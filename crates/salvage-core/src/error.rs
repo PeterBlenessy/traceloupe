@@ -23,6 +23,22 @@ pub enum Error {
 
     #[error("cache database error: {0}")]
     Cache(#[from] rusqlite::Error),
+
+    /// The iLEAPP sidecar binary could not be located or spawned.
+    #[error("iLEAPP engine not available: {0}")]
+    EngineNotFound(String),
+
+    /// The sidecar ran but exited non-zero; carries a short tail of its log.
+    #[error("iLEAPP engine failed (exit {code}): {detail}")]
+    EngineFailed { code: i32, detail: String },
+
+    /// The import was cancelled by the caller before completion.
+    #[error("import cancelled")]
+    Cancelled,
+
+    /// The sidecar produced no `_lava_artifacts.db` where one was expected.
+    #[error("no engine output found under {path}")]
+    NoEngineOutput { path: PathBuf },
 }
 
 impl Error {

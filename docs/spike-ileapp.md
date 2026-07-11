@@ -64,9 +64,14 @@ Key structural facts for the normalizer (salvage-core, Milestone 2):
   `_lava_media_items(id, source_path, extraction_path, type, metadata, …)` and
   `_lava_media_references(media_item_id, module_name, artifact_name, …)`. An
   artifact row references media by id; the bytes live at `extraction_path`
-  under the output folder. Our fixture has no attachments yet, so these were
-  empty — **media delivery is the one path this spike did not exercise and
-  the next thing to test** (it's the plan's flagged soft spot).
+  under the output folder. **Now verified end-to-end** by seeding an image
+  attachment: iLEAPP extracted it, wrote the bytes to `media/<hash>.png`
+  (matching the seeded PNG's size), set `_lava_media_items.type` to the MIME
+  type (`image/png`), `.source_path` to the original backup path, and
+  `.extraction_path` relative to the output dir; the `sms` row's
+  `attachment_file` column holds the media-item id. **Normalizer contract:**
+  resolve an artifact row's media-ref id → `_lava_media_items.extraction_path`
+  → real bytes on disk. This is what the Gallery and Messages views consume.
 - Other engine tables — `itunes_backup_info(property, property_value)`,
   `_file_path_list`, `_artifact_search_patterns`, `_artifact_pattern_to_file`
   — are metadata we can read opportunistically (device info) or ignore.
@@ -101,6 +106,19 @@ frozen macOS binary is usable. Options, in preference order:
 Either way, **the download source becomes our own release, not upstream's** —
 which is strictly better for the SHA-pinning story in architecture §9. The
 first-import download stays the same size ballpark (~50 MB).
+
+### 3b. iLEAPP is dependency-version-sensitive — pin its deps when we re-freeze ⚠️
+
+Running from source with **unpinned** deps installed pandas 3.0, whose default
+string dtype coerces `None` → `NaN` (a truthy float). iLEAPP's SMS chat
+renderer assumes `None` stays falsy, so with pandas 3.0 it enters the
+attachment branch for *every* text row and crashes (`'float' object has no
+attribute 'split'`) — taking the whole `sms` artifact (and its lava table)
+down with it, but only when a thread mixes attachment and non-attachment
+messages. Pinning `pandas==2.2.3` (with `numpy==1.26.4`, which the upstream
+release already pins) fixes it. **Consequence:** our re-frozen build must pin
+iLEAPP's exact dependency set, not just its source — a `requirements` lock, not
+`pip install ileapp-latest`.
 
 ## Decisions taken from this spike
 

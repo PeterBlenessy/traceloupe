@@ -7,5 +7,8 @@
 pub mod cache;
 pub mod discovery;
 mod error;
+pub mod import;
+pub mod normalize;
+pub mod sidecar;
 
 pub use error::{Error, Result};

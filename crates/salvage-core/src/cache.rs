@@ -107,17 +107,21 @@ CREATE TABLE notes (
 );
 
 CREATE TABLE media_items (
-    id            INTEGER PRIMARY KEY,
-    domain        TEXT,                       -- e.g. 'CameraRollDomain'
-    relative_path TEXT NOT NULL,
-    kind          TEXT NOT NULL,              -- 'photo' | 'video'
-    taken_at      INTEGER,
-    width         INTEGER,
-    height        INTEGER,
-    duration_s    REAL,
+    id              INTEGER PRIMARY KEY,
+    -- iLEAPP's `_lava_media_items.id`, so artifact rows can be linked back to
+    -- their media during normalization. NULL for natively-parsed media.
+    engine_media_id TEXT UNIQUE,
+    domain          TEXT,                     -- e.g. 'CameraRollDomain'
+    relative_path   TEXT NOT NULL,
+    kind            TEXT NOT NULL,            -- 'photo' | 'video'
+    mime_type       TEXT,
+    taken_at        INTEGER,
+    width           INTEGER,
+    height          INTEGER,
+    duration_s      REAL,
     -- Paths under the app cache dir; NULL until materialized.
-    thumb_path    TEXT,
-    local_path    TEXT
+    thumb_path      TEXT,
+    local_path      TEXT
 );
 CREATE INDEX idx_media_taken ON media_items(taken_at DESC);
 

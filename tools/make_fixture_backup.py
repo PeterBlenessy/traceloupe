@@ -52,6 +52,17 @@ ITER = 10_000
 # Domain -> the seed backup's files. Cocoa/Core Data epoch is 2001-01-01.
 COCOA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
+# A minimal valid 1x1 PNG, used as a seeded SMS image attachment so the media
+# path (_lava_media_items -> extraction_path -> real bytes) is exercised.
+TINY_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+    "01f15c4890000000d49444154789c62f8cfc0f01f0005000155a2b4e0"
+    "0000000049454e44ae426082"
+)
+# Path of the seeded attachment, relative to the MediaDomain root. sms.db's
+# attachment.filename references it as "~/<this>" (~ = private/var/mobile).
+ATTACHMENT_REL = "Library/SMS/Attachments/aa/00/salvage-test.png"
+
 
 def cocoa_ns(dt: datetime) -> int:
     """Seconds since 2001 as nanoseconds (modern iOS message.date encoding)."""
@@ -163,6 +174,28 @@ def seed_sms_db(path: Path) -> None:
             "INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, ?)",
             (rowid,),
         )
+
+    # A 6th message carrying an image attachment, to exercise the media path.
+    att_rowid = len(convo) + 1
+    ts = cocoa_ns(base.replace(minute=11))
+    # Caption text (rather than NULL) so iLEAPP's chat renderer doesn't choke
+    # on a NaN when building the HTML report; media check-in is driven by the
+    # attachment row regardless of message text.
+    con.execute(
+        """INSERT INTO message
+           (ROWID, text, service, account, date, date_read,
+            is_from_me, is_sent, is_delivered, is_read)
+           VALUES (?, 'Here''s the trailhead 📷', 'iMessage', 'me@example.com', ?, ?, 1, 1, 1, 1)""",
+        (att_rowid, ts, ts),
+    )
+    con.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, ?)", (att_rowid,))
+    con.execute(
+        """INSERT INTO attachment
+           (ROWID, transfer_name, filename, created_date, mime_type, total_bytes)
+           VALUES (1, 'salvage-test.png', ?, ?, 'image/png', ?)""",
+        (f"~/{ATTACHMENT_REL}", ts, len(TINY_PNG)),
+    )
+    con.execute("INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, 1)", (att_rowid,))
     con.commit()
     con.close()
 
@@ -174,6 +207,7 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_sms_db(sms_path)
     return [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
+        ("MediaDomain", ATTACHMENT_REL, TINY_PNG),
     ]
 
 
