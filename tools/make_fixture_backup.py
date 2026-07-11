@@ -34,7 +34,7 @@ import sqlite3
 import struct
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -200,14 +200,85 @@ def seed_sms_db(path: Path) -> None:
     con.close()
 
 
+def cocoa_s(dt: datetime) -> float:
+    """Seconds since 2001 (Core Data / CFAbsoluteTime encoding)."""
+    return (dt - COCOA_EPOCH).total_seconds()
+
+
+def seed_safari_db(path: Path) -> None:
+    """Safari History.db with the tables iLEAPP's safariHistory module queries."""
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE history_items (id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER);
+        CREATE TABLE history_visits (
+            id INTEGER PRIMARY KEY, history_item INTEGER, visit_time REAL, title TEXT,
+            redirect_source INTEGER, redirect_destination INTEGER, origin INTEGER
+        );
+        """
+    )
+    base = datetime(2024, 6, 7, 20, 0, tzinfo=timezone.utc)
+    visits = [
+        ("https://www.apple.com/", "Apple", 12, 0),
+        ("https://news.ycombinator.com/", "Hacker News", 34, 0),
+        ("https://en.wikipedia.org/wiki/Mission_Peak", "Mission Peak - Wikipedia", 2, 1),
+    ]
+    for i, (url, title, count, origin) in enumerate(visits, start=1):
+        con.execute("INSERT INTO history_items (id, url, visit_count) VALUES (?, ?, ?)", (i, url, count))
+        con.execute(
+            """INSERT INTO history_visits (id, history_item, visit_time, title, origin)
+               VALUES (?, ?, ?, ?, ?)""",
+            (i, i, cocoa_s(base) + i * 3600, title, origin),
+        )
+    con.commit()
+    con.close()
+
+
+def seed_callhistory_db(path: Path) -> None:
+    """CallHistory.storedata (Core Data) with the ZCALLRECORD columns iLEAPP reads."""
+    con = sqlite3.connect(path)
+    con.execute(
+        """CREATE TABLE ZCALLRECORD (
+            Z_PK INTEGER PRIMARY KEY, ZDATE REAL, ZDURATION REAL,
+            ZSERVICE_PROVIDER TEXT, ZCALLTYPE INTEGER, ZORIGINATED INTEGER,
+            ZADDRESS BLOB, ZANSWERED INTEGER, ZFACE_TIME_DATA BLOB,
+            ZDISCONNECTED_CAUSE INTEGER, ZISO_COUNTRY_CODE TEXT, ZLOCATION TEXT
+        )"""
+    )
+    base = datetime(2024, 6, 7, 18, 0, tzinfo=timezone.utc)
+    # (address, calltype, originated, answered, duration_s, minutes_offset)
+    calls = [
+        (b"+15551234567", 1, 1, 1, 312.0, 0),   # outgoing phone, answered
+        (b"+15559876543", 1, 0, 0, 0.0, 30),     # incoming phone, missed
+        (b"friend@icloud.com", 16, 0, 1, 128.0, 60),  # incoming FaceTime audio
+    ]
+    for pk, (addr, ctype, orig, ans, dur, off) in enumerate(calls, start=1):
+        con.execute(
+            """INSERT INTO ZCALLRECORD
+               (Z_PK, ZDATE, ZDURATION, ZSERVICE_PROVIDER, ZCALLTYPE, ZORIGINATED,
+                ZADDRESS, ZANSWERED, ZFACE_TIME_DATA, ZDISCONNECTED_CAUSE,
+                ZISO_COUNTRY_CODE, ZLOCATION)
+               VALUES (?, ?, ?, 'com.apple.Telephony', ?, ?, ?, ?, NULL, 0, 'us', NULL)""",
+            (pk, cocoa_s(base + timedelta(minutes=off)), dur, ctype, orig, addr, ans),
+        )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
     sms_path = workdir / "sms.db"
     seed_sms_db(sms_path)
+    safari_path = workdir / "History.db"
+    seed_safari_db(safari_path)
+    calls_path = workdir / "CallHistory.storedata"
+    seed_callhistory_db(calls_path)
     return [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("MediaDomain", ATTACHMENT_REL, TINY_PNG),
+        ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
+        ("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata", calls_path.read_bytes()),
     ]
 
 

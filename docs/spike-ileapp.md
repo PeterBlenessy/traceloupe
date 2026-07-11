@@ -107,6 +107,34 @@ Either way, **the download source becomes our own release, not upstream's** —
 which is strictly better for the SHA-pinning story in architecture §9. The
 first-import download stays the same size ballpark (~50 MB).
 
+### 3c. Contacts: iLEAPP's `addressbook` lava table is lossy ⚠️
+
+Calls (`callhistory`) and Safari (`safarihistory`) produce clean, complete lava
+tables — column-for-column what the module's headers describe, epoch
+timestamps, decoded phone numbers and call-type/direction strings. Both are
+normalized and validated end-to-end (see the normalizer's integration check).
+
+**Contacts is different.** Running iLEAPP against a real `AddressBook.sqlitedb`
+(iLEAPP's own `belkasoft_ctf6` addressBook test fixture), the `addressBook`
+module's HTML report has the full contact, but the **lava** table
+(`addressbook`) came out with only 6 columns —
+`creation_date, prefix, middle_name, phone_numbers, group_name, storage_place`
+— **missing `first_name`, `last_name`, `company`, `display_name`, and
+`email_addresses` entirely**. The lava schema also looks data-dependent (a
+sparse contact yields a sparse column set), which a fixed-column normalizer
+can't rely on.
+
+So Contacts can't be sourced from iLEAPP's lava output the way the other
+artifacts are. Options for a follow-up:
+1. Read iLEAPP's per-artifact **TSV/HTML export** for contacts instead of lava.
+2. Bring the **native AddressBook parser forward from Phase 2** — the schema is
+   stable and well-understood, and this removes the iLEAPP dependency for the
+   one artifact where its lava output fails us.
+
+Recommendation: (2). Contacts is a good first native parser — bounded scope,
+stable format, and it sidesteps a real iLEAPP limitation. Tracked as the next
+piece of work; Calls and Safari shipped without it.
+
 ### 3b. iLEAPP is dependency-version-sensitive — pin its deps when we re-freeze ⚠️
 
 Running from source with **unpinned** deps installed pandas 3.0, whose default

@@ -24,6 +24,8 @@ pub struct ImportReport {
     pub threads: usize,
     pub messages: usize,
     pub media_items: usize,
+    pub calls: usize,
+    pub safari_visits: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
 }
@@ -40,6 +42,8 @@ pub fn normalize_lava(
 
     normalize_media(&lava, engine_out_dir, cache, &mut report)?;
     normalize_sms(&lava, cache, &mut report)?;
+    normalize_calls(&lava, cache, &mut report)?;
+    normalize_safari(&lava, cache, &mut report)?;
 
     Ok(report)
 }
@@ -248,6 +252,94 @@ struct SmsRow {
     media_ref: Option<String>,
 }
 
+/// Map iLEAPP's `callhistory` table into cache `calls`. iLEAPP renders
+/// direction/answered/type as strings; we normalize back to booleans/lowercase.
+/// Duration comes from the start/end timestamp delta (the text `call_duration`
+/// is display-formatted). Missed calls have no end time → 0 duration.
+fn normalize_calls(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+    if !table_exists(lava, "callhistory")? {
+        return Ok(());
+    }
+    let mut stmt = lava.prepare(
+        "SELECT starting_timestamp, ending_timestamp, phone_number,
+                call_direction, answered, call_type
+         FROM callhistory
+         ORDER BY starting_timestamp DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, Option<i64>>(0)?,
+            r.get::<_, Option<i64>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, Option<String>>(4)?,
+            r.get::<_, Option<String>>(5)?,
+        ))
+    })?;
+
+    let conn = cache.conn();
+    for row in rows {
+        let (start, end, address, direction, answered, call_type) = row?;
+        let duration = match (start, end) {
+            (Some(s), Some(e)) if e >= s => e - s,
+            _ => 0,
+        };
+        conn.execute(
+            "INSERT INTO calls (address, direction, answered, duration_s, occurred_at, service)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                address,
+                direction.as_deref().map(str::to_lowercase),
+                answered.as_deref().map(|a| (a == "Yes") as i64),
+                duration,
+                start,
+                call_type,
+            ],
+        )?;
+        report.calls += 1;
+    }
+    Ok(())
+}
+
+/// Map iLEAPP's `safarihistory` table into cache `safari_history`. `visit_count`
+/// arrives as text; parse it to an integer where possible.
+fn normalize_safari(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+    if !table_exists(lava, "safarihistory")? {
+        return Ok(());
+    }
+    let mut stmt = lava.prepare(
+        "SELECT url, title, visit_timestamp, visit_count
+         FROM safarihistory
+         WHERE url IS NOT NULL
+         ORDER BY visit_timestamp DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+
+    let conn = cache.conn();
+    for row in rows {
+        let (url, title, visited_at, visit_count) = row?;
+        conn.execute(
+            "INSERT INTO safari_history (url, title, visited_at, visit_count)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                url,
+                title,
+                visited_at,
+                visit_count.and_then(|c| c.parse::<i64>().ok()),
+            ],
+        )?;
+        report.safari_visits += 1;
+    }
+    Ok(())
+}
+
 /// Translate an artifact's media reference (a `_lava_media_references.id`) to
 /// the underlying `_lava_media_items.id`. If the references table is absent or
 /// has no match, assume the reference is already a media-item id.
@@ -446,6 +538,91 @@ mod tests {
             .query_row("SELECT local_path FROM media_items", [], |r| r.get(0))
             .unwrap();
         assert_eq!(local, None);
+    }
+
+    #[test]
+    fn normalizes_calls_from_callhistory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        // Real callhistory lava schema (see docs/spike-ileapp.md).
+        conn.execute_batch(
+            "CREATE TABLE callhistory (
+                 starting_timestamp INTEGER, ending_timestamp INTEGER, service_provider TEXT,
+                 call_type TEXT, call_direction TEXT, phone_number TEXT, answered TEXT,
+                 call_duration TEXT, facetime_data TEXT, disconnected_cause TEXT,
+                 iso_country_code TEXT, location TEXT);
+             INSERT INTO callhistory VALUES
+                 (1717783200, 1717783512, 'x', 'Phone Call', 'Outgoing', '+15551234567', 'Yes', '00:05:12', NULL, 'Ended', 'US', NULL);
+             INSERT INTO callhistory VALUES
+                 (1717785000, NULL, 'x', 'Phone Call', 'Incoming', '+15559876543', 'No', '00:00:00', NULL, 'Ended', 'US', NULL);",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        assert_eq!(report.calls, 2);
+
+        let c = cache.conn();
+        // Outgoing answered call with a 312s duration.
+        let (addr, dir, ans, dur): (String, String, i64, i64) = c
+            .query_row(
+                "SELECT address, direction, answered, duration_s FROM calls WHERE address = '+15551234567'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (addr.as_str(), dir.as_str(), ans, dur),
+            ("+15551234567", "outgoing", 1, 312)
+        );
+        // Missed incoming call: not answered, zero duration (no end time).
+        let (ans2, dur2): (i64, i64) = c
+            .query_row(
+                "SELECT answered, duration_s FROM calls WHERE address = '+15559876543'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((ans2, dur2), (0, 0));
+    }
+
+    #[test]
+    fn normalizes_safari_history() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE safarihistory (
+                 visit_timestamp INTEGER, title TEXT, url TEXT, visit_count TEXT,
+                 redirect_source TEXT, redirect_destination TEXT, visit_id TEXT, origin TEXT);
+             INSERT INTO safarihistory VALUES
+                 (1717794000, 'Apple', 'https://www.apple.com/', '12', '', '', '1', 'Local Device');
+             INSERT INTO safarihistory VALUES
+                 (1717797600, 'HN', 'https://news.ycombinator.com/', 'notanumber', '', '', '2', 'Local Device');",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        assert_eq!(report.safari_visits, 2);
+
+        let c = cache.conn();
+        let (title, count): (String, i64) = c
+            .query_row(
+                "SELECT title, visit_count FROM safari_history WHERE url = 'https://www.apple.com/'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((title.as_str(), count), ("Apple", 12));
+        // Non-numeric visit_count degrades to NULL, not an error.
+        let count2: Option<i64> = c
+            .query_row(
+                "SELECT visit_count FROM safari_history WHERE title = 'HN'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count2, None);
     }
 
     #[test]

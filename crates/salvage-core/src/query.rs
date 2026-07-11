@@ -112,6 +112,74 @@ pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
     Ok(messages)
 }
 
+/// One call-history entry.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Call {
+    pub id: i64,
+    pub address: Option<String>,
+    /// "incoming" | "outgoing".
+    pub direction: Option<String>,
+    pub answered: Option<bool>,
+    pub duration_s: Option<i64>,
+    pub occurred_at: Option<i64>,
+    /// Call type/service, e.g. "Phone Call", "FaceTime Audio".
+    pub service: Option<String>,
+}
+
+/// Calls, most recent first.
+pub fn list_calls(cache: &CacheDb) -> Result<Vec<Call>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, address, direction, answered, duration_s, occurred_at, service
+         FROM calls ORDER BY occurred_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Call {
+            id: r.get(0)?,
+            address: r.get(1)?,
+            direction: r.get(2)?,
+            answered: r.get::<_, Option<i64>>(3)?.map(|a| a != 0),
+            duration_s: r.get(4)?,
+            occurred_at: r.get(5)?,
+            service: r.get(6)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// One Safari history visit.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryVisit {
+    pub id: i64,
+    pub url: String,
+    pub title: Option<String>,
+    pub visited_at: Option<i64>,
+    pub visit_count: Option<i64>,
+}
+
+/// Safari history, most recent first.
+pub fn list_safari_history(cache: &CacheDb) -> Result<Vec<HistoryVisit>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, url, title, visited_at, visit_count
+         FROM safari_history ORDER BY visited_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(HistoryVisit {
+            id: r.get(0)?,
+            url: r.get(1)?,
+            title: r.get(2)?,
+            visited_at: r.get(3)?,
+            visit_count: r.get(4)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// A stored value from the backup's `meta` table (device name, etc.), if set.
 pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
     Ok(cache

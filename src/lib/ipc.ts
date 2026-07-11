@@ -34,7 +34,27 @@ export interface ImportResult {
   threads: number;
   messages: number;
   mediaItems: number;
+  calls: number;
+  safariVisits: number;
   warnings: string[];
+}
+
+export interface Call {
+  id: number;
+  address: string | null;
+  direction: string | null;
+  answered: boolean | null;
+  durationS: number | null;
+  occurredAt: number | null;
+  service: string | null;
+}
+
+export interface HistoryVisit {
+  id: number;
+  url: string;
+  title: string | null;
+  visitedAt: number | null;
+  visitCount: number | null;
 }
 
 export interface ThreadSummary {
@@ -76,6 +96,8 @@ export interface SalvageClient {
   openBackup(backupId: string): Promise<boolean>;
   listThreads(): Promise<ThreadSummary[]>;
   getThreadMessages(threadId: number): Promise<Message[]>;
+  listCalls(): Promise<Call[]>;
+  listSafariHistory(): Promise<HistoryVisit[]>;
 }
 
 const tauriClient: SalvageClient = {
@@ -87,6 +109,8 @@ const tauriClient: SalvageClient = {
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   getThreadMessages: (threadId) => invoke<Message[]>("get_thread_messages", { threadId }),
+  listCalls: () => invoke<Call[]>("list_calls"),
+  listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -150,6 +174,18 @@ const mockMessages: Record<number, Message[]> = {
   ],
 };
 
+const mockCalls: Call[] = [
+  { id: 1, address: "friend@icloud.com", direction: "incoming", answered: true, durationS: 128, occurredAt: 1717786800, service: "FaceTime Audio" },
+  { id: 2, address: "+15559876543", direction: "incoming", answered: false, durationS: 0, occurredAt: 1717785000, service: "Phone Call" },
+  { id: 3, address: "+15551234567", direction: "outgoing", answered: true, durationS: 312, occurredAt: 1717783200, service: "Phone Call" },
+];
+
+const mockSafari: HistoryVisit[] = [
+  { id: 1, url: "https://en.wikipedia.org/wiki/Mission_Peak", title: "Mission Peak - Wikipedia", visitedAt: 1717801200, visitCount: 2 },
+  { id: 2, url: "https://news.ycombinator.com/", title: "Hacker News", visitedAt: 1717797600, visitCount: 34 },
+  { id: 3, url: "https://www.apple.com/", title: "Apple", visitedAt: 1717794000, visitCount: 12 },
+];
+
 let mockActive = false;
 
 // A mock progress emitter so the import flow is exercisable in the browser.
@@ -177,7 +213,7 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
     await new Promise((r) => setTimeout(r, 300));
     mockActive = true;
-    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 1, warnings: [] };
+    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 1, calls: 3, safariVisits: 3, warnings: [] };
   },
   onImportProgress: async (cb) => {
     mockProgressSubs.add(cb);
@@ -190,6 +226,8 @@ export const mockClient: SalvageClient = {
   },
   listThreads: async () => (mockActive ? mockThreads : []),
   getThreadMessages: async (threadId) => (mockActive ? (mockMessages[threadId] ?? []) : []),
+  listCalls: async () => (mockActive ? mockCalls : []),
+  listSafariHistory: async () => (mockActive ? mockSafari : []),
 };
 
 const isTauri = "__TAURI_INTERNALS__" in window;

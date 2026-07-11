@@ -9,7 +9,7 @@ use salvage_core::cache::CacheDb;
 use salvage_core::discovery::{self, BackupInfo};
 use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
-use salvage_core::query::{self, Message, ThreadSummary};
+use salvage_core::query::{self, Call, HistoryVisit, Message, ThreadSummary};
 use salvage_core::sidecar::CancelToken;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -116,6 +116,8 @@ struct ImportResult {
     threads: usize,
     messages: usize,
     media_items: usize,
+    calls: usize,
+    safari_visits: usize,
     warnings: Vec<String>,
 }
 
@@ -187,6 +189,8 @@ async fn import_backup(
         threads: outcome.report.threads,
         messages: outcome.report.messages,
         media_items: outcome.report.media_items,
+        calls: outcome.report.calls,
+        safari_visits: outcome.report.safari_visits,
         warnings: outcome.report.warnings,
     })
 }
@@ -228,6 +232,18 @@ fn get_thread_messages(
     query::get_messages(&cache, thread_id).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn list_calls(active: State<'_, ActiveBackup>) -> Result<Vec<Call>, String> {
+    let cache = open_active_cache(&active)?;
+    query::list_calls(&cache).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_safari_history(active: State<'_, ActiveBackup>) -> Result<Vec<HistoryVisit>, String> {
+    let cache = open_active_cache(&active)?;
+    query::list_safari_history(&cache).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -240,7 +256,9 @@ pub fn run() {
             open_backup,
             has_active_backup,
             list_threads,
-            get_thread_messages
+            get_thread_messages,
+            list_calls,
+            list_safari_history
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

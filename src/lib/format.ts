@@ -30,3 +30,19 @@ export function formatMessageTime(epochSeconds: number | null): string {
   if (!epochSeconds) return "";
   return dayTime.format(new Date(epochSeconds * 1000));
 }
+
+/** Full date + time for a row (calls, history). */
+export function formatDateTime(epochSeconds: number | null): string {
+  if (!epochSeconds) return "";
+  return dayTime.format(new Date(epochSeconds * 1000));
+}
+
+/** A call duration like "5:12" or "1:02:08"; empty for zero/none. */
+export function formatDuration(seconds: number | null): string {
+  if (!seconds || seconds <= 0) return "";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+}
