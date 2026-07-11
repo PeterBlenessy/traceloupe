@@ -129,6 +129,27 @@ pub fn read_backup_info(dir: &Path) -> BackupInfo {
     }
 }
 
+/// The apps that were installed on the device, as bundle IDs (e.g.
+/// `net.whatsapp.WhatsApp`), read from `Info.plist`'s "Installed Applications".
+/// Sorted; empty if the key is absent or unreadable. Cheap — no decryption.
+pub fn installed_apps(dir: &Path) -> Vec<String> {
+    let Ok(info) = plist::Value::from_file(dir.join("Info.plist")) else {
+        return Vec::new();
+    };
+    let mut apps: Vec<String> = info
+        .as_dictionary()
+        .and_then(|d| d.get("Installed Applications"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_string().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    apps.sort();
+    apps
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -181,6 +202,33 @@ mod tests {
         assert_eq!(b.product_version.as_deref(), Some("17.5.1"));
         assert_eq!(b.is_encrypted, Some(true));
         assert_eq!(b.last_backup_date, Some(0));
+    }
+
+    #[test]
+    fn lists_installed_apps_from_info_plist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut info = Dictionary::new();
+        info.insert(
+            "Installed Applications".into(),
+            Value::Array(vec![
+                Value::String("net.whatsapp.WhatsApp".into()),
+                Value::String("com.burbn.instagram".into()),
+                Value::String("com.apple.mobilesafari".into()),
+            ]),
+        );
+        write_plist(&tmp.path().join("Info.plist"), Value::Dictionary(info));
+
+        let apps = installed_apps(tmp.path());
+        assert_eq!(
+            apps,
+            vec![
+                "com.apple.mobilesafari",
+                "com.burbn.instagram",
+                "net.whatsapp.WhatsApp",
+            ]
+        );
+        // Missing key / no plist → empty, not an error.
+        assert!(installed_apps(&tmp.path().join("nope")).is_empty());
     }
 
     #[test]
