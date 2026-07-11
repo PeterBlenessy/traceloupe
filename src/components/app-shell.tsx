@@ -1,12 +1,12 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
+  Boxes,
   Globe,
   HardDrive,
   Image,
   MessageSquare,
   NotebookText,
   Phone,
-  Search,
   Users,
 } from "lucide-react";
 import {
@@ -31,7 +31,7 @@ const nav = [
   { to: "/calls", label: "Calls", icon: Phone },
   { to: "/safari", label: "Safari", icon: Globe },
   { to: "/notes", label: "Notes", icon: NotebookText },
-  { to: "/browser", label: "App Data", icon: Search },
+  { to: "/apps", label: "Apps", icon: Boxes },
 ] as const;
 
 export function AppShell() {

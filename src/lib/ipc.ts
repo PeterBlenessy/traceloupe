@@ -157,6 +157,8 @@ export interface SalvageClient {
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
   listContacts(): Promise<Contact[]>;
+  /** Bundle ids of apps that were installed on the device. */
+  listInstalledApps(): Promise<string[]>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
@@ -191,6 +193,7 @@ const tauriClient: SalvageClient = {
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listContacts: () => invoke<Contact[]>("list_contacts"),
+  listInstalledApps: () => invoke<string[]>("list_installed_apps"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
@@ -298,6 +301,20 @@ function mockMediaDataUrl(id: number): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+// A realistic mix: some Salvage-supported apps, some not, plus system apps.
+const mockInstalledApps = [
+  "net.whatsapp.WhatsApp",
+  "com.burbn.instagram",
+  "com.toyopagroup.picaboo", // Snapchat
+  "com.zhiliaoapp.musically", // TikTok
+  "org.telegram.messenger",
+  "com.spotify.client",
+  "com.apple.mobilesafari",
+  "com.google.Gmail",
+  "com.tinyspeck.chatlyio", // Slack
+  "com.ubercab.UberClient",
+];
+
 let mockActive = false;
 const mockImported = new Set<string>();
 
@@ -368,6 +385,7 @@ export const mockClient: SalvageClient = {
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listContacts: async () => (mockActive ? mockContacts : []),
+  listInstalledApps: async () => (mockActive ? mockInstalledApps : []),
   listMedia: async () => (mockActive ? mockMedia : []),
   mediaSources: async () => {
     if (!mockActive) return [];

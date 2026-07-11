@@ -287,6 +287,15 @@ pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<(String, Option<Str
         .optional()?)
 }
 
+/// Bundle IDs of apps installed on the device, sorted.
+pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<String>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare("SELECT bundle_id FROM installed_apps ORDER BY bundle_id")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// A stored value from the backup's `meta` table (device name, etc.), if set.
 pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
     Ok(cache

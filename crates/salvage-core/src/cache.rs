@@ -46,6 +46,11 @@ CREATE TABLE contacts (
     emails_json  TEXT NOT NULL DEFAULT '[]'
 );
 
+-- Apps that were installed on the device (from Info.plist), for the Apps view.
+CREATE TABLE installed_apps (
+    bundle_id TEXT PRIMARY KEY
+);
+
 CREATE TABLE threads (
     id              INTEGER PRIMARY KEY,
     identifier      TEXT NOT NULL,            -- chat guid / group id / phone number

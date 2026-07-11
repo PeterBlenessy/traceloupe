@@ -369,6 +369,12 @@ fn list_contacts(active: State<'_, ActiveBackup>) -> Result<Vec<Contact>, String
 }
 
 #[tauri::command]
+fn list_installed_apps(active: State<'_, ActiveBackup>) -> Result<Vec<String>, String> {
+    let cache = open_active_cache(&active)?;
+    query::list_installed_apps(&cache).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_media(active: State<'_, ActiveBackup>) -> Result<Vec<MediaItem>, String> {
     let cache = open_active_cache(&active)?;
     query::list_media(&cache).map_err(|e| e.to_string())
@@ -472,6 +478,7 @@ pub fn run() {
             list_calls,
             list_safari_history,
             list_contacts,
+            list_installed_apps,
             list_media,
             media_sources
         ])

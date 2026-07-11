@@ -60,6 +60,15 @@ pub fn import_backup(
     let cache = CacheDb::open(cache_path)?;
     let report = normalize::normalize_lava(&lava_path, &engine_out_dir, &cache)?;
 
+    // Record which apps were on the device (from Info.plist) for the Apps view.
+    let apps = crate::discovery::installed_apps(backup_dir);
+    for bundle_id in &apps {
+        cache.conn().execute(
+            "INSERT OR IGNORE INTO installed_apps (bundle_id) VALUES (?1)",
+            [bundle_id],
+        )?;
+    }
+
     on_phase(ImportPhase::Done(report.clone()));
     Ok(ImportOutcome {
         cache_path: cache_path.to_path_buf(),
