@@ -10,6 +10,7 @@ pub mod engine;
 mod error;
 pub mod import;
 pub mod normalize;
+pub mod parsers;
 pub mod query;
 pub mod sidecar;
 

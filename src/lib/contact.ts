@@ -1,5 +1,13 @@
 /** Shared helpers for rendering people/handles across views. */
 
+import type { Contact } from "@/lib/ipc";
+
+/** A display name for a contact: full name, else organization, else "No Name". */
+export function contactName(c: Contact): string {
+  const name = [c.firstName, c.lastName].filter(Boolean).join(" ").trim();
+  return name || c.organization || "No Name";
+}
+
 /** Up to two initials for an avatar fallback. Falls back to "#" for numbers. */
 export function initials(name: string | null | undefined): string {
   if (!name) return "?";

@@ -57,6 +57,20 @@ export interface HistoryVisit {
   visitCount: number | null;
 }
 
+export interface LabeledValue {
+  label: string | null;
+  value: string;
+}
+
+export interface Contact {
+  id: number;
+  firstName: string | null;
+  lastName: string | null;
+  organization: string | null;
+  phones: LabeledValue[];
+  emails: LabeledValue[];
+}
+
 export interface ThreadSummary {
   id: number;
   identifier: string;
@@ -98,6 +112,7 @@ export interface SalvageClient {
   getThreadMessages(threadId: number): Promise<Message[]>;
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
+  listContacts(): Promise<Contact[]>;
 }
 
 const tauriClient: SalvageClient = {
@@ -111,6 +126,7 @@ const tauriClient: SalvageClient = {
   getThreadMessages: (threadId) => invoke<Message[]>("get_thread_messages", { threadId }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
+  listContacts: () => invoke<Contact[]>("list_contacts"),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -186,6 +202,13 @@ const mockSafari: HistoryVisit[] = [
   { id: 3, url: "https://www.apple.com/", title: "Apple", visitedAt: 1717794000, visitCount: 12 },
 ];
 
+const mockContacts: Contact[] = [
+  { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }] },
+  { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }] },
+  { id: 3, firstName: "Sam", lastName: "Taylor", organization: null, phones: [], emails: [{ label: "Home", value: "sam.taylor@example.com" }] },
+  { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [] },
+];
+
 let mockActive = false;
 
 // A mock progress emitter so the import flow is exercisable in the browser.
@@ -213,7 +236,7 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
     await new Promise((r) => setTimeout(r, 300));
     mockActive = true;
-    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 1, calls: 3, safariVisits: 3, warnings: [] };
+    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 1, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
   },
   onImportProgress: async (cb) => {
     mockProgressSubs.add(cb);
@@ -228,6 +251,7 @@ export const mockClient: SalvageClient = {
   getThreadMessages: async (threadId) => (mockActive ? (mockMessages[threadId] ?? []) : []),
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
+  listContacts: async () => (mockActive ? mockContacts : []),
 };
 
 const isTauri = "__TAURI_INTERNALS__" in window;

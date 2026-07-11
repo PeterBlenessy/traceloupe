@@ -234,6 +234,56 @@ def seed_safari_db(path: Path) -> None:
     con.close()
 
 
+def seed_addressbook_db(path: Path) -> None:
+    """AddressBook.sqlitedb with the ABPerson + ABMultiValue schema our native
+    contacts parser reads. iLEAPP's own addressBook lava output is lossy
+    (drops names/emails), so we parse this decrypted file directly."""
+    con = sqlite3.connect(path)
+    con.executescript(
+        """
+        CREATE TABLE ABPerson (
+            ROWID INTEGER PRIMARY KEY, First TEXT, Last TEXT, Middle TEXT,
+            Organization TEXT, Department TEXT, JobTitle TEXT, Nickname TEXT,
+            Note TEXT, Prefix TEXT, Suffix TEXT, CreationDate REAL, ModificationDate REAL
+        );
+        CREATE TABLE ABMultiValueLabel (value TEXT);
+        CREATE TABLE ABMultiValue (
+            UID INTEGER PRIMARY KEY, record_id INTEGER, property INTEGER,
+            identifier INTEGER, label INTEGER, value TEXT, guid TEXT
+        );
+        """
+    )
+    # iOS stores labels as magic strings; the parser strips the wrapper.
+    labels = ["_$!<Mobile>!$_", "_$!<Home>!$_", "_$!<Work>!$_", "_$!<iPhone>!$_"]
+    for i, v in enumerate(labels, start=1):
+        con.execute("INSERT INTO ABMultiValueLabel (rowid, value) VALUES (?, ?)", (i, v))
+
+    people = [
+        # (first, last, org, [(prop, label_idx, value)])
+        ("Alex", "Rivera", None, [(3, 1, "+15551234567"), (4, 2, "alex@example.com")]),
+        ("Jordan", "Kim", "Acme Corp", [(3, 3, "+15559876543"), (4, 3, "jordan@acme.example")]),
+        (None, None, "Bella Vista Pizza", [(3, 1, "+15550001111")]),
+        ("Sam", "Taylor", None, [(4, 2, "sam.taylor@example.com")]),
+    ]
+    base = datetime(2023, 1, 1, tzinfo=timezone.utc)
+    uid = 1
+    for pk, (first, last, org, values) in enumerate(people, start=1):
+        con.execute(
+            """INSERT INTO ABPerson (ROWID, First, Last, Organization, CreationDate, ModificationDate)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (pk, first, last, org, cocoa_s(base), cocoa_s(base)),
+        )
+        for prop, label_idx, value in values:
+            con.execute(
+                """INSERT INTO ABMultiValue (UID, record_id, property, label, value)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (uid, pk, prop, label_idx, value),
+            )
+            uid += 1
+    con.commit()
+    con.close()
+
+
 def seed_callhistory_db(path: Path) -> None:
     """CallHistory.storedata (Core Data) with the ZCALLRECORD columns iLEAPP reads."""
     con = sqlite3.connect(path)
@@ -274,11 +324,14 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_safari_db(safari_path)
     calls_path = workdir / "CallHistory.storedata"
     seed_callhistory_db(calls_path)
+    ab_path = workdir / "AddressBook.sqlitedb"
+    seed_addressbook_db(ab_path)
     return [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("MediaDomain", ATTACHMENT_REL, TINY_PNG),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
         ("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata", calls_path.read_bytes()),
+        ("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", ab_path.read_bytes()),
     ]
 
 

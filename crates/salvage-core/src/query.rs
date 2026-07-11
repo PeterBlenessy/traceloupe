@@ -180,6 +180,43 @@ pub fn list_safari_history(cache: &CacheDb) -> Result<Vec<HistoryVisit>> {
         .map_err(Into::into)
 }
 
+/// A contact, with phones/emails decoded from the cache's JSON columns.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Contact {
+    pub id: i64,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub organization: Option<String>,
+    pub phones: Vec<crate::parsers::address_book::LabeledValue>,
+    pub emails: Vec<crate::parsers::address_book::LabeledValue>,
+}
+
+/// Contacts, ordered by name (people first, then organization-only entries).
+pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, first_name, last_name, organization, phones_json, emails_json
+         FROM contacts
+         ORDER BY last_name IS NULL AND first_name IS NULL,
+                  last_name COLLATE NOCASE, first_name COLLATE NOCASE, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let phones: String = r.get(4)?;
+        let emails: String = r.get(5)?;
+        Ok(Contact {
+            id: r.get(0)?,
+            first_name: r.get(1)?,
+            last_name: r.get(2)?,
+            organization: r.get(3)?,
+            phones: serde_json::from_str(&phones).unwrap_or_default(),
+            emails: serde_json::from_str(&emails).unwrap_or_default(),
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// A stored value from the backup's `meta` table (device name, etc.), if set.
 pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
     Ok(cache

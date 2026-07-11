@@ -26,6 +26,7 @@ pub struct ImportReport {
     pub media_items: usize,
     pub calls: usize,
     pub safari_visits: usize,
+    pub contacts: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
 }
@@ -44,8 +45,66 @@ pub fn normalize_lava(
     normalize_sms(&lava, cache, &mut report)?;
     normalize_calls(&lava, cache, &mut report)?;
     normalize_safari(&lava, cache, &mut report)?;
+    // Contacts come from a native parse of the decrypted AddressBook that
+    // iLEAPP extracts (its own lava output for contacts is lossy — see
+    // docs/spike-ileapp.md). A missing DB just means no contacts.
+    normalize_contacts(engine_out_dir, cache, &mut report)?;
 
     Ok(report)
+}
+
+/// Find, parse, and cache contacts from the decrypted `AddressBook.sqlitedb`
+/// that iLEAPP extracts under its output `data/` tree.
+fn normalize_contacts(
+    engine_out_dir: &Path,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+) -> Result<()> {
+    let Some(db) = find_extracted(engine_out_dir, "AddressBook.sqlitedb") else {
+        return Ok(());
+    };
+    let contacts = match crate::parsers::address_book::parse_address_book(&db) {
+        Ok(c) => c,
+        Err(e) => {
+            report.warnings.push(format!("contacts parse failed: {e}"));
+            return Ok(());
+        }
+    };
+
+    let conn = cache.conn();
+    for c in contacts {
+        conn.execute(
+            "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                c.first_name,
+                c.last_name,
+                c.organization,
+                serde_json::to_string(&c.phones).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&c.emails).unwrap_or_else(|_| "[]".into()),
+            ],
+        )?;
+        report.contacts += 1;
+    }
+    Ok(())
+}
+
+/// Depth-first search under `root` for a file named `name`. iLEAPP nests
+/// extracted files under `data/<domain path>/…`, so we can't hard-code a path.
+fn find_extracted(root: &Path, name: &str) -> Option<PathBuf> {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.file_name().and_then(|n| n.to_str()) == Some(name) {
+                return Some(path);
+            }
+        }
+    }
+    None
 }
 
 fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
