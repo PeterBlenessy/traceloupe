@@ -132,7 +132,7 @@ function FdaGuidance({ path }: { path: string }) {
       <CardHeader>
         <CardTitle>macOS is blocking access to your backups</CardTitle>
         <CardDescription>
-          Finder's backup folder is protected. To let Salvage read it, grant
+          Finder's backup folder is protected. To let Salvage read it, grant it
           Full Disk Access:
         </CardDescription>
       </CardHeader>
@@ -142,11 +142,16 @@ function FdaGuidance({ path }: { path: string }) {
             Open <b>System Settings → Privacy &amp; Security → Full Disk
             Access</b>
           </li>
-          <li>Enable it for <b>Salvage</b>, then reopen the app</li>
+          <li>
+            Salvage won't be listed yet — click <b>+</b>, then select the Salvage
+            app (in <b>Applications</b>) and turn it on
+          </li>
+          <li>Quit and reopen Salvage</li>
         </ol>
         <p className="mt-3">
-          Alternatively, copy the backup folder somewhere else and open it from
-          there. Blocked path: <code className="select-text">{path}</code>
+          Alternatively, copy the backup folder somewhere Salvage can already
+          read (like your Desktop) and open it from there — no Full Disk Access
+          needed. Blocked path: <code className="select-text">{path}</code>
         </p>
       </CardContent>
     </Card>
