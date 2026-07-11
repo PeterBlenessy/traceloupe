@@ -6,6 +6,7 @@
  * (Vite dev server, Playwright). Views depend only on `SalvageClient`.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export interface BackupInfo {
   id: string;
@@ -24,12 +25,35 @@ export type DiscoveryResult =
   | { status: "permissionDenied"; path: string }
   | { status: "notFound"; path: string };
 
+export type ImportProgress =
+  | { phase: "parsing"; current: number; total: number; fraction: number; artifact: string }
+  | { phase: "normalizing" };
+
+export interface ImportResult {
+  cachePath: string;
+  threads: number;
+  messages: number;
+  mediaItems: number;
+  warnings: string[];
+}
+
 export interface SalvageClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
+  engineStatus(): Promise<boolean>;
+  importBackup(args: {
+    backupPath: string;
+    backupId: string;
+    password: string;
+  }): Promise<ImportResult>;
+  /** Subscribe to import progress events. Returns an unsubscribe fn. */
+  onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
 }
 
 const tauriClient: SalvageClient = {
   listBackups: (root) => invoke<DiscoveryResult>("list_backups", { root }),
+  engineStatus: () => invoke<boolean>("engine_status"),
+  importBackup: (args) => invoke<ImportResult>("import_backup", args),
+  onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -55,8 +79,36 @@ const mockBackups: BackupInfo[] = [
   },
 ];
 
+// A mock progress emitter so the import flow is exercisable in the browser.
+type ProgressCb = (p: ImportProgress) => void;
+const mockProgressSubs = new Set<ProgressCb>();
+
 export const mockClient: SalvageClient = {
   listBackups: async () => ({ status: "ok", backups: mockBackups }),
+  engineStatus: async () => true,
+  importBackup: async () => {
+    const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];
+    for (let i = 0; i < artifacts.length; i++) {
+      await new Promise((r) => setTimeout(r, 250));
+      mockProgressSubs.forEach((cb) =>
+        cb({
+          phase: "parsing",
+          current: i + 1,
+          total: artifacts.length,
+          fraction: (i + 1) / artifacts.length,
+          artifact: artifacts[i],
+        }),
+      );
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
+    await new Promise((r) => setTimeout(r, 300));
+    return { cachePath: "/mock/cache.db", threads: 1, messages: 6, mediaItems: 1, warnings: [] };
+  },
+  onImportProgress: async (cb) => {
+    mockProgressSubs.add(cb);
+    return () => mockProgressSubs.delete(cb);
+  },
 };
 
 const isTauri = "__TAURI_INTERNALS__" in window;

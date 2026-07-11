@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import { Lock, LockOpen, Smartphone } from "lucide-react";
 import {
   Card,
@@ -10,8 +12,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { client, type BackupInfo } from "@/lib/ipc";
+import { ImportDialog } from "@/views/import-dialog";
 
 export function BackupPicker() {
+  const navigate = useNavigate();
+  const [selected, setSelected] = useState<BackupInfo | null>(null);
   const { data, isPending, error } = useQuery({
     queryKey: ["backups"],
     queryFn: () => client.listBackups(),
@@ -64,18 +69,35 @@ export function BackupPicker() {
           </Card>
         )}
         {data?.status === "ok" &&
-          data.backups.map((b) => <BackupCard key={b.id} backup={b} />)}
+          data.backups.map((b) => (
+            <BackupCard key={b.id} backup={b} onSelect={() => setSelected(b)} />
+          ))}
       </div>
+
+      {selected && (
+        <ImportDialog
+          backup={selected}
+          open={!!selected}
+          onOpenChange={(open) => !open && setSelected(null)}
+          onDone={() => {
+            setSelected(null);
+            navigate({ to: "/messages" });
+          }}
+        />
+      )}
     </div>
   );
 }
 
-function BackupCard({ backup }: { backup: BackupInfo }) {
+function BackupCard({ backup, onSelect }: { backup: BackupInfo; onSelect: () => void }) {
   const date = backup.lastBackupDate
     ? new Date(backup.lastBackupDate * 1000).toLocaleString()
     : "unknown date";
   return (
-    <Card className="cursor-pointer transition-colors hover:bg-accent/50">
+    <Card
+      onClick={onSelect}
+      className="cursor-pointer transition-colors hover:bg-accent/50"
+    >
       <CardContent className="flex items-center gap-4 py-4">
         <Smartphone className="size-8 text-muted-foreground" />
         <div className="min-w-0 flex-1">

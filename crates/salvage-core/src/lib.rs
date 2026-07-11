@@ -6,6 +6,7 @@
 
 pub mod cache;
 pub mod discovery;
+pub mod engine;
 mod error;
 pub mod import;
 pub mod normalize;
