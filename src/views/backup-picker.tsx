@@ -165,6 +165,17 @@ function BackupCard({ backup, onSelect }: { backup: BackupInfo; onSelect: () => 
 }
 
 function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }) {
+  const [openError, setOpenError] = useState<string | null>(null);
+
+  async function openSettings() {
+    setOpenError(null);
+    try {
+      await client.openFullDiskAccessSettings();
+    } catch (e) {
+      setOpenError(String(e));
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -189,15 +200,15 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
             </li>
             <li>Quit and reopen Salvage</li>
           </ol>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="mt-2"
-            onClick={() => void client.openFullDiskAccessSettings()}
-          >
+          <Button variant="secondary" size="sm" className="mt-2" onClick={openSettings}>
             <Settings className="size-4" />
             Open Full Disk Access settings
           </Button>
+          {openError && (
+            <p className="mt-2 select-text text-xs text-destructive">
+              Couldn't open Settings: {openError}
+            </p>
+          )}
         </div>
         <p className="text-xs">
           Blocked path: <code className="select-text">{path}</code>

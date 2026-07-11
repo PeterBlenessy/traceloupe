@@ -83,9 +83,11 @@ fn default_backup_root() -> Option<String> {
 
 /// Open System Settings straight to the Full Disk Access pane. A fixed URL,
 /// not one from the frontend, so this can't be used to open arbitrary targets.
+/// Uses the absolute path to `open` because a bundle launched from Finder has
+/// a minimal PATH that may not include `/usr/bin`.
 #[tauri::command]
 fn open_full_disk_access_settings() -> Result<(), String> {
-    std::process::Command::new("open")
+    std::process::Command::new("/usr/bin/open")
         .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
         .spawn()
         .map(|_| ())
