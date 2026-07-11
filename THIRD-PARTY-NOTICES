@@ -1,0 +1,17 @@
+Third-party notices
+===================
+
+This file records attribution obligations for third-party code, per the
+parser-provenance rules in architecture.md §10.
+
+- Native parsers written from reverse-engineered facts ("reference"
+  provenance) carry no notice and are not listed here.
+- Any parser ported from iLEAPP or another project ("port" provenance)
+  must add the upstream copyright line and license text below, and mark
+  its source header `// provenance: port of <module> — see
+  THIRD-PARTY-NOTICES`.
+- iLEAPP itself runs as a separate sidecar process (downloaded from its
+  official GitHub releases at first use); it is not linked into or
+  distributed within this binary.
+
+No entries yet.

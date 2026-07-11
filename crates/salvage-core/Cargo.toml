@@ -1,0 +1,17 @@
+[package]
+name = "salvage-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "UI-agnostic core for the local iOS backup browser: discovery, cache, import pipeline"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rusqlite = { workspace = true }
+plist = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
