@@ -37,6 +37,31 @@ export interface ImportResult {
   warnings: string[];
 }
 
+export interface ThreadSummary {
+  id: number;
+  identifier: string;
+  displayName: string | null;
+  service: string | null;
+  lastMessageAt: number | null;
+  messageCount: number;
+  snippet: string | null;
+}
+
+export interface Attachment {
+  filename: string | null;
+  mimeType: string | null;
+  localPath: string | null;
+}
+
+export interface Message {
+  id: number;
+  isFromMe: boolean;
+  sender: string | null;
+  body: string | null;
+  sentAt: number | null;
+  attachments: Attachment[];
+}
+
 export interface SalvageClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   engineStatus(): Promise<boolean>;
@@ -47,6 +72,10 @@ export interface SalvageClient {
   }): Promise<ImportResult>;
   /** Subscribe to import progress events. Returns an unsubscribe fn. */
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
+  hasActiveBackup(): Promise<boolean>;
+  openBackup(backupId: string): Promise<boolean>;
+  listThreads(): Promise<ThreadSummary[]>;
+  getThreadMessages(threadId: number): Promise<Message[]>;
 }
 
 const tauriClient: SalvageClient = {
@@ -54,6 +83,10 @@ const tauriClient: SalvageClient = {
   engineStatus: () => invoke<boolean>("engine_status"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
+  hasActiveBackup: () => invoke<boolean>("has_active_backup"),
+  openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
+  listThreads: () => invoke<ThreadSummary[]>("list_threads"),
+  getThreadMessages: (threadId) => invoke<Message[]>("get_thread_messages", { threadId }),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -79,6 +112,46 @@ const mockBackups: BackupInfo[] = [
   },
 ];
 
+// Mock message data mirroring the test fixture, so the Messages view is
+// exercisable in the browser. Becomes "active" after a mock import.
+const mockThreads: ThreadSummary[] = [
+  {
+    id: 1,
+    identifier: "+15551234567",
+    displayName: "+15551234567",
+    service: "iMessage",
+    lastMessageAt: 1717841460,
+    messageCount: 6,
+    snippet: "Here's the trailhead 📷",
+  },
+  {
+    id: 2,
+    identifier: "Mom",
+    displayName: "Mom",
+    service: "SMS",
+    lastMessageAt: 1717500000,
+    messageCount: 2,
+    snippet: "Call me when you land ❤️",
+  },
+];
+
+const mockMessages: Record<number, Message[]> = {
+  1: [
+    { id: 1, isFromMe: false, sender: "+15551234567", body: "Hey, are you around this weekend?", sentAt: 1717840800, attachments: [] },
+    { id: 2, isFromMe: true, sender: null, body: "Yeah! What did you have in mind?", sentAt: 1717840980, attachments: [] },
+    { id: 3, isFromMe: false, sender: "+15551234567", body: "Thinking of hiking Mission Peak", sentAt: 1717841100, attachments: [] },
+    { id: 4, isFromMe: true, sender: null, body: "I'm in. Saturday morning?", sentAt: 1717841220, attachments: [] },
+    { id: 5, isFromMe: false, sender: "+15551234567", body: "Perfect, I'll pick you up at 8", sentAt: 1717841340, attachments: [] },
+    { id: 6, isFromMe: true, sender: null, body: "Here's the trailhead 📷", sentAt: 1717841460, attachments: [{ filename: "salvage-test.png", mimeType: "image/png", localPath: null }] },
+  ],
+  2: [
+    { id: 7, isFromMe: true, sender: null, body: "Landing at 6, boarding now", sentAt: 1717499000, attachments: [] },
+    { id: 8, isFromMe: false, sender: "Mom", body: "Call me when you land ❤️", sentAt: 1717500000, attachments: [] },
+  ],
+};
+
+let mockActive = false;
+
 // A mock progress emitter so the import flow is exercisable in the browser.
 type ProgressCb = (p: ImportProgress) => void;
 const mockProgressSubs = new Set<ProgressCb>();
@@ -103,12 +176,20 @@ export const mockClient: SalvageClient = {
     await new Promise((r) => setTimeout(r, 200));
     mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
     await new Promise((r) => setTimeout(r, 300));
-    return { cachePath: "/mock/cache.db", threads: 1, messages: 6, mediaItems: 1, warnings: [] };
+    mockActive = true;
+    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 1, warnings: [] };
   },
   onImportProgress: async (cb) => {
     mockProgressSubs.add(cb);
     return () => mockProgressSubs.delete(cb);
   },
+  hasActiveBackup: async () => mockActive,
+  openBackup: async () => {
+    mockActive = true;
+    return true;
+  },
+  listThreads: async () => (mockActive ? mockThreads : []),
+  getThreadMessages: async (threadId) => (mockActive ? (mockMessages[threadId] ?? []) : []),
 };
 
 const isTauri = "__TAURI_INTERNALS__" in window;

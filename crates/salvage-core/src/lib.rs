@@ -10,6 +10,7 @@ pub mod engine;
 mod error;
 pub mod import;
 pub mod normalize;
+pub mod query;
 pub mod sidecar;
 
 pub use error::{Error, Result};

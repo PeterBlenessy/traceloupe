@@ -3,12 +3,38 @@
 //! or business logic lives here.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 
+use salvage_core::cache::CacheDb;
 use salvage_core::discovery::{self, BackupInfo};
 use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
+use salvage_core::query::{self, Message, ThreadSummary};
 use salvage_core::sidecar::CancelToken;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+/// The cache DB currently being browsed. Set when an import finishes or a
+/// previously-imported backup is opened; read by every artifact query.
+#[derive(Default)]
+struct ActiveBackup(Mutex<Option<PathBuf>>);
+
+impl ActiveBackup {
+    fn set(&self, path: PathBuf) {
+        *self.0.lock().unwrap() = Some(path);
+    }
+    fn path(&self) -> Result<PathBuf, String> {
+        self.0
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "no backup is open".to_string())
+    }
+}
+
+/// Open the active cache DB for a read query.
+fn open_active_cache(active: &ActiveBackup) -> Result<CacheDb, String> {
+    CacheDb::open(&active.path()?).map_err(|e| e.to_string())
+}
 
 /// Discovery outcome shaped for the UI: distinguishes "no backups" from
 /// "macOS denied access" so the frontend can show Full Disk Access guidance.
@@ -101,6 +127,7 @@ struct ImportResult {
 #[tauri::command]
 async fn import_backup(
     app: AppHandle,
+    active: State<'_, ActiveBackup>,
     backup_path: String,
     backup_id: String,
     password: String,
@@ -152,6 +179,9 @@ async fn import_backup(
     .map_err(|e| format!("import task panicked: {e}"))?
     .map_err(|e| e.to_string())?;
 
+    // Newly imported backup becomes the active one for browsing.
+    active.set(outcome.cache_path.clone());
+
     Ok(ImportResult {
         cache_path: outcome.cache_path.display().to_string(),
         threads: outcome.report.threads,
@@ -161,14 +191,56 @@ async fn import_backup(
     })
 }
 
+/// Open a previously-imported backup's cache (by id) for browsing, without
+/// re-running the engine. Returns false if no cache exists for that id yet.
+#[tauri::command]
+fn open_backup(app: AppHandle, active: State<'_, ActiveBackup>, backup_id: String) -> bool {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return false;
+    };
+    let cache_path = data_dir.join("caches").join(&backup_id).join("cache.db");
+    if cache_path.exists() {
+        active.set(cache_path);
+        true
+    } else {
+        false
+    }
+}
+
+/// Whether a backup is currently open for browsing.
+#[tauri::command]
+fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
+    active.path().is_ok()
+}
+
+#[tauri::command]
+fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSummary>, String> {
+    let cache = open_active_cache(&active)?;
+    query::list_threads(&cache).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_thread_messages(
+    active: State<'_, ActiveBackup>,
+    thread_id: i64,
+) -> Result<Vec<Message>, String> {
+    let cache = open_active_cache(&active)?;
+    query::get_messages(&cache, thread_id).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(ActiveBackup::default())
         .invoke_handler(tauri::generate_handler![
             list_backups,
             engine_status,
-            import_backup
+            import_backup,
+            open_backup,
+            has_active_backup,
+            list_threads,
+            get_thread_messages
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
