@@ -121,6 +121,37 @@ impl CancelToken {
     }
 }
 
+/// The iLEAPP artifact modules Salvage actually surfaces. Restricting the run
+/// to these (via an `.ilprofile`) is the difference between iLEAPP's ~600-module
+/// eager pass and a handful — the import cost the architecture said should be
+/// "bounded by running only the modules the product surfaces" (§8.5).
+///
+/// Keys are iLEAPP artifact keys (the `__artifacts_v2__` dict key). Notably
+/// `photosDbexif` is *excluded*: it re-encodes every HEIC in-process, the slow
+/// path behind long imports; `photosMetadata` gives camera-roll thumbnails
+/// without it. `addressBook` extracts AddressBook.sqlitedb for our native
+/// contacts parser.
+pub const SELECTED_MODULES: &[&str] = &[
+    "sms",
+    "callHistory",
+    "safariHistory",
+    "addressBook",
+    "photosMetadata",
+];
+
+/// Write an iLEAPP profile selecting only `SELECTED_MODULES` and return its path.
+fn write_profile(out_dir: &Path) -> Result<PathBuf> {
+    let plugins = SELECTED_MODULES
+        .iter()
+        .map(|m| format!("{m:?}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let json = format!(r#"{{"leapp": "ileapp", "format_version": 1, "plugins": [{plugins}]}}"#);
+    let path = out_dir.join("salvage.ilprofile");
+    std::fs::write(&path, json).map_err(|e| Error::io(&path, e))?;
+    Ok(path)
+}
+
 /// Run iLEAPP against `backup_dir`, writing output under `out_dir`. Calls
 /// `on_progress` for each artifact as it starts. Blocks until completion.
 ///
@@ -134,6 +165,7 @@ pub fn run_import(
     mut on_progress: impl FnMut(Progress),
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(out_dir).map_err(|e| Error::io(out_dir, e))?;
+    let profile = write_profile(out_dir)?;
 
     let mut cmd = cfg.command();
     cmd.arg("-t")
@@ -141,7 +173,10 @@ pub fn run_import(
         .arg("-i")
         .arg(backup_dir)
         .arg("-o")
-        .arg(out_dir);
+        .arg(out_dir)
+        // Restrict to the modules we surface — the import speedup.
+        .arg("-m")
+        .arg(&profile);
     // Only pass a password for encrypted backups; an empty `--itunes_password`
     // would make iLEAPP attempt (and fail) decryption on an unencrypted backup.
     if !password.is_empty() {
