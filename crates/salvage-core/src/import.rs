@@ -39,6 +39,14 @@ pub fn import_backup(
     cancel: &CancelToken,
     mut on_phase: impl FnMut(ImportPhase),
 ) -> Result<ImportOutcome> {
+    // Start from a clean slate so re-importing is idempotent, not additive:
+    // iLEAPP writes a new timestamped subfolder each run (they'd pile up and
+    // find_lava_db could pick a stale one), and the normalizer appends rows
+    // (a leftover cache would duplicate everything). Also frees the previous
+    // run's disk before writing the new one.
+    let _ = std::fs::remove_dir_all(work_dir);
+    remove_cache(cache_path);
+
     let lava_path = sidecar::run_import(cfg, backup_dir, password, work_dir, cancel, |p| {
         on_phase(ImportPhase::Parsing(p))
     })?;
@@ -57,6 +65,16 @@ pub fn import_backup(
         cache_path: cache_path.to_path_buf(),
         report,
     })
+}
+
+/// Remove a SQLite cache DB and its WAL/SHM sidecars, if present.
+fn remove_cache(cache_path: &Path) {
+    let _ = std::fs::remove_file(cache_path);
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = cache_path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let _ = std::fs::remove_file(sidecar);
+    }
 }
 
 #[cfg(test)]
@@ -128,6 +146,74 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reimport_is_idempotent() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        if Command::sqlite3_missing() {
+            eprintln!("skipping: sqlite3 CLI not found");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let script = tmp.path().join("fake_ileapp.sh");
+        {
+            let mut f = std::fs::File::create(&script).unwrap();
+            writeln!(
+                f,
+                r#"#!/bin/sh
+out=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done
+sub="$out/iLEAPP_Output_test"
+mkdir -p "$sub"
+sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, read_timestamp INTEGER, message TEXT, service TEXT, message_direction TEXT, message_sent TEXT, message_delivered TEXT, message_read TEXT, account TEXT, account_login TEXT, chat_contact_id TEXT, attachment_name TEXT, attachment_file TEXT, attachment_timestamp INTEGER, attachment_mimetype TEXT, attachment_size_bytes TEXT, message_row_id TEXT, chat_id TEXT, from_me TEXT); INSERT INTO sms (message_timestamp, message, chat_contact_id, chat_id, from_me) VALUES (1717840800, 'hi', '+15551234567', '1', '0');"
+"#
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let cfg = EngineConfig::frozen(&script);
+        let cache_path = tmp.path().join("cache.db");
+        let work_dir = tmp.path().join("work");
+        let run = || {
+            import_backup(
+                &cfg,
+                tmp.path(),
+                "pw",
+                &cache_path,
+                &work_dir,
+                &CancelToken::new(),
+                |_| {},
+            )
+            .unwrap()
+        };
+
+        // Import the same backup twice into the same paths.
+        assert_eq!(run().report.messages, 1);
+        assert_eq!(run().report.messages, 1);
+
+        // The cache must hold one message, not two — re-import replaced, not
+        // appended. And the work dir holds a single engine output.
+        let n: i64 = Connection::open(&cache_path)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1, "re-import must not duplicate rows");
+        let outputs = std::fs::read_dir(&work_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("iLEAPP_Output_")
+            })
+            .count();
+        assert_eq!(outputs, 1, "stale engine outputs must not accumulate");
     }
 
     // Small helper so the test can gracefully skip without sqlite3.
