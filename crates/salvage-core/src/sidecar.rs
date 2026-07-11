@@ -141,11 +141,13 @@ pub fn run_import(
         .arg("-i")
         .arg(backup_dir)
         .arg("-o")
-        .arg(out_dir)
-        .arg("--itunes_password")
-        .arg(password)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .arg(out_dir);
+    // Only pass a password for encrypted backups; an empty `--itunes_password`
+    // would make iLEAPP attempt (and fail) decryption on an unencrypted backup.
+    if !password.is_empty() {
+        cmd.arg("--itunes_password").arg(password);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd.spawn().map_err(|e| {
         Error::EngineNotFound(format!("failed to spawn {}: {e}", cfg.program.display()))

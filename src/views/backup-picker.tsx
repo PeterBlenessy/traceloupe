@@ -82,9 +82,8 @@ export function BackupPicker() {
             <CardHeader>
               <CardTitle>No backup folder found</CardTitle>
               <CardDescription>
-                Nothing at <code className="select-text">{data.path}</code>. Connect your
-                iPhone and create an encrypted backup with Finder, or choose a
-                backup folder yourself (e.g. one copied from another Mac).
+                Nothing at <code className="select-text">{data.path}</code>. Create
+                a backup with Finder, or choose a folder.
               </CardDescription>
             </CardHeader>
             <CardContent>{chooseButton}</CardContent>
@@ -96,8 +95,8 @@ export function BackupPicker() {
               <CardTitle>No backups here</CardTitle>
               <CardDescription>
                 {root
-                  ? "That folder has no backups in it. Choose a different folder, or the one backup folder itself."
-                  : "The backup folder exists but contains no backups. Create an encrypted backup of your iPhone with Finder first, or choose a folder."}
+                  ? "That folder has no backups in it. Choose a different one."
+                  : "No backups in the default folder yet. Create one with Finder, or choose a folder."}
               </CardDescription>
             </CardHeader>
             <CardContent>{chooseButton}</CardContent>

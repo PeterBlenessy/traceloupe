@@ -78,6 +78,18 @@ export function ImportDialog({
     }
   }
 
+  // Encryption drives the prompt: only encrypted backups need a password.
+  // `isEncrypted` is null when the flag couldn't be read — treat as optional.
+  const encrypted = backup.isEncrypted === true;
+  const showPasswordField = backup.isEncrypted !== false;
+  const canImport = !encrypted || password.length > 0;
+
+  const prompt = encrypted
+    ? "This backup is encrypted. Enter its password to import and browse it."
+    : backup.isEncrypted === false
+      ? "This backup isn't encrypted, so no password is needed."
+      : "Enter the backup password if it's encrypted.";
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -85,8 +97,7 @@ export function ImportDialog({
           <DialogTitle>{backup.deviceName ?? backup.id}</DialogTitle>
           <DialogDescription>
             {backup.productVersion ? `iOS ${backup.productVersion} · ` : ""}
-            This backup is encrypted. Enter its password to import and browse it.
-            Everything stays on this Mac.
+            {prompt} Everything stays on this Mac.
           </DialogDescription>
         </DialogHeader>
 
@@ -94,26 +105,28 @@ export function ImportDialog({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              if (password) void runImport();
+              if (canImport) void runImport();
             }}
             className="space-y-4"
           >
-            <div className="relative">
-              <Lock className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-              <Input
-                type="password"
-                autoFocus
-                placeholder="Backup password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="pl-8 select-text"
-              />
-            </div>
+            {showPasswordField && (
+              <div className="relative">
+                <Lock className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                <Input
+                  type="password"
+                  autoFocus
+                  placeholder={encrypted ? "Backup password" : "Backup password (optional)"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="pl-8 select-text"
+                />
+              </div>
+            )}
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={!password}>
+              <Button type="submit" disabled={!canImport}>
                 Import
               </Button>
             </DialogFooter>
