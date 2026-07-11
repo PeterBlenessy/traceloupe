@@ -1,4 +1,4 @@
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   Globe,
   HardDrive,
@@ -9,7 +9,20 @@ import {
   Search,
   Users,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
+import { ModeToggle } from "@/components/mode-toggle";
 
 const nav = [
   { to: "/gallery", label: "Gallery", icon: Image },
@@ -22,36 +35,49 @@ const nav = [
 ] as const;
 
 export function AppShell() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+
   return (
-    <div className="flex h-screen">
-      <aside className="flex w-52 shrink-0 flex-col border-r bg-muted/40">
-        <Link
-          to="/"
-          className="flex items-center gap-2 px-4 py-4 text-sm font-semibold"
-        >
-          <HardDrive className="size-4" />
-          Salvage
-        </Link>
-        <nav className="flex flex-col gap-0.5 px-2">
-          {nav.map(({ to, label, icon: Icon }) => (
-            <Link
-              key={to}
-              to={to}
-              className={cn(
-                "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground",
-                "hover:bg-accent hover:text-accent-foreground",
-                "[&.active]:bg-accent [&.active]:text-accent-foreground [&.active]:font-medium",
-              )}
-            >
-              <Icon className="size-4" />
-              {label}
-            </Link>
-          ))}
-        </nav>
-      </aside>
-      <main className="flex-1 overflow-auto">
-        <Outlet />
-      </main>
-    </div>
+    <SidebarProvider>
+      <Sidebar>
+        <SidebarHeader>
+          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 font-semibold">
+            <HardDrive className="size-4" />
+            Salvage
+          </Link>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {nav.map(({ to, label, icon: Icon }) => (
+                  <SidebarMenuItem key={to}>
+                    <SidebarMenuButton asChild isActive={pathname === to}>
+                      <Link to={to}>
+                        <Icon />
+                        <span>{label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+      </Sidebar>
+      <SidebarInset>
+        {/* A slim bar carrying the sidebar toggle and theme control; views
+            render their own headers below it. */}
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
+          <SidebarTrigger />
+          <div className="ml-auto">
+            <ModeToggle />
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <Outlet />
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

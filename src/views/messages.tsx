@@ -2,10 +2,15 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ImageIcon, MessageSquare, Paperclip } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyView, ListDetail, ViewHeader } from "@/components/view";
 import { cn } from "@/lib/utils";
 import { formatListTime, formatMessageTime } from "@/lib/format";
+import { initials } from "@/lib/contact";
 import { client, type Message, type ThreadSummary } from "@/lib/ipc";
 
 export function MessagesView() {
@@ -23,53 +28,60 @@ export function MessagesView() {
 
   if (active === false) {
     return (
-      <EmptyState
+      <EmptyView
+        icon={MessageSquare}
         title="No backup open"
-        body="Import a backup to read its messages."
-        action={<Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>}
-      />
+        description="Import a backup to read its messages."
+      >
+        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+      </EmptyView>
     );
   }
 
-  const selected =
-    threads?.find((t) => t.id === selectedId) ?? threads?.[0] ?? null;
+  const selected = threads?.find((t) => t.id === selectedId) ?? threads?.[0] ?? null;
 
   return (
-    <div className="flex h-full">
-      <div className="flex w-72 shrink-0 flex-col border-r">
-        <header className="px-4 py-3 text-sm font-semibold">Messages</header>
-        <div className="flex-1 overflow-auto">
-          {isPending &&
-            Array.from({ length: 5 }).map((_, i) => (
-              <div key={i} className="px-4 py-3">
-                <Skeleton className="h-10 w-full" />
-              </div>
+    <ListDetail
+      master={
+        <>
+          <ViewHeader title="Messages" count={threads?.length} />
+          <ScrollArea className="flex-1">
+            {isPending &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="px-3 py-2">
+                  <Skeleton className="h-12 w-full" />
+                </div>
+              ))}
+            {threads?.length === 0 && (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                No messages in this backup.
+              </p>
+            )}
+            {threads?.map((t) => (
+              <ThreadRow
+                key={t.id}
+                thread={t}
+                active={selected?.id === t.id}
+                onClick={() => setSelectedId(t.id)}
+              />
             ))}
-          {threads?.length === 0 && (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              No messages in this backup.
-            </p>
-          )}
-          {threads?.map((t) => (
-            <ThreadRow
-              key={t.id}
-              thread={t}
-              active={selected?.id === t.id}
-              onClick={() => setSelectedId(t.id)}
-            />
-          ))}
-        </div>
-      </div>
-      <div className="flex-1">
-        {selected ? (
+          </ScrollArea>
+        </>
+      }
+      detail={
+        selected ? (
           <Conversation thread={selected} />
         ) : (
           !isPending && (
-            <EmptyState title="No conversation selected" body="Pick a thread on the left." />
+            <EmptyView
+              icon={MessageSquare}
+              title="No conversation selected"
+              description="Pick a thread on the left."
+            />
           )
-        )}
-      </div>
-    </div>
+        )
+      }
+    />
   );
 }
 
@@ -82,27 +94,28 @@ function ThreadRow({
   active: boolean;
   onClick: () => void;
 }) {
+  const name = thread.displayName ?? thread.identifier;
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex w-full flex-col gap-0.5 border-b px-4 py-3 text-left transition-colors",
-        "hover:bg-accent/50",
-        active && "bg-accent",
-      )}
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate text-sm font-medium">
-          {thread.displayName ?? thread.identifier}
-        </span>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {formatListTime(thread.lastMessageAt)}
-        </span>
-      </div>
-      <span className="truncate text-xs text-muted-foreground">
-        {thread.snippet ?? "No messages"}
-      </span>
-    </button>
+    <Item asChild data-active={active} className="rounded-none data-[active=true]:bg-accent">
+      <button onClick={onClick} className="w-full text-left">
+        <ItemMedia>
+          <Avatar>
+            <AvatarFallback>{initials(name)}</AvatarFallback>
+          </Avatar>
+        </ItemMedia>
+        <ItemContent className="gap-0.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <ItemTitle className="truncate">{name}</ItemTitle>
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {formatListTime(thread.lastMessageAt)}
+            </span>
+          </div>
+          <span className="truncate text-xs text-muted-foreground">
+            {thread.snippet ?? "No messages"}
+          </span>
+        </ItemContent>
+      </button>
+    </Item>
   );
 }
 
@@ -111,32 +124,23 @@ function Conversation({ thread }: { thread: ThreadSummary }) {
     queryKey: ["messages", thread.id],
     queryFn: () => client.getThreadMessages(thread.id),
   });
+  const name = thread.displayName ?? thread.identifier;
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-center gap-2 border-b px-4 py-3">
-        <div className="flex size-8 items-center justify-center rounded-full bg-muted">
-          <MessageSquare className="size-4 text-muted-foreground" />
+      <ViewHeader title={name}>
+        {thread.service && (
+          <span className="text-xs text-muted-foreground">{thread.service}</span>
+        )}
+      </ViewHeader>
+      <ScrollArea className="flex-1">
+        <div className="space-y-1 px-4 py-4">
+          {isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {messages?.map((m, i) => (
+            <MessageBubble key={m.id} message={m} showTime={shouldShowTime(messages, i)} />
+          ))}
         </div>
-        <div>
-          <div className="text-sm font-medium">
-            {thread.displayName ?? thread.identifier}
-          </div>
-          {thread.service && (
-            <div className="text-xs text-muted-foreground">{thread.service}</div>
-          )}
-        </div>
-      </header>
-      <div className="flex-1 space-y-1 overflow-auto px-4 py-4">
-        {isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {messages?.map((m, i) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            showTime={shouldShowTime(messages, i)}
-          />
-        ))}
-      </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -167,7 +171,9 @@ function MessageBubble({ message, showTime }: { message: Message; showTime: bool
               : "rounded-bl-sm bg-muted text-foreground",
           )}
         >
-          {message.body && <p className="whitespace-pre-wrap break-words select-text">{message.body}</p>}
+          {message.body && (
+            <p className="select-text whitespace-pre-wrap break-words">{message.body}</p>
+          )}
           {message.attachments.map((a, i) => (
             <div
               key={i}
@@ -181,29 +187,11 @@ function MessageBubble({ message, showTime }: { message: Message; showTime: bool
               ) : (
                 <Paperclip className="size-3.5" />
               )}
-              <span className="truncate select-text">{a.filename ?? "attachment"}</span>
+              <span className="select-text truncate">{a.filename ?? "attachment"}</span>
             </div>
           ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-function EmptyState({
-  title,
-  body,
-  action,
-}: {
-  title: string;
-  body: string;
-  action?: React.ReactNode;
-}) {
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-      <h1 className="text-lg font-medium">{title}</h1>
-      <p className="max-w-sm text-sm text-muted-foreground">{body}</p>
-      {action && <div className="mt-2">{action}</div>}
     </div>
   );
 }
