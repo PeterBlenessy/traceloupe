@@ -17,7 +17,15 @@ Safari history, and Notes. All processing is local; nothing leaves your Mac.
 
 ```sh
 pnpm install
-pnpm tauri dev        # run the app
+pnpm setup:engine     # one-time: install the local iLEAPP engine into ./engine
+pnpm app:dev          # run the dev app (Salvage Dev), wired to the local engine
 cargo test -p salvage-core   # core tests
 pnpm dev              # frontend only, in a browser with mocked IPC
 ```
+
+**The iLEAPP engine.** Imports are powered by iLEAPP, which isn't bundled or
+auto-downloaded yet. `pnpm setup:engine` installs a pinned iLEAPP + Python venv
+into `./engine` (git-ignored, ~220 MB), and `pnpm app:dev` points the app at it
+via the `SALVAGE_PYTHON` / `SALVAGE_ILEAPP_SOURCE` env vars. Without it, imports
+report "engine not installed". See `docs/spike-ileapp.md` for why deps are
+pinned and the plan to ship a re-frozen binary later.

@@ -25,3 +25,6 @@ dist-ssr
 
 # Rust
 target
+
+# Local iLEAPP engine (set up via scripts/setup-engine.sh)
+/engine
