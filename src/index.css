@@ -112,4 +112,14 @@
     cursor: default;
     overscroll-behavior: none;
   }
+  /* Every clickable control shows the same pointer cursor, so buttons, list
+     rows, nav items and links all read as interactive. Disabled controls keep
+     the default arrow. */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  label[for],
+  summary {
+    cursor: pointer;
+  }
 }
