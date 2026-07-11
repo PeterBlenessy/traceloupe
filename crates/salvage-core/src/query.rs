@@ -225,6 +225,8 @@ pub struct MediaItem {
     pub id: i64,
     /// "photo" | "video".
     pub kind: String,
+    /// App/artifact the media was found in ("Messages", "WhatsApp", …).
+    pub source: Option<String>,
     pub mime_type: Option<String>,
     pub filename: Option<String>,
     pub taken_at: Option<i64>,
@@ -235,22 +237,39 @@ pub struct MediaItem {
 pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, kind, mime_type, relative_path, taken_at
+        "SELECT id, kind, source, mime_type, relative_path, taken_at
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
     )?;
     let rows = stmt.query_map([], |r| {
-        let rel: Option<String> = r.get(3)?;
+        let rel: Option<String> = r.get(4)?;
         Ok(MediaItem {
             id: r.get(0)?,
             kind: r.get(1)?,
-            mime_type: r.get(2)?,
+            source: r.get(2)?,
+            mime_type: r.get(3)?,
             // Show just the basename as the filename.
             filename: rel.map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
-            taken_at: r.get(4)?,
+            taken_at: r.get(5)?,
         })
     })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// Distinct media sources present, with a count each, for the gallery filter.
+/// Ordered by count descending (biggest sources first).
+pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(source, 'Other') AS s, COUNT(*) AS n
+         FROM media_items
+         WHERE local_path IS NOT NULL
+         GROUP BY s
+         ORDER BY n DESC, s",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }

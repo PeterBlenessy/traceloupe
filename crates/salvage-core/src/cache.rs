@@ -114,6 +114,9 @@ CREATE TABLE media_items (
     domain          TEXT,                     -- e.g. 'CameraRollDomain'
     relative_path   TEXT NOT NULL,
     kind            TEXT NOT NULL,            -- 'photo' | 'video'
+    -- Which app/artifact the media was found in ('Messages', 'Photos',
+    -- 'WhatsApp', …), for the gallery's source filter. NULL if unknown.
+    source          TEXT,
     mime_type       TEXT,
     taken_at        INTEGER,
     width           INTEGER,

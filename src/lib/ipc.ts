@@ -74,10 +74,14 @@ export interface Contact {
 export interface MediaItem {
   id: number;
   kind: string;
+  source: string | null;
   mimeType: string | null;
   filename: string | null;
   takenAt: number | null;
 }
+
+/** A media source and how many items came from it, for the gallery filter. */
+export type MediaSource = [source: string, count: number];
 
 export interface ThreadSummary {
   id: number;
@@ -122,8 +126,9 @@ export interface SalvageClient {
   listSafariHistory(): Promise<HistoryVisit[]>;
   listContacts(): Promise<Contact[]>;
   listMedia(): Promise<MediaItem[]>;
-  /** URL the webview can load for a media item's bytes. */
-  mediaUrl(id: number): string;
+  mediaSources(): Promise<MediaSource[]>;
+  /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
+  mediaUrl(id: number, opts?: { thumb?: boolean }): string;
 }
 
 const tauriClient: SalvageClient = {
@@ -139,8 +144,10 @@ const tauriClient: SalvageClient = {
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
+  mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
-  mediaUrl: (id) => `salvage-media://localhost/${id}`,
+  mediaUrl: (id, opts) =>
+    `salvage-media://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
 };
 
 const mockBackups: BackupInfo[] = [
@@ -224,13 +231,19 @@ const mockContacts: Contact[] = [
 ];
 
 const mockMedia: MediaItem[] = [
-  { id: 1, kind: "photo", mimeType: "image/png", filename: "salvage-test.png", takenAt: 1717841460 },
-  { id: 2, kind: "photo", mimeType: "image/png", filename: "sunset.png", takenAt: 1717841520 },
-  { id: 3, kind: "photo", mimeType: "image/png", filename: "forest.png", takenAt: 1717841580 },
+  { id: 1, kind: "photo", source: "Messages", mimeType: "image/png", filename: "salvage-test.png", takenAt: 1717841460 },
+  { id: 2, kind: "photo", source: "Messages", mimeType: "image/png", filename: "sunset.png", takenAt: 1717841520 },
+  { id: 3, kind: "photo", source: "Photos", mimeType: "image/png", filename: "forest.png", takenAt: 1717841580 },
+  { id: 4, kind: "photo", source: "WhatsApp", mimeType: "image/heic", filename: "IMG_0421.heic", takenAt: 1717841640 },
 ];
 
 // Solid-color SVG data URIs mirroring the fixture's seeded photos.
-const mockMediaColors: Record<number, string> = { 1: "#4a90e2", 2: "#f0823c", 3: "#3ca05a" };
+const mockMediaColors: Record<number, string> = {
+  1: "#4a90e2",
+  2: "#f0823c",
+  3: "#3ca05a",
+  4: "#c8507a",
+};
 function mockMediaDataUrl(id: number): string {
   const color = mockMediaColors[id] ?? "#888";
   const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><rect width='240' height='240' fill='${color}'/></svg>`;
@@ -264,7 +277,7 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
     await new Promise((r) => setTimeout(r, 300));
     mockActive = true;
-    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 3, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
+    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 4, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
   },
   onImportProgress: async (cb) => {
     mockProgressSubs.add(cb);
@@ -281,6 +294,15 @@ export const mockClient: SalvageClient = {
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listContacts: async () => (mockActive ? mockContacts : []),
   listMedia: async () => (mockActive ? mockMedia : []),
+  mediaSources: async () => {
+    if (!mockActive) return [];
+    const counts = new Map<string, number>();
+    for (const m of mockMedia) {
+      const s = m.source ?? "Other";
+      counts.set(s, (counts.get(s) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  },
   mediaUrl: (id) => mockMediaDataUrl(id),
 };
 

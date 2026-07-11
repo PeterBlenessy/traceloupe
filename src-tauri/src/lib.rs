@@ -2,6 +2,8 @@
 //! Commands translate core results into serializable responses; no parsing
 //! or business logic lives here.
 
+mod media;
+
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -258,12 +260,27 @@ fn list_media(active: State<'_, ActiveBackup>) -> Result<Vec<MediaItem>, String>
     query::list_media(&cache).map_err(|e| e.to_string())
 }
 
-/// Serve a media item's bytes over the `salvage-media://localhost/<id>` scheme.
+/// (source label, count) pairs for the gallery's source filter.
+#[tauri::command]
+fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, String> {
+    let cache = open_active_cache(&active)?;
+    query::media_sources(&cache).map_err(|e| e.to_string())
+}
+
+/// Serve a media item over the `salvage-media://localhost/<id>` scheme
+/// (append `?thumb=1` for a downscaled thumbnail).
 ///
 /// Security: the handler takes only a numeric id, looks up the file path
 /// recorded for it in the active cache, and serves that. It never accepts a
 /// path from the request, so it can't be coerced into reading arbitrary files.
-fn media_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
+///
+/// HEIC (the format most iOS photos use) is transcoded to JPEG so the webview
+/// can render it; thumbnails are downscaled JPEGs. Both are cached (see media).
+fn media_protocol_response(
+    app: &AppHandle,
+    path: &str,
+    query_str: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
     use tauri::http::{Response, StatusCode};
 
     let not_found = || {
@@ -273,10 +290,12 @@ fn media_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Response
             .unwrap()
     };
 
-    // Path is "/<id>".
+    // Path is "/<id>"; the query may carry "thumb=1".
     let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
         return not_found();
     };
+    let want_thumb = query_str.is_some_and(|q| q.contains("thumb"));
+
     let active = app.state::<ActiveBackup>();
     let Ok(cache_path) = active.path() else {
         return not_found();
@@ -287,17 +306,28 @@ fn media_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Response
     let Ok(Some((local_path, mime))) = query::media_blob(&cache, id) else {
         return not_found();
     };
-    let Ok(bytes) = std::fs::read(&local_path) else {
+
+    // Converted thumbnails/full-JPEGs are cached alongside the backup's cache DB.
+    let thumbs_dir = cache_path
+        .parent()
+        .map(|p| p.join("thumbs"))
+        .unwrap_or_else(|| PathBuf::from("thumbs"));
+
+    let Some(rendered) = media::render(
+        std::path::Path::new(&local_path),
+        &thumbs_dir,
+        id,
+        want_thumb,
+        mime.as_deref(),
+    ) else {
         return not_found();
     };
+
     Response::builder()
         .status(StatusCode::OK)
-        .header(
-            "Content-Type",
-            mime.as_deref().unwrap_or("application/octet-stream"),
-        )
+        .header("Content-Type", rendered.content_type)
         .header("Cache-Control", "no-cache")
-        .body(bytes)
+        .body(rendered.bytes)
         .unwrap()
 }
 
@@ -308,7 +338,8 @@ pub fn run() {
         .manage(ActiveBackup::default())
         .register_uri_scheme_protocol("salvage-media", |ctx, request| {
             let path = request.uri().path().to_string();
-            media_protocol_response(ctx.app_handle(), &path)
+            let query = request.uri().query().map(str::to_string);
+            media_protocol_response(ctx.app_handle(), &path, query.as_deref())
         })
         .invoke_handler(tauri::generate_handler![
             list_backups,
@@ -321,7 +352,8 @@ pub fn run() {
             list_calls,
             list_safari_history,
             list_contacts,
-            list_media
+            list_media,
+            media_sources
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

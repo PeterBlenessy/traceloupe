@@ -27,6 +27,7 @@ This script is intentionally dependency-light: stdlib + `cryptography`.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import os
 import plistlib
@@ -76,12 +77,31 @@ def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
     )
 
 
+# A real 400x300 HEIC (the format most iOS photos use), so the gallery's
+# native HEIC->JPEG thumbnailing is exercised. Produced once with macOS `sips`
+# and embedded here to keep this generator dependency-free.
+HEIC_PHOTO = base64.b64decode(
+    "AAAAJGZ0eXBoZWljAAAAAG1pZjFNaVBybWlhZk1pSEJoZWljAAABhW1ldGEAAAAAAAAAIWhkbHIA"
+    "AAAAAAAAAHBpY3QAAAAAAAAAAAAAAAAAAAAAJGRpbmYAAAAcZHJlZgAAAAAAAAABAAAADHVybCAA"
+    "AAABAAAADnBpdG0AAAAAAAEAAAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABodmMxAAAAAOVp"
+    "cHJwAAAAxGlwY28AAAATY29scm5jbHgAAgACAAaAAAAADGNsbGkAywBAAAAAFGlzcGUAAAAAAAAB"
+    "kAAAASwAAAAJaXJvdAAAAAAQcGl4aQAAAAADCAgIAAAAcGh2Y0MBA3AAAACwAAAAAAA88AD8/fj4"
+    "AAALA6AAAQAXQAEMAf//A3AAAAMAsAAAAwAAAwA8cCShAAEAIkIBAQNwAAADALAAAAMAAAMAPKAM"
+    "iATH3iHuRZVNwICBgCCiAAEACUQBwGFyyEBTJAAAABlpcG1hAAAAAAAAAAEAAQaBAgMFhoQAAAAe"
+    "aWxvYwAAAABEAAABAAEAAAABAAABuQAAAI8AAAABbWRhdAAAAAAAAACfAAAAiygBr4ot3MWpSkog"
+    "R6Ccf/r3Xe/QleGNl7N8Yu5ll5Ob7uQcPm3F/OIL5+73g/zQAOqAIrDE7BmDUxd4AABBQArDa+Hc"
+    "QYAAAAMDYgLV4LCAAAADAAf4BDoAAAMAAAMAB8wAAAMAAAMAAAMCsgAAAwAAAwAAmIAAAAMAAAMA"
+    "DsgAAAMAAAMAAAMAICA="
+)
+
 # A few visible photos for the gallery, seeded as message attachments so they
-# flow through iLEAPP's media check-in into _lava_media_items.
+# flow through iLEAPP's media check-in into _lava_media_items. Mixed formats
+# including HEIC, matching a real camera roll.
 GALLERY_PHOTOS = [
-    ("Library/SMS/Attachments/aa/00/salvage-test.png", solid_png(64, 64, (74, 144, 226))),
-    ("Library/SMS/Attachments/bb/01/sunset.png", solid_png(96, 64, (240, 130, 60))),
-    ("Library/SMS/Attachments/cc/02/forest.png", solid_png(64, 96, (60, 160, 90))),
+    ("Library/SMS/Attachments/aa/00/salvage-test.png", "image/png", solid_png(64, 64, (74, 144, 226))),
+    ("Library/SMS/Attachments/bb/01/sunset.png", "image/png", solid_png(96, 64, (240, 130, 60))),
+    ("Library/SMS/Attachments/cc/02/forest.png", "image/png", solid_png(64, 96, (60, 160, 90))),
+    ("Library/SMS/Attachments/dd/03/IMG_0421.heic", "image/heic", HEIC_PHOTO),
 ]
 
 
@@ -200,8 +220,13 @@ def seed_sms_db(path: Path) -> None:
     # the gallery several photos. Caption text (rather than NULL) so iLEAPP's
     # chat renderer doesn't choke on a NaN; media check-in is driven by the
     # attachment row regardless of message text.
-    captions = ["Here's the trailhead 📷", "Sunset from the summit 🌅", "Into the woods 🌲"]
-    for i, (rel, png) in enumerate(GALLERY_PHOTOS):
+    captions = [
+        "Here's the trailhead 📷",
+        "Sunset from the summit 🌅",
+        "Into the woods 🌲",
+        "Straight off the camera 📸",
+    ]
+    for i, (rel, mime, blob) in enumerate(GALLERY_PHOTOS):
         att_rowid = len(convo) + 1 + i
         ts = cocoa_ns(base.replace(minute=11 + i))
         name = rel.rsplit("/", 1)[-1]
@@ -216,8 +241,8 @@ def seed_sms_db(path: Path) -> None:
         con.execute(
             """INSERT INTO attachment
                (ROWID, transfer_name, filename, created_date, mime_type, total_bytes)
-               VALUES (?, ?, ?, ?, 'image/png', ?)""",
-            (i + 1, name, f"~/{rel}", ts, len(png)),
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (i + 1, name, f"~/{rel}", ts, mime, len(blob)),
         )
         con.execute(
             "INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)",
@@ -359,7 +384,7 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
         ("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata", calls_path.read_bytes()),
         ("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", ab_path.read_bytes()),
     ]
-    files += [("MediaDomain", rel, png) for rel, png in GALLERY_PHOTOS]
+    files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
     return files
 
 

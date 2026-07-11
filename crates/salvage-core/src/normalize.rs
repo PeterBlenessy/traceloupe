@@ -130,6 +130,8 @@ fn normalize_media(
     if !table_exists(lava, "_lava_media_items")? {
         return Ok(());
     }
+    let has_refs = table_exists(lava, "_lava_media_references")?;
+
     let mut stmt =
         lava.prepare("SELECT id, source_path, extraction_path, type FROM _lava_media_items")?;
     let rows = stmt.query_map([], |r| {
@@ -145,18 +147,24 @@ fn normalize_media(
     for row in rows {
         let (id, source_path, extraction_path, mime) = row?;
         let kind = media_kind(mime.as_deref());
+        let source = if has_refs {
+            media_source(lava, &id)?
+        } else {
+            None
+        };
         let local_path = match extraction_path {
             Some(rel) => resolve_extraction_path(engine_out_dir, &rel, report),
             None => None,
         };
         conn.execute(
             "INSERT OR REPLACE INTO media_items
-                 (engine_media_id, domain, relative_path, kind, mime_type, local_path)
-             VALUES (?1, NULL, ?2, ?3, ?4, ?5)",
+                 (engine_media_id, domain, relative_path, kind, source, mime_type, local_path)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 id,
                 source_path.unwrap_or_default(),
                 kind,
+                source,
                 mime,
                 local_path.map(|p| p.to_string_lossy().into_owned()),
             ],
@@ -164,6 +172,30 @@ fn normalize_media(
         report.media_items += 1;
     }
     Ok(())
+}
+
+/// The app/artifact a media item was found in, from `_lava_media_references`
+/// (which app referenced it). Uses the friendlier `artifact_name`; if a photo
+/// is referenced by several artifacts, takes the first.
+fn media_source(lava: &Connection, media_item_id: &str) -> Result<Option<String>> {
+    Ok(lava
+        .query_row(
+            "SELECT artifact_name FROM _lava_media_references
+             WHERE media_item_id = ?1 AND artifact_name IS NOT NULL
+             ORDER BY artifact_name LIMIT 1",
+            [media_item_id],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|a| friendly_source(&a)))
+}
+
+/// Map an iLEAPP artifact name to a gallery-friendly source label.
+fn friendly_source(artifact: &str) -> String {
+    match artifact {
+        "SMS" => "Messages".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn media_kind(mime: Option<&str>) -> &'static str {
