@@ -14,10 +14,15 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { ImportDialog } from "@/views/import-dialog";
+import { EngineSetup } from "@/views/engine-setup";
 
 export function BackupPicker() {
   const navigate = useNavigate();
   const [selected, setSelected] = useState<BackupInfo | null>(null);
+  const { data: engineReady } = useQuery({
+    queryKey: ["engineStatus"],
+    queryFn: () => client.engineStatus(),
+  });
   // A folder the user picked (via the native panel), overriding the default
   // MobileSync scan. Selecting a folder grants access without Full Disk Access.
   const [root, setRoot] = useState<string | null>(null);
@@ -62,6 +67,11 @@ export function BackupPicker() {
         <p className="mt-3 text-xs text-muted-foreground">
           Looking in <code className="select-text">{root}</code>
         </p>
+      )}
+      {engineReady === false && (
+        <div className="mt-6">
+          <EngineSetup />
+        </div>
       )}
       <div className="mt-6 flex flex-col gap-3">
         {isPending && (

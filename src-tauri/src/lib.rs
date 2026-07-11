@@ -11,6 +11,7 @@ use salvage_core::cache::CacheDb;
 use salvage_core::discovery::{self, BackupInfo};
 use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
+use salvage_core::install;
 use salvage_core::query::{self, Call, Contact, HistoryVisit, MediaItem, Message, ThreadSummary};
 use salvage_core::sidecar::CancelToken;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -99,6 +100,77 @@ fn open_full_disk_access_settings() -> Result<(), String> {
 #[tauri::command]
 fn engine_status(app: AppHandle) -> bool {
     resolve_engine(&app).is_some()
+}
+
+/// Engine setup state for the UI: whether one is resolvable now, its pinned
+/// version, and whether a downloadable build has been published yet.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EngineInfo {
+    installed: bool,
+    version: String,
+    can_download: bool,
+}
+
+#[tauri::command]
+fn engine_info(app: AppHandle) -> EngineInfo {
+    let manifest = install::pinned_engine();
+    EngineInfo {
+        installed: resolve_engine(&app).is_some(),
+        version: manifest.version.clone(),
+        can_download: manifest.is_published(),
+    }
+}
+
+/// Download and install the pinned engine into `<app_data>/engine`, streaming
+/// progress on `engine://progress`. After it succeeds, `resolve_engine` finds
+/// the installed binary and imports work.
+#[tauri::command]
+async fn install_engine(app: AppHandle) -> Result<(), String> {
+    let manifest = install::pinned_engine();
+    let install_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("engine");
+
+    tauri::async_runtime::spawn_blocking(move || {
+        install::install_engine(&manifest, &install_dir, |p| {
+            let ev = match p {
+                install::InstallProgress::Downloading { received, total } => {
+                    EngineEvent::Downloading {
+                        received,
+                        total,
+                        fraction: if total > 0 {
+                            received as f32 / total as f32
+                        } else {
+                            0.0
+                        },
+                    }
+                }
+                install::InstallProgress::Verifying => EngineEvent::Verifying,
+                install::InstallProgress::Done => EngineEvent::Done,
+            };
+            let _ = app.emit("engine://progress", ev);
+        })
+        .map(|_| ())
+    })
+    .await
+    .map_err(|e| format!("install task panicked: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// Progress event for engine install, on the `engine://progress` channel.
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "phase", rename_all = "camelCase")]
+enum EngineEvent {
+    Downloading {
+        received: u64,
+        total: u64,
+        fraction: f32,
+    },
+    Verifying,
+    Done,
 }
 
 /// Resolve the iLEAPP engine from env overrides and the app data dir.
@@ -372,6 +444,8 @@ pub fn run() {
             default_backup_root,
             open_full_disk_access_settings,
             engine_status,
+            engine_info,
+            install_engine,
             import_backup,
             open_backup,
             has_active_backup,

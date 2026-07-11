@@ -109,6 +109,20 @@ export interface Message {
   attachments: Attachment[];
 }
 
+export interface EngineInfo {
+  /** An engine is resolvable right now (imports will work). */
+  installed: boolean;
+  /** Pinned engine version, e.g. "iLEAPP v2026.1.0". */
+  version: string;
+  /** A downloadable build has been published (the download flow is live). */
+  canDownload: boolean;
+}
+
+export type EngineProgress =
+  | { phase: "downloading"; received: number; total: number; fraction: number }
+  | { phase: "verifying" }
+  | { phase: "done" };
+
 export interface SalvageClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
@@ -122,6 +136,11 @@ export interface SalvageClient {
   /** Open System Settings at the Full Disk Access pane. */
   openFullDiskAccessSettings(): Promise<void>;
   engineStatus(): Promise<boolean>;
+  engineInfo(): Promise<EngineInfo>;
+  /** Download + verify + install the pinned engine. */
+  installEngine(): Promise<void>;
+  /** Subscribe to engine-install progress. Returns an unsubscribe fn. */
+  onEngineProgress(cb: (p: EngineProgress) => void): Promise<UnlistenFn>;
   importBackup(args: {
     backupPath: string;
     backupId: string;
@@ -157,6 +176,9 @@ const tauriClient: SalvageClient = {
   },
   openFullDiskAccessSettings: () => invoke<void>("open_full_disk_access_settings"),
   engineStatus: () => invoke<boolean>("engine_status"),
+  engineInfo: () => invoke<EngineInfo>("engine_info"),
+  installEngine: () => invoke<void>("install_engine"),
+  onEngineProgress: (cb) => listen<EngineProgress>("engine://progress", (e) => cb(e.payload)),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
@@ -279,6 +301,8 @@ let mockActive = false;
 type ProgressCb = (p: ImportProgress) => void;
 const mockProgressSubs = new Set<ProgressCb>();
 
+const mockEngineSubs = new Set<(p: EngineProgress) => void>();
+
 export const mockClient: SalvageClient = {
   listBackups: async () => ({ status: "ok", backups: mockBackups }),
   defaultBackupRoot: async () =>
@@ -287,6 +311,22 @@ export const mockClient: SalvageClient = {
     "/Users/dev/Library/Application Support/MobileSync/Backup",
   openFullDiskAccessSettings: async () => {},
   engineStatus: async () => true,
+  engineInfo: async () => ({ installed: true, version: "iLEAPP v2026.1.0", canDownload: true }),
+  installEngine: async () => {
+    for (let i = 1; i <= 5; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      mockEngineSubs.forEach((cb) =>
+        cb({ phase: "downloading", received: i * 15_000_000, total: 78_000_000, fraction: i / 5 }),
+      );
+    }
+    mockEngineSubs.forEach((cb) => cb({ phase: "verifying" }));
+    await new Promise((r) => setTimeout(r, 300));
+    mockEngineSubs.forEach((cb) => cb({ phase: "done" }));
+  },
+  onEngineProgress: async (cb) => {
+    mockEngineSubs.add(cb);
+    return () => mockEngineSubs.delete(cb);
+  },
   importBackup: async () => {
     const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];
     for (let i = 0; i < artifacts.length; i++) {

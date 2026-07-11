@@ -39,6 +39,11 @@ pub enum Error {
     /// The sidecar produced no `_lava_artifacts.db` where one was expected.
     #[error("no engine output found under {path}")]
     NoEngineOutput { path: PathBuf },
+
+    /// Downloading/installing the engine failed (network, disk, or a checksum
+    /// mismatch — the last is a hard integrity failure, never retried silently).
+    #[error("engine download failed: {0}")]
+    EngineDownload(String),
 }
 
 impl Error {

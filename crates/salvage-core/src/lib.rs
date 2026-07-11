@@ -9,6 +9,7 @@ pub mod discovery;
 pub mod engine;
 mod error;
 pub mod import;
+pub mod install;
 pub mod normalize;
 pub mod parsers;
 pub mod query;
