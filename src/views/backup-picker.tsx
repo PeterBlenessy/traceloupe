@@ -193,17 +193,21 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
             Or grant Full Disk Access:
           </p>
           <ol className="list-decimal space-y-1 pl-5">
-            <li>Open Full Disk Access settings (button below)</li>
+            <li>
+              <button
+                onClick={openSettings}
+                className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:text-primary"
+              >
+                <Settings className="size-3.5" />
+                Open Full Disk Access settings
+              </button>
+            </li>
             <li>
               Salvage won't be listed yet — click <b>+</b>, then select the
               Salvage app (in <b>Applications</b>) and turn it on
             </li>
             <li>Quit and reopen Salvage</li>
           </ol>
-          <Button variant="outline" className="mt-2" onClick={openSettings}>
-            <Settings className="size-4" />
-            Open Full Disk Access settings
-          </Button>
           {openError && (
             <p className="mt-2 select-text text-xs text-destructive">
               Couldn't open Settings: {openError}
