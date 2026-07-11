@@ -50,12 +50,17 @@ enum DiscoveryResult {
 
 #[tauri::command]
 fn list_backups(root: Option<String>) -> Result<DiscoveryResult, String> {
-    let root = match root {
-        Some(r) => PathBuf::from(r),
-        None => discovery::default_backup_root()
-            .ok_or_else(|| "cannot resolve home directory".to_string())?,
+    // No root → scan the default MobileSync location (needs FDA). A root from
+    // the folder picker → discover_at, which also accepts a single backup dir.
+    let result = match root {
+        Some(r) => discovery::discover_at(&PathBuf::from(r)),
+        None => {
+            let root = discovery::default_backup_root()
+                .ok_or_else(|| "cannot resolve home directory".to_string())?;
+            discovery::discover_backups(&root)
+        }
     };
-    match discovery::discover_backups(&root) {
+    match result {
         Ok(backups) => Ok(DiscoveryResult::Ok { backups }),
         Err(salvage_core::Error::PermissionDenied { path }) => {
             Ok(DiscoveryResult::PermissionDenied {
@@ -67,6 +72,13 @@ fn list_backups(root: Option<String>) -> Result<DiscoveryResult, String> {
         }),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The default Finder/MobileSync backup location, for seeding the folder
+/// picker's starting directory. `None` if the home dir can't be resolved.
+#[tauri::command]
+fn default_backup_root() -> Option<String> {
+    discovery::default_backup_root().map(|p| p.display().to_string())
 }
 
 /// Whether an iLEAPP engine is resolvable right now. The UI uses this to decide
@@ -335,6 +347,7 @@ fn media_protocol_response(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ActiveBackup::default())
         .register_uri_scheme_protocol("salvage-media", |ctx, request| {
             let path = request.uri().path().to_string();
@@ -343,6 +356,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             list_backups,
+            default_backup_root,
             engine_status,
             import_backup,
             open_backup,

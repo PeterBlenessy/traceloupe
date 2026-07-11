@@ -64,10 +64,22 @@ pub fn discover_backups(root: &Path) -> Result<Vec<BackupInfo>> {
 /// A directory is treated as a backup if it carries any of the files every
 /// iOS backup contains. Loose on purpose: partially copied backups should
 /// still be listed so the user can see what they have.
-fn looks_like_backup(dir: &Path) -> bool {
+pub fn looks_like_backup(dir: &Path) -> bool {
     ["Manifest.db", "Manifest.plist", "Info.plist"]
         .iter()
         .any(|f| dir.join(f).exists())
+}
+
+/// Discover backups the user may have meant by picking `path`: first the
+/// backups *inside* it (the MobileSync/Backup root case), and if there are
+/// none but `path` is itself a backup directory, that single backup. This
+/// lets a folder picker accept either the backups root or one backup.
+pub fn discover_at(path: &Path) -> Result<Vec<BackupInfo>> {
+    let backups = discover_backups(path)?;
+    if backups.is_empty() && looks_like_backup(path) {
+        return Ok(vec![read_backup_info(path)]);
+    }
+    Ok(backups)
 }
 
 /// Read metadata for a single backup directory. Never fails: unreadable or
@@ -179,6 +191,27 @@ mod tests {
             discover_backups(&missing),
             Err(Error::BackupDirNotFound { .. })
         ));
+    }
+
+    #[test]
+    fn discover_at_accepts_root_or_single_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A backups root with one backup inside.
+        make_backup(tmp.path(), "00008030-ROOT", "Root Phone", true);
+        let via_root = discover_at(tmp.path()).unwrap();
+        assert_eq!(via_root.len(), 1);
+        assert_eq!(via_root[0].device_name.as_deref(), Some("Root Phone"));
+
+        // Pointing directly at the single backup dir also resolves it.
+        let backup_dir = tmp.path().join("00008030-ROOT");
+        let via_single = discover_at(&backup_dir).unwrap();
+        assert_eq!(via_single.len(), 1);
+        assert_eq!(via_single[0].device_name.as_deref(), Some("Root Phone"));
+
+        // A plain folder that is neither yields nothing (not an error).
+        let empty = tmp.path().join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(discover_at(&empty).unwrap().is_empty());
     }
 
     #[test]

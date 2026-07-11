@@ -7,6 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 export interface BackupInfo {
   id: string;
@@ -110,6 +111,14 @@ export interface Message {
 
 export interface SalvageClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
+  /** The default Finder/MobileSync backup folder, for seeding the picker. */
+  defaultBackupRoot(): Promise<string | null>;
+  /**
+   * Open a native folder picker (defaulting to the MobileSync backup folder)
+   * and return the chosen path, or null if cancelled. Selecting a folder grants
+   * macOS access to it, sidestepping Full Disk Access.
+   */
+  pickBackupFolder(): Promise<string | null>;
   engineStatus(): Promise<boolean>;
   importBackup(args: {
     backupPath: string;
@@ -133,6 +142,17 @@ export interface SalvageClient {
 
 const tauriClient: SalvageClient = {
   listBackups: (root) => invoke<DiscoveryResult>("list_backups", { root }),
+  defaultBackupRoot: () => invoke<string | null>("default_backup_root"),
+  pickBackupFolder: async () => {
+    const defaultPath = (await invoke<string | null>("default_backup_root")) ?? undefined;
+    const chosen = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose an iPhone backup folder",
+      defaultPath,
+    });
+    return typeof chosen === "string" ? chosen : null;
+  },
   engineStatus: () => invoke<boolean>("engine_status"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
@@ -258,6 +278,10 @@ const mockProgressSubs = new Set<ProgressCb>();
 
 export const mockClient: SalvageClient = {
   listBackups: async () => ({ status: "ok", backups: mockBackups }),
+  defaultBackupRoot: async () =>
+    "/Users/dev/Library/Application Support/MobileSync/Backup",
+  pickBackupFolder: async () =>
+    "/Users/dev/Library/Application Support/MobileSync/Backup",
   engineStatus: async () => true,
   importBackup: async () => {
     const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];

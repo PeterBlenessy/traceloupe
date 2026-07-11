@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Lock, LockOpen, Smartphone } from "lucide-react";
+import { FolderOpen, Lock, LockOpen, Smartphone } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { ImportDialog } from "@/views/import-dialog";
@@ -17,18 +18,47 @@ import { ImportDialog } from "@/views/import-dialog";
 export function BackupPicker() {
   const navigate = useNavigate();
   const [selected, setSelected] = useState<BackupInfo | null>(null);
-  const { data, isPending, error } = useQuery({
-    queryKey: ["backups"],
-    queryFn: () => client.listBackups(),
+  // A folder the user picked (via the native panel), overriding the default
+  // MobileSync scan. Selecting a folder grants access without Full Disk Access.
+  const [root, setRoot] = useState<string | null>(null);
+  const { data, isPending, error, refetch } = useQuery({
+    queryKey: ["backups", root],
+    queryFn: () => client.listBackups(root ?? undefined),
   });
+
+  async function chooseFolder() {
+    const picked = await client.pickBackupFolder();
+    if (picked) {
+      // Re-run discovery on the picked folder (setRoot changes the query key).
+      if (picked === root) void refetch();
+      else setRoot(picked);
+    }
+  }
+
+  const chooseButton = (
+    <Button variant="outline" onClick={chooseFolder}>
+      <FolderOpen className="size-4" />
+      Choose folder…
+    </Button>
+  );
 
   return (
     <div className="mx-auto max-w-2xl p-8">
-      <h1 className="text-2xl font-semibold">Your iPhone backups</h1>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Backups found on this Mac. Select one to import and browse its
-        contents. Everything stays on this machine.
-      </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold">Your iPhone backups</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Backups found on this Mac. Select one to import and browse its
+            contents. Everything stays on this machine.
+          </p>
+        </div>
+        {chooseButton}
+      </div>
+      {root && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Looking in <code className="select-text">{root}</code>
+        </p>
+      )}
       <div className="mt-6 flex flex-col gap-3">
         {isPending && (
           <>
@@ -44,28 +74,33 @@ export function BackupPicker() {
             </CardHeader>
           </Card>
         )}
-        {data?.status === "permissionDenied" && <FdaGuidance path={data.path} />}
+        {data?.status === "permissionDenied" && (
+          <FdaGuidance path={data.path} action={chooseButton} />
+        )}
         {data?.status === "notFound" && (
           <Card>
             <CardHeader>
               <CardTitle>No backup folder found</CardTitle>
               <CardDescription>
                 Nothing at <code className="select-text">{data.path}</code>. Connect your
-                iPhone and create an encrypted backup with Finder, or open a
-                backup folder copied from another Mac.
+                iPhone and create an encrypted backup with Finder, or choose a
+                backup folder yourself (e.g. one copied from another Mac).
               </CardDescription>
             </CardHeader>
+            <CardContent>{chooseButton}</CardContent>
           </Card>
         )}
         {data?.status === "ok" && data.backups.length === 0 && (
           <Card>
             <CardHeader>
-              <CardTitle>No backups yet</CardTitle>
+              <CardTitle>No backups here</CardTitle>
               <CardDescription>
-                The backup folder exists but contains no backups. Create an
-                encrypted backup of your iPhone with Finder first.
+                {root
+                  ? "That folder has no backups in it. Choose a different folder, or the one backup folder itself."
+                  : "The backup folder exists but contains no backups. Create an encrypted backup of your iPhone with Finder first, or choose a folder."}
               </CardDescription>
             </CardHeader>
+            <CardContent>{chooseButton}</CardContent>
           </Card>
         )}
         {data?.status === "ok" &&
@@ -126,32 +161,37 @@ function BackupCard({ backup, onSelect }: { backup: BackupInfo; onSelect: () => 
   );
 }
 
-function FdaGuidance({ path }: { path: string }) {
+function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }) {
   return (
     <Card>
       <CardHeader>
         <CardTitle>macOS is blocking access to your backups</CardTitle>
         <CardDescription>
-          Finder's backup folder is protected. To let Salvage read it, grant it
-          Full Disk Access:
+          Finder's backup folder is protected. The easiest way in: choose the
+          folder yourself — selecting it grants Salvage access, no Full Disk
+          Access needed.
         </CardDescription>
       </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        <ol className="list-decimal space-y-1 pl-5">
-          <li>
-            Open <b>System Settings → Privacy &amp; Security → Full Disk
-            Access</b>
-          </li>
-          <li>
-            Salvage won't be listed yet — click <b>+</b>, then select the Salvage
-            app (in <b>Applications</b>) and turn it on
-          </li>
-          <li>Quit and reopen Salvage</li>
-        </ol>
-        <p className="mt-3">
-          Alternatively, copy the backup folder somewhere Salvage can already
-          read (like your Desktop) and open it from there — no Full Disk Access
-          needed. Blocked path: <code className="select-text">{path}</code>
+      <CardContent className="space-y-4 text-sm text-muted-foreground">
+        {action}
+        <div>
+          <p className="mb-1 font-medium text-foreground">
+            Or grant Full Disk Access:
+          </p>
+          <ol className="list-decimal space-y-1 pl-5">
+            <li>
+              Open <b>System Settings → Privacy &amp; Security → Full Disk
+              Access</b>
+            </li>
+            <li>
+              Salvage won't be listed yet — click <b>+</b>, then select the
+              Salvage app (in <b>Applications</b>) and turn it on
+            </li>
+            <li>Quit and reopen Salvage</li>
+          </ol>
+        </div>
+        <p className="text-xs">
+          Blocked path: <code className="select-text">{path}</code>
         </p>
       </CardContent>
     </Card>
