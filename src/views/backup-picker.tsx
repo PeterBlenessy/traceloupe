@@ -200,7 +200,7 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
             </li>
             <li>Quit and reopen Salvage</li>
           </ol>
-          <Button variant="secondary" size="sm" className="mt-2" onClick={openSettings}>
+          <Button variant="outline" className="mt-2" onClick={openSettings}>
             <Settings className="size-4" />
             Open Full Disk Access settings
           </Button>
