@@ -9,7 +9,7 @@ use salvage_core::cache::CacheDb;
 use salvage_core::discovery::{self, BackupInfo};
 use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
-use salvage_core::query::{self, Call, Contact, HistoryVisit, Message, ThreadSummary};
+use salvage_core::query::{self, Call, Contact, HistoryVisit, MediaItem, Message, ThreadSummary};
 use salvage_core::sidecar::CancelToken;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -252,11 +252,64 @@ fn list_contacts(active: State<'_, ActiveBackup>) -> Result<Vec<Contact>, String
     query::list_contacts(&cache).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn list_media(active: State<'_, ActiveBackup>) -> Result<Vec<MediaItem>, String> {
+    let cache = open_active_cache(&active)?;
+    query::list_media(&cache).map_err(|e| e.to_string())
+}
+
+/// Serve a media item's bytes over the `salvage-media://localhost/<id>` scheme.
+///
+/// Security: the handler takes only a numeric id, looks up the file path
+/// recorded for it in the active cache, and serves that. It never accepts a
+/// path from the request, so it can't be coerced into reading arbitrary files.
+fn media_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{Response, StatusCode};
+
+    let not_found = || {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap()
+    };
+
+    // Path is "/<id>".
+    let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
+        return not_found();
+    };
+    let active = app.state::<ActiveBackup>();
+    let Ok(cache_path) = active.path() else {
+        return not_found();
+    };
+    let Ok(cache) = CacheDb::open(&cache_path) else {
+        return not_found();
+    };
+    let Ok(Some((local_path, mime))) = query::media_blob(&cache, id) else {
+        return not_found();
+    };
+    let Ok(bytes) = std::fs::read(&local_path) else {
+        return not_found();
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            "Content-Type",
+            mime.as_deref().unwrap_or("application/octet-stream"),
+        )
+        .header("Cache-Control", "no-cache")
+        .body(bytes)
+        .unwrap()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ActiveBackup::default())
+        .register_uri_scheme_protocol("salvage-media", |ctx, request| {
+            let path = request.uri().path().to_string();
+            media_protocol_response(ctx.app_handle(), &path)
+        })
         .invoke_handler(tauri::generate_handler![
             list_backups,
             engine_status,
@@ -267,7 +320,8 @@ pub fn run() {
             get_thread_messages,
             list_calls,
             list_safari_history,
-            list_contacts
+            list_contacts,
+            list_media
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

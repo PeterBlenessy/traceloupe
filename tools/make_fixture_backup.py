@@ -34,6 +34,7 @@ import sqlite3
 import struct
 import tempfile
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,16 +53,36 @@ ITER = 10_000
 # Domain -> the seed backup's files. Cocoa/Core Data epoch is 2001-01-01.
 COCOA_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
-# A minimal valid 1x1 PNG, used as a seeded SMS image attachment so the media
-# path (_lava_media_items -> extraction_path -> real bytes) is exercised.
-TINY_PNG = bytes.fromhex(
-    "89504e470d0a1a0a0000000d494844520000000100000001080600000"
-    "01f15c4890000000d49444154789c62f8cfc0f01f0005000155a2b4e0"
-    "0000000049454e44ae426082"
-)
-# Path of the seeded attachment, relative to the MediaDomain root. sms.db's
-# attachment.filename references it as "~/<this>" (~ = private/var/mobile).
-ATTACHMENT_REL = "Library/SMS/Attachments/aa/00/salvage-test.png"
+def solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """Encode a solid-color RGB PNG using only stdlib (zlib). Keeps the fixture
+    dependency-light while producing visible images for the gallery."""
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)  # 8-bit RGB
+    row = b"\x00" + bytes(rgb) * width  # filter byte 0 + pixels
+    raw = row * height
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+# A few visible photos for the gallery, seeded as message attachments so they
+# flow through iLEAPP's media check-in into _lava_media_items.
+GALLERY_PHOTOS = [
+    ("Library/SMS/Attachments/aa/00/salvage-test.png", solid_png(64, 64, (74, 144, 226))),
+    ("Library/SMS/Attachments/bb/01/sunset.png", solid_png(96, 64, (240, 130, 60))),
+    ("Library/SMS/Attachments/cc/02/forest.png", solid_png(64, 96, (60, 160, 90))),
+]
 
 
 def cocoa_ns(dt: datetime) -> int:
@@ -175,27 +196,33 @@ def seed_sms_db(path: Path) -> None:
             (rowid,),
         )
 
-    # A 6th message carrying an image attachment, to exercise the media path.
-    att_rowid = len(convo) + 1
-    ts = cocoa_ns(base.replace(minute=11))
-    # Caption text (rather than NULL) so iLEAPP's chat renderer doesn't choke
-    # on a NaN when building the HTML report; media check-in is driven by the
+    # Messages carrying image attachments, to exercise the media path and give
+    # the gallery several photos. Caption text (rather than NULL) so iLEAPP's
+    # chat renderer doesn't choke on a NaN; media check-in is driven by the
     # attachment row regardless of message text.
-    con.execute(
-        """INSERT INTO message
-           (ROWID, text, service, account, date, date_read,
-            is_from_me, is_sent, is_delivered, is_read)
-           VALUES (?, 'Here''s the trailhead 📷', 'iMessage', 'me@example.com', ?, ?, 1, 1, 1, 1)""",
-        (att_rowid, ts, ts),
-    )
-    con.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, ?)", (att_rowid,))
-    con.execute(
-        """INSERT INTO attachment
-           (ROWID, transfer_name, filename, created_date, mime_type, total_bytes)
-           VALUES (1, 'salvage-test.png', ?, ?, 'image/png', ?)""",
-        (f"~/{ATTACHMENT_REL}", ts, len(TINY_PNG)),
-    )
-    con.execute("INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, 1)", (att_rowid,))
+    captions = ["Here's the trailhead 📷", "Sunset from the summit 🌅", "Into the woods 🌲"]
+    for i, (rel, png) in enumerate(GALLERY_PHOTOS):
+        att_rowid = len(convo) + 1 + i
+        ts = cocoa_ns(base.replace(minute=11 + i))
+        name = rel.rsplit("/", 1)[-1]
+        con.execute(
+            """INSERT INTO message
+               (ROWID, text, service, account, date, date_read,
+                is_from_me, is_sent, is_delivered, is_read)
+               VALUES (?, ?, 'iMessage', 'me@example.com', ?, ?, 1, 1, 1, 1)""",
+            (att_rowid, captions[i], ts, ts),
+        )
+        con.execute("INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, ?)", (att_rowid,))
+        con.execute(
+            """INSERT INTO attachment
+               (ROWID, transfer_name, filename, created_date, mime_type, total_bytes)
+               VALUES (?, ?, ?, ?, 'image/png', ?)""",
+            (i + 1, name, f"~/{rel}", ts, len(png)),
+        )
+        con.execute(
+            "INSERT INTO message_attachment_join (message_id, attachment_id) VALUES (?, ?)",
+            (att_rowid, i + 1),
+        )
     con.commit()
     con.close()
 
@@ -326,13 +353,14 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_callhistory_db(calls_path)
     ab_path = workdir / "AddressBook.sqlitedb"
     seed_addressbook_db(ab_path)
-    return [
+    files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
-        ("MediaDomain", ATTACHMENT_REL, TINY_PNG),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
         ("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata", calls_path.read_bytes()),
         ("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", ab_path.read_bytes()),
     ]
+    files += [("MediaDomain", rel, png) for rel, png in GALLERY_PHOTOS]
+    return files
 
 
 def build_manifest_db(path: Path, files: list[tuple[str, str, str]]) -> None:

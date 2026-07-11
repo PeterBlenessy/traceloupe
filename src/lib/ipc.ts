@@ -71,6 +71,14 @@ export interface Contact {
   emails: LabeledValue[];
 }
 
+export interface MediaItem {
+  id: number;
+  kind: string;
+  mimeType: string | null;
+  filename: string | null;
+  takenAt: number | null;
+}
+
 export interface ThreadSummary {
   id: number;
   identifier: string;
@@ -113,6 +121,9 @@ export interface SalvageClient {
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
   listContacts(): Promise<Contact[]>;
+  listMedia(): Promise<MediaItem[]>;
+  /** URL the webview can load for a media item's bytes. */
+  mediaUrl(id: number): string;
 }
 
 const tauriClient: SalvageClient = {
@@ -127,6 +138,9 @@ const tauriClient: SalvageClient = {
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listContacts: () => invoke<Contact[]>("list_contacts"),
+  listMedia: () => invoke<MediaItem[]>("list_media"),
+  // Served by the register_uri_scheme_protocol handler in the Rust shell.
+  mediaUrl: (id) => `salvage-media://localhost/${id}`,
 };
 
 const mockBackups: BackupInfo[] = [
@@ -209,6 +223,20 @@ const mockContacts: Contact[] = [
   { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [] },
 ];
 
+const mockMedia: MediaItem[] = [
+  { id: 1, kind: "photo", mimeType: "image/png", filename: "salvage-test.png", takenAt: 1717841460 },
+  { id: 2, kind: "photo", mimeType: "image/png", filename: "sunset.png", takenAt: 1717841520 },
+  { id: 3, kind: "photo", mimeType: "image/png", filename: "forest.png", takenAt: 1717841580 },
+];
+
+// Solid-color SVG data URIs mirroring the fixture's seeded photos.
+const mockMediaColors: Record<number, string> = { 1: "#4a90e2", 2: "#f0823c", 3: "#3ca05a" };
+function mockMediaDataUrl(id: number): string {
+  const color = mockMediaColors[id] ?? "#888";
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><rect width='240' height='240' fill='${color}'/></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
 let mockActive = false;
 
 // A mock progress emitter so the import flow is exercisable in the browser.
@@ -236,7 +264,7 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
     await new Promise((r) => setTimeout(r, 300));
     mockActive = true;
-    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 1, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
+    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 3, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
   },
   onImportProgress: async (cb) => {
     mockProgressSubs.add(cb);
@@ -252,6 +280,8 @@ export const mockClient: SalvageClient = {
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listContacts: async () => (mockActive ? mockContacts : []),
+  listMedia: async () => (mockActive ? mockMedia : []),
+  mediaUrl: (id) => mockMediaDataUrl(id),
 };
 
 const isTauri = "__TAURI_INTERNALS__" in window;

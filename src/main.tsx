@@ -11,6 +11,7 @@ import "./index.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { AppShell } from "@/components/app-shell";
 import { BackupPicker } from "@/views/backup-picker";
+import { GalleryView } from "@/views/gallery";
 import { MessagesView } from "@/views/messages";
 import { ContactsView } from "@/views/contacts";
 import { CallsView } from "@/views/calls";
@@ -21,7 +22,7 @@ const rootRoute = createRootRoute({ component: AppShell });
 
 const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/", component: BackupPicker }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: () => <Placeholder title="Gallery" /> }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/gallery", component: GalleryView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/messages", component: MessagesView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/contacts", component: ContactsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calls", component: CallsView }),

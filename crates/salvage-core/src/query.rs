@@ -217,6 +217,57 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
         .map_err(Into::into)
 }
 
+/// A media item for the gallery grid. Bytes are served separately via the
+/// media protocol (by id), never inlined here.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaItem {
+    pub id: i64,
+    /// "photo" | "video".
+    pub kind: String,
+    pub mime_type: Option<String>,
+    pub filename: Option<String>,
+    pub taken_at: Option<i64>,
+}
+
+/// Media items that have materialized bytes, newest first. Only items with a
+/// `local_path` on disk are listed — the gallery can't show what isn't there.
+pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, mime_type, relative_path, taken_at
+         FROM media_items
+         WHERE local_path IS NOT NULL
+         ORDER BY taken_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let rel: Option<String> = r.get(3)?;
+        Ok(MediaItem {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            mime_type: r.get(2)?,
+            // Show just the basename as the filename.
+            filename: rel.map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
+            taken_at: r.get(4)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// The on-disk path and MIME type for one media item, for the media protocol
+/// handler. Returns `None` if the id is unknown or has no materialized bytes.
+pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<(String, Option<String>)>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT local_path, mime_type FROM media_items WHERE id = ?1 AND local_path IS NOT NULL",
+            [id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?)
+}
+
 /// A stored value from the backup's `meta` table (device name, etc.), if set.
 pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
     Ok(cache
@@ -299,5 +350,36 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         seed(&cache);
         assert!(get_messages(&cache, 999).unwrap().is_empty());
+    }
+
+    #[test]
+    fn lists_only_materialized_media_and_resolves_blob() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let c = cache.conn();
+        c.execute_batch(
+            "INSERT INTO media_items (id, kind, mime_type, relative_path, taken_at, local_path)
+                VALUES (1, 'photo', 'image/png', 'Media/DCIM/IMG_0001.png', 1717841460, '/cache/media/a.png');
+             INSERT INTO media_items (id, kind, mime_type, relative_path, taken_at, local_path)
+                VALUES (2, 'video', 'video/mp4', 'Media/DCIM/IMG_0002.mp4', 1717841520, '/cache/media/b.mp4');
+             -- No bytes materialized: must be excluded from the gallery.
+             INSERT INTO media_items (id, kind, mime_type, relative_path, local_path)
+                VALUES (3, 'photo', 'image/png', 'Media/DCIM/IMG_0003.png', NULL);",
+        )
+        .unwrap();
+
+        let media = list_media(&cache).unwrap();
+        assert_eq!(media.len(), 2, "item without bytes is excluded");
+        // Newest first; basename extracted for filename.
+        assert_eq!(media[0].id, 2);
+        assert_eq!(media[0].kind, "video");
+        assert_eq!(media[1].filename.as_deref(), Some("IMG_0001.png"));
+
+        // media_blob resolves path + mime for the handler, None for unknown/no-bytes.
+        assert_eq!(
+            media_blob(&cache, 1).unwrap(),
+            Some(("/cache/media/a.png".into(), Some("image/png".into())))
+        );
+        assert_eq!(media_blob(&cache, 3).unwrap(), None);
+        assert_eq!(media_blob(&cache, 999).unwrap(), None);
     }
 }
