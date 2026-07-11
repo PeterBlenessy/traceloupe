@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { FolderOpen, Lock, LockOpen, Settings, Smartphone } from "lucide-react";
+import { Check, FolderOpen, Lock, LockOpen, Settings, Smartphone } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -23,6 +23,23 @@ export function BackupPicker() {
     queryKey: ["engineStatus"],
     queryFn: () => client.engineStatus(),
   });
+  const { data: importedIds } = useQuery({
+    queryKey: ["importedBackupIds"],
+    queryFn: () => client.importedBackupIds(),
+  });
+  const imported = new Set(importedIds ?? []);
+
+  // Opening an already-parsed backup is instant (just point at its cache).
+  // A never-parsed one needs a first-time read: unencrypted starts straight
+  // away, encrypted asks for a password first — both via the dialog.
+  async function handleOpen(b: BackupInfo) {
+    if (imported.has(b.id)) {
+      await client.openBackup(b.id);
+      navigate({ to: "/messages" });
+    } else {
+      setSelected(b);
+    }
+  }
   // A folder the user picked (via the native panel), overriding the default
   // MobileSync scan. Selecting a folder grants access without Full Disk Access.
   const [root, setRoot] = useState<string | null>(null);
@@ -57,8 +74,8 @@ export function BackupPicker() {
         <div>
           <h1 className="text-2xl font-semibold">Your iPhone backups</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Backups found on this Mac. Select one to import and browse its
-            contents. Everything stays on this machine.
+            Pick a backup to open. The first time, Salvage reads it once; after
+            that it opens instantly. Everything stays on this machine.
           </p>
         </div>
         {showHeaderButton && chooseButton}
@@ -118,13 +135,20 @@ export function BackupPicker() {
         )}
         {data?.status === "ok" &&
           data.backups.map((b) => (
-            <BackupCard key={b.id} backup={b} onSelect={() => setSelected(b)} />
+            <BackupCard
+              key={b.id}
+              backup={b}
+              imported={imported.has(b.id)}
+              onSelect={() => handleOpen(b)}
+            />
           ))}
       </div>
 
       {selected && (
         <ImportDialog
           backup={selected}
+          // Unencrypted backups need no password — start reading immediately.
+          autoStart={selected.isEncrypted !== true}
           open={!!selected}
           onOpenChange={(open) => !open && setSelected(null)}
           onDone={() => {
@@ -137,7 +161,15 @@ export function BackupPicker() {
   );
 }
 
-function BackupCard({ backup, onSelect }: { backup: BackupInfo; onSelect: () => void }) {
+function BackupCard({
+  backup,
+  imported,
+  onSelect,
+}: {
+  backup: BackupInfo;
+  imported: boolean;
+  onSelect: () => void;
+}) {
   const date = backup.lastBackupDate
     ? new Date(backup.lastBackupDate * 1000).toLocaleString()
     : "unknown date";
@@ -169,6 +201,15 @@ function BackupCard({ backup, onSelect }: { backup: BackupInfo; onSelect: () => 
             {date}
           </div>
         </div>
+        <span className="shrink-0 text-sm text-muted-foreground">
+          {imported ? (
+            <span className="inline-flex items-center gap-1 text-foreground">
+              <Check className="size-4" /> Open
+            </span>
+          ) : (
+            "Read & open"
+          )}
+        </span>
       </CardContent>
     </Card>
   );

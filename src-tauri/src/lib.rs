@@ -318,6 +318,23 @@ fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
     active.path().is_ok()
 }
 
+/// Backup ids that have already been parsed (a cache exists) — the UI shows
+/// these as "open instantly" rather than needing a first-time read.
+#[tauri::command]
+fn imported_backup_ids(app: AppHandle) -> Vec<String> {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return vec![];
+    };
+    let Ok(entries) = std::fs::read_dir(data_dir.join("caches")) else {
+        return vec![];
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().join("cache.db").exists())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect()
+}
+
 #[tauri::command]
 fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSummary>, String> {
     let cache = open_active_cache(&active)?;
@@ -449,6 +466,7 @@ pub fn run() {
             import_backup,
             open_backup,
             has_active_backup,
+            imported_backup_ids,
             list_threads,
             get_thread_messages,
             list_calls,

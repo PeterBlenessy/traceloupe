@@ -27,31 +27,47 @@ type Stage =
  */
 export function ImportDialog({
   backup,
+  autoStart = false,
   open,
   onOpenChange,
   onDone,
 }: {
   backup: BackupInfo;
+  /** Start reading immediately without a password step (unencrypted backups). */
+  autoStart?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
 }) {
-  const [stage, setStage] = useState<Stage>({ kind: "password" });
+  const [stage, setStage] = useState<Stage>(() =>
+    autoStart ? { kind: "running", progress: null } : { kind: "password" },
+  );
   const [password, setPassword] = useState("");
   const qc = useQueryClient();
   // Keep the latest progress even across re-subscribes.
   const unlisten = useRef<(() => void) | null>(null);
+  const started = useRef(false);
 
   useEffect(() => {
     if (!open) {
-      setStage({ kind: "password" });
+      started.current = false;
+      setStage(autoStart ? { kind: "running", progress: null } : { kind: "password" });
       setPassword("");
     }
     return () => {
       unlisten.current?.();
       unlisten.current = null;
     };
-  }, [open]);
+  }, [open, autoStart]);
+
+  // Unencrypted backups: kick off the read as soon as the dialog opens.
+  useEffect(() => {
+    if (open && autoStart && !started.current) {
+      started.current = true;
+      void runImport();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, autoStart]);
 
   async function runImport() {
     setStage({ kind: "running", progress: null });
@@ -85,10 +101,8 @@ export function ImportDialog({
   const canImport = !encrypted || password.length > 0;
 
   const prompt = encrypted
-    ? "This backup is encrypted. Enter its password to import and browse it."
-    : backup.isEncrypted === false
-      ? "This backup isn't encrypted, so no password is needed."
-      : "Enter the backup password if it's encrypted.";
+    ? "This backup is encrypted. Enter its password to open it — Salvage reads it once, then it's instant."
+    : "Enter the backup password if it's encrypted.";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -127,7 +141,7 @@ export function ImportDialog({
                 Cancel
               </Button>
               <Button type="submit" disabled={!canImport}>
-                Import
+                Open
               </Button>
             </DialogFooter>
           </form>
@@ -139,7 +153,7 @@ export function ImportDialog({
           <div className="space-y-4">
             <Alert variant="destructive">
               <TriangleAlert className="size-4" />
-              <AlertTitle>Import failed</AlertTitle>
+              <AlertTitle>Couldn't open the backup</AlertTitle>
               <AlertDescription className="select-text break-words">
                 {stage.message}
               </AlertDescription>
@@ -148,7 +162,13 @@ export function ImportDialog({
               <Button variant="ghost" onClick={() => onOpenChange(false)}>
                 Close
               </Button>
-              <Button onClick={() => setStage({ kind: "password" })}>Try again</Button>
+              <Button
+                onClick={() =>
+                  autoStart ? void runImport() : setStage({ kind: "password" })
+                }
+              >
+                Try again
+              </Button>
             </DialogFooter>
           </div>
         )}
@@ -165,8 +185,8 @@ function RunningView({ progress }: { progress: ImportProgress | null }) {
   const label = normalizing
     ? "Organizing results…"
     : parsing
-      ? `Parsing ${parsing.artifact} (${parsing.current}/${parsing.total})`
-      : "Starting the parsing engine…";
+      ? `Reading ${parsing.artifact} (${parsing.current}/${parsing.total})`
+      : "Opening the backup…";
 
   return (
     <div className="space-y-3 py-2">
@@ -176,7 +196,7 @@ function RunningView({ progress }: { progress: ImportProgress | null }) {
       </div>
       <Progress value={pct} />
       <p className="text-xs text-muted-foreground">
-        First import parses the whole backup once. Browsing is instant afterward.
+        Reading this backup for the first time. It opens instantly next time.
       </p>
     </div>
   );

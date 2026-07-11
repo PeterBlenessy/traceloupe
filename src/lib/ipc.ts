@@ -150,6 +150,8 @@ export interface SalvageClient {
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
   hasActiveBackup(): Promise<boolean>;
   openBackup(backupId: string): Promise<boolean>;
+  /** Ids of backups already parsed (open instantly, no first-time read). */
+  importedBackupIds(): Promise<string[]>;
   listThreads(): Promise<ThreadSummary[]>;
   getThreadMessages(threadId: number): Promise<Message[]>;
   listCalls(): Promise<Call[]>;
@@ -183,6 +185,7 @@ const tauriClient: SalvageClient = {
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
+  importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   getThreadMessages: (threadId) => invoke<Message[]>("get_thread_messages", { threadId }),
   listCalls: () => invoke<Call[]>("list_calls"),
@@ -296,6 +299,7 @@ function mockMediaDataUrl(id: number): string {
 }
 
 let mockActive = false;
+const mockImported = new Set<string>();
 
 // A mock progress emitter so the import flow is exercisable in the browser.
 type ProgressCb = (p: ImportProgress) => void;
@@ -327,7 +331,7 @@ export const mockClient: SalvageClient = {
     mockEngineSubs.add(cb);
     return () => mockEngineSubs.delete(cb);
   },
-  importBackup: async () => {
+  importBackup: async ({ backupId }) => {
     const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];
     for (let i = 0; i < artifacts.length; i++) {
       await new Promise((r) => setTimeout(r, 250));
@@ -345,6 +349,7 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
     await new Promise((r) => setTimeout(r, 300));
     mockActive = true;
+    mockImported.add(backupId);
     return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 4, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
   },
   onImportProgress: async (cb) => {
@@ -352,10 +357,12 @@ export const mockClient: SalvageClient = {
     return () => mockProgressSubs.delete(cb);
   },
   hasActiveBackup: async () => mockActive,
-  openBackup: async () => {
+  openBackup: async (backupId) => {
+    if (!mockImported.has(backupId)) return false;
     mockActive = true;
     return true;
   },
+  importedBackupIds: async () => [...mockImported],
   listThreads: async () => (mockActive ? mockThreads : []),
   getThreadMessages: async (threadId) => (mockActive ? (mockMessages[threadId] ?? []) : []),
   listCalls: async () => (mockActive ? mockCalls : []),
