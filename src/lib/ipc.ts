@@ -119,6 +119,8 @@ export interface SalvageClient {
    * macOS access to it, sidestepping Full Disk Access.
    */
   pickBackupFolder(): Promise<string | null>;
+  /** Open System Settings at the Full Disk Access pane. */
+  openFullDiskAccessSettings(): Promise<void>;
   engineStatus(): Promise<boolean>;
   importBackup(args: {
     backupPath: string;
@@ -153,6 +155,7 @@ const tauriClient: SalvageClient = {
     });
     return typeof chosen === "string" ? chosen : null;
   },
+  openFullDiskAccessSettings: () => invoke<void>("open_full_disk_access_settings"),
   engineStatus: () => invoke<boolean>("engine_status"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
@@ -282,6 +285,7 @@ export const mockClient: SalvageClient = {
     "/Users/dev/Library/Application Support/MobileSync/Backup",
   pickBackupFolder: async () =>
     "/Users/dev/Library/Application Support/MobileSync/Backup",
+  openFullDiskAccessSettings: async () => {},
   engineStatus: async () => true,
   importBackup: async () => {
     const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];

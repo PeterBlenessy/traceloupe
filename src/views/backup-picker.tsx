@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { FolderOpen, Lock, LockOpen, Smartphone } from "lucide-react";
+import { FolderOpen, Lock, LockOpen, Settings, Smartphone } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -42,6 +42,10 @@ export function BackupPicker() {
     </Button>
   );
 
+  // The empty/blocked/not-found cards carry their own button, so only show the
+  // header one while actually listing backups — avoids two side by side.
+  const showHeaderButton = data?.status === "ok" && data.backups.length > 0;
+
   return (
     <div className="mx-auto max-w-2xl p-8">
       <div className="flex items-start justify-between gap-4">
@@ -52,7 +56,7 @@ export function BackupPicker() {
             contents. Everything stays on this machine.
           </p>
         </div>
-        {chooseButton}
+        {showHeaderButton && chooseButton}
       </div>
       {root && (
         <p className="mt-3 text-xs text-muted-foreground">
@@ -174,20 +178,26 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
       <CardContent className="space-y-4 text-sm text-muted-foreground">
         {action}
         <div>
-          <p className="mb-1 font-medium text-foreground">
+          <p className="mb-2 font-medium text-foreground">
             Or grant Full Disk Access:
           </p>
           <ol className="list-decimal space-y-1 pl-5">
-            <li>
-              Open <b>System Settings → Privacy &amp; Security → Full Disk
-              Access</b>
-            </li>
+            <li>Open Full Disk Access settings (button below)</li>
             <li>
               Salvage won't be listed yet — click <b>+</b>, then select the
               Salvage app (in <b>Applications</b>) and turn it on
             </li>
             <li>Quit and reopen Salvage</li>
           </ol>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-2"
+            onClick={() => void client.openFullDiskAccessSettings()}
+          >
+            <Settings className="size-4" />
+            Open Full Disk Access settings
+          </Button>
         </div>
         <p className="text-xs">
           Blocked path: <code className="select-text">{path}</code>

@@ -81,6 +81,17 @@ fn default_backup_root() -> Option<String> {
     discovery::default_backup_root().map(|p| p.display().to_string())
 }
 
+/// Open System Settings straight to the Full Disk Access pane. A fixed URL,
+/// not one from the frontend, so this can't be used to open arbitrary targets.
+#[tauri::command]
+fn open_full_disk_access_settings() -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Whether an iLEAPP engine is resolvable right now. The UI uses this to decide
 /// between offering "import" and "engine not installed" guidance.
 #[tauri::command]
@@ -357,6 +368,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_backups,
             default_backup_root,
+            open_full_disk_access_settings,
             engine_status,
             import_backup,
             open_backup,
