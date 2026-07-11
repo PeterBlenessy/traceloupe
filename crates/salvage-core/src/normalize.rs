@@ -132,8 +132,14 @@ fn normalize_media(
     }
     let has_refs = table_exists(lava, "_lava_media_references")?;
 
-    let mut stmt =
-        lava.prepare("SELECT id, source_path, extraction_path, type FROM _lava_media_items")?;
+    // Originals first (is_embedded=0) so that when the same source file is
+    // checked in as both an original and a generated thumbnail, the original
+    // is the one kept by the dedup below.
+    let mut stmt = lava.prepare(
+        "SELECT id, source_path, extraction_path, type, is_embedded
+         FROM _lava_media_items
+         ORDER BY is_embedded ASC, id",
+    )?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -143,9 +149,20 @@ fn normalize_media(
         ))
     })?;
 
+    // Same source file checked in more than once (e.g. by two photo modules)
+    // should appear once. Keyed on the non-empty source path. Note: this does
+    // not merge differently-keyed thumbnails of one asset across modules — see
+    // docs/spike-ileapp.md.
+    let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+
     let conn = cache.conn();
     for row in rows {
         let (id, source_path, extraction_path, mime) = row?;
+        if let Some(path) = source_path.as_deref() {
+            if !path.is_empty() && !seen_paths.insert(path.to_string()) {
+                continue; // already inserted this source file
+            }
+        }
         let kind = media_kind(mime.as_deref());
         let source = if has_refs {
             media_source(lava, &id)?
@@ -194,6 +211,8 @@ fn media_source(lava: &Connection, media_item_id: &str) -> Result<Option<String>
 fn friendly_source(artifact: &str) -> String {
     match artifact {
         "SMS" => "Messages".to_string(),
+        // Both camera-roll modules collapse to one "Photos" source.
+        "Photos.sqlite Metadata" | "Photos.sqlite EXIF Analysis" => "Photos".to_string(),
         other => other.to_string(),
     }
 }
@@ -613,8 +632,8 @@ mod tests {
         let path = tmp.path().join("_lava_artifacts.db");
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE _lava_media_items (id TEXT, source_path TEXT, extraction_path TEXT, type TEXT);
-             INSERT INTO _lava_media_items VALUES ('m1', 'x', 'media/gone.png', 'image/png');",
+            "CREATE TABLE _lava_media_items (id TEXT, source_path TEXT, extraction_path TEXT, type TEXT, is_embedded INTEGER);
+             INSERT INTO _lava_media_items VALUES ('m1', 'x', 'media/gone.png', 'image/png', 0);",
         )
         .unwrap();
         let cache = CacheDb::open_in_memory().unwrap();
@@ -629,6 +648,73 @@ mod tests {
             .query_row("SELECT local_path FROM media_items", [], |r| r.get(0))
             .unwrap();
         assert_eq!(local, None);
+    }
+
+    #[test]
+    fn dedups_media_by_source_and_labels_photos() {
+        // Mimics a camera-roll asset checked in twice for the same source file:
+        // a non-embedded original and an embedded generated thumbnail, plus a
+        // second distinct Photos asset. The dupe must collapse to the original,
+        // and both survivors must be sourced "Photos".
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        fs::create_dir_all(tmp.path().join("media")).unwrap();
+        fs::write(tmp.path().join("media/orig.heic"), b"heic").unwrap();
+        fs::write(tmp.path().join("media/thumb.jpg"), b"jpg").unwrap();
+        fs::write(tmp.path().join("media/other.jpg"), b"jpg2").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _lava_media_items (
+                 id TEXT, source_path TEXT, extraction_path TEXT, type TEXT, is_embedded INTEGER);
+             CREATE TABLE _lava_media_references (
+                 id TEXT, media_item_id TEXT, module_name TEXT, artifact_name TEXT, name TEXT);
+             -- Same source file, two check-ins: embedded thumbnail + original.
+             INSERT INTO _lava_media_items VALUES
+                 ('m_thumb', 'Media/DCIM/IMG_1.HEIC', 'media/thumb.jpg', 'image/jpeg', 1);
+             INSERT INTO _lava_media_items VALUES
+                 ('m_orig', 'Media/DCIM/IMG_1.HEIC', 'media/orig.heic', 'image/heic', 0);
+             -- A second, distinct asset.
+             INSERT INTO _lava_media_items VALUES
+                 ('m_other', 'Media/DCIM/IMG_2.JPG', 'media/other.jpg', 'image/jpeg', 0);
+             INSERT INTO _lava_media_references VALUES
+                 ('r1', 'm_thumb', 'photosMetadata', 'Photos.sqlite Metadata', 'IMG_1');
+             INSERT INTO _lava_media_references VALUES
+                 ('r2', 'm_orig', 'photosDbexif', 'Photos.sqlite EXIF Analysis', 'IMG_1');
+             INSERT INTO _lava_media_references VALUES
+                 ('r3', 'm_other', 'photosMetadata', 'Photos.sqlite Metadata', 'IMG_2');",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        // Two visible items: the deduped IMG_1 and the distinct IMG_2.
+        assert_eq!(report.media_items, 2);
+
+        let c = cache.conn();
+        let total: i64 = c
+            .query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(total, 2);
+        // The kept IMG_1 row is the non-embedded original (heic), not the thumb.
+        let (kind, engine_id): (String, String) = c
+            .query_row(
+                "SELECT kind, engine_media_id FROM media_items
+                 WHERE relative_path = 'Media/DCIM/IMG_1.HEIC'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(engine_id, "m_orig");
+        assert_eq!(kind, "photo");
+        // Both items are labeled "Photos".
+        let photos: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM media_items WHERE source = 'Photos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(photos, 2);
     }
 
     #[test]

@@ -148,6 +148,41 @@ release already pins) fixes it. **Consequence:** our re-frozen build must pin
 iLEAPP's exact dependency set, not just its source — a `requirements` lock, not
 `pip install ileapp-latest`.
 
+### 4. Camera-roll photos: already wired, with two caveats 📷
+
+The gallery's camera-roll photos come from two iLEAPP modules that **already
+run** in our all-modules import (seen in the log at `[384/583] photosMetadata`,
+`[385/583] photosDbexif`). They produce nothing against our fixture only because
+it has no `Media/PhotoData/Photos.sqlite`; on a real backup they populate
+`_lava_media_items`, which the normalizer reads generically. So photos need
+essentially no new code — just real data.
+
+What the two modules do differs in ways that matter:
+
+- **`photosMetadata`** ("Photos.sqlite Metadata") checks in the *already-cached*
+  thumbnail JPGs from `Media/PhotoData/Thumbnails/`. Fast, already JPEG.
+- **`photosDbexif`** ("Photos.sqlite EXIF Analysis") reads `Media/DCIM/*` and,
+  **for every HEIC, runs an in-process PIL `register_heif_opener()` +
+  `Image.open().save(JPEG)`**. On a full camera roll that's thousands of
+  synchronous HEIC decodes — the likely cause of the import appearing to hang.
+
+Two consequences the normalizer now handles / flags:
+
+- **Dedup.** The same asset is checked in by both modules (and sometimes as both
+  an original and a generated thumbnail), keyed by *different* `source_path`s
+  (photosMetadata → the `Photos.sqlite` path; photosDbexif → the `DCIM/...HEIC`
+  path). `normalize_media` dedups by `source_path`, preferring the non-embedded
+  original, so exact duplicates collapse and originals win. It does **not** merge
+  the two modules' differently-keyed thumbnails of one asset — there is no clean
+  asset key in the generic lava tables — so a real camera roll may still show
+  some photos twice until this is tuned against real data.
+- **Follow-ups (not done here):** *module selection* — run `photosMetadata`, skip
+  `photosDbexif`'s slow per-HEIC conversion — would fix both the residual dupes
+  and the import hang, but it changes the sidecar invocation (we run all modules
+  today). A native `Photos.sqlite` parser with lazy DCIM decode (Phase 2) avoids
+  iLEAPP's eager per-asset copy entirely. Both are the right validation targets
+  once a real backup is available.
+
 ## Decisions taken from this spike
 
 - **MVP drops the native Decryptor** — iLEAPP handles decryption; the Decryptor
