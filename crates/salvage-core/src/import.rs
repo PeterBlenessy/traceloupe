@@ -30,12 +30,14 @@ pub struct ImportOutcome {
 /// Import `backup_dir` into a cache DB at `cache_path`, using the iLEAPP engine
 /// described by `cfg`. `work_dir` holds the engine's (large, transient) output.
 /// `on_phase` receives progress updates; `cancel` aborts a running engine.
+#[allow(clippy::too_many_arguments)]
 pub fn import_backup(
     cfg: &EngineConfig,
     backup_dir: &Path,
     password: &str,
     cache_path: &Path,
     work_dir: &Path,
+    module_ids: &[String],
     cancel: &CancelToken,
     mut on_phase: impl FnMut(ImportPhase),
 ) -> Result<ImportOutcome> {
@@ -47,7 +49,7 @@ pub fn import_backup(
     let _ = std::fs::remove_dir_all(work_dir);
     remove_cache(cache_path);
 
-    let lava_path = sidecar::run_import(cfg, backup_dir, password, work_dir, cancel, |p| {
+    let lava_path = sidecar::run_import(cfg, backup_dir, password, work_dir, module_ids, cancel, |p| {
         on_phase(ImportPhase::Parsing(p))
     })?;
 
@@ -139,6 +141,7 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             "pw",
             &cache_path,
             &work_dir,
+            &[],
             &CancelToken::new(),
             |ph| phases.push(ph),
         )
@@ -195,6 +198,7 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
                 "pw",
                 &cache_path,
                 &work_dir,
+                &[],
                 &CancelToken::new(),
                 |_| {},
             )

@@ -30,6 +30,14 @@ export type ImportProgress =
   | { phase: "parsing"; current: number; total: number; fraction: number; artifact: string }
   | { phase: "normalizing" };
 
+/** A selectable data type for import (maps to iLEAPP modules behind the scenes). */
+export interface ImportModule {
+  id: string;
+  label: string;
+  category: string;
+  default: boolean;
+}
+
 export interface ImportResult {
   cachePath: string;
   threads: number;
@@ -160,10 +168,14 @@ export interface SalvageClient {
   installEngine(): Promise<void>;
   /** Subscribe to engine-install progress. Returns an unsubscribe fn. */
   onEngineProgress(cb: (p: EngineProgress) => void): Promise<UnlistenFn>;
+  /** The catalog of importable data types the user can enable/disable. */
+  listImportModules(): Promise<ImportModule[]>;
   importBackup(args: {
     backupPath: string;
     backupId: string;
     password: string;
+    /** Module ids to import (empty = all defaults). */
+    modules: string[];
   }): Promise<ImportResult>;
   /** Subscribe to import progress events. Returns an unsubscribe fn. */
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
@@ -240,6 +252,7 @@ const tauriClient: SalvageClient = {
   engineInfo: () => invoke<EngineInfo>("engine_info"),
   installEngine: () => invoke<void>("install_engine"),
   onEngineProgress: (cb) => listen<EngineProgress>("engine://progress", (e) => cb(e.payload)),
+  listImportModules: () => invoke<ImportModule[]>("list_import_modules"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
@@ -511,6 +524,13 @@ export const mockClient: SalvageClient = {
     mockEngineSubs.add(cb);
     return () => mockEngineSubs.delete(cb);
   },
+  listImportModules: async () => [
+    { id: "messages", label: "Messages", category: "Communication", default: true },
+    { id: "calls", label: "Call history", category: "Communication", default: true },
+    { id: "contacts", label: "Contacts", category: "Communication", default: true },
+    { id: "safari", label: "Safari history", category: "Web", default: true },
+    { id: "photos", label: "Photos & videos", category: "Media", default: true },
+  ],
   importBackup: async ({ backupId }) => {
     const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];
     for (let i = 0; i < artifacts.length; i++) {

@@ -126,22 +126,86 @@ impl CancelToken {
 /// eager pass and a handful — the import cost the architecture said should be
 /// "bounded by running only the modules the product surfaces" (§8.5).
 ///
-/// Keys are iLEAPP artifact keys (the `__artifacts_v2__` dict key). Notably
-/// `photosDbexif` is *excluded*: it re-encodes every HEIC in-process, the slow
-/// path behind long imports; `photosMetadata` gives camera-roll thumbnails
-/// without it. `addressBook` extracts AddressBook.sqlitedb for our native
-/// contacts parser.
-pub const SELECTED_MODULES: &[&str] = &[
-    "sms",
-    "callHistory",
-    "safariHistory",
-    "addressBook",
-    "photosMetadata",
+/// A user-facing importable data type, mapping to one or more iLEAPP artifact
+/// keys (the `__artifacts_v2__` dict key). This catalog is the source of truth:
+/// the UI lists these so the user chooses what to import, and the importer
+/// resolves the chosen ids to iLEAPP keys. Notably `photosDbexif` is excluded —
+/// it re-encodes every HEIC in-process (the slow path behind long imports);
+/// `photosMetadata` gives camera-roll thumbnails without it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportModule {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub category: &'static str,
+    /// iLEAPP artifact keys this maps to (not serialized to the UI).
+    #[serde(skip)]
+    pub keys: &'static [&'static str],
+    /// Selected by default.
+    pub default: bool,
+}
+
+/// The catalog of importable data types the app can surface today. Extend this
+/// as more views are added (Notes, Safari bookmarks/tabs, …).
+pub const IMPORT_CATALOG: &[ImportModule] = &[
+    ImportModule {
+        id: "messages",
+        label: "Messages",
+        category: "Communication",
+        keys: &["sms"],
+        default: true,
+    },
+    ImportModule {
+        id: "calls",
+        label: "Call history",
+        category: "Communication",
+        keys: &["callHistory"],
+        default: true,
+    },
+    ImportModule {
+        id: "contacts",
+        label: "Contacts",
+        category: "Communication",
+        keys: &["addressBook"],
+        default: true,
+    },
+    ImportModule {
+        id: "safari",
+        label: "Safari history",
+        category: "Web",
+        keys: &["safariHistory"],
+        default: true,
+    },
+    ImportModule {
+        id: "photos",
+        label: "Photos & videos",
+        category: "Media",
+        keys: &["photosMetadata"],
+        default: true,
+    },
 ];
 
-/// Write an iLEAPP profile selecting only `SELECTED_MODULES` and return its path.
-fn write_profile(out_dir: &Path) -> Result<PathBuf> {
-    let plugins = SELECTED_MODULES
+/// The iLEAPP artifact keys to run for the selected module ids. An empty
+/// selection falls back to every default, so a first-time import still works.
+pub fn resolve_module_keys(module_ids: &[String]) -> Vec<String> {
+    let selected = IMPORT_CATALOG.iter().filter(|m| {
+        if module_ids.is_empty() {
+            m.default
+        } else {
+            module_ids.iter().any(|id| id == m.id)
+        }
+    });
+    let mut keys: Vec<String> = selected
+        .flat_map(|m| m.keys.iter().map(|k| k.to_string()))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Write an iLEAPP profile selecting `keys` and return its path.
+fn write_profile(out_dir: &Path, keys: &[String]) -> Result<PathBuf> {
+    let plugins = keys
         .iter()
         .map(|m| format!("{m:?}"))
         .collect::<Vec<_>>()
@@ -161,11 +225,12 @@ pub fn run_import(
     backup_dir: &Path,
     password: &str,
     out_dir: &Path,
+    module_ids: &[String],
     cancel: &CancelToken,
     mut on_progress: impl FnMut(Progress),
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(out_dir).map_err(|e| Error::io(out_dir, e))?;
-    let profile = write_profile(out_dir)?;
+    let profile = write_profile(out_dir, &resolve_module_keys(module_ids))?;
 
     let mut cmd = cfg.command();
     cmd.arg("-t")
@@ -338,7 +403,7 @@ echo "Report generation Completed."
         let out = tmp.path().join("out");
         let cancel = CancelToken::new();
         let mut seen = Vec::new();
-        let lava = run_import(&cfg, tmp.path(), "pw", &out, &cancel, |p| seen.push(p)).unwrap();
+        let lava = run_import(&cfg, tmp.path(), "pw", &out, &[], &cancel, |p| seen.push(p)).unwrap();
 
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[1].artifact, "sms");
@@ -364,6 +429,7 @@ echo "Report generation Completed."
             tmp.path(),
             "pw",
             &tmp.path().join("out"),
+            &[],
             &CancelToken::new(),
             |_| {},
         )

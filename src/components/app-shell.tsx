@@ -34,7 +34,9 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
+import { client } from "@/lib/ipc";
 
 const nav = [
   { to: "/gallery", label: "Gallery", icon: Image },
@@ -103,8 +105,24 @@ export function AppShell() {
 
 /** Gear button + dialog exposing the app-wide display preferences. */
 function SettingsMenu() {
-  const { showContactNames, setShowContactNames, showAvatars, setShowAvatars } =
-    useSettings();
+  const {
+    showContactNames,
+    setShowContactNames,
+    showAvatars,
+    setShowAvatars,
+    importModules,
+    setImportModules,
+  } = useSettings();
+  const { data: catalog } = useQuery({
+    queryKey: ["importModules"],
+    queryFn: () => client.listImportModules(),
+  });
+  // Effective selection: the user's saved choice, or every default.
+  const selected = importModules ?? catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
+  const toggleModule = (id: string, on: boolean) => {
+    const base = selected;
+    setImportModules(on ? [...new Set([...base, id])] : base.filter((x) => x !== id));
+  };
 
   return (
     <Dialog>
@@ -144,6 +162,31 @@ function SettingsMenu() {
               onCheckedChange={setShowAvatars}
             />
           </div>
+
+          {catalog && catalog.length > 0 && (
+            <div className="flex flex-col gap-3 border-t pt-4">
+              <div className="flex flex-col gap-1">
+                <Label>Data to import</Label>
+                <p className="text-muted-foreground text-sm">
+                  Choose which data types to parse. Applies to the next import or
+                  re-import.
+                </p>
+              </div>
+              {catalog.map((m) => (
+                <div key={m.id} className="flex items-center justify-between gap-4">
+                  <Label htmlFor={`import-${m.id}`} className="font-normal">
+                    {m.label}
+                    <span className="ml-2 text-xs text-muted-foreground">{m.category}</span>
+                  </Label>
+                  <Switch
+                    id={`import-${m.id}`}
+                    checked={selected.includes(m.id)}
+                    onCheckedChange={(on) => toggleModule(m.id, on)}
+                  />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

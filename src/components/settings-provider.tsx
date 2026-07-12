@@ -11,10 +11,14 @@ type SettingsProviderState = {
   setShowContactNames: (v: boolean) => void;
   showAvatars: boolean;
   setShowAvatars: (v: boolean) => void;
+  /** Import module ids the user chose, or null to use the catalog defaults. */
+  importModules: string[] | null;
+  setImportModules: (ids: string[]) => void;
 };
 
 const NAMES_KEY = "salvage-show-names";
 const AVATARS_KEY = "salvage-show-avatars";
+const IMPORT_MODULES_KEY = "salvage-import-modules";
 
 const SettingsProviderContext = createContext<SettingsProviderState | null>(null);
 
@@ -23,12 +27,27 @@ function readBool(key: string): boolean {
   return localStorage.getItem(key) !== "false";
 }
 
+/** Read a persisted string array, or null when absent/invalid. */
+function readStringArray(key: string): string[] | null {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as string[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [showContactNames, setShowContactNamesState] = useState<boolean>(() =>
     readBool(NAMES_KEY),
   );
   const [showAvatars, setShowAvatarsState] = useState<boolean>(() =>
     readBool(AVATARS_KEY),
+  );
+  const [importModules, setImportModulesState] = useState<string[] | null>(() =>
+    readStringArray(IMPORT_MODULES_KEY),
   );
 
   const setShowContactNames = (v: boolean) => {
@@ -41,9 +60,21 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setShowAvatarsState(v);
   };
 
+  const setImportModules = (ids: string[]) => {
+    localStorage.setItem(IMPORT_MODULES_KEY, JSON.stringify(ids));
+    setImportModulesState(ids);
+  };
+
   return (
     <SettingsProviderContext.Provider
-      value={{ showContactNames, setShowContactNames, showAvatars, setShowAvatars }}
+      value={{
+        showContactNames,
+        setShowContactNames,
+        showAvatars,
+        setShowAvatars,
+        importModules,
+        setImportModules,
+      }}
     >
       {children}
     </SettingsProviderContext.Provider>

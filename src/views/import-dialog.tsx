@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useSettings } from "@/components/settings-provider";
 import { Lock, Loader2, TriangleAlert } from "lucide-react";
 import {
   Dialog,
@@ -44,6 +45,15 @@ export function ImportDialog({
   );
   const [password, setPassword] = useState("");
   const qc = useQueryClient();
+  // Resolve which data types to import: the user's saved choice, or the catalog
+  // defaults if they haven't customized it.
+  const { importModules } = useSettings();
+  const { data: catalog } = useQuery({
+    queryKey: ["importModules"],
+    queryFn: () => client.listImportModules(),
+  });
+  const modules =
+    importModules ?? catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
   // Keep the latest progress even across re-subscribes.
   const unlisten = useRef<(() => void) | null>(null);
   const started = useRef(false);
@@ -80,6 +90,7 @@ export function ImportDialog({
         backupPath: backup.path,
         backupId: backup.id,
         password,
+        modules,
       });
       off();
       unlisten.current = null;

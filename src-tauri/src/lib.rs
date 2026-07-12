@@ -228,6 +228,12 @@ struct ImportResult {
 ///
 /// Runs the blocking import on a worker thread so the async runtime is free to
 /// deliver the emitted events while it runs.
+/// The catalog of importable data types, for the import-selection settings.
+#[tauri::command]
+fn list_import_modules() -> Vec<salvage_core::sidecar::ImportModule> {
+    salvage_core::sidecar::IMPORT_CATALOG.to_vec()
+}
+
 #[tauri::command]
 async fn import_backup(
     app: AppHandle,
@@ -235,6 +241,7 @@ async fn import_backup(
     backup_path: String,
     backup_id: String,
     password: String,
+    modules: Vec<String>,
 ) -> Result<ImportResult, String> {
     let cfg = resolve_engine(&app).ok_or_else(|| {
         "iLEAPP engine is not installed. Set SALVAGE_ILEAPP or install the engine.".to_string()
@@ -261,6 +268,7 @@ async fn import_backup(
             &password,
             &cache_path,
             &work_dir,
+            &modules,
             &cancel,
             |phase| {
                 let event = match phase {
@@ -862,6 +870,7 @@ pub fn run() {
             engine_status,
             engine_info,
             install_engine,
+            list_import_modules,
             import_backup,
             open_backup,
             has_active_backup,
