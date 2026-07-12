@@ -529,7 +529,7 @@ export const mockClient: SalvageClient = {
     { id: "calls", label: "Call history", category: "Communication", default: true },
     { id: "contacts", label: "Contacts", category: "Communication", default: true },
     { id: "safari", label: "Safari history", category: "Web", default: true },
-    { id: "camera_roll", label: "Camera roll photos (slower import)", category: "Media", default: false },
+    { id: "camera_roll", label: "Camera roll photos", category: "Media", default: true },
   ],
   importBackup: async ({ backupId }) => {
     const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];

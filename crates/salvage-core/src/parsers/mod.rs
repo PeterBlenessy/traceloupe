@@ -11,4 +11,5 @@
 //! iLEAPP source.
 
 pub mod address_book;
+pub mod camera_roll;
 pub mod chats;

@@ -177,16 +177,16 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         default: true,
     },
     ImportModule {
-        // photosDbexif checks in the camera roll (Media/DCIM), but re-encodes
-        // every HEIC in-process, so it's slow — off by default. (photosMetadata,
-        // the fast module, extracts photo metadata but no images on iOS 14+, so
-        // it doesn't populate the gallery. Message/app media come from the other
-        // modules regardless of this toggle.)
+        // Handled natively (not via iLEAPP): the importer reads the camera roll
+        // straight from the backup's Manifest and uses iOS's pre-rendered
+        // thumbnails, so it's fast (no HEIC re-encoding at import time). Empty
+        // `keys` means it adds nothing to the iLEAPP profile. Unencrypted backups
+        // only for now.
         id: "camera_roll",
-        label: "Camera roll photos (slower import)",
+        label: "Camera roll photos",
         category: "Media",
-        keys: &["photosDbexif"],
-        default: false,
+        keys: &[],
+        default: true,
     },
 ];
 

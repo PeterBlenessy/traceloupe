@@ -62,10 +62,42 @@ pub fn import_backup(
     let cache = CacheDb::open(cache_path)?;
     let mut report = normalize::normalize_lava(&lava_path, &engine_out_dir, &cache)?;
 
+    let effective = sidecar::effective_module_ids(module_ids);
+
+    // Camera roll: read the backup's Manifest natively and reference iOS's own
+    // thumbnails, so the gallery is fast and full images transcode on demand.
+    if effective.contains(&"camera_roll") {
+        match crate::parsers::camera_roll::parse_camera_roll(backup_dir) {
+            Ok(assets) => {
+                let conn = cache.conn();
+                for a in &assets {
+                    conn.execute(
+                        "INSERT INTO media_items
+                            (domain, relative_path, kind, source, mime_type,
+                             taken_at, thumb_path, local_path)
+                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, NULL, ?4, ?5)",
+                        rusqlite::params![
+                            a.relative_path,
+                            a.kind,
+                            a.mime,
+                            a.thumb_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                            a.full_path.to_string_lossy(),
+                        ],
+                    )?;
+                }
+                report.media_items += assets.len();
+            }
+            Err(e) => report.warnings.push(format!(
+                "Camera roll: couldn't read the backup manifest ({e}). \
+                 Encrypted backups aren't supported yet."
+            )),
+        }
+    }
+
     // Diagnostic: flag any enabled data type that produced nothing, so an empty
-    // Safari/Calls/Photos (usually the source DB isn't in this backup) is
-    // visible instead of silently absent.
-    for id in sidecar::effective_module_ids(module_ids) {
+    // Safari/Calls (usually the source DB isn't in this backup) is visible
+    // instead of silently absent.
+    for id in effective {
         let (label, count) = match id {
             "messages" => ("Messages", report.messages),
             "calls" => ("Call history", report.calls),

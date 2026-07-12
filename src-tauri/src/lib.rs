@@ -624,9 +624,24 @@ fn media_protocol_response(
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime))) = query::media_blob(&cache, id) else {
+    let Ok(Some((local_path, mime, thumb_path))) = query::media_blob(&cache, id) else {
         return not_found();
     };
+
+    // Camera-roll items carry iOS's pre-rendered JPEG thumbnail — serve it
+    // directly for grid requests (no HEIC decode at all).
+    if want_thumb {
+        if let Some(tp) = thumb_path {
+            if let Ok(bytes) = std::fs::read(&tp) {
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "image/jpeg")
+                    .header("Cache-Control", "no-cache")
+                    .body(bytes)
+                    .unwrap();
+            }
+        }
+    }
 
     // Converted thumbnails/full-JPEGs are cached alongside the backup's cache DB.
     let thumbs_dir = cache_path

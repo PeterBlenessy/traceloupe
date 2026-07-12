@@ -654,13 +654,23 @@ pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
 
 /// The on-disk path and MIME type for one media item, for the media protocol
 /// handler. Returns `None` if the id is unknown or has no materialized bytes.
-pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<(String, Option<String>)>> {
+/// `(local_path, mime, thumb_path)` for a media item served by the protocol.
+pub type MediaBlob = (String, Option<String>, Option<String>);
+
+pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
     Ok(cache
         .conn()
         .query_row(
-            "SELECT local_path, mime_type FROM media_items WHERE id = ?1 AND local_path IS NOT NULL",
+            "SELECT local_path, mime_type, thumb_path FROM media_items
+             WHERE id = ?1 AND local_path IS NOT NULL",
             [id],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            },
         )
         .optional()?)
 }
@@ -783,7 +793,7 @@ mod tests {
         // media_blob resolves path + mime for the handler, None for unknown/no-bytes.
         assert_eq!(
             media_blob(&cache, 1).unwrap(),
-            Some(("/cache/media/a.png".into(), Some("image/png".into())))
+            Some(("/cache/media/a.png".into(), Some("image/png".into()), None))
         );
         assert_eq!(media_blob(&cache, 3).unwrap(), None);
         assert_eq!(media_blob(&cache, 999).unwrap(), None);
