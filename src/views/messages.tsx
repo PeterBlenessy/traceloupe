@@ -568,9 +568,15 @@ function Conversation({
             {thread.participants.length} people · {members}
           </span>
         ) : (
-          thread.service && (
-            <span className="text-xs text-muted-foreground">{thread.service}</span>
-          )
+          // App threads (e.g. TikTok) store the peer's @handle as the sole
+          // participant — show it next to the service.
+          (() => {
+            const handle = thread.participants.find((p) => p.startsWith("@"));
+            const bits = [handle, thread.service].filter(Boolean);
+            return bits.length > 0 ? (
+              <span className="text-xs text-muted-foreground">{bits.join(" · ")}</span>
+            ) : null;
+          })()
         )}
       </ViewHeader>
       <LazyVirtualList<Message>

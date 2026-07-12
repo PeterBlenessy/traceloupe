@@ -44,7 +44,10 @@ CREATE TABLE contacts (
     organization TEXT,
     phones_json  TEXT NOT NULL DEFAULT '[]',  -- [{"label":..,"value":..}]
     emails_json  TEXT NOT NULL DEFAULT '[]',
-    image        BLOB                          -- contact photo thumbnail, if any
+    image        BLOB,                         -- contact photo thumbnail, if any
+    -- Where the contact came from: 'Address Book' (the device's contacts) or a
+    -- third-party app's social graph (e.g. 'TikTok'). Drives the Contacts filter.
+    source       TEXT NOT NULL DEFAULT 'Address Book'
 );
 
 -- Apps that were installed on the device (from Info.plist), for the Apps view.
@@ -199,6 +202,7 @@ impl CacheDb {
         )?;
         ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
         ensure_column(&conn, "media_items", "plain_size", "INTEGER")?;
+        ensure_column(&conn, "contacts", "source", "TEXT NOT NULL DEFAULT 'Address Book'")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
     }

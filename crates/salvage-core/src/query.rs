@@ -451,6 +451,8 @@ pub struct Contact {
     pub emails: Vec<crate::parsers::address_book::LabeledValue>,
     /// Whether a photo is stored for this contact (fetched via `contact_image`).
     pub has_image: bool,
+    /// 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter.
+    pub source: String,
 }
 
 /// Contacts, ordered by name (people first, then organization-only entries).
@@ -458,7 +460,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, first_name, last_name, organization, phones_json, emails_json,
-                image IS NOT NULL
+                image IS NOT NULL, source
          FROM contacts
          ORDER BY last_name IS NULL AND first_name IS NULL,
                   last_name COLLATE NOCASE, first_name COLLATE NOCASE, id",
@@ -474,6 +476,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
             phones: serde_json::from_str(&phones).unwrap_or_default(),
             emails: serde_json::from_str(&emails).unwrap_or_default(),
             has_image: r.get(6)?,
+            source: r.get(7)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

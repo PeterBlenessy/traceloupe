@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { EmptyView, ListDetail, ListSearch, ViewHeader } from "@/components/view";
@@ -28,13 +29,23 @@ export function ContactsView() {
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [q, setQ] = useState("");
+  // Source filter: the device address book vs a third-party app's social graph
+  // (e.g. TikTok). Default to the address book so app contacts don't bury it.
+  const [source, setSource] = useState("Address Book");
   const { showAvatars } = useSettings();
+
+  const sources = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of contacts ?? []) set.add(c.source);
+    return [...set].sort((a, b) => (a === "Address Book" ? -1 : b === "Address Book" ? 1 : a.localeCompare(b)));
+  }, [contacts]);
 
   const filtered = useMemo(() => {
     if (!contacts) return [];
     const needle = q.trim().toLowerCase();
-    if (!needle) return contacts;
     return contacts.filter((c) => {
+      if (sources.length > 1 && c.source !== source) return false;
+      if (!needle) return true;
       const hay = [
         contactName(c),
         c.organization,
@@ -46,7 +57,7 @@ export function ContactsView() {
         .toLowerCase();
       return hay.includes(needle);
     });
-  }, [contacts, q]);
+  }, [contacts, q, source, sources]);
 
   if (active === false) {
     return (
@@ -62,9 +73,25 @@ export function ContactsView() {
     <ListDetail
       master={
         <>
-          <ViewHeader title="Contacts" count={contacts?.length} />
-          <div className="border-b p-2">
+          <ViewHeader title="Contacts" count={filtered.length} />
+          <div className="space-y-2 border-b p-2">
             <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />
+            {sources.length > 1 && (
+              <ToggleGroup
+                type="single"
+                size="sm"
+                variant="outline"
+                value={source}
+                onValueChange={(v) => v && setSource(v)}
+                className="flex-wrap justify-start"
+              >
+                {sources.map((s) => (
+                  <ToggleGroupItem key={s} value={s}>
+                    {s}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            )}
           </div>
           {isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
