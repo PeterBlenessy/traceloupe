@@ -364,6 +364,17 @@ const mockThreads: ThreadSummary[] = [
     snippet: "See you at the trailhead!",
     participants: ["+15551234567", "+15559876543", "+15550001111"],
   },
+  {
+    // A third-party app DM (TikTok), tagged by its service for the app filter.
+    id: 5,
+    identifier: "0:1:179546233697390592:7145206438070666245",
+    displayName: "★ hembokke",
+    service: "TikTok",
+    lastMessageAt: 1717600000,
+    messageCount: 2,
+    snippet: "sent you a video 🎵",
+    participants: [],
+  },
 ];
 
 const mockMessages: Record<number, Message[]> = {
@@ -378,6 +389,10 @@ const mockMessages: Record<number, Message[]> = {
   2: [
     { id: 7, isFromMe: true, sender: null, body: "Landing at 6, boarding now", sentAt: 1717499000, attachments: [] },
     { id: 8, isFromMe: false, sender: "Mom", body: "Call me when you land ❤️", sentAt: 1717500000, attachments: [] },
+  ],
+  5: [
+    { id: 9, isFromMe: false, sender: "★ hembokke", body: "have you seen this one 😂", sentAt: 1717599000, attachments: [] },
+    { id: 10, isFromMe: true, sender: null, body: "sent you a video 🎵", sentAt: 1717600000, attachments: [] },
   ],
 };
 

@@ -195,6 +195,16 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         keys: &[],
         default: true,
     },
+    ImportModule {
+        // Third-party app DMs, normalized into the Messages view (service =
+        // "TikTok"). iLEAPP parses TikTok's ChatFiles/AwemeIM DBs; users without
+        // TikTok pay ~nothing (no files matched), so it's a safe default.
+        id: "tiktok",
+        label: "TikTok messages",
+        category: "Apps",
+        keys: &["tiktok_messages"],
+        default: true,
+    },
 ];
 
 /// The iLEAPP artifact keys to run for the selected module ids. An empty
@@ -430,7 +440,8 @@ echo "Report generation Completed."
         let out = tmp.path().join("out");
         let cancel = CancelToken::new();
         let mut seen = Vec::new();
-        let lava = run_import(&cfg, tmp.path(), "pw", &out, &[], &cancel, |p| seen.push(p)).unwrap();
+        let lava =
+            run_import(&cfg, tmp.path(), "pw", &out, &[], &cancel, |p| seen.push(p)).unwrap();
 
         assert_eq!(seen.len(), 2);
         assert_eq!(seen[1].artifact, "sms");
