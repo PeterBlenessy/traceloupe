@@ -177,11 +177,16 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         default: true,
     },
     ImportModule {
-        id: "photos",
-        label: "Photos & videos",
+        // photosDbexif checks in the camera roll (Media/DCIM), but re-encodes
+        // every HEIC in-process, so it's slow — off by default. (photosMetadata,
+        // the fast module, extracts photo metadata but no images on iOS 14+, so
+        // it doesn't populate the gallery. Message/app media come from the other
+        // modules regardless of this toggle.)
+        id: "camera_roll",
+        label: "Camera roll photos (slower import)",
         category: "Media",
-        keys: &["photosMetadata"],
-        default: true,
+        keys: &["photosDbexif"],
+        default: false,
     },
 ];
 
