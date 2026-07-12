@@ -49,9 +49,15 @@ pub fn import_backup(
     let _ = std::fs::remove_dir_all(work_dir);
     remove_cache(cache_path);
 
-    let lava_path = sidecar::run_import(cfg, backup_dir, password, work_dir, module_ids, cancel, |p| {
-        on_phase(ImportPhase::Parsing(p))
-    })?;
+    let lava_path = sidecar::run_import(
+        cfg,
+        backup_dir,
+        password,
+        work_dir,
+        module_ids,
+        cancel,
+        |p| on_phase(ImportPhase::Parsing(p)),
+    )?;
 
     on_phase(ImportPhase::Normalizing);
     let engine_out_dir = lava_path
@@ -67,31 +73,62 @@ pub fn import_backup(
     // Camera roll: read the backup's Manifest natively and reference iOS's own
     // thumbnails, so the gallery is fast and full images transcode on demand.
     if effective.contains(&"camera_roll") {
-        match crate::parsers::camera_roll::parse_camera_roll(backup_dir) {
+        // Encrypted backups need the native decryptor (iLEAPP won't hand us the
+        // DCIM originals); `password` is empty for unencrypted backups. iLEAPP
+        // already ran with this password, so a failure to derive keys here is
+        // unexpected — degrade with a warning rather than aborting the import.
+        let decryptor = if password.is_empty() {
+            None
+        } else {
+            match crate::crypto::BackupDecryptor::open(backup_dir, password) {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    report
+                        .warnings
+                        .push(format!("Encrypted camera roll unavailable: {e}"));
+                    None
+                }
+            }
+        };
+        // Decrypted thumbnails and transient decrypted DBs live beside the cache.
+        // Wipe first so re-import doesn't serve a previous run's stale thumbnails.
+        let media_cache_dir = cache_path
+            .parent()
+            .map(|p| p.join("media"))
+            .unwrap_or_else(|| work_dir.join("media"));
+        let _ = std::fs::remove_dir_all(&media_cache_dir);
+
+        match crate::parsers::camera_roll::parse_camera_roll(
+            backup_dir,
+            decryptor.as_ref(),
+            &media_cache_dir,
+        ) {
             Ok(assets) => {
                 let conn = cache.conn();
                 for a in &assets {
                     conn.execute(
                         "INSERT INTO media_items
                             (domain, relative_path, kind, source, mime_type,
-                             taken_at, thumb_path, local_path)
-                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6)",
+                             taken_at, thumb_path, local_path, decrypt_key)
+                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6, ?7)",
                         rusqlite::params![
                             a.relative_path,
                             a.kind,
                             a.mime,
                             a.taken_at,
-                            a.thumb_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                            a.thumb_path
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().into_owned()),
                             a.full_path.to_string_lossy(),
+                            a.decrypt_key,
                         ],
                     )?;
                 }
                 report.media_items += assets.len();
             }
-            Err(e) => report.warnings.push(format!(
-                "Camera roll: couldn't read the backup manifest ({e}). \
-                 Encrypted backups aren't supported yet."
-            )),
+            Err(e) => report
+                .warnings
+                .push(format!("Camera roll: couldn't read the backup ({e}).")),
         }
     }
 
@@ -110,9 +147,9 @@ pub fn import_backup(
             _ => continue,
         };
         if count == 0 {
-            report
-                .warnings
-                .push(format!("{label}: nothing found — the source data isn't in this backup."));
+            report.warnings.push(format!(
+                "{label}: nothing found — the source data isn't in this backup."
+            ));
         }
     }
 

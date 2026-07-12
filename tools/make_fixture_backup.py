@@ -105,6 +105,19 @@ GALLERY_PHOTOS = [
 ]
 
 
+# A camera-roll asset in CameraRollDomain (not a message attachment), with its
+# pre-rendered V2 thumbnail and a Photos.sqlite row — what the native encrypted
+# camera-roll reader enumerates. Kept small; the decrypt path is the point.
+CAMERA_ROLL_DCIM = ("Media/DCIM/100APPLE/IMG_0001.HEIC", HEIC_PHOTO)
+CAMERA_ROLL_THUMB = (
+    "Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_0001.HEIC/5005.JPG",
+    solid_png(80, 60, (200, 50, 50)),
+)
+# ZDATECREATED is a Core Data timestamp (seconds since 2001); 700000000 + the
+# 978307200 epoch offset = 1678307200 Unix, which the reader must recover.
+CAMERA_ROLL_DATE_COCOA = 700_000_000.0
+
+
 def cocoa_ns(dt: datetime) -> int:
     """Seconds since 2001 as nanoseconds (modern iOS message.date encoding)."""
     return int((dt - COCOA_EPOCH).total_seconds() * 1_000_000_000)
@@ -367,6 +380,21 @@ def seed_callhistory_db(path: Path) -> None:
     con.close()
 
 
+def seed_photos_sqlite(path: Path) -> None:
+    """Photos.sqlite with the ZASSET columns the native camera-roll reader joins
+    on (ZDIRECTORY/ZFILENAME → capture date, trashed flag)."""
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE ZASSET (ZDIRECTORY TEXT, ZFILENAME TEXT, ZDATECREATED REAL, ZTRASHEDSTATE INTEGER)"
+    )
+    con.execute(
+        "INSERT INTO ZASSET VALUES ('DCIM/100APPLE', 'IMG_0001.HEIC', ?, 0)",
+        (CAMERA_ROLL_DATE_COCOA,),
+    )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -378,6 +406,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_callhistory_db(calls_path)
     ab_path = workdir / "AddressBook.sqlitedb"
     seed_addressbook_db(ab_path)
+    photos_path = workdir / "Photos.sqlite"
+    seed_photos_sqlite(photos_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -385,6 +415,12 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
         ("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", ab_path.read_bytes()),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
+    # A real camera roll: the DCIM original, its V2 thumbnail, and Photos.sqlite.
+    files += [
+        ("CameraRollDomain", CAMERA_ROLL_DCIM[0], CAMERA_ROLL_DCIM[1]),
+        ("CameraRollDomain", CAMERA_ROLL_THUMB[0], CAMERA_ROLL_THUMB[1]),
+        ("CameraRollDomain", "Media/PhotoData/Photos.sqlite", photos_path.read_bytes()),
+    ]
     return files
 
 
