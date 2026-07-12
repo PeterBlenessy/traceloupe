@@ -225,23 +225,43 @@ impl BackupDecryptor {
     /// Manifest.db (carrying the wrapped per-file key and real size); `file_id`
     /// locates the ciphertext at `<backup>/<id[:2]>/<id>`.
     pub fn decrypt_file(&self, file_blob: &[u8], file_id: &str) -> Result<Vec<u8>> {
-        let meta = FileMeta::parse(file_blob)?;
-        let key = unwrap_prefixed(&self.class_keys, &meta.enc_key)?;
+        let (enc_key, size) = file_key_field(file_blob)?;
         let ct_path = self
             .backup_dir
             .join(&file_id[..2.min(file_id.len())])
             .join(file_id);
         let ct = std::fs::read(&ct_path).map_err(|e| Error::io(&ct_path, e))?;
-        let mut pt = aes_cbc_decrypt(&key, &ct)?;
-        // CBC works in 16-byte blocks; trim the zero padding back to the real size.
-        if let Some(size) = meta.size {
-            let size = size as usize;
+        self.decrypt_bytes(&enc_key, &ct, size.map(|s| s as usize))
+    }
+
+    /// Decrypt raw ciphertext given a file's class-prefixed wrapped key (the
+    /// `EncryptionKey` field, from `file_key_field`). This is the on-demand
+    /// primitive the media layer uses: the wrapped key is stored on the cache
+    /// row, so a single photo decrypts without re-reading Manifest.db. `size`
+    /// trims the CBC block padding back to the real plaintext length.
+    pub fn decrypt_bytes(
+        &self,
+        enc_key_field: &[u8],
+        ciphertext: &[u8],
+        size: Option<usize>,
+    ) -> Result<Vec<u8>> {
+        let key = unwrap_prefixed(&self.class_keys, enc_key_field)?;
+        let mut pt = aes_cbc_decrypt(&key, ciphertext)?;
+        if let Some(size) = size {
             if size <= pt.len() {
                 pt.truncate(size);
             }
         }
         Ok(pt)
     }
+}
+
+/// Extract a Manifest.db `file` blob's class-prefixed wrapped key and plaintext
+/// size. The wrapped key can be stored per-file (it's useless without the class
+/// keys) so a photo can be decrypted on demand later via [`BackupDecryptor::decrypt_bytes`].
+pub fn file_key_field(blob: &[u8]) -> Result<(Vec<u8>, Option<u64>)> {
+    let meta = FileMeta::parse(blob)?;
+    Ok((meta.enc_key, meta.size))
 }
 
 /// The bits of a Manifest.db `file` blob we need: the (class-prefixed) wrapped

@@ -133,7 +133,10 @@ CREATE TABLE media_items (
     duration_s      REAL,
     -- Paths under the app cache dir; NULL until materialized.
     thumb_path      TEXT,
-    local_path      TEXT
+    local_path      TEXT,
+    -- Encrypted backups only: the class-prefixed wrapped key that decrypts
+    -- local_path on demand (useless without the backup keys). NULL otherwise.
+    decrypt_key     BLOB
 );
 CREATE INDEX idx_media_taken ON media_items(taken_at DESC);
 
@@ -183,6 +186,7 @@ impl CacheDb {
         // idempotent, so they run every open rather than being version-gated.
         ensure_column(&conn, "contacts", "image", "BLOB")?;
         ensure_column(&conn, "threads", "participants_json", "TEXT NOT NULL DEFAULT '[]'")?;
+        ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
     }

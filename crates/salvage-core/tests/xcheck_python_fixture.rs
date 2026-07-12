@@ -48,3 +48,48 @@ fn decrypts_python_generated_backup() {
     }
     eprintln!("cross-check OK: decrypted {checked} files from the Python fixture");
 }
+
+#[test]
+fn parses_encrypted_camera_roll() {
+    let Ok(dir) = std::env::var("SALVAGE_ENC_FIXTURE") else {
+        eprintln!("skipping: set SALVAGE_ENC_FIXTURE to a fixture dir");
+        return;
+    };
+    let dir = std::path::PathBuf::from(dir);
+    let dec = BackupDecryptor::open(&dir, "salvage-test").expect("open with correct password");
+    let cache = std::env::temp_dir().join("xcheck_media_cache");
+    let _ = std::fs::remove_dir_all(&cache);
+
+    let assets = salvage_core::parsers::camera_roll::parse_camera_roll(&dir, Some(&dec), &cache)
+        .expect("parse encrypted camera roll");
+    let asset = assets
+        .iter()
+        .find(|a| a.relative_path.ends_with("IMG_0001.HEIC"))
+        .expect("DCIM asset present");
+
+    // Capture date recovered from the decrypted Photos.sqlite (700000000 + offset).
+    assert_eq!(asset.taken_at, Some(1_678_307_200));
+
+    // The thumbnail was decrypted into the cache and is a real image on disk.
+    let thumb = asset.thumb_path.as_ref().expect("thumbnail resolved");
+    let thumb_bytes = std::fs::read(thumb).expect("read decrypted thumb");
+    assert_eq!(
+        &thumb_bytes[..8],
+        b"\x89PNG\r\n\x1a\n",
+        "thumbnail not decrypted"
+    );
+
+    // The original stays encrypted on disk; its stored wrapped key decrypts it
+    // on demand into a valid HEIC (bytes 4..8 are the `ftyp` box marker).
+    let key = asset
+        .decrypt_key
+        .as_ref()
+        .expect("wrapped key for encrypted asset");
+    let ct = std::fs::read(&asset.full_path).expect("read encrypted original");
+    let full = dec
+        .decrypt_bytes(key, &ct, None)
+        .expect("decrypt original on demand");
+    assert_eq!(&full[4..8], b"ftyp", "decrypted original is not a HEIC");
+
+    eprintln!("encrypted camera-roll OK: date, decrypted thumb, on-demand full image");
+}
