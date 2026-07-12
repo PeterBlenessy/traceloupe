@@ -651,17 +651,25 @@ pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
 }
 
 /// What the media protocol needs to serve one item:
-/// `(local_path, mime, thumb_path, decrypt_key)`. Returns `None` if the id is
-/// unknown or has no materialized bytes. `decrypt_key` is the class-prefixed
-/// wrapped key for an encrypted backup's original (see [`crate::crypto`]); it's
-/// `None` when `local_path` is already plaintext.
-pub type MediaBlob = (String, Option<String>, Option<String>, Option<Vec<u8>>);
+/// `(local_path, mime, thumb_path, decrypt_key, plain_size)`. Returns `None` if
+/// the id is unknown or has no materialized bytes. `decrypt_key` is the
+/// class-prefixed wrapped key for an encrypted backup's original (see
+/// [`crate::crypto`]) and `plain_size` its real length (to trim CBC padding);
+/// both are `None` when `local_path` is already plaintext.
+pub type MediaBlob = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<i64>,
+);
 
 pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
     Ok(cache
         .conn()
         .query_row(
-            "SELECT local_path, mime_type, thumb_path, decrypt_key FROM media_items
+            "SELECT local_path, mime_type, thumb_path, decrypt_key, plain_size
+             FROM media_items
              WHERE id = ?1 AND local_path IS NOT NULL",
             [id],
             |r| {
@@ -670,6 +678,7 @@ pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
                     r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
                 ))
             },
         )
@@ -834,6 +843,7 @@ mod tests {
             Some((
                 "/cache/media/a.png".into(),
                 Some("image/png".into()),
+                None,
                 None,
                 None
             ))

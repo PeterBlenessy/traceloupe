@@ -6,7 +6,11 @@ mod media;
 mod secret;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+
+/// Monotonic counter for unique on-demand decrypt temp-file names.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 use salvage_core::cache::CacheDb;
 use salvage_core::crypto::BackupDecryptor;
@@ -689,7 +693,8 @@ fn media_protocol_response(
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime, thumb_path, decrypt_key))) = query::media_blob(&cache, id)
+    let Ok(Some((local_path, mime, thumb_path, decrypt_key, plain_size))) =
+        query::media_blob(&cache, id)
     else {
         return not_found();
     };
@@ -727,16 +732,16 @@ fn media_protocol_response(
         let Ok(ciphertext) = std::fs::read(&local_path) else {
             return not_found();
         };
-        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, None) else {
+        let size = plain_size.and_then(|s| usize::try_from(s).ok());
+        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, size) else {
             return not_found();
         };
         let _ = std::fs::create_dir_all(&thumbs_dir);
-        // Distinguish thumb vs full so the webview's parallel grid+lightbox
-        // requests for the same id don't fight over one temp file.
-        let tmp = thumbs_dir.join(format!(
-            "{id}.{}.decrypted",
-            if want_thumb { "t" } else { "f" }
-        ));
+        // Unique per request so concurrent webview requests for the same id
+        // (grid + lightbox, or strict-mode double-invokes) never clobber each
+        // other's temp file mid-render.
+        let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = thumbs_dir.join(format!("{id}.{seq}.decrypted"));
         if std::fs::write(&tmp, &plain).is_err() {
             return not_found();
         }
