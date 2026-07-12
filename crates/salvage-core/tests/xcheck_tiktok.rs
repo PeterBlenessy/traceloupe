@@ -42,6 +42,46 @@ fn normalizes_real_tiktok_dms() {
         )
         .unwrap();
     eprintln!("named threads: {named}/{}", report.threads);
+
+    // Group chats: labelled "Group chat · N people", never a raw numeric id.
+    let groups: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM threads WHERE service = 'TikTok' AND display_name LIKE 'Group chat%'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    eprintln!("group chats: {groups}");
+    // No thread name should be a bare numeric id (the group-chat bug).
+    let numeric_names: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM threads
+             WHERE service = 'TikTok' AND display_name GLOB '[0-9]*'
+               AND display_name NOT GLOB '*[^0-9]*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        numeric_names, 0,
+        "a group thread is still named by its raw id"
+    );
+
+    // bare-numeric identifier fallback: a null display_name would make the UI
+    // show the raw identifier — none should be a bare number for TikTok.
+    let numeric_fallback: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM threads
+             WHERE service = 'TikTok' AND display_name IS NULL
+               AND identifier GLOB '[0-9]*' AND identifier NOT GLOB '*[^0-9]*'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        numeric_fallback, 0,
+        "a thread would fall back to a bare-numeric id"
+    );
     // A sanity check on timestamps: all within a plausible epoch range.
     let (min_ts, max_ts): (i64, i64) = c
         .query_row(

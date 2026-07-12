@@ -200,9 +200,9 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         // "TikTok"). iLEAPP parses TikTok's ChatFiles/AwemeIM DBs; users without
         // TikTok pay ~nothing (no files matched), so it's a safe default.
         id: "tiktok",
-        label: "TikTok messages",
+        label: "TikTok messages & contacts",
         category: "Apps",
-        keys: &["tiktok_messages"],
+        keys: &["tiktok_messages", "tiktok_contacts"],
         default: true,
     },
     ImportModule {
