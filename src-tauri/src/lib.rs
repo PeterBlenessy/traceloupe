@@ -731,7 +731,12 @@ fn media_protocol_response(
             return not_found();
         };
         let _ = std::fs::create_dir_all(&thumbs_dir);
-        let tmp = thumbs_dir.join(format!("{id}.decrypted"));
+        // Distinguish thumb vs full so the webview's parallel grid+lightbox
+        // requests for the same id don't fight over one temp file.
+        let tmp = thumbs_dir.join(format!(
+            "{id}.{}.decrypted",
+            if want_thumb { "t" } else { "f" }
+        ));
         if std::fs::write(&tmp, &plain).is_err() {
             return not_found();
         }
