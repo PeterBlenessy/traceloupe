@@ -136,7 +136,10 @@ CREATE TABLE media_items (
     local_path      TEXT,
     -- Encrypted backups only: the class-prefixed wrapped key that decrypts
     -- local_path on demand (useless without the backup keys). NULL otherwise.
-    decrypt_key     BLOB
+    decrypt_key     BLOB,
+    -- Encrypted backups only: the original's real plaintext size, to trim CBC
+    -- block padding after on-demand decryption. NULL otherwise.
+    plain_size      INTEGER
 );
 CREATE INDEX idx_media_taken ON media_items(taken_at DESC);
 
@@ -195,6 +198,7 @@ impl CacheDb {
             "TEXT NOT NULL DEFAULT '[]'",
         )?;
         ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
+        ensure_column(&conn, "media_items", "plain_size", "INTEGER")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
     }

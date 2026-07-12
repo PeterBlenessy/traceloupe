@@ -79,17 +79,22 @@ fn parses_encrypted_camera_roll() {
         "thumbnail not decrypted"
     );
 
-    // The original stays encrypted on disk; its stored wrapped key decrypts it
-    // on demand into a valid HEIC (bytes 4..8 are the `ftyp` box marker).
+    // The original stays encrypted on disk; its stored wrapped key + size
+    // decrypt+trim it on demand into a valid HEIC (bytes 4..8 are the `ftyp`
+    // box marker), with no CBC padding beyond the real length.
     let key = asset
         .decrypt_key
         .as_ref()
         .expect("wrapped key for encrypted asset");
+    let size = asset.plain_size.map(|s| s as usize);
     let ct = std::fs::read(&asset.full_path).expect("read encrypted original");
     let full = dec
-        .decrypt_bytes(key, &ct, None)
+        .decrypt_bytes(key, &ct, size)
         .expect("decrypt original on demand");
     assert_eq!(&full[4..8], b"ftyp", "decrypted original is not a HEIC");
+    if let Some(n) = size {
+        assert_eq!(full.len(), n, "on-demand decrypt not trimmed to real size");
+    }
 
     eprintln!("encrypted camera-roll OK: date, decrypted thumb, on-demand full image");
 }

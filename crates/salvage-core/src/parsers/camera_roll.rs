@@ -46,6 +46,9 @@ pub struct CameraRollAsset {
     /// `full_path` on demand (stored on the cache row). None when the original
     /// is already plaintext.
     pub decrypt_key: Option<Vec<u8>>,
+    /// Encrypted backups only: the original's real plaintext length, to trim the
+    /// CBC block padding when decrypting on demand. None for plaintext backups.
+    pub plain_size: Option<u64>,
 }
 
 const THUMB_PREFIX: &str = "Media/PhotoData/Thumbnails/V2/DCIM/";
@@ -169,11 +172,14 @@ fn enumerate(
             )?),
         };
 
-        // Encrypted backups: keep the wrapped key so the original decrypts on
-        // demand. Plaintext backups serve the original directly.
-        let decrypt_key = match decryptor {
-            Some(_) => Some(crypto::file_key_field(&blob)?.0),
-            None => None,
+        // Encrypted backups: keep the wrapped key + real size so the original
+        // decrypts (and trims) on demand. Plaintext backups serve it directly.
+        let (decrypt_key, plain_size) = match decryptor {
+            Some(_) => {
+                let (enc_key, size) = crypto::file_key_field(&blob)?;
+                (Some(enc_key), size)
+            }
+            None => (None, None),
         };
 
         assets.push(CameraRollAsset {
@@ -183,6 +189,7 @@ fn enumerate(
             mime: Some(mime.to_string()),
             taken_at: asset_meta.and_then(|m| m.taken_at),
             decrypt_key,
+            plain_size,
             relative_path: rel,
         });
     }
@@ -363,7 +370,8 @@ mod tests {
         assert_eq!(photo.thumb_path, Some(backup.join("bb").join("bb22")));
         assert_eq!(photo.mime.as_deref(), Some("image/heic"));
         assert_eq!(photo.decrypt_key, None); // plaintext backup
-                                             // 700000000 (Cocoa) + 978307200 = 1678307200 (Unix).
+        assert_eq!(photo.plain_size, None);
+        // 700000000 (Cocoa) + 978307200 = 1678307200 (Unix).
         assert_eq!(photo.taken_at, Some(1_678_307_200));
 
         let video = assets.iter().find(|a| a.kind == "video").unwrap();

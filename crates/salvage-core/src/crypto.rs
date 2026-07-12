@@ -146,9 +146,11 @@ impl Keybag {
         pbkdf2_hmac_array::<Sha1, 32>(&k0, &self.salt, self.iter)
     }
 
-    /// Unwrap every passcode-wrapped class key with the KEK. A wrong password
-    /// makes the RFC-3394 integrity check fail, so this returns an error rather
-    /// than bad keys — the caller treats that as "wrong password".
+    /// Unwrap every passcode-wrapped class key with the KEK. A single malformed
+    /// class entry is skipped rather than failing the whole backup, but a wrong
+    /// password makes *every* RFC-3394 integrity check fail, leaving the map
+    /// empty — which we report as an error. So a wrong password never yields bad
+    /// keys, while one corrupt class doesn't reject a correct password.
     fn class_keys(&self, kek: &[u8; 32]) -> Result<HashMap<u32, [u8; 32]>> {
         let kek = KekAes256::from(*kek);
         let mut out = HashMap::new();
@@ -156,16 +158,16 @@ impl Keybag {
             if entry.wrap & WRAP_PASSCODE == 0 {
                 continue; // device-only class key; not recoverable from a password.
             }
-            let unwrapped = kek
-                .unwrap_vec(&entry.wpky)
-                .map_err(|_| err("wrong password (class key failed to unwrap)"))?;
-            let key: [u8; 32] = unwrapped
-                .try_into()
-                .map_err(|_| err("unexpected class-key length"))?;
-            out.insert(*clas, key);
+            // Unwrap failure (wrong KEK, or a stray/short WPKY) → skip this class.
+            if let Ok(unwrapped) = kek.unwrap_vec(&entry.wpky) {
+                if let Ok(key) = <[u8; 32]>::try_from(unwrapped) {
+                    out.insert(*clas, key);
+                }
+            }
         }
         if out.is_empty() {
-            return Err(err("keybag has no passcode-wrapped class keys"));
+            // No class unwrapped: wrong password (or an unsupported keybag).
+            return Err(err("wrong password (no class key could be unwrapped)"));
         }
         Ok(out)
     }
