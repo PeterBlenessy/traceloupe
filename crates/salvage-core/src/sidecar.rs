@@ -203,6 +203,21 @@ pub fn resolve_module_keys(module_ids: &[String]) -> Vec<String> {
     keys
 }
 
+/// The catalog module ids that are effectively selected (empty = all defaults).
+pub fn effective_module_ids(module_ids: &[String]) -> Vec<&'static str> {
+    IMPORT_CATALOG
+        .iter()
+        .filter(|m| {
+            if module_ids.is_empty() {
+                m.default
+            } else {
+                module_ids.iter().any(|id| id == m.id)
+            }
+        })
+        .map(|m| m.id)
+        .collect()
+}
+
 /// Write an iLEAPP profile selecting `keys` and return its path.
 fn write_profile(out_dir: &Path, keys: &[String]) -> Result<PathBuf> {
     let plugins = keys

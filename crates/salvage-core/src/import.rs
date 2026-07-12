@@ -60,7 +60,26 @@ pub fn import_backup(
         .unwrap_or_else(|| work_dir.to_path_buf());
 
     let cache = CacheDb::open(cache_path)?;
-    let report = normalize::normalize_lava(&lava_path, &engine_out_dir, &cache)?;
+    let mut report = normalize::normalize_lava(&lava_path, &engine_out_dir, &cache)?;
+
+    // Diagnostic: flag any enabled data type that produced nothing, so an empty
+    // Safari/Calls/Photos (usually the source DB isn't in this backup) is
+    // visible instead of silently absent.
+    for id in sidecar::effective_module_ids(module_ids) {
+        let (label, count) = match id {
+            "messages" => ("Messages", report.messages),
+            "calls" => ("Call history", report.calls),
+            "contacts" => ("Contacts", report.contacts),
+            "safari" => ("Safari history", report.safari_visits),
+            "photos" => ("Photos & videos", report.media_items),
+            _ => continue,
+        };
+        if count == 0 {
+            report
+                .warnings
+                .push(format!("{label}: nothing found — the source data isn't in this backup."));
+        }
+    }
 
     // Record which apps were on the device (from Info.plist) for the Apps view.
     let apps = crate::discovery::installed_apps(backup_dir);

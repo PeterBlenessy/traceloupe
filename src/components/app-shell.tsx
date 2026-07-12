@@ -32,7 +32,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
@@ -131,64 +130,90 @@ function SettingsMenu() {
           <Settings className="size-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
+      <DialogContent className="gap-5 rounded-2xl sm:max-w-lg">
+        <DialogHeader className="items-center">
+          <DialogTitle className="text-center text-base">Settings</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-6 py-2">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="show-contact-names">Show contact names</Label>
-              <p className="text-muted-foreground text-sm">
-                Display saved names instead of phone numbers.
-              </p>
-            </div>
-            <Switch
-              id="show-contact-names"
-              checked={showContactNames}
-              onCheckedChange={setShowContactNames}
-            />
-          </div>
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="show-avatars">Show contact photos</Label>
-              <p className="text-muted-foreground text-sm">
-                Show contact avatars where available.
-              </p>
-            </div>
-            <Switch
-              id="show-avatars"
-              checked={showAvatars}
-              onCheckedChange={setShowAvatars}
-            />
-          </div>
+        <div className="flex flex-col gap-6">
+          <SettingsGroup title="Display">
+            <SettingsRow label="Show contact names" description="Display saved names instead of phone numbers.">
+              <Switch checked={showContactNames} onCheckedChange={setShowContactNames} />
+            </SettingsRow>
+            <SettingsRow label="Show contact photos" description="Show contact avatars where available.">
+              <Switch checked={showAvatars} onCheckedChange={setShowAvatars} />
+            </SettingsRow>
+          </SettingsGroup>
 
           {catalog && catalog.length > 0 && (
-            <div className="flex flex-col gap-3 border-t pt-4">
-              <div className="flex flex-col gap-1">
-                <Label>Data to import</Label>
-                <p className="text-muted-foreground text-sm">
-                  Choose which data types to parse. Applies to the next import or
-                  re-import.
-                </p>
-              </div>
+            <SettingsGroup
+              title="Data to import"
+              description="Choose which data types to parse. Applies to the next import or re-import."
+            >
               {catalog.map((m) => (
-                <div key={m.id} className="flex items-center justify-between gap-4">
-                  <Label htmlFor={`import-${m.id}`} className="font-normal">
-                    {m.label}
-                    <span className="ml-2 text-xs text-muted-foreground">{m.category}</span>
-                  </Label>
+                <SettingsRow key={m.id} label={m.label} description={m.category}>
                   <Switch
-                    id={`import-${m.id}`}
                     checked={selected.includes(m.id)}
                     onCheckedChange={(on) => toggleModule(m.id, on)}
                   />
-                </div>
+                </SettingsRow>
               ))}
-            </div>
+            </SettingsGroup>
           )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * A macOS System Settings-style group: a small header above a rounded card whose
+ * rows are separated by hairline dividers.
+ */
+function SettingsGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="px-1">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h3>
+        {description && (
+          <p className="mt-1 text-xs leading-snug text-muted-foreground">{description}</p>
+        )}
+      </div>
+      <div className="divide-y divide-border overflow-hidden rounded-xl border bg-card">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+/** One row inside a SettingsGroup: label + description on the left, control right. */
+function SettingsRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+      <div className="min-w-0">
+        <div className="text-sm">{label}</div>
+        {description && (
+          <div className="truncate text-xs text-muted-foreground">{description}</div>
+        )}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
   );
 }
