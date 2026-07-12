@@ -11,7 +11,7 @@ import { EmptyView, ViewHeader } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type MediaItem } from "@/lib/ipc";
 
-export function GalleryView() {
+export function PhotosView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],

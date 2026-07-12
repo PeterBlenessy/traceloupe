@@ -118,7 +118,7 @@ export function VirtualListView<T>({
 /**
  * Like VirtualListView, but the data itself is fetched in windows (a cheap COUNT
  * plus lazily-loaded slices) instead of all at once — for lists that can reach
- * tens of thousands of rows (Gallery, Calls, Safari). Filtering/search must be
+ * tens of thousands of rows (Photos, Calls, Safari). Filtering/search must be
  * done by `fetchWindow`/`count` (server-side), and `resetKey` should change when
  * the filter changes so the scroll position resets.
  */
