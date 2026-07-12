@@ -3,11 +3,13 @@
 //! or business logic lives here.
 
 mod media;
+mod secret;
 
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use salvage_core::cache::CacheDb;
+use salvage_core::crypto::BackupDecryptor;
 use salvage_core::discovery::{self, BackupInfo};
 use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
@@ -34,6 +36,33 @@ impl ActiveBackup {
             .clone()
             .ok_or_else(|| "no backup is open".to_string())
     }
+}
+
+/// The active backup's decryptor, for encrypted backups. Holds the unwrapped
+/// keys (derived once from the Keychain-stored password) so full-resolution
+/// photos can be decrypted on demand by the media protocol. `None` for
+/// unencrypted backups. Keys live only in memory for the session.
+#[derive(Default)]
+struct SessionKeys(Mutex<Option<Arc<BackupDecryptor>>>);
+
+impl SessionKeys {
+    fn set(&self, decryptor: Option<Arc<BackupDecryptor>>) {
+        *self.0.lock().unwrap() = decryptor;
+    }
+    fn get(&self) -> Option<Arc<BackupDecryptor>> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+/// Reconstruct the decryptor for an encrypted backup from its Keychain password
+/// and the source dir recorded in its cache. `None` if not encrypted / no key.
+fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecryptor>> {
+    let password = secret::get(backup_id)?;
+    let cache = CacheDb::open(cache_path).ok()?;
+    let source_dir = cache.get_meta("source_dir").ok().flatten()?;
+    BackupDecryptor::open(Path::new(&source_dir), &password)
+        .ok()
+        .map(Arc::new)
 }
 
 /// Open the active cache DB for a read query.
@@ -238,6 +267,7 @@ fn list_import_modules() -> Vec<salvage_core::sidecar::ImportModule> {
 async fn import_backup(
     app: AppHandle,
     active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
     backup_path: String,
     backup_id: String,
     password: String,
@@ -259,6 +289,9 @@ async fn import_backup(
 
     let cancel = CancelToken::new();
     let backup_path = PathBuf::from(backup_path);
+    // Kept for post-import key setup (the originals are moved into the worker).
+    let source_dir = backup_path.clone();
+    let key_password = password.clone();
 
     // Blocking pipeline on a worker thread; progress is emitted as it runs.
     let outcome = tauri::async_runtime::spawn_blocking(move || {
@@ -294,6 +327,25 @@ async fn import_backup(
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
 
+    // Encrypted backup: remember its source dir, stash the password in the
+    // Keychain, and hold the decryptor for on-demand media decryption. For an
+    // unencrypted backup, clear any stale secret/keys.
+    if key_password.is_empty() {
+        session.set(None);
+        secret::delete(&backup_id);
+    } else {
+        if let Ok(cache) = CacheDb::open(&outcome.cache_path) {
+            let _ = cache.set_meta("source_dir", &source_dir.display().to_string());
+        }
+        if let Err(e) = secret::store(&backup_id, &key_password) {
+            eprintln!("could not store backup password in Keychain: {e}");
+        }
+        let decryptor = BackupDecryptor::open(&source_dir, &key_password)
+            .ok()
+            .map(Arc::new);
+        session.set(decryptor);
+    }
+
     Ok(ImportResult {
         cache_path: outcome.cache_path.display().to_string(),
         threads: outcome.report.threads,
@@ -309,12 +361,19 @@ async fn import_backup(
 /// Open a previously-imported backup's cache (by id) for browsing, without
 /// re-running the engine. Returns false if no cache exists for that id yet.
 #[tauri::command]
-fn open_backup(app: AppHandle, active: State<'_, ActiveBackup>, backup_id: String) -> bool {
+fn open_backup(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    backup_id: String,
+) -> bool {
     let Ok(data_dir) = app.path().app_data_dir() else {
         return false;
     };
     let cache_path = data_dir.join("caches").join(&backup_id).join("cache.db");
     if cache_path.exists() {
+        // Rebuild the decryptor for an encrypted backup (no-op for plaintext).
+        session.set(reopen_decryptor(&cache_path, &backup_id));
         active.set(cache_path);
         true
     } else {
@@ -630,12 +689,15 @@ fn media_protocol_response(
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime, thumb_path))) = query::media_blob(&cache, id) else {
+    let Ok(Some((local_path, mime, thumb_path, decrypt_key))) = query::media_blob(&cache, id)
+    else {
         return not_found();
     };
 
     // Camera-roll items carry iOS's pre-rendered JPEG thumbnail — serve it
-    // directly for grid requests (no HEIC decode at all).
+    // directly for grid requests (no HEIC decode at all). On encrypted backups
+    // this thumbnail was decrypted into the cache at import, so the grid works
+    // even without the keys.
     if want_thumb {
         if let Some(tp) = thumb_path {
             if let Ok(bytes) = std::fs::read(&tp) {
@@ -655,13 +717,38 @@ fn media_protocol_response(
         .map(|p| p.join("thumbs"))
         .unwrap_or_else(|| PathBuf::from("thumbs"));
 
-    let Some(rendered) = media::render(
-        std::path::Path::new(&local_path),
-        &thumbs_dir,
-        id,
-        want_thumb,
-        mime.as_deref(),
-    ) else {
+    // Encrypted original: decrypt it (using the session keys) to a temp file that
+    // `media::render` / sips can read, then discard the plaintext. The rendered
+    // JPEG is still cached by id, so repeat views don't re-decrypt via sips.
+    let rendered = if let Some(key) = decrypt_key {
+        let Some(dec) = app.state::<SessionKeys>().get() else {
+            return not_found(); // encrypted item but no keys this session
+        };
+        let Ok(ciphertext) = std::fs::read(&local_path) else {
+            return not_found();
+        };
+        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, None) else {
+            return not_found();
+        };
+        let _ = std::fs::create_dir_all(&thumbs_dir);
+        let tmp = thumbs_dir.join(format!("{id}.decrypted"));
+        if std::fs::write(&tmp, &plain).is_err() {
+            return not_found();
+        }
+        let out = media::render(&tmp, &thumbs_dir, id, want_thumb, mime.as_deref());
+        let _ = std::fs::remove_file(&tmp);
+        out
+    } else {
+        media::render(
+            std::path::Path::new(&local_path),
+            &thumbs_dir,
+            id,
+            want_thumb,
+            mime.as_deref(),
+        )
+    };
+
+    let Some(rendered) = rendered else {
         return not_found();
     };
 
@@ -860,6 +947,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ActiveBackup::default())
+        .manage(SessionKeys::default())
         .register_uri_scheme_protocol("salvage-media", |ctx, request| {
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
