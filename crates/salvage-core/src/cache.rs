@@ -158,7 +158,10 @@ fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Re
         .filter_map(|c| c.ok())
         .any(|c| c == column);
     if !has {
-        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+        conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            [],
+        )?;
     }
     Ok(())
 }
@@ -185,7 +188,12 @@ impl CacheDb {
         // Additive migrations for caches created by earlier builds. Cheap and
         // idempotent, so they run every open rather than being version-gated.
         ensure_column(&conn, "contacts", "image", "BLOB")?;
-        ensure_column(&conn, "threads", "participants_json", "TEXT NOT NULL DEFAULT '[]'")?;
+        ensure_column(
+            &conn,
+            "threads",
+            "participants_json",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
         ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
@@ -199,6 +207,25 @@ impl CacheDb {
 
     pub fn conn(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Store a small key/value in the cache's `meta` table (e.g. the backup's
+    /// source directory, so an encrypted backup can be reopened and decrypted).
+    pub fn set_meta(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+            rusqlite::params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Read a value previously stored with [`Self::set_meta`].
+    pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
+        use rusqlite::OptionalExtension;
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
     }
 }
 

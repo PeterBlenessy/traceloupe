@@ -303,28 +303,23 @@ fn range_window(
          LIMIT ?3 OFFSET ?4",
     )?;
     let mut items = stmt
-        .query_map(
-            rusqlite::params![range.lo, range.hi, limit, offset],
-            |r| {
-                let display_name: Option<String> = r.get(6)?;
-                let identifier: String = r.get(7)?;
-                Ok(TimelineMessage {
-                    thread_id: r.get(5)?,
-                    thread_title: display_name
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or(identifier),
-                    service: r.get(8)?,
-                    message: Message {
-                        id: r.get(0)?,
-                        is_from_me: r.get::<_, i64>(1)? != 0,
-                        sender: r.get(2)?,
-                        body: r.get(3)?,
-                        sent_at: r.get(4)?,
-                        attachments: Vec::new(),
-                    },
-                })
-            },
-        )?
+        .query_map(rusqlite::params![range.lo, range.hi, limit, offset], |r| {
+            let display_name: Option<String> = r.get(6)?;
+            let identifier: String = r.get(7)?;
+            Ok(TimelineMessage {
+                thread_id: r.get(5)?,
+                thread_title: display_name.filter(|s| !s.is_empty()).unwrap_or(identifier),
+                service: r.get(8)?,
+                message: Message {
+                    id: r.get(0)?,
+                    is_from_me: r.get::<_, i64>(1)? != 0,
+                    sender: r.get(2)?,
+                    body: r.get(3)?,
+                    sent_at: r.get(4)?,
+                    attachments: Vec::new(),
+                },
+            })
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     // Attach media for just this window's messages (they span many threads, so
@@ -575,7 +570,8 @@ pub fn get_media_window(
          LIMIT ?2 OFFSET ?3",
     )?;
     let rows = stmt.query_map(rusqlite::params![source, limit, offset], row_to_media)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 /// Calls whose address matches `search` (substring), or all when NULL.
@@ -604,7 +600,8 @@ pub fn get_calls_window(
          LIMIT ?2 OFFSET ?3",
     )?;
     let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_call)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 /// Safari visits whose URL or title matches `search`, or all when NULL.
@@ -633,7 +630,8 @@ pub fn get_safari_window(
          LIMIT ?2 OFFSET ?3",
     )?;
     let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_visit)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 /// Distinct media sources present, with a count each, for the gallery filter.
@@ -652,16 +650,18 @@ pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
         .map_err(Into::into)
 }
 
-/// The on-disk path and MIME type for one media item, for the media protocol
-/// handler. Returns `None` if the id is unknown or has no materialized bytes.
-/// `(local_path, mime, thumb_path)` for a media item served by the protocol.
-pub type MediaBlob = (String, Option<String>, Option<String>);
+/// What the media protocol needs to serve one item:
+/// `(local_path, mime, thumb_path, decrypt_key)`. Returns `None` if the id is
+/// unknown or has no materialized bytes. `decrypt_key` is the class-prefixed
+/// wrapped key for an encrypted backup's original (see [`crate::crypto`]); it's
+/// `None` when `local_path` is already plaintext.
+pub type MediaBlob = (String, Option<String>, Option<String>, Option<Vec<u8>>);
 
 pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
     Ok(cache
         .conn()
         .query_row(
-            "SELECT local_path, mime_type, thumb_path FROM media_items
+            "SELECT local_path, mime_type, thumb_path, decrypt_key FROM media_items
              WHERE id = ?1 AND local_path IS NOT NULL",
             [id],
             |r| {
@@ -669,6 +669,7 @@ pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(3)?,
                 ))
             },
         )
@@ -830,7 +831,12 @@ mod tests {
         // media_blob resolves path + mime for the handler, None for unknown/no-bytes.
         assert_eq!(
             media_blob(&cache, 1).unwrap(),
-            Some(("/cache/media/a.png".into(), Some("image/png".into()), None))
+            Some((
+                "/cache/media/a.png".into(),
+                Some("image/png".into()),
+                None,
+                None
+            ))
         );
         assert_eq!(media_blob(&cache, 3).unwrap(), None);
         assert_eq!(media_blob(&cache, 999).unwrap(), None);
