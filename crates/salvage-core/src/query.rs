@@ -128,7 +128,15 @@ pub fn get_message_window(
     let mut messages = stmt
         .query_map(rusqlite::params![thread_id, limit, offset], row_to_message)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    load_attachments(conn, thread_id, &mut messages)?;
+    // Load attachments only for this window's messages, not the whole thread —
+    // otherwise every window fetch rescans all of a large thread's attachments.
+    let ids: Vec<i64> = messages.iter().map(|m| m.id).collect();
+    let atts = attachments_by_ids(conn, &ids)?;
+    for m in &mut messages {
+        if let Some(a) = atts.get(&m.id) {
+            m.attachments = a.clone();
+        }
+    }
     Ok(messages)
 }
 
@@ -225,7 +233,14 @@ pub fn attachment_blob(
 pub fn count_all_messages(cache: &CacheDb) -> Result<i64> {
     let conn = cache.conn();
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
-    let n = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+    // Undated messages can't be placed chronologically, so the timeline (and the
+    // period buckets, whose range filters already exclude NULLs) omit them —
+    // keeping the count and the windowed rows exactly aligned.
+    let n = conn.query_row(
+        "SELECT COUNT(*) FROM messages WHERE sent_at IS NOT NULL",
+        [],
+        |r| r.get(0),
+    )?;
     Ok(n)
 }
 
@@ -281,7 +296,8 @@ fn range_window(
                 m.thread_id, t.display_name, t.identifier, t.service
          FROM messages m
          JOIN threads t ON t.id = m.thread_id
-         WHERE (?1 IS NULL OR m.sent_at >= ?1)
+         WHERE m.sent_at IS NOT NULL
+           AND (?1 IS NULL OR m.sent_at >= ?1)
            AND (?2 IS NULL OR m.sent_at < ?2)
          ORDER BY m.sent_at ASC, m.id ASC
          LIMIT ?3 OFFSET ?4",

@@ -309,6 +309,7 @@ fn normalize_sms(
     // Group consecutive rows (query is ordered by chat_id) into threads.
     let mut current_key: Option<String> = None;
     let mut thread_id: i64 = 0;
+    let mut current_is_group = false;
     for row in rows {
         let row = row?;
         let key = row
@@ -322,6 +323,7 @@ fn normalize_sms(
             let info = key.parse::<i64>().ok().and_then(|id| chats.get(&id));
             let participants = info.map(|i| i.participants.clone()).unwrap_or_default();
             let is_group = participants.len() > 1;
+            current_is_group = is_group;
             let display_name = if is_group {
                 info.and_then(|i| i.display_name.clone())
             } else {
@@ -344,14 +346,21 @@ fn normalize_sms(
 
         let is_from_me = matches!(row.from_me.as_deref(), Some("1"));
         let has_attachment = row.media_ref.is_some();
-        // Per-message sender from sms.db (real member in group chats); fall back
-        // to the chat contact id for 1:1s when the lookup is unavailable.
+        // Per-message sender from sms.db (real member in group chats). For a 1:1
+        // fall back to the chat contact id; for a group, leave it unknown rather
+        // than stamp the group identifier as if it were a member.
         let sender = if is_from_me {
             None
         } else {
             row.message_row_id
                 .and_then(|rid| senders.get(&rid).cloned())
-                .or_else(|| row.contact_id.clone())
+                .or_else(|| {
+                    if current_is_group {
+                        None
+                    } else {
+                        row.contact_id.clone()
+                    }
+                })
         };
         conn.execute(
             "INSERT INTO messages

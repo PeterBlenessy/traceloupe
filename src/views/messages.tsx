@@ -299,7 +299,7 @@ function Periods({ onOpenThread }: { onOpenThread: (threadId: number) => void })
                   label={p.label}
                   count={count}
                   active={activeIndex === i}
-                  disabled={count === 0}
+                  disabled={!count}
                   onClick={() =>
                     setJump((prev) => ({
                       index: startIndex[i],

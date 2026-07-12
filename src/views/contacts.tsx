@@ -28,6 +28,7 @@ export function ContactsView() {
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [q, setQ] = useState("");
+  const { showAvatars } = useSettings();
 
   const filtered = useMemo(() => {
     if (!contacts) return [];
@@ -55,7 +56,6 @@ export function ContactsView() {
     );
   }
 
-  const { showAvatars } = useSettings();
   const selected = filtered.find((c) => c.id === selectedId) ?? filtered[0] ?? null;
 
   return (

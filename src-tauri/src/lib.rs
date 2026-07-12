@@ -605,6 +605,7 @@ fn attachment_protocol_response(
     app: &AppHandle,
     path: &str,
     query_str: Option<&str>,
+    range: Option<&str>,
 ) -> tauri::http::Response<Vec<u8>> {
     use tauri::http::{Response, StatusCode};
 
@@ -658,10 +659,39 @@ fn attachment_protocol_response(
     }
 
     // Audio/video and anything else served inline: raw bytes with stored mime.
+    // Honor Range requests so <video>/<audio> can seek without re-downloading
+    // (and without reading the whole file into memory each time).
+    let content_type = mime.unwrap_or_else(|| "application/octet-stream".to_string());
+    let Ok(meta) = std::fs::metadata(&local_path) else {
+        return not_found();
+    };
+    let total = meta.len();
+
+    if let Some((start, end)) = range.and_then(|r| parse_byte_range(r, total)) {
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = std::fs::File::open(&local_path) else {
+            return not_found();
+        };
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return not_found();
+        }
+        let mut buf = vec![0u8; (end - start + 1) as usize];
+        if file.read_exact(&mut buf).is_err() {
+            return not_found();
+        }
+        return Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header("Content-Type", content_type)
+            .header("Accept-Ranges", "bytes")
+            .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+            .header("Cache-Control", "no-cache")
+            .body(buf)
+            .unwrap();
+    }
+
     let Ok(bytes) = std::fs::read(&local_path) else {
         return not_found();
     };
-    let content_type = mime.unwrap_or_else(|| "application/octet-stream".to_string());
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
@@ -669,6 +699,36 @@ fn attachment_protocol_response(
         .header("Cache-Control", "no-cache")
         .body(bytes)
         .unwrap()
+}
+
+/// Parse a single-range `Range: bytes=start-end` header into an inclusive
+/// `[start, end]` clamped to `total`. Supports `start-`, `start-end`, and
+/// `-suffix`. Returns None for unsatisfiable or multi-range requests.
+fn parse_byte_range(header: &str, total: u64) -> Option<(u64, u64)> {
+    if total == 0 {
+        return None;
+    }
+    let spec = header.strip_prefix("bytes=")?.split(',').next()?.trim();
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = if a.is_empty() {
+        let n: u64 = b.parse().ok()?;
+        if n == 0 {
+            return None;
+        }
+        (total.saturating_sub(n), total - 1)
+    } else {
+        let start: u64 = a.parse().ok()?;
+        let end: u64 = if b.is_empty() {
+            total - 1
+        } else {
+            b.parse::<u64>().ok()?.min(total - 1)
+        };
+        (start, end)
+    };
+    if start > end || start >= total {
+        return None;
+    }
+    Some((start, end))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -689,7 +749,17 @@ pub fn run() {
         .register_uri_scheme_protocol("salvage-attachment", |ctx, request| {
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
-            attachment_protocol_response(ctx.app_handle(), &path, query.as_deref())
+            let range = request
+                .headers()
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            attachment_protocol_response(
+                ctx.app_handle(),
+                &path,
+                query.as_deref(),
+                range.as_deref(),
+            )
         })
         .invoke_handler(tauri::generate_handler![
             list_backups,

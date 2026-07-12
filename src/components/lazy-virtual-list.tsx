@@ -69,8 +69,11 @@ export function LazyVirtualList<T>({
     (virtualItems[virtualItems.length - 1]?.index ?? 0) / PAGE,
   );
   const pages = useMemo(() => {
+    // Include the page before the visible range so the row at a page boundary
+    // can see its predecessor (used for date/time separators and group sender
+    // labels); otherwise those render spuriously at the top of each page.
     const out: number[] = [];
-    for (let p = firstPage; p <= lastPage; p++) out.push(p);
+    for (let p = Math.max(0, firstPage - 1); p <= lastPage; p++) out.push(p);
     return out;
   }, [firstPage, lastPage]);
 
