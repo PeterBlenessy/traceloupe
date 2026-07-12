@@ -43,6 +43,21 @@ export function MessagesView() {
     setMode("conversations");
   };
 
+  // Filter by source app (iMessage / SMS / TikTok / …), shared across all three
+  // modes so it applies to Conversations, Timeline, and Periods alike.
+  const [serviceFilter, setServiceFilter] = useState<string>("all");
+  const { data: threadsForServices } = useQuery({
+    queryKey: ["threads"],
+    queryFn: () => client.listThreads(),
+    enabled: active === true,
+  });
+  const services = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of threadsForServices ?? []) if (t.service) set.add(t.service);
+    return [...set].sort();
+  }, [threadsForServices]);
+  const service = serviceFilter === "all" ? null : serviceFilter;
+
   // Deep link from elsewhere (e.g. a contact's "Conversations"): ?thread=<id>.
   const search = useSearch({ strict: false }) as { thread?: number };
   useEffect(() => {
@@ -64,7 +79,7 @@ export function MessagesView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
         <ToggleGroup
           type="single"
           value={mode}
@@ -76,14 +91,31 @@ export function MessagesView() {
           <ToggleGroupItem value="timeline">Timeline</ToggleGroupItem>
           <ToggleGroupItem value="periods">Periods</ToggleGroupItem>
         </ToggleGroup>
+        {services.length > 1 && (
+          <ToggleGroup
+            type="single"
+            size="sm"
+            variant="outline"
+            value={serviceFilter}
+            onValueChange={(v) => v && setServiceFilter(v)}
+            className="ml-auto flex-wrap justify-end"
+          >
+            <ToggleGroupItem value="all">All</ToggleGroupItem>
+            {services.map((s) => (
+              <ToggleGroupItem key={s} value={s}>
+                {s}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        )}
       </div>
       <div className="min-h-0 flex-1">
         {mode === "conversations" ? (
-          <Conversations selectedId={selectedId} onSelect={setSelectedId} />
+          <Conversations selectedId={selectedId} onSelect={setSelectedId} service={service} />
         ) : mode === "timeline" ? (
-          <Timeline onOpenThread={openThread} />
+          <Timeline onOpenThread={openThread} service={service} />
         ) : (
-          <Periods onOpenThread={openThread} />
+          <Periods onOpenThread={openThread} service={service} />
         )}
       </div>
     </div>
@@ -94,9 +126,11 @@ export function MessagesView() {
 function Conversations({
   selectedId,
   onSelect,
+  service,
 }: {
   selectedId: number | null;
   onSelect: (id: number) => void;
+  service: string | null;
 }) {
   const { data: threads, isPending } = useQuery({
     queryKey: ["threads"],
@@ -105,20 +139,10 @@ function Conversations({
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
 
-  // Filter by source app (iMessage / SMS / TikTok / …). Only meaningful when a
-  // backup holds more than one; app DMs (e.g. TikTok) carry their own service.
-  const [serviceFilter, setServiceFilter] = useState<string>("all");
-  const services = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of threads ?? []) if (t.service) set.add(t.service);
-    return [...set].sort();
-  }, [threads]);
+  // The app filter lives in the shared header; here we just apply it.
   const visibleThreads = useMemo(
-    () =>
-      serviceFilter === "all"
-        ? threads
-        : threads?.filter((t) => t.service === serviceFilter),
-    [threads, serviceFilter],
+    () => (service ? threads?.filter((t) => t.service === service) : threads),
+    [threads, service],
   );
 
   const selected =
@@ -129,25 +153,6 @@ function Conversations({
       master={
         <>
           <ViewHeader title="Conversations" count={visibleThreads?.length} />
-          {services.length > 1 && (
-            <div className="border-b px-2 pb-2">
-              <ToggleGroup
-                type="single"
-                size="sm"
-                variant="outline"
-                value={serviceFilter}
-                onValueChange={(v) => v && setServiceFilter(v)}
-                className="flex-wrap justify-start"
-              >
-                <ToggleGroupItem value="all">All</ToggleGroupItem>
-                {services.map((s) => (
-                  <ToggleGroupItem key={s} value={s}>
-                    {s}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            </div>
-          )}
           {isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -238,10 +243,18 @@ function threadLabel(thread: ThreadSummary, resolve: Resolver, showContactNames:
 }
 
 /** Every message from every conversation, in one chronological stream. */
-function Timeline({ onOpenThread }: { onOpenThread: (threadId: number) => void }) {
+function Timeline({
+  onOpenThread,
+  service,
+}: {
+  onOpenThread: (threadId: number) => void;
+  service: string | null;
+}) {
+  const resolve = useContactResolver();
+  const { showContactNames, showAvatars } = useSettings();
   const { data: total } = useQuery({
-    queryKey: ["timelineCount"],
-    queryFn: () => client.countTimelineMessages(),
+    queryKey: ["timelineCount", service],
+    queryFn: () => client.countTimelineMessages(service),
   });
 
   return (
@@ -250,15 +263,18 @@ function Timeline({ onOpenThread }: { onOpenThread: (threadId: number) => void }
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom
-        resetKey="timeline"
+        resetKey={`timeline:${service ?? "all"}`}
         estimateSize={72}
-        windowKey={(page) => ["timelineWindow", page]}
-        fetchWindow={(offset, limit) => client.getTimelineWindow(offset, limit)}
+        windowKey={(page) => ["timelineWindow", service, page]}
+        fetchWindow={(offset, limit) => client.getTimelineWindow(offset, limit, service)}
         renderItem={(item, _i, prev) => (
           <TimelineRow
             item={item}
             showDate={dayChanged(prev, item)}
             onOpen={() => onOpenThread(item.threadId)}
+            resolve={resolve}
+            showContactNames={showContactNames}
+            showAvatars={showAvatars}
           />
         )}
       />
@@ -287,19 +303,27 @@ function makePeriods(now: number): Period[] {
  * bucket scrolls to where that period begins; scrolling past it flows naturally
  * into the neighbouring periods, and the active bucket follows the scroll.
  */
-function Periods({ onOpenThread }: { onOpenThread: (threadId: number) => void }) {
+function Periods({
+  onOpenThread,
+  service,
+}: {
+  onOpenThread: (threadId: number) => void;
+  service: string | null;
+}) {
+  const resolve = useContactResolver();
+  const { showContactNames, showAvatars } = useSettings();
   // Anchor the buckets once so their bounds (and query keys) stay stable.
   const [now] = useState(() => Math.floor(Date.now() / 1000));
   const periods = useMemo(() => makePeriods(now), [now]);
 
   const { data: total } = useQuery({
-    queryKey: ["timelineCount"],
-    queryFn: () => client.countTimelineMessages(),
+    queryKey: ["timelineCount", service],
+    queryFn: () => client.countTimelineMessages(service),
   });
   const { data: counts } = useQuery({
-    queryKey: ["messageRanges", now],
+    queryKey: ["messageRanges", now, service],
     queryFn: () =>
-      client.countMessageRanges(periods.map((p) => ({ lo: p.lo, hi: p.hi }))),
+      client.countMessageRanges(periods.map((p) => ({ lo: p.lo, hi: p.hi })), service),
   });
 
   // The timeline is ascending (oldest first), so a period's starting row index is
@@ -356,17 +380,20 @@ function Periods({ onOpenThread }: { onOpenThread: (threadId: number) => void })
           <LazyVirtualList<TimelineMessage>
             count={total ?? 0}
             startAtBottom
-            resetKey="periods-timeline"
+            resetKey={`periods-timeline:${service ?? "all"}`}
             estimateSize={72}
             jumpTo={jump}
             onTopIndexChange={setTopIndex}
-            windowKey={(page) => ["timelineWindow", page]}
-            fetchWindow={(offset, limit) => client.getTimelineWindow(offset, limit)}
+            windowKey={(page) => ["timelineWindow", service, page]}
+            fetchWindow={(offset, limit) => client.getTimelineWindow(offset, limit, service)}
             renderItem={(item, _i, prev) => (
               <TimelineRow
                 item={item}
                 showDate={dayChanged(prev, item)}
                 onOpen={() => onOpenThread(item.threadId)}
+                resolve={resolve}
+                showContactNames={showContactNames}
+                showAvatars={showAvatars}
               />
             )}
           />
@@ -407,16 +434,39 @@ function PeriodRow({
   );
 }
 
+/** A small pill labelling a message's source app (iMessage / SMS / TikTok / …). */
+function ServiceBadge({ service }: { service: string }) {
+  return (
+    <span className="shrink-0 rounded border px-1 py-px text-[10px] leading-none text-muted-foreground">
+      {service}
+    </span>
+  );
+}
+
 function TimelineRow({
   item,
   showDate,
   onOpen,
+  resolve,
+  showContactNames,
+  showAvatars,
 }: {
   item: TimelineMessage;
   showDate: boolean;
   onOpen: () => void;
+  resolve: Resolver;
+  showContactNames: boolean;
+  showAvatars: boolean;
 }) {
   const m = item.message;
+  // The person on this row: the sender for incoming, "You" for outgoing.
+  const resolved = !m.isFromMe && m.sender ? resolve(m.sender) : null;
+  const who = m.isFromMe
+    ? "You"
+    : (showContactNames && resolved?.name) || m.sender || item.threadTitle;
+  // Show the conversation as context only when it differs from `who` (group
+  // chats, or your own outgoing messages).
+  const context = who !== item.threadTitle ? item.threadTitle : null;
   return (
     <div>
       {showDate && m.sentAt && (
@@ -426,29 +476,39 @@ function TimelineRow({
       )}
       <button
         onClick={onOpen}
-        className="flex w-full flex-col gap-0.5 px-4 py-2 text-left hover:bg-accent"
+        className="flex w-full gap-3 px-4 py-2 text-left hover:bg-accent"
       >
-        <div className="flex items-baseline gap-2">
-          <span className="truncate text-sm font-medium">{item.threadTitle}</span>
-          {!m.isFromMe && m.sender && m.sender !== item.threadTitle && (
-            <span className="truncate text-xs text-muted-foreground">{m.sender}</span>
-          )}
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-            {formatMessageTime(m.sentAt)}
-          </span>
-        </div>
-        <div className="text-sm text-foreground/90">
-          {m.isFromMe && <span className="text-muted-foreground">You: </span>}
-          {m.body ? (
-            <span className="whitespace-pre-wrap break-words">{m.body}</span>
-          ) : m.attachments.length ? (
-            <span className="inline-flex items-center gap-1 text-muted-foreground">
-              <Paperclip className="size-3.5" />
-              {m.attachments[0].filename ?? "attachment"}
+        {showAvatars && (
+          <Avatar className="mt-0.5 size-8 shrink-0">
+            {resolved?.hasImage && (
+              <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
+            )}
+            <AvatarFallback>{initials(who)}</AvatarFallback>
+          </Avatar>
+        )}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex items-baseline gap-2">
+            <span className="truncate text-sm font-medium">{who}</span>
+            {context && (
+              <span className="truncate text-xs text-muted-foreground">{context}</span>
+            )}
+            {item.service && <ServiceBadge service={item.service} />}
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+              {formatMessageTime(m.sentAt)}
             </span>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          )}
+          </div>
+          <div className="text-sm text-foreground/90">
+            {m.body ? (
+              <span className="whitespace-pre-wrap break-words">{m.body}</span>
+            ) : m.attachments.length ? (
+              <span className="inline-flex items-center gap-1 text-muted-foreground">
+                <Paperclip className="size-3.5" />
+                {m.attachments[0].filename ?? "attachment"}
+              </span>
+            ) : (
+              <span className="text-muted-foreground">—</span>
+            )}
+          </div>
         </div>
       </button>
     </div>

@@ -204,18 +204,24 @@ export interface SalvageClient {
     offset: number,
     limit: number,
   ): Promise<Message[]>;
-  /** Total messages across all conversations; drives the timeline scroller. */
-  countTimelineMessages(): Promise<number>;
+  /** Total messages across all conversations (filtered by `service`, null=all);
+   * drives the timeline scroller. */
+  countTimelineMessages(service?: string | null): Promise<number>;
   /** A window of the all-conversations timeline, oldest first, from `offset`. */
-  getTimelineWindow(offset: number, limit: number): Promise<TimelineMessage[]>;
+  getTimelineWindow(
+    offset: number,
+    limit: number,
+    service?: string | null,
+  ): Promise<TimelineMessage[]>;
   /** Message counts for each half-open [lo, hi) epoch-second window. */
-  countMessageRanges(ranges: TimeRange[]): Promise<number[]>;
+  countMessageRanges(ranges: TimeRange[], service?: string | null): Promise<number[]>;
   /** A window of messages whose time falls in [lo, hi), oldest first. */
   getRangeWindow(
     lo: number | null,
     hi: number | null,
     offset: number,
     limit: number,
+    service?: string | null,
   ): Promise<TimelineMessage[]>;
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
@@ -276,13 +282,14 @@ const tauriClient: SalvageClient = {
     invoke<number>("count_thread_messages", { threadId }),
   getThreadMessageWindow: (threadId, offset, limit) =>
     invoke<Message[]>("get_thread_message_window", { threadId, offset, limit }),
-  countTimelineMessages: () => invoke<number>("count_timeline_messages"),
-  getTimelineWindow: (offset, limit) =>
-    invoke<TimelineMessage[]>("get_timeline_window", { offset, limit }),
-  countMessageRanges: (ranges) =>
-    invoke<number[]>("count_message_ranges", { ranges }),
-  getRangeWindow: (lo, hi, offset, limit) =>
-    invoke<TimelineMessage[]>("get_range_window", { lo, hi, offset, limit }),
+  countTimelineMessages: (service) =>
+    invoke<number>("count_timeline_messages", { service: service ?? null }),
+  getTimelineWindow: (offset, limit, service) =>
+    invoke<TimelineMessage[]>("get_timeline_window", { offset, limit, service: service ?? null }),
+  countMessageRanges: (ranges, service) =>
+    invoke<number[]>("count_message_ranges", { ranges, service: service ?? null }),
+  getRangeWindow: (lo, hi, offset, limit, service) =>
+    invoke<TimelineMessage[]>("get_range_window", { lo, hi, offset, limit, service: service ?? null }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listNotes: () => invoke<Note[]>("list_notes"),
@@ -607,19 +614,29 @@ export const mockClient: SalvageClient = {
     mockActive ? (mockMessages[threadId]?.length ?? 0) : 0,
   getThreadMessageWindow: async (threadId, offset, limit) =>
     mockActive ? (mockMessages[threadId] ?? []).slice(offset, offset + limit) : [],
-  countTimelineMessages: async () => (mockActive ? mockTimeline.length : 0),
-  getTimelineWindow: async (offset, limit) =>
-    mockActive ? mockTimeline.slice(offset, offset + limit) : [],
-  countMessageRanges: async (ranges) =>
-    ranges.map((r) =>
-      mockActive
-        ? mockTimeline.filter((t) => inRange(t.message.sentAt, r)).length
-        : 0,
-    ),
-  getRangeWindow: async (lo, hi, offset, limit) =>
+  countTimelineMessages: async (service) =>
+    mockActive ? mockTimeline.filter((t) => !service || t.service === service).length : 0,
+  getTimelineWindow: async (offset, limit, service) =>
     mockActive
       ? mockTimeline
-          .filter((t) => inRange(t.message.sentAt, { lo, hi }))
+          .filter((t) => !service || t.service === service)
+          .slice(offset, offset + limit)
+      : [],
+  countMessageRanges: async (ranges, service) =>
+    ranges.map((r) =>
+      mockActive
+        ? mockTimeline.filter(
+            (t) => inRange(t.message.sentAt, r) && (!service || t.service === service),
+          ).length
+        : 0,
+    ),
+  getRangeWindow: async (lo, hi, offset, limit, service) =>
+    mockActive
+      ? mockTimeline
+          .filter(
+            (t) =>
+              inRange(t.message.sentAt, { lo, hi }) && (!service || t.service === service),
+          )
           .slice(offset, offset + limit)
       : [],
   listCalls: async () => (mockActive ? mockCalls : []),

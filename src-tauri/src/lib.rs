@@ -448,11 +448,14 @@ async fn get_thread_message_window(
 }
 
 #[tauri::command]
-async fn count_timeline_messages(active: State<'_, ActiveBackup>) -> Result<i64, String> {
+async fn count_timeline_messages(
+    active: State<'_, ActiveBackup>,
+    service: Option<String>,
+) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_all_messages(&cache).map_err(|e| e.to_string())
+        query::count_all_messages(&cache, service.as_deref()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -463,11 +466,13 @@ async fn get_timeline_window(
     active: State<'_, ActiveBackup>,
     offset: i64,
     limit: i64,
+    service: Option<String>,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_timeline_window(&cache, offset, limit).map_err(|e| e.to_string())
+        query::get_timeline_window(&cache, offset, limit, service.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -477,11 +482,12 @@ async fn get_timeline_window(
 async fn count_message_ranges(
     active: State<'_, ActiveBackup>,
     ranges: Vec<query::TimeRange>,
+    service: Option<String>,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_message_ranges(&cache, &ranges).map_err(|e| e.to_string())
+        query::count_message_ranges(&cache, &ranges, service.as_deref()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -494,12 +500,19 @@ async fn get_range_window(
     hi: Option<i64>,
     offset: i64,
     limit: i64,
+    service: Option<String>,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_range_window(&cache, query::TimeRange { lo, hi }, offset, limit)
-            .map_err(|e| e.to_string())
+        query::get_range_window(
+            &cache,
+            query::TimeRange { lo, hi },
+            offset,
+            limit,
+            service.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

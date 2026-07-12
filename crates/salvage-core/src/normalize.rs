@@ -557,6 +557,10 @@ struct AppChatSpec {
     /// Optional per-row thread label (WhatsApp/Telegram carry the chat name);
     /// when absent, the thread is named after the first incoming sender.
     chat_name: Option<&'static str>,
+    /// Optional raw sender-id column (a stable uid, distinct from the display
+    /// name). Only used in derive-name mode to count distinct participants so a
+    /// group chat is labelled by headcount instead of a raw conversation id.
+    sender_id: Option<&'static str>,
 }
 
 const TIKTOK_CHAT: AppChatSpec = AppChatSpec {
@@ -569,6 +573,7 @@ const TIKTOK_CHAT: AppChatSpec = AppChatSpec {
     sender: "COALESCE(nickname, custom_id)",
     handle: Some("custom_id"),
     chat_name: None,
+    sender_id: Some("sender"),
 };
 
 const WHATSAPP_CHAT: AppChatSpec = AppChatSpec {
@@ -581,6 +586,7 @@ const WHATSAPP_CHAT: AppChatSpec = AppChatSpec {
     sender: "sender_name",
     handle: None,
     chat_name: Some("chat_name"),
+    sender_id: None,
 };
 
 const TELEGRAM_CHAT: AppChatSpec = AppChatSpec {
@@ -593,6 +599,7 @@ const TELEGRAM_CHAT: AppChatSpec = AppChatSpec {
     sender: "author",
     handle: None,
     chat_name: Some("chat"),
+    sender_id: None,
 };
 
 /// Map a third-party chat app's iLEAPP output into cache `threads` + `messages`,
@@ -613,7 +620,7 @@ fn normalize_app_conversation(
     }
     // Columns are trusted constants from the spec, not user input.
     let sql = format!(
-        "SELECT {chat}, {ts}, {body}, {dir}, {sender}, {handle}, {chat_name}
+        "SELECT {chat}, {ts}, {body}, {dir}, {sender}, {handle}, {chat_name}, {sender_id}
          FROM {table}
          WHERE {body} IS NOT NULL
          ORDER BY {chat}, {ts}",
@@ -624,6 +631,7 @@ fn normalize_app_conversation(
         sender = spec.sender,
         handle = spec.handle.unwrap_or("NULL"),
         chat_name = spec.chat_name.unwrap_or("NULL"),
+        sender_id = spec.sender_id.unwrap_or("NULL"),
         table = spec.table,
     );
     let mut stmt = lava.prepare(&sql)?;
@@ -639,21 +647,51 @@ fn normalize_app_conversation(
     let derive_name = spec.chat_name.is_none();
     let mut peer_nick: Option<String> = None;
     let mut peer_handle: Option<String> = None;
+    // Distinct incoming sender ids in the current conversation, to tell a group
+    // (many senders) from a 1:1 (one) in derive-name mode.
+    let mut member_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let finalize = |tx: &rusqlite::Connection,
                     id: i64,
+                    key: &str,
                     nick: &mut Option<String>,
-                    handle: &mut Option<String>|
+                    handle: &mut Option<String>,
+                    members: &mut std::collections::HashSet<String>|
      -> Result<()> {
-        // The peer @handle is stored as the sole participant so the thread header
-        // can show it. COALESCE keeps a chat-name already set at insert time.
-        let participants: Vec<String> = handle.take().into_iter().collect();
-        let pj = serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into());
-        tx.execute(
-            "UPDATE threads SET display_name = COALESCE(?1, display_name),
-                 participants_json = ?2 WHERE id = ?3",
-            rusqlite::params![nick.take(), pj, id],
-        )?;
+        let member_count = members.len();
+        members.clear();
+        // A group chat: either several distinct senders wrote text, or (TikTok)
+        // the conversation id is a bare number — 1:1 ids embed the two user ids
+        // separated by ':'. Group members usually aren't in the user's contacts
+        // (their names come back NULL), so name the thread rather than leak the
+        // raw id, which is what the user would otherwise see as the "recipient".
+        // A bare all-digit id is a TikTok group (1:1 ids embed both user ids with
+        // ':'); only trust this in derive mode so it never overrides a real
+        // chat name (WhatsApp/Telegram), whose numeric chat ids aren't groups.
+        let id_is_group = derive_name && !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit());
+        if member_count > 1 || id_is_group {
+            let label = if member_count > 1 {
+                format!("Group chat · {} people", member_count + 1)
+            } else {
+                "Group chat".to_string()
+            };
+            nick.take();
+            handle.take();
+            tx.execute(
+                "UPDATE threads SET display_name = ?1, participants_json = '[]' WHERE id = ?2",
+                rusqlite::params![label, id],
+            )?;
+        } else {
+            // 1:1 (or chat-name mode): the peer @handle is the sole participant so
+            // the header can show it. COALESCE keeps a chat-name set at insert.
+            let participants: Vec<String> = handle.take().into_iter().collect();
+            let pj = serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into());
+            tx.execute(
+                "UPDATE threads SET display_name = COALESCE(?1, display_name),
+                     participants_json = ?2 WHERE id = ?3",
+                rusqlite::params![nick.take(), pj, id],
+            )?;
+        }
         Ok(())
     };
 
@@ -667,10 +705,18 @@ fn normalize_app_conversation(
         let sender_name: Option<String> = r.get(4)?;
         let handle: Option<String> = r.get(5)?;
         let chat_name: Option<String> = r.get(6)?;
+        let sender_id: Option<String> = r.get(7)?;
 
         if current_key.as_ref() != Some(&key) {
-            if current_key.is_some() {
-                finalize(&tx, thread_id, &mut peer_nick, &mut peer_handle)?;
+            if let Some(prev) = current_key.as_deref() {
+                finalize(
+                    &tx,
+                    thread_id,
+                    prev,
+                    &mut peer_nick,
+                    &mut peer_handle,
+                    &mut member_ids,
+                )?;
             }
             // chat_name is NULL for derive-mode apps (filled in at finalize).
             tx.execute(
@@ -683,6 +729,7 @@ fn normalize_app_conversation(
             current_key = Some(key);
             peer_nick = None;
             peer_handle = None;
+            member_ids.clear();
             report.threads += 1;
         }
 
@@ -692,15 +739,20 @@ fn normalize_app_conversation(
         } else {
             sender_name.clone()
         };
-        if derive_name && !is_from_me && peer_nick.is_none() {
-            peer_nick = sender_name;
-            peer_handle = handle.map(|h| {
-                if h.starts_with('@') {
-                    h
-                } else {
-                    format!("@{h}")
-                }
-            });
+        if derive_name && !is_from_me {
+            if let Some(sid) = sender_id {
+                member_ids.insert(sid);
+            }
+            if peer_nick.is_none() {
+                peer_nick = sender_name;
+                peer_handle = handle.map(|h| {
+                    if h.starts_with('@') {
+                        h
+                    } else {
+                        format!("@{h}")
+                    }
+                });
+            }
         }
         tx.execute(
             "INSERT INTO messages
@@ -710,8 +762,15 @@ fn normalize_app_conversation(
         )?;
         report.messages += 1;
     }
-    if current_key.is_some() {
-        finalize(&tx, thread_id, &mut peer_nick, &mut peer_handle)?;
+    if let Some(prev) = current_key.as_deref() {
+        finalize(
+            &tx,
+            thread_id,
+            prev,
+            &mut peer_nick,
+            &mut peer_handle,
+            &mut member_ids,
+        )?;
     }
 
     // Denormalize the per-thread counters the thread list reads.
@@ -1222,6 +1281,47 @@ mod tests {
             .unwrap();
         assert_eq!(from_me, 0);
         assert_eq!(sender.as_deref(), Some("Peer A"));
+    }
+
+    #[test]
+    fn tiktok_group_chats_are_named_not_shown_as_raw_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        // A group: a bare-numeric conversation id and members with no
+        // nickname/custom_id (not in the user's contacts) — the bug case.
+        conn.execute_batch(
+            "CREATE TABLE tiktok_messages (
+                 timestamp INTEGER, sender TEXT, custom_id TEXT, nickname TEXT,
+                 message TEXT, local_response TEXT, link_gif_name TEXT,
+                 link_gif_url TEXT, server_created_timestamp INTEGER,
+                 profile_pic_url TEXT, contact_table TEXT, account_id TEXT,
+                 source_file TEXT, conversation_id TEXT, direction TEXT);
+             INSERT INTO tiktok_messages VALUES
+                 (1675838000,'7107289401973097477',NULL,NULL,'hi all',NULL,NULL,NULL,0,NULL,NULL,'me','f','7600077391893709063','Incoming');
+             INSERT INTO tiktok_messages VALUES
+                 (1675838100,'7525560543878546454',NULL,NULL,'hey',NULL,NULL,NULL,0,NULL,NULL,'me','f','7600077391893709063','Incoming');
+             INSERT INTO tiktok_messages VALUES
+                 (1675838200,'me',NULL,NULL,'sup',NULL,NULL,NULL,0,NULL,NULL,'me','f','7600077391893709063','Outgoing');",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        normalize_lava(&path, tmp.path(), &cache).unwrap();
+
+        let (display, identifier): (Option<String>, String) = cache
+            .conn()
+            .query_row(
+                "SELECT display_name, identifier FROM threads WHERE service = 'TikTok'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        // Named "Group chat · N people", never the raw numeric conversation id.
+        assert!(
+            display.as_deref().unwrap_or("").starts_with("Group chat"),
+            "group not labelled: {display:?}",
+        );
+        assert_eq!(identifier, "7600077391893709063");
     }
 
     #[test]

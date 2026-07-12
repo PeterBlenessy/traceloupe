@@ -113,7 +113,9 @@ export function ImportDialog({
 
   const prompt = encrypted
     ? "This backup is encrypted. Enter its password to open it — Salvage reads it once, then it's instant."
-    : "Enter the backup password if it's encrypted.";
+    : backup.isEncrypted === false
+      ? "This backup isn't encrypted."
+      : "Enter the backup password if it's encrypted."; // encryption unknown
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

@@ -230,43 +230,58 @@ pub fn attachment_blob(
 /// Total messages across every conversation. Drives the timeline's virtual
 /// scroller. Also ensures the timeline ordering index exists, migrating caches
 /// created before the timeline feature.
-pub fn count_all_messages(cache: &CacheDb) -> Result<i64> {
+pub fn count_all_messages(cache: &CacheDb, service: Option<&str>) -> Result<i64> {
     let conn = cache.conn();
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
     // Undated messages can't be placed chronologically, so the timeline (and the
     // period buckets, whose range filters already exclude NULLs) omit them —
-    // keeping the count and the windowed rows exactly aligned.
+    // keeping the count and the windowed rows exactly aligned. `service` (None =
+    // all) filters to one source app (iMessage/SMS/TikTok/…) for the app filter.
     let n = conn.query_row(
-        "SELECT COUNT(*) FROM messages WHERE sent_at IS NOT NULL",
-        [],
+        "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
+         WHERE m.sent_at IS NOT NULL AND (?1 IS NULL OR t.service = ?1)",
+        rusqlite::params![service],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
 /// A window of the cross-conversation timeline: every message from every thread,
-/// oldest first, sliced by `offset`.
+/// oldest first, sliced by `offset`. `service` filters by source app (None=all).
 pub fn get_timeline_window(
     cache: &CacheDb,
     offset: i64,
     limit: i64,
+    service: Option<&str>,
 ) -> Result<Vec<TimelineMessage>> {
-    range_window(cache, TimeRange { lo: None, hi: None }, offset, limit)
+    range_window(
+        cache,
+        TimeRange { lo: None, hi: None },
+        offset,
+        limit,
+        service,
+    )
 }
 
 /// Message counts for each of the given time windows. Powers the periods view's
 /// bucket list (e.g. "Last 7 days: 812"). One row per range, order preserved.
-pub fn count_message_ranges(cache: &CacheDb, ranges: &[TimeRange]) -> Result<Vec<i64>> {
+/// `service` filters by source app (None = all).
+pub fn count_message_ranges(
+    cache: &CacheDb,
+    ranges: &[TimeRange],
+    service: Option<&str>,
+) -> Result<Vec<i64>> {
     let conn = cache.conn();
     conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
     let mut stmt = conn.prepare(
-        "SELECT COUNT(*) FROM messages
-         WHERE (?1 IS NULL OR sent_at >= ?1)
-           AND (?2 IS NULL OR sent_at < ?2)",
+        "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
+         WHERE (?1 IS NULL OR m.sent_at >= ?1)
+           AND (?2 IS NULL OR m.sent_at < ?2)
+           AND (?3 IS NULL OR t.service = ?3)",
     )?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
-        out.push(stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?);
+        out.push(stmt.query_row(rusqlite::params![r.lo, r.hi, service], |row| row.get(0))?);
     }
     Ok(out)
 }
@@ -278,17 +293,20 @@ pub fn get_range_window(
     range: TimeRange,
     offset: i64,
     limit: i64,
+    service: Option<&str>,
 ) -> Result<Vec<TimelineMessage>> {
-    range_window(cache, range, offset, limit)
+    range_window(cache, range, offset, limit, service)
 }
 
-/// Shared implementation: messages in `range` (open bounds allowed), joined to
-/// their thread for labeling, with attachments, ordered chronologically.
+/// Shared implementation: messages in `range` (open bounds allowed) and optional
+/// `service`, joined to their thread for labeling, with attachments, ordered
+/// chronologically.
 fn range_window(
     cache: &CacheDb,
     range: TimeRange,
     offset: i64,
     limit: i64,
+    service: Option<&str>,
 ) -> Result<Vec<TimelineMessage>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
@@ -299,27 +317,31 @@ fn range_window(
          WHERE m.sent_at IS NOT NULL
            AND (?1 IS NULL OR m.sent_at >= ?1)
            AND (?2 IS NULL OR m.sent_at < ?2)
+           AND (?5 IS NULL OR t.service = ?5)
          ORDER BY m.sent_at ASC, m.id ASC
          LIMIT ?3 OFFSET ?4",
     )?;
     let mut items = stmt
-        .query_map(rusqlite::params![range.lo, range.hi, limit, offset], |r| {
-            let display_name: Option<String> = r.get(6)?;
-            let identifier: String = r.get(7)?;
-            Ok(TimelineMessage {
-                thread_id: r.get(5)?,
-                thread_title: display_name.filter(|s| !s.is_empty()).unwrap_or(identifier),
-                service: r.get(8)?,
-                message: Message {
-                    id: r.get(0)?,
-                    is_from_me: r.get::<_, i64>(1)? != 0,
-                    sender: r.get(2)?,
-                    body: r.get(3)?,
-                    sent_at: r.get(4)?,
-                    attachments: Vec::new(),
-                },
-            })
-        })?
+        .query_map(
+            rusqlite::params![range.lo, range.hi, limit, offset, service],
+            |r| {
+                let display_name: Option<String> = r.get(6)?;
+                let identifier: String = r.get(7)?;
+                Ok(TimelineMessage {
+                    thread_id: r.get(5)?,
+                    thread_title: display_name.filter(|s| !s.is_empty()).unwrap_or(identifier),
+                    service: r.get(8)?,
+                    message: Message {
+                        id: r.get(0)?,
+                        is_from_me: r.get::<_, i64>(1)? != 0,
+                        sender: r.get(2)?,
+                        body: r.get(3)?,
+                        sent_at: r.get(4)?,
+                        attachments: Vec::new(),
+                    },
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     // Attach media for just this window's messages (they span many threads, so
