@@ -38,7 +38,7 @@ import { useSettings } from "@/components/settings-provider";
 import { client } from "@/lib/ipc";
 
 const nav = [
-  { to: "/gallery", label: "Gallery", icon: Image },
+  { to: "/gallery", label: "Photos", icon: Image },
   { to: "/messages", label: "Messages", icon: MessageSquare },
   { to: "/contacts", label: "Contacts", icon: Users },
   { to: "/calls", label: "Calls", icon: Phone },

@@ -198,7 +198,11 @@ function BackupCard({
               </Badge>
             )}
             {backup.isEncrypted === false && (
-              <Badge variant="outline" className="gap-1">
+              <Badge
+                variant="outline"
+                className="gap-1"
+                title="Unencrypted backups omit Safari & call history, Health, and saved passwords. Encrypt the backup to include them."
+              >
                 <LockOpen className="size-3" /> not encrypted
               </Badge>
             )}
@@ -207,6 +211,12 @@ function BackupCard({
             {backup.productVersion ? `iOS ${backup.productVersion} · ` : ""}
             {date}
           </div>
+          {backup.isEncrypted === false && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Unencrypted — Safari &amp; call history, Health, and passwords are
+              excluded by iOS. Encrypt the backup to include them.
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
           {imported ? (

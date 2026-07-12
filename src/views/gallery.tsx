@@ -44,7 +44,7 @@ export function GalleryView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Gallery" count={count} />
+      <ViewHeader title="Photos" count={count} />
       {hasFilter && (
         <div className="shrink-0 border-b px-2 py-2">
           <SourceFilter
