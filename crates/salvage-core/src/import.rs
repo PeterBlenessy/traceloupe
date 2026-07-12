@@ -75,11 +75,12 @@ pub fn import_backup(
                         "INSERT INTO media_items
                             (domain, relative_path, kind, source, mime_type,
                              taken_at, thumb_path, local_path)
-                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, NULL, ?4, ?5)",
+                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6)",
                         rusqlite::params![
                             a.relative_path,
                             a.kind,
                             a.mime,
+                            a.taken_at,
                             a.thumb_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                             a.full_path.to_string_lossy(),
                         ],
