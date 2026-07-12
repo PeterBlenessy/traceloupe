@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -16,8 +16,9 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
-import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
+import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
+import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { client, type Call } from "@/lib/ipc";
 
@@ -27,19 +28,13 @@ export function CallsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: calls, isPending } = useQuery({
-    queryKey: ["calls"],
-    queryFn: () => client.listCalls(),
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim()) || null;
+  const { data: count } = useQuery({
+    queryKey: ["callsCount", search],
+    queryFn: () => client.countCalls(search),
     enabled: active === true,
   });
-  const [q, setQ] = useState("");
-
-  const filtered = useMemo(() => {
-    if (!calls) return [];
-    const needle = q.trim().toLowerCase();
-    if (!needle) return calls;
-    return calls.filter((c) => c.address?.toLowerCase().includes(needle));
-  }, [calls, q]);
 
   if (active === false) {
     return (
@@ -50,20 +45,18 @@ export function CallsView() {
   }
 
   return (
-    <VirtualListView
+    <LazyListView<Call>
       title="Calls"
-      count={calls?.length}
-      isPending={isPending}
-      emptyMessage="No calls in this backup."
+      count={active === true ? count : undefined}
+      resetKey={search ?? ""}
+      emptyMessage={search ? "No matching calls." : "No calls in this backup."}
       header={
-        calls && calls.length > 0 ? (
-          <div className="w-56">
-            <ListSearch value={q} onChange={setQ} placeholder="Search calls" />
-          </div>
-        ) : undefined
+        <div className="w-56">
+          <ListSearch value={q} onChange={setQ} placeholder="Search calls" />
+        </div>
       }
-      items={filtered}
-      getKey={(c) => c.id}
+      windowKey={(page) => ["callsWindow", search, page]}
+      fetchWindow={(offset, limit) => client.getCallsWindow(search, offset, limit)}
       renderItem={(c) => <CallRow call={c} />}
     />
   );

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Globe } from "lucide-react";
@@ -10,8 +10,9 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
-import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
+import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
+import { useDebounced } from "@/lib/use-debounced";
 import { client, type HistoryVisit } from "@/lib/ipc";
 
 export function SafariView() {
@@ -20,21 +21,13 @@ export function SafariView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: history, isPending } = useQuery({
-    queryKey: ["safari"],
-    queryFn: () => client.listSafariHistory(),
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim()) || null;
+  const { data: count } = useQuery({
+    queryKey: ["safariCount", search],
+    queryFn: () => client.countSafari(search),
     enabled: active === true,
   });
-  const [q, setQ] = useState("");
-
-  const filtered = useMemo(() => {
-    if (!history) return [];
-    const needle = q.trim().toLowerCase();
-    if (!needle) return history;
-    return history.filter(
-      (h) => h.url.toLowerCase().includes(needle) || h.title?.toLowerCase().includes(needle),
-    );
-  }, [history, q]);
 
   if (active === false) {
     return (
@@ -45,21 +38,19 @@ export function SafariView() {
   }
 
   return (
-    <VirtualListView
+    <LazyListView<HistoryVisit>
       title="Safari"
-      count={history?.length}
-      isPending={isPending}
-      emptyMessage="No Safari history in this backup."
+      count={count}
+      resetKey={search ?? ""}
+      emptyMessage={search ? "No matching history." : "No Safari history in this backup."}
       header={
-        history && history.length > 0 ? (
-          <div className="w-56">
-            <ListSearch value={q} onChange={setQ} placeholder="Search history" />
-          </div>
-        ) : undefined
+        <div className="w-56">
+          <ListSearch value={q} onChange={setQ} placeholder="Search history" />
+        </div>
       }
-      items={filtered}
-      getKey={(x) => x.id}
-      renderItem={(x) => <VisitRow visit={x} />}
+      windowKey={(page) => ["safariWindow", search, page]}
+      fetchWindow={(offset, limit) => client.getSafariWindow(search, offset, limit)}
+      renderItem={(h) => <VisitRow visit={h} />}
     />
   );
 }

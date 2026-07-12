@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Image as ImageIcon, Play } from "lucide-react";
@@ -17,9 +17,11 @@ export function GalleryView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: media, isPending } = useQuery({
-    queryKey: ["media"],
-    queryFn: () => client.listMedia(),
+  const [source, setSource] = useState<string>("all");
+  const sourceArg = source === "all" ? null : source;
+  const { data: count } = useQuery({
+    queryKey: ["mediaCount", source],
+    queryFn: () => client.countMedia(sourceArg),
     enabled: active === true,
   });
   const { data: sources } = useQuery({
@@ -27,14 +29,7 @@ export function GalleryView() {
     queryFn: () => client.mediaSources(),
     enabled: active === true,
   });
-  const [openId, setOpenId] = useState<number | null>(null);
-  const [source, setSource] = useState<string>("all");
-
-  const filtered = useMemo(() => {
-    if (!media) return [];
-    if (source === "all") return media;
-    return media.filter((m) => (m.source ?? "Other") === source);
-  }, [media, source]);
+  const [openItem, setOpenItem] = useState<MediaItem | null>(null);
 
   if (active === false) {
     return (
@@ -44,37 +39,40 @@ export function GalleryView() {
     );
   }
 
-  const openItem = filtered.find((m) => m.id === openId) ?? null;
   const hasFilter = (sources?.length ?? 0) > 1;
+  const total = sources?.reduce((sum, [, c]) => sum + c, 0) ?? 0;
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Gallery" count={media?.length} />
+      <ViewHeader title="Gallery" count={count} />
       {hasFilter && (
         <div className="shrink-0 border-b px-2 py-2">
           <SourceFilter
             sources={sources ?? []}
-            total={media?.length ?? 0}
+            total={total}
             value={source}
             onChange={setSource}
           />
         </div>
       )}
-      {isPending && (
+      {count === undefined ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
           {Array.from({ length: 12 }).map((_, i) => (
             <Skeleton key={i} className="aspect-square" />
           ))}
         </div>
-      )}
-      {media?.length === 0 && (
+      ) : count === 0 ? (
         <p className="p-6 text-center text-sm text-muted-foreground">
-          No photos or videos in this backup.
+          {source === "all"
+            ? "No photos or videos in this backup."
+            : "No media from this source."}
         </p>
+      ) : (
+        // key by source so the grid remounts (scroll + measurement reset) on filter change.
+        <MediaGrid key={source} count={count} source={sourceArg} onOpen={setOpenItem} />
       )}
-      {filtered.length > 0 && <MediaGrid items={filtered} onOpen={setOpenId} />}
 
-      <Lightbox item={openItem} onClose={() => setOpenId(null)} />
+      <Lightbox item={openItem} onClose={() => setOpenItem(null)} />
     </div>
   );
 }
@@ -116,14 +114,17 @@ function SourceFilter({
  * keep the responsive auto-fill layout.
  */
 function MediaGrid({
-  items,
+  count,
+  source,
   onOpen,
 }: {
-  items: MediaItem[];
-  onOpen: (id: number) => void;
+  count: number;
+  source: string | null;
+  onOpen: (item: MediaItem) => void;
 }) {
   const GAP = 4; // matches gap-1 / p-1 (0.25rem)
   const MIN = 144; // 9rem minimum tile
+  const PAGE = 100; // media items fetched per lazy window
   const scrollRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(1);
   const [cell, setCell] = useState(MIN);
@@ -143,7 +144,7 @@ function MediaGrid({
     return () => ro.disconnect();
   }, []);
 
-  const rowCount = Math.ceil(items.length / cols);
+  const rowCount = Math.ceil(count / cols);
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollRef.current,
@@ -154,13 +155,38 @@ function MediaGrid({
     rowVirtualizer.measure();
   }, [cell, cols, rowVirtualizer]);
 
+  // Lazily fetch only the item-windows the visible rows cover.
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const firstRow = virtualRows[0]?.index ?? 0;
+  const lastRow = virtualRows[virtualRows.length - 1]?.index ?? 0;
+  const firstPage = Math.floor((firstRow * cols) / PAGE);
+  const lastPage = Math.floor(((lastRow + 1) * cols - 1) / PAGE);
+  const pages = useMemo(() => {
+    const out: number[] = [];
+    for (let p = Math.max(0, firstPage); p <= Math.max(0, lastPage); p++) out.push(p);
+    return out;
+  }, [firstPage, lastPage]);
+  const queries = useQueries({
+    queries: pages.map((p) => ({
+      queryKey: ["mediaWindow", source, p],
+      queryFn: () => client.getMediaWindow(source, p * PAGE, PAGE),
+    })),
+  });
+  const loaded = new Map<number, MediaItem[]>();
+  pages.forEach((p, i) => {
+    const data = queries[i].data;
+    if (data) loaded.set(p, data);
+  });
+  const itemAt = (index: number): MediaItem | undefined =>
+    loaded.get(Math.floor(index / PAGE))?.[index % PAGE];
+
   return (
     // min-h-0 lets this flex child actually scroll; without it the grid grows to
     // its full content height and the virtualizer mounts every row (and spawns a
     // `sips` transcode per thumbnail), freezing the app.
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-1">
       <div className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
-        {rowVirtualizer.getVirtualItems().map((row) => {
+        {virtualRows.map((row) => {
           const start = row.index * cols;
           return (
             <div
@@ -168,11 +194,20 @@ function MediaGrid({
               className="absolute left-0 top-0 flex w-full gap-1"
               style={{ transform: `translateY(${row.start}px)`, height: cell }}
             >
-              {items.slice(start, start + cols).map((m) => (
-                <div key={m.id} style={{ width: cell }}>
-                  <Thumb item={m} onOpen={() => onOpen(m.id)} />
-                </div>
-              ))}
+              {Array.from({ length: cols }).map((_, c) => {
+                const index = start + c;
+                if (index >= count) return null;
+                const item = itemAt(index);
+                return (
+                  <div key={index} style={{ width: cell }}>
+                    {item ? (
+                      <Thumb item={item} onOpen={() => onOpen(item)} />
+                    ) : (
+                      <div className="aspect-square w-full animate-pulse rounded-sm bg-muted" />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })}

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualList } from "@/components/virtual-list";
+import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { cn } from "@/lib/utils";
 
 /** The header strip at the top of a view: title, optional count, actions. */
@@ -105,6 +106,65 @@ export function VirtualListView<T>({
           items={items}
           estimateSize={estimateSize}
           getKey={getKey}
+          renderItem={(item) => (
+            <div className="mx-auto max-w-3xl px-2 pb-1">{renderItem(item)}</div>
+          )}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Like VirtualListView, but the data itself is fetched in windows (a cheap COUNT
+ * plus lazily-loaded slices) instead of all at once — for lists that can reach
+ * tens of thousands of rows (Gallery, Calls, Safari). Filtering/search must be
+ * done by `fetchWindow`/`count` (server-side), and `resetKey` should change when
+ * the filter changes so the scroll position resets.
+ */
+export function LazyListView<T>({
+  title,
+  header,
+  count,
+  windowKey,
+  fetchWindow,
+  renderItem,
+  resetKey,
+  estimateSize = 64,
+  emptyMessage = "Nothing here.",
+}: {
+  title: string;
+  header?: React.ReactNode;
+  /** Total matching rows (from a count query); undefined while loading. */
+  count: number | undefined;
+  windowKey: (page: number) => unknown[];
+  fetchWindow: (offset: number, limit: number) => Promise<T[]>;
+  renderItem: (item: T) => React.ReactNode;
+  resetKey?: unknown;
+  estimateSize?: number;
+  emptyMessage?: string;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <ViewHeader title={title} count={count}>
+        {header}
+      </ViewHeader>
+      {count === undefined ? (
+        <div className="mx-auto w-full max-w-3xl p-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="mb-1 h-14 w-full" />
+          ))}
+        </div>
+      ) : count === 0 ? (
+        <p className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+      ) : (
+        <LazyVirtualList<T>
+          // Remount when the filter changes so scroll/measurement reset cleanly.
+          key={String(resetKey)}
+          count={count}
+          estimateSize={estimateSize}
+          windowKey={windowKey}
+          fetchWindow={fetchWindow}
           renderItem={(item) => (
             <div className="mx-auto max-w-3xl px-2 pb-1">{renderItem(item)}</div>
           )}

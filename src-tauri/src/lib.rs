@@ -486,6 +486,100 @@ fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, 
     query::media_sources(&cache).map_err(|e| e.to_string())
 }
 
+// Windowed, filterable list commands (async + spawn_blocking) so the UI can
+// lazily load huge lists a slice at a time — the same pattern as messages.
+
+#[tauri::command]
+async fn count_media(
+    active: State<'_, ActiveBackup>,
+    source: Option<String>,
+) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_media(&cache, source.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_media_window(
+    active: State<'_, ActiveBackup>,
+    source: Option<String>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<MediaItem>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_media_window(&cache, source.as_deref(), offset, limit).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_calls(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_calls(&cache, search.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_calls_window(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<Call>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_calls_window(&cache, search.as_deref(), offset, limit).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_safari(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_safari(&cache, search.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_safari_window(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<HistoryVisit>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_safari_window(&cache, search.as_deref(), offset, limit)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Serve a media item over the `salvage-media://localhost/<id>` scheme
 /// (append `?thumb=1` for a downscaled thumbnail).
 ///
@@ -785,7 +879,13 @@ pub fn run() {
             list_contacts,
             list_installed_apps,
             list_media,
-            media_sources
+            media_sources,
+            count_media,
+            get_media_window,
+            count_calls,
+            get_calls_window,
+            count_safari,
+            get_safari_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -200,6 +200,18 @@ export interface SalvageClient {
   listInstalledApps(): Promise<string[]>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
+  // Windowed/filterable list queries (null filter = all), for lazy-loading
+  // huge lists a slice at a time.
+  countMedia(source: string | null): Promise<number>;
+  getMediaWindow(source: string | null, offset: number, limit: number): Promise<MediaItem[]>;
+  countCalls(search: string | null): Promise<number>;
+  getCallsWindow(search: string | null, offset: number, limit: number): Promise<Call[]>;
+  countSafari(search: string | null): Promise<number>;
+  getSafariWindow(
+    search: string | null,
+    offset: number,
+    limit: number,
+  ): Promise<HistoryVisit[]>;
   /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
   mediaUrl(id: number, opts?: { thumb?: boolean }): string;
   /** URL the webview can load for a contact's photo. */
@@ -247,6 +259,15 @@ const tauriClient: SalvageClient = {
     invoke<TimelineMessage[]>("get_range_window", { lo, hi, offset, limit }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
+  countMedia: (source) => invoke<number>("count_media", { source }),
+  getMediaWindow: (source, offset, limit) =>
+    invoke<MediaItem[]>("get_media_window", { source, offset, limit }),
+  countCalls: (search) => invoke<number>("count_calls", { search }),
+  getCallsWindow: (search, offset, limit) =>
+    invoke<Call[]>("get_calls_window", { search, offset, limit }),
+  countSafari: (search) => invoke<number>("count_safari", { search }),
+  getSafariWindow: (search, offset, limit) =>
+    invoke<HistoryVisit[]>("get_safari_window", { search, offset, limit }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listInstalledApps: () => invoke<string[]>("list_installed_apps"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
@@ -442,6 +463,24 @@ const mockInstalledApps = [
 let mockActive = false;
 const mockImported = new Set<string>();
 
+// Mock-side filters mirroring the backend's windowed SQL, so the browser mock
+// behaves like the real windowed/filterable queries.
+function mockFilterMedia(source: string | null): MediaItem[] {
+  return source ? mockMedia.filter((m) => (m.source ?? "Other") === source) : mockMedia;
+}
+function mockFilterCalls(search: string | null): Call[] {
+  if (!search) return mockCalls;
+  const q = search.toLowerCase();
+  return mockCalls.filter((c) => c.address?.toLowerCase().includes(q));
+}
+function mockFilterSafari(search: string | null): HistoryVisit[] {
+  if (!search) return mockSafari;
+  const q = search.toLowerCase();
+  return mockSafari.filter(
+    (h) => h.url.toLowerCase().includes(q) || (h.title?.toLowerCase().includes(q) ?? false),
+  );
+}
+
 // A mock progress emitter so the import flow is exercisable in the browser.
 type ProgressCb = (p: ImportProgress) => void;
 const mockProgressSubs = new Set<ProgressCb>();
@@ -526,6 +565,15 @@ export const mockClient: SalvageClient = {
       : [],
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
+  countMedia: async (source) => (mockActive ? mockFilterMedia(source).length : 0),
+  getMediaWindow: async (source, offset, limit) =>
+    mockActive ? mockFilterMedia(source).slice(offset, offset + limit) : [],
+  countCalls: async (search) => (mockActive ? mockFilterCalls(search).length : 0),
+  getCallsWindow: async (search, offset, limit) =>
+    mockActive ? mockFilterCalls(search).slice(offset, offset + limit) : [],
+  countSafari: async (search) => (mockActive ? mockFilterSafari(search).length : 0),
+  getSafariWindow: async (search, offset, limit) =>
+    mockActive ? mockFilterSafari(search).slice(offset, offset + limit) : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),
   listMedia: async () => (mockActive ? mockMedia : []),

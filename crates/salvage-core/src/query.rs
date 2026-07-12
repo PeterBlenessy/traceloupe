@@ -394,19 +394,21 @@ pub fn list_calls(cache: &CacheDb) -> Result<Vec<Call>> {
         "SELECT id, address, direction, answered, duration_s, occurred_at, service
          FROM calls ORDER BY occurred_at DESC NULLS LAST, id DESC",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(Call {
-            id: r.get(0)?,
-            address: r.get(1)?,
-            direction: r.get(2)?,
-            answered: r.get::<_, Option<i64>>(3)?.map(|a| a != 0),
-            duration_s: r.get(4)?,
-            occurred_at: r.get(5)?,
-            service: r.get(6)?,
-        })
-    })?;
+    let rows = stmt.query_map([], row_to_call)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+fn row_to_call(r: &rusqlite::Row<'_>) -> rusqlite::Result<Call> {
+    Ok(Call {
+        id: r.get(0)?,
+        address: r.get(1)?,
+        direction: r.get(2)?,
+        answered: r.get::<_, Option<i64>>(3)?.map(|a| a != 0),
+        duration_s: r.get(4)?,
+        occurred_at: r.get(5)?,
+        service: r.get(6)?,
+    })
 }
 
 /// One Safari history visit.
@@ -427,17 +429,19 @@ pub fn list_safari_history(cache: &CacheDb) -> Result<Vec<HistoryVisit>> {
         "SELECT id, url, title, visited_at, visit_count
          FROM safari_history ORDER BY visited_at DESC NULLS LAST, id DESC",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(HistoryVisit {
-            id: r.get(0)?,
-            url: r.get(1)?,
-            title: r.get(2)?,
-            visited_at: r.get(3)?,
-            visit_count: r.get(4)?,
-        })
-    })?;
+    let rows = stmt.query_map([], row_to_visit)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+fn row_to_visit(r: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryVisit> {
+    Ok(HistoryVisit {
+        id: r.get(0)?,
+        url: r.get(1)?,
+        title: r.get(2)?,
+        visited_at: r.get(3)?,
+        visit_count: r.get(4)?,
+    })
 }
 
 /// A contact, with phones/emails decoded from the cache's JSON columns.
@@ -520,20 +524,116 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
     )?;
-    let rows = stmt.query_map([], |r| {
-        let rel: Option<String> = r.get(4)?;
-        Ok(MediaItem {
-            id: r.get(0)?,
-            kind: r.get(1)?,
-            source: r.get(2)?,
-            mime_type: r.get(3)?,
-            // Show just the basename as the filename.
-            filename: rel.map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
-            taken_at: r.get(5)?,
-        })
-    })?;
+    let rows = stmt.query_map([], row_to_media)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
+    let rel: Option<String> = r.get(4)?;
+    Ok(MediaItem {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        source: r.get(2)?,
+        mime_type: r.get(3)?,
+        // Show just the basename as the filename.
+        filename: rel.map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
+        taken_at: r.get(5)?,
+    })
+}
+
+// --- Windowed, filterable list queries -------------------------------------
+// Each artifact list has a `count_*` and `get_*_window` pair so the UI can
+// virtualize/lazy-load huge lists (a large camera roll, years of history) the
+// same way Messages does — fetching only the visible slice. Filtering/search
+// happens in SQL so the count and the windows stay consistent. A NULL filter
+// matches everything.
+
+/// Photos/videos in `source` ("Photos", "Messages", …), or all when NULL.
+pub fn count_media(cache: &CacheDb, source: Option<&str>) -> Result<i64> {
+    let n = cache.conn().query_row(
+        "SELECT COUNT(*) FROM media_items
+         WHERE local_path IS NOT NULL AND (?1 IS NULL OR source = ?1)",
+        [source],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+pub fn get_media_window(
+    cache: &CacheDb,
+    source: Option<&str>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<MediaItem>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, kind, source, mime_type, relative_path, taken_at
+         FROM media_items
+         WHERE local_path IS NOT NULL AND (?1 IS NULL OR source = ?1)
+         ORDER BY taken_at DESC NULLS LAST, id DESC
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![source, limit, offset], row_to_media)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// Calls whose address matches `search` (substring), or all when NULL.
+pub fn count_calls(cache: &CacheDb, search: Option<&str>) -> Result<i64> {
+    let n = cache.conn().query_row(
+        "SELECT COUNT(*) FROM calls
+         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%')",
+        [search],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+pub fn get_calls_window(
+    cache: &CacheDb,
+    search: Option<&str>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<Call>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, address, direction, answered, duration_s, occurred_at, service
+         FROM calls
+         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%')
+         ORDER BY occurred_at DESC NULLS LAST, id DESC
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_call)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+/// Safari visits whose URL or title matches `search`, or all when NULL.
+pub fn count_safari(cache: &CacheDb, search: Option<&str>) -> Result<i64> {
+    let n = cache.conn().query_row(
+        "SELECT COUNT(*) FROM safari_history
+         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' OR title LIKE '%' || ?1 || '%')",
+        [search],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+pub fn get_safari_window(
+    cache: &CacheDb,
+    search: Option<&str>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<HistoryVisit>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, url, title, visited_at, visit_count
+         FROM safari_history
+         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' OR title LIKE '%' || ?1 || '%')
+         ORDER BY visited_at DESC NULLS LAST, id DESC
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_visit)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 /// Distinct media sources present, with a count each, for the gallery filter.
