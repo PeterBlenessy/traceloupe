@@ -5,6 +5,7 @@
 //! artifact queries. See architecture.md §5.
 
 pub mod cache;
+pub mod crypto;
 pub mod discovery;
 pub mod engine;
 mod error;

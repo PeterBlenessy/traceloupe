@@ -18,3 +18,10 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 ureq = "2"
 sha2 = "0.10"
 hex = "0.4"
+# Native decryption of encrypted iOS backups (Phase 2): keybag unwrap → class
+# keys → Manifest.db / per-file AES-CBC. See crates/salvage-core/src/crypto.rs.
+sha1 = "0.10"
+pbkdf2 = "0.12"
+aes = "0.8"
+cbc = "0.1"
+aes-kw = "0.2"
