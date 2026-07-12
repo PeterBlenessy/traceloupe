@@ -105,13 +105,49 @@ function Conversations({
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
 
-  const selected = threads?.find((t) => t.id === selectedId) ?? threads?.[0] ?? null;
+  // Filter by source app (iMessage / SMS / TikTok / …). Only meaningful when a
+  // backup holds more than one; app DMs (e.g. TikTok) carry their own service.
+  const [serviceFilter, setServiceFilter] = useState<string>("all");
+  const services = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of threads ?? []) if (t.service) set.add(t.service);
+    return [...set].sort();
+  }, [threads]);
+  const visibleThreads = useMemo(
+    () =>
+      serviceFilter === "all"
+        ? threads
+        : threads?.filter((t) => t.service === serviceFilter),
+    [threads, serviceFilter],
+  );
+
+  const selected =
+    visibleThreads?.find((t) => t.id === selectedId) ?? visibleThreads?.[0] ?? null;
 
   return (
     <ListDetail
       master={
         <>
-          <ViewHeader title="Conversations" count={threads?.length} />
+          <ViewHeader title="Conversations" count={visibleThreads?.length} />
+          {services.length > 1 && (
+            <div className="border-b px-2 pb-2">
+              <ToggleGroup
+                type="single"
+                size="sm"
+                variant="outline"
+                value={serviceFilter}
+                onValueChange={(v) => v && setServiceFilter(v)}
+                className="flex-wrap justify-start"
+              >
+                <ToggleGroupItem value="all">All</ToggleGroupItem>
+                {services.map((s) => (
+                  <ToggleGroupItem key={s} value={s}>
+                    {s}
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+            </div>
+          )}
           {isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -120,13 +156,15 @@ function Conversations({
                 </div>
               ))}
             </div>
-          ) : (threads?.length ?? 0) === 0 ? (
+          ) : (visibleThreads?.length ?? 0) === 0 ? (
             <p className="px-4 py-6 text-sm text-muted-foreground">
-              No messages in this backup.
+              {(threads?.length ?? 0) === 0
+                ? "No messages in this backup."
+                : "No conversations for this app."}
             </p>
           ) : (
             <VirtualList
-              items={threads!}
+              items={visibleThreads!}
               getKey={(t) => t.id}
               estimateSize={64}
               renderItem={(t) => (

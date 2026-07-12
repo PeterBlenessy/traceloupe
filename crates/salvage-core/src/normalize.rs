@@ -51,6 +51,7 @@ pub fn normalize_lava(
     // docs/spike-ileapp.md). A missing DB just means no contacts.
     normalize_contacts(engine_out_dir, cache, &mut report)?;
     normalize_notes(&lava, cache, &mut report)?;
+    normalize_tiktok(&lava, cache, &mut report)?;
 
     Ok(report)
 }
@@ -480,6 +481,108 @@ struct SmsRow {
     from_me: Option<String>,
     media_ref: Option<String>,
     message_row_id: Option<i64>,
+}
+
+/// Map iLEAPP's `tiktok_messages` table into cache `threads` + `messages`,
+/// tagged `service = "TikTok"` so the Messages view's app filter can surface
+/// them. Rows group into threads by `conversation_id`; `direction` = "Outgoing"
+/// is from-me; each thread is named after the peer's `nickname` (the first
+/// incoming message's). Non-text rows (shares/stickers, ~16%) have a NULL
+/// `message` and are skipped for now. `timestamp` is Unix epoch seconds.
+///
+/// This is the template for future chat apps (Instagram, WhatsApp, …): same
+/// conversation shape, different table + column names.
+fn normalize_tiktok(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+    if !table_exists(lava, "tiktok_messages")? {
+        return Ok(());
+    }
+    let mut stmt = lava.prepare(
+        "SELECT conversation_id, timestamp, message, direction, nickname, custom_id
+         FROM tiktok_messages
+         WHERE message IS NOT NULL
+         ORDER BY conversation_id, timestamp",
+    )?;
+    let mut rows = stmt.query([])?;
+
+    // One transaction for the whole app — TikTok DMs run to hundreds of
+    // thousands of rows, which would be pathologically slow in autocommit.
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+
+    let mut current_key: Option<String> = None;
+    let mut thread_id: i64 = 0;
+    // The peer's display name, captured from the first incoming message and
+    // applied to the thread when the conversation ends.
+    let mut peer_nick: Option<String> = None;
+
+    let name_thread =
+        |tx: &rusqlite::Connection, id: i64, nick: &mut Option<String>| -> Result<()> {
+            if let Some(name) = nick.take() {
+                tx.execute(
+                    "UPDATE threads SET display_name = ?1 WHERE id = ?2",
+                    rusqlite::params![name, id],
+                )?;
+            }
+            Ok(())
+        };
+
+    while let Some(r) = rows.next()? {
+        let key: String = r
+            .get::<_, Option<String>>(0)?
+            .unwrap_or_else(|| "unknown".into());
+        let timestamp = epoch_value(r, 1);
+        let body: Option<String> = r.get(2)?;
+        let direction: Option<String> = r.get(3)?;
+        let nickname: Option<String> = r.get(4)?;
+        let custom_id: Option<String> = r.get(5)?;
+
+        if current_key.as_ref() != Some(&key) {
+            if current_key.is_some() {
+                name_thread(&tx, thread_id, &mut peer_nick)?;
+            }
+            tx.execute(
+                "INSERT INTO threads
+                    (identifier, display_name, service, last_message_at, message_count, participants_json)
+                 VALUES (?1, NULL, 'TikTok', NULL, 0, '[]')",
+                rusqlite::params![key],
+            )?;
+            thread_id = tx.last_insert_rowid();
+            current_key = Some(key);
+            peer_nick = None;
+            report.threads += 1;
+        }
+
+        let is_from_me = matches!(direction.as_deref(), Some("Outgoing"));
+        let sender = if is_from_me {
+            None
+        } else {
+            nickname.clone().or_else(|| custom_id.clone())
+        };
+        if !is_from_me && peer_nick.is_none() {
+            peer_nick = nickname.or(custom_id);
+        }
+        tx.execute(
+            "INSERT INTO messages
+                 (thread_id, sender, is_from_me, body, sent_at, has_attachments)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            rusqlite::params![thread_id, sender, is_from_me as i64, body, timestamp],
+        )?;
+        report.messages += 1;
+    }
+    if current_key.is_some() {
+        name_thread(&tx, thread_id, &mut peer_nick)?;
+    }
+
+    // Denormalize the per-thread counters the thread list reads.
+    tx.execute(
+        "UPDATE threads SET
+             message_count = (SELECT COUNT(*) FROM messages WHERE messages.thread_id = threads.id),
+             last_message_at = (SELECT MAX(sent_at) FROM messages WHERE messages.thread_id = threads.id)
+         WHERE service = 'TikTok'",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 /// Map iLEAPP's `callhistory` table into cache `calls`. iLEAPP renders
@@ -920,6 +1023,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count2, None);
+    }
+
+    #[test]
+    fn normalizes_tiktok_dms_into_threads() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tiktok_messages (
+                 timestamp INTEGER, sender TEXT, custom_id TEXT, nickname TEXT,
+                 message TEXT, local_response TEXT, link_gif_name TEXT,
+                 link_gif_url TEXT, server_created_timestamp INTEGER,
+                 profile_pic_url TEXT, contact_table TEXT, account_id TEXT,
+                 source_file TEXT, conversation_id TEXT, direction TEXT);
+             -- Conversation A: an incoming then an outgoing text message.
+             INSERT INTO tiktok_messages VALUES
+                 (1675838000,'peerA','peer.a','Peer A','hi there',NULL,NULL,NULL,0,NULL,NULL,'me','f','convA','Incoming');
+             INSERT INTO tiktok_messages VALUES
+                 (1675838551,'me','me.handle','Me','hello back',NULL,NULL,NULL,0,NULL,NULL,'me','f','convA','Outgoing');
+             -- A non-text share (NULL message) — should be skipped.
+             INSERT INTO tiktok_messages VALUES
+                 (1675838600,'peerA','peer.a','Peer A',NULL,NULL,NULL,NULL,0,NULL,NULL,'me','f','convA','Incoming');
+             -- Conversation B: one outgoing only (peer name unknown → NULL display).
+             INSERT INTO tiktok_messages VALUES
+                 (1675900000,'me','me.handle','Me','yo',NULL,NULL,NULL,0,NULL,NULL,'me','f','convB','Outgoing');",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        assert_eq!(report.threads, 2);
+        assert_eq!(report.messages, 3); // the NULL-message share is skipped
+
+        let c = cache.conn();
+        // Conversation A is named after the peer's nickname and counted.
+        let (display, count, last): (Option<String>, i64, i64) = c
+            .query_row(
+                "SELECT display_name, message_count, last_message_at FROM threads
+                 WHERE identifier = 'convA' AND service = 'TikTok'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(display.as_deref(), Some("Peer A"));
+        assert_eq!(count, 2);
+        assert_eq!(last, 1675838551);
+
+        // from-me / sender attribution.
+        let (from_me, sender): (i64, Option<String>) = c
+            .query_row(
+                "SELECT m.is_from_me, m.sender FROM messages m
+                 JOIN threads t ON t.id = m.thread_id
+                 WHERE t.identifier = 'convA' AND m.body = 'hi there'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(from_me, 0);
+        assert_eq!(sender.as_deref(), Some("Peer A"));
     }
 
     #[test]
