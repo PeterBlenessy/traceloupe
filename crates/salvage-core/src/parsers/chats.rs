@@ -57,9 +57,57 @@ pub fn parse_chats(db_path: &Path) -> Result<HashMap<i64, ChatInfo>> {
     Ok(map)
 }
 
+/// The sender handle for each incoming message, keyed by `message.ROWID`.
+/// Outgoing messages are omitted (the device owner is the sender). Lets group
+/// messages be attributed to individual members — iLEAPP's `sms` artifact
+/// doesn't expose `message.handle_id`.
+pub fn parse_message_senders(db_path: &Path) -> Result<HashMap<i64, String>> {
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut map = HashMap::new();
+    let mut stmt = conn.prepare(
+        "SELECT m.ROWID, h.id
+         FROM message m
+         JOIN handle h ON h.ROWID = m.handle_id
+         WHERE m.is_from_me = 0",
+    )?;
+    for row in stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?))
+        })?
+        .flatten()
+    {
+        let (rowid, handle) = row;
+        if let Some(h) = handle {
+            if !h.trim().is_empty() {
+                map.insert(rowid, h);
+            }
+        }
+    }
+    Ok(map)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_message_senders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, handle_id INTEGER, is_from_me INTEGER);
+             INSERT INTO handle VALUES (5, '+15550001111');
+             INSERT INTO message VALUES (100, 5, 0);
+             INSERT INTO message VALUES (101, 5, 1);",
+        )
+        .unwrap();
+
+        let senders = parse_message_senders(&db).unwrap();
+        assert_eq!(senders.get(&100).map(String::as_str), Some("+15550001111"));
+        assert!(!senders.contains_key(&101)); // outgoing omitted
+    }
 
     #[test]
     fn parses_group_name_and_members() {

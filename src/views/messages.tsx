@@ -8,7 +8,7 @@ import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Message as MessageRow, MessageContent } from "@/components/ui/message";
+import { Message as MessageRow, MessageContent, MessageHeader } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { EmptyView, ListDetail, ViewHeader } from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
@@ -543,11 +543,25 @@ function Conversation({
         fetchWindow={(offset, limit) =>
           client.getThreadMessageWindow(thread.id, offset, limit)
         }
-        renderItem={(message, _i, prev) => (
-          <div className="px-4 pb-1">
-            <MessageBubble message={message} showTime={showTimeBetween(prev, message)} />
-          </div>
-        )}
+        renderItem={(message, _i, prev) => {
+          // In a group, label an incoming message with its sender — but only
+          // when the sender changes, so runs of messages aren't repetitive.
+          const newSender =
+            !prev || prev.isFromMe || prev.sender !== message.sender;
+          const senderLabel =
+            group && !message.isFromMe && message.sender && newSender
+              ? (showContactNames ? (resolve(message.sender)?.name ?? message.sender) : message.sender)
+              : null;
+          return (
+            <div className="px-4 pb-1">
+              <MessageBubble
+                message={message}
+                showTime={showTimeBetween(prev, message)}
+                senderLabel={senderLabel}
+              />
+            </div>
+          );
+        }}
       />
     </div>
   );
@@ -559,7 +573,15 @@ function showTimeBetween(prev: Message | undefined, cur: Message): boolean {
   return (cur.sentAt ?? 0) - (prev.sentAt ?? 0) > 15 * 60;
 }
 
-function MessageBubble({ message, showTime }: { message: Message; showTime: boolean }) {
+function MessageBubble({
+  message,
+  showTime,
+  senderLabel,
+}: {
+  message: Message;
+  showTime: boolean;
+  senderLabel?: string | null;
+}) {
   const align = message.isFromMe ? "end" : "start";
   return (
     <div>
@@ -570,6 +592,7 @@ function MessageBubble({ message, showTime }: { message: Message; showTime: bool
       )}
       <MessageRow align={align}>
         <MessageContent>
+          {senderLabel && <MessageHeader>{senderLabel}</MessageHeader>}
           <Bubble variant={message.isFromMe ? "default" : "muted"}>
             <BubbleContent className="select-text">
               {message.body && (

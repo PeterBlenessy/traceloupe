@@ -268,14 +268,22 @@ fn normalize_sms(
     }
 
     // Group names + participants come from the raw sms.db (iLEAPP's sms artifact
-    // exposes neither), keyed by chat.ROWID == our thread identifier.
-    let chats = find_extracted(engine_out_dir, "sms.db")
-        .and_then(|p| crate::parsers::chats::parse_chats(&p).ok())
+    // exposes neither), keyed by chat.ROWID == our thread identifier. The same
+    // sms.db also gives us the per-message sender (message.handle_id), which the
+    // lava `sms` table lacks — needed to attribute group-chat messages.
+    let sms_db = find_extracted(engine_out_dir, "sms.db");
+    let chats = sms_db
+        .as_ref()
+        .and_then(|p| crate::parsers::chats::parse_chats(p).ok())
+        .unwrap_or_default();
+    let senders = sms_db
+        .as_ref()
+        .and_then(|p| crate::parsers::chats::parse_message_senders(p).ok())
         .unwrap_or_default();
 
     let mut stmt = lava.prepare(
         "SELECT chat_id, chat_contact_id, service, message_timestamp,
-                message, from_me, attachment_file
+                message, from_me, attachment_file, message_row_id
          FROM sms
          ORDER BY chat_id, message_timestamp",
     )?;
@@ -288,6 +296,12 @@ fn normalize_sms(
             body: r.get::<_, Option<String>>(4)?,
             from_me: r.get::<_, Option<String>>(5)?,
             media_ref: r.get::<_, Option<String>>(6)?,
+            // lava columns are TEXT-affinity; accept an int or a numeric string.
+            message_row_id: match r.get::<_, rusqlite::types::Value>(7)? {
+                rusqlite::types::Value::Integer(i) => Some(i),
+                rusqlite::types::Value::Text(s) => s.parse().ok(),
+                _ => None,
+            },
         })
     })?;
 
@@ -330,17 +344,22 @@ fn normalize_sms(
 
         let is_from_me = matches!(row.from_me.as_deref(), Some("1"));
         let has_attachment = row.media_ref.is_some();
+        // Per-message sender from sms.db (real member in group chats); fall back
+        // to the chat contact id for 1:1s when the lookup is unavailable.
+        let sender = if is_from_me {
+            None
+        } else {
+            row.message_row_id
+                .and_then(|rid| senders.get(&rid).cloned())
+                .or_else(|| row.contact_id.clone())
+        };
         conn.execute(
             "INSERT INTO messages
                  (thread_id, sender, is_from_me, body, sent_at, has_attachments)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 thread_id,
-                if is_from_me {
-                    None
-                } else {
-                    row.contact_id.clone()
-                },
+                sender,
                 is_from_me as i64,
                 row.body,
                 row.timestamp,
@@ -390,6 +409,7 @@ struct SmsRow {
     body: Option<String>,
     from_me: Option<String>,
     media_ref: Option<String>,
+    message_row_id: Option<i64>,
 }
 
 /// Map iLEAPP's `callhistory` table into cache `calls`. iLEAPP renders
