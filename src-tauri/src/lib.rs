@@ -13,7 +13,7 @@ use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
 use salvage_core::install;
 use salvage_core::query::{
-    self, Call, Contact, HistoryVisit, MediaItem, Message, ThreadSummary, TimelineMessage,
+    self, Call, Contact, HistoryVisit, MediaItem, Message, Note, ThreadSummary, TimelineMessage,
 };
 use salvage_core::sidecar::CancelToken;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -464,6 +464,12 @@ fn list_calls(active: State<'_, ActiveBackup>) -> Result<Vec<Call>, String> {
 }
 
 #[tauri::command]
+fn list_notes(active: State<'_, ActiveBackup>) -> Result<Vec<Note>, String> {
+    let cache = open_active_cache(&active)?;
+    query::list_notes(&cache).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn list_safari_history(active: State<'_, ActiveBackup>) -> Result<Vec<HistoryVisit>, String> {
     let cache = open_active_cache(&active)?;
     query::list_safari_history(&cache).map_err(|e| e.to_string())
@@ -899,6 +905,7 @@ pub fn run() {
             get_range_window,
             open_attachment,
             list_calls,
+            list_notes,
             list_safari_history,
             list_contacts,
             list_installed_apps,

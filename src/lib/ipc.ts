@@ -66,6 +66,16 @@ export interface HistoryVisit {
   visitCount: number | null;
 }
 
+export interface Note {
+  id: number;
+  folder: string | null;
+  title: string | null;
+  snippet: string | null;
+  body: string | null;
+  createdAt: number | null;
+  modifiedAt: number | null;
+}
+
 export interface LabeledValue {
   label: string | null;
   value: string;
@@ -207,6 +217,7 @@ export interface SalvageClient {
   ): Promise<TimelineMessage[]>;
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
+  listNotes(): Promise<Note[]>;
   listContacts(): Promise<Contact[]>;
   /** Bundle ids of apps that were installed on the device. */
   listInstalledApps(): Promise<string[]>;
@@ -272,6 +283,7 @@ const tauriClient: SalvageClient = {
     invoke<TimelineMessage[]>("get_range_window", { lo, hi, offset, limit }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
+  listNotes: () => invoke<Note[]>("list_notes"),
   countMedia: (source) => invoke<number>("count_media", { source }),
   getMediaWindow: (source, offset, limit) =>
     invoke<MediaItem[]>("get_media_window", { source, offset, limit }),
@@ -424,6 +436,12 @@ const mockSafari: HistoryVisit[] = [
   { id: 3, url: "https://www.apple.com/", title: "Apple", visitedAt: 1717794000, visitCount: 12 },
 ];
 
+const mockNotes: Note[] = [
+  { id: 1, folder: "Notes", title: "Hike checklist", snippet: "Water, snacks, sunscreen…", body: "Water\nSnacks\nSunscreen\nHat\nExtra socks", createdAt: 1717000000, modifiedAt: 1717838000 },
+  { id: 2, folder: "Work", title: "Q3 ideas", snippet: "Ship the importer, then…", body: "Ship the importer, then work on lazy decode and the encrypted path.", createdAt: 1716500000, modifiedAt: 1717500000 },
+  { id: 3, folder: "Notes", title: null, snippet: "Grocery list", body: "Milk\nEggs\nBröd\nKaffe", createdAt: 1716000000, modifiedAt: 1716600000 },
+];
+
 const mockContacts: Contact[] = [
   { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }], hasImage: true },
   { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }], hasImage: true },
@@ -529,6 +547,7 @@ export const mockClient: SalvageClient = {
     { id: "calls", label: "Call history", category: "Communication", default: true },
     { id: "contacts", label: "Contacts", category: "Communication", default: true },
     { id: "safari", label: "Safari history", category: "Web", default: true },
+    { id: "notes", label: "Notes", category: "Productivity", default: true },
     { id: "camera_roll", label: "Camera roll photos", category: "Media", default: true },
   ],
   importBackup: async ({ backupId }) => {
@@ -585,6 +604,7 @@ export const mockClient: SalvageClient = {
       : [],
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
+  listNotes: async () => (mockActive ? mockNotes : []),
   countMedia: async (source) => (mockActive ? mockFilterMedia(source).length : 0),
   getMediaWindow: async (source, offset, limit) =>
     mockActive ? mockFilterMedia(source).slice(offset, offset + limit) : [],

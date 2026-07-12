@@ -675,6 +675,43 @@ pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
         .optional()?)
 }
 
+/// One note from the device's Notes app.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Note {
+    pub id: i64,
+    pub folder: Option<String>,
+    pub title: Option<String>,
+    pub snippet: Option<String>,
+    /// The note body (plain text extracted from the note's protobuf).
+    pub body: Option<String>,
+    pub created_at: Option<i64>,
+    pub modified_at: Option<i64>,
+}
+
+/// Notes, most-recently-modified first.
+pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, folder, title, snippet, body_html, created_at, modified_at
+         FROM notes
+         ORDER BY modified_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Note {
+            id: r.get(0)?,
+            folder: r.get(1)?,
+            title: r.get(2)?,
+            snippet: r.get(3)?,
+            body: r.get(4)?,
+            created_at: r.get(5)?,
+            modified_at: r.get(6)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// Bundle IDs of apps installed on the device, sorted.
 pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<String>> {
     let conn = cache.conn();

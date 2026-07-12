@@ -103,6 +103,7 @@ pub fn import_backup(
             "calls" => ("Call history", report.calls),
             "contacts" => ("Contacts", report.contacts),
             "safari" => ("Safari history", report.safari_visits),
+            "notes" => ("Notes", report.notes),
             // camera_roll isn't checked here: media_items also holds message/app
             // attachments, so a 0-count test wouldn't be meaningful.
             _ => continue,

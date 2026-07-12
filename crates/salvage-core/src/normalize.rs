@@ -27,6 +27,7 @@ pub struct ImportReport {
     pub calls: usize,
     pub safari_visits: usize,
     pub contacts: usize,
+    pub notes: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
 }
@@ -49,8 +50,68 @@ pub fn normalize_lava(
     // iLEAPP extracts (its own lava output for contacts is lossy — see
     // docs/spike-ileapp.md). A missing DB just means no contacts.
     normalize_contacts(engine_out_dir, cache, &mut report)?;
+    normalize_notes(&lava, cache, &mut report)?;
 
     Ok(report)
+}
+
+/// Map iLEAPP's `notes` table (from NoteStore.sqlite) into cache `notes`.
+fn normalize_notes(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+    if !table_exists(lava, "notes")? {
+        return Ok(());
+    }
+    let mut stmt = lava.prepare(
+        "SELECT folder, note_title, snippet, note_contents, creation_date, last_modified
+         FROM notes",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(NoteRow {
+            folder: r.get(0)?,
+            title: r.get(1)?,
+            snippet: r.get(2)?,
+            body: r.get(3)?,
+            created_at: epoch_value(r, 4),
+            modified_at: epoch_value(r, 5),
+        })
+    })?;
+
+    let conn = cache.conn();
+    for row in rows {
+        let row = row?;
+        conn.execute(
+            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                row.folder,
+                row.title,
+                row.snippet,
+                row.body,
+                row.created_at,
+                row.modified_at,
+            ],
+        )?;
+        report.notes += 1;
+    }
+    Ok(())
+}
+
+struct NoteRow {
+    folder: Option<String>,
+    title: Option<String>,
+    snippet: Option<String>,
+    body: Option<String>,
+    created_at: Option<i64>,
+    modified_at: Option<i64>,
+}
+
+/// Read an epoch-seconds value from a lava column that may be an integer or a
+/// numeric string (lava column affinity varies); anything else yields None.
+fn epoch_value(r: &rusqlite::Row<'_>, idx: usize) -> Option<i64> {
+    match r.get::<_, rusqlite::types::Value>(idx).ok()? {
+        rusqlite::types::Value::Integer(i) => Some(i),
+        rusqlite::types::Value::Text(s) => s.parse().ok(),
+        _ => None,
+    }
 }
 
 /// Find, parse, and cache contacts from the decrypted `AddressBook.sqlitedb`

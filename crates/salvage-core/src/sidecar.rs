@@ -177,6 +177,13 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         default: true,
     },
     ImportModule {
+        id: "notes",
+        label: "Notes",
+        category: "Productivity",
+        keys: &["notes"],
+        default: true,
+    },
+    ImportModule {
         // Handled natively (not via iLEAPP): the importer reads the camera roll
         // straight from the backup's Manifest and uses iOS's pre-rendered
         // thumbnails, so it's fast (no HEIC re-encoding at import time). Empty
