@@ -44,6 +44,11 @@ pub enum Error {
     /// mismatch — the last is a hard integrity failure, never retried silently).
     #[error("engine download failed: {0}")]
     EngineDownload(String),
+
+    /// Decrypting an encrypted backup failed: a malformed keybag, a wrong
+    /// password (a key unwrap that didn't validate), or an unexpected blob.
+    #[error("backup decryption failed: {0}")]
+    Decrypt(String),
 }
 
 impl Error {
