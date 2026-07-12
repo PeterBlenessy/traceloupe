@@ -51,9 +51,59 @@ pub fn normalize_lava(
     // docs/spike-ileapp.md). A missing DB just means no contacts.
     normalize_contacts(engine_out_dir, cache, &mut report)?;
     normalize_notes(&lava, cache, &mut report)?;
-    normalize_tiktok(&lava, cache, &mut report)?;
+    // Third-party chat apps → the Messages view, tagged by service. Each is a
+    // no-op unless its lava table is present (the app was installed + parsed).
+    normalize_app_conversation(&lava, cache, &mut report, &TIKTOK_CHAT)?;
+    normalize_app_conversation(&lava, cache, &mut report, &WHATSAPP_CHAT)?;
+    normalize_app_conversation(&lava, cache, &mut report, &TELEGRAM_CHAT)?;
+    normalize_tiktok_contacts(&lava, cache, &mut report)?;
 
     Ok(report)
+}
+
+/// Map iLEAPP's `tiktok_contacts` (the TikTok social graph) into cache
+/// `contacts`, tagged `source = "TikTok"` so the Contacts view can filter them
+/// away from the device's address book. These carry only a nickname + `@handle`
+/// (no phone/email, and the avatar URL is remote/expired so we don't fetch it),
+/// so the handle goes in `organization` to show as the contact's subtitle.
+fn normalize_tiktok_contacts(
+    lava: &Connection,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+) -> Result<()> {
+    if !table_exists(lava, "tiktok_contacts")? {
+        return Ok(());
+    }
+    let mut stmt = lava.prepare(
+        "SELECT unique_id, nickname, custom_id FROM tiktok_contacts
+         WHERE nickname IS NOT NULL OR custom_id IS NOT NULL",
+    )?;
+    let mut rows = stmt.query([])?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    // A person recurs across source tables (friends, followers, …); dedup by uid.
+    let mut seen = std::collections::HashSet::new();
+    while let Some(r) = rows.next()? {
+        let unique_id: Option<String> = r.get(0)?;
+        let nickname: Option<String> = r.get(1)?;
+        let custom_id: Option<String> = r.get(2)?;
+        if let Some(uid) = &unique_id {
+            if !seen.insert(uid.clone()) {
+                continue;
+            }
+        }
+        let handle = custom_id.map(|h| format!("@{h}"));
+        tx.execute(
+            "INSERT INTO contacts
+                 (first_name, last_name, organization, phones_json, emails_json, image, source)
+             VALUES (?1, NULL, ?2, '[]', '[]', NULL, 'TikTok')",
+            rusqlite::params![nickname, handle],
+        )?;
+        report.contacts += 1;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 /// Map iLEAPP's `notes` table (from NoteStore.sqlite) into cache `notes`.
@@ -483,48 +533,129 @@ struct SmsRow {
     message_row_id: Option<i64>,
 }
 
-/// Map iLEAPP's `tiktok_messages` table into cache `threads` + `messages`,
-/// tagged `service = "TikTok"` so the Messages view's app filter can surface
-/// them. Rows group into threads by `conversation_id`; `direction` = "Outgoing"
-/// is from-me; each thread is named after the peer's `nickname` (the first
-/// incoming message's). Non-text rows (shares/stickers, ~16%) have a NULL
-/// `message` and are skipped for now. `timestamp` is Unix epoch seconds.
-///
-/// This is the template for future chat apps (Instagram, WhatsApp, …): same
-/// conversation shape, different table + column names.
-fn normalize_tiktok(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
-    if !table_exists(lava, "tiktok_messages")? {
+/// How to read one third-party chat app's iLEAPP messages table into the shared
+/// `threads`/`messages` schema. All the apps iLEAPP parses share a "conversation"
+/// shape — they differ only in table and column names. Column fields are trusted
+/// constants (SQL identifiers or expressions), never user input.
+struct AppChatSpec {
+    /// Lava table name (iLEAPP function name, sanitized), e.g. "tiktok_messages".
+    table: &'static str,
+    /// Value stamped on each thread's `service` (and the app filter label).
+    service: &'static str,
+    /// Column that groups messages into a thread.
+    chat_id: &'static str,
+    /// Unix-epoch-seconds timestamp column.
+    timestamp: &'static str,
+    /// Message text column (rows where it's NULL — media-only — are skipped).
+    body: &'static str,
+    /// Direction column whose value is "Outgoing" for messages the owner sent.
+    direction: &'static str,
+    /// Sender display-name column (expression allowed), used for incoming rows.
+    sender: &'static str,
+    /// Optional `@handle` column captured for thread enrichment (TikTok only).
+    handle: Option<&'static str>,
+    /// Optional per-row thread label (WhatsApp/Telegram carry the chat name);
+    /// when absent, the thread is named after the first incoming sender.
+    chat_name: Option<&'static str>,
+}
+
+const TIKTOK_CHAT: AppChatSpec = AppChatSpec {
+    table: "tiktok_messages",
+    service: "TikTok",
+    chat_id: "conversation_id",
+    timestamp: "timestamp",
+    body: "message",
+    direction: "direction",
+    sender: "COALESCE(nickname, custom_id)",
+    handle: Some("custom_id"),
+    chat_name: None,
+};
+
+const WHATSAPP_CHAT: AppChatSpec = AppChatSpec {
+    table: "whatsappmessages",
+    service: "WhatsApp",
+    chat_id: "chat_id",
+    timestamp: "timestamp",
+    body: "message",
+    direction: "direction",
+    sender: "sender_name",
+    handle: None,
+    chat_name: Some("chat_name"),
+};
+
+const TELEGRAM_CHAT: AppChatSpec = AppChatSpec {
+    table: "telegrammessages",
+    service: "Telegram",
+    chat_id: "chat_id",
+    timestamp: "timestamp",
+    body: "text",
+    direction: "direction",
+    sender: "author",
+    handle: None,
+    chat_name: Some("chat"),
+};
+
+/// Map a third-party chat app's iLEAPP output into cache `threads` + `messages`,
+/// tagged with `spec.service` so the Messages view's app filter can surface it.
+/// Rows group into threads by the chat id; `direction` = "Outgoing" is from-me;
+/// threads are named by their per-row chat label, or (TikTok) by the first
+/// incoming sender, whose `@handle` is stored as the sole participant so the
+/// header can show it. Media-only rows (NULL body) are skipped. One transaction
+/// — these run to hundreds of thousands of rows.
+fn normalize_app_conversation(
+    lava: &Connection,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+    spec: &AppChatSpec,
+) -> Result<()> {
+    if !table_exists(lava, spec.table)? {
         return Ok(());
     }
-    let mut stmt = lava.prepare(
-        "SELECT conversation_id, timestamp, message, direction, nickname, custom_id
-         FROM tiktok_messages
-         WHERE message IS NOT NULL
-         ORDER BY conversation_id, timestamp",
-    )?;
+    // Columns are trusted constants from the spec, not user input.
+    let sql = format!(
+        "SELECT {chat}, {ts}, {body}, {dir}, {sender}, {handle}, {chat_name}
+         FROM {table}
+         WHERE {body} IS NOT NULL
+         ORDER BY {chat}, {ts}",
+        chat = spec.chat_id,
+        ts = spec.timestamp,
+        body = spec.body,
+        dir = spec.direction,
+        sender = spec.sender,
+        handle = spec.handle.unwrap_or("NULL"),
+        chat_name = spec.chat_name.unwrap_or("NULL"),
+        table = spec.table,
+    );
+    let mut stmt = lava.prepare(&sql)?;
     let mut rows = stmt.query([])?;
 
-    // One transaction for the whole app — TikTok DMs run to hundreds of
-    // thousands of rows, which would be pathologically slow in autocommit.
     let conn = cache.conn();
     let tx = conn.unchecked_transaction()?;
 
     let mut current_key: Option<String> = None;
     let mut thread_id: i64 = 0;
-    // The peer's display name, captured from the first incoming message and
-    // applied to the thread when the conversation ends.
+    // Derived (no chat-name column): the peer's display name + @handle, taken
+    // from the first incoming message and applied when the conversation ends.
+    let derive_name = spec.chat_name.is_none();
     let mut peer_nick: Option<String> = None;
+    let mut peer_handle: Option<String> = None;
 
-    let name_thread =
-        |tx: &rusqlite::Connection, id: i64, nick: &mut Option<String>| -> Result<()> {
-            if let Some(name) = nick.take() {
-                tx.execute(
-                    "UPDATE threads SET display_name = ?1 WHERE id = ?2",
-                    rusqlite::params![name, id],
-                )?;
-            }
-            Ok(())
-        };
+    let finalize = |tx: &rusqlite::Connection,
+                    id: i64,
+                    nick: &mut Option<String>,
+                    handle: &mut Option<String>|
+     -> Result<()> {
+        // The peer @handle is stored as the sole participant so the thread header
+        // can show it. COALESCE keeps a chat-name already set at insert time.
+        let participants: Vec<String> = handle.take().into_iter().collect();
+        let pj = serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into());
+        tx.execute(
+            "UPDATE threads SET display_name = COALESCE(?1, display_name),
+                 participants_json = ?2 WHERE id = ?3",
+            rusqlite::params![nick.take(), pj, id],
+        )?;
+        Ok(())
+    };
 
     while let Some(r) = rows.next()? {
         let key: String = r
@@ -533,22 +664,25 @@ fn normalize_tiktok(lava: &Connection, cache: &CacheDb, report: &mut ImportRepor
         let timestamp = epoch_value(r, 1);
         let body: Option<String> = r.get(2)?;
         let direction: Option<String> = r.get(3)?;
-        let nickname: Option<String> = r.get(4)?;
-        let custom_id: Option<String> = r.get(5)?;
+        let sender_name: Option<String> = r.get(4)?;
+        let handle: Option<String> = r.get(5)?;
+        let chat_name: Option<String> = r.get(6)?;
 
         if current_key.as_ref() != Some(&key) {
             if current_key.is_some() {
-                name_thread(&tx, thread_id, &mut peer_nick)?;
+                finalize(&tx, thread_id, &mut peer_nick, &mut peer_handle)?;
             }
+            // chat_name is NULL for derive-mode apps (filled in at finalize).
             tx.execute(
                 "INSERT INTO threads
                     (identifier, display_name, service, last_message_at, message_count, participants_json)
-                 VALUES (?1, NULL, 'TikTok', NULL, 0, '[]')",
-                rusqlite::params![key],
+                 VALUES (?1, ?2, ?3, NULL, 0, '[]')",
+                rusqlite::params![key, chat_name, spec.service],
             )?;
             thread_id = tx.last_insert_rowid();
             current_key = Some(key);
             peer_nick = None;
+            peer_handle = None;
             report.threads += 1;
         }
 
@@ -556,10 +690,17 @@ fn normalize_tiktok(lava: &Connection, cache: &CacheDb, report: &mut ImportRepor
         let sender = if is_from_me {
             None
         } else {
-            nickname.clone().or_else(|| custom_id.clone())
+            sender_name.clone()
         };
-        if !is_from_me && peer_nick.is_none() {
-            peer_nick = nickname.or(custom_id);
+        if derive_name && !is_from_me && peer_nick.is_none() {
+            peer_nick = sender_name;
+            peer_handle = handle.map(|h| {
+                if h.starts_with('@') {
+                    h
+                } else {
+                    format!("@{h}")
+                }
+            });
         }
         tx.execute(
             "INSERT INTO messages
@@ -570,7 +711,7 @@ fn normalize_tiktok(lava: &Connection, cache: &CacheDb, report: &mut ImportRepor
         report.messages += 1;
     }
     if current_key.is_some() {
-        name_thread(&tx, thread_id, &mut peer_nick)?;
+        finalize(&tx, thread_id, &mut peer_nick, &mut peer_handle)?;
     }
 
     // Denormalize the per-thread counters the thread list reads.
@@ -578,8 +719,8 @@ fn normalize_tiktok(lava: &Connection, cache: &CacheDb, report: &mut ImportRepor
         "UPDATE threads SET
              message_count = (SELECT COUNT(*) FROM messages WHERE messages.thread_id = threads.id),
              last_message_at = (SELECT MAX(sent_at) FROM messages WHERE messages.thread_id = threads.id)
-         WHERE service = 'TikTok'",
-        [],
+         WHERE service = ?1",
+        rusqlite::params![spec.service],
     )?;
     tx.commit()?;
     Ok(())
@@ -1081,6 +1222,95 @@ mod tests {
             .unwrap();
         assert_eq!(from_me, 0);
         assert_eq!(sender.as_deref(), Some("Peer A"));
+    }
+
+    #[test]
+    fn normalizes_tiktok_contacts_with_source_tag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tiktok_contacts (
+                 timestamp INTEGER, nickname TEXT, unique_id TEXT, custom_id TEXT,
+                 url TEXT, source_table TEXT, source_file TEXT);
+             INSERT INTO tiktok_contacts VALUES (0,'Alice','111','alice_h','u',NULL,NULL);
+             -- Same person in a second source table → deduped by unique_id.
+             INSERT INTO tiktok_contacts VALUES (0,'Alice','111','alice_h','u',NULL,NULL);
+             INSERT INTO tiktok_contacts VALUES (0,'Bob','222','bobby','u',NULL,NULL);",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        assert_eq!(report.contacts, 2); // deduped
+
+        let c = cache.conn();
+        let (name, org, source): (String, String, String) = c
+            .query_row(
+                "SELECT first_name, organization, source FROM contacts WHERE first_name = 'Alice'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), org.as_str(), source.as_str()),
+            ("Alice", "@alice_h", "TikTok")
+        );
+    }
+
+    #[test]
+    fn normalizes_whatsapp_and_telegram_via_shared_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE whatsappmessages (
+                 timestamp INTEGER, sender_name TEXT, from_id TEXT, receiver TEXT,
+                 to_id TEXT, message TEXT, attachment_file TEXT, thumb TEXT,
+                 starred TEXT, number_of_forwardings TEXT, forwarded_from TEXT,
+                 latitude TEXT, longitude TEXT, direction TEXT, chat_id TEXT, chat_name TEXT);
+             INSERT INTO whatsappmessages VALUES
+                 (1700000000,'Sam','x','','','hey there',NULL,NULL,'',0,'','','','Incoming','jid1','Sam Q');
+             INSERT INTO whatsappmessages VALUES
+                 (1700000060,'Local User','','','','hi Sam',NULL,NULL,'',0,'','','','Outgoing','jid1','Sam Q');
+             CREATE TABLE telegrammessages (
+                 timestamp INTEGER, chat TEXT, chat_id TEXT, thread_id TEXT,
+                 direction TEXT, author TEXT, author_id TEXT, text TEXT,
+                 action_data TEXT, thumbnail TEXT, forward_from TEXT, forward_timestamp INTEGER);
+             INSERT INTO telegrammessages VALUES
+                 (1700001000,'Group Chat','g99','','Incoming','Kim','5','yo everyone','','','',0);",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        assert_eq!(report.threads, 2); // one WhatsApp, one Telegram
+        assert_eq!(report.messages, 3);
+
+        let c = cache.conn();
+        // WhatsApp: thread named by chat_name, direction mapped, from-me sender dropped.
+        let (name, service, from_me): (String, String, i64) = c
+            .query_row(
+                "SELECT t.display_name, t.service, m.is_from_me FROM messages m
+                 JOIN threads t ON t.id = m.thread_id WHERE m.body = 'hi Sam'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), service.as_str(), from_me),
+            ("Sam Q", "WhatsApp", 1)
+        );
+
+        // Telegram: thread named by `chat`, sender preserved for incoming.
+        let (tname, sender): (String, Option<String>) = c
+            .query_row(
+                "SELECT t.display_name, m.sender FROM messages m
+                 JOIN threads t ON t.id = m.thread_id WHERE t.service = 'Telegram'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tname.as_str(), "Group Chat");
+        assert_eq!(sender.as_deref(), Some("Kim"));
     }
 
     #[test]

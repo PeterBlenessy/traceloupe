@@ -90,6 +90,8 @@ export interface Contact {
   emails: LabeledValue[];
   /** Whether a contact photo is stored (load it via `contactAvatarUrl`). */
   hasImage: boolean;
+  /** 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter. */
+  source: string;
 }
 
 export interface MediaItem {
@@ -373,7 +375,7 @@ const mockThreads: ThreadSummary[] = [
     lastMessageAt: 1717600000,
     messageCount: 2,
     snippet: "sent you a video 🎵",
-    participants: [],
+    participants: ["@hembokke"],
   },
 ];
 
@@ -458,10 +460,13 @@ const mockNotes: Note[] = [
 ];
 
 const mockContacts: Contact[] = [
-  { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }], hasImage: true },
-  { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }], hasImage: true },
-  { id: 3, firstName: "Sam", lastName: "Taylor", organization: null, phones: [], emails: [{ label: "Home", value: "sam.taylor@example.com" }], hasImage: false },
-  { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [], hasImage: false },
+  { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }], hasImage: true, source: "Address Book" },
+  { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }], hasImage: true, source: "Address Book" },
+  { id: 3, firstName: "Sam", lastName: "Taylor", organization: null, phones: [], emails: [{ label: "Home", value: "sam.taylor@example.com" }], hasImage: false, source: "Address Book" },
+  { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [], hasImage: false, source: "Address Book" },
+  // A third-party app's social graph: name + @handle only (behind the filter).
+  { id: 5, firstName: "★ Alice ✿", lastName: null, organization: "@ccidkk", phones: [], emails: [], hasImage: false, source: "TikTok" },
+  { id: 6, firstName: "jhopesop", lastName: null, organization: "@jhopesop", phones: [], emails: [], hasImage: false, source: "TikTok" },
 ];
 
 // Colored initials SVGs standing in for real contact photos in the browser mock.

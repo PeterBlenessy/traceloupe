@@ -205,6 +205,23 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         keys: &["tiktok_messages"],
         default: true,
     },
+    ImportModule {
+        // WhatsApp/Telegram DMs → Messages, same normalizer path as TikTok. The
+        // column mapping is derived from the iLEAPP module source but UNVALIDATED
+        // against a real backup yet; a no-op unless the app's data is present.
+        id: "whatsapp",
+        label: "WhatsApp messages",
+        category: "Apps",
+        keys: &["whatsAppMessages"],
+        default: true,
+    },
+    ImportModule {
+        id: "telegram",
+        label: "Telegram messages",
+        category: "Apps",
+        keys: &["telegramMessages"],
+        default: true,
+    },
 ];
 
 /// The iLEAPP artifact keys to run for the selected module ids. An empty
