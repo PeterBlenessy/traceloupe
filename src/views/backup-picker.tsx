@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Check, FolderOpen, Lock, LockOpen, Settings, Smartphone } from "lucide-react";
+import { Check, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -18,6 +18,7 @@ import { EngineSetup } from "@/views/engine-setup";
 
 export function BackupPicker() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [selected, setSelected] = useState<BackupInfo | null>(null);
   const { data: engineReady } = useQuery({
     queryKey: ["engineStatus"],
@@ -35,6 +36,9 @@ export function BackupPicker() {
   async function handleOpen(b: BackupInfo) {
     if (imported.has(b.id)) {
       await client.openBackup(b.id);
+      // Drop any cached artifact data from a previously-open backup; with
+      // staleTime: Infinity it would otherwise persist across backups.
+      await qc.invalidateQueries();
       navigate({ to: "/messages" });
     } else {
       setSelected(b);
@@ -140,6 +144,7 @@ export function BackupPicker() {
               backup={b}
               imported={imported.has(b.id)}
               onSelect={() => handleOpen(b)}
+              onReimport={() => setSelected(b)}
             />
           ))}
       </div>
@@ -165,10 +170,12 @@ function BackupCard({
   backup,
   imported,
   onSelect,
+  onReimport,
 }: {
   backup: BackupInfo;
   imported: boolean;
   onSelect: () => void;
+  onReimport: () => void;
 }) {
   const date = backup.lastBackupDate
     ? new Date(backup.lastBackupDate * 1000).toLocaleString()
@@ -201,15 +208,29 @@ function BackupCard({
             {date}
           </div>
         </div>
-        <span className="shrink-0 text-sm text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
           {imported ? (
-            <span className="inline-flex items-center gap-1 text-foreground">
-              <Check className="size-4" /> Open
-            </span>
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Parse this backup again (updates data, e.g. contact photos)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReimport();
+                }}
+              >
+                <RotateCw className="size-4" />
+                Re-import
+              </Button>
+              <span className="inline-flex items-center gap-1 text-foreground">
+                <Check className="size-4" /> Open
+              </span>
+            </>
           ) : (
             "Read & open"
           )}
-        </span>
+        </div>
       </CardContent>
     </Card>
   );

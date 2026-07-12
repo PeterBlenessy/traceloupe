@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Image as ImageIcon, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { EmptyView, ViewHeader } from "@/components/view";
@@ -60,27 +60,19 @@ export function GalleryView() {
           />
         </div>
       )}
-      <ScrollArea className="flex-1">
-        {isPending && (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
-            {Array.from({ length: 12 }).map((_, i) => (
-              <Skeleton key={i} className="aspect-square" />
-            ))}
-          </div>
-        )}
-        {media?.length === 0 && (
-          <p className="p-6 text-center text-sm text-muted-foreground">
-            No photos or videos in this backup.
-          </p>
-        )}
-        {filtered.length > 0 && (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
-            {filtered.map((m) => (
-              <Thumb key={m.id} item={m} onOpen={() => setOpenId(m.id)} />
-            ))}
-          </div>
-        )}
-      </ScrollArea>
+      {isPending && (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <Skeleton key={i} className="aspect-square" />
+          ))}
+        </div>
+      )}
+      {media?.length === 0 && (
+        <p className="p-6 text-center text-sm text-muted-foreground">
+          No photos or videos in this backup.
+        </p>
+      )}
+      {filtered.length > 0 && <MediaGrid items={filtered} onOpen={setOpenId} />}
 
       <Lightbox item={openItem} onClose={() => setOpenId(null)} />
     </div>
@@ -117,12 +109,84 @@ function SourceFilter({
   );
 }
 
+/**
+ * Row-virtualized thumbnail grid. A real camera roll holds thousands of media
+ * items, and every rendered <img> spawns a native `sips` transcode — so we mount
+ * only the rows in view. Columns are derived from the live container width to
+ * keep the responsive auto-fill layout.
+ */
+function MediaGrid({
+  items,
+  onOpen,
+}: {
+  items: MediaItem[];
+  onOpen: (id: number) => void;
+}) {
+  const GAP = 4; // matches gap-1 / p-1 (0.25rem)
+  const MIN = 144; // 9rem minimum tile
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(1);
+  const [cell, setCell] = useState(MIN);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const compute = () => {
+      const w = el.clientWidth - GAP * 2;
+      const c = Math.max(1, Math.floor((w + GAP) / (MIN + GAP)));
+      setCols(c);
+      setCell((w - GAP * (c - 1)) / c);
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const rowCount = Math.ceil(items.length / cols);
+  const rowVirtualizer = useVirtualizer({
+    count: rowCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => cell + GAP,
+    overscan: 3,
+  });
+  useLayoutEffect(() => {
+    rowVirtualizer.measure();
+  }, [cell, cols, rowVirtualizer]);
+
+  return (
+    // min-h-0 lets this flex child actually scroll; without it the grid grows to
+    // its full content height and the virtualizer mounts every row (and spawns a
+    // `sips` transcode per thumbnail), freezing the app.
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-1">
+      <div className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
+        {rowVirtualizer.getVirtualItems().map((row) => {
+          const start = row.index * cols;
+          return (
+            <div
+              key={row.key}
+              className="absolute left-0 top-0 flex w-full gap-1"
+              style={{ transform: `translateY(${row.start}px)`, height: cell }}
+            >
+              {items.slice(start, start + cols).map((m) => (
+                <div key={m.id} style={{ width: cell }}>
+                  <Thumb item={m} onOpen={() => onOpen(m.id)} />
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   const isVideo = item.kind === "video";
   return (
     <button
       onClick={onOpen}
-      className="group relative aspect-square overflow-hidden rounded-sm bg-muted"
+      className="group relative aspect-square w-full overflow-hidden rounded-sm bg-muted"
     >
       <img
         src={client.mediaUrl(item.id, { thumb: true })}

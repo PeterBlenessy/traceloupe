@@ -11,3 +11,4 @@
 //! iLEAPP source.
 
 pub mod address_book;
+pub mod chats;

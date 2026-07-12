@@ -111,6 +111,58 @@ struct Row {
     label: Option<String>,
 }
 
+/// Contact photo thumbnails from `AddressBookImages.sqlitedb`, keyed by the
+/// ABPerson ROWID (which `ParsedContact.id` also carries, so images line up with
+/// contacts). Best-effort: the schema varies across iOS versions, so we try the
+/// known tables and skip anything that doesn't fit rather than failing the whole
+/// import.
+pub fn parse_address_book_images(
+    db_path: &Path,
+) -> Result<std::collections::HashMap<i64, Vec<u8>>> {
+    use std::collections::HashMap;
+
+    let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut out: HashMap<i64, Vec<u8>> = HashMap::new();
+
+    // Thumbnails first (format 0, per iLEAPP's addressBook.py), then full-size
+    // to cover contacts that only have one. `or_insert` keeps the thumbnail when
+    // both exist. We don't break after the first table, so a contact with only a
+    // full-size photo still gets one.
+    let sources = [
+        ("ABThumbnailImage", "AND format = 0"),
+        ("ABFullSizeImage", ""),
+    ];
+    for (table, extra) in sources {
+        if !images_table_exists(&conn, table) {
+            continue;
+        }
+        let sql = format!("SELECT record_id, data FROM {table} WHERE data IS NOT NULL {extra}");
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            continue;
+        };
+        let Ok(rows) =
+            stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+        else {
+            continue;
+        };
+        for (record_id, data) in rows.flatten() {
+            if !data.is_empty() {
+                out.entry(record_id).or_insert(data);
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn images_table_exists(conn: &Connection, name: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+        [name],
+        |_| Ok(()),
+    )
+    .is_ok()
+}
+
 /// Strip iOS's `_$!<Mobile>!$_` wrapper to `Mobile`; pass other labels through.
 fn clean_label(raw: &str) -> String {
     raw.strip_prefix("_$!<")
@@ -164,6 +216,29 @@ mod tests {
         assert!(pizza.first_name.is_none() && pizza.last_name.is_none());
         assert_eq!(pizza.phones.len(), 1);
         assert!(pizza.emails.is_empty());
+    }
+
+    #[test]
+    fn parses_contact_thumbnails_by_record_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("AddressBookImages.sqlitedb");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ABThumbnailImage (record_id INTEGER, format INTEGER, data BLOB);
+             CREATE TABLE ABFullSizeImage (record_id INTEGER, data BLOB);
+             INSERT INTO ABThumbnailImage (record_id, format, data) VALUES (1, 0, x'FFD8FF01');
+             INSERT INTO ABThumbnailImage (record_id, format, data) VALUES (3, 1, x'DEAD');
+             INSERT INTO ABFullSizeImage (record_id, data) VALUES (2, x'89504E47');",
+        )
+        .unwrap();
+
+        let images = parse_address_book_images(&db).unwrap();
+        // record 1: format-0 thumbnail; record 2: full-size fallback.
+        assert_eq!(images.len(), 2);
+        assert_eq!(images.get(&1).unwrap(), &vec![0xFF, 0xD8, 0xFF, 0x01]);
+        assert_eq!(images.get(&2).unwrap(), &vec![0x89, 0x50, 0x4E, 0x47]);
+        // record 3's thumbnail is format 1 (not 0) and has no full-size → skipped.
+        assert!(!images.contains_key(&3));
     }
 
     #[test]

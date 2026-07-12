@@ -3,7 +3,7 @@
 //! hands straight to the UI. No engine or decryption concerns here.
 
 use rusqlite::OptionalExtension;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cache::CacheDb;
 use crate::Result;
@@ -21,6 +21,8 @@ pub struct ThreadSummary {
     pub message_count: i64,
     /// Body of the most recent message, for the list preview.
     pub snippet: Option<String>,
+    /// Member handles for a group chat (empty/one for a 1:1).
+    pub participants: Vec<String>,
 }
 
 /// One message in a conversation.
@@ -35,9 +37,30 @@ pub struct Message {
     pub attachments: Vec<Attachment>,
 }
 
+/// One message in the cross-conversation timeline: a message plus the thread it
+/// belongs to, so the flat stream can label each row with its conversation.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineMessage {
+    pub thread_id: i64,
+    pub thread_title: String,
+    pub service: Option<String>,
+    pub message: Message,
+}
+
+/// A half-open time window `[lo, hi)` in epoch seconds; either bound may be open
+/// (`None`). Used to bucket messages by recency for the periods view.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimeRange {
+    pub lo: Option<i64>,
+    pub hi: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Attachment {
+    pub id: i64,
     pub filename: Option<String>,
     pub mime_type: Option<String>,
     /// Absolute path to the extracted bytes, if materialized.
@@ -49,7 +72,7 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT t.id, t.identifier, t.display_name, t.service,
-                t.last_message_at, t.message_count,
+                t.last_message_at, t.message_count, t.participants_json,
                 (SELECT m.body FROM messages m
                   WHERE m.thread_id = t.id
                   ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS snippet
@@ -57,6 +80,7 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
          ORDER BY t.last_message_at DESC NULLS LAST, t.id DESC",
     )?;
     let rows = stmt.query_map([], |r| {
+        let participants: String = r.get(6)?;
         Ok(ThreadSummary {
             id: r.get(0)?,
             identifier: r.get(1)?,
@@ -64,14 +88,52 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
             service: r.get(3)?,
             last_message_at: r.get(4)?,
             message_count: r.get(5)?,
-            snippet: r.get(6)?,
+            participants: serde_json::from_str(&participants).unwrap_or_default(),
+            snippet: r.get(7)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
 
-/// All messages in a thread, oldest first, each with its attachments.
+/// Total number of messages in a thread. Cheap; drives the virtual scroller so
+/// the UI can lazily fetch only the windows it renders.
+pub fn count_messages(cache: &CacheDb, thread_id: i64) -> Result<i64> {
+    let n = cache.conn().query_row(
+        "SELECT COUNT(*) FROM messages WHERE thread_id = ?1",
+        [thread_id],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+/// A window of a thread's messages, oldest first, each with its attachments.
+/// `offset` counts from the oldest message. Threads can hold tens of thousands
+/// of messages, so the UI never loads a whole thread — it requests the slices
+/// it is about to display.
+pub fn get_message_window(
+    cache: &CacheDb,
+    thread_id: i64,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<Message>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, is_from_me, sender, body, sent_at
+         FROM messages
+         WHERE thread_id = ?1
+         ORDER BY sent_at ASC, id ASC
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let mut messages = stmt
+        .query_map(rusqlite::params![thread_id, limit, offset], row_to_message)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    load_attachments(conn, thread_id, &mut messages)?;
+    Ok(messages)
+}
+
+/// All messages in a thread, oldest first, each with its attachments. Used by
+/// tests and small callers; large threads should use [`get_message_window`].
 pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
@@ -81,35 +143,217 @@ pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
          ORDER BY sent_at ASC, id ASC",
     )?;
     let mut messages = stmt
-        .query_map([thread_id], |r| {
-            Ok(Message {
-                id: r.get(0)?,
-                is_from_me: r.get::<_, i64>(1)? != 0,
-                sender: r.get(2)?,
-                body: r.get(3)?,
-                sent_at: r.get(4)?,
-                attachments: Vec::new(),
-            })
-        })?
+        .query_map([thread_id], row_to_message)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    load_attachments(conn, thread_id, &mut messages)?;
+    Ok(messages)
+}
+
+fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
+    Ok(Message {
+        id: r.get(0)?,
+        is_from_me: r.get::<_, i64>(1)? != 0,
+        sender: r.get(2)?,
+        body: r.get(3)?,
+        sent_at: r.get(4)?,
+        attachments: Vec::new(),
+    })
+}
+
+/// Attach media to already-loaded messages with a single grouped query,
+/// avoiding an N+1 lookup that would stall large threads.
+fn load_attachments(
+    conn: &rusqlite::Connection,
+    thread_id: i64,
+    messages: &mut [Message],
+) -> Result<()> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let mut index = std::collections::HashMap::with_capacity(messages.len());
+    for (i, m) in messages.iter().enumerate() {
+        index.insert(m.id, i);
+    }
+    let mut att_stmt = conn.prepare(
+        "SELECT a.message_id, a.id, a.filename, a.mime_type, a.local_path
+         FROM attachments a
+         JOIN messages m ON m.id = a.message_id
+         WHERE m.thread_id = ?1",
+    )?;
+    let rows = att_stmt.query_map([thread_id], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            Attachment {
+                id: r.get(1)?,
+                filename: r.get(2)?,
+                mime_type: r.get(3)?,
+                local_path: r.get(4)?,
+            },
+        ))
+    })?;
+    for row in rows {
+        let (message_id, att) = row?;
+        if let Some(&i) = index.get(&message_id) {
+            messages[i].attachments.push(att);
+        }
+    }
+    Ok(())
+}
+
+/// Local path + mime for a message attachment's extracted bytes, if any. Used
+/// by the attachment protocol/opener; returns None when the file wasn't
+/// materialized during import.
+pub fn attachment_blob(
+    cache: &CacheDb,
+    attachment_id: i64,
+) -> Result<Option<(String, Option<String>)>> {
+    let row = cache
+        .conn()
+        .query_row(
+            "SELECT local_path, mime_type FROM attachments
+             WHERE id = ?1 AND local_path IS NOT NULL",
+            [attachment_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?;
+    Ok(row)
+}
+
+/// Total messages across every conversation. Drives the timeline's virtual
+/// scroller. Also ensures the timeline ordering index exists, migrating caches
+/// created before the timeline feature.
+pub fn count_all_messages(cache: &CacheDb) -> Result<i64> {
+    let conn = cache.conn();
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
+    let n = conn.query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))?;
+    Ok(n)
+}
+
+/// A window of the cross-conversation timeline: every message from every thread,
+/// oldest first, sliced by `offset`.
+pub fn get_timeline_window(
+    cache: &CacheDb,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<TimelineMessage>> {
+    range_window(cache, TimeRange { lo: None, hi: None }, offset, limit)
+}
+
+/// Message counts for each of the given time windows. Powers the periods view's
+/// bucket list (e.g. "Last 7 days: 812"). One row per range, order preserved.
+pub fn count_message_ranges(cache: &CacheDb, ranges: &[TimeRange]) -> Result<Vec<i64>> {
+    let conn = cache.conn();
+    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM messages
+         WHERE (?1 IS NULL OR sent_at >= ?1)
+           AND (?2 IS NULL OR sent_at < ?2)",
+    )?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        out.push(stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?);
+    }
+    Ok(out)
+}
+
+/// A window of every message whose timestamp falls in `range`, oldest first,
+/// across all conversations. Backs a selected period bucket.
+pub fn get_range_window(
+    cache: &CacheDb,
+    range: TimeRange,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<TimelineMessage>> {
+    range_window(cache, range, offset, limit)
+}
+
+/// Shared implementation: messages in `range` (open bounds allowed), joined to
+/// their thread for labeling, with attachments, ordered chronologically.
+fn range_window(
+    cache: &CacheDb,
+    range: TimeRange,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<TimelineMessage>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT m.id, m.is_from_me, m.sender, m.body, m.sent_at,
+                m.thread_id, t.display_name, t.identifier, t.service
+         FROM messages m
+         JOIN threads t ON t.id = m.thread_id
+         WHERE (?1 IS NULL OR m.sent_at >= ?1)
+           AND (?2 IS NULL OR m.sent_at < ?2)
+         ORDER BY m.sent_at ASC, m.id ASC
+         LIMIT ?3 OFFSET ?4",
+    )?;
+    let mut items = stmt
+        .query_map(
+            rusqlite::params![range.lo, range.hi, limit, offset],
+            |r| {
+                let display_name: Option<String> = r.get(6)?;
+                let identifier: String = r.get(7)?;
+                Ok(TimelineMessage {
+                    thread_id: r.get(5)?,
+                    thread_title: display_name
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or(identifier),
+                    service: r.get(8)?,
+                    message: Message {
+                        id: r.get(0)?,
+                        is_from_me: r.get::<_, i64>(1)? != 0,
+                        sender: r.get(2)?,
+                        body: r.get(3)?,
+                        sent_at: r.get(4)?,
+                        attachments: Vec::new(),
+                    },
+                })
+            },
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    // Attach media per message. Small N per thread; a per-message query keeps
-    // the mapping obvious. (If this ever shows up in a profile, switch to one
-    // grouped query.)
-    let mut att_stmt = conn
-        .prepare("SELECT filename, mime_type, local_path FROM attachments WHERE message_id = ?1")?;
-    for msg in &mut messages {
-        msg.attachments = att_stmt
-            .query_map([msg.id], |r| {
-                Ok(Attachment {
-                    filename: r.get(0)?,
-                    mime_type: r.get(1)?,
-                    local_path: r.get(2)?,
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+    // Attach media for just this window's messages (they span many threads, so
+    // we look up by message id rather than by thread).
+    let ids: Vec<i64> = items.iter().map(|it| it.message.id).collect();
+    let atts = attachments_by_ids(conn, &ids)?;
+    for it in &mut items {
+        if let Some(a) = atts.get(&it.message.id) {
+            it.message.attachments = a.clone();
+        }
     }
-    Ok(messages)
+    Ok(items)
+}
+
+/// Attachments for an explicit set of message ids, grouped by message id.
+fn attachments_by_ids(
+    conn: &rusqlite::Connection,
+    ids: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<Attachment>>> {
+    let mut map: std::collections::HashMap<i64, Vec<Attachment>> = std::collections::HashMap::new();
+    if ids.is_empty() {
+        return Ok(map);
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT message_id, id, filename, mime_type, local_path
+         FROM attachments WHERE message_id IN ({placeholders})"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            Attachment {
+                id: r.get(1)?,
+                filename: r.get(2)?,
+                mime_type: r.get(3)?,
+                local_path: r.get(4)?,
+            },
+        ))
+    })?;
+    for row in rows {
+        let (mid, att) = row?;
+        map.entry(mid).or_default().push(att);
+    }
+    Ok(map)
 }
 
 /// One call-history entry.
@@ -190,13 +434,16 @@ pub struct Contact {
     pub organization: Option<String>,
     pub phones: Vec<crate::parsers::address_book::LabeledValue>,
     pub emails: Vec<crate::parsers::address_book::LabeledValue>,
+    /// Whether a photo is stored for this contact (fetched via `contact_image`).
+    pub has_image: bool,
 }
 
 /// Contacts, ordered by name (people first, then organization-only entries).
 pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, first_name, last_name, organization, phones_json, emails_json
+        "SELECT id, first_name, last_name, organization, phones_json, emails_json,
+                image IS NOT NULL
          FROM contacts
          ORDER BY last_name IS NULL AND first_name IS NULL,
                   last_name COLLATE NOCASE, first_name COLLATE NOCASE, id",
@@ -211,10 +458,25 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
             organization: r.get(3)?,
             phones: serde_json::from_str(&phones).unwrap_or_default(),
             emails: serde_json::from_str(&emails).unwrap_or_default(),
+            has_image: r.get(6)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// The stored photo thumbnail bytes for a contact, if any.
+pub fn contact_image(cache: &CacheDb, contact_id: i64) -> Result<Option<Vec<u8>>> {
+    let blob = cache
+        .conn()
+        .query_row(
+            "SELECT image FROM contacts WHERE id = ?1",
+            [contact_id],
+            |r| r.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(blob)
 }
 
 /// A media item for the gallery grid. Bytes are served separately via the

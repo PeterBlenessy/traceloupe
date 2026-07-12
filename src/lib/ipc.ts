@@ -70,6 +70,8 @@ export interface Contact {
   organization: string | null;
   phones: LabeledValue[];
   emails: LabeledValue[];
+  /** Whether a contact photo is stored (load it via `contactAvatarUrl`). */
+  hasImage: boolean;
 }
 
 export interface MediaItem {
@@ -92,9 +94,12 @@ export interface ThreadSummary {
   lastMessageAt: number | null;
   messageCount: number;
   snippet: string | null;
+  /** Member handles for a group chat (empty or one for a 1:1). */
+  participants: string[];
 }
 
 export interface Attachment {
+  id: number;
   filename: string | null;
   mimeType: string | null;
   localPath: string | null;
@@ -107,6 +112,20 @@ export interface Message {
   body: string | null;
   sentAt: number | null;
   attachments: Attachment[];
+}
+
+/** A message in the cross-conversation timeline, tagged with its thread. */
+export interface TimelineMessage {
+  threadId: number;
+  threadTitle: string;
+  service: string | null;
+  message: Message;
+}
+
+/** A half-open time window [lo, hi) in epoch seconds; either bound may be null. */
+export interface TimeRange {
+  lo: number | null;
+  hi: number | null;
 }
 
 export interface EngineInfo {
@@ -153,7 +172,27 @@ export interface SalvageClient {
   /** Ids of backups already parsed (open instantly, no first-time read). */
   importedBackupIds(): Promise<string[]>;
   listThreads(): Promise<ThreadSummary[]>;
-  getThreadMessages(threadId: number): Promise<Message[]>;
+  /** Total messages in a thread; drives the lazily-loaded virtual scroller. */
+  countThreadMessages(threadId: number): Promise<number>;
+  /** A window of a thread's messages, oldest first, starting at `offset`. */
+  getThreadMessageWindow(
+    threadId: number,
+    offset: number,
+    limit: number,
+  ): Promise<Message[]>;
+  /** Total messages across all conversations; drives the timeline scroller. */
+  countTimelineMessages(): Promise<number>;
+  /** A window of the all-conversations timeline, oldest first, from `offset`. */
+  getTimelineWindow(offset: number, limit: number): Promise<TimelineMessage[]>;
+  /** Message counts for each half-open [lo, hi) epoch-second window. */
+  countMessageRanges(ranges: TimeRange[]): Promise<number[]>;
+  /** A window of messages whose time falls in [lo, hi), oldest first. */
+  getRangeWindow(
+    lo: number | null,
+    hi: number | null,
+    offset: number,
+    limit: number,
+  ): Promise<TimelineMessage[]>;
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
   listContacts(): Promise<Contact[]>;
@@ -163,6 +202,12 @@ export interface SalvageClient {
   mediaSources(): Promise<MediaSource[]>;
   /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
   mediaUrl(id: number, opts?: { thumb?: boolean }): string;
+  /** URL the webview can load for a contact's photo. */
+  contactAvatarUrl(id: number): string;
+  /** URL for a message attachment's bytes (`thumb` for an image thumbnail). */
+  attachmentUrl(id: number, opts?: { thumb?: boolean }): string;
+  /** Open an attachment's file with the OS default app (documents, etc.). */
+  openAttachment(id: number): Promise<void>;
 }
 
 const tauriClient: SalvageClient = {
@@ -189,7 +234,17 @@ const tauriClient: SalvageClient = {
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
-  getThreadMessages: (threadId) => invoke<Message[]>("get_thread_messages", { threadId }),
+  countThreadMessages: (threadId) =>
+    invoke<number>("count_thread_messages", { threadId }),
+  getThreadMessageWindow: (threadId, offset, limit) =>
+    invoke<Message[]>("get_thread_message_window", { threadId, offset, limit }),
+  countTimelineMessages: () => invoke<number>("count_timeline_messages"),
+  getTimelineWindow: (offset, limit) =>
+    invoke<TimelineMessage[]>("get_timeline_window", { offset, limit }),
+  countMessageRanges: (ranges) =>
+    invoke<number[]>("count_message_ranges", { ranges }),
+  getRangeWindow: (lo, hi, offset, limit) =>
+    invoke<TimelineMessage[]>("get_range_window", { lo, hi, offset, limit }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listContacts: () => invoke<Contact[]>("list_contacts"),
@@ -199,6 +254,10 @@ const tauriClient: SalvageClient = {
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
   mediaUrl: (id, opts) =>
     `salvage-media://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+  contactAvatarUrl: (id) => `salvage-avatar://localhost/${id}`,
+  attachmentUrl: (id, opts) =>
+    `salvage-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+  openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -228,22 +287,36 @@ const mockBackups: BackupInfo[] = [
 // exercisable in the browser. Becomes "active" after a mock import.
 const mockThreads: ThreadSummary[] = [
   {
+    // identifier is the chat ROWID (as iLEAPP stores it); displayName is the handle.
     id: 1,
-    identifier: "+15551234567",
+    identifier: "12",
     displayName: "+15551234567",
     service: "iMessage",
     lastMessageAt: 1717841460,
     messageCount: 6,
     snippet: "Here's the trailhead 📷",
+    participants: ["+15551234567"],
   },
   {
     id: 2,
-    identifier: "Mom",
-    displayName: "Mom",
+    identifier: "8",
+    displayName: "+15559876543",
     service: "SMS",
     lastMessageAt: 1717500000,
     messageCount: 2,
     snippet: "Call me when you land ❤️",
+    participants: ["+15559876543"],
+  },
+  {
+    // A group chat: displayName holds the group's name; members via participants.
+    id: 4,
+    identifier: "20",
+    displayName: "Hiking Crew",
+    service: "iMessage",
+    lastMessageAt: 1717841700,
+    messageCount: 3,
+    snippet: "See you at the trailhead!",
+    participants: ["+15551234567", "+15559876543", "+15550001111"],
   },
 ];
 
@@ -253,14 +326,57 @@ const mockMessages: Record<number, Message[]> = {
     { id: 2, isFromMe: true, sender: null, body: "Yeah! What did you have in mind?", sentAt: 1717840980, attachments: [] },
     { id: 3, isFromMe: false, sender: "+15551234567", body: "Thinking of hiking Mission Peak", sentAt: 1717841100, attachments: [] },
     { id: 4, isFromMe: true, sender: null, body: "I'm in. Saturday morning?", sentAt: 1717841220, attachments: [] },
-    { id: 5, isFromMe: false, sender: "+15551234567", body: "Perfect, I'll pick you up at 8", sentAt: 1717841340, attachments: [] },
-    { id: 6, isFromMe: true, sender: null, body: "Here's the trailhead 📷", sentAt: 1717841460, attachments: [{ filename: "salvage-test.png", mimeType: "image/png", localPath: null }] },
+    { id: 5, isFromMe: false, sender: "+15551234567", body: "Here's the itinerary", sentAt: 1717841340, attachments: [{ id: 2, filename: "itinerary.pdf", mimeType: "application/pdf", localPath: "/mock/itinerary.pdf" }] },
+    { id: 6, isFromMe: true, sender: null, body: "Here's the trailhead 📷", sentAt: 1717841460, attachments: [{ id: 1, filename: "salvage-test.png", mimeType: "image/png", localPath: "/mock/salvage-test.png" }] },
   ],
   2: [
     { id: 7, isFromMe: true, sender: null, body: "Landing at 6, boarding now", sentAt: 1717499000, attachments: [] },
     { id: 8, isFromMe: false, sender: "Mom", body: "Call me when you land ❤️", sentAt: 1717500000, attachments: [] },
   ],
 };
+
+// A large synthetic thread, so virtualization can be stress-tested in a browser
+// (the small fixtures above never exceed the viewport, hiding scroll bugs).
+mockThreads.push({
+  id: 3,
+  identifier: "Big Test Group",
+  displayName: "Big Test Group",
+  service: "iMessage",
+  lastMessageAt: 1717000000 + 2999 * 600,
+  messageCount: 3000,
+  snippet: "Message number 3000",
+  participants: ["Big Test Group"],
+});
+mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
+  id: 1000 + i,
+  isFromMe: i % 3 === 0,
+  sender: i % 3 === 0 ? null : "Big Test Group",
+  body: `Message number ${i + 1} in the big test thread`,
+  sentAt: 1717000000 + i * 600,
+  attachments: [],
+}));
+mockMessages[4] = [
+  { id: 2000, isFromMe: false, sender: "+15559876543", body: "Who's in for Saturday?", sentAt: 1717841600, attachments: [] },
+  { id: 2001, isFromMe: true, sender: null, body: "I'm in!", sentAt: 1717841650, attachments: [] },
+  { id: 2002, isFromMe: false, sender: "+15550001111", body: "See you at the trailhead!", sentAt: 1717841700, attachments: [] },
+];
+
+// All mock messages flattened into one chronological stream, for the timeline.
+const mockTimeline: TimelineMessage[] = mockThreads
+  .flatMap((t) =>
+    (mockMessages[t.id] ?? []).map((message) => ({
+      threadId: t.id,
+      threadTitle: t.displayName ?? t.identifier,
+      service: t.service,
+      message,
+    })),
+  )
+  .sort((a, b) => (a.message.sentAt ?? 0) - (b.message.sentAt ?? 0));
+
+function inRange(sentAt: number | null, r: TimeRange): boolean {
+  if (sentAt == null) return false;
+  return (r.lo == null || sentAt >= r.lo) && (r.hi == null || sentAt < r.hi);
+}
 
 const mockCalls: Call[] = [
   { id: 1, address: "friend@icloud.com", direction: "incoming", answered: true, durationS: 128, occurredAt: 1717786800, service: "FaceTime Audio" },
@@ -275,11 +391,19 @@ const mockSafari: HistoryVisit[] = [
 ];
 
 const mockContacts: Contact[] = [
-  { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }] },
-  { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }] },
-  { id: 3, firstName: "Sam", lastName: "Taylor", organization: null, phones: [], emails: [{ label: "Home", value: "sam.taylor@example.com" }] },
-  { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [] },
+  { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }], hasImage: true },
+  { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }], hasImage: true },
+  { id: 3, firstName: "Sam", lastName: "Taylor", organization: null, phones: [], emails: [{ label: "Home", value: "sam.taylor@example.com" }], hasImage: false },
+  { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [], hasImage: false },
 ];
+
+// Colored initials SVGs standing in for real contact photos in the browser mock.
+const mockAvatarColors: Record<number, string> = { 1: "#7c3aed", 2: "#0891b2" };
+function mockAvatarDataUrl(id: number): string {
+  const color = mockAvatarColors[id] ?? "#888";
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='96' height='96'><rect width='96' height='96' fill='${color}'/></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
 
 const mockMedia: MediaItem[] = [
   { id: 1, kind: "photo", source: "Messages", mimeType: "image/png", filename: "salvage-test.png", takenAt: 1717841460 },
@@ -381,7 +505,25 @@ export const mockClient: SalvageClient = {
   },
   importedBackupIds: async () => [...mockImported],
   listThreads: async () => (mockActive ? mockThreads : []),
-  getThreadMessages: async (threadId) => (mockActive ? (mockMessages[threadId] ?? []) : []),
+  countThreadMessages: async (threadId) =>
+    mockActive ? (mockMessages[threadId]?.length ?? 0) : 0,
+  getThreadMessageWindow: async (threadId, offset, limit) =>
+    mockActive ? (mockMessages[threadId] ?? []).slice(offset, offset + limit) : [],
+  countTimelineMessages: async () => (mockActive ? mockTimeline.length : 0),
+  getTimelineWindow: async (offset, limit) =>
+    mockActive ? mockTimeline.slice(offset, offset + limit) : [],
+  countMessageRanges: async (ranges) =>
+    ranges.map((r) =>
+      mockActive
+        ? mockTimeline.filter((t) => inRange(t.message.sentAt, r)).length
+        : 0,
+    ),
+  getRangeWindow: async (lo, hi, offset, limit) =>
+    mockActive
+      ? mockTimeline
+          .filter((t) => inRange(t.message.sentAt, { lo, hi }))
+          .slice(offset, offset + limit)
+      : [],
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listContacts: async () => (mockActive ? mockContacts : []),
@@ -397,6 +539,9 @@ export const mockClient: SalvageClient = {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   },
   mediaUrl: (id) => mockMediaDataUrl(id),
+  contactAvatarUrl: (id) => mockAvatarDataUrl(id),
+  attachmentUrl: (id) => mockMediaDataUrl(id),
+  openAttachment: async () => {},
 };
 
 const isTauri = "__TAURI_INTERNALS__" in window;

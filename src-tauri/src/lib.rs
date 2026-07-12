@@ -12,7 +12,9 @@ use salvage_core::discovery::{self, BackupInfo};
 use salvage_core::engine::{self};
 use salvage_core::import::{self, ImportPhase};
 use salvage_core::install;
-use salvage_core::query::{self, Call, Contact, HistoryVisit, MediaItem, Message, ThreadSummary};
+use salvage_core::query::{
+    self, Call, Contact, HistoryVisit, MediaItem, Message, ThreadSummary, TimelineMessage,
+};
 use salvage_core::sidecar::CancelToken;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -342,12 +344,109 @@ fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSummary>, S
 }
 
 #[tauri::command]
-fn get_thread_messages(
+async fn count_thread_messages(
     active: State<'_, ActiveBackup>,
     thread_id: i64,
+) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_messages(&cache, thread_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_thread_message_window(
+    active: State<'_, ActiveBackup>,
+    thread_id: i64,
+    offset: i64,
+    limit: i64,
 ) -> Result<Vec<Message>, String> {
+    // Async + spawn_blocking: a synchronous command runs on the main thread and
+    // would freeze the whole native UI. Only the requested window is read, so
+    // the frontend can lazily load a thread as it scrolls.
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_message_window(&cache, thread_id, offset, limit).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_timeline_messages(active: State<'_, ActiveBackup>) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_all_messages(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_timeline_window(
+    active: State<'_, ActiveBackup>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<TimelineMessage>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_timeline_window(&cache, offset, limit).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_message_ranges(
+    active: State<'_, ActiveBackup>,
+    ranges: Vec<query::TimeRange>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_message_ranges(&cache, &ranges).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_range_window(
+    active: State<'_, ActiveBackup>,
+    lo: Option<i64>,
+    hi: Option<i64>,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<TimelineMessage>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_range_window(&cache, query::TimeRange { lo, hi }, offset, limit)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Open a message attachment's file with the OS default app (for documents and
+/// anything not rendered inline).
+#[tauri::command]
+fn open_attachment(active: State<'_, ActiveBackup>, attachment_id: i64) -> Result<(), String> {
     let cache = open_active_cache(&active)?;
-    query::get_messages(&cache, thread_id).map_err(|e| e.to_string())
+    let (path, _) = query::attachment_blob(&cache, attachment_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "attachment file is not available".to_string())?;
+    std::process::Command::new("/usr/bin/open")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -451,6 +550,127 @@ fn media_protocol_response(
         .unwrap()
 }
 
+/// Serve a contact's photo over `salvage-avatar://localhost/<contactId>`.
+///
+/// Like the media handler, it takes only a numeric id and reads the bytes stored
+/// for that contact in the active cache — never a path from the request.
+fn avatar_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{Response, StatusCode};
+
+    let not_found = || {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap()
+    };
+
+    let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
+        return not_found();
+    };
+    let active = app.state::<ActiveBackup>();
+    let Ok(cache_path) = active.path() else {
+        return not_found();
+    };
+    let Ok(cache) = CacheDb::open(&cache_path) else {
+        return not_found();
+    };
+    let Ok(Some(bytes)) = query::contact_image(&cache, id) else {
+        return not_found();
+    };
+
+    let content_type = guess_image_mime(&bytes);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .header("Cache-Control", "no-cache")
+        .body(bytes)
+        .unwrap()
+}
+
+/// Sniff a bitmap's magic bytes; contact thumbnails are usually JPEG/PNG.
+fn guess_image_mime(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else {
+        "image/jpeg"
+    }
+}
+
+/// Serve a message attachment over `salvage-attachment://localhost/<id>`
+/// (`?thumb=1` for an image thumbnail). Images are transcoded/downscaled like
+/// gallery media; audio/video are served as raw bytes with their stored mime.
+fn attachment_protocol_response(
+    app: &AppHandle,
+    path: &str,
+    query_str: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{Response, StatusCode};
+
+    let not_found = || {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap()
+    };
+
+    let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
+        return not_found();
+    };
+    let want_thumb = query_str.is_some_and(|q| q.contains("thumb"));
+
+    let active = app.state::<ActiveBackup>();
+    let Ok(cache_path) = active.path() else {
+        return not_found();
+    };
+    let Ok(cache) = CacheDb::open(&cache_path) else {
+        return not_found();
+    };
+    let Ok(Some((local_path, mime))) = query::attachment_blob(&cache, id) else {
+        return not_found();
+    };
+
+    let is_image = mime.as_deref().is_some_and(|m| m.starts_with("image/"))
+        || local_path.to_ascii_lowercase().ends_with(".heic");
+
+    if is_image {
+        // Its own thumbs dir so attachment ids can't collide with media ids.
+        let thumbs_dir = cache_path
+            .parent()
+            .map(|p| p.join("att-thumbs"))
+            .unwrap_or_else(|| PathBuf::from("att-thumbs"));
+        let Some(rendered) = media::render(
+            std::path::Path::new(&local_path),
+            &thumbs_dir,
+            id,
+            want_thumb,
+            mime.as_deref(),
+        ) else {
+            return not_found();
+        };
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", rendered.content_type)
+            .header("Cache-Control", "no-cache")
+            .body(rendered.bytes)
+            .unwrap();
+    }
+
+    // Audio/video and anything else served inline: raw bytes with stored mime.
+    let Ok(bytes) = std::fs::read(&local_path) else {
+        return not_found();
+    };
+    let content_type = mime.unwrap_or_else(|| "application/octet-stream".to_string());
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .header("Accept-Ranges", "bytes")
+        .header("Cache-Control", "no-cache")
+        .body(bytes)
+        .unwrap()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -461,6 +681,15 @@ pub fn run() {
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
             media_protocol_response(ctx.app_handle(), &path, query.as_deref())
+        })
+        .register_uri_scheme_protocol("salvage-avatar", |ctx, request| {
+            let path = request.uri().path().to_string();
+            avatar_protocol_response(ctx.app_handle(), &path)
+        })
+        .register_uri_scheme_protocol("salvage-attachment", |ctx, request| {
+            let path = request.uri().path().to_string();
+            let query = request.uri().query().map(str::to_string);
+            attachment_protocol_response(ctx.app_handle(), &path, query.as_deref())
         })
         .invoke_handler(tauri::generate_handler![
             list_backups,
@@ -474,7 +703,13 @@ pub fn run() {
             has_active_backup,
             imported_backup_ids,
             list_threads,
-            get_thread_messages,
+            count_thread_messages,
+            get_thread_message_window,
+            count_timeline_messages,
+            get_timeline_window,
+            count_message_ranges,
+            get_range_window,
+            open_attachment,
             list_calls,
             list_safari_history,
             list_contacts,

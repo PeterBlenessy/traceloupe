@@ -43,7 +43,8 @@ CREATE TABLE contacts (
     last_name    TEXT,
     organization TEXT,
     phones_json  TEXT NOT NULL DEFAULT '[]',  -- [{"label":..,"value":..}]
-    emails_json  TEXT NOT NULL DEFAULT '[]'
+    emails_json  TEXT NOT NULL DEFAULT '[]',
+    image        BLOB                          -- contact photo thumbnail, if any
 );
 
 -- Apps that were installed on the device (from Info.plist), for the Apps view.
@@ -52,12 +53,13 @@ CREATE TABLE installed_apps (
 );
 
 CREATE TABLE threads (
-    id              INTEGER PRIMARY KEY,
-    identifier      TEXT NOT NULL,            -- chat guid / group id / phone number
-    display_name    TEXT,
-    service         TEXT,                     -- 'iMessage' | 'SMS' | app module id
-    last_message_at INTEGER,
-    message_count   INTEGER NOT NULL DEFAULT 0
+    id               INTEGER PRIMARY KEY,
+    identifier       TEXT NOT NULL,            -- chat guid / group id / phone number
+    display_name     TEXT,
+    service          TEXT,                     -- 'iMessage' | 'SMS' | app module id
+    last_message_at  INTEGER,
+    message_count    INTEGER NOT NULL DEFAULT 0,
+    participants_json TEXT NOT NULL DEFAULT '[]'  -- group member handles
 );
 CREATE INDEX idx_threads_last_message ON threads(last_message_at DESC);
 
@@ -71,6 +73,8 @@ CREATE TABLE messages (
     has_attachments INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_messages_thread ON messages(thread_id, sent_at);
+-- Global chronological order for the cross-conversation timeline.
+CREATE INDEX idx_messages_sent ON messages(sent_at, id);
 
 CREATE TABLE attachments (
     id         INTEGER PRIMARY KEY,
@@ -142,6 +146,20 @@ CREATE VIRTUAL TABLE search_fts USING fts5(
 );
 "#;
 
+/// Add `column` to `table` if it isn't already present (SQLite has no
+/// `ADD COLUMN IF NOT EXISTS`). Names are trusted constants, not user input.
+fn ensure_column(conn: &Connection, table: &str, column: &str, decl: &str) -> Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let has = stmt
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|c| c == column);
+    if !has {
+        conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"), [])?;
+    }
+    Ok(())
+}
+
 impl CacheDb {
     /// Open (creating and migrating as needed) the cache DB at `path`.
     pub fn open(path: &Path) -> Result<Self> {
@@ -161,7 +179,10 @@ impl CacheDb {
         if version < 1 {
             conn.execute_batch(SCHEMA_V1)?;
         }
-        // Future migrations: `if version < 2 { ... }`
+        // Additive migrations for caches created by earlier builds. Cheap and
+        // idempotent, so they run every open rather than being version-gated.
+        ensure_column(&conn, "contacts", "image", "BLOB")?;
+        ensure_column(&conn, "threads", "participants_json", "TEXT NOT NULL DEFAULT '[]'")?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
     }

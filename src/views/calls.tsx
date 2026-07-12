@@ -16,8 +16,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyView, ListSearch, ListView } from "@/components/view";
+import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { client, type Call } from "@/lib/ipc";
@@ -51,9 +50,11 @@ export function CallsView() {
   }
 
   return (
-    <ListView
+    <VirtualListView
       title="Calls"
       count={calls?.length}
+      isPending={isPending}
+      emptyMessage="No calls in this backup."
       header={
         calls && calls.length > 0 ? (
           <div className="w-56">
@@ -61,20 +62,10 @@ export function CallsView() {
           </div>
         ) : undefined
       }
-    >
-      {isPending &&
-        Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="mb-1 h-14 w-full" />
-        ))}
-      {calls?.length === 0 && (
-        <p className="p-6 text-center text-sm text-muted-foreground">
-          No calls in this backup.
-        </p>
-      )}
-      {filtered.map((c) => (
-        <CallRow key={c.id} call={c} />
-      ))}
-    </ListView>
+      items={filtered}
+      getKey={(c) => c.id}
+      renderItem={(c) => <CallRow call={c} />}
+    />
   );
 }
 

@@ -1,14 +1,17 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Building2, Mail, Phone, Users } from "lucide-react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Building2, Mail, MessageSquare, Phone, Users } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
+import { VirtualList } from "@/components/virtual-list";
+import { useSettings } from "@/components/settings-provider";
 import { EmptyView, ListDetail, ListSearch, ViewHeader } from "@/components/view";
 import { contactName, initials } from "@/lib/contact";
+import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
 import { client, type Contact } from "@/lib/ipc";
 
@@ -52,6 +55,7 @@ export function ContactsView() {
     );
   }
 
+  const { showAvatars } = useSettings();
   const selected = filtered.find((c) => c.id === selectedId) ?? filtered[0] ?? null;
 
   return (
@@ -62,32 +66,38 @@ export function ContactsView() {
           <div className="border-b p-2">
             <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />
           </div>
-          <ScrollArea className="flex-1">
-            {isPending &&
-              Array.from({ length: 8 }).map((_, i) => (
+          {isPending ? (
+            <div className="min-h-0 flex-1 overflow-auto">
+              {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="px-3 py-2">
                   <Skeleton className="h-9 w-full" />
                 </div>
               ))}
-            {contacts?.length === 0 && (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                No contacts in this backup.
-              </p>
-            )}
-            {filtered.map((c) => (
-              <ContactRow
-                key={c.id}
-                contact={c}
-                active={selected?.id === c.id}
-                onClick={() => setSelectedId(c.id)}
-              />
-            ))}
-          </ScrollArea>
+            </div>
+          ) : filtered.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted-foreground">
+              No contacts in this backup.
+            </p>
+          ) : (
+            <VirtualList
+              items={filtered}
+              getKey={(c) => c.id}
+              estimateSize={56}
+              renderItem={(c) => (
+                <ContactRow
+                  contact={c}
+                  showAvatars={showAvatars}
+                  active={selected?.id === c.id}
+                  onClick={() => setSelectedId(c.id)}
+                />
+              )}
+            />
+          )}
         </>
       }
       detail={
         selected ? (
-          <ContactDetail contact={selected} />
+          <ContactDetail contact={selected} showAvatars={showAvatars} />
         ) : (
           !isPending && <EmptyView icon={Users} title="No contact selected" description="Pick someone on the left." />
         )
@@ -98,10 +108,12 @@ export function ContactsView() {
 
 function ContactRow({
   contact,
+  showAvatars,
   active,
   onClick,
 }: {
   contact: Contact;
+  showAvatars: boolean;
   active: boolean;
   onClick: () => void;
 }) {
@@ -110,11 +122,16 @@ function ContactRow({
   return (
     <Item asChild data-active={active} className="rounded-none data-[active=true]:bg-accent">
       <button onClick={onClick} className="w-full text-left">
-        <ItemMedia>
-          <Avatar>
-            <AvatarFallback>{isOrg ? <Building2 className="size-4" /> : initials(name)}</AvatarFallback>
-          </Avatar>
-        </ItemMedia>
+        {showAvatars && (
+          <ItemMedia>
+            <Avatar>
+              {contact.hasImage && (
+                <AvatarImage src={client.contactAvatarUrl(contact.id)} alt="" />
+              )}
+              <AvatarFallback>{isOrg ? <Building2 className="size-4" /> : initials(name)}</AvatarFallback>
+            </Avatar>
+          </ItemMedia>
+        )}
         <ItemContent>
           <ItemTitle className="truncate">{name}</ItemTitle>
           {contact.organization && !isOrg && (
@@ -126,9 +143,26 @@ function ContactRow({
   );
 }
 
-function ContactDetail({ contact }: { contact: Contact }) {
+function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars: boolean }) {
+  const navigate = useNavigate();
   const name = contactName(contact);
   const isOrg = !contact.firstName && !contact.lastName && !!contact.organization;
+
+  // Message threads whose handle matches one of this contact's numbers/emails.
+  const { data: threads } = useQuery({
+    queryKey: ["threads"],
+    queryFn: () => client.listThreads(),
+  });
+  const keys = new Set(
+    [...contact.phones, ...contact.emails]
+      .map((v) => phoneOrEmailKey(v.value))
+      .filter(Boolean),
+  );
+  const conversations = (threads ?? []).filter(
+    (t) =>
+      keys.has(phoneOrEmailKey(t.displayName ?? t.identifier)) ||
+      t.participants.some((h) => keys.has(phoneOrEmailKey(h))),
+  );
   return (
     <div className="flex h-full flex-col">
       <ViewHeader title="Contact" />
@@ -136,6 +170,9 @@ function ContactDetail({ contact }: { contact: Contact }) {
         <div className="mx-auto max-w-xl p-6">
           <div className="flex flex-col items-center gap-3 pb-6 text-center">
             <Avatar className="size-20 text-xl">
+              {contact.hasImage && showAvatars && (
+                <AvatarImage src={client.contactAvatarUrl(contact.id)} alt="" />
+              )}
               <AvatarFallback>
                 {isOrg ? <Building2 className="size-8" /> : initials(name)}
               </AvatarFallback>
@@ -159,6 +196,33 @@ function ContactDetail({ contact }: { contact: Contact }) {
             <FieldGroup title="Email">
               {contact.emails.map((e, i) => (
                 <Field key={i} icon={Mail} label={e.label} value={e.value} href={`mailto:${e.value}`} />
+              ))}
+            </FieldGroup>
+          )}
+          {conversations.length > 0 && (
+            <FieldGroup title={`Conversations (${conversations.length})`}>
+              {conversations.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => navigate({ to: "/messages", search: { thread: t.id } })}
+                  className={cn(
+                    "flex w-full items-center gap-3 border-b px-3 py-2.5 text-left last:border-b-0",
+                    "transition-colors hover:bg-accent/50",
+                  )}
+                >
+                  <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm">
+                      {t.participants.length > 1
+                        ? (t.displayName ?? "Group chat")
+                        : "Direct messages"}
+                    </div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {t.messageCount} message{t.messageCount === 1 ? "" : "s"}
+                      {t.snippet ? ` · ${t.snippet}` : ""}
+                    </div>
+                  </div>
+                </button>
               ))}
             </FieldGroup>
           )}

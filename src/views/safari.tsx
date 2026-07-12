@@ -10,8 +10,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyView, ListSearch, ListView } from "@/components/view";
+import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type HistoryVisit } from "@/lib/ipc";
 
@@ -46,9 +45,11 @@ export function SafariView() {
   }
 
   return (
-    <ListView
+    <VirtualListView
       title="Safari"
       count={history?.length}
+      isPending={isPending}
+      emptyMessage="No Safari history in this backup."
       header={
         history && history.length > 0 ? (
           <div className="w-56">
@@ -56,20 +57,10 @@ export function SafariView() {
           </div>
         ) : undefined
       }
-    >
-      {isPending &&
-        Array.from({ length: 6 }).map((_, i) => (
-          <Skeleton key={i} className="mb-1 h-14 w-full" />
-        ))}
-      {history?.length === 0 && (
-        <p className="p-6 text-center text-sm text-muted-foreground">
-          No Safari history in this backup.
-        </p>
-      )}
-      {filtered.map((h) => (
-        <VisitRow key={h.id} visit={h} />
-      ))}
-    </ListView>
+      items={filtered}
+      getKey={(x) => x.id}
+      renderItem={(x) => <VisitRow visit={x} />}
+    />
   );
 }
 

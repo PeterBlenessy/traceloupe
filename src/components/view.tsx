@@ -11,6 +11,8 @@ import { Search } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
+import { VirtualList } from "@/components/virtual-list";
 import { cn } from "@/lib/utils";
 
 /** The header strip at the top of a view: title, optional count, actions. */
@@ -54,6 +56,60 @@ export function ListView({
       <ScrollArea className="flex-1">
         <div className="mx-auto max-w-3xl p-2">{children}</div>
       </ScrollArea>
+    </div>
+  );
+}
+
+/**
+ * A full-height, single-column view whose rows are virtualized — the same shape
+ * as ListView, but only the visible rows mount, so it stays fast for lists of
+ * tens of thousands of items (Calls, Safari, Apps). Rows are centered to the
+ * same max width as ListView.
+ */
+export function VirtualListView<T>({
+  title,
+  count,
+  header,
+  items,
+  renderItem,
+  getKey,
+  estimateSize = 64,
+  isPending,
+  emptyMessage = "Nothing here.",
+}: {
+  title: string;
+  count?: number;
+  header?: React.ReactNode;
+  items: T[];
+  renderItem: (item: T) => React.ReactNode;
+  getKey?: (item: T, index: number) => React.Key;
+  estimateSize?: number;
+  isPending?: boolean;
+  emptyMessage?: string;
+}) {
+  return (
+    <div className="flex h-full flex-col">
+      <ViewHeader title={title} count={count}>
+        {header}
+      </ViewHeader>
+      {isPending ? (
+        <div className="mx-auto w-full max-w-3xl p-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="mb-1 h-14 w-full" />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <p className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+      ) : (
+        <VirtualList
+          items={items}
+          estimateSize={estimateSize}
+          getKey={getKey}
+          renderItem={(item) => (
+            <div className="mx-auto max-w-3xl px-2 pb-1">{renderItem(item)}</div>
+          )}
+        />
+      )}
     </div>
   );
 }

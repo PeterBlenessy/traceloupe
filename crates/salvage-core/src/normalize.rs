@@ -42,7 +42,7 @@ pub fn normalize_lava(
     let mut report = ImportReport::default();
 
     normalize_media(&lava, engine_out_dir, cache, &mut report)?;
-    normalize_sms(&lava, cache, &mut report)?;
+    normalize_sms(&lava, engine_out_dir, cache, &mut report)?;
     normalize_calls(&lava, cache, &mut report)?;
     normalize_safari(&lava, cache, &mut report)?;
     // Contacts come from a native parse of the decrypted AddressBook that
@@ -71,17 +71,24 @@ fn normalize_contacts(
         }
     };
 
+    // Contact photos live in a sibling DB, keyed by the same ABPerson ROWID that
+    // `ParsedContact.id` carries. Missing/odd-schema images are non-fatal.
+    let images = find_extracted(engine_out_dir, "AddressBookImages.sqlitedb")
+        .and_then(|p| crate::parsers::address_book::parse_address_book_images(&p).ok())
+        .unwrap_or_default();
+
     let conn = cache.conn();
     for c in contacts {
         conn.execute(
-            "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json, image)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 c.first_name,
                 c.last_name,
                 c.organization,
                 serde_json::to_string(&c.phones).unwrap_or_else(|_| "[]".into()),
                 serde_json::to_string(&c.emails).unwrap_or_else(|_| "[]".into()),
+                images.get(&c.id),
             ],
         )?;
         report.contacts += 1;
@@ -249,11 +256,22 @@ fn resolve_extraction_path(
 /// Map iLEAPP's `sms` table into cache `threads` + `messages`. Rows are grouped
 /// into threads by `chat_id`; the display identifier comes from
 /// `chat_contact_id`. Timestamps in lava are already Unix epoch seconds.
-fn normalize_sms(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+fn normalize_sms(
+    lava: &Connection,
+    engine_out_dir: &Path,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+) -> Result<()> {
     if !table_exists(lava, "sms")? {
         // No messages parsed — normal, not an error.
         return Ok(());
     }
+
+    // Group names + participants come from the raw sms.db (iLEAPP's sms artifact
+    // exposes neither), keyed by chat.ROWID == our thread identifier.
+    let chats = find_extracted(engine_out_dir, "sms.db")
+        .and_then(|p| crate::parsers::chats::parse_chats(&p).ok())
+        .unwrap_or_default();
 
     let mut stmt = lava.prepare(
         "SELECT chat_id, chat_contact_id, service, message_timestamp,
@@ -284,13 +302,25 @@ fn normalize_sms(lava: &Connection, cache: &CacheDb, report: &mut ImportReport) 
             .clone()
             .unwrap_or_else(|| row.contact_id.clone().unwrap_or_else(|| "unknown".into()));
         if current_key.as_ref() != Some(&key) {
+            // Enrich with native chat metadata (group name + members). For a
+            // group we show its name (or, later, member names); for a 1:1 the
+            // display handle stays the contact id.
+            let info = key.parse::<i64>().ok().and_then(|id| chats.get(&id));
+            let participants = info.map(|i| i.participants.clone()).unwrap_or_default();
+            let is_group = participants.len() > 1;
+            let display_name = if is_group {
+                info.and_then(|i| i.display_name.clone())
+            } else {
+                row.contact_id.clone()
+            };
             conn.execute(
-                "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count)
-                 VALUES (?1, ?2, ?3, NULL, 0)",
+                "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count, participants_json)
+                 VALUES (?1, ?2, ?3, NULL, 0, ?4)",
                 rusqlite::params![
                     key,
-                    row.contact_id,
+                    display_name,
                     row.service,
+                    serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into()),
                 ],
             )?;
             thread_id = conn.last_insert_rowid();

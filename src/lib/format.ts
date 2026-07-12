@@ -37,6 +37,26 @@ export function formatDateTime(epochSeconds: number | null): string {
   return dayTime.format(new Date(epochSeconds * 1000));
 }
 
+const dateHeader = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const dateHeaderYear = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+});
+
+/** A day separator label for the timeline, e.g. "Sat, Jun 8". */
+export function formatDateHeader(epochSeconds: number | null): string {
+  if (!epochSeconds) return "";
+  const d = new Date(epochSeconds * 1000);
+  const fmt = d.getFullYear() === new Date().getFullYear() ? dateHeader : dateHeaderYear;
+  return fmt.format(d);
+}
+
 /** A call duration like "5:12" or "1:02:08"; empty for zero/none. */
 export function formatDuration(seconds: number | null): string {
   if (!seconds || seconds <= 0) return "";

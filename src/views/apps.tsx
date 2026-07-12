@@ -12,8 +12,7 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
-import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyView, ListSearch, ListView } from "@/components/view";
+import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
 import { client } from "@/lib/ipc";
 
@@ -68,9 +67,11 @@ export function AppsView() {
   }
 
   return (
-    <ListView
+    <VirtualListView
       title="Apps"
       count={apps.length}
+      isPending={isPending}
+      emptyMessage="No installed-app list in this backup."
       header={
         apps.length > 0 ? (
           <div className="w-56">
@@ -78,18 +79,10 @@ export function AppsView() {
           </div>
         ) : undefined
       }
-    >
-      {isPending &&
-        Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="mb-1 h-14 w-full" />)}
-      {apps.length === 0 && !isPending && (
-        <p className="p-6 text-center text-sm text-muted-foreground">
-          No installed-app list in this backup.
-        </p>
-      )}
-      {filtered.map((app) => (
-        <AppItem key={app.bundleId} app={app} />
-      ))}
-    </ListView>
+      items={filtered}
+      getKey={(a) => a.bundleId}
+      renderItem={(a) => <AppItem app={a} />}
+    />
   );
 }
 
