@@ -192,11 +192,12 @@ export function ImportDialog({
 
 function RunningView({ progress }: { progress: ImportProgress | null }) {
   const parsing = progress?.phase === "parsing" ? progress : null;
-  const normalizing = progress?.phase === "normalizing";
-  // During parsing show real fraction; during normalizing show indeterminate-ish full bar.
+  const normalizing = progress?.phase === "normalizing" ? progress : null;
+  // During parsing show real fraction; during normalizing show a full-ish bar
+  // (no per-row fraction) with the live sub-step so it doesn't look stuck.
   const pct = normalizing ? 100 : parsing ? Math.round(parsing.fraction * 100) : 3;
   const label = normalizing
-    ? "Organizing results…"
+    ? `Organizing ${normalizing.step.toLowerCase()}…`
     : parsing
       ? `Reading ${parsing.artifact} (${parsing.current}/${parsing.total})`
       : "Opening the backup…";

@@ -14,8 +14,10 @@ use crate::Result;
 pub enum ImportPhase {
     /// iLEAPP is parsing the backup; carries per-artifact progress.
     Parsing(Progress),
-    /// Reading iLEAPP's output into the cache DB.
-    Normalizing,
+    /// Reading iLEAPP's output into the cache DB; `step` is the sub-stage being
+    /// processed (e.g. "Messages", "TikTok messages", "Camera roll") so the UI
+    /// can show live progress instead of one opaque "organizing" spinner.
+    Normalizing { step: String },
     /// Done; carries the final report.
     Done(ImportReport),
 }
@@ -59,17 +61,26 @@ pub fn import_backup(
         |p| on_phase(ImportPhase::Parsing(p)),
     )?;
 
-    on_phase(ImportPhase::Normalizing);
+    on_phase(ImportPhase::Normalizing {
+        step: "Reading results".into(),
+    });
     let engine_out_dir = lava_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| work_dir.to_path_buf());
 
     let cache = CacheDb::open(cache_path)?;
-    let mut report = normalize::normalize_lava(&lava_path, &engine_out_dir, &cache)?;
+    // Each normalizer reports its sub-stage so the UI shows what's happening.
+    let mut report =
+        normalize::normalize_lava_with_progress(&lava_path, &engine_out_dir, &cache, |step| {
+            on_phase(ImportPhase::Normalizing { step: step.into() })
+        })?;
 
     let effective = sidecar::effective_module_ids(module_ids);
 
+    on_phase(ImportPhase::Normalizing {
+        step: "Camera roll".into(),
+    });
     // Camera roll: read the backup's Manifest natively and reference iOS's own
     // thumbnails, so the gallery is fast and full images transcode on demand.
     if effective.contains(&"camera_roll") {
@@ -158,6 +169,9 @@ pub fn import_backup(
         }
     }
 
+    on_phase(ImportPhase::Normalizing {
+        step: "Installed apps".into(),
+    });
     // Record which apps were on the device (from Info.plist) for the Apps view.
     let apps = crate::discovery::installed_apps(backup_dir);
     {
@@ -251,7 +265,9 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
         assert_eq!(outcome.report.messages, 1);
         assert_eq!(outcome.report.threads, 1);
         assert!(matches!(phases[0], ImportPhase::Parsing(_)));
-        assert!(matches!(phases[phases.len() - 2], ImportPhase::Normalizing));
+        assert!(phases
+            .iter()
+            .any(|p| matches!(p, ImportPhase::Normalizing { .. })));
         assert!(matches!(phases[phases.len() - 1], ImportPhase::Done(_)));
 
         let n: i64 = Connection::open(&cache_path)

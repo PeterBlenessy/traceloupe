@@ -39,23 +39,45 @@ pub fn normalize_lava(
     engine_out_dir: &Path,
     cache: &CacheDb,
 ) -> Result<ImportReport> {
+    normalize_lava_with_progress(lava_path, engine_out_dir, cache, |_| {})
+}
+
+/// Like [`normalize_lava`], but calls `on_step` with a human label before each
+/// sub-stage so the UI can show live progress during the (potentially long)
+/// normalize pass instead of one opaque "organizing" spinner.
+pub fn normalize_lava_with_progress(
+    lava_path: &Path,
+    engine_out_dir: &Path,
+    cache: &CacheDb,
+    mut on_step: impl FnMut(&str),
+) -> Result<ImportReport> {
     let lava = Connection::open_with_flags(lava_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut report = ImportReport::default();
 
+    on_step("Media");
     normalize_media(&lava, engine_out_dir, cache, &mut report)?;
+    on_step("Messages");
     normalize_sms(&lava, engine_out_dir, cache, &mut report)?;
+    on_step("Call history");
     normalize_calls(&lava, cache, &mut report)?;
+    on_step("Safari history");
     normalize_safari(&lava, cache, &mut report)?;
     // Contacts come from a native parse of the decrypted AddressBook that
     // iLEAPP extracts (its own lava output for contacts is lossy — see
     // docs/spike-ileapp.md). A missing DB just means no contacts.
+    on_step("Contacts");
     normalize_contacts(engine_out_dir, cache, &mut report)?;
+    on_step("Notes");
     normalize_notes(&lava, cache, &mut report)?;
     // Third-party chat apps → the Messages view, tagged by service. Each is a
     // no-op unless its lava table is present (the app was installed + parsed).
+    on_step("TikTok messages");
     normalize_app_conversation(&lava, cache, &mut report, &TIKTOK_CHAT)?;
+    on_step("WhatsApp messages");
     normalize_app_conversation(&lava, cache, &mut report, &WHATSAPP_CHAT)?;
+    on_step("Telegram messages");
     normalize_app_conversation(&lava, cache, &mut report, &TELEGRAM_CHAT)?;
+    on_step("TikTok contacts");
     normalize_tiktok_contacts(&lava, cache, &mut report)?;
 
     Ok(report)
