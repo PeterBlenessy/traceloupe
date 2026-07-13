@@ -69,7 +69,7 @@ export function AppsView() {
   return (
     <VirtualListView
       title="Apps"
-      count={apps.length}
+      count={filtered.length}
       isPending={isPending}
       error={error}
       emptyMessage="No installed-app list in this backup."

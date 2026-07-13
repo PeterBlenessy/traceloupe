@@ -54,6 +54,7 @@ export interface ImportResult {
   mediaItems: number;
   calls: number;
   safariVisits: number;
+  contacts: number;
   warnings: string[];
 }
 
