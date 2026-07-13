@@ -19,6 +19,7 @@ sha1 = { workspace = true }
 pbkdf2 = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
+cipher = { workspace = true }
 aes-kw = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]

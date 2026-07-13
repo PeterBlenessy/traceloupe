@@ -2994,6 +2994,7 @@ dependencies = [
  "aes",
  "aes-kw",
  "cbc",
+ "cipher",
  "hex",
  "pbkdf2",
  "plist",

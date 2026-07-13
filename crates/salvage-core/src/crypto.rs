@@ -29,6 +29,7 @@ use std::path::{Path, PathBuf};
 
 use aes::Aes256;
 use aes_kw::KekAes256;
+use cbc::cipher::block_padding::NoPadding;
 use cbc::cipher::generic_array::GenericArray;
 use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use pbkdf2::pbkdf2_hmac_array;
@@ -364,14 +365,23 @@ fn aes_cbc_decrypt(key: &[u8; 32], ct: &[u8]) -> Result<Vec<u8>> {
     if ct.is_empty() || !ct.len().is_multiple_of(16) {
         return Err(err("ciphertext length is not a positive multiple of 16"));
     }
-    let mut dec = cbc::Decryptor::<Aes256>::new(
+    // Decrypt the whole buffer in ONE call. A per-block loop
+    // (`decrypt_block_mut` over `chunks_exact_mut(16)`) forces the AES backend
+    // to process one 16-byte block at a time, which defeats hardware AES
+    // pipelining (~8 blocks at once) and runs ~50x slower — decrypting the two
+    // ~433 MB backup DBs and every thumbnail that way was the multi-minute
+    // camera-roll import bottleneck. `NoPadding` on a block-aligned buffer
+    // removes nothing, so the plaintext is byte-identical to the old path.
+    let mut buf = ct.to_vec();
+    let dec = cbc::Decryptor::<Aes256>::new(
         GenericArray::from_slice(key),
         GenericArray::from_slice(&ZERO_IV),
     );
-    let mut buf = ct.to_vec();
-    for chunk in buf.chunks_exact_mut(16) {
-        dec.decrypt_block_mut(GenericArray::from_mut_slice(chunk));
-    }
+    let n = dec
+        .decrypt_padded_mut::<NoPadding>(&mut buf)
+        .map_err(|_| err("AES-CBC decrypt failed"))?
+        .len();
+    buf.truncate(n);
     Ok(buf)
 }
 
@@ -411,6 +421,28 @@ mod tests {
             enc.encrypt_block_mut(GenericArray::from_mut_slice(chunk));
         }
         buf
+    }
+
+    #[test]
+    #[ignore] // perf probe: `cargo test -p salvage-core --lib -- --ignored --nocapture aes_cbc_throughput`
+    fn aes_cbc_throughput() {
+        let key = [0x11u8; 32];
+        let mb = 128usize;
+        let plaintext = vec![0xABu8; mb * 1024 * 1024];
+        let ct = aes_cbc_encrypt(&key, &plaintext);
+        let t = std::time::Instant::now();
+        let pt = super::aes_cbc_decrypt(&key, &ct).unwrap();
+        let secs = t.elapsed().as_secs_f64();
+        eprintln!(
+            "aes_cbc_decrypt: {mb} MB in {secs:.2}s = {:.0} MB/s",
+            mb as f64 / secs
+        );
+        #[cfg(target_arch = "aarch64")]
+        eprintln!(
+            "aarch64 hardware AES available: {}",
+            std::arch::is_aarch64_feature_detected!("aes")
+        );
+        assert_eq!(pt.len(), plaintext.len());
     }
 
     fn tlv(tag: &[u8; 4], value: &[u8]) -> Vec<u8> {

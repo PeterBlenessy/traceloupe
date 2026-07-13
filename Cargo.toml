@@ -24,4 +24,42 @@ sha1 = "0.10"
 pbkdf2 = "0.12"
 aes = "0.8"
 cbc = "0.1"
+# Direct dep only to turn on `block-padding`, which unlocks the batched
+# `decrypt_padded_mut` fast path on cbc's Decryptor (see crypto.rs).
+cipher = { version = "0.4", features = ["block-padding"] }
 aes-kw = "0.2"
+
+# Even in a dev/debug build (`tauri dev`), compile the crypto crates optimized.
+# Decrypting hundreds of MB with an unoptimized AES is ~20x slower and made the
+# encrypted camera-roll import take the better part of an hour. These deps are
+# third-party and rarely recompiled, so this costs no incremental-build time.
+[profile.dev.package.aes]
+opt-level = 3
+[profile.dev.package.cbc]
+opt-level = 3
+[profile.dev.package.cipher]
+opt-level = 3
+[profile.dev.package.aes-kw]
+opt-level = 3
+[profile.dev.package.sha1]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.pbkdf2]
+opt-level = 3
+# The RustCrypto block-chaining / buffer glue the AES fast path runs through.
+[profile.dev.package.inout]
+opt-level = 3
+[profile.dev.package.crypto-common]
+opt-level = 3
+[profile.dev.package.generic-array]
+opt-level = 3
+[profile.dev.package.cpufeatures]
+opt-level = 3
+[profile.dev.package.block-padding]
+opt-level = 3
+# The AES-CBC chaining loop is a generic trait method, so it monomorphizes into
+# salvage-core rather than the cbc crate. Optimize salvage-core in dev too, or an
+# unoptimized copy of that loop throttles the otherwise-GB/s hardware AES.
+[profile.dev.package.salvage-core]
+opt-level = 2
