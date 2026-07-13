@@ -107,17 +107,35 @@ pub fn import_backup(
         )
     };
 
+    // Phase 2: materialize Notes natively from NoteStore.sqlite (via the Manifest
+    // Index), skipping iLEAPP's eager notes pass. Same fallback contract as
+    // Messages: any miss/parse failure declines and the iLEAPP path runs.
+    let native_notes = effective.contains(&"notes") && {
+        on_phase(ImportPhase::Normalizing {
+            step: "Notes".into(),
+        });
+        import_notes_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        )
+    };
+
     // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
-    // the Messages stage is skipped when handled natively above.
+    // the Messages/Notes stages are skipped when handled natively above.
     let mut report = normalize::normalize_lava_with_progress(
         &lava_path,
         &engine_out_dir,
         &cache,
         native_messages,
+        native_notes,
         |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
     )?;
     report.threads += native.threads;
     report.messages += native.messages;
+    report.notes += native.notes;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -262,6 +280,52 @@ fn import_messages_native(
         }
     };
     let _ = std::fs::remove_file(&sms_db);
+    ok
+}
+
+/// Materialize Notes natively: locate `NoteStore.sqlite` via the Manifest Index,
+/// decrypt/extract it to a temp file, and parse it into the cache. Returns
+/// whether it succeeded (DB present + parsed); on any miss or error the caller
+/// falls back to the iLEAPP `notes` path. `parse_notes` commits in one
+/// transaction, so a failure leaves no partial rows to duplicate.
+fn import_notes_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) -> bool {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Notes unavailable ({e}); using iLEAPP."));
+            return false;
+        }
+    };
+    let entry = match index.find("AppDomainGroup-group.com.apple.notes", "NoteStore.sqlite") {
+        Ok(Some(e)) => e,
+        // NoteStore.sqlite not in this backup (or a read error) → iLEAPP path.
+        _ => return false,
+    };
+    let note_store = work_dir.join(".NoteStore.sqlite");
+    if let Err(e) = index.extract_to(&entry, decryptor, &note_store) {
+        report.warnings.push(format!(
+            "Native Notes: couldn't read NoteStore.sqlite ({e}); using iLEAPP."
+        ));
+        return false;
+    }
+    let ok = match crate::parsers::notes::parse_notes(&note_store, cache, report) {
+        Ok(()) => true,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Notes: parse failed ({e}); using iLEAPP."));
+            false
+        }
+    };
+    let _ = std::fs::remove_file(&note_store);
     ok
 }
 
@@ -505,6 +569,65 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
         let ok = import_messages_native(&backup, None, &cache, tmp.path(), &mut report);
         assert!(!ok);
         assert_eq!(report.messages, 0);
+    }
+
+    /// A plaintext backup whose Manifest.db points at a `NoteStore.sqlite` blob:
+    /// the native path resolves it and parses the note into the cache. (Body
+    /// protobuf decoding is covered by parsers::notes; here a NULL-body note is
+    /// enough to exercise the manifest → parse → cache wiring.)
+    #[test]
+    fn native_notes_from_a_plaintext_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+
+        let note_id = "cd00000000000000000000000000000000000077";
+        let sub = backup.join(&note_id[..2]);
+        std::fs::create_dir_all(&sub).unwrap();
+        let ns = Connection::open(sub.join(note_id)).unwrap();
+        ns.execute_batch(
+            "CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZNOTE INTEGER, ZDATA BLOB);
+             CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+                Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT, ZSNIPPET TEXT,
+                ZFOLDER INTEGER, ZNOTEDATA INTEGER,
+                ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL, ZMARKEDFORDELETION INTEGER);
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTITLE2) VALUES (1, 'Notes');
+             INSERT INTO ZICNOTEDATA (Z_PK, ZNOTE, ZDATA) VALUES (5, 10, NULL);
+             INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, ZTITLE1, ZSNIPPET, ZFOLDER, ZNOTEDATA, ZCREATIONDATE1, ZMODIFICATIONDATE1)
+             VALUES (10, 'Reminder', 'call the plumber', 1, 5, 721692800.0, 721692900.0);",
+        )
+        .unwrap();
+        drop(ns);
+
+        Connection::open(backup.join("Manifest.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+                 INSERT INTO Files VALUES ('{note_id}','AppDomainGroup-group.com.apple.notes','NoteStore.sqlite',1,NULL);"
+            ))
+            .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let mut report = ImportReport::default();
+
+        let ok = import_notes_native(&backup, None, &cache, &work, &mut report);
+        assert!(
+            ok,
+            "native notes should succeed; warnings: {:?}",
+            report.warnings
+        );
+        assert_eq!(report.notes, 1);
+        let (folder, title): (Option<String>, Option<String>) = cache
+            .conn()
+            .query_row("SELECT folder, title FROM notes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(folder.as_deref(), Some("Notes"));
+        assert_eq!(title.as_deref(), Some("Reminder"));
     }
 
     // Small helper so the test can gracefully skip without sqlite3.

@@ -4170,6 +4170,7 @@ dependencies = [
  "aes-kw",
  "cbc",
  "cipher",
+ "flate2",
  "hex",
  "pbkdf2",
  "plist",
