@@ -102,12 +102,11 @@ pub fn import_backup(
             }
         };
         // Decrypted thumbnails and transient decrypted DBs live beside the cache.
-        // Wipe first so re-import doesn't serve a previous run's stale thumbnails.
+        // remove_cache (at import start) already cleared this, so no wipe here.
         let media_cache_dir = cache_path
             .parent()
             .map(|p| p.join("media"))
             .unwrap_or_else(|| work_dir.join("media"));
-        let _ = std::fs::remove_dir_all(&media_cache_dir);
 
         match crate::parsers::camera_roll::parse_camera_roll(
             backup_dir,
@@ -194,12 +193,22 @@ pub fn import_backup(
 }
 
 /// Remove a SQLite cache DB and its WAL/SHM sidecars, if present.
-fn remove_cache(cache_path: &Path) {
+/// Remove a backup's cache DB and all data derived from it: the WAL/SHM
+/// sidecars, and the sibling `media` / `thumbs` / `att-thumbs` directories
+/// (decrypted thumbnails and sips-converted JPEGs). Consolidated here so both
+/// re-import and "forget backup" clean up everything consistently — a re-import
+/// never serves a previous run's stale media, and forgetting leaves nothing.
+pub fn remove_cache(cache_path: &Path) {
     let _ = std::fs::remove_file(cache_path);
     for suffix in ["-wal", "-shm"] {
         let mut sidecar = cache_path.as_os_str().to_os_string();
         sidecar.push(suffix);
         let _ = std::fs::remove_file(sidecar);
+    }
+    if let Some(dir) = cache_path.parent() {
+        for sub in ["media", "thumbs", "att-thumbs"] {
+            let _ = std::fs::remove_dir_all(dir.join(sub));
+        }
     }
 }
 

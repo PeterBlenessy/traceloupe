@@ -229,9 +229,11 @@ impl BackupDecryptor {
     /// locates the ciphertext at `<backup>/<id[:2]>/<id>`.
     pub fn decrypt_file(&self, file_blob: &[u8], file_id: &str) -> Result<Vec<u8>> {
         let (enc_key, size) = file_key_field(file_blob)?;
+        // `.get(..2)` (not `[..2]`) so a short or non-ASCII file_id can't panic on
+        // a byte/char boundary; real ids are 40-char hex.
         let ct_path = self
             .backup_dir
-            .join(&file_id[..2.min(file_id.len())])
+            .join(file_id.get(..2).unwrap_or(file_id))
             .join(file_id);
         let ct = std::fs::read(&ct_path).map_err(|e| Error::io(&ct_path, e))?;
         self.decrypt_bytes(&enc_key, &ct, size.map(|s| s as usize))
@@ -251,9 +253,12 @@ impl BackupDecryptor {
         let key = unwrap_prefixed(&self.class_keys, enc_key_field)?;
         let mut pt = aes_cbc_decrypt(&key, ciphertext)?;
         if let Some(size) = size {
-            if size <= pt.len() {
-                pt.truncate(size);
+            // A declared size larger than the decrypted data means the wrong key
+            // or a corrupt record — fail rather than serve padded garbage.
+            if size > pt.len() {
+                return Err(err("declared plaintext size exceeds decrypted length"));
             }
+            pt.truncate(size);
         }
         Ok(pt)
     }

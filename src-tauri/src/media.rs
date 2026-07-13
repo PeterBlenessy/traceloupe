@@ -19,6 +19,24 @@ pub struct Rendered {
     pub content_type: String,
 }
 
+/// A Content-Type value taken from the (untrusted) backup, made safe to put in a
+/// response header. A malformed MIME — header-injection bytes, non-ASCII, over-
+/// long — would otherwise make the response builder's `.body()` fail (and the
+/// old `.unwrap()` panic). Falls back to a generic binary type.
+pub fn safe_content_type(mime: Option<&str>) -> String {
+    let generic = "application/octet-stream";
+    match mime {
+        Some(m)
+            if !m.is_empty()
+                && m.len() <= 128
+                && m.bytes().all(|b| b.is_ascii_graphic() || b == b' ') =>
+        {
+            m.to_string()
+        }
+        _ => generic.to_string(),
+    }
+}
+
 fn is_heic(src: &Path, mime: Option<&str>) -> bool {
     if let Some(m) = mime {
         let m = m.to_ascii_lowercase();
@@ -53,7 +71,7 @@ pub fn render(
         let bytes = std::fs::read(src).ok()?;
         return Some(Rendered {
             bytes,
-            content_type: src_mime.unwrap_or("application/octet-stream").to_string(),
+            content_type: safe_content_type(src_mime),
         });
     }
 
@@ -68,7 +86,7 @@ pub fn render(
         let bytes = std::fs::read(src).ok()?;
         return Some(Rendered {
             bytes,
-            content_type: src_mime.unwrap_or("application/octet-stream").to_string(),
+            content_type: safe_content_type(src_mime),
         });
     }
     let bytes = std::fs::read(&out).ok()?;
@@ -106,6 +124,23 @@ mod tests {
 
     fn jpeg_magic(bytes: &[u8]) -> bool {
         bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+    }
+
+    #[test]
+    fn safe_content_type_rejects_bad_mime() {
+        assert_eq!(safe_content_type(Some("image/png")), "image/png");
+        assert_eq!(safe_content_type(Some("video/mp4")), "video/mp4");
+        // Header injection, empty, non-ASCII, and None all fall back.
+        assert_eq!(
+            safe_content_type(Some("image/png\r\nX-Evil: 1")),
+            "application/octet-stream"
+        );
+        assert_eq!(safe_content_type(Some("")), "application/octet-stream");
+        assert_eq!(
+            safe_content_type(Some("tekst/密")),
+            "application/octet-stream"
+        );
+        assert_eq!(safe_content_type(None), "application/octet-stream");
     }
 
     #[test]
