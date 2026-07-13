@@ -424,7 +424,7 @@ mod tests {
     use aes::Aes256;
     use cbc::cipher::BlockEncryptMut;
 
-    const PW: &str = "salvage-test";
+    const PW: &str = "traceloupe-test";
     const CLASS_ID: u32 = 3;
     const DPIC: u32 = 1000; // low iteration counts keep the test fast.
     const ITER: u32 = 1000;
@@ -445,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // perf probe: `cargo test -p salvage-core --lib -- --ignored --nocapture aes_cbc_throughput`
+    #[ignore] // perf probe: `cargo test -p traceloupe-core --lib -- --ignored --nocapture aes_cbc_throughput`
     fn aes_cbc_throughput() {
         let key = [0x11u8; 32];
         let mb = 128usize;

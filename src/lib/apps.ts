@@ -1,12 +1,12 @@
 /**
  * Curated metadata for known apps, keyed by iOS bundle id. Maps the bundle ids
  * from a backup's "Installed Applications" to friendly names and how much
- * Salvage can recover from each. Extend this as extraction support grows
+ * TraceLoupe can recover from each. Extend this as extraction support grows
  * (the Tier-1/2/3 roadmap).
  */
 
 export type AppSupport =
-  | "available" // Salvage can extract this app's data today
+  | "available" // TraceLoupe can extract this app's data today
   | "planned" // on the roadmap, not yet built
   | "limited" // stores little/nothing locally (e.g. Snapchat, Signal)
   | "system" // Apple app already covered by a dedicated view

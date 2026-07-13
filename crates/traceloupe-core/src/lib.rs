@@ -1,4 +1,4 @@
-//! salvage-core: UI-agnostic core for the local iOS backup browser.
+//! traceloupe-core: UI-agnostic core for the local iOS backup browser.
 //!
 //! This crate has no Tauri or UI dependencies. It exposes the use-cases the
 //! shell calls over IPC: backup discovery, import orchestration, and cached

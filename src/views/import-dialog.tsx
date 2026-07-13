@@ -64,7 +64,7 @@ export function ImportDialog({
   const canImport = !encrypted || password.length > 0;
 
   const prompt = encrypted
-    ? "This backup is encrypted. Enter its password to open it — Salvage reads it once, then it's instant."
+    ? "This backup is encrypted. Enter its password to open it — TraceLoupe reads it once, then it's instant."
     : backup.isEncrypted === false
       ? "This backup isn't encrypted."
       : "Enter the backup password if it's encrypted."; // encryption unknown

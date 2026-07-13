@@ -121,7 +121,7 @@ impl CancelToken {
     }
 }
 
-/// The iLEAPP artifact modules Salvage actually surfaces. Restricting the run
+/// The iLEAPP artifact modules TraceLoupe actually surfaces. Restricting the run
 /// to these (via an `.ilprofile`) is the difference between iLEAPP's ~600-module
 /// eager pass and a handful — the import cost the architecture said should be
 /// "bounded by running only the modules the product surfaces" (§8.5).
@@ -265,7 +265,7 @@ fn write_profile(out_dir: &Path, keys: &[String]) -> Result<PathBuf> {
         .collect::<Vec<_>>()
         .join(",");
     let json = format!(r#"{{"leapp": "ileapp", "format_version": 1, "plugins": [{plugins}]}}"#);
-    let path = out_dir.join("salvage.ilprofile");
+    let path = out_dir.join("traceloupe.ilprofile");
     std::fs::write(&path, json).map_err(|e| Error::io(&path, e))?;
     Ok(path)
 }

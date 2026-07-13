@@ -15,9 +15,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # The core crate is UI-agnostic by design (architecture.md §2) and
       # builds without Tauri's platform deps — this job stays cheap.
-      - run: cargo test -p salvage-core
-      - run: cargo clippy -p salvage-core -- -D warnings
-      - run: cargo fmt -p salvage-core --check
+      - run: cargo test -p traceloupe-core
+      - run: cargo clippy -p traceloupe-core -- -D warnings
+      - run: cargo fmt -p traceloupe-core --check
 
   frontend:
     name: Frontend (typecheck + build)
@@ -50,4 +50,4 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: cargo check -p salvage
+      - run: cargo check -p traceloupe

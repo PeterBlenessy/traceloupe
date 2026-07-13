@@ -2,7 +2,7 @@
 
 **Product & Architecture Description**
 
-*Working codename: Salvage · Status: Draft v0.2 · Platform: macOS (desktop, Tauri v2)*
+*Working codename: TraceLoupe · Status: Draft v0.2 · Platform: macOS (desktop, Tauri v2)*
 
 ---
 

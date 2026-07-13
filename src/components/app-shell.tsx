@@ -58,7 +58,7 @@ export function AppShell() {
   // Drag-resizable, persisted sidebar width (applies only when expanded; the
   // icon rail uses the fixed --sidebar-width-icon).
   const { width: sidebarWidth, startResize } = useResizableWidth(
-    "salvage-sidebar-width",
+    "traceloupe-sidebar-width",
     256,
     180,
     400,
@@ -85,7 +85,7 @@ export function AppShell() {
         <SidebarHeader>
           <Link to="/" className="flex items-center gap-2 px-2 py-1.5 font-semibold">
             <HardDrive className="size-4" />
-            <span className="group-data-[collapsible=icon]:hidden">Salvage</span>
+            <span className="group-data-[collapsible=icon]:hidden">TraceLoupe</span>
           </Link>
         </SidebarHeader>
         <SidebarContent>

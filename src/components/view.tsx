@@ -185,7 +185,7 @@ export function ListDetail({
   master: React.ReactNode;
   detail: React.ReactNode;
 }) {
-  const { width, startResize } = useResizableWidth("salvage-master-width", 288, 200, 560);
+  const { width, startResize } = useResizableWidth("traceloupe-master-width", 288, 200, 560);
   return (
     <div className="flex h-full">
       {/* min-h-0 lets the master's scroll area shrink to the column height and

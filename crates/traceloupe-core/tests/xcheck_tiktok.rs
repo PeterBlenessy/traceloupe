@@ -1,12 +1,12 @@
 //! Validate TikTok DM normalization against a real iLEAPP lava DB. Gated on
-//! SALVAGE_TIKTOK_LAVA (path to a `_lava_artifacts.db` with tiktok_messages).
-use salvage_core::cache::CacheDb;
-use salvage_core::normalize::normalize_lava;
+//! TRACELOUPE_TIKTOK_LAVA (path to a `_lava_artifacts.db` with tiktok_messages).
+use traceloupe_core::cache::CacheDb;
+use traceloupe_core::normalize::normalize_lava;
 
 #[test]
 fn normalizes_real_tiktok_dms() {
-    let Ok(lava) = std::env::var("SALVAGE_TIKTOK_LAVA") else {
-        eprintln!("skipping: set SALVAGE_TIKTOK_LAVA to a real lava DB");
+    let Ok(lava) = std::env::var("TRACELOUPE_TIKTOK_LAVA") else {
+        eprintln!("skipping: set TRACELOUPE_TIKTOK_LAVA to a real lava DB");
         return;
     };
     let lava = std::path::PathBuf::from(lava);

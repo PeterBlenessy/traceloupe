@@ -2,7 +2,7 @@
 
 /** User clock preference: locale default, or force 12-/24-hour. */
 export type ClockFormat = "system" | "12h" | "24h";
-export const CLOCK_KEY = "salvage-clock";
+export const CLOCK_KEY = "traceloupe-clock";
 
 /** `hour12` option for Intl: undefined = locale default, else forced. */
 function hour12For(pref: ClockFormat): boolean | undefined {

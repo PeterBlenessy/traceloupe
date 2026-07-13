@@ -15,7 +15,7 @@ type ThemeProviderState = {
   resolvedTheme: "dark" | "light";
 };
 
-const STORAGE_KEY = "salvage-theme";
+const STORAGE_KEY = "traceloupe-theme";
 
 const ThemeProviderContext = createContext<ThemeProviderState | null>(null);
 

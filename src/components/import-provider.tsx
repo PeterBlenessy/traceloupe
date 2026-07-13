@@ -76,7 +76,7 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
       // they aren't lost — the import still succeeded for everything else.
       if (result.warnings.length > 0) {
         console.warn(
-          `%c[salvage]%c import completed with ${result.warnings.length} warning(s):`,
+          `%c[traceloupe]%c import completed with ${result.warnings.length} warning(s):`,
           "color:#a78bfa;font-weight:600",
           "color:inherit",
           result.warnings,

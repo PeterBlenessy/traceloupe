@@ -35,7 +35,7 @@ export function AppsView() {
   });
   const [q, setQ] = useState("");
 
-  // Salvage-recoverable apps first, system apps last; each group by name.
+  // TraceLoupe-recoverable apps first, system apps last; each group by name.
   const apps: AppRow[] = useMemo(() => {
     if (!bundleIds) return [];
     const rank: Record<AppSupport, number> = {

@@ -851,7 +851,7 @@ mod tests {
         .unwrap();
         c.execute(
             "INSERT INTO attachments (message_id, filename, mime_type, local_path)
-             VALUES (3, 'salvage-test.png', 'image/png', '/cache/media/x.png')",
+             VALUES (3, 'traceloupe-test.png', 'image/png', '/cache/media/x.png')",
             [],
         )
         .unwrap();

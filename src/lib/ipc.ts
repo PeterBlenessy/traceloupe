@@ -3,7 +3,7 @@
  *
  * Two implementations of the same interface: the real one over
  * `invoke()`, and a mock used when the app runs in a plain browser
- * (Vite dev server, Playwright). Views depend only on `SalvageClient`.
+ * (Vite dev server, Playwright). Views depend only on `TraceLoupeClient`.
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -172,7 +172,7 @@ export type EngineProgress =
   | { phase: "verifying" }
   | { phase: "done" };
 
-export interface SalvageClient {
+export interface TraceLoupeClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
   defaultBackupRoot(): Promise<string | null>;
@@ -285,7 +285,7 @@ export interface SalvageClient {
   openAttachment(id: number): Promise<void>;
 }
 
-const tauriClient: SalvageClient = {
+const tauriClient: TraceLoupeClient = {
   listBackups: (root) => invoke<DiscoveryResult>("list_backups", { root }),
   defaultBackupRoot: () => invoke<string | null>("default_backup_root"),
   pickBackupFolder: async () => {
@@ -344,10 +344,10 @@ const tauriClient: SalvageClient = {
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
   mediaUrl: (id, opts) =>
-    `salvage-media://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
-  contactAvatarUrl: (id) => `salvage-avatar://localhost/${id}`,
+    `traceloupe-media://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+  contactAvatarUrl: (id) => `traceloupe-avatar://localhost/${id}`,
   attachmentUrl: (id, opts) =>
-    `salvage-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+    `traceloupe-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
 };
 
@@ -429,7 +429,7 @@ const mockMessages: Record<number, Message[]> = {
     { id: 3, isFromMe: false, sender: "+15551234567", body: "Thinking of hiking Mission Peak", sentAt: 1717841100, attachments: [] },
     { id: 4, isFromMe: true, sender: null, body: "I'm in. Saturday morning?", sentAt: 1717841220, attachments: [] },
     { id: 5, isFromMe: false, sender: "+15551234567", body: "Here's the itinerary", sentAt: 1717841340, attachments: [{ id: 2, filename: "itinerary.pdf", mimeType: "application/pdf", localPath: "/mock/itinerary.pdf" }] },
-    { id: 6, isFromMe: true, sender: null, body: "Here's the trailhead 📷", sentAt: 1717841460, attachments: [{ id: 1, filename: "salvage-test.png", mimeType: "image/png", localPath: "/mock/salvage-test.png" }] },
+    { id: 6, isFromMe: true, sender: null, body: "Here's the trailhead 📷", sentAt: 1717841460, attachments: [{ id: 1, filename: "traceloupe-test.png", mimeType: "image/png", localPath: "/mock/traceloupe-test.png" }] },
   ],
   2: [
     { id: 7, isFromMe: true, sender: null, body: "Landing at 6, boarding now", sentAt: 1717499000, attachments: [] },
@@ -521,7 +521,7 @@ function mockAvatarDataUrl(id: number): string {
 }
 
 const mockMedia: MediaItem[] = [
-  { id: 1, kind: "photo", source: "Messages", mimeType: "image/png", filename: "salvage-test.png", takenAt: 1717841460 },
+  { id: 1, kind: "photo", source: "Messages", mimeType: "image/png", filename: "traceloupe-test.png", takenAt: 1717841460 },
   { id: 2, kind: "photo", source: "Messages", mimeType: "image/png", filename: "sunset.png", takenAt: 1717841520 },
   { id: 3, kind: "photo", source: "Photos", mimeType: "image/png", filename: "forest.png", takenAt: 1717841580 },
   { id: 4, kind: "photo", source: "WhatsApp", mimeType: "image/heic", filename: "IMG_0421.heic", takenAt: 1717841640 },
@@ -540,7 +540,7 @@ function mockMediaDataUrl(id: number): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-// A realistic mix: some Salvage-supported apps, some not, plus system apps.
+// A realistic mix: some TraceLoupe-supported apps, some not, plus system apps.
 const mockInstalledApps = [
   "net.whatsapp.WhatsApp",
   "com.burbn.instagram",
@@ -604,7 +604,7 @@ const mockProgressSubs = new Set<ProgressCb>();
 
 const mockEngineSubs = new Set<(p: EngineProgress) => void>();
 
-export const mockClient: SalvageClient = {
+export const mockClient: TraceLoupeClient = {
   listBackups: async () => ({ status: "ok", backups: mockBackups }),
   defaultBackupRoot: async () =>
     "/Users/dev/Library/Application Support/MobileSync/Backup",
@@ -744,4 +744,4 @@ export const mockClient: SalvageClient = {
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 
-export const client: SalvageClient = isTauri ? tauriClient : mockClient;
+export const client: TraceLoupeClient = isTauri ? tauriClient : mockClient;

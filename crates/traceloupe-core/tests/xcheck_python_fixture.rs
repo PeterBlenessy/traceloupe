@@ -1,16 +1,16 @@
 //! Cross-validation against tools/make_fixture_backup.py (independent Python
-//! reference). Gated on SALVAGE_ENC_FIXTURE so it only runs when pointed at a
+//! reference). Gated on TRACELOUPE_ENC_FIXTURE so it only runs when pointed at a
 //! generated fixture; not part of the normal suite.
-use salvage_core::crypto::BackupDecryptor;
+use traceloupe_core::crypto::BackupDecryptor;
 
 #[test]
 fn decrypts_python_generated_backup() {
-    let Ok(dir) = std::env::var("SALVAGE_ENC_FIXTURE") else {
-        eprintln!("skipping: set SALVAGE_ENC_FIXTURE to a fixture dir");
+    let Ok(dir) = std::env::var("TRACELOUPE_ENC_FIXTURE") else {
+        eprintln!("skipping: set TRACELOUPE_ENC_FIXTURE to a fixture dir");
         return;
     };
     let dir = std::path::PathBuf::from(dir);
-    let dec = BackupDecryptor::open(&dir, "salvage-test").expect("open with correct password");
+    let dec = BackupDecryptor::open(&dir, "traceloupe-test").expect("open with correct password");
 
     // Manifest.db decrypts to real SQLite (magic header).
     let manifest = dec.decrypt_manifest_db().expect("decrypt Manifest.db");
@@ -51,16 +51,16 @@ fn decrypts_python_generated_backup() {
 
 #[test]
 fn parses_encrypted_camera_roll() {
-    let Ok(dir) = std::env::var("SALVAGE_ENC_FIXTURE") else {
-        eprintln!("skipping: set SALVAGE_ENC_FIXTURE to a fixture dir");
+    let Ok(dir) = std::env::var("TRACELOUPE_ENC_FIXTURE") else {
+        eprintln!("skipping: set TRACELOUPE_ENC_FIXTURE to a fixture dir");
         return;
     };
     let dir = std::path::PathBuf::from(dir);
-    let dec = BackupDecryptor::open(&dir, "salvage-test").expect("open with correct password");
+    let dec = BackupDecryptor::open(&dir, "traceloupe-test").expect("open with correct password");
     let cache = std::env::temp_dir().join("xcheck_media_cache");
     let _ = std::fs::remove_dir_all(&cache);
 
-    let assets = salvage_core::parsers::camera_roll::parse_camera_roll(&dir, Some(&dec), &cache)
+    let assets = traceloupe_core::parsers::camera_roll::parse_camera_roll(&dir, Some(&dec), &cache)
         .expect("parse encrypted camera roll");
     let asset = assets
         .iter()
