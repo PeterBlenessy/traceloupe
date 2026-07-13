@@ -86,6 +86,16 @@ export interface Note {
   modifiedAt: number | null;
 }
 
+export interface Recording {
+  id: number;
+  title: string | null;
+  folder: string | null;
+  recordedAt: number | null;
+  durationS: number | null;
+  /** Trailing filename of the `.m4a`, for labeling an untitled memo. */
+  fileName: string | null;
+}
+
 export interface LabeledValue {
   label: string | null;
   value: string;
@@ -244,6 +254,7 @@ export interface TraceLoupeClient {
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
   listNotes(): Promise<Note[]>;
+  listRecordings(): Promise<Recording[]>;
   listContacts(): Promise<Contact[]>;
   /** Bundle ids of apps that were installed on the device. */
   listInstalledApps(): Promise<string[]>;
@@ -281,6 +292,8 @@ export interface TraceLoupeClient {
   contactAvatarUrl(id: number): string;
   /** URL for a message attachment's bytes (`thumb` for an image thumbnail). */
   attachmentUrl(id: number, opts?: { thumb?: boolean }): string;
+  /** URL the webview can load for a voice recording's audio bytes. */
+  audioUrl(id: number): string;
   /** Open an attachment's file with the OS default app (documents, etc.). */
   openAttachment(id: number): Promise<void>;
 }
@@ -329,6 +342,7 @@ const tauriClient: TraceLoupeClient = {
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listNotes: () => invoke<Note[]>("list_notes"),
+  listRecordings: () => invoke<Recording[]>("list_recordings"),
   countMedia: (source) => invoke<number>("count_media", { source }),
   getMediaWindow: (source, offset, limit, sortBy, desc) =>
     invoke<MediaItem[]>("get_media_window", { source, offset, limit, sortBy, desc }),
@@ -348,6 +362,7 @@ const tauriClient: TraceLoupeClient = {
   contactAvatarUrl: (id) => `traceloupe-avatar://localhost/${id}`,
   attachmentUrl: (id, opts) =>
     `traceloupe-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+  audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
 };
 
@@ -500,6 +515,12 @@ const mockNotes: Note[] = [
   { id: 1, folder: "Notes", title: "Hike checklist", snippet: "Water, snacks, sunscreen…", body: "Water\nSnacks\nSunscreen\nHat\nExtra socks", createdAt: 1717000000, modifiedAt: 1717838000 },
   { id: 2, folder: "Work", title: "Q3 ideas", snippet: "Ship the importer, then…", body: "Ship the importer, then work on lazy decode and the encrypted path.", createdAt: 1716500000, modifiedAt: 1717500000 },
   { id: 3, folder: "Notes", title: null, snippet: "Grocery list", body: "Milk\nEggs\nBröd\nKaffe", createdAt: 1716000000, modifiedAt: 1716600000 },
+];
+
+const mockRecordings: Recording[] = [
+  { id: 1, title: "Morning idea", folder: null, recordedAt: 1717838000, durationS: 42.5, fileName: "20240608 083320.m4a" },
+  { id: 2, title: "Meeting notes", folder: null, recordedAt: 1717500000, durationS: 195, fileName: "20240604 100000.m4a" },
+  { id: 3, title: null, folder: null, recordedAt: 1716600000, durationS: 9.2, fileName: "New Recording 3.m4a" },
 ];
 
 const mockContacts: Contact[] = [
@@ -709,6 +730,7 @@ export const mockClient: TraceLoupeClient = {
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listNotes: async () => (mockActive ? mockNotes : []),
+  listRecordings: async () => (mockActive ? mockRecordings : []),
   countMedia: async (source) => (mockActive ? mockFilterMedia(source).length : 0),
   getMediaWindow: async (source, offset, limit, sortBy, desc) =>
     mockActive
@@ -739,8 +761,15 @@ export const mockClient: TraceLoupeClient = {
   mediaUrl: (id) => mockMediaDataUrl(id),
   contactAvatarUrl: (id) => mockAvatarDataUrl(id),
   attachmentUrl: (id) => mockMediaDataUrl(id),
+  // A short silent WAV so the browser mock renders a working <audio> control
+  // (the real bytes come from the traceloupe-audio scheme under Tauri).
+  audioUrl: () => SILENT_WAV_DATA_URL,
   openAttachment: async () => {},
 };
+
+/** ~0.1s of silence — lets the mock player render/seek without a backend. */
+const SILENT_WAV_DATA_URL =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQAAAAA=";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 

@@ -52,7 +52,8 @@ use traceloupe_core::engine::{self};
 use traceloupe_core::import::{self, ImportPhase};
 use traceloupe_core::install;
 use traceloupe_core::query::{
-    self, Call, Contact, HistoryVisit, MediaItem, Message, Note, ThreadSummary, TimelineMessage,
+    self, Call, Contact, HistoryVisit, MediaItem, Message, Note, Recording, ThreadSummary,
+    TimelineMessage,
 };
 use traceloupe_core::sidecar::CancelToken;
 
@@ -733,6 +734,17 @@ async fn list_notes(active: State<'_, ActiveBackup>) -> Result<Vec<Note>, String
 }
 
 #[tauri::command]
+async fn list_recordings(active: State<'_, ActiveBackup>) -> Result<Vec<Recording>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_recordings(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn list_safari_history(active: State<'_, ActiveBackup>) -> Result<Vec<HistoryVisit>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1203,6 +1215,88 @@ fn attachment_protocol_response(
         .unwrap()
 }
 
+/// Serve a voice recording over `traceloupe-audio://localhost/<id>`.
+///
+/// Like the media handler, it takes only a numeric id and reads the file recorded
+/// for it in the active cache — never a path from the request. On an encrypted
+/// backup the `.m4a` is decrypted with the session keys into a buffer (audio
+/// files are small), then served; `Range` requests are honored against that
+/// buffer so `<audio>` can seek.
+fn audio_protocol_response(
+    app: &AppHandle,
+    path: &str,
+    range: Option<&str>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{Response, StatusCode};
+
+    let not_found = || {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap()
+    };
+
+    let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
+        return not_found();
+    };
+
+    let active = app.state::<ActiveBackup>();
+    let Ok(cache_path) = active.path() else {
+        return not_found();
+    };
+    let Ok(cache) = CacheDb::open(&cache_path) else {
+        return not_found();
+    };
+    let Ok(Some((local_path, mime, decrypt_key, plain_size))) = query::recording_blob(&cache, id)
+    else {
+        return not_found();
+    };
+
+    // Materialize the plaintext bytes: decrypt an encrypted original with the
+    // session keys, or read a plaintext one straight off disk.
+    let bytes = if let Some(key) = decrypt_key {
+        let Some(dec) = app.state::<SessionKeys>().get() else {
+            return not_found(); // encrypted item but no keys this session
+        };
+        let Ok(ciphertext) = std::fs::read(&local_path) else {
+            return not_found();
+        };
+        let size = plain_size.and_then(|s| usize::try_from(s).ok());
+        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, size) else {
+            return not_found();
+        };
+        plain
+    } else {
+        let Ok(raw) = std::fs::read(&local_path) else {
+            return not_found();
+        };
+        raw
+    };
+
+    let content_type = media::safe_content_type(mime.as_deref());
+    let total = bytes.len() as u64;
+
+    if let Some((start, end)) = range.and_then(|r| parse_byte_range(r, total)) {
+        let slice = bytes[start as usize..=end as usize].to_vec();
+        return Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header("Content-Type", content_type)
+            .header("Accept-Ranges", "bytes")
+            .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+            .header("Cache-Control", "no-cache")
+            .body(slice)
+            .unwrap();
+    }
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .header("Accept-Ranges", "bytes")
+        .header("Cache-Control", "no-cache")
+        .body(bytes)
+        .unwrap()
+}
+
 /// Parse a single-range `Range: bytes=start-end` header into an inclusive
 /// `[start, end]` clamped to `total`. Supports `start-`, `start-end`, and
 /// `-suffix`. Returns None for unsatisfiable or multi-range requests.
@@ -1285,6 +1379,18 @@ pub fn run() {
                 });
             },
         )
+        .register_asynchronous_uri_scheme_protocol("traceloupe-audio", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            let range = request
+                .headers()
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(audio_protocol_response(&app, &path, range.as_deref()));
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             list_backups,
             default_backup_root,
@@ -1310,6 +1416,7 @@ pub fn run() {
             open_attachment,
             list_calls,
             list_notes,
+            list_recordings,
             list_safari_history,
             list_contacts,
             list_installed_apps,

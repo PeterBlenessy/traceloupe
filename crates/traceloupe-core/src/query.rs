@@ -809,6 +809,72 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
         .map_err(Into::into)
 }
 
+/// One voice recording (Voice Memos).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Recording {
+    pub id: i64,
+    /// User label, or None for an auto-named memo (the UI derives one).
+    pub title: Option<String>,
+    pub folder: Option<String>,
+    pub recorded_at: Option<i64>,
+    pub duration_s: Option<f64>,
+    /// Trailing filename of the `.m4a`, so the UI can label an untitled memo.
+    pub file_name: Option<String>,
+}
+
+/// Voice recordings, most-recent first (undated memos last).
+pub fn list_recordings(cache: &CacheDb) -> Result<Vec<Recording>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, title, folder, recorded_at, duration_s, relative_path
+         FROM recordings
+         ORDER BY recorded_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let relative_path: String = r.get(5)?;
+        let file_name = relative_path
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        Ok(Recording {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            folder: r.get(2)?,
+            recorded_at: r.get(3)?,
+            duration_s: r.get(4)?,
+            file_name,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// The bytes-serving fields for one recording: `(local_path, mime, decrypt_key,
+/// plain_size)`. `decrypt_key`/`plain_size` are `None` when the `.m4a` is already
+/// plaintext (see [`media_blob`]).
+pub type RecordingBlob = (String, Option<String>, Option<Vec<u8>>, Option<i64>);
+
+pub fn recording_blob(cache: &CacheDb, id: i64) -> Result<Option<RecordingBlob>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT local_path, mime_type, decrypt_key, plain_size
+             FROM recordings WHERE id = ?1",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<Vec<u8>>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )
+        .optional()?)
+}
+
 /// Bundle IDs of apps installed on the device, sorted.
 pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<String>> {
     let conn = cache.conn();

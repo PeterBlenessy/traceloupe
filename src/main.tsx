@@ -18,6 +18,7 @@ import { ContactsView } from "@/views/contacts";
 import { CallsView } from "@/views/calls";
 import { SafariView } from "@/views/safari";
 import { NotesView } from "@/views/notes";
+import { RecordingsView } from "@/views/recordings";
 import { AppsView } from "@/views/apps";
 
 const rootRoute = createRootRoute({ component: AppShell });
@@ -39,6 +40,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/calls", component: CallsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/safari", component: SafariView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/notes", component: NotesView }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/apps", component: AppsView }),
 ];
 

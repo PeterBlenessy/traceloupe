@@ -17,10 +17,10 @@ pub struct CacheDb {
     conn: Connection,
 }
 
-// Bumped to 2 so caches from earlier builds (stamped 1, possibly missing the
-// additively-added columns/index) run the migration block once to catch up, then
-// skip it on every subsequent open.
-const SCHEMA_VERSION: i64 = 2;
+// Bumped to 3 so caches from earlier builds run the migration block once to catch
+// up (v2 added columns/index; v3 adds the `recordings` table), then skip it on
+// every subsequent open.
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -149,6 +149,26 @@ CREATE TABLE media_items (
 );
 CREATE INDEX idx_media_taken ON media_items(taken_at DESC);
 
+CREATE TABLE recordings (
+    id            INTEGER PRIMARY KEY,
+    -- User-set label, or NULL for an auto-named memo (the view falls back to the
+    -- filename / date).
+    title         TEXT,
+    -- Voice Memos folder ("All Recordings", "Deleted", a custom folder), if known.
+    folder        TEXT,
+    recorded_at   INTEGER,                  -- unix seconds
+    duration_s    REAL,
+    relative_path TEXT NOT NULL,            -- e.g. 'Recordings/20240101 090000.m4a'
+    -- Full path to the .m4a blob in the backup (ciphertext on encrypted backups).
+    local_path    TEXT NOT NULL,
+    mime_type     TEXT,
+    -- Encrypted backups only: wrapped key + real size to decrypt/trim local_path
+    -- on demand (see media_items). NULL for plaintext backups.
+    decrypt_key   BLOB,
+    plain_size    INTEGER
+);
+CREATE INDEX idx_recordings_at ON recordings(recorded_at DESC);
+
 -- Cross-artifact full-text search. ref_kind/ref_id point back at the source row.
 CREATE VIRTUAL TABLE search_fts USING fts5(
     ref_kind UNINDEXED,
@@ -224,6 +244,24 @@ impl CacheDb {
             // schema (new caches already have it from SCHEMA_V1).
             conn.execute_batch(
                 "CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)",
+            )?;
+            // v3: the recordings table (voice memos). CREATE IF NOT EXISTS so a
+            // fresh cache (already has it from SCHEMA_V1) and an older cache both
+            // end up with it.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS recordings (
+                    id            INTEGER PRIMARY KEY,
+                    title         TEXT,
+                    folder        TEXT,
+                    recorded_at   INTEGER,
+                    duration_s    REAL,
+                    relative_path TEXT NOT NULL,
+                    local_path    TEXT NOT NULL,
+                    mime_type     TEXT,
+                    decrypt_key   BLOB,
+                    plain_size    INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_recordings_at ON recordings(recorded_at DESC);",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }

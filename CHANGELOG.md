@@ -28,6 +28,13 @@ While pre-1.0, the **minor** version tracks major milestones:
   `NoteStoreProto` wire format, with folder/title/snippet/timestamps from the
   Core Data columns (schema introspected so version-suffixed column names still
   resolve). iLEAPP's `notes` step is skipped on success and remains the fallback.
+- **Voice recordings.** New Recordings view: the import reads Voice Memos
+  metadata (`CloudRecordings.db`) natively and pairs each memo with its `.m4a` in
+  the backup, which streams over a new `traceloupe-audio://` scheme — decrypted on
+  demand at play time on encrypted backups (never bulk-decrypted), with HTTP
+  Range support so the player can seek. Recordings with no metadata DB still
+  surface (filename as the label). Adds a `recordings` cache table (schema v3),
+  a `recordings` import module, and the `list_recordings` command.
 
 ### Remaining for 0.2.0
 - iLEAPP still *runs* its `sms` and `notes` modules, so no import time is saved
