@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { NotebookText } from "lucide-react";
@@ -7,12 +7,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
 import { VirtualList } from "@/components/virtual-list";
+import { useSettings } from "@/components/settings-provider";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { EmptyView, ListDetail, ViewHeader } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
 import { client, type Note } from "@/lib/ipc";
 
 export function NotesView() {
   const navigate = useNavigate();
+  // Subscribe to the clock preference so times re-render on change.
+  const { clockFormat } = useSettings();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -23,6 +27,18 @@ export function NotesView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [sort, setSort] = useState<SortState>({ by: "modified", desc: true });
+  const sortedNotes = useMemo(
+    () =>
+      notes
+        ? sortItems(
+            notes,
+            (n) => (sort.by === "title" ? (n.title ?? "").toLowerCase() : n.modifiedAt),
+            sort.desc,
+          )
+        : notes,
+    [notes, sort],
+  );
 
   if (active === false) {
     return (
@@ -32,13 +48,25 @@ export function NotesView() {
     );
   }
 
-  const selected = notes?.find((n) => n.id === selectedId) ?? notes?.[0] ?? null;
+  const selected = sortedNotes?.find((n) => n.id === selectedId) ?? sortedNotes?.[0] ?? null;
 
   return (
     <ListDetail
       master={
         <>
           <ViewHeader title="Notes" count={notes?.length} />
+          {(notes?.length ?? 0) > 0 && (
+            <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
+              <SortControl
+                fields={[
+                  { value: "modified", label: "Modified" },
+                  { value: "title", label: "Title" },
+                ]}
+                value={sort}
+                onChange={setSort}
+              />
+            </div>
+          )}
           {isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -51,7 +79,8 @@ export function NotesView() {
             <p className="px-4 py-6 text-sm text-muted-foreground">No notes in this backup.</p>
           ) : (
             <VirtualList
-              items={notes!}
+              key={clockFormat}
+              items={sortedNotes!}
               getKey={(n) => n.id}
               estimateSize={64}
               renderItem={(n) => (

@@ -13,6 +13,7 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { EmptyView, ListDetail, ViewHeader } from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { VirtualList } from "@/components/virtual-list";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSettings } from "@/components/settings-provider";
 import { cn } from "@/lib/utils";
 import { formatDateHeader, formatListTime, formatMessageTime } from "@/lib/format";
@@ -139,11 +140,23 @@ function Conversations({
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
 
-  // The app filter lives in the shared header; here we just apply it.
-  const visibleThreads = useMemo(
-    () => (service ? threads?.filter((t) => t.service === service) : threads),
-    [threads, service],
-  );
+  const [sort, setSort] = useState<SortState>({ by: "recent", desc: true });
+
+  // The app filter lives in the shared header; here we just apply it, then sort.
+  const visibleThreads = useMemo(() => {
+    const list = service ? threads?.filter((t) => t.service === service) : threads;
+    if (!list) return list;
+    return sortItems(
+      list,
+      (t) =>
+        sort.by === "name"
+          ? (t.displayName || t.identifier || "").toLowerCase()
+          : sort.by === "count"
+            ? t.messageCount
+            : t.lastMessageAt,
+      sort.desc,
+    );
+  }, [threads, service, sort]);
 
   const selected =
     visibleThreads?.find((t) => t.id === selectedId) ?? visibleThreads?.[0] ?? null;
@@ -153,6 +166,19 @@ function Conversations({
       master={
         <>
           <ViewHeader title="Conversations" count={visibleThreads?.length} />
+          {(threads?.length ?? 0) > 0 && (
+            <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
+              <SortControl
+                fields={[
+                  { value: "recent", label: "Recent" },
+                  { value: "name", label: "Name" },
+                  { value: "count", label: "Messages" },
+                ]}
+                value={sort}
+                onChange={setSort}
+              />
+            </div>
+          )}
           {isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -285,16 +311,34 @@ function Timeline({
 /** A recency bucket: a labelled half-open time window with a message count. */
 type Period = { key: string; label: string; lo: number | null; hi: number | null };
 
-/** Non-overlapping recency buckets, newest first, anchored at `now` (epoch s). */
+/** Earliest year to generate a bucket for — the first iPhone, so no iOS backup
+ *  predates it. Empty years are hidden, so an over-wide floor costs nothing. */
+const FLOOR_YEAR = 2007;
+
+/**
+ * Non-overlapping buckets, newest first, anchored at `now` (epoch s): three
+ * recency buckets, then one bucket per calendar year for everything older than
+ * 30 days (2025, 2024, …). Year buckets with no messages are hidden at render.
+ */
 function makePeriods(now: number): Period[] {
   const DAY = 86_400;
-  return [
+  const thirtyDaysAgo = now - 30 * DAY;
+  const periods: Period[] = [
     { key: "24h", label: "Last 24 hours", lo: now - DAY, hi: null },
     { key: "7d", label: "Last 7 days", lo: now - 7 * DAY, hi: now - DAY },
-    { key: "30d", label: "Last 30 days", lo: now - 30 * DAY, hi: now - 7 * DAY },
-    { key: "1y", label: "Last year", lo: now - 365 * DAY, hi: now - 30 * DAY },
-    { key: "older", label: "Older", lo: null, hi: now - 365 * DAY },
+    { key: "30d", label: "Last 30 days", lo: thirtyDaysAgo, hi: now - 7 * DAY },
   ];
+  const currentYear = new Date(now * 1000).getFullYear();
+  for (let y = currentYear; y >= FLOOR_YEAR; y--) {
+    const yearStart = Math.floor(new Date(y, 0, 1).getTime() / 1000);
+    const nextYearStart = Math.floor(new Date(y + 1, 0, 1).getTime() / 1000);
+    // The current year stops at the 30-day cutoff so it doesn't overlap the
+    // recency buckets above; older years span their whole calendar year.
+    const hi = Math.min(nextYearStart, thirtyDaysAgo);
+    if (hi <= yearStart) continue; // fully covered by the recency buckets
+    periods.push({ key: `y${y}`, label: String(y), lo: yearStart, hi });
+  }
+  return periods;
 }
 
 /**
@@ -355,6 +399,10 @@ function Periods({
           <ScrollArea className="flex-1">
             {periods.map((p, i) => {
               const count = counts?.[i];
+              // Hide calendar-year buckets with no messages (an over-wide year
+              // floor then costs nothing); keep the recency buckets always
+              // visible so the list never collapses to nothing while loading.
+              if (p.key.startsWith("y") && !count) return null;
               return (
                 <PeriodRow
                   key={p.key}
@@ -417,7 +465,11 @@ function PeriodRow({
   onClick: () => void;
 }) {
   return (
-    <Item asChild data-active={active} className="rounded-none data-[active=true]:bg-accent">
+    <Item
+      asChild
+      data-active={active}
+      className="rounded-none py-2 data-[active=true]:bg-accent"
+    >
       <button
         onClick={onClick}
         disabled={disabled}
@@ -497,9 +549,14 @@ function TimelineRow({
               {formatMessageTime(m.sentAt)}
             </span>
           </div>
-          <div className="text-sm text-foreground/90">
+          {/* One line, truncated: the timeline is a scannable overview, and a
+              fixed row height keeps virtualized scrolling smooth and the
+              scrollbar position accurate (variable-height rows make the
+              virtualizer re-measure and the list jump). Click opens the full
+              thread. */}
+          <div className="truncate text-sm text-foreground/90">
             {m.body ? (
-              <span className="whitespace-pre-wrap break-words">{m.body}</span>
+              m.body
             ) : m.attachments.length ? (
               <span className="inline-flex items-center gap-1 text-muted-foreground">
                 <Paperclip className="size-3.5" />

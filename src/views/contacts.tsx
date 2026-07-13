@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { EmptyView, ListDetail, ListSearch, ViewHeader } from "@/components/view";
 import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
@@ -32,6 +33,7 @@ export function ContactsView() {
   // Source filter: the device address book vs a third-party app's social graph
   // (e.g. TikTok). Default to the address book so app contacts don't bury it.
   const [source, setSource] = useState("Address Book");
+  const [sort, setSort] = useState<SortState>({ by: "name", desc: false });
   const { showAvatars } = useSettings();
 
   const sources = useMemo(() => {
@@ -59,6 +61,19 @@ export function ContactsView() {
     });
   }, [contacts, q, source, sources]);
 
+  const sorted = useMemo(
+    () =>
+      sortItems(
+        filtered,
+        (c) =>
+          sort.by === "organization"
+            ? (c.organization ?? "").toLowerCase()
+            : contactName(c).toLowerCase(),
+        sort.desc,
+      ),
+    [filtered, sort],
+  );
+
   if (active === false) {
     return (
       <EmptyView icon={Users} title="No backup open" description="Import a backup to see contacts.">
@@ -67,7 +82,7 @@ export function ContactsView() {
     );
   }
 
-  const selected = filtered.find((c) => c.id === selectedId) ?? filtered[0] ?? null;
+  const selected = sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
 
   return (
     <ListDetail
@@ -92,6 +107,16 @@ export function ContactsView() {
                 ))}
               </ToggleGroup>
             )}
+            <div className="flex justify-end">
+              <SortControl
+                fields={[
+                  { value: "name", label: "Name" },
+                  { value: "organization", label: "Organization" },
+                ]}
+                value={sort}
+                onChange={setSort}
+              />
+            </div>
           </div>
           {isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
@@ -107,7 +132,7 @@ export function ContactsView() {
             </p>
           ) : (
             <VirtualList
-              items={filtered}
+              items={sorted}
               getKey={(c) => c.id}
               estimateSize={56}
               renderItem={(c) => (

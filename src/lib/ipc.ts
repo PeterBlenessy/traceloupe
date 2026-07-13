@@ -249,14 +249,28 @@ export interface SalvageClient {
   // Windowed/filterable list queries (null filter = all), for lazy-loading
   // huge lists a slice at a time.
   countMedia(source: string | null): Promise<number>;
-  getMediaWindow(source: string | null, offset: number, limit: number): Promise<MediaItem[]>;
+  getMediaWindow(
+    source: string | null,
+    offset: number,
+    limit: number,
+    sortBy: string,
+    desc: boolean,
+  ): Promise<MediaItem[]>;
   countCalls(search: string | null): Promise<number>;
-  getCallsWindow(search: string | null, offset: number, limit: number): Promise<Call[]>;
+  getCallsWindow(
+    search: string | null,
+    offset: number,
+    limit: number,
+    sortBy: string,
+    desc: boolean,
+  ): Promise<Call[]>;
   countSafari(search: string | null): Promise<number>;
   getSafariWindow(
     search: string | null,
     offset: number,
     limit: number,
+    sortBy: string,
+    desc: boolean,
   ): Promise<HistoryVisit[]>;
   /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
   mediaUrl(id: number, opts?: { thumb?: boolean }): string;
@@ -312,14 +326,14 @@ const tauriClient: SalvageClient = {
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listNotes: () => invoke<Note[]>("list_notes"),
   countMedia: (source) => invoke<number>("count_media", { source }),
-  getMediaWindow: (source, offset, limit) =>
-    invoke<MediaItem[]>("get_media_window", { source, offset, limit }),
+  getMediaWindow: (source, offset, limit, sortBy, desc) =>
+    invoke<MediaItem[]>("get_media_window", { source, offset, limit, sortBy, desc }),
   countCalls: (search) => invoke<number>("count_calls", { search }),
-  getCallsWindow: (search, offset, limit) =>
-    invoke<Call[]>("get_calls_window", { search, offset, limit }),
+  getCallsWindow: (search, offset, limit, sortBy, desc) =>
+    invoke<Call[]>("get_calls_window", { search, offset, limit, sortBy, desc }),
   countSafari: (search) => invoke<number>("count_safari", { search }),
-  getSafariWindow: (search, offset, limit) =>
-    invoke<HistoryVisit[]>("get_safari_window", { search, offset, limit }),
+  getSafariWindow: (search, offset, limit, sortBy, desc) =>
+    invoke<HistoryVisit[]>("get_safari_window", { search, offset, limit, sortBy, desc }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listInstalledApps: () => invoke<string[]>("list_installed_apps"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
@@ -557,6 +571,29 @@ function mockFilterSafari(search: string | null): HistoryVisit[] {
   );
 }
 
+/** Mirror the backend's sort for the in-browser mock: nulls last regardless of
+ *  direction, so sorted mock lists match the real app. */
+function mockSortBy<T>(
+  items: T[],
+  key: (t: T) => number | string | null | undefined,
+  desc: boolean,
+): T[] {
+  const sign = desc ? -1 : 1;
+  return [...items].sort((a, b) => {
+    const ka = key(a) ?? null;
+    const kb = key(b) ?? null;
+    if (ka === null && kb === null) return 0;
+    if (ka === null) return 1;
+    if (kb === null) return -1;
+    return ka < kb ? -sign : ka > kb ? sign : 0;
+  });
+}
+const mediaKey = (by: string) => (m: MediaItem) => (by === "source" ? m.source : m.takenAt);
+const callKey = (by: string) => (c: Call) =>
+  by === "name" ? c.address : by === "duration" ? c.durationS : c.occurredAt;
+const safariKey = (by: string) => (h: HistoryVisit) =>
+  by === "title" ? h.title : by === "visits" ? h.visitCount : h.visitedAt;
+
 // A mock progress emitter so the import flow is exercisable in the browser.
 type ProgressCb = (p: ImportProgress) => void;
 const mockProgressSubs = new Set<ProgressCb>();
@@ -666,14 +703,20 @@ export const mockClient: SalvageClient = {
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listNotes: async () => (mockActive ? mockNotes : []),
   countMedia: async (source) => (mockActive ? mockFilterMedia(source).length : 0),
-  getMediaWindow: async (source, offset, limit) =>
-    mockActive ? mockFilterMedia(source).slice(offset, offset + limit) : [],
+  getMediaWindow: async (source, offset, limit, sortBy, desc) =>
+    mockActive
+      ? mockSortBy(mockFilterMedia(source), mediaKey(sortBy), desc).slice(offset, offset + limit)
+      : [],
   countCalls: async (search) => (mockActive ? mockFilterCalls(search).length : 0),
-  getCallsWindow: async (search, offset, limit) =>
-    mockActive ? mockFilterCalls(search).slice(offset, offset + limit) : [],
+  getCallsWindow: async (search, offset, limit, sortBy, desc) =>
+    mockActive
+      ? mockSortBy(mockFilterCalls(search), callKey(sortBy), desc).slice(offset, offset + limit)
+      : [],
   countSafari: async (search) => (mockActive ? mockFilterSafari(search).length : 0),
-  getSafariWindow: async (search, offset, limit) =>
-    mockActive ? mockFilterSafari(search).slice(offset, offset + limit) : [],
+  getSafariWindow: async (search, offset, limit, sortBy, desc) =>
+    mockActive
+      ? mockSortBy(mockFilterSafari(search), safariKey(sortBy), desc).slice(offset, offset + limit)
+      : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),
   listMedia: async () => (mockActive ? mockMedia : []),

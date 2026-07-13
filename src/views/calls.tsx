@@ -16,6 +16,8 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
+import { useSettings } from "@/components/settings-provider";
+import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
@@ -30,6 +32,10 @@ export function CallsView() {
   });
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
+  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  // Subscribe to the clock preference so rows re-render (with the new time
+  // format) when it changes; folded into resetKey below.
+  const { clockFormat } = useSettings();
   const { data: count } = useQuery({
     queryKey: ["callsCount", search],
     queryFn: () => client.countCalls(search),
@@ -48,15 +54,28 @@ export function CallsView() {
     <LazyListView<Call>
       title="Calls"
       count={active === true ? count : undefined}
-      resetKey={search ?? ""}
+      resetKey={`${search ?? ""}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching calls." : "No calls in this backup."}
       header={
-        <div className="w-56">
-          <ListSearch value={q} onChange={setQ} placeholder="Search calls" />
+        <div className="flex items-center gap-2">
+          <div className="w-56">
+            <ListSearch value={q} onChange={setQ} placeholder="Search calls" />
+          </div>
+          <SortControl
+            fields={[
+              { value: "date", label: "Date" },
+              { value: "name", label: "Name" },
+              { value: "duration", label: "Duration" },
+            ]}
+            value={sort}
+            onChange={setSort}
+          />
         </div>
       }
-      windowKey={(page) => ["callsWindow", search, page]}
-      fetchWindow={(offset, limit) => client.getCallsWindow(search, offset, limit)}
+      windowKey={(page) => ["callsWindow", search, sort.by, sort.desc, page]}
+      fetchWindow={(offset, limit) =>
+        client.getCallsWindow(search, offset, limit, sort.by, sort.desc)
+      }
       renderItem={(c) => <CallRow call={c} />}
     />
   );
@@ -84,14 +103,14 @@ function CallRow({ call }: { call: Call }) {
         <Icon className={cn("size-5", className)} />
       </ItemMedia>
       <ItemContent>
-        <ItemTitle className={cn(missed && "text-destructive")}>
+        <ItemTitle className={cn("truncate", missed && "text-destructive")}>
           {call.address ?? "Unknown"}
         </ItemTitle>
-        <ItemDescription>
+        <ItemDescription className="truncate">
           {[call.service, call.direction].filter(Boolean).join(" · ")}
         </ItemDescription>
       </ItemContent>
-      <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground">
+      <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
         <span>{formatDateTime(call.occurredAt)}</span>
         {duration && <span>{duration}</span>}
       </div>
