@@ -31,3 +31,4 @@ target
 
 # agent worktrees (isolated review/dev copies)
 .claude/worktrees/
+*.bak

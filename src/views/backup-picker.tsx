@@ -13,13 +13,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { client, type BackupInfo } from "@/lib/ipc";
-import { ImportDialog } from "@/views/import-dialog";
+import { useImport } from "@/components/import-provider";
 import { EngineSetup } from "@/views/engine-setup";
 
 export function BackupPicker() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [selected, setSelected] = useState<BackupInfo | null>(null);
+  const imp = useImport();
   const { data: engineReady } = useQuery({
     queryKey: ["engineStatus"],
     queryFn: () => client.engineStatus(),
@@ -41,7 +41,7 @@ export function BackupPicker() {
       await qc.invalidateQueries();
       navigate({ to: "/messages" });
     } else {
-      setSelected(b);
+      imp.open(b); // first-time read: the provider owns the import + its dialog
     }
   }
   // A folder the user picked (via the native panel), overriding the default
@@ -144,24 +144,11 @@ export function BackupPicker() {
               backup={b}
               imported={imported.has(b.id)}
               onSelect={() => handleOpen(b)}
-              onReimport={() => setSelected(b)}
+              onReimport={() => imp.open(b)}
             />
           ))}
       </div>
 
-      {selected && (
-        <ImportDialog
-          backup={selected}
-          // Unencrypted backups need no password — start reading immediately.
-          autoStart={selected.isEncrypted !== true}
-          open={!!selected}
-          onOpenChange={(open) => !open && setSelected(null)}
-          onDone={() => {
-            setSelected(null);
-            navigate({ to: "/messages" });
-          }}
-        />
-      )}
     </div>
   );
 }
