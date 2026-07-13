@@ -9,7 +9,7 @@ import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/i
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { EmptyView, ListDetail, ViewHeader } from "@/components/view";
+import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
 import { client, type Note } from "@/lib/ipc";
 
@@ -21,7 +21,7 @@ export function NotesView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: notes, isPending } = useQuery({
+  const { data: notes, isPending, error } = useQuery({
     queryKey: ["notes"],
     queryFn: () => client.listNotes(),
     enabled: active === true,
@@ -67,7 +67,9 @@ export function NotesView() {
               />
             </div>
           )}
-          {isPending ? (
+          {error ? (
+            <ErrorState error={error} />
+          ) : isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="px-3 py-2">

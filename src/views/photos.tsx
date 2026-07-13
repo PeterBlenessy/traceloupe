@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SortControl, type SortState } from "@/components/sort-control";
-import { EmptyView, ViewHeader } from "@/components/view";
+import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type MediaItem } from "@/lib/ipc";
 
@@ -20,7 +20,7 @@ export function PhotosView() {
   });
   const [source, setSource] = useState<string>("all");
   const sourceArg = source === "all" ? null : source;
-  const { data: count } = useQuery({
+  const { data: count, error } = useQuery({
     queryKey: ["mediaCount", source],
     queryFn: () => client.countMedia(sourceArg),
     enabled: active === true,
@@ -67,7 +67,9 @@ export function PhotosView() {
           onChange={setSort}
         />
       </div>
-      {count === undefined ? (
+      {error ? (
+        <ErrorState error={error} />
+      ) : count === undefined ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
           {Array.from({ length: 12 }).map((_, i) => (
             <Skeleton key={i} className="aspect-square" />

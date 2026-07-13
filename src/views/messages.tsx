@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Message as MessageRow, MessageContent, MessageHeader } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { EmptyView, ListDetail, ViewHeader } from "@/components/view";
+import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { VirtualList } from "@/components/virtual-list";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
@@ -133,7 +133,7 @@ function Conversations({
   onSelect: (id: number) => void;
   service: string | null;
 }) {
-  const { data: threads, isPending } = useQuery({
+  const { data: threads, isPending, error } = useQuery({
     queryKey: ["threads"],
     queryFn: () => client.listThreads(),
   });
@@ -179,7 +179,9 @@ function Conversations({
               />
             </div>
           )}
-          {isPending ? (
+          {error ? (
+            <ErrorState error={error} />
+          ) : isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 6 }).map((_, i) => (
                 <div key={i} className="px-3 py-2">

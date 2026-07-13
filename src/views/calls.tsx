@@ -36,7 +36,7 @@ export function CallsView() {
   // Subscribe to the clock preference so rows re-render (with the new time
   // format) when it changes; folded into resetKey below.
   const { clockFormat } = useSettings();
-  const { data: count } = useQuery({
+  const { data: count, error } = useQuery({
     queryKey: ["callsCount", search],
     queryFn: () => client.countCalls(search),
     enabled: active === true,
@@ -54,6 +54,7 @@ export function CallsView() {
     <LazyListView<Call>
       title="Calls"
       count={active === true ? count : undefined}
+      error={error}
       resetKey={`${search ?? ""}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching calls." : "No calls in this backup."}
       header={

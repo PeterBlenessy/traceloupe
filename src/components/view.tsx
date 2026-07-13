@@ -7,7 +7,7 @@
  * not new styling systems. If a view needs something bespoke, prefer adding a
  * primitive here over inlining it in the view.
  */
-import { Search } from "lucide-react";
+import { Search, TriangleAlert } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -34,6 +34,24 @@ export function ViewHeader({
       )}
       {children && <div className="ml-auto flex items-center gap-2">{children}</div>}
     </header>
+  );
+}
+
+/** A load-failure state, so a failed query surfaces the error instead of quietly
+ *  looking like an empty list. */
+export function ErrorState({ error }: { error: unknown }) {
+  return (
+    <Empty>
+      <EmptyHeader>
+        <EmptyMedia variant="icon">
+          <TriangleAlert />
+        </EmptyMedia>
+        <EmptyTitle>Couldn't load this</EmptyTitle>
+        <EmptyDescription className="max-w-md select-text break-words">
+          {error instanceof Error ? error.message : String(error)}
+        </EmptyDescription>
+      </EmptyHeader>
+    </Empty>
   );
 }
 
@@ -76,6 +94,7 @@ export function VirtualListView<T>({
   getKey,
   estimateSize = 64,
   isPending,
+  error,
   emptyMessage = "Nothing here.",
 }: {
   title: string;
@@ -86,6 +105,7 @@ export function VirtualListView<T>({
   getKey?: (item: T, index: number) => React.Key;
   estimateSize?: number;
   isPending?: boolean;
+  error?: unknown;
   emptyMessage?: string;
 }) {
   return (
@@ -93,7 +113,9 @@ export function VirtualListView<T>({
       <ViewHeader title={title} count={count}>
         {header}
       </ViewHeader>
-      {isPending ? (
+      {error ? (
+        <ErrorState error={error} />
+      ) : isPending ? (
         <div className="mx-auto w-full max-w-3xl p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="mb-1 h-14 w-full" />
@@ -131,6 +153,7 @@ export function LazyListView<T>({
   renderItem,
   resetKey,
   estimateSize = 64,
+  error,
   emptyMessage = "Nothing here.",
 }: {
   title: string;
@@ -142,6 +165,7 @@ export function LazyListView<T>({
   renderItem: (item: T) => React.ReactNode;
   resetKey?: unknown;
   estimateSize?: number;
+  error?: unknown;
   emptyMessage?: string;
 }) {
   return (
@@ -149,7 +173,9 @@ export function LazyListView<T>({
       <ViewHeader title={title} count={count}>
         {header}
       </ViewHeader>
-      {count === undefined ? (
+      {error ? (
+        <ErrorState error={error} />
+      ) : count === undefined ? (
         <div className="mx-auto w-full max-w-3xl p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="mb-1 h-14 w-full" />

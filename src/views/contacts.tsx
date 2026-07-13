@@ -11,7 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { EmptyView, ListDetail, ListSearch, ViewHeader } from "@/components/view";
+import { EmptyView, ErrorState, ListDetail, ListSearch, ViewHeader } from "@/components/view";
 import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
@@ -23,7 +23,7 @@ export function ContactsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: contacts, isPending } = useQuery({
+  const { data: contacts, isPending, error } = useQuery({
     queryKey: ["contacts"],
     queryFn: () => client.listContacts(),
     enabled: active === true,
@@ -118,7 +118,9 @@ export function ContactsView() {
               />
             </div>
           </div>
-          {isPending ? (
+          {error ? (
+            <ErrorState error={error} />
+          ) : isPending ? (
             <div className="min-h-0 flex-1 overflow-auto">
               {Array.from({ length: 8 }).map((_, i) => (
                 <div key={i} className="px-3 py-2">

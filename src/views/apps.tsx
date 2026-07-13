@@ -28,7 +28,7 @@ export function AppsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: bundleIds, isPending } = useQuery({
+  const { data: bundleIds, isPending, error } = useQuery({
     queryKey: ["installedApps"],
     queryFn: () => client.listInstalledApps(),
     enabled: active === true,
@@ -71,6 +71,7 @@ export function AppsView() {
       title="Apps"
       count={apps.length}
       isPending={isPending}
+      error={error}
       emptyMessage="No installed-app list in this backup."
       header={
         apps.length > 0 ? (

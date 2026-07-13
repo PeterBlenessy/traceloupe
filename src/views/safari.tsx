@@ -28,7 +28,7 @@ export function SafariView() {
   const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
   // Subscribe to the clock preference so times re-render on change.
   const { clockFormat } = useSettings();
-  const { data: count } = useQuery({
+  const { data: count, error } = useQuery({
     queryKey: ["safariCount", search],
     queryFn: () => client.countSafari(search),
     enabled: active === true,
@@ -46,6 +46,7 @@ export function SafariView() {
     <LazyListView<HistoryVisit>
       title="Safari"
       count={count}
+      error={error}
       resetKey={`${search ?? ""}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching history." : "No Safari history in this backup."}
       header={
