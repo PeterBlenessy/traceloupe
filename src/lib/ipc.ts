@@ -200,6 +200,8 @@ export interface SalvageClient {
   }): Promise<ImportResult>;
   /** Subscribe to import progress events. Returns an unsubscribe fn. */
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
+  /** Stop the in-flight import (kills the iLEAPP subprocess). */
+  cancelImport(): Promise<void>;
   /** Set the dev-console log verbosity at runtime. */
   setLogLevel(level: LogLevel): Promise<void>;
   /** Subscribe to backend log records (forwarded to the console). */
@@ -287,6 +289,7 @@ const tauriClient: SalvageClient = {
   listImportModules: () => invoke<ImportModule[]>("list_import_modules"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
+  cancelImport: () => invoke("cancel_import"),
   setLogLevel: (level) => invoke("set_log_level", { level }),
   onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
@@ -619,6 +622,7 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.add(cb);
     return () => mockProgressSubs.delete(cb);
   },
+  cancelImport: async () => {},
   setLogLevel: async () => {},
   onLog: async () => () => {},
   hasActiveBackup: async () => mockActive,
