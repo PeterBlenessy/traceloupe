@@ -10,6 +10,8 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
+import { useSettings } from "@/components/settings-provider";
+import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
@@ -23,6 +25,9 @@ export function SafariView() {
   });
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
+  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  // Subscribe to the clock preference so times re-render on change.
+  const { clockFormat } = useSettings();
   const { data: count } = useQuery({
     queryKey: ["safariCount", search],
     queryFn: () => client.countSafari(search),
@@ -41,15 +46,28 @@ export function SafariView() {
     <LazyListView<HistoryVisit>
       title="Safari"
       count={count}
-      resetKey={search ?? ""}
+      resetKey={`${search ?? ""}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching history." : "No Safari history in this backup."}
       header={
-        <div className="w-56">
-          <ListSearch value={q} onChange={setQ} placeholder="Search history" />
+        <div className="flex items-center gap-2">
+          <div className="w-56">
+            <ListSearch value={q} onChange={setQ} placeholder="Search history" />
+          </div>
+          <SortControl
+            fields={[
+              { value: "date", label: "Date" },
+              { value: "title", label: "Title" },
+              { value: "visits", label: "Visits" },
+            ]}
+            value={sort}
+            onChange={setSort}
+          />
         </div>
       }
-      windowKey={(page) => ["safariWindow", search, page]}
-      fetchWindow={(offset, limit) => client.getSafariWindow(search, offset, limit)}
+      windowKey={(page) => ["safariWindow", search, sort.by, sort.desc, page]}
+      fetchWindow={(offset, limit) =>
+        client.getSafariWindow(search, offset, limit, sort.by, sort.desc)
+      }
       renderItem={(h) => <VisitRow visit={h} />}
     />
   );
@@ -73,7 +91,7 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
         <ItemTitle className="truncate">{visit.title ?? hostOf(visit.url)}</ItemTitle>
         <ItemDescription className="truncate">{visit.url}</ItemDescription>
       </ItemContent>
-      <div className="flex flex-col items-end gap-0.5 text-xs text-muted-foreground">
+      <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
         <span>{formatDateTime(visit.visitedAt)}</span>
         {visit.visitCount != null && <span>{visit.visitCount} visits</span>}
       </div>

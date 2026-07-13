@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, ViewHeader } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type MediaItem } from "@/lib/ipc";
@@ -30,6 +31,7 @@ export function PhotosView() {
     enabled: active === true,
   });
   const [openItem, setOpenItem] = useState<MediaItem | null>(null);
+  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
 
   if (active === false) {
     return (
@@ -45,16 +47,26 @@ export function PhotosView() {
   return (
     <div className="flex h-full flex-col">
       <ViewHeader title="Photos" count={count} />
-      {hasFilter && (
-        <div className="shrink-0 border-b px-2 py-2">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-2 py-2">
+        {hasFilter ? (
           <SourceFilter
             sources={sources ?? []}
             total={total}
             value={source}
             onChange={setSource}
           />
-        </div>
-      )}
+        ) : (
+          <span />
+        )}
+        <SortControl
+          fields={[
+            { value: "date", label: "Date" },
+            { value: "source", label: "Source" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      </div>
       {count === undefined ? (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
           {Array.from({ length: 12 }).map((_, i) => (
@@ -68,8 +80,14 @@ export function PhotosView() {
             : "No media from this source."}
         </p>
       ) : (
-        // key by source so the grid remounts (scroll + measurement reset) on filter change.
-        <MediaGrid key={source} count={count} source={sourceArg} onOpen={setOpenItem} />
+        // key by source+sort so the grid remounts (scroll + measurement reset) on change.
+        <MediaGrid
+          key={`${source}:${sort.by}:${sort.desc}`}
+          count={count}
+          source={sourceArg}
+          sort={sort}
+          onOpen={setOpenItem}
+        />
       )}
 
       <Lightbox item={openItem} onClose={() => setOpenItem(null)} />
@@ -116,10 +134,12 @@ function SourceFilter({
 function MediaGrid({
   count,
   source,
+  sort,
   onOpen,
 }: {
   count: number;
   source: string | null;
+  sort: SortState;
   onOpen: (item: MediaItem) => void;
 }) {
   const GAP = 4; // matches gap-1 / p-1 (0.25rem)
@@ -168,8 +188,8 @@ function MediaGrid({
   }, [firstPage, lastPage]);
   const queries = useQueries({
     queries: pages.map((p) => ({
-      queryKey: ["mediaWindow", source, p],
-      queryFn: () => client.getMediaWindow(source, p * PAGE, PAGE),
+      queryKey: ["mediaWindow", source, sort.by, sort.desc, p],
+      queryFn: () => client.getMediaWindow(source, p * PAGE, PAGE, sort.by, sort.desc),
     })),
   });
   const loaded = new Map<number, MediaItem[]>();
