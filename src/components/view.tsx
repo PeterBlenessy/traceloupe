@@ -11,6 +11,7 @@ import { Search, TriangleAlert } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { cn } from "@/lib/utils";
@@ -175,7 +176,8 @@ export function LazyListView<T>({
   );
 }
 
-/** Master list on the left, detail pane on the right (Messages, Contacts). */
+/** Master list on the left, detail pane on the right (Messages, Contacts). The
+ *  master width is drag-resizable and persisted (shared across these views). */
 export function ListDetail({
   master,
   detail,
@@ -183,11 +185,15 @@ export function ListDetail({
   master: React.ReactNode;
   detail: React.ReactNode;
 }) {
+  const { width, startResize } = useResizableWidth("salvage-master-width", 288, 200, 560);
   return (
     <div className="flex h-full">
       {/* min-h-0 lets the master's scroll area shrink to the column height and
           actually scroll, instead of growing with its content. */}
-      <div className="flex w-72 min-h-0 shrink-0 flex-col border-r">{master}</div>
+      <div className="flex min-h-0 shrink-0 flex-col border-r" style={{ width }}>
+        {master}
+      </div>
+      <ResizeHandle onPointerDown={(e) => startResize(e, "right")} />
       <div className="min-w-0 flex-1">{detail}</div>
     </div>
   );

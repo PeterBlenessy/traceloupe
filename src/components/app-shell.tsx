@@ -23,7 +23,9 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
+import { useResizableWidth } from "@/components/resize";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -53,6 +55,14 @@ const nav = [
 
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Drag-resizable, persisted sidebar width (applies only when expanded; the
+  // icon rail uses the fixed --sidebar-width-icon).
+  const { width: sidebarWidth, startResize } = useResizableWidth(
+    "salvage-sidebar-width",
+    256,
+    180,
+    400,
+  );
 
   return (
     // ImportProvider lives above the routes so an import survives "run in
@@ -63,13 +73,19 @@ export function AppShell() {
         virtualized list's tall spacer would inflate the whole document and its
         scroll container would never actually scroll (it just grows), defeating
         every `min-h-0`/`overflow-auto` below. A fixed height gives the flex chain
-        something to constrain against so overflow scrolls instead of expanding. */}
-    <SidebarProvider className="h-svh overflow-hidden">
-      <Sidebar>
+        something to constrain against so overflow scrolls instead of expanding.
+        `relative` anchors the sidebar resize handle. */}
+    <SidebarProvider
+      className="relative h-svh overflow-hidden"
+      style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
+    >
+      {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
+          rather than sliding it off-canvas. */}
+      <Sidebar collapsible="icon">
         <SidebarHeader>
           <Link to="/" className="flex items-center gap-2 px-2 py-1.5 font-semibold">
             <HardDrive className="size-4" />
-            Salvage
+            <span className="group-data-[collapsible=icon]:hidden">Salvage</span>
           </Link>
         </SidebarHeader>
         <SidebarContent>
@@ -78,7 +94,7 @@ export function AppShell() {
               <SidebarMenu>
                 {nav.map(({ to, label, icon: Icon }) => (
                   <SidebarMenuItem key={to}>
-                    <SidebarMenuButton asChild isActive={pathname === to}>
+                    <SidebarMenuButton asChild isActive={pathname === to} tooltip={label}>
                       <Link to={to}>
                         <Icon />
                         <span>{label}</span>
@@ -91,6 +107,7 @@ export function AppShell() {
           </SidebarGroup>
         </SidebarContent>
       </Sidebar>
+      <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
       <SidebarInset>
         {/* A slim bar carrying the sidebar toggle and theme control; views
             render their own headers below it. */}
@@ -108,6 +125,27 @@ export function AppShell() {
       </SidebarInset>
     </SidebarProvider>
     </ImportProvider>
+  );
+}
+
+/** A drag handle at the expanded sidebar's right edge for resizing its width.
+ *  Hidden on mobile and when collapsed to the icon rail. */
+function SidebarResizeEdge({
+  onPointerDown,
+}: {
+  onPointerDown: (e: React.PointerEvent) => void;
+}) {
+  const { state, isMobile } = useSidebar();
+  if (isMobile || state === "collapsed") return null;
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      onPointerDown={onPointerDown}
+      title="Drag to resize the sidebar"
+      className="absolute inset-y-0 z-20 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40 active:bg-primary/60"
+      style={{ left: "var(--sidebar-width)", transform: "translateX(-2px)" }}
+    />
   );
 }
 
