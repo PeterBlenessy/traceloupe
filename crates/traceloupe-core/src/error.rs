@@ -49,6 +49,12 @@ pub enum Error {
     /// password (a key unwrap that didn't validate), or an unexpected blob.
     #[error("backup decryption failed: {0}")]
     Decrypt(String),
+
+    /// A native parser could not make sense of a source database (e.g. an
+    /// unrecognized schema). Non-fatal at the import layer: the caller falls
+    /// back to the iLEAPP path.
+    #[error("parse error: {0}")]
+    Parse(String),
 }
 
 impl Error {

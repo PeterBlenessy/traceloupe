@@ -39,7 +39,7 @@ pub fn normalize_lava(
     engine_out_dir: &Path,
     cache: &CacheDb,
 ) -> Result<ImportReport> {
-    normalize_lava_with_progress(lava_path, engine_out_dir, cache, false, |_| {})
+    normalize_lava_with_progress(lava_path, engine_out_dir, cache, false, false, |_| {})
 }
 
 /// Like [`normalize_lava`], but calls `on_step` with a human label before each
@@ -47,11 +47,14 @@ pub fn normalize_lava(
 /// normalize pass instead of one opaque "organizing" spinner.
 /// `skip_messages` skips the iLEAPP `sms` stage — set when the caller already
 /// materialized Messages natively from `sms.db` (Phase 2), to avoid duplicates.
+/// `skip_notes` likewise skips the iLEAPP `notes` stage when Notes were
+/// materialized natively from `NoteStore.sqlite`.
 pub fn normalize_lava_with_progress(
     lava_path: &Path,
     engine_out_dir: &Path,
     cache: &CacheDb,
     skip_messages: bool,
+    skip_notes: bool,
     mut on_step: impl FnMut(&str),
 ) -> Result<ImportReport> {
     let lava = Connection::open_with_flags(lava_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -96,7 +99,11 @@ pub fn normalize_lava_with_progress(
         "Contacts",
         normalize_contacts(engine_out_dir, cache, &mut report)
     );
-    stage!("Notes", normalize_notes(&lava, cache, &mut report));
+    // Notes: skipped when the orchestrator materialized them natively from
+    // NoteStore.sqlite (Phase 2). Otherwise the iLEAPP `notes` path runs.
+    if !skip_notes {
+        stage!("Notes", normalize_notes(&lava, cache, &mut report));
+    }
     // Third-party chat apps → the Messages view, tagged by service. Each is a
     // no-op unless its lava table is present (the app was installed + parsed).
     stage!(

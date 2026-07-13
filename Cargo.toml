@@ -29,6 +29,9 @@ zeroize = "1"
 # `decrypt_padded_mut` fast path on cbc's Decryptor (see crypto.rs).
 cipher = { version = "0.4", features = ["block-padding"] }
 aes-kw = "0.2"
+# Native Notes parser (Phase 2): NoteStore.sqlite stores each note body as a
+# gzip-compressed protobuf in ZICNOTEDATA.ZDATA. See parsers/notes.rs.
+flate2 = "1"
 
 # Even in a dev/debug build (`tauri dev`), compile the crypto crates optimized.
 # Decrypting hundreds of MB with an unoptimized AES is ~20x slower and made the
