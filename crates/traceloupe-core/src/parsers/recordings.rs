@@ -43,11 +43,6 @@ pub struct RecordingAsset {
     pub plain_size: Option<u64>,
 }
 
-/// Domains a Voice Memos DB / audio can live in, newest layout first.
-const DOMAINS: &[&str] = &["AppDomainGroup-group.com.apple.VoiceMemos", "MediaDomain"];
-/// Candidate metadata DB relative paths within a domain.
-const DB_PATHS: &[&str] = &["Recordings/CloudRecordings.db", "Recordings/Recordings.db"];
-
 /// Enumerate voice memos. Pass `decryptor` for an encrypted backup, `None` for a
 /// plaintext one. `work_dir` holds the transient decrypted metadata DB. Returns
 /// an error only if the Manifest itself can't be opened; a missing Voice Memos DB
@@ -59,16 +54,15 @@ pub fn parse_recordings(
 ) -> Result<Vec<RecordingAsset>> {
     let index = ManifestIndex::open(backup_dir, decryptor, work_dir)?;
 
-    // All `.m4a` blobs under Recordings/, keyed by filename, across candidate
-    // domains. This is the source of truth for what's actually in the backup.
+    // Voice Memos audio: any `.m4a` under a `Recordings/` path, in any domain.
+    // Matching on path (not a hard-coded domain) is robust to the layout moving
+    // between `AppDomainGroup-group.com.apple.VoiceMemos` and `MediaDomain`
+    // across iOS versions, and the `Recordings/` segment excludes message-audio
+    // attachments and ringtones (which live elsewhere). Keyed by filename.
     let mut audio: HashMap<String, FileEntry> = HashMap::new();
-    for domain in DOMAINS {
-        for entry in index.find_prefix(domain, "Recordings/")? {
-            if entry.relative_path.to_ascii_lowercase().ends_with(".m4a") {
-                if let Some(name) = basename(&entry.relative_path) {
-                    audio.entry(name.to_string()).or_insert(entry);
-                }
-            }
+    for entry in index.find_relative_like("%Recordings/%.m4a")? {
+        if let Some(name) = basename(&entry.relative_path) {
+            audio.entry(name.to_string()).or_insert(entry);
         }
     }
     if audio.is_empty() {
@@ -122,11 +116,11 @@ fn read_metadata(
     decryptor: Option<&BackupDecryptor>,
     work_dir: &Path,
 ) -> Option<HashMap<String, RecordingMeta>> {
-    // First DB found across the candidate (domain, path) pairs.
-    let db_entry = DOMAINS
-        .iter()
-        .flat_map(|d| DB_PATHS.iter().map(move |p| (*d, *p)))
-        .find_map(|(d, p)| index.find(d, p).ok().flatten())?;
+    // The Voice Memos metadata DB, by filename, in any domain. Modern iOS uses
+    // CloudRecordings.db; older uses Recordings.db.
+    let db_entry = ["%CloudRecordings.db", "%/Recordings.db"]
+        .into_iter()
+        .find_map(|p| index.find_relative_like(p).ok().and_then(|mut v| v.pop()))?;
 
     let db_temp = work_dir.join(".recordings.db");
     index.extract_to(&db_entry, decryptor, &db_temp).ok()?;

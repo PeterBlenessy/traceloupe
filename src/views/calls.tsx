@@ -21,6 +21,7 @@ import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
+import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
 import { client, type Call } from "@/lib/ipc";
 
@@ -41,6 +42,8 @@ export function CallsView() {
     queryFn: () => client.countCalls(search),
     enabled: active === true,
   });
+  // Resolve each call's phone number to a saved contact, like Messages does.
+  const resolve = useContactResolver();
 
   if (active === false) {
     return (
@@ -77,7 +80,7 @@ export function CallsView() {
       fetchWindow={(offset, limit) =>
         client.getCallsWindow(search, offset, limit, sort.by, sort.desc)
       }
-      renderItem={(c) => <CallRow call={c} />}
+      renderItem={(c) => <CallRow call={c} contact={resolve(c.address)} />}
     />
   );
 }
@@ -94,10 +97,20 @@ function callVisual(call: Call): { Icon: typeof PhoneCall; className: string } {
   return { Icon: PhoneIncoming, className: "text-muted-foreground" };
 }
 
-function CallRow({ call }: { call: Call }) {
+function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | null }) {
   const { Icon, className } = callVisual(call);
   const missed = call.answered === false && call.direction === "incoming";
   const duration = formatDuration(call.durationS);
+  // Prefer the saved contact's name; fall back to the raw number. When a name is
+  // shown, keep the number visible in the subtitle so it's not lost.
+  const title = contact?.name ?? call.address ?? "Unknown";
+  const subtitle = [
+    contact && call.address ? call.address : null,
+    call.service,
+    call.direction,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <Item>
       <ItemMedia>
@@ -105,11 +118,9 @@ function CallRow({ call }: { call: Call }) {
       </ItemMedia>
       <ItemContent>
         <ItemTitle className={cn("truncate", missed && "text-destructive")}>
-          {call.address ?? "Unknown"}
+          {title}
         </ItemTitle>
-        <ItemDescription className="truncate">
-          {[call.service, call.direction].filter(Boolean).join(" · ")}
-        </ItemDescription>
+        <ItemDescription className="truncate">{subtitle}</ItemDescription>
       </ItemContent>
       <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
         <span>{formatDateTime(call.occurredAt)}</span>

@@ -96,6 +96,21 @@ impl ManifestIndex {
             .map_err(Into::into)
     }
 
+    /// Every file whose `relativePath` matches a SQL `LIKE` pattern, across ALL
+    /// domains, ordered by path. Use when a file's domain varies by iOS version
+    /// (e.g. Voice Memos: `AppDomainGroup-group.com.apple.VoiceMemos` vs
+    /// `MediaDomain`) so the caller can match on path alone.
+    pub fn find_relative_like(&self, pattern: &str) -> Result<Vec<FileEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT fileID, domain, relativePath, file FROM Files
+             WHERE relativePath LIKE ?1
+             ORDER BY relativePath",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![pattern], Self::row_to_entry)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     /// The on-disk (possibly ciphertext) path of a backed-up file.
     pub fn blob_path(&self, file_id: &str) -> PathBuf {
         self.backup_dir
