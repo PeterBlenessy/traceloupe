@@ -140,8 +140,7 @@ pub fn parse_address_book_images(
         let Ok(mut stmt) = conn.prepare(&sql) else {
             continue;
         };
-        let Ok(rows) =
-            stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+        let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
         else {
             continue;
         };
