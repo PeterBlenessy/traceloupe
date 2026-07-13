@@ -42,11 +42,16 @@ export function ContactsView() {
     return [...set].sort((a, b) => (a === "Address Book" ? -1 : b === "Address Book" ? 1 : a.localeCompare(b)));
   }, [contacts]);
 
+  // If the saved source isn't present (e.g. a backup with no Address Book
+  // contacts), fall back to the first available so the list never filters to
+  // nothing.
+  const activeSource = sources.includes(source) ? source : (sources[0] ?? source);
+
   const filtered = useMemo(() => {
     if (!contacts) return [];
     const needle = q.trim().toLowerCase();
     return contacts.filter((c) => {
-      if (sources.length > 1 && c.source !== source) return false;
+      if (sources.length > 1 && c.source !== activeSource) return false;
       if (!needle) return true;
       const hay = [
         contactName(c),
@@ -59,7 +64,7 @@ export function ContactsView() {
         .toLowerCase();
       return hay.includes(needle);
     });
-  }, [contacts, q, source, sources]);
+  }, [contacts, q, activeSource, sources]);
 
   const sorted = useMemo(
     () =>
@@ -96,7 +101,7 @@ export function ContactsView() {
                 type="single"
                 size="sm"
                 variant="outline"
-                value={source}
+                value={activeSource}
                 onValueChange={(v) => v && setSource(v)}
                 className="flex-wrap justify-start"
               >
@@ -130,7 +135,9 @@ export function ContactsView() {
             </div>
           ) : filtered.length === 0 ? (
             <p className="px-4 py-6 text-sm text-muted-foreground">
-              No contacts in this backup.
+              {(contacts?.length ?? 0) === 0
+                ? "No contacts in this backup."
+                : "No matching contacts."}
             </p>
           ) : (
             <VirtualList

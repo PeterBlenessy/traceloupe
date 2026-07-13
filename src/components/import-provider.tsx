@@ -66,12 +66,22 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
     );
     unlisten.current = off;
     try {
-      await client.importBackup({
+      const result = await client.importBackup({
         backupPath: backup.path,
         backupId: backup.id,
         password,
         modules,
       });
+      // Surface partial-failure warnings (a malformed artifact was skipped) so
+      // they aren't lost — the import still succeeded for everything else.
+      if (result.warnings.length > 0) {
+        console.warn(
+          `%c[salvage]%c import completed with ${result.warnings.length} warning(s):`,
+          "color:#a78bfa;font-weight:600",
+          "color:inherit",
+          result.warnings,
+        );
+      }
       off();
       unlisten.current = null;
       qc.invalidateQueries();
