@@ -14,6 +14,36 @@ use std::time::Instant;
 /// Monotonic counter for unique on-demand decrypt temp-file names.
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Deletes its path on drop, so a decrypted-plaintext temp file never outlives
+/// the request that produced it — even on an early return or a panic mid-render.
+struct TempPath(PathBuf);
+impl Drop for TempPath {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Write bytes to a fresh file with owner-only (0600) permissions on Unix, so a
+/// decrypted plaintext isn't briefly world-readable at rest.
+fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
+}
+
 use salvage_core::cache::CacheDb;
 use salvage_core::crypto::BackupDecryptor;
 use salvage_core::discovery::{self, BackupInfo};
@@ -961,12 +991,13 @@ fn media_protocol_response(
         // other's temp file mid-render.
         let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = thumbs_dir.join(format!("{id}.{seq}.decrypted"));
-        if std::fs::write(&tmp, &plain).is_err() {
+        if write_private(&tmp, &plain).is_err() {
             return not_found();
         }
-        let out = media::render(&tmp, &thumbs_dir, id, want_thumb, mime.as_deref());
-        let _ = std::fs::remove_file(&tmp);
-        out
+        // RAII: the plaintext temp is removed when this guard drops, no matter how
+        // we leave the block.
+        let _tmp = TempPath(tmp.clone());
+        media::render(&tmp, &thumbs_dir, id, want_thumb, mime.as_deref())
     } else {
         media::render(
             std::path::Path::new(&local_path),
@@ -1099,8 +1130,9 @@ fn attachment_protocol_response(
 
     // Audio/video and anything else served inline: raw bytes with stored mime.
     // Honor Range requests so <video>/<audio> can seek without re-downloading
-    // (and without reading the whole file into memory each time).
-    let content_type = mime.unwrap_or_else(|| "application/octet-stream".to_string());
+    // (and without reading the whole file into memory each time). The stored MIME
+    // is from the backup, so validate it before it becomes a response header.
+    let content_type = media::safe_content_type(mime.as_deref());
     let Ok(meta) = std::fs::metadata(&local_path) else {
         return not_found();
     };
