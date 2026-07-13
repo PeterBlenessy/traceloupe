@@ -1,15 +1,37 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { client } from "@/lib/ipc";
+import { client, type ReimportResult } from "@/lib/ipc";
+
+/** Human count of what a re-import produced, for the success toast. */
+function summarize(module: string, r: ReimportResult): string {
+  const n =
+    module === "recordings"
+      ? r.recordings
+      : module === "camera_roll"
+        ? r.mediaItems
+        : module === "notes"
+          ? r.notes
+          : r.messages;
+  const noun =
+    module === "recordings"
+      ? "recordings"
+      : module === "camera_roll"
+        ? "photos & videos"
+        : module === "notes"
+          ? "notes"
+          : "messages";
+  return `Re-imported ${n.toLocaleString()} ${noun}`;
+}
 
 /**
  * Re-import a single native data type (recordings, camera_roll, messages, notes)
- * into the open backup without a full re-import. On success it invalidates the
- * query cache so the current view refreshes. On failure it shows the error inline
- * (selectable) and logs it to the console, so a decrypt/parse error is visible
- * and copyable rather than swallowed.
+ * into the open backup without a full re-import. Feedback is via shadcn's Sonner
+ * toasts; on success it invalidates the query cache so the current view refreshes.
+ * An error toast stays until dismissed (a decrypt/parse error is worth reading),
+ * and is also logged to the console for copying.
  */
 export function ReimportButton({
   module,
@@ -19,41 +41,31 @@ export function ReimportButton({
   label?: string;
 }) {
   const qc = useQueryClient();
-  const [status, setStatus] = useState<"idle" | "running" | "error">("idle");
-  const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
 
   async function run() {
-    setStatus("running");
-    setError(null);
+    setRunning(true);
     try {
-      await client.reimportModule(module);
-      // Refresh whatever the current view is reading.
+      const result = await client.reimportModule(module);
       await qc.invalidateQueries();
-      setStatus("idle");
+      toast.success(summarize(module, result));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Surface the full error in the console so it's copyable for diagnosis.
       console.error(`[reimport ${module}]`, msg);
-      setError(msg);
-      setStatus("error");
+      toast.error(`Re-import failed`, { description: msg, duration: Infinity });
+    } finally {
+      setRunning(false);
     }
   }
 
   return (
-    <div className="flex min-w-0 items-center gap-2">
-      {status === "error" && error && (
-        <span className="max-w-md select-text truncate text-xs text-destructive" title={error}>
-          {error}
-        </span>
+    <Button size="sm" variant="outline" onClick={run} disabled={running}>
+      {running ? (
+        <Loader2 className="size-4 animate-spin" />
+      ) : (
+        <RefreshCw className="size-4" />
       )}
-      <Button size="sm" variant="outline" onClick={run} disabled={status === "running"}>
-        {status === "running" ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : (
-          <RefreshCw className="size-4" />
-        )}
-        {label}
-      </Button>
-    </div>
+      {label}
+    </Button>
   );
 }
