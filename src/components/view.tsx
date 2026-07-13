@@ -10,7 +10,6 @@
 import { Search, TriangleAlert } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
@@ -52,30 +51,6 @@ export function ErrorState({ error }: { error: unknown }) {
         </EmptyDescription>
       </EmptyHeader>
     </Empty>
-  );
-}
-
-/** A full-height view that is a single scrolling column (Calls, Safari). */
-export function ListView({
-  title,
-  count,
-  header,
-  children,
-}: {
-  title: string;
-  count?: number;
-  header?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex h-full flex-col">
-      <ViewHeader title={title} count={count}>
-        {header}
-      </ViewHeader>
-      <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-3xl p-2">{children}</div>
-      </ScrollArea>
-    </div>
   );
 }
 
