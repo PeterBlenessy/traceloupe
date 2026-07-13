@@ -96,6 +96,17 @@ export interface Recording {
   fileName: string | null;
 }
 
+/** Counts refreshed by a partial re-import (only the relevant field is set). */
+export interface ReimportResult {
+  module: string;
+  recordings: number;
+  mediaItems: number;
+  messages: number;
+  threads: number;
+  notes: number;
+  warnings: string[];
+}
+
 export interface LabeledValue {
   label: string | null;
   value: string;
@@ -296,6 +307,12 @@ export interface TraceLoupeClient {
   audioUrl(id: number): string;
   /** Open an attachment's file with the OS default app (documents, etc.). */
   openAttachment(id: number): Promise<void>;
+  /**
+   * Re-import one natively-parsed data type into the open backup, replacing just
+   * that type's rows (no iLEAPP). `moduleId` is one of "recordings",
+   * "camera_roll", "messages", "notes".
+   */
+  reimportModule(moduleId: string): Promise<ReimportResult>;
 }
 
 const tauriClient: TraceLoupeClient = {
@@ -364,6 +381,7 @@ const tauriClient: TraceLoupeClient = {
     `traceloupe-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
   audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
+  reimportModule: (moduleId) => invoke<ReimportResult>("reimport_module", { moduleId }),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -765,6 +783,15 @@ export const mockClient: TraceLoupeClient = {
   // (the real bytes come from the traceloupe-audio scheme under Tauri).
   audioUrl: () => SILENT_WAV_DATA_URL,
   openAttachment: async () => {},
+  reimportModule: async (moduleId) => ({
+    module: moduleId,
+    recordings: mockActive ? mockRecordings.length : 0,
+    mediaItems: 0,
+    messages: 0,
+    threads: 0,
+    notes: 0,
+    warnings: [],
+  }),
 };
 
 /** ~0.1s of silence — lets the mock player render/seek without a backend. */

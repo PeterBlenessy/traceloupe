@@ -10,6 +10,7 @@ import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
+import { ReimportButton } from "@/components/reimport-button";
 import { formatDateTime, formatListTime } from "@/lib/format";
 import { client, type Note } from "@/lib/ipc";
 
@@ -54,7 +55,9 @@ export function NotesView() {
     <ListDetail
       master={
         <>
-          <ViewHeader title="Notes" count={notes?.length} />
+          <ViewHeader title="Notes" count={notes?.length}>
+            <ReimportButton module="notes" />
+          </ViewHeader>
           {(notes?.length ?? 0) > 0 && (
             <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
               <SortControl

@@ -9,6 +9,7 @@ import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
+import { ReimportButton } from "@/components/reimport-button";
 import { formatDateTime, formatDuration, formatListTime } from "@/lib/format";
 import { client, type Recording } from "@/lib/ipc";
 
@@ -59,7 +60,9 @@ export function RecordingsView() {
     <ListDetail
       master={
         <>
-          <ViewHeader title="Recordings" count={recordings?.length} />
+          <ViewHeader title="Recordings" count={recordings?.length}>
+            <ReimportButton module="recordings" />
+          </ViewHeader>
           {(recordings?.length ?? 0) > 0 && (
             <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
               <SortControl
