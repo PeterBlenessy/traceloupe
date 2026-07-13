@@ -70,13 +70,56 @@ pub fn import_backup(
         .unwrap_or_else(|| work_dir.to_path_buf());
 
     let cache = CacheDb::open(cache_path)?;
-    // Each normalizer reports its sub-stage so the UI shows what's happening.
-    let mut report =
-        normalize::normalize_lava_with_progress(&lava_path, &engine_out_dir, &cache, |step| {
-            on_phase(ImportPhase::Normalizing { step: step.into() })
-        })?;
-
     let effective = sidecar::effective_module_ids(module_ids);
+
+    // Build the backup decryptor once (encrypted backups) — reused for native
+    // Messages and the camera roll. An empty password means an unencrypted
+    // backup, so no decryptor is needed. iLEAPP already ran with this password,
+    // so a failure here is unexpected; degrade with a warning.
+    let mut pre_warnings: Vec<String> = Vec::new();
+    let decryptor = if password.is_empty() {
+        None
+    } else {
+        match crate::crypto::BackupDecryptor::open(backup_dir, password) {
+            Ok(d) => Some(d),
+            Err(e) => {
+                pre_warnings.push(format!("Encrypted native reads unavailable: {e}"));
+                None
+            }
+        }
+    };
+
+    // Phase 2: materialize Messages natively from the backup's sms.db (via the
+    // Manifest Index), skipping iLEAPP's eager sms pass. Falls back to the iLEAPP
+    // path when Messages are disabled, sms.db isn't in the backup, or the native
+    // parse fails.
+    let mut native = ImportReport::default();
+    let native_messages = effective.contains(&"messages") && {
+        on_phase(ImportPhase::Normalizing {
+            step: "Messages".into(),
+        });
+        import_messages_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        )
+    };
+
+    // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
+    // the Messages stage is skipped when handled natively above.
+    let mut report = normalize::normalize_lava_with_progress(
+        &lava_path,
+        &engine_out_dir,
+        &cache,
+        native_messages,
+        |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
+    )?;
+    report.threads += native.threads;
+    report.messages += native.messages;
+    report.warnings.extend(pre_warnings);
+    report.warnings.extend(native.warnings);
 
     on_phase(ImportPhase::Normalizing {
         step: "Camera roll".into(),
@@ -84,23 +127,7 @@ pub fn import_backup(
     // Camera roll: read the backup's Manifest natively and reference iOS's own
     // thumbnails, so the gallery is fast and full images transcode on demand.
     if effective.contains(&"camera_roll") {
-        // Encrypted backups need the native decryptor (iLEAPP won't hand us the
-        // DCIM originals); `password` is empty for unencrypted backups. iLEAPP
-        // already ran with this password, so a failure to derive keys here is
-        // unexpected — degrade with a warning rather than aborting the import.
-        let decryptor = if password.is_empty() {
-            None
-        } else {
-            match crate::crypto::BackupDecryptor::open(backup_dir, password) {
-                Ok(d) => Some(d),
-                Err(e) => {
-                    report
-                        .warnings
-                        .push(format!("Encrypted camera roll unavailable: {e}"));
-                    None
-                }
-            }
-        };
+        // Reuses the decryptor built once above (None for unencrypted backups).
         // Decrypted thumbnails and transient decrypted DBs live beside the cache.
         // remove_cache (at import start) already cleared this, so no wipe here.
         let media_cache_dir = cache_path
@@ -190,6 +217,52 @@ pub fn import_backup(
         cache_path: cache_path.to_path_buf(),
         report,
     })
+}
+
+/// Materialize Messages natively: locate `sms.db` via the Manifest Index,
+/// decrypt/extract it to a temp file, and parse it into the cache. Returns
+/// whether it succeeded (sms.db present + parsed); on any miss or error the
+/// caller falls back to the iLEAPP `sms` path. `parse_messages` commits in one
+/// transaction, so a failure leaves no partial rows to duplicate.
+fn import_messages_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) -> bool {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Messages unavailable ({e}); using iLEAPP."));
+            return false;
+        }
+    };
+    let entry = match index.find("HomeDomain", "Library/SMS/sms.db") {
+        Ok(Some(e)) => e,
+        // sms.db not in this backup (or a read error) → let the iLEAPP path try.
+        _ => return false,
+    };
+    let sms_db = work_dir.join(".sms.db");
+    if let Err(e) = index.extract_to(&entry, decryptor, &sms_db) {
+        report.warnings.push(format!(
+            "Native Messages: couldn't read sms.db ({e}); using iLEAPP."
+        ));
+        return false;
+    }
+    let ok = match crate::parsers::messages::parse_messages(&sms_db, cache, report) {
+        Ok(()) => true,
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Messages: parse failed ({e}); using iLEAPP."
+            ));
+            false
+        }
+    };
+    let _ = std::fs::remove_file(&sms_db);
+    ok
 }
 
 /// Remove a SQLite cache DB and its WAL/SHM sidecars, if present.
@@ -353,6 +426,85 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             })
             .count();
         assert_eq!(outputs, 1, "stale engine outputs must not accumulate");
+    }
+
+    /// A plaintext backup whose Manifest.db points at an `sms.db` blob: the
+    /// native path resolves it via the Manifest Index and parses it into the
+    /// cache, no iLEAPP involved.
+    #[test]
+    fn native_messages_from_a_plaintext_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+
+        // sms.db stored content-addressed at <backup>/<id[:2]>/<id>.
+        let sms_id = "ab00000000000000000000000000000000000099";
+        let sub = backup.join(&sms_id[..2]);
+        std::fs::create_dir_all(&sub).unwrap();
+        let sms = Connection::open(sub.join(sms_id)).unwrap();
+        sms.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             INSERT INTO message VALUES (100,'hi',0,721692800000000000,1,0);
+             INSERT INTO chat_message_join VALUES (10,100);",
+        )
+        .unwrap();
+        drop(sms);
+
+        // Manifest.db resolving HomeDomain/Library/SMS/sms.db → that blob.
+        Connection::open(backup.join("Manifest.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+                 INSERT INTO Files VALUES ('{sms_id}','HomeDomain','Library/SMS/sms.db',1,NULL);"
+            ))
+            .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let mut report = ImportReport::default();
+
+        let ok = import_messages_native(&backup, None, &cache, &work, &mut report);
+        assert!(
+            ok,
+            "native path should succeed; warnings: {:?}",
+            report.warnings
+        );
+        assert_eq!(report.messages, 1);
+        assert_eq!(report.threads, 1);
+        let n: i64 = cache
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+
+    /// No sms.db in the backup → the native path declines (returns false) so the
+    /// caller falls back to the iLEAPP `sms` stage, writing nothing itself.
+    #[test]
+    fn native_messages_absent_sms_db_declines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+        Connection::open(backup.join("Manifest.db"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);",
+            )
+            .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        let ok = import_messages_native(&backup, None, &cache, tmp.path(), &mut report);
+        assert!(!ok);
+        assert_eq!(report.messages, 0);
     }
 
     // Small helper so the test can gracefully skip without sqlite3.
