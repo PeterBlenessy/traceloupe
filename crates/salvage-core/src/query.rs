@@ -236,12 +236,21 @@ pub fn count_all_messages(cache: &CacheDb, service: Option<&str>) -> Result<i64>
     // period buckets, whose range filters already exclude NULLs) omit them —
     // keeping the count and the windowed rows exactly aligned. `service` (None =
     // all) filters to one source app (iMessage/SMS/TikTok/…) for the app filter.
-    let n = conn.query_row(
-        "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
-         WHERE m.sent_at IS NOT NULL AND (?1 IS NULL OR t.service = ?1)",
-        rusqlite::params![service],
-        |r| r.get(0),
-    )?;
+    // No app filter → count messages directly (idx_messages_sent), skipping the
+    // join to threads entirely; only the service filter needs it.
+    let n = match service {
+        None => conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE sent_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?,
+        Some(svc) => conn.query_row(
+            "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
+             WHERE m.sent_at IS NOT NULL AND t.service = ?1",
+            [svc],
+            |r| r.get(0),
+        )?,
+    };
     Ok(n)
 }
 
@@ -271,15 +280,25 @@ pub fn count_message_ranges(
     service: Option<&str>,
 ) -> Result<Vec<i64>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
-        "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
-         WHERE (?1 IS NULL OR m.sent_at >= ?1)
-           AND (?2 IS NULL OR m.sent_at < ?2)
-           AND (?3 IS NULL OR t.service = ?3)",
-    )?;
+    // No app filter → no join to threads (the common case: one COUNT per bucket).
+    let mut stmt = match service {
+        None => conn.prepare(
+            "SELECT COUNT(*) FROM messages
+             WHERE (?1 IS NULL OR sent_at >= ?1) AND (?2 IS NULL OR sent_at < ?2)",
+        )?,
+        Some(_) => conn.prepare(
+            "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
+             WHERE (?1 IS NULL OR m.sent_at >= ?1)
+               AND (?2 IS NULL OR m.sent_at < ?2)
+               AND t.service = ?3",
+        )?,
+    };
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
-        out.push(stmt.query_row(rusqlite::params![r.lo, r.hi, service], |row| row.get(0))?);
+        out.push(match service {
+            None => stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?,
+            Some(svc) => stmt.query_row(rusqlite::params![r.lo, r.hi, svc], |row| row.get(0))?,
+        });
     }
     Ok(out)
 }
