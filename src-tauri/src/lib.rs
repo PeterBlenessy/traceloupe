@@ -455,24 +455,25 @@ async fn import_backup(
 /// Open a previously-imported backup's cache (by id) for browsing, without
 /// re-running the engine. Returns false if no cache exists for that id yet.
 #[tauri::command]
-fn open_backup(
-    app: AppHandle,
-    active: State<'_, ActiveBackup>,
-    session: State<'_, SessionKeys>,
-    backup_id: String,
-) -> bool {
+async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     let Ok(data_dir) = app.path().app_data_dir() else {
         return false;
     };
     let cache_path = data_dir.join("caches").join(&backup_id).join("cache.db");
-    if cache_path.exists() {
-        // Rebuild the decryptor for an encrypted backup (no-op for plaintext).
-        session.set(reopen_decryptor(&cache_path, &backup_id));
-        active.set(cache_path);
-        true
-    } else {
-        false
+    if !cache_path.exists() {
+        return false;
     }
+    // Rebuilding the decryptor reads the Keychain, opens the cache and runs
+    // PBKDF2 — all blocking. Keep it off the main thread so selecting a backup
+    // never freezes the UI (no-op decryptor for plaintext backups).
+    let cp = cache_path.clone();
+    let decryptor = tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&cp, &backup_id))
+        .await
+        .ok()
+        .flatten();
+    app.state::<SessionKeys>().set(decryptor);
+    app.state::<ActiveBackup>().set(cache_path);
+    true
 }
 
 /// Whether a backup is currently open for browsing.
@@ -499,9 +500,17 @@ fn imported_backup_ids(app: AppHandle) -> Vec<String> {
 }
 
 #[tauri::command]
-fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSummary>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_threads(&cache).map_err(|e| e.to_string())
+async fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSummary>, String> {
+    // Async + spawn_blocking: this scans every thread (with a per-thread snippet
+    // subquery) and must not run on the main thread, or opening a backup with
+    // thousands of conversations freezes the whole UI.
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_threads(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -624,50 +633,114 @@ fn open_attachment(active: State<'_, ActiveBackup>, attachment_id: i64) -> Resul
 }
 
 #[tauri::command]
-fn list_calls(active: State<'_, ActiveBackup>) -> Result<Vec<Call>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_calls(&cache).map_err(|e| e.to_string())
+async fn list_calls(active: State<'_, ActiveBackup>) -> Result<Vec<Call>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_calls(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_notes(active: State<'_, ActiveBackup>) -> Result<Vec<Note>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_notes(&cache).map_err(|e| e.to_string())
+async fn list_notes(active: State<'_, ActiveBackup>) -> Result<Vec<Note>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_notes(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_safari_history(active: State<'_, ActiveBackup>) -> Result<Vec<HistoryVisit>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_safari_history(&cache).map_err(|e| e.to_string())
+async fn list_safari_history(active: State<'_, ActiveBackup>) -> Result<Vec<HistoryVisit>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_safari_history(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_contacts(active: State<'_, ActiveBackup>) -> Result<Vec<Contact>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_contacts(&cache).map_err(|e| e.to_string())
+async fn list_contacts(active: State<'_, ActiveBackup>) -> Result<Vec<Contact>, String> {
+    // Async + spawn_blocking: the address book can hold tens of thousands of
+    // contacts (e.g. TikTok), so this must stay off the main thread.
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_contacts(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_installed_apps(active: State<'_, ActiveBackup>) -> Result<Vec<String>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_installed_apps(&cache).map_err(|e| e.to_string())
+async fn list_installed_apps(active: State<'_, ActiveBackup>) -> Result<Vec<String>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_installed_apps(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_media(active: State<'_, ActiveBackup>) -> Result<Vec<MediaItem>, String> {
-    let cache = open_active_cache(&active)?;
-    query::list_media(&cache).map_err(|e| e.to_string())
+async fn list_media(active: State<'_, ActiveBackup>) -> Result<Vec<MediaItem>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_media(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// (source label, count) pairs for the gallery's source filter.
 #[tauri::command]
-fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, String> {
-    let cache = open_active_cache(&active)?;
-    query::media_sources(&cache).map_err(|e| e.to_string())
+async fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::media_sources(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // Windowed, filterable list commands (async + spawn_blocking) so the UI can
 // lazily load huge lists a slice at a time — the same pattern as messages.
+
+// These map a client-supplied sort *field name* to an allowlisted SQL column so
+// nothing untrusted is ever interpolated into a query. Unknown fields fall back
+// to each list's default (date/most-recent).
+fn calls_sort(field: &str, desc: bool) -> query::Sort {
+    let col = match field {
+        "name" => "address COLLATE NOCASE",
+        "duration" => "duration_s",
+        _ => "occurred_at",
+    };
+    query::Sort::new(col, desc)
+}
+fn safari_sort(field: &str, desc: bool) -> query::Sort {
+    let col = match field {
+        "title" => "title COLLATE NOCASE",
+        "visits" => "visit_count",
+        _ => "visited_at",
+    };
+    query::Sort::new(col, desc)
+}
+fn media_sort(field: &str, desc: bool) -> query::Sort {
+    let col = match field {
+        "source" => "source COLLATE NOCASE",
+        _ => "taken_at",
+    };
+    query::Sort::new(col, desc)
+}
 
 #[tauri::command]
 async fn count_media(
@@ -689,11 +762,20 @@ async fn get_media_window(
     source: Option<String>,
     offset: i64,
     limit: i64,
+    sort_by: String,
+    desc: bool,
 ) -> Result<Vec<MediaItem>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_media_window(&cache, source.as_deref(), offset, limit).map_err(|e| e.to_string())
+        query::get_media_window(
+            &cache,
+            source.as_deref(),
+            offset,
+            limit,
+            media_sort(&sort_by, desc),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -719,11 +801,20 @@ async fn get_calls_window(
     search: Option<String>,
     offset: i64,
     limit: i64,
+    sort_by: String,
+    desc: bool,
 ) -> Result<Vec<Call>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_calls_window(&cache, search.as_deref(), offset, limit).map_err(|e| e.to_string())
+        query::get_calls_window(
+            &cache,
+            search.as_deref(),
+            offset,
+            limit,
+            calls_sort(&sort_by, desc),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -749,12 +840,20 @@ async fn get_safari_window(
     search: Option<String>,
     offset: i64,
     limit: i64,
+    sort_by: String,
+    desc: bool,
 ) -> Result<Vec<HistoryVisit>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_safari_window(&cache, search.as_deref(), offset, limit)
-            .map_err(|e| e.to_string())
+        query::get_safari_window(
+            &cache,
+            search.as_deref(),
+            offset,
+            limit,
+            safari_sort(&sort_by, desc),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1062,30 +1161,47 @@ pub fn run() {
         .manage(ActiveBackup::default())
         .manage(SessionKeys::default())
         .manage(ImportCancel::default())
-        .register_uri_scheme_protocol("salvage-media", |ctx, request| {
+        // Asynchronous protocols: the handlers decrypt bytes and shell out to
+        // `sips` to render/downscale images. On the *synchronous* scheme that
+        // runs on the main thread, so scrolling a timeline or gallery full of
+        // thumbnails/avatars froze the whole UI. Answer each request on a
+        // blocking worker instead and hand the bytes back via the responder.
+        .register_asynchronous_uri_scheme_protocol("salvage-media", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
-            media_protocol_response(ctx.app_handle(), &path, query.as_deref())
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(media_protocol_response(&app, &path, query.as_deref()));
+            });
         })
-        .register_uri_scheme_protocol("salvage-avatar", |ctx, request| {
+        .register_asynchronous_uri_scheme_protocol("salvage-avatar", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
-            avatar_protocol_response(ctx.app_handle(), &path)
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(avatar_protocol_response(&app, &path));
+            });
         })
-        .register_uri_scheme_protocol("salvage-attachment", |ctx, request| {
-            let path = request.uri().path().to_string();
-            let query = request.uri().query().map(str::to_string);
-            let range = request
-                .headers()
-                .get("range")
-                .and_then(|v| v.to_str().ok())
-                .map(str::to_string);
-            attachment_protocol_response(
-                ctx.app_handle(),
-                &path,
-                query.as_deref(),
-                range.as_deref(),
-            )
-        })
+        .register_asynchronous_uri_scheme_protocol(
+            "salvage-attachment",
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                let path = request.uri().path().to_string();
+                let query = request.uri().query().map(str::to_string);
+                let range = request
+                    .headers()
+                    .get("range")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(attachment_protocol_response(
+                        &app,
+                        &path,
+                        query.as_deref(),
+                        range.as_deref(),
+                    ));
+                });
+            },
+        )
         .invoke_handler(tauri::generate_handler![
             list_backups,
             default_backup_root,

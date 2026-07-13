@@ -585,18 +585,50 @@ pub fn get_media_window(
     source: Option<&str>,
     offset: i64,
     limit: i64,
+    sort: Sort,
 ) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    let (dir, nulls) = sort.order_sql();
+    let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at
          FROM media_items
          WHERE local_path IS NOT NULL AND (?1 IS NULL OR source = ?1)
-         ORDER BY taken_at DESC NULLS LAST, id DESC
+         ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
-    )?;
+        sort.column(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params![source, limit, offset], row_to_media)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// A list sort: an allowlisted column expression plus a direction. The column
+/// is interpolated into SQL, so it MUST come from a trusted literal (the command
+/// layer maps a client-supplied field name to one of a fixed set of `&'static
+/// str` columns) — never from raw user input.
+#[derive(Debug, Clone, Copy)]
+pub struct Sort {
+    column: &'static str,
+    desc: bool,
+}
+
+impl Sort {
+    pub fn new(column: &'static str, desc: bool) -> Self {
+        Self { column, desc }
+    }
+    fn column(&self) -> &'static str {
+        self.column
+    }
+    /// `(direction, null-placement)` — nulls sort last when descending (newest
+    /// first) and first when ascending, so undated rows stay at the far end.
+    fn order_sql(&self) -> (&'static str, &'static str) {
+        if self.desc {
+            ("DESC", "NULLS LAST")
+        } else {
+            ("ASC", "NULLS FIRST")
+        }
+    }
 }
 
 /// Calls whose address matches `search` (substring), or all when NULL.
@@ -615,15 +647,21 @@ pub fn get_calls_window(
     search: Option<&str>,
     offset: i64,
     limit: i64,
+    sort: Sort,
 ) -> Result<Vec<Call>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    // `sort.column()` is an allowlisted SQL fragment (never raw user input); see
+    // the `Sort` type. `id` is the stable tiebreaker.
+    let (dir, nulls) = sort.order_sql();
+    let sql = format!(
         "SELECT id, address, direction, answered, duration_s, occurred_at, service
          FROM calls
          WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%')
-         ORDER BY occurred_at DESC NULLS LAST, id DESC
+         ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
-    )?;
+        sort.column(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_call)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
@@ -645,15 +683,19 @@ pub fn get_safari_window(
     search: Option<&str>,
     offset: i64,
     limit: i64,
+    sort: Sort,
 ) -> Result<Vec<HistoryVisit>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    let (dir, nulls) = sort.order_sql();
+    let sql = format!(
         "SELECT id, url, title, visited_at, visit_count
          FROM safari_history
          WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' OR title LIKE '%' || ?1 || '%')
-         ORDER BY visited_at DESC NULLS LAST, id DESC
+         ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
-    )?;
+        sort.column(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_visit)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
