@@ -11,11 +11,17 @@
 //! layout; decryption via [`crate::crypto`].
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use crate::crypto::BackupDecryptor;
 use crate::{Error, Result};
+
+/// Makes each decrypted-manifest temp file name unique, so two `ManifestIndex`
+/// instances sharing a `work_dir` (e.g. concurrent parsers) never read/delete
+/// each other's file.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// One file recorded in `Manifest.db`.
 #[derive(Debug, Clone)]
@@ -49,7 +55,8 @@ impl ManifestIndex {
     ) -> Result<Self> {
         let (manifest_path, temp) = if let Some(dec) = decryptor {
             std::fs::create_dir_all(work_dir).map_err(|e| Error::io(work_dir, e))?;
-            let tmp = work_dir.join(".manifest-index.db");
+            let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let tmp = work_dir.join(format!(".manifest-index-{seq}.db"));
             std::fs::write(&tmp, dec.decrypt_manifest_db()?).map_err(|e| Error::io(&tmp, e))?;
             (tmp.clone(), Some(tmp))
         } else {
