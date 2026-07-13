@@ -187,6 +187,12 @@ impl CacheDb {
     fn init(conn: Connection) -> Result<Self> {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        // WAL + NORMAL is the recommended durable-but-fast setting: commits append
+        // to the WAL without an fsync each (fsync happens at checkpoint), which —
+        // together with per-artifact transactions in the normalizer — keeps a
+        // large import (hundreds of thousands of rows) from stalling on per-row
+        // fsyncs. Safe: the cache is rebuilt on re-import if a crash truncates it.
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1 {
             conn.execute_batch(SCHEMA_V1)?;
@@ -202,7 +208,12 @@ impl CacheDb {
         )?;
         ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
         ensure_column(&conn, "media_items", "plain_size", "INTEGER")?;
-        ensure_column(&conn, "contacts", "source", "TEXT NOT NULL DEFAULT 'Address Book'")?;
+        ensure_column(
+            &conn,
+            "contacts",
+            "source",
+            "TEXT NOT NULL DEFAULT 'Address Book'",
+        )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
     }

@@ -104,9 +104,12 @@ pub fn import_backup(
             &media_cache_dir,
         ) {
             Ok(assets) => {
+                // One transaction for the whole camera roll (can be ~10k rows) —
+                // a commit per row is what stalls a large import.
                 let conn = cache.conn();
+                let tx = conn.unchecked_transaction()?;
                 for a in &assets {
-                    conn.execute(
+                    tx.execute(
                         "INSERT INTO media_items
                             (domain, relative_path, kind, source, mime_type,
                              taken_at, thumb_path, local_path, decrypt_key, plain_size)
@@ -125,6 +128,7 @@ pub fn import_backup(
                         ],
                     )?;
                 }
+                tx.commit()?;
                 report.media_items += assets.len();
             }
             Err(e) => report
@@ -156,11 +160,16 @@ pub fn import_backup(
 
     // Record which apps were on the device (from Info.plist) for the Apps view.
     let apps = crate::discovery::installed_apps(backup_dir);
-    for bundle_id in &apps {
-        cache.conn().execute(
-            "INSERT OR IGNORE INTO installed_apps (bundle_id) VALUES (?1)",
-            [bundle_id],
-        )?;
+    {
+        let conn = cache.conn();
+        let tx = conn.unchecked_transaction()?;
+        for bundle_id in &apps {
+            tx.execute(
+                "INSERT OR IGNORE INTO installed_apps (bundle_id) VALUES (?1)",
+                [bundle_id],
+            )?;
+        }
+        tx.commit()?;
     }
 
     on_phase(ImportPhase::Done(report.clone()));
