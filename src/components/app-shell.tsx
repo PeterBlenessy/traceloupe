@@ -38,6 +38,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
 import { client, type LogLevel } from "@/lib/ipc";
+import { type ClockFormat } from "@/lib/format";
 
 const nav = [
   { to: "/photos", label: "Photos", icon: Image },
@@ -145,6 +146,8 @@ function SettingsMenu() {
     setImportModules,
     logLevel,
     setLogLevel,
+    clockFormat,
+    setClockFormatPref,
   } = useSettings();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
@@ -175,6 +178,18 @@ function SettingsMenu() {
             </SettingsRow>
             <SettingsRow label="Show contact photos" description="Show contact avatars where available.">
               <Switch checked={showAvatars} onCheckedChange={setShowAvatars} />
+            </SettingsRow>
+            <SettingsRow label="Time format" description="How clock times are shown.">
+              <select
+                value={clockFormat}
+                onChange={(e) => setClockFormatPref(e.target.value as ClockFormat)}
+                aria-label="Time format"
+                className="rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="system">System</option>
+                <option value="24h">24-hour</option>
+                <option value="12h">12-hour</option>
+              </select>
             </SettingsRow>
           </SettingsGroup>
 
