@@ -81,6 +81,17 @@ fn open_active_cache(active: &ActiveBackup) -> Result<CacheDb, String> {
     CacheDb::open(&active.path()?).map_err(|e| e.to_string())
 }
 
+/// A backup id is joined into cache/work paths and used as a Keychain account,
+/// so it must be a plain identifier — this rejects path separators, `..`, and
+/// other tampering. Discovery only ever yields device UDIDs / UUIDs.
+fn valid_backup_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Discovery outcome shaped for the UI: distinguishes "no backups" from
 /// "macOS denied access" so the frontend can show Full Disk Access guidance.
 #[derive(serde::Serialize)]
@@ -304,6 +315,9 @@ async fn import_backup(
     password: String,
     modules: Vec<String>,
 ) -> Result<ImportResult, String> {
+    if !valid_backup_id(&backup_id) {
+        return Err("invalid backup id".to_string());
+    }
     let cfg = resolve_engine(&app).ok_or_else(|| {
         "iLEAPP engine is not installed. Set SALVAGE_ILEAPP or install the engine.".to_string()
     })?;
@@ -456,6 +470,9 @@ async fn import_backup(
 /// re-running the engine. Returns false if no cache exists for that id yet.
 #[tauri::command]
 async fn open_backup(app: AppHandle, backup_id: String) -> bool {
+    if !valid_backup_id(&backup_id) {
+        return false;
+    }
     let Ok(data_dir) = app.path().app_data_dir() else {
         return false;
     };

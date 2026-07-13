@@ -214,6 +214,12 @@ impl CacheDb {
             "source",
             "TEXT NOT NULL DEFAULT 'Address Book'",
         )?;
+        // Backfill the timeline index for caches created before it was in the
+        // schema. Idempotent; keeps it out of the read path (it previously ran on
+        // every count/window query).
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)",
+        )?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(CacheDb { conn })
     }
