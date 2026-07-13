@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -170,14 +171,25 @@ function SettingsMenu() {
       <DialogContent className="max-h-[85vh] gap-5 overflow-y-auto rounded-2xl sm:max-w-lg">
         <DialogHeader className="items-center">
           <DialogTitle className="text-center text-base">Settings</DialogTitle>
+          <DialogDescription className="sr-only">
+            Display, data-import, and developer preferences.
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-6">
           <SettingsGroup title="Display">
             <SettingsRow label="Show contact names" description="Display saved names instead of phone numbers.">
-              <Switch checked={showContactNames} onCheckedChange={setShowContactNames} />
+              <Switch
+                aria-label="Show contact names"
+                checked={showContactNames}
+                onCheckedChange={setShowContactNames}
+              />
             </SettingsRow>
             <SettingsRow label="Show contact photos" description="Show contact avatars where available.">
-              <Switch checked={showAvatars} onCheckedChange={setShowAvatars} />
+              <Switch
+                aria-label="Show contact photos"
+                checked={showAvatars}
+                onCheckedChange={setShowAvatars}
+              />
             </SettingsRow>
             <SettingsRow label="Time format" description="How clock times are shown.">
               <select
@@ -201,6 +213,7 @@ function SettingsMenu() {
               {catalog.map((m) => (
                 <SettingsRow key={m.id} label={m.label} description={m.category}>
                   <Switch
+                    aria-label={m.label}
                     checked={selected.includes(m.id)}
                     onCheckedChange={(on) => toggleModule(m.id, on)}
                   />
