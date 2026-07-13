@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 /**
  * Theme provider — applies the `light`/`dark` class to <html>, persists the
@@ -24,9 +24,11 @@ function systemTheme(): "dark" | "light" {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>(
-    () => (localStorage.getItem(STORAGE_KEY) as Theme) || "system",
-  );
+  const [theme, setThemeState] = useState<Theme>(() => {
+    // Validate rather than blind-cast: ignore a stale/garbage stored value.
+    const stored = localStorage.getItem(STORAGE_KEY);
+    return stored === "dark" || stored === "light" || stored === "system" ? stored : "system";
+  });
   const [resolved, setResolved] = useState<"dark" | "light">(() =>
     theme === "system" ? systemTheme() : theme,
   );
@@ -35,8 +37,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const root = window.document.documentElement;
     const apply = () => {
       const next = theme === "system" ? systemTheme() : theme;
+      // Only `.dark` drives the CSS (`@custom-variant dark`); light is the
+      // default `:root`, so there's no `.light` class to toggle.
       root.classList.toggle("dark", next === "dark");
-      root.classList.toggle("light", next === "light");
       root.dataset.theme = next;
       setResolved(next);
     };
@@ -53,11 +56,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setThemeState(t);
   };
 
-  return (
-    <ThemeProviderContext.Provider value={{ theme, setTheme, resolvedTheme: resolved }}>
-      {children}
-    </ThemeProviderContext.Provider>
+  // Stable context value so consumers don't re-render on every provider render.
+  const value = useMemo(
+    () => ({ theme, setTheme, resolvedTheme: resolved }),
+    [theme, resolved],
   );
+
+  return <ThemeProviderContext.Provider value={value}>{children}</ThemeProviderContext.Provider>;
 }
 
 export function useTheme() {

@@ -181,8 +181,17 @@ function BackupCard({
     : "unknown date";
   return (
     <Card
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${backup.deviceName ?? backup.id}`}
       onClick={onSelect}
-      className="cursor-pointer transition-colors hover:bg-accent/50"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      className="cursor-pointer transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <CardContent className="flex items-center gap-4 py-4">
         <Smartphone className="size-8 text-muted-foreground" />
