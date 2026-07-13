@@ -17,11 +17,16 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 ### Added
-- **Phase 2 foundations** (not yet wired into the import flow): a reusable
-  `ManifestIndex` (decrypt `Manifest.db` once, resolve `domain/relativePath` →
-  file + key, read a single file on demand) and a native Messages parser
-  (`sms.db` → cache threads/messages). Bump to `0.2.0` once these replace the
-  iLEAPP `sms` step end-to-end.
+- **Phase 2 — native Messages, wired in.** The import now materializes Messages
+  natively from the backup's `sms.db` via a reusable `ManifestIndex`
+  (decrypt-on-demand: resolve `domain/relativePath` → file + key, read one file),
+  skipping iLEAPP's `sms` normalize step. iLEAPP remains the automatic fallback
+  when `sms.db` is absent or the native parse fails.
+
+### Remaining for 0.2.0
+- iLEAPP still *runs* its sms module, so no import time is saved yet — dropping it
+  is next, gated on real-backup validation of the native output.
+- A pure-Rust **Notes** parser (to retire the Notes sidecar).
 
 ## [0.1.0] — 2026-07-13
 

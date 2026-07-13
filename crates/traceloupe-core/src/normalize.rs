@@ -39,16 +39,19 @@ pub fn normalize_lava(
     engine_out_dir: &Path,
     cache: &CacheDb,
 ) -> Result<ImportReport> {
-    normalize_lava_with_progress(lava_path, engine_out_dir, cache, |_| {})
+    normalize_lava_with_progress(lava_path, engine_out_dir, cache, false, |_| {})
 }
 
 /// Like [`normalize_lava`], but calls `on_step` with a human label before each
 /// sub-stage so the UI can show live progress during the (potentially long)
 /// normalize pass instead of one opaque "organizing" spinner.
+/// `skip_messages` skips the iLEAPP `sms` stage — set when the caller already
+/// materialized Messages natively from `sms.db` (Phase 2), to avoid duplicates.
 pub fn normalize_lava_with_progress(
     lava_path: &Path,
     engine_out_dir: &Path,
     cache: &CacheDb,
+    skip_messages: bool,
     mut on_step: impl FnMut(&str),
 ) -> Result<ImportReport> {
     let lava = Connection::open_with_flags(lava_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -73,10 +76,14 @@ pub fn normalize_lava_with_progress(
         "Media",
         normalize_media(&lava, engine_out_dir, cache, &mut report)
     );
-    stage!(
-        "Messages",
-        normalize_sms(&lava, engine_out_dir, cache, &mut report)
-    );
+    // Messages: skipped when the orchestrator already materialized them natively
+    // from sms.db (Phase 2). Otherwise the iLEAPP `sms` path runs.
+    if !skip_messages {
+        stage!(
+            "Messages",
+            normalize_sms(&lava, engine_out_dir, cache, &mut report)
+        );
+    }
     stage!("Call history", normalize_calls(&lava, cache, &mut report));
     stage!(
         "Safari history",
