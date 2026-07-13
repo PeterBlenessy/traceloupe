@@ -127,9 +127,10 @@ fn normalize_notes(lava: &Connection, cache: &CacheDb, report: &mut ImportReport
     })?;
 
     let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
     for row in rows {
         let row = row?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -143,6 +144,7 @@ fn normalize_notes(lava: &Connection, cache: &CacheDb, report: &mut ImportReport
         )?;
         report.notes += 1;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -190,8 +192,9 @@ fn normalize_contacts(
         .unwrap_or_default();
 
     let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
     for c in contacts {
-        conn.execute(
+        tx.execute(
             "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json, image)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -205,6 +208,7 @@ fn normalize_contacts(
         )?;
         report.contacts += 1;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -213,7 +217,11 @@ fn normalize_contacts(
 fn find_extracted(root: &Path, name: &str) -> Option<PathBuf> {
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let entries = std::fs::read_dir(&dir).ok()?;
+        // Skip an unreadable directory rather than abandoning the whole search —
+        // one permission-denied folder shouldn't hide sms.db / the address book.
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
@@ -274,7 +282,9 @@ fn normalize_media(
     // docs/spike-ileapp.md.
     let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    // Batch the inserts: one transaction instead of an fsync per row.
     let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
     for row in rows {
         let (id, source_path, extraction_path, mime) = row?;
         if let Some(path) = source_path.as_deref() {
@@ -292,7 +302,7 @@ fn normalize_media(
             Some(rel) => resolve_extraction_path(engine_out_dir, &rel, report),
             None => None,
         };
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO media_items
                  (engine_media_id, domain, relative_path, kind, source, mime_type, local_path)
              VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6)",
@@ -307,6 +317,7 @@ fn normalize_media(
         )?;
         report.media_items += 1;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -417,7 +428,14 @@ fn normalize_sms(
         })
     })?;
 
+    // Loop-invariant: whether the lava has a media-references table (probed once
+    // rather than per attachment).
+    let has_media_refs = table_exists(lava, "_lava_media_references")?;
+
+    // One transaction for the whole table — messages run to tens of thousands of
+    // rows; a commit (and fsync) per row is what made import stall.
     let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
     // Group consecutive rows (query is ordered by chat_id) into threads.
     let mut current_key: Option<String> = None;
     let mut thread_id: i64 = 0;
@@ -441,7 +459,7 @@ fn normalize_sms(
             } else {
                 row.contact_id.clone()
             };
-            conn.execute(
+            tx.execute(
                 "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count, participants_json)
                  VALUES (?1, ?2, ?3, NULL, 0, ?4)",
                 rusqlite::params![
@@ -451,7 +469,7 @@ fn normalize_sms(
                     serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into()),
                 ],
             )?;
-            thread_id = conn.last_insert_rowid();
+            thread_id = tx.last_insert_rowid();
             current_key = Some(key);
             report.threads += 1;
         }
@@ -474,7 +492,7 @@ fn normalize_sms(
                     }
                 })
         };
-        conn.execute(
+        tx.execute(
             "INSERT INTO messages
                  (thread_id, sender, is_from_me, body, sent_at, has_attachments)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -487,7 +505,7 @@ fn normalize_sms(
                 has_attachment as i64,
             ],
         )?;
-        let message_id = conn.last_insert_rowid();
+        let message_id = tx.last_insert_rowid();
         report.messages += 1;
 
         // Link an attachment to its cache media_item. An artifact's
@@ -497,8 +515,8 @@ fn normalize_sms(
         // the value as a media-item id directly, for engines without the
         // references table).
         if let Some(media_ref) = row.media_ref {
-            let media_item_id = resolve_media_item_id(lava, &media_ref)?;
-            let inserted = conn.execute(
+            let media_item_id = resolve_media_item_id(lava, &media_ref, has_media_refs)?;
+            let inserted = tx.execute(
                 "INSERT INTO attachments (message_id, filename, mime_type, local_path)
                  SELECT ?1, relative_path, mime_type, local_path
                  FROM media_items WHERE engine_media_id = ?2",
@@ -512,13 +530,17 @@ fn normalize_sms(
         }
     }
 
-    // Denormalize per-thread counters used by the thread list.
-    conn.execute(
+    // Denormalize per-thread counters used by the thread list. Scoped to the
+    // threads this pass created (native SMS/iMessage) so it can't clobber the
+    // app normalizers' counters regardless of dispatch order.
+    tx.execute(
         "UPDATE threads SET
              message_count = (SELECT COUNT(*) FROM messages WHERE messages.thread_id = threads.id),
-             last_message_at = (SELECT MAX(sent_at) FROM messages WHERE messages.thread_id = threads.id)",
+             last_message_at = (SELECT MAX(sent_at) FROM messages WHERE messages.thread_id = threads.id)
+         WHERE service IS NULL OR service NOT IN ('TikTok', 'WhatsApp', 'Telegram')",
         [],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -811,13 +833,14 @@ fn normalize_calls(lava: &Connection, cache: &CacheDb, report: &mut ImportReport
     })?;
 
     let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
     for row in rows {
         let (start, end, address, direction, answered, call_type) = row?;
         let duration = match (start, end) {
             (Some(s), Some(e)) if e >= s => e - s,
             _ => 0,
         };
-        conn.execute(
+        tx.execute(
             "INSERT INTO calls (address, direction, answered, duration_s, occurred_at, service)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
@@ -831,6 +854,7 @@ fn normalize_calls(lava: &Connection, cache: &CacheDb, report: &mut ImportReport
         )?;
         report.calls += 1;
     }
+    tx.commit()?;
     Ok(())
 }
 
@@ -856,9 +880,10 @@ fn normalize_safari(lava: &Connection, cache: &CacheDb, report: &mut ImportRepor
     })?;
 
     let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
     for row in rows {
         let (url, title, visited_at, visit_count) = row?;
-        conn.execute(
+        tx.execute(
             "INSERT INTO safari_history (url, title, visited_at, visit_count)
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![
@@ -870,14 +895,15 @@ fn normalize_safari(lava: &Connection, cache: &CacheDb, report: &mut ImportRepor
         )?;
         report.safari_visits += 1;
     }
+    tx.commit()?;
     Ok(())
 }
 
 /// Translate an artifact's media reference (a `_lava_media_references.id`) to
 /// the underlying `_lava_media_items.id`. If the references table is absent or
 /// has no match, assume the reference is already a media-item id.
-fn resolve_media_item_id(lava: &Connection, media_ref: &str) -> Result<String> {
-    if table_exists(lava, "_lava_media_references")? {
+fn resolve_media_item_id(lava: &Connection, media_ref: &str, has_refs: bool) -> Result<String> {
+    if has_refs {
         let item_id: Option<String> = lava
             .query_row(
                 "SELECT media_item_id FROM _lava_media_references WHERE id = ?1",

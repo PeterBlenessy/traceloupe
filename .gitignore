@@ -28,3 +28,6 @@ target
 
 # Local iLEAPP engine (set up via scripts/setup-engine.sh)
 /engine
+
+# agent worktrees (isolated review/dev copies)
+.claude/worktrees/
