@@ -2,12 +2,14 @@
 //! Commands translate core results into serializable responses; no parsing
 //! or business logic lives here.
 
+mod logging;
 mod media;
 mod secret;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Monotonic counter for unique on-demand decrypt temp-file names.
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -270,6 +272,13 @@ fn list_import_modules() -> Vec<salvage_core::sidecar::ImportModule> {
     salvage_core::sidecar::IMPORT_CATALOG.to_vec()
 }
 
+/// Set the dev-console log verbosity at runtime (from Settings).
+/// `level` is "off" | "error" | "warn" | "info" | "debug" | "trace".
+#[tauri::command]
+fn set_log_level(level: String) {
+    logging::set_level(&level);
+}
+
 #[tauri::command]
 async fn import_backup(
     app: AppHandle,
@@ -302,6 +311,12 @@ async fn import_backup(
 
     // Blocking pipeline on a worker thread; progress is emitted as it runs.
     let outcome = tauri::async_runtime::spawn_blocking(move || {
+        logging::info(&app, "Import started");
+        // Time each phase/step for the dev console (start on entry, elapsed on
+        // the next step boundary / completion).
+        let import_start = Instant::now();
+        let mut step_start = import_start;
+        let mut current_step: Option<String> = None;
         import::import_backup(
             &cfg,
             &backup_path,
@@ -311,15 +326,64 @@ async fn import_backup(
             &modules,
             &cancel,
             |phase| {
-                let event = match phase {
-                    ImportPhase::Parsing(p) => Some(ImportEvent::Parsing {
-                        current: p.current,
-                        total: p.total,
-                        fraction: p.fraction(),
-                        artifact: p.artifact,
-                    }),
-                    ImportPhase::Normalizing { step } => Some(ImportEvent::Normalizing { step }),
-                    ImportPhase::Done(_) => None,
+                let event = match &phase {
+                    ImportPhase::Parsing(p) => {
+                        if current_step.is_none() {
+                            logging::info(&app, "\u{25b6} Parsing backup with iLEAPP\u{2026}");
+                            current_step = Some("Parsing".into());
+                            step_start = Instant::now();
+                        }
+                        logging::debug(
+                            &app,
+                            format!("parsing {} ({}/{})", p.artifact, p.current, p.total),
+                        );
+                        Some(ImportEvent::Parsing {
+                            current: p.current,
+                            total: p.total,
+                            fraction: p.fraction(),
+                            artifact: p.artifact.clone(),
+                        })
+                    }
+                    ImportPhase::Normalizing { step } => {
+                        if let Some(prev) = current_step.take() {
+                            logging::info(
+                                &app,
+                                format!(
+                                    "\u{2713} {prev} ({} ms)",
+                                    step_start.elapsed().as_millis()
+                                ),
+                            );
+                        }
+                        logging::info(&app, format!("\u{25b6} Organizing {step}"));
+                        current_step = Some(step.clone());
+                        step_start = Instant::now();
+                        Some(ImportEvent::Normalizing { step: step.clone() })
+                    }
+                    ImportPhase::Done(report) => {
+                        if let Some(prev) = current_step.take() {
+                            logging::info(
+                                &app,
+                                format!(
+                                    "\u{2713} {prev} ({} ms)",
+                                    step_start.elapsed().as_millis()
+                                ),
+                            );
+                        }
+                        for w in &report.warnings {
+                            logging::warn(&app, w.clone());
+                        }
+                        logging::info(
+                            &app,
+                            format!(
+                                "Import complete in {} ms ({} messages, {} media, {} contacts)",
+                                import_start.elapsed().as_millis(),
+                                report.messages,
+                                report.media_items,
+                                report.contacts
+                            ),
+                        );
+                        None
+                    }
                 };
                 if let Some(event) = event {
                     let _ = app.emit("import://progress", event);
@@ -1006,6 +1070,7 @@ pub fn run() {
             engine_info,
             install_engine,
             list_import_modules,
+            set_log_level,
             import_backup,
             open_backup,
             has_active_backup,

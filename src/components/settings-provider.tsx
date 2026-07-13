@@ -1,4 +1,5 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
+import { client, type LogLevel, type LogRecord } from "@/lib/ipc";
 
 /**
  * Settings provider — holds app-wide display preferences, reads their initial
@@ -14,11 +15,36 @@ type SettingsProviderState = {
   /** Import module ids the user chose, or null to use the catalog defaults. */
   importModules: string[] | null;
   setImportModules: (ids: string[]) => void;
+  /** Dev-console log verbosity. */
+  logLevel: LogLevel;
+  setLogLevel: (level: LogLevel) => void;
 };
 
 const NAMES_KEY = "salvage-show-names";
 const AVATARS_KEY = "salvage-show-avatars";
 const IMPORT_MODULES_KEY = "salvage-import-modules";
+const LOG_LEVEL_KEY = "salvage-log-level";
+
+const LOG_LEVELS: LogLevel[] = ["off", "error", "warn", "info", "debug", "trace"];
+
+/** Read the persisted log level, defaulting to "info". */
+function readLogLevel(): LogLevel {
+  const raw = localStorage.getItem(LOG_LEVEL_KEY);
+  return LOG_LEVELS.includes(raw as LogLevel) ? (raw as LogLevel) : "info";
+}
+
+/** Print a backend log record to the dev-tools console. */
+function printLog(r: LogRecord) {
+  const fn =
+    r.level === "error"
+      ? console.error
+      : r.level === "warn"
+        ? console.warn
+        : r.level === "debug" || r.level === "trace"
+          ? console.debug
+          : console.info;
+  fn(`%c[salvage]%c ${r.message}`, "color:#a78bfa;font-weight:600", "color:inherit");
+}
 
 const SettingsProviderContext = createContext<SettingsProviderState | null>(null);
 
@@ -49,6 +75,31 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [importModules, setImportModulesState] = useState<string[] | null>(() =>
     readStringArray(IMPORT_MODULES_KEY),
   );
+  const [logLevel, setLogLevelState] = useState<LogLevel>(() => readLogLevel());
+
+  // Apply the log level to the backend (it gates emission), and forward backend
+  // log records to the dev-tools console. The level is re-applied whenever it
+  // changes; the console subscription lasts the app's lifetime.
+  useEffect(() => {
+    void client.setLogLevel(logLevel);
+  }, [logLevel]);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void client.onLog(printLog).then((u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const setLogLevel = (level: LogLevel) => {
+    localStorage.setItem(LOG_LEVEL_KEY, level);
+    setLogLevelState(level);
+  };
 
   const setShowContactNames = (v: boolean) => {
     localStorage.setItem(NAMES_KEY, String(v));
@@ -74,6 +125,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setShowAvatars,
         importModules,
         setImportModules,
+        logLevel,
+        setLogLevel,
       }}
     >
       {children}

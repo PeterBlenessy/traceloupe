@@ -35,7 +35,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
-import { client } from "@/lib/ipc";
+import { client, type LogLevel } from "@/lib/ipc";
 
 const nav = [
   { to: "/photos", label: "Photos", icon: Image },
@@ -111,6 +111,8 @@ function SettingsMenu() {
     setShowAvatars,
     importModules,
     setImportModules,
+    logLevel,
+    setLogLevel,
   } = useSettings();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
@@ -130,7 +132,7 @@ function SettingsMenu() {
           <Settings className="size-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="gap-5 rounded-2xl sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] gap-5 overflow-y-auto rounded-2xl sm:max-w-lg">
         <DialogHeader className="items-center">
           <DialogTitle className="text-center text-base">Settings</DialogTitle>
         </DialogHeader>
@@ -159,6 +161,26 @@ function SettingsMenu() {
               ))}
             </SettingsGroup>
           )}
+
+          <SettingsGroup
+            title="Developer"
+            description="Backend logs print to the browser dev-tools console."
+          >
+            <SettingsRow label="Log level" description="Verbosity of import & backend logs.">
+              <select
+                value={logLevel}
+                onChange={(e) => setLogLevel(e.target.value as LogLevel)}
+                aria-label="Log level"
+                className="rounded-md border bg-transparent px-2 py-1 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {(["off", "error", "warn", "info", "debug", "trace"] as LogLevel[]).map((l) => (
+                  <option key={l} value={l}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            </SettingsRow>
+          </SettingsGroup>
         </div>
       </DialogContent>
     </Dialog>
