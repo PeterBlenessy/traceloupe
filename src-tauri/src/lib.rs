@@ -99,6 +99,13 @@ impl SessionKeys {
 #[derive(Default)]
 struct ImportCancel(Mutex<Option<CancelToken>>);
 
+/// Serializes partial re-imports: only one may touch the cache at a time. Two
+/// concurrent re-imports would otherwise contend on the single SQLite writer and
+/// collide on the shared manifest temp file. A second re-import waits here for the
+/// first to finish rather than failing.
+#[derive(Default)]
+struct ReimportGate(tauri::async_runtime::Mutex<()>);
+
 /// Reconstruct the decryptor for an encrypted backup from its Keychain password
 /// and the source dir recorded in its cache. `None` if not encrypted / no key.
 fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecryptor>> {
@@ -554,11 +561,15 @@ struct ReimportResult {
 async fn reimport_module(
     active: State<'_, ActiveBackup>,
     session: State<'_, SessionKeys>,
+    gate: State<'_, ReimportGate>,
     module_id: String,
 ) -> Result<ReimportResult, String> {
     if !import::REIMPORTABLE_NATIVE.contains(&module_id.as_str()) {
         return Err(format!("'{module_id}' can't be re-imported on its own"));
     }
+    // Serialize re-imports: a second one waits here until the first finishes, so
+    // they never contend on the cache writer or the shared manifest temp file.
+    let _gate = gate.0.lock().await;
     let cache_path = active.path()?;
     // …/caches/<id>/cache.db → id dir → caches dir → data dir → …/work/<id>
     let id_dir = cache_path
@@ -1413,6 +1424,7 @@ pub fn run() {
         .manage(ActiveBackup::default())
         .manage(SessionKeys::default())
         .manage(ImportCancel::default())
+        .manage(ReimportGate::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of
