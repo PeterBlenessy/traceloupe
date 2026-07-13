@@ -11,6 +11,7 @@ pub mod engine;
 mod error;
 pub mod import;
 pub mod install;
+pub mod manifest;
 pub mod normalize;
 pub mod parsers;
 pub mod query;
