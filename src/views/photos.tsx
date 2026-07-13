@@ -1,8 +1,12 @@
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Image as ImageIcon, Play } from "lucide-react";
+import { ChevronLeft, ChevronRight, Image as ImageIcon, Play, X } from "lucide-react";
+
+/** Media items fetched per lazy window (shared by the grid and the lightbox's
+ *  neighbour lookup so their cache keys line up). */
+const PAGE = 100;
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -30,8 +34,36 @@ export function PhotosView() {
     queryFn: () => client.mediaSources(),
     enabled: active === true,
   });
-  const [openItem, setOpenItem] = useState<MediaItem | null>(null);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
   const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  const qc = useQueryClient();
+
+  // Resolve a gallery item by absolute index from the same windowed cache the
+  // grid fills, so the lightbox can page prev/next across the whole gallery.
+  const mediaAt = useCallback(
+    (index: number): MediaItem | undefined => {
+      if (index < 0 || (count != null && index >= count)) return undefined;
+      const page = Math.floor(index / PAGE);
+      const win = qc.getQueryData<MediaItem[]>([
+        "mediaWindow",
+        sourceArg,
+        sort.by,
+        sort.desc,
+        page,
+      ]);
+      return win?.[index % PAGE];
+    },
+    [qc, sourceArg, sort, count],
+  );
+  const ensurePage = useCallback(
+    (page: number) => {
+      void qc.prefetchQuery({
+        queryKey: ["mediaWindow", sourceArg, sort.by, sort.desc, page],
+        queryFn: () => client.getMediaWindow(sourceArg, page * PAGE, PAGE, sort.by, sort.desc),
+      });
+    },
+    [qc, sourceArg, sort],
+  );
 
   if (active === false) {
     return (
@@ -88,11 +120,18 @@ export function PhotosView() {
           count={count}
           source={sourceArg}
           sort={sort}
-          onOpen={setOpenItem}
+          onOpen={setOpenIndex}
         />
       )}
 
-      <Lightbox item={openItem} onClose={() => setOpenItem(null)} />
+      <Lightbox
+        index={openIndex}
+        count={count ?? 0}
+        mediaAt={mediaAt}
+        ensurePage={ensurePage}
+        onNavigate={setOpenIndex}
+        onClose={() => setOpenIndex(null)}
+      />
     </div>
   );
 }
@@ -142,11 +181,10 @@ function MediaGrid({
   count: number;
   source: string | null;
   sort: SortState;
-  onOpen: (item: MediaItem) => void;
+  onOpen: (index: number) => void;
 }) {
   const GAP = 4; // matches gap-1 / p-1 (0.25rem)
   const MIN = 144; // 9rem minimum tile
-  const PAGE = 100; // media items fetched per lazy window
   const scrollRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(1);
   const [cell, setCell] = useState(MIN);
@@ -223,7 +261,7 @@ function MediaGrid({
                 return (
                   <div key={index} style={{ width: cell }}>
                     {item ? (
-                      <Thumb item={item} onOpen={() => onOpen(item)} />
+                      <Thumb item={item} onOpen={() => onOpen(index)} />
                     ) : (
                       <div className="aspect-square w-full animate-pulse rounded-sm bg-muted" />
                     )}
@@ -265,29 +303,120 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   );
 }
 
-function Lightbox({ item, onClose }: { item: MediaItem | null; onClose: () => void }) {
+function Lightbox({
+  index,
+  count,
+  mediaAt,
+  ensurePage,
+  onNavigate,
+  onClose,
+}: {
+  index: number | null;
+  count: number;
+  mediaAt: (index: number) => MediaItem | undefined;
+  ensurePage: (page: number) => void;
+  onNavigate: (index: number) => void;
+  onClose: () => void;
+}) {
+  const open = index != null;
+  const item = index != null ? mediaAt(index) : undefined;
+  const hasPrev = index != null && index > 0;
+  const hasNext = index != null && index < count - 1;
+  const go = (delta: number) => {
+    if (index == null) return;
+    const next = index + delta;
+    if (next >= 0 && next < count) onNavigate(next);
+  };
+
+  // Preload the current and neighbouring windows so paging lands on a real image
+  // rather than a blank while its window fetches.
+  useEffect(() => {
+    if (index == null) return;
+    for (const i of [index, index - 1, index + 1]) {
+      if (i >= 0 && i < count) ensurePage(Math.floor(i / PAGE));
+    }
+  }, [index, count, ensurePage]);
+
+  // Arrow keys page prev/next (Dialog already handles Escape).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") go(-1);
+      else if (e.key === "ArrowRight") go(1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, index, count]);
+
+  const isVideo = item?.kind === "video";
   return (
-    <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-3xl gap-2 p-2">
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        className="flex h-[95vh] max-w-[95vw] flex-col border-none bg-transparent p-0 shadow-none sm:max-w-[95vw]"
+      >
         <DialogTitle className="sr-only">{item?.filename ?? "Media"}</DialogTitle>
-        {item && (
-          <>
-            <div className="flex items-center justify-center bg-muted/40">
+        {/* Close */}
+        <button
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute right-2 top-2 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        >
+          <X className="size-5" />
+        </button>
+        <div className="relative flex min-h-0 flex-1 items-center justify-center">
+          {hasPrev && (
+            <button
+              onClick={() => go(-1)}
+              aria-label="Previous"
+              className="absolute left-2 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+            >
+              <ChevronLeft className="size-6" />
+            </button>
+          )}
+          {item ? (
+            isVideo ? (
+              <video
+                key={item.id}
+                src={client.mediaUrl(item.id)}
+                controls
+                autoPlay
+                className="max-h-full max-w-full object-contain"
+              />
+            ) : (
               <img
+                key={item.id}
                 src={client.mediaUrl(item.id)}
                 alt={item.filename ?? ""}
-                className="max-h-[70vh] w-auto object-contain"
+                className="max-h-full max-w-full object-contain"
               />
-            </div>
-            <div className="flex items-center justify-between gap-2 px-2 pb-1 text-xs text-muted-foreground">
-              <span className="select-text truncate">{item.filename ?? "—"}</span>
-              <div className="flex shrink-0 items-center gap-2">
-                {item.source && <span>{item.source}</span>}
-                {item.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
-              </div>
-            </div>
-          </>
-        )}
+            )
+          ) : (
+            <div className="size-16 animate-pulse rounded-full bg-white/20" />
+          )}
+          {hasNext && (
+            <button
+              onClick={() => go(1)}
+              aria-label="Next"
+              className="absolute right-2 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+            >
+              <ChevronRight className="size-6" />
+            </button>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-white/80">
+          <span className="select-text truncate">{item?.filename ?? "—"}</span>
+          <div className="flex shrink-0 items-center gap-3">
+            {index != null && (
+              <span className="tabular-nums">
+                {index + 1} / {count}
+              </span>
+            )}
+            {item?.source && <span>{item.source}</span>}
+            {item?.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
+          </div>
+        </div>
       </DialogContent>
     </Dialog>
   );

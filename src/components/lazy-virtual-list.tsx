@@ -104,17 +104,19 @@ export function LazyVirtualList<T>({
     }
   }, [count, resetKey, startAtBottom]);
 
-  // Imperative jump: align `index` to the top. We set scrollTop directly (index
-  // × estimate) rather than virtualizer.scrollToIndex() to avoid its multi-frame
-  // retry on large dynamic lists — approximate is fine for a jump shortcut.
+  // Imperative jump: align `index` to the top. scrollToIndex accounts for
+  // already-measured row heights (e.g. the timeline's occasional date headers),
+  // so it lands on the target far more accurately than a flat index × estimate —
+  // safe here because the rows that use this (the fixed-height timeline) don't
+  // trigger the multi-frame re-measure that made scrollToIndex thrash on
+  // variable-height lists.
   const jumpedFor = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
-    const el = scrollRef.current;
-    if (jumpTo && el && jumpedFor.current !== jumpTo.token) {
+    if (jumpTo && scrollRef.current && jumpedFor.current !== jumpTo.token) {
       jumpedFor.current = jumpTo.token;
-      el.scrollTop = jumpTo.index * estimateSize;
+      virtualizer.scrollToIndex(jumpTo.index, { align: "start" });
     }
-  }, [jumpTo, estimateSize]);
+  }, [jumpTo, virtualizer]);
 
   // Report the top visible row so a caller can highlight where we are.
   const topIndex = virtualItems[0]?.index ?? 0;
