@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import "./index.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import { Toaster } from "@/components/ui/sonner";
 import { SettingsProvider } from "@/components/settings-provider";
 import { AppShell } from "@/components/app-shell";
 import { BackupPicker } from "@/views/backup-picker";
@@ -74,6 +75,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <SettingsProvider>
         <QueryClientProvider client={queryClient}>
           <RouterProvider router={router} />
+          <Toaster richColors closeButton />
         </QueryClientProvider>
       </SettingsProvider>
     </ThemeProvider>
