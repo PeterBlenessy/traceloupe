@@ -4,6 +4,7 @@ import {
   Globe,
   HardDrive,
   Image,
+  Loader2,
   MessageSquare,
   NotebookText,
   Phone,
@@ -35,6 +36,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
+import { ImportProvider, useImport } from "@/components/import-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 
 const nav = [
@@ -51,12 +53,15 @@ export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   return (
-    // h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
-    // only sets `min-h-svh`, which lets the layout grow with its content — so a
-    // virtualized list's tall spacer would inflate the whole document and its
-    // scroll container would never actually scroll (it just grows), defeating
-    // every `min-h-0`/`overflow-auto` below. A fixed height gives the flex chain
-    // something to constrain against so overflow scrolls instead of expanding.
+    // ImportProvider lives above the routes so an import survives "run in
+    // background" and navigation between views.
+    <ImportProvider>
+    {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
+        only sets `min-h-svh`, which lets the layout grow with its content — so a
+        virtualized list's tall spacer would inflate the whole document and its
+        scroll container would never actually scroll (it just grows), defeating
+        every `min-h-0`/`overflow-auto` below. A fixed height gives the flex chain
+        something to constrain against so overflow scrolls instead of expanding. */}
     <SidebarProvider className="h-svh overflow-hidden">
       <Sidebar>
         <SidebarHeader>
@@ -90,6 +95,7 @@ export function AppShell() {
         <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
           <SidebarTrigger />
           <div className="ml-auto flex items-center gap-1">
+            <ImportIndicator />
             <ModeToggle />
             <SettingsMenu />
           </div>
@@ -99,6 +105,32 @@ export function AppShell() {
         </div>
       </SidebarInset>
     </SidebarProvider>
+    </ImportProvider>
+  );
+}
+
+/** A pill shown while an import runs in the background; click to reopen it. */
+function ImportIndicator() {
+  const { active, backgrounded, reopen } = useImport();
+  if (!backgrounded || !active) return null;
+  const p = active.progress;
+  const detail =
+    p?.phase === "normalizing"
+      ? `Organizing ${p.step.toLowerCase()}…`
+      : p?.phase === "parsing"
+        ? `Reading ${p.artifact}…`
+        : "starting…";
+  return (
+    <button
+      onClick={reopen}
+      title="Reopen import"
+      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
+    >
+      <Loader2 className="size-3 animate-spin" />
+      <span className="max-w-[16rem] truncate">
+        Importing {active.backup.deviceName ?? active.backup.id} · {detail}
+      </span>
+    </button>
   );
 }
 
