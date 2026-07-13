@@ -388,6 +388,151 @@ pub fn remove_cache(cache_path: &Path) {
     }
 }
 
+/// The natively-parsed data types that can be re-imported on their own — no
+/// iLEAPP, so it's fast. The UI offers a "re-import" action only for these.
+pub const REIMPORTABLE_NATIVE: &[&str] = &["recordings", "camera_roll", "messages", "notes"];
+
+/// Re-run one native data type into an existing cache, replacing just that type's
+/// rows. Unlike [`import_backup`] this skips iLEAPP entirely, so it's cheap — for
+/// refreshing a single view or picking up a parser fix without a full re-import.
+///
+/// The decrypt + parse runs to completion BEFORE any existing rows are deleted,
+/// so a failure (e.g. a file that won't decrypt) leaves the current data intact.
+pub fn reimport_module(
+    module_id: &str,
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache_path: &Path,
+    work_dir: &Path,
+) -> Result<ImportReport> {
+    let _ = std::fs::create_dir_all(work_dir);
+    let cache = CacheDb::open(cache_path)?;
+    let mut report = ImportReport::default();
+
+    match module_id {
+        "recordings" => {
+            let recs =
+                crate::parsers::recordings::parse_recordings(backup_dir, decryptor, work_dir)?;
+            let conn = cache.conn();
+            let tx = conn.unchecked_transaction()?;
+            tx.execute("DELETE FROM recordings", [])?;
+            for rec in &recs {
+                tx.execute(
+                    "INSERT INTO recordings
+                        (title, folder, recorded_at, duration_s, relative_path,
+                         local_path, mime_type, decrypt_key, plain_size)
+                     VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        rec.title,
+                        rec.recorded_at,
+                        rec.duration_s,
+                        rec.relative_path,
+                        rec.full_path.to_string_lossy(),
+                        rec.mime,
+                        rec.decrypt_key,
+                        rec.plain_size,
+                    ],
+                )?;
+            }
+            tx.commit()?;
+            report.recordings = recs.len();
+        }
+        "camera_roll" => {
+            let media_cache_dir = cache_path
+                .parent()
+                .map(|p| p.join("media"))
+                .unwrap_or_else(|| work_dir.join("media"));
+            let assets = crate::parsers::camera_roll::parse_camera_roll(
+                backup_dir,
+                decryptor,
+                &media_cache_dir,
+            )?;
+            let conn = cache.conn();
+            let tx = conn.unchecked_transaction()?;
+            // Only the camera roll (source 'Photos'); message/app attachments in
+            // media_items are left alone.
+            tx.execute("DELETE FROM media_items WHERE source = 'Photos'", [])?;
+            for a in &assets {
+                tx.execute(
+                    "INSERT INTO media_items
+                        (domain, relative_path, kind, source, mime_type,
+                         taken_at, thumb_path, local_path, decrypt_key, plain_size)
+                     VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![
+                        a.relative_path,
+                        a.kind,
+                        a.mime,
+                        a.taken_at,
+                        a.thumb_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().into_owned()),
+                        a.full_path.to_string_lossy(),
+                        a.decrypt_key,
+                        a.plain_size,
+                    ],
+                )?;
+            }
+            tx.commit()?;
+            report.media_items = assets.len();
+        }
+        "messages" => {
+            // Extract sms.db first — the decrypt happens here, so a failure aborts
+            // before we delete anything. Only then swap the iMessage/SMS rows
+            // (app-chat threads — TikTok/WhatsApp/Telegram — are left untouched).
+            let index = crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir)?;
+            let entry = index
+                .find("HomeDomain", "Library/SMS/sms.db")?
+                .ok_or_else(|| crate::Error::Parse("sms.db is not in this backup".into()))?;
+            let sms_db = work_dir.join(".reimport-sms.db");
+            index.extract_to(&entry, decryptor, &sms_db)?;
+            {
+                let conn = cache.conn();
+                let tx = conn.unchecked_transaction()?;
+                tx.execute(
+                    "DELETE FROM messages WHERE thread_id IN
+                        (SELECT id FROM threads
+                         WHERE service IS NULL OR service NOT IN ('TikTok','WhatsApp','Telegram'))",
+                    [],
+                )?;
+                tx.execute(
+                    "DELETE FROM threads
+                     WHERE service IS NULL OR service NOT IN ('TikTok','WhatsApp','Telegram')",
+                    [],
+                )?;
+                tx.commit()?;
+            }
+            let r = crate::parsers::messages::parse_messages(&sms_db, &cache, &mut report);
+            let _ = std::fs::remove_file(&sms_db);
+            r?;
+        }
+        "notes" => {
+            let index = crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir)?;
+            let entry = index
+                .find("AppDomainGroup-group.com.apple.notes", "NoteStore.sqlite")?
+                .ok_or_else(|| {
+                    crate::Error::Parse("NoteStore.sqlite is not in this backup".into())
+                })?;
+            let note_db = work_dir.join(".reimport-notes.db");
+            index.extract_to(&entry, decryptor, &note_db)?;
+            {
+                let conn = cache.conn();
+                let tx = conn.unchecked_transaction()?;
+                tx.execute("DELETE FROM notes", [])?;
+                tx.commit()?;
+            }
+            let r = crate::parsers::notes::parse_notes(&note_db, &cache, &mut report);
+            let _ = std::fs::remove_file(&note_db);
+            r?;
+        }
+        other => {
+            return Err(crate::Error::Parse(format!(
+                "'{other}' cannot be re-imported on its own"
+            )))
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -667,6 +812,43 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             .unwrap();
         assert_eq!(folder.as_deref(), Some("Notes"));
         assert_eq!(title.as_deref(), Some("Reminder"));
+    }
+
+    /// Re-importing a native type replaces its rows rather than appending: two
+    /// runs leave the same count, and the row count reflects the backup, not the
+    /// number of runs.
+    #[test]
+    fn reimport_recordings_replaces_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+
+        let m4a_id = "ee00000000000000000000000000000000000009";
+        let sub = backup.join(&m4a_id[..2]);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join(m4a_id), b"m4a").unwrap();
+        Connection::open(backup.join("Manifest.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+                 INSERT INTO Files VALUES ('{m4a_id}','MediaDomain','Recordings/memo.m4a',1,NULL);"
+            ))
+            .unwrap();
+
+        let cache_path = tmp.path().join("cache.db");
+        let work = tmp.path().join("work");
+
+        for _ in 0..2 {
+            let report = reimport_module("recordings", &backup, None, &cache_path, &work).unwrap();
+            assert_eq!(report.recordings, 1);
+        }
+        // Still one row after two runs — the DELETE ran, no duplication.
+        let cache = CacheDb::open(&cache_path).unwrap();
+        let n: i64 = cache
+            .conn()
+            .query_row("SELECT COUNT(*) FROM recordings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     // Small helper so the test can gracefully skip without sqlite3.

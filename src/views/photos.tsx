@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
+import { ReimportButton } from "@/components/reimport-button";
 import { formatDateTime } from "@/lib/format";
 import { client, type MediaItem } from "@/lib/ipc";
 
@@ -78,7 +79,9 @@ export function PhotosView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Photos" count={count} />
+      <ViewHeader title="Photos" count={count}>
+        <ReimportButton module="camera_roll" />
+      </ViewHeader>
       <div className="flex shrink-0 items-center justify-between gap-2 border-b px-2 py-2">
         {hasFilter ? (
           <SourceFilter

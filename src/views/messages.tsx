@@ -11,6 +11,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Message as MessageRow, MessageContent, MessageHeader } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
+import { ReimportButton } from "@/components/reimport-button";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { VirtualList } from "@/components/virtual-list";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
@@ -165,7 +166,9 @@ function Conversations({
     <ListDetail
       master={
         <>
-          <ViewHeader title="Conversations" count={visibleThreads?.length} />
+          <ViewHeader title="Conversations" count={visibleThreads?.length}>
+            <ReimportButton module="messages" />
+          </ViewHeader>
           {(threads?.length ?? 0) > 0 && (
             <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
               <SortControl

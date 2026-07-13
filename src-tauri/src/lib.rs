@@ -533,6 +533,84 @@ fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
     active.path().is_ok()
 }
 
+/// Counts refreshed by a partial re-import (only the relevant one is non-zero).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReimportResult {
+    module: String,
+    recordings: usize,
+    media_items: usize,
+    messages: usize,
+    threads: usize,
+    notes: usize,
+    warnings: Vec<String>,
+}
+
+/// Re-import a single natively-parsed data type into the open backup's cache,
+/// replacing just that type's rows — no iLEAPP, so it's fast. Paths are derived
+/// from the active cache (`…/caches/<id>/cache.db`) and the original backup dir
+/// recorded in its `source_dir` meta; the decrypt keys come from the session.
+#[tauri::command]
+async fn reimport_module(
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    module_id: String,
+) -> Result<ReimportResult, String> {
+    if !import::REIMPORTABLE_NATIVE.contains(&module_id.as_str()) {
+        return Err(format!("'{module_id}' can't be re-imported on its own"));
+    }
+    let cache_path = active.path()?;
+    // …/caches/<id>/cache.db → id dir → caches dir → data dir → …/work/<id>
+    let id_dir = cache_path
+        .parent()
+        .ok_or_else(|| "unexpected cache layout".to_string())?;
+    let backup_id = id_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "unexpected cache layout".to_string())?;
+    let data_dir = id_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "unexpected cache layout".to_string())?;
+    let work_dir = data_dir.join("work").join(backup_id);
+
+    // The original backup dir (may be offline now) is recorded in the cache.
+    let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+    let source_dir = cache
+        .get_meta("source_dir")
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "this backup's source path isn't recorded; re-import fully once".to_string()
+        })?;
+    drop(cache);
+
+    let decryptor = session.get();
+    let module = module_id.clone();
+    let cp = cache_path.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        import::reimport_module(
+            &module,
+            Path::new(&source_dir),
+            decryptor.as_deref(),
+            &cp,
+            &work_dir,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+
+    Ok(ReimportResult {
+        module: module_id,
+        recordings: report.recordings,
+        media_items: report.media_items,
+        messages: report.messages,
+        threads: report.threads,
+        notes: report.notes,
+        warnings: report.warnings,
+    })
+}
+
 /// Forget an imported backup: delete its cache DB and all derived caches
 /// (media/thumbs), its work dir, and its stored password. Does not touch the
 /// original backup on disk. Re-importing recreates everything.
@@ -1404,6 +1482,7 @@ pub fn run() {
             import_backup,
             open_backup,
             has_active_backup,
+            reimport_module,
             forget_backup,
             imported_backup_ids,
             list_threads,
