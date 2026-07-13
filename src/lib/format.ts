@@ -55,7 +55,7 @@ const dateYear = new Intl.DateTimeFormat(undefined, {
 
 /** Compact relative-ish label for a thread-list row. */
 export function formatListTime(epochSeconds: number | null): string {
-  if (!epochSeconds) return "";
+  if (epochSeconds == null) return "";
   const d = new Date(epochSeconds * 1000);
   const now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
@@ -66,13 +66,13 @@ export function formatListTime(epochSeconds: number | null): string {
 
 /** Full timestamp for a message separator. */
 export function formatMessageTime(epochSeconds: number | null): string {
-  if (!epochSeconds) return "";
+  if (epochSeconds == null) return "";
   return dayTime.format(new Date(epochSeconds * 1000));
 }
 
 /** Full date + time for a row (calls, history). */
 export function formatDateTime(epochSeconds: number | null): string {
-  if (!epochSeconds) return "";
+  if (epochSeconds == null) return "";
   return dayTime.format(new Date(epochSeconds * 1000));
 }
 
@@ -90,7 +90,7 @@ const dateHeaderYear = new Intl.DateTimeFormat(undefined, {
 
 /** A day separator label for the timeline, e.g. "Sat, Jun 8". */
 export function formatDateHeader(epochSeconds: number | null): string {
-  if (!epochSeconds) return "";
+  if (epochSeconds == null) return "";
   const d = new Date(epochSeconds * 1000);
   const fmt = d.getFullYear() === new Date().getFullYear() ? dateHeader : dateHeaderYear;
   return fmt.format(d);
