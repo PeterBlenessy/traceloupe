@@ -57,6 +57,9 @@ export function ImportDialog({
   // Keep the latest progress even across re-subscribes.
   const unlisten = useRef<(() => void) | null>(null);
   const started = useRef(false);
+  // Set when the user hits Stop, so the resulting cancel error doesn't flash an
+  // error state while the dialog is already closing.
+  const stopped = useRef(false);
 
   useEffect(() => {
     if (!open) {
@@ -80,6 +83,7 @@ export function ImportDialog({
   }, [open, autoStart]);
 
   async function runImport() {
+    stopped.current = false;
     setStage({ kind: "running", progress: null });
     const off = await client.onImportProgress((p) =>
       setStage({ kind: "running", progress: p }),
@@ -101,8 +105,17 @@ export function ImportDialog({
     } catch (e) {
       off();
       unlisten.current = null;
+      if (stopped.current) return; // user stopped; the dialog is closing
       setStage({ kind: "error", message: String(e) });
     }
+  }
+
+  // Stop the in-flight import and close the dialog. Closes directly through the
+  // parent handler, bypassing the "can't close mid-import" guard on outside/Esc.
+  function stopImport() {
+    stopped.current = true;
+    void client.cancelImport();
+    onOpenChange(false);
   }
 
   // Encryption drives the prompt: only encrypted backups need a password.
@@ -177,7 +190,9 @@ export function ImportDialog({
           </form>
         )}
 
-        {stage.kind === "running" && <RunningView progress={stage.progress} />}
+        {stage.kind === "running" && (
+          <RunningView progress={stage.progress} onStop={stopImport} />
+        )}
 
         {stage.kind === "error" && (
           <div className="space-y-4">
@@ -207,7 +222,13 @@ export function ImportDialog({
   );
 }
 
-function RunningView({ progress }: { progress: ImportProgress | null }) {
+function RunningView({
+  progress,
+  onStop,
+}: {
+  progress: ImportProgress | null;
+  onStop: () => void;
+}) {
   const parsing = progress?.phase === "parsing" ? progress : null;
   const normalizing = progress?.phase === "normalizing" ? progress : null;
   // During parsing show real fraction; during normalizing show a full-ish bar
@@ -229,6 +250,11 @@ function RunningView({ progress }: { progress: ImportProgress | null }) {
       <p className="text-xs text-muted-foreground">
         Reading this backup for the first time. It opens instantly next time.
       </p>
+      <DialogFooter>
+        <Button variant="ghost" onClick={onStop}>
+          Stop import
+        </Button>
+      </DialogFooter>
     </div>
   );
 }

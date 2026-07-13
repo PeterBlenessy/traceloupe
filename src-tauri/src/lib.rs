@@ -60,6 +60,11 @@ impl SessionKeys {
     }
 }
 
+/// The cancel token of the import currently in flight, so a `cancel_import`
+/// command can stop it (killing the iLEAPP subprocess). `None` when idle.
+#[derive(Default)]
+struct ImportCancel(Mutex<Option<CancelToken>>);
+
 /// Reconstruct the decryptor for an encrypted backup from its Keychain password
 /// and the source dir recorded in its cache. `None` if not encrypted / no key.
 fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecryptor>> {
@@ -279,11 +284,21 @@ fn set_log_level(level: String) {
     logging::set_level(&level);
 }
 
+/// Stop the in-flight import (kills the iLEAPP subprocess). No-op when idle.
 #[tauri::command]
+fn cancel_import(import_cancel: State<'_, ImportCancel>) {
+    if let Some(token) = import_cancel.0.lock().unwrap().as_ref() {
+        token.cancel();
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri injects the State params; not a real API.
 async fn import_backup(
     app: AppHandle,
     active: State<'_, ActiveBackup>,
     session: State<'_, SessionKeys>,
+    import_cancel: State<'_, ImportCancel>,
     backup_path: String,
     backup_id: String,
     password: String,
@@ -304,13 +319,15 @@ async fn import_backup(
     }
 
     let cancel = CancelToken::new();
+    // Expose the token so `cancel_import` can stop this run (kills iLEAPP).
+    *import_cancel.0.lock().unwrap() = Some(cancel.clone());
     let backup_path = PathBuf::from(backup_path);
     // Kept for post-import key setup (the originals are moved into the worker).
     let source_dir = backup_path.clone();
     let key_password = password.clone();
 
     // Blocking pipeline on a worker thread; progress is emitted as it runs.
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
+    let result = tauri::async_runtime::spawn_blocking(move || {
         logging::info(&app, "Import started");
         // Time each phase/step for the dev console (start on entry, elapsed on
         // the next step boundary / completion).
@@ -391,9 +408,15 @@ async fn import_backup(
             },
         )
     })
-    .await
-    .map_err(|e| format!("import task panicked: {e}"))?
-    .map_err(|e| e.to_string())?;
+    .await;
+
+    // The run is over (done, error, or cancelled) — clear the shared token so a
+    // later cancel_import can't stop a future import, and free it.
+    *import_cancel.0.lock().unwrap() = None;
+
+    let outcome = result
+        .map_err(|e| format!("import task panicked: {e}"))?
+        .map_err(|e| e.to_string())?;
 
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
@@ -1038,6 +1061,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ActiveBackup::default())
         .manage(SessionKeys::default())
+        .manage(ImportCancel::default())
         .register_uri_scheme_protocol("salvage-media", |ctx, request| {
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
@@ -1071,6 +1095,7 @@ pub fn run() {
             install_engine,
             list_import_modules,
             set_log_level,
+            cancel_import,
             import_backup,
             open_backup,
             has_active_backup,
