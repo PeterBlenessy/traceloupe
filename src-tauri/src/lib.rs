@@ -239,7 +239,10 @@ enum ImportEvent {
         fraction: f32,
         artifact: String,
     },
-    Normalizing,
+    Normalizing {
+        /// The sub-stage being organized (e.g. "Messages", "Camera roll").
+        step: String,
+    },
 }
 
 /// Outcome returned to the awaiting frontend.
@@ -315,7 +318,7 @@ async fn import_backup(
                         fraction: p.fraction(),
                         artifact: p.artifact,
                     }),
-                    ImportPhase::Normalizing => Some(ImportEvent::Normalizing),
+                    ImportPhase::Normalizing { step } => Some(ImportEvent::Normalizing { step }),
                     ImportPhase::Done(_) => None,
                 };
                 if let Some(event) = event {

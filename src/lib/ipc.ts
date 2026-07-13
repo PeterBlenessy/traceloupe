@@ -28,7 +28,7 @@ export type DiscoveryResult =
 
 export type ImportProgress =
   | { phase: "parsing"; current: number; total: number; fraction: number; artifact: string }
-  | { phase: "normalizing" };
+  | { phase: "normalizing"; step: string };
 
 /** A selectable data type for import (maps to iLEAPP modules behind the scenes). */
 export interface ImportModule {
@@ -591,9 +591,11 @@ export const mockClient: SalvageClient = {
         }),
       );
     }
+    for (const step of ["Messages", "Contacts", "TikTok messages", "Camera roll"]) {
+      await new Promise((r) => setTimeout(r, 250));
+      mockProgressSubs.forEach((cb) => cb({ phase: "normalizing", step }));
+    }
     await new Promise((r) => setTimeout(r, 200));
-    mockProgressSubs.forEach((cb) => cb({ phase: "normalizing" }));
-    await new Promise((r) => setTimeout(r, 300));
     mockActive = true;
     mockImported.add(backupId);
     return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 4, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
