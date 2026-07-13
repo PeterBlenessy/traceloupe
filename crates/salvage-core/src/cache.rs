@@ -17,7 +17,10 @@ pub struct CacheDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+// Bumped to 2 so caches from earlier builds (stamped 1, possibly missing the
+// additively-added columns/index) run the migration block once to catch up, then
+// skip it on every subsequent open.
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -194,33 +197,36 @@ impl CacheDb {
         // fsyncs. Safe: the cache is rebuilt on re-import if a crash truncates it.
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if version < 1 {
+        if version == 0 {
             conn.execute_batch(SCHEMA_V1)?;
         }
-        // Additive migrations for caches created by earlier builds. Cheap and
-        // idempotent, so they run every open rather than being version-gated.
-        ensure_column(&conn, "contacts", "image", "BLOB")?;
-        ensure_column(
-            &conn,
-            "threads",
-            "participants_json",
-            "TEXT NOT NULL DEFAULT '[]'",
-        )?;
-        ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
-        ensure_column(&conn, "media_items", "plain_size", "INTEGER")?;
-        ensure_column(
-            &conn,
-            "contacts",
-            "source",
-            "TEXT NOT NULL DEFAULT 'Address Book'",
-        )?;
-        // Backfill the timeline index for caches created before it was in the
-        // schema. Idempotent; keeps it out of the read path (it previously ran on
-        // every count/window query).
-        conn.execute_batch(
-            "CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)",
-        )?;
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        // Migrations only run when the cache is older than the current schema —
+        // not on every open. They're additive/idempotent, so running the whole
+        // set to catch a cache up is safe. A cache newer than us (a future build)
+        // is left untouched: we never stamp a lower user_version (no downgrade).
+        if version < SCHEMA_VERSION {
+            ensure_column(&conn, "contacts", "image", "BLOB")?;
+            ensure_column(
+                &conn,
+                "threads",
+                "participants_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )?;
+            ensure_column(&conn, "media_items", "decrypt_key", "BLOB")?;
+            ensure_column(&conn, "media_items", "plain_size", "INTEGER")?;
+            ensure_column(
+                &conn,
+                "contacts",
+                "source",
+                "TEXT NOT NULL DEFAULT 'Address Book'",
+            )?;
+            // Backfill the timeline index for caches created before it was in the
+            // schema (new caches already have it from SCHEMA_V1).
+            conn.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)",
+            )?;
+            conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
         Ok(CacheDb { conn })
     }
 
