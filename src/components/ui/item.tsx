@@ -31,7 +31,11 @@ function ItemSeparator({
 }
 
 const itemVariants = cva(
-  "group/item flex flex-wrap items-center rounded-md border border-transparent text-sm transition-colors duration-100 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 [a]:transition-colors [a]:hover:bg-accent/50",
+  // `min-w-0` + no `flex-wrap`: rows must stay a single horizontal line and be
+  // able to shrink, so a long child (e.g. a URL) truncates instead of wrapping
+  // its siblings onto new lines or pushing the row wider than the pane (which
+  // made the whole window scroll sideways).
+  "group/item flex min-w-0 items-center rounded-md border border-transparent text-sm transition-colors duration-100 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 [a]:transition-colors [a]:hover:bg-accent/50",
   {
     variants: {
       variant: {
@@ -108,7 +112,10 @@ function ItemContent({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-content"
       className={cn(
-        "flex flex-1 flex-col gap-1 [&+[data-slot=item-content]]:flex-none",
+        // `min-w-0` lets this flex child shrink below its content's intrinsic
+        // width, so a long title/URL inside can truncate instead of forcing the
+        // whole row wider than the pane.
+        "flex min-w-0 flex-1 flex-col gap-1 [&+[data-slot=item-content]]:flex-none",
         className
       )}
       {...props}
@@ -121,7 +128,11 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-title"
       className={cn(
-        "flex w-fit items-center gap-2 text-sm leading-snug font-medium",
+        // A plain block by default so a `truncate` from the view actually
+        // ellipsizes (a `flex w-fit` title sizes to its content and can't
+        // shrink). Views needing an inline badge opt back in with their own
+        // `flex items-center gap-2`.
+        "min-w-0 text-sm leading-snug font-medium",
         className
       )}
       {...props}
@@ -147,7 +158,7 @@ function ItemActions({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="item-actions"
-      className={cn("flex items-center gap-2", className)}
+      className={cn("flex shrink-0 items-center gap-2", className)}
       {...props}
     />
   )
