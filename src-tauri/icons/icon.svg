@@ -1,71 +1,50 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#3E4C63"/>
-      <stop offset="0.5" stop-color="#1B2536"/>
-      <stop offset="1" stop-color="#080C15"/>
+      <stop offset="0" stop-color="#3E4C63"/><stop offset="0.5" stop-color="#1B2536"/><stop offset="1" stop-color="#080C15"/>
     </linearGradient>
     <radialGradient id="glow" cx="0.30" cy="0.26" r="0.75">
-      <stop offset="0" stop-color="#5EEAD4" stop-opacity="0.30"/>
-      <stop offset="1" stop-color="#5EEAD4" stop-opacity="0"/>
+      <stop offset="0" stop-color="#5EEAD4" stop-opacity="0.30"/><stop offset="1" stop-color="#5EEAD4" stop-opacity="0"/>
     </radialGradient>
     <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#F1F5F9"/>
-      <stop offset="0.5" stop-color="#AEB9C9"/>
-      <stop offset="1" stop-color="#5B6B82"/>
+      <stop offset="0" stop-color="#F1F5F9"/><stop offset="0.5" stop-color="#AEB9C9"/><stop offset="1" stop-color="#5B6B82"/>
     </linearGradient>
-    <radialGradient id="glass" cx="0.42" cy="0.36" r="0.70">
-      <stop offset="0" stop-color="#16233B" stop-opacity="0.12"/>
-      <stop offset="1" stop-color="#060B14" stop-opacity="0.60"/>
+    <radialGradient id="glass" cx="0.42" cy="0.36" r="0.72">
+      <stop offset="0" stop-color="#16273F"/><stop offset="1" stop-color="#060B14"/>
     </radialGradient>
     <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/>
-      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.22"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
     <filter id="tglow" x="-40%" y="-40%" width="180%" height="180%">
-      <feGaussianBlur stdDeviation="7" result="b"/>
-      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      <feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
     <clipPath id="iconClip"><rect x="0" y="0" width="1024" height="1024" rx="224"/></clipPath>
-    <clipPath id="lens"><circle cx="468" cy="452" r="232"/></clipPath>
+    <clipPath id="lens"><circle cx="512" cy="512" r="234"/></clipPath>
   </defs>
 
-  <!-- background -->
   <rect x="0" y="0" width="1024" height="1024" rx="224" fill="url(#bg)"/>
   <g clip-path="url(#iconClip)">
     <rect x="0" y="0" width="1024" height="1024" fill="url(#glow)"/>
-    <!-- the raw data: a quiet, flat trace across the icon -->
-    <path d="M 60 470 H 964" fill="none" stroke="#38BDF8" stroke-opacity="0.30"
-          stroke-width="10" stroke-linecap="round"/>
-    <path d="M 150 470 l 26 -14 l 26 14 M 812 470 l 26 -16 l 26 16" fill="none"
-          stroke="#38BDF8" stroke-opacity="0.22" stroke-width="8" stroke-linecap="round"/>
+    <path d="M 40 512 H 984" fill="none" stroke="#38BDF8" stroke-opacity="0.30" stroke-width="10" stroke-linecap="round"/>
+    <path d="M 130 512 l 26 -14 l 26 14 M 812 512 l 26 -16 l 26 16" fill="none" stroke="#38BDF8" stroke-opacity="0.22" stroke-width="8" stroke-linecap="round"/>
   </g>
-
-  <!-- loupe handle (behind the rim) -->
-  <path d="M 648 632 L 828 812" fill="none" stroke="url(#metal)" stroke-width="74"
-        stroke-linecap="round"/>
-  <path d="M 648 632 L 828 812" fill="none" stroke="#060B14" stroke-opacity="0.20"
-        stroke-width="18" stroke-linecap="round"/>
 
   <!-- lens glass -->
-  <circle cx="468" cy="452" r="232" fill="url(#glass)"/>
+  <circle cx="512" cy="512" r="234" fill="url(#glass)"/>
 
-  <!-- the revealed signal: rich waveform + nodes, magnified under the loupe -->
+  <!-- magnified trace revealed inside the lens -->
   <g clip-path="url(#lens)">
-    <path d="M 236 452 L 322 452 L 360 366 L 402 548 L 448 396 L 496 500 L 548 452
-             L 604 452 L 642 500 L 684 404 L 730 452 L 800 452"
-          fill="none" stroke="#22D3EE" stroke-width="22"
-          stroke-linecap="round" stroke-linejoin="round" filter="url(#tglow)"/>
-    <circle cx="360" cy="366" r="15" fill="#ECFEFF"/>
-    <circle cx="496" cy="500" r="13" fill="#ECFEFF"/>
-    <circle cx="684" cy="404" r="15" fill="#ECFEFF"/>
-    <!-- glass sheen -->
-    <ellipse cx="386" cy="356" rx="168" ry="104" fill="url(#sheen)"
-             transform="rotate(-28 386 356)"/>
+    <path d="M 300 512 L 356 512 L 392 424 L 434 600 L 480 448 L 528 556 L 580 512
+             L 636 512 L 674 560 L 716 460 L 740 512"
+          fill="none" stroke="#22D3EE" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" filter="url(#tglow)"/>
+    <circle cx="392" cy="424" r="14" fill="#ECFEFF"/>
+    <circle cx="528" cy="556" r="12" fill="#ECFEFF"/>
+    <circle cx="716" cy="460" r="14" fill="#ECFEFF"/>
+    <ellipse cx="430" cy="416" rx="150" ry="94" fill="url(#sheen)" transform="rotate(-28 430 416)"/>
   </g>
 
-  <!-- rim (metal ring) -->
-  <circle cx="468" cy="452" r="248" fill="none" stroke="url(#metal)" stroke-width="34"/>
-  <circle cx="468" cy="452" r="231" fill="none" stroke="#060B14" stroke-opacity="0.45" stroke-width="3"/>
-  <circle cx="468" cy="452" r="266" fill="none" stroke="#060B14" stroke-opacity="0.25" stroke-width="4"/>
+  <!-- smooth metal rim (no handle) -->
+  <circle cx="512" cy="512" r="250" fill="none" stroke="url(#metal)" stroke-width="34"/>
+  <circle cx="512" cy="512" r="233" fill="none" stroke="#060B14" stroke-opacity="0.45" stroke-width="3"/>
+  <circle cx="512" cy="512" r="268" fill="none" stroke="#060B14" stroke-opacity="0.25" stroke-width="4"/>
 </svg>
