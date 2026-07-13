@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/salvage-core", "src-tauri"]
+members = ["crates/traceloupe-core", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,7 +19,7 @@ ureq = "2"
 sha2 = "0.10"
 hex = "0.4"
 # Native decryption of encrypted iOS backups (Phase 2): keybag unwrap → class
-# keys → Manifest.db / per-file AES-CBC. See crates/salvage-core/src/crypto.rs.
+# keys → Manifest.db / per-file AES-CBC. See crates/traceloupe-core/src/crypto.rs.
 sha1 = "0.10"
 pbkdf2 = "0.12"
 aes = "0.8"
@@ -60,7 +60,7 @@ opt-level = 3
 [profile.dev.package.block-padding]
 opt-level = 3
 # The AES-CBC chaining loop is a generic trait method, so it monomorphizes into
-# salvage-core rather than the cbc crate. Optimize salvage-core in dev too, or an
+# traceloupe-core rather than the cbc crate. Optimize traceloupe-core in dev too, or an
 # unoptimized copy of that loop throttles the otherwise-GB/s hardware AES.
-[profile.dev.package.salvage-core]
+[profile.dev.package.traceloupe-core]
 opt-level = 2

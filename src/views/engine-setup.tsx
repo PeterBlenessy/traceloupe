@@ -62,7 +62,7 @@ export function EngineSetup() {
           <CardTitle>Parsing engine needed</CardTitle>
         </div>
         <CardDescription>
-          Salvage reads backups with the iLEAPP engine ({info?.version ?? "…"}),
+          TraceLoupe reads backups with the iLEAPP engine ({info?.version ?? "…"}),
           which downloads once and is reused after. It isn't bundled, to keep the
           app small.
         </CardDescription>

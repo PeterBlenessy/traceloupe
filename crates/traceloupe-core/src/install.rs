@@ -40,7 +40,7 @@ impl EngineManifest {
     }
 }
 
-/// The engine Salvage installs on first use.
+/// The engine TraceLoupe installs on first use.
 ///
 /// TODO(publish): fill `url`/`sha256`/`size` once a re-frozen iLEAPP is hosted
 /// as a release asset. Upstream's own macOS binary is broken (Pillow), so this

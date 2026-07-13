@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Salvage",
+  "productName": "TraceLoupe",
   "version": "0.1.0",
-  "identifier": "se.addable.salvage",
+  "identifier": "se.addable.traceloupe",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Salvage",
+        "title": "TraceLoupe",
         "width": 1100,
         "height": 750,
         "minWidth": 800,

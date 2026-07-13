@@ -10,7 +10,7 @@ AES-key-wrapped class/manifest/file keys, AES-CBC file blobs) with a seeded
 
 ```sh
 pip install cryptography
-python tools/make_fixture_backup.py /tmp/fixture-backup --password salvage-test
+python tools/make_fixture_backup.py /tmp/fixture-backup --password traceloupe-test
 ```
 
 The fixture's crypto is independently validated by the third-party `iOSbackup`

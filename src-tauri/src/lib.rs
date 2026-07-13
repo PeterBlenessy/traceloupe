@@ -1,4 +1,4 @@
-//! Thin Tauri command layer over salvage-core (architecture.md §4).
+//! Thin Tauri command layer over traceloupe-core (architecture.md §4).
 //! Commands translate core results into serializable responses; no parsing
 //! or business logic lives here.
 
@@ -44,17 +44,17 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
 }
 
-use salvage_core::cache::CacheDb;
-use salvage_core::crypto::BackupDecryptor;
-use salvage_core::discovery::{self, BackupInfo};
-use salvage_core::engine::{self};
-use salvage_core::import::{self, ImportPhase};
-use salvage_core::install;
-use salvage_core::query::{
+use tauri::{AppHandle, Emitter, Manager, State};
+use traceloupe_core::cache::CacheDb;
+use traceloupe_core::crypto::BackupDecryptor;
+use traceloupe_core::discovery::{self, BackupInfo};
+use traceloupe_core::engine::{self};
+use traceloupe_core::import::{self, ImportPhase};
+use traceloupe_core::install;
+use traceloupe_core::query::{
     self, Call, Contact, HistoryVisit, MediaItem, Message, Note, ThreadSummary, TimelineMessage,
 };
-use salvage_core::sidecar::CancelToken;
-use tauri::{AppHandle, Emitter, Manager, State};
+use traceloupe_core::sidecar::CancelToken;
 
 /// The cache DB currently being browsed. Set when an import finishes or a
 /// previously-imported backup is opened; read by every artifact query.
@@ -149,12 +149,12 @@ fn list_backups(root: Option<String>) -> Result<DiscoveryResult, String> {
     };
     match result {
         Ok(backups) => Ok(DiscoveryResult::Ok { backups }),
-        Err(salvage_core::Error::PermissionDenied { path }) => {
+        Err(traceloupe_core::Error::PermissionDenied { path }) => {
             Ok(DiscoveryResult::PermissionDenied {
                 path: path.display().to_string(),
             })
         }
-        Err(salvage_core::Error::BackupDirNotFound { path }) => Ok(DiscoveryResult::NotFound {
+        Err(traceloupe_core::Error::BackupDirNotFound { path }) => Ok(DiscoveryResult::NotFound {
             path: path.display().to_string(),
         }),
         Err(e) => Err(e.to_string()),
@@ -260,18 +260,18 @@ enum EngineEvent {
 }
 
 /// Resolve the iLEAPP engine from env overrides and the app data dir.
-/// - `SALVAGE_PYTHON` + `SALVAGE_ILEAPP_SOURCE` → run from a source checkout.
-/// - `SALVAGE_ILEAPP` → an explicit frozen binary.
+/// - `TRACELOUPE_PYTHON` + `TRACELOUPE_ILEAPP_SOURCE` → run from a source checkout.
+/// - `TRACELOUPE_ILEAPP` → an explicit frozen binary.
 /// - else `<app_data>/engine/ileapp` (downloaded on first use).
-fn resolve_engine(app: &AppHandle) -> Option<salvage_core::sidecar::EngineConfig> {
+fn resolve_engine(app: &AppHandle) -> Option<traceloupe_core::sidecar::EngineConfig> {
     let source_override = match (
-        std::env::var_os("SALVAGE_PYTHON"),
-        std::env::var_os("SALVAGE_ILEAPP_SOURCE"),
+        std::env::var_os("TRACELOUPE_PYTHON"),
+        std::env::var_os("TRACELOUPE_ILEAPP_SOURCE"),
     ) {
         (Some(py), Some(src)) => Some((PathBuf::from(py), PathBuf::from(src))),
         _ => None,
     };
-    let binary_override = std::env::var_os("SALVAGE_ILEAPP").map(PathBuf::from);
+    let binary_override = std::env::var_os("TRACELOUPE_ILEAPP").map(PathBuf::from);
     let installed = app
         .path()
         .app_data_dir()
@@ -317,8 +317,8 @@ struct ImportResult {
 /// deliver the emitted events while it runs.
 /// The catalog of importable data types, for the import-selection settings.
 #[tauri::command]
-fn list_import_modules() -> Vec<salvage_core::sidecar::ImportModule> {
-    salvage_core::sidecar::IMPORT_CATALOG.to_vec()
+fn list_import_modules() -> Vec<traceloupe_core::sidecar::ImportModule> {
+    traceloupe_core::sidecar::IMPORT_CATALOG.to_vec()
 }
 
 /// Set the dev-console log verbosity at runtime (from Settings).
@@ -352,7 +352,7 @@ async fn import_backup(
         return Err("invalid backup id".to_string());
     }
     let cfg = resolve_engine(&app).ok_or_else(|| {
-        "iLEAPP engine is not installed. Set SALVAGE_ILEAPP or install the engine.".to_string()
+        "iLEAPP engine is not installed. Set TRACELOUPE_ILEAPP or install the engine.".to_string()
     })?;
 
     let data_dir = app
@@ -937,7 +937,7 @@ async fn get_safari_window(
     .map_err(|e| e.to_string())?
 }
 
-/// Serve a media item over the `salvage-media://localhost/<id>` scheme
+/// Serve a media item over the `traceloupe-media://localhost/<id>` scheme
 /// (append `?thumb=1` for a downscaled thumbnail).
 ///
 /// Security: the handler takes only a numeric id, looks up the file path
@@ -1051,7 +1051,7 @@ fn media_protocol_response(
         .unwrap()
 }
 
-/// Serve a contact's photo over `salvage-avatar://localhost/<contactId>`.
+/// Serve a contact's photo over `traceloupe-avatar://localhost/<contactId>`.
 ///
 /// Like the media handler, it takes only a numeric id and reads the bytes stored
 /// for that contact in the active cache — never a path from the request.
@@ -1099,7 +1099,7 @@ fn guess_image_mime(bytes: &[u8]) -> &'static str {
     }
 }
 
-/// Serve a message attachment over `salvage-attachment://localhost/<id>`
+/// Serve a message attachment over `traceloupe-attachment://localhost/<id>`
 /// (`?thumb=1` for an image thumbnail). Images are transcoded/downscaled like
 /// gallery media; audio/video are served as raw bytes with their stored mime.
 fn attachment_protocol_response(
@@ -1246,7 +1246,7 @@ pub fn run() {
         // runs on the main thread, so scrolling a timeline or gallery full of
         // thumbnails/avatars froze the whole UI. Answer each request on a
         // blocking worker instead and hand the bytes back via the responder.
-        .register_asynchronous_uri_scheme_protocol("salvage-media", |ctx, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("traceloupe-media", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
@@ -1254,15 +1254,18 @@ pub fn run() {
                 responder.respond(media_protocol_response(&app, &path, query.as_deref()));
             });
         })
-        .register_asynchronous_uri_scheme_protocol("salvage-avatar", |ctx, request, responder| {
-            let app = ctx.app_handle().clone();
-            let path = request.uri().path().to_string();
-            tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(avatar_protocol_response(&app, &path));
-            });
-        })
         .register_asynchronous_uri_scheme_protocol(
-            "salvage-attachment",
+            "traceloupe-avatar",
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                let path = request.uri().path().to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(avatar_protocol_response(&app, &path));
+                });
+            },
+        )
+        .register_asynchronous_uri_scheme_protocol(
+            "traceloupe-attachment",
             |ctx, request, responder| {
                 let app = ctx.app_handle().clone();
                 let path = request.uri().path().to_string();

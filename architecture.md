@@ -1,6 +1,6 @@
 # Local iOS Backup Browser — Architecture
 
-*Working codename: Salvage · Status: Draft v0.2 · Companion to the Product & Architecture Description*
+*Working codename: TraceLoupe · Status: Draft v0.2 · Companion to the Product & Architecture Description*
 
 ---
 

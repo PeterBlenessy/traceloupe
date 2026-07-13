@@ -9,7 +9,7 @@
 use keyring::Entry;
 
 /// Keychain service name; entries are per-backup under this service.
-const SERVICE: &str = "se.addable.salvage.backup-password";
+const SERVICE: &str = "se.addable.traceloupe.backup-password";
 
 fn entry(backup_id: &str) -> Option<Entry> {
     Entry::new(SERVICE, backup_id).ok()

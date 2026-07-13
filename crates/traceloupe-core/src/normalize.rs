@@ -1031,13 +1031,13 @@ mod tests {
         fs::write(dir.join(media_rel), b"\x89PNG fake bytes").unwrap();
         conn.execute(
             "INSERT INTO _lava_media_items (id, source_path, extraction_path, type)
-             VALUES ('media-1', 'private/var/mobile/.../salvage-test.png', ?1, 'image/png')",
+             VALUES ('media-1', 'private/var/mobile/.../traceloupe-test.png', ?1, 'image/png')",
             [media_rel],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO _lava_media_references (id, media_item_id, module_name, artifact_name, name)
-             VALUES ('ref-1', 'media-1', 'sms', 'SMS', 'salvage-test.png')",
+             VALUES ('ref-1', 'media-1', 'sms', 'SMS', 'traceloupe-test.png')",
             [],
         )
         .unwrap();

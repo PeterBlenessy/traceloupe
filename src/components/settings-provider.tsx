@@ -24,10 +24,10 @@ type SettingsProviderState = {
   setClockFormatPref: (pref: ClockFormat) => void;
 };
 
-const NAMES_KEY = "salvage-show-names";
-const AVATARS_KEY = "salvage-show-avatars";
-const IMPORT_MODULES_KEY = "salvage-import-modules";
-const LOG_LEVEL_KEY = "salvage-log-level";
+const NAMES_KEY = "traceloupe-show-names";
+const AVATARS_KEY = "traceloupe-show-avatars";
+const IMPORT_MODULES_KEY = "traceloupe-import-modules";
+const LOG_LEVEL_KEY = "traceloupe-log-level";
 
 const LOG_LEVELS: LogLevel[] = ["off", "error", "warn", "info", "debug", "trace"];
 
@@ -47,7 +47,7 @@ function printLog(r: LogRecord) {
         : r.level === "debug" || r.level === "trace"
           ? console.debug
           : console.info;
-  fn(`%c[salvage]%c ${r.message}`, "color:#a78bfa;font-weight:600", "color:inherit");
+  fn(`%c[traceloupe]%c ${r.message}`, "color:#a78bfa;font-weight:600", "color:inherit");
 }
 
 const SettingsProviderContext = createContext<SettingsProviderState | null>(null);

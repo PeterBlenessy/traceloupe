@@ -13,7 +13,7 @@
 #     are likewise invisible to analysis, so each is force-collected.
 #
 # Produces ./engine/dist/ileapp and prints its size + SHA-256 for the pinned
-# manifest in crates/salvage-core/src/install.rs. Requires `pnpm setup:engine`
+# manifest in crates/traceloupe-core/src/install.rs. Requires `pnpm setup:engine`
 # first (needs the venv with PyInstaller and iLEAPP's deps).
 set -euo pipefail
 
@@ -49,4 +49,4 @@ echo "✅ Built $BIN"
 echo "   size:   $(stat -f%z "$BIN") bytes"
 echo "   sha256: $(shasum -a 256 "$BIN" | awk '{print $1}')"
 echo
-echo "Host this file, then set url/sha256/size in crates/salvage-core/src/install.rs::pinned_engine()."
+echo "Host this file, then set url/sha256/size in crates/traceloupe-core/src/install.rs::pinned_engine()."

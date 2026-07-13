@@ -98,7 +98,7 @@ HEIC_PHOTO = base64.b64decode(
 # flow through iLEAPP's media check-in into _lava_media_items. Mixed formats
 # including HEIC, matching a real camera roll.
 GALLERY_PHOTOS = [
-    ("Library/SMS/Attachments/aa/00/salvage-test.png", "image/png", solid_png(64, 64, (74, 144, 226))),
+    ("Library/SMS/Attachments/aa/00/traceloupe-test.png", "image/png", solid_png(64, 64, (74, 144, 226))),
     ("Library/SMS/Attachments/bb/01/sunset.png", "image/png", solid_png(96, 64, (240, 130, 60))),
     ("Library/SMS/Attachments/cc/02/forest.png", "image/png", solid_png(64, 96, (60, 160, 90))),
     ("Library/SMS/Attachments/dd/03/IMG_0421.heic", "image/heic", HEIC_PHOTO),
@@ -551,7 +551,7 @@ def make_backup(out: Path, passcode: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("out", type=Path, help="output backup directory")
-    ap.add_argument("--password", default="salvage-test", help="backup password")
+    ap.add_argument("--password", default="traceloupe-test", help="backup password")
     args = ap.parse_args()
     make_backup(args.out, args.password)
     n = sum(1 for _ in args.out.rglob("*") if _.is_file())

@@ -1,5 +1,5 @@
 [package]
-name = "salvage-core"
+name = "traceloupe-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

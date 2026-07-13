@@ -25,7 +25,7 @@ class-key → `Manifest.db` → per-file decryption internally
 
 ```
 Detected encrypted iTunes backup
-Manifest.db was successfully decrypted with passcode salvage-test
+Manifest.db was successfully decrypted with passcode traceloupe-test
 ```
 
 and extracted + parsed the encrypted `sms.db`. **Consequence:** the Phase 1
@@ -49,7 +49,7 @@ CREATE TABLE sms (
 );
 ```
 
-Key structural facts for the normalizer (salvage-core, Milestone 2):
+Key structural facts for the normalizer (traceloupe-core, Milestone 2):
 
 - **One table per artifact module**, named after the module (`sms`). Column
   names are the module's `data_headers` lowercased with spaces → underscores.
@@ -224,16 +224,16 @@ expects.
 
 ```sh
 # 1. Build the fixture (needs `cryptography`)
-python tools/make_fixture_backup.py /tmp/fixture-backup --password salvage-test
+python tools/make_fixture_backup.py /tmp/fixture-backup --password traceloupe-test
 
 # 2a. Independent crypto check (needs `iOSbackup`)
 python -c "from iOSbackup import iOSbackup; import os; \
-  b=iOSbackup(udid='fixture-backup', cleartextpassword='salvage-test', backuproot='/tmp'); \
+  b=iOSbackup(udid='fixture-backup', cleartextpassword='traceloupe-test', backuproot='/tmp'); \
   print('manifest decrypted, files:', len(b.getBackupFilesList()))"
 
 # 2b. End-to-end via iLEAPP from source
 python /path/to/iLEAPP/ileapp.py -t itunes -i /tmp/fixture-backup \
-  -o /tmp/ileapp-out --itunes_password salvage-test
+  -o /tmp/ileapp-out --itunes_password traceloupe-test
 
 # 3. Inspect the engine output
 sqlite3 /tmp/ileapp-out/iLEAPP_Output_*/_lava_artifacts.db \

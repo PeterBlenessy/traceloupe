@@ -86,7 +86,7 @@ export function BackupPicker() {
         <div>
           <h1 className="text-2xl font-semibold">Your iPhone backups</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pick a backup to open. The first time, Salvage reads it once; after
+            Pick a backup to open. The first time, TraceLoupe reads it once; after
             that it opens instantly. Everything stays on this machine.
           </p>
         </div>
@@ -309,7 +309,7 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
         <CardTitle>macOS is blocking access to your backups</CardTitle>
         <CardDescription>
           Finder's backup folder is protected. The easiest way in: choose the
-          folder yourself — selecting it grants Salvage access, no Full Disk
+          folder yourself — selecting it grants TraceLoupe access, no Full Disk
           Access needed.
         </CardDescription>
       </CardHeader>
@@ -330,10 +330,10 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
               </button>
             </li>
             <li>
-              Salvage won't be listed yet — click <b>+</b>, then select the
-              Salvage app (in <b>Applications</b>) and turn it on
+              TraceLoupe won't be listed yet — click <b>+</b>, then select the
+              TraceLoupe app (in <b>Applications</b>) and turn it on
             </li>
-            <li>Quit and reopen Salvage</li>
+            <li>Quit and reopen TraceLoupe</li>
           </ol>
           {openError && (
             <p className="mt-2 select-text text-xs text-destructive">
