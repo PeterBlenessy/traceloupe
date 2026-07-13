@@ -166,7 +166,7 @@ fn make_executable(_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufRead, BufReader, Write as _};
+    use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
 
     /// Serve `body` over HTTP on a throwaway port, once, and return the URL.
