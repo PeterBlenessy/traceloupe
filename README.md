@@ -29,3 +29,10 @@ into `./engine` (git-ignored, ~220 MB), and `pnpm app:dev` points the app at it
 via the `TRACELOUPE_PYTHON` / `TRACELOUPE_ILEAPP_SOURCE` env vars. Without it, imports
 report "engine not installed". See `docs/spike-ileapp.md` for why deps are
 pinned and the plan to ship a re-frozen binary later.
+
+## License
+
+TraceLoupe is licensed under the [Apache License 2.0](LICENSE) — Copyright 2026
+Peter Blenessy. It builds on third-party open-source software under permissive
+licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). iLEAPP (MIT) runs
+as a separate subprocess and is never linked into TraceLoupe.
