@@ -88,7 +88,6 @@ export function AppsView() {
 }
 
 function AppItem({ app }: { app: AppRow }) {
-  const [extractNote, setExtractNote] = useState(false);
   const label = SUPPORT_LABEL[app.support];
   const canExtract = app.support === "available" || app.support === "planned";
 
@@ -112,14 +111,15 @@ function AppItem({ app }: { app: AppRow }) {
       </ItemContent>
       {canExtract && (
         <ItemActions>
-          {extractNote ? (
-            <span className="text-xs text-muted-foreground">Per-app extraction is coming soon</span>
-          ) : (
-            <Button variant="outline" size="sm" onClick={() => setExtractNote(true)}>
-              <Download className="size-4" />
-              Extract data
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled
+            title="Per-app extraction is coming soon"
+          >
+            <Download className="size-4" />
+            Extract data
+          </Button>
         </ItemActions>
       )}
     </Item>

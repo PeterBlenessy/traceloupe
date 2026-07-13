@@ -226,7 +226,7 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
   );
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Contact" />
+      <ViewHeader title={name} />
       <ScrollArea className="flex-1">
         <div className="mx-auto max-w-xl p-6">
           <div className="flex flex-col items-center gap-3 pb-6 text-center">
