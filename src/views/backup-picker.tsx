@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Check, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone } from "lucide-react";
+import { Check, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
 import {
   Card,
   CardContent,
@@ -51,6 +51,14 @@ export function BackupPicker() {
     queryKey: ["backups", root],
     queryFn: () => client.listBackups(root ?? undefined),
   });
+
+  // Delete an imported backup's caches + stored password (not the original), then
+  // refresh which backups show as imported.
+  async function handleForget(b: BackupInfo) {
+    await client.forgetBackup(b.id);
+    await qc.invalidateQueries({ queryKey: ["importedBackupIds"] });
+    await qc.invalidateQueries({ queryKey: ["hasActiveBackup"] });
+  }
 
   async function chooseFolder() {
     const picked = await client.pickBackupFolder();
@@ -145,6 +153,7 @@ export function BackupPicker() {
               imported={imported.has(b.id)}
               onSelect={() => handleOpen(b)}
               onReimport={() => imp.open(b)}
+              onForget={() => handleForget(b)}
             />
           ))}
       </div>
@@ -158,12 +167,15 @@ function BackupCard({
   imported,
   onSelect,
   onReimport,
+  onForget,
 }: {
   backup: BackupInfo;
   imported: boolean;
   onSelect: () => void;
   onReimport: () => void;
+  onForget: () => void;
 }) {
+  const [confirming, setConfirming] = useState(false);
   const date = backup.lastBackupDate
     ? new Date(backup.lastBackupDate * 1000).toLocaleString()
     : "unknown date";
@@ -206,7 +218,32 @@ function BackupCard({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
-          {imported ? (
+          {imported && confirming ? (
+            <>
+              <span className="text-xs">Remove imported data?</span>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirming(false);
+                  onForget();
+                }}
+              >
+                Remove
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirming(false);
+                }}
+              >
+                Cancel
+              </Button>
+            </>
+          ) : imported ? (
             <>
               <Button
                 variant="ghost"
@@ -219,6 +256,18 @@ function BackupCard({
               >
                 <RotateCw className="size-4" />
                 Re-import
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Remove imported data"
+                title="Remove this backup's imported data (keeps the original backup)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setConfirming(true);
+                }}
+              >
+                <Trash2 className="size-4" />
               </Button>
               <span className="inline-flex items-center gap-1 text-foreground">
                 <Check className="size-4" /> Open

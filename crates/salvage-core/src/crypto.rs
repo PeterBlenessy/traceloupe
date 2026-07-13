@@ -35,6 +35,7 @@ use cbc::cipher::{BlockDecryptMut, KeyIvInit};
 use pbkdf2::pbkdf2_hmac_array;
 use sha1::Sha1;
 use sha2::Sha256;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{Error, Result};
 
@@ -143,8 +144,12 @@ impl Keybag {
 
     /// Derive the passcode key (KEK) via the two-stage PBKDF2 modern iOS uses.
     fn derive_kek(&self, password: &[u8]) -> [u8; 32] {
-        let k0 = pbkdf2_hmac_array::<Sha256, 32>(password, &self.dpsl, self.dpic);
-        pbkdf2_hmac_array::<Sha1, 32>(&k0, &self.salt, self.iter)
+        // Zero the intermediate key when it drops; the returned KEK is wrapped by
+        // the caller.
+        let k0 = Zeroizing::new(pbkdf2_hmac_array::<Sha256, 32>(
+            password, &self.dpsl, self.dpic,
+        ));
+        pbkdf2_hmac_array::<Sha1, 32>(&*k0, &self.salt, self.iter)
     }
 
     /// Unwrap every passcode-wrapped class key with the KEK. A single malformed
@@ -182,6 +187,17 @@ pub struct BackupDecryptor {
     manifest_key: [u8; 32],
 }
 
+impl Drop for BackupDecryptor {
+    /// Zero the unwrapped key material when the decryptor drops, so it doesn't
+    /// linger in freed memory for the rest of the process.
+    fn drop(&mut self) {
+        self.manifest_key.zeroize();
+        for key in self.class_keys.values_mut() {
+            key.zeroize();
+        }
+    }
+}
+
 impl BackupDecryptor {
     /// Read `Manifest.plist`, parse the keybag, derive keys from `password`, and
     /// unwrap the manifest key. Errors (as `Error::Decrypt`) on a wrong password.
@@ -205,7 +221,7 @@ impl BackupDecryptor {
             .ok_or_else(|| err("Manifest.plist has no ManifestKey"))?;
 
         let keybag = Keybag::parse(keybag_blob)?;
-        let kek = keybag.derive_kek(password.as_bytes());
+        let kek = Zeroizing::new(keybag.derive_kek(password.as_bytes()));
         let class_keys = keybag.class_keys(&kek)?;
         let manifest_key = unwrap_prefixed(&class_keys, manifest_key_field)?;
 

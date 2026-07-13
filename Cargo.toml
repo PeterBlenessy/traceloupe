@@ -24,6 +24,7 @@ sha1 = "0.10"
 pbkdf2 = "0.12"
 aes = "0.8"
 cbc = "0.1"
+zeroize = "1"
 # Direct dep only to turn on `block-padding`, which unlocks the batched
 # `decrypt_padded_mut` fast path on cbc's Decryptor (see crypto.rs).
 cipher = { version = "0.4", features = ["block-padding"] }
