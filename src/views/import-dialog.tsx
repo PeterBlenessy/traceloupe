@@ -117,9 +117,26 @@ export function ImportDialog({
       ? "This backup isn't encrypted."
       : "Enter the backup password if it's encrypted."; // encryption unknown
 
+  // While an import is running the dialog is fully modal: the work runs in the
+  // background and dismissing it (outside-click / Escape / close button) would
+  // orphan the in-flight import and restart it on reopen. So block dismissal.
+  const running = stage.kind === "running";
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next && running) return; // can't close mid-import
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        className="sm:max-w-md"
+        showCloseButton={!running}
+        onPointerDownOutside={(e) => running && e.preventDefault()}
+        onInteractOutside={(e) => running && e.preventDefault()}
+        onEscapeKeyDown={(e) => running && e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{backup.deviceName ?? backup.id}</DialogTitle>
           <DialogDescription>
