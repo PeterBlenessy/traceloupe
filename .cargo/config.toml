@@ -1,0 +1,8 @@
+# Apple Silicon: build the `aes` crate against the CPU's hardware AES
+# instructions (ARMv8 Crypto Extensions). Without this cfg the crate falls back
+# to a constant-time *software* AES (~10x slower) even though the hardware is
+# present — which dominated the encrypted-backup import (hundreds of MB of
+# Manifest.db / Photos.sqlite + every thumbnail). The intrinsics are
+# runtime-detected inside the crate, so this stays correct on any aarch64 host.
+[target.aarch64-apple-darwin]
+rustflags = ["--cfg", "aes_armv8"]
