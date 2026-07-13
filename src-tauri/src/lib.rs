@@ -65,6 +65,9 @@ impl ActiveBackup {
     fn set(&self, path: PathBuf) {
         *self.0.lock().unwrap() = Some(path);
     }
+    fn clear(&self) {
+        *self.0.lock().unwrap() = None;
+    }
     fn path(&self) -> Result<PathBuf, String> {
         self.0
             .lock()
@@ -527,6 +530,34 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
 #[tauri::command]
 fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
     active.path().is_ok()
+}
+
+/// Forget an imported backup: delete its cache DB and all derived caches
+/// (media/thumbs), its work dir, and its stored password. Does not touch the
+/// original backup on disk. Re-importing recreates everything.
+#[tauri::command]
+async fn forget_backup(app: AppHandle, backup_id: String) -> Result<(), String> {
+    if !valid_backup_id(&backup_id) {
+        return Err("invalid backup id".to_string());
+    }
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let cache_dir = data_dir.join("caches").join(&backup_id);
+    // If this backup is currently open, close it first so we don't delete under a
+    // live handle and its keys don't linger in the session.
+    let active = app.state::<ActiveBackup>();
+    if active.path().is_ok_and(|p| p.starts_with(&cache_dir)) {
+        active.clear();
+        app.state::<SessionKeys>().set(None);
+    }
+    let work_dir = data_dir.join("work").join(&backup_id);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let _ = std::fs::remove_dir_all(&work_dir);
+        secret::delete(&backup_id);
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Backup ids that have already been parsed (a cache exists) — the UI shows
@@ -1264,6 +1295,7 @@ pub fn run() {
             import_backup,
             open_backup,
             has_active_backup,
+            forget_backup,
             imported_backup_ids,
             list_threads,
             count_thread_messages,

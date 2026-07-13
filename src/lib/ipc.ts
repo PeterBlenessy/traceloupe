@@ -208,6 +208,8 @@ export interface SalvageClient {
   onLog(cb: (r: LogRecord) => void): Promise<UnlistenFn>;
   hasActiveBackup(): Promise<boolean>;
   openBackup(backupId: string): Promise<boolean>;
+  /** Delete an imported backup's caches + stored password (not the original). */
+  forgetBackup(backupId: string): Promise<void>;
   /** Ids of backups already parsed (open instantly, no first-time read). */
   importedBackupIds(): Promise<string[]>;
   listThreads(): Promise<ThreadSummary[]>;
@@ -308,6 +310,7 @@ const tauriClient: SalvageClient = {
   onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
+  forgetBackup: (backupId) => invoke<void>("forget_backup", { backupId }),
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   countThreadMessages: (threadId) =>
@@ -667,6 +670,9 @@ export const mockClient: SalvageClient = {
     if (!mockImported.has(backupId)) return false;
     mockActive = true;
     return true;
+  },
+  forgetBackup: async (backupId) => {
+    mockImported.delete(backupId);
   },
   importedBackupIds: async () => [...mockImported],
   listThreads: async () => (mockActive ? mockThreads : []),
