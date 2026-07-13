@@ -30,6 +30,15 @@ export type ImportProgress =
   | { phase: "parsing"; current: number; total: number; fraction: number; artifact: string }
   | { phase: "normalizing"; step: string };
 
+/** Dev-console log verbosity, mirrored in the Rust `set_log_level` command. */
+export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace";
+
+/** A log record forwarded from the Rust backend to the dev-tools console. */
+export interface LogRecord {
+  level: Exclude<LogLevel, "off">;
+  message: string;
+}
+
 /** A selectable data type for import (maps to iLEAPP modules behind the scenes). */
 export interface ImportModule {
   id: string;
@@ -191,6 +200,10 @@ export interface SalvageClient {
   }): Promise<ImportResult>;
   /** Subscribe to import progress events. Returns an unsubscribe fn. */
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
+  /** Set the dev-console log verbosity at runtime. */
+  setLogLevel(level: LogLevel): Promise<void>;
+  /** Subscribe to backend log records (forwarded to the console). */
+  onLog(cb: (r: LogRecord) => void): Promise<UnlistenFn>;
   hasActiveBackup(): Promise<boolean>;
   openBackup(backupId: string): Promise<boolean>;
   /** Ids of backups already parsed (open instantly, no first-time read). */
@@ -274,6 +287,8 @@ const tauriClient: SalvageClient = {
   listImportModules: () => invoke<ImportModule[]>("list_import_modules"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
+  setLogLevel: (level) => invoke("set_log_level", { level }),
+  onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
@@ -604,6 +619,8 @@ export const mockClient: SalvageClient = {
     mockProgressSubs.add(cb);
     return () => mockProgressSubs.delete(cb);
   },
+  setLogLevel: async () => {},
+  onLog: async () => () => {},
   hasActiveBackup: async () => mockActive,
   openBackup: async (backupId) => {
     if (!mockImported.has(backupId)) return false;
