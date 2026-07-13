@@ -270,9 +270,15 @@ impl BackupDecryptor {
         let mut pt = aes_cbc_decrypt(&key, ciphertext)?;
         if let Some(size) = size {
             // A declared size larger than the decrypted data means the wrong key
-            // or a corrupt record — fail rather than serve padded garbage.
+            // or a corrupt/misparsed record — fail rather than serve padded
+            // garbage. The numbers are diagnostic: `size` far larger than the
+            // ciphertext points at a Size-metadata parse bug, not decryption.
             if size > pt.len() {
-                return Err(err("declared plaintext size exceeds decrypted length"));
+                return Err(err(format!(
+                    "declared plaintext size {size} exceeds decrypted length {} (ciphertext {} bytes)",
+                    pt.len(),
+                    ciphertext.len(),
+                )));
             }
             pt.truncate(size);
         }
