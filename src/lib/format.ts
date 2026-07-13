@@ -1,12 +1,51 @@
 /** Shared formatting helpers for epoch-seconds timestamps from the cache. */
 
-const time = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
-const dayTime = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
+/** User clock preference: locale default, or force 12-/24-hour. */
+export type ClockFormat = "system" | "12h" | "24h";
+export const CLOCK_KEY = "salvage-clock";
+
+/** `hour12` option for Intl: undefined = locale default, else forced. */
+function hour12For(pref: ClockFormat): boolean | undefined {
+  return pref === "system" ? undefined : pref === "12h";
+}
+
+// Read the persisted preference at module load so the very first render already
+// uses the right clock, before the settings provider mounts.
+export function readClockFormat(): ClockFormat {
+  const raw = typeof localStorage !== "undefined" ? localStorage.getItem(CLOCK_KEY) : null;
+  return raw === "12h" || raw === "24h" ? raw : "system";
+}
+
+// The time-bearing formatters are rebuilt whenever the clock preference changes
+// (date-only formatters don't depend on it, so they stay constant).
+let hour12 = hour12For(readClockFormat());
+let time = buildTime();
+let dayTime = buildDayTime();
+
+function buildTime() {
+  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", hour12 });
+}
+function buildDayTime() {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12,
+  });
+}
+
+/**
+ * Switch the clock preference used by all time formatters. Called by the
+ * settings provider; views re-render and pick up the new formatters on their
+ * next render.
+ */
+export function setClockFormat(pref: ClockFormat) {
+  hour12 = hour12For(pref);
+  time = buildTime();
+  dayTime = buildDayTime();
+}
+
 const dateOnly = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
 const dateYear = new Intl.DateTimeFormat(undefined, {
   year: "numeric",

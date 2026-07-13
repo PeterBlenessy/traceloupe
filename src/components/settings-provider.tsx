@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { client, type LogLevel, type LogRecord } from "@/lib/ipc";
+import { CLOCK_KEY, readClockFormat, setClockFormat, type ClockFormat } from "@/lib/format";
 
 /**
  * Settings provider — holds app-wide display preferences, reads their initial
@@ -18,6 +19,9 @@ type SettingsProviderState = {
   /** Dev-console log verbosity. */
   logLevel: LogLevel;
   setLogLevel: (level: LogLevel) => void;
+  /** Clock format for all timestamps: locale default, or forced 12-/24-hour. */
+  clockFormat: ClockFormat;
+  setClockFormatPref: (pref: ClockFormat) => void;
 };
 
 const NAMES_KEY = "salvage-show-names";
@@ -76,6 +80,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     readStringArray(IMPORT_MODULES_KEY),
   );
   const [logLevel, setLogLevelState] = useState<LogLevel>(() => readLogLevel());
+  const [clockFormat, setClockFormatState] = useState<ClockFormat>(() => readClockFormat());
 
   // Apply the log level to the backend (it gates emission), and forward backend
   // log records to the dev-tools console. The level is re-applied whenever it
@@ -116,6 +121,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setImportModulesState(ids);
   };
 
+  const setClockFormatPref = (pref: ClockFormat) => {
+    localStorage.setItem(CLOCK_KEY, pref);
+    setClockFormat(pref); // rebuild the shared Intl formatters
+    setClockFormatState(pref); // re-render consumers
+  };
+
   return (
     <SettingsProviderContext.Provider
       value={{
@@ -127,6 +138,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setImportModules,
         logLevel,
         setLogLevel,
+        clockFormat,
+        setClockFormatPref,
       }}
     >
       {children}
