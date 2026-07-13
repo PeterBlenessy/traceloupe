@@ -192,6 +192,45 @@ pub fn import_backup(
         }
     }
 
+    // Voice recordings: read Voice Memos metadata + `.m4a` blobs natively (they
+    // decrypt on demand at play time, like the camera roll). No iLEAPP fallback —
+    // there's no recordings normalizer — so a failure is just a warning.
+    if effective.contains(&"recordings") {
+        on_phase(ImportPhase::Normalizing {
+            step: "Voice recordings".into(),
+        });
+        match crate::parsers::recordings::parse_recordings(backup_dir, decryptor.as_ref(), work_dir)
+        {
+            Ok(recordings) => {
+                let conn = cache.conn();
+                let tx = conn.unchecked_transaction()?;
+                for rec in &recordings {
+                    tx.execute(
+                        "INSERT INTO recordings
+                            (title, folder, recorded_at, duration_s, relative_path,
+                             local_path, mime_type, decrypt_key, plain_size)
+                         VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        rusqlite::params![
+                            rec.title,
+                            rec.recorded_at,
+                            rec.duration_s,
+                            rec.relative_path,
+                            rec.full_path.to_string_lossy(),
+                            rec.mime,
+                            rec.decrypt_key,
+                            rec.plain_size,
+                        ],
+                    )?;
+                }
+                tx.commit()?;
+                report.recordings += recordings.len();
+            }
+            Err(e) => report
+                .warnings
+                .push(format!("Voice recordings: couldn't read the backup ({e}).")),
+        }
+    }
+
     // Diagnostic: flag any enabled data type that produced nothing, so an empty
     // Safari/Calls (usually the source DB isn't in this backup) is visible
     // instead of silently absent.

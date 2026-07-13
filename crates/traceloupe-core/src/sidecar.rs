@@ -196,6 +196,17 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         default: true,
     },
     ImportModule {
+        // Handled natively (not via iLEAPP): reads Voice Memos metadata from
+        // CloudRecordings.db and pairs each with its `.m4a` in the backup, which
+        // decrypts on demand at play time. Empty `keys` — adds nothing to the
+        // iLEAPP profile.
+        id: "recordings",
+        label: "Voice recordings",
+        category: "Media",
+        keys: &[],
+        default: true,
+    },
+    ImportModule {
         // Third-party app DMs, normalized into the Messages view (service =
         // "TikTok"). iLEAPP parses TikTok's ChatFiles/AwemeIM DBs; users without
         // TikTok pay ~nothing (no files matched), so it's a safe default.

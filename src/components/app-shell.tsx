@@ -6,6 +6,7 @@ import {
   Image,
   Loader2,
   MessageSquare,
+  Mic,
   NotebookText,
   Phone,
   Settings,
@@ -50,6 +51,7 @@ const nav = [
   { to: "/calls", label: "Calls", icon: Phone },
   { to: "/safari", label: "Safari", icon: Globe },
   { to: "/notes", label: "Notes", icon: NotebookText },
+  { to: "/recordings", label: "Recordings", icon: Mic },
   { to: "/apps", label: "Apps", icon: Boxes },
 ] as const;
 

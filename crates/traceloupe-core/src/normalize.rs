@@ -28,6 +28,7 @@ pub struct ImportReport {
     pub safari_visits: usize,
     pub contacts: usize,
     pub notes: usize,
+    pub recordings: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
 }
