@@ -54,31 +54,60 @@ pub fn normalize_lava_with_progress(
     let lava = Connection::open_with_flags(lava_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut report = ImportReport::default();
 
-    on_step("Media");
-    normalize_media(&lava, engine_out_dir, cache, &mut report)?;
-    on_step("Messages");
-    normalize_sms(&lava, engine_out_dir, cache, &mut report)?;
-    on_step("Call history");
-    normalize_calls(&lava, cache, &mut report)?;
-    on_step("Safari history");
-    normalize_safari(&lava, cache, &mut report)?;
+    // Isolate each stage: a failure in one artifact (a malformed iLEAPP table, a
+    // missing column) becomes a warning and the rest of the import still
+    // completes, rather than aborting everything. Each normalizer runs in its own
+    // transaction, so a failed stage rolls back its partial work cleanly.
+    macro_rules! stage {
+        ($label:literal, $call:expr) => {{
+            on_step($label);
+            if let Err(e) = $call {
+                report
+                    .warnings
+                    .push(format!("{} could not be imported: {}", $label, e));
+            }
+        }};
+    }
+
+    stage!(
+        "Media",
+        normalize_media(&lava, engine_out_dir, cache, &mut report)
+    );
+    stage!(
+        "Messages",
+        normalize_sms(&lava, engine_out_dir, cache, &mut report)
+    );
+    stage!("Call history", normalize_calls(&lava, cache, &mut report));
+    stage!(
+        "Safari history",
+        normalize_safari(&lava, cache, &mut report)
+    );
     // Contacts come from a native parse of the decrypted AddressBook that
     // iLEAPP extracts (its own lava output for contacts is lossy — see
     // docs/spike-ileapp.md). A missing DB just means no contacts.
-    on_step("Contacts");
-    normalize_contacts(engine_out_dir, cache, &mut report)?;
-    on_step("Notes");
-    normalize_notes(&lava, cache, &mut report)?;
+    stage!(
+        "Contacts",
+        normalize_contacts(engine_out_dir, cache, &mut report)
+    );
+    stage!("Notes", normalize_notes(&lava, cache, &mut report));
     // Third-party chat apps → the Messages view, tagged by service. Each is a
     // no-op unless its lava table is present (the app was installed + parsed).
-    on_step("TikTok messages");
-    normalize_app_conversation(&lava, cache, &mut report, &TIKTOK_CHAT)?;
-    on_step("WhatsApp messages");
-    normalize_app_conversation(&lava, cache, &mut report, &WHATSAPP_CHAT)?;
-    on_step("Telegram messages");
-    normalize_app_conversation(&lava, cache, &mut report, &TELEGRAM_CHAT)?;
-    on_step("TikTok contacts");
-    normalize_tiktok_contacts(&lava, cache, &mut report)?;
+    stage!(
+        "TikTok messages",
+        normalize_app_conversation(&lava, cache, &mut report, &TIKTOK_CHAT)
+    );
+    stage!(
+        "WhatsApp messages",
+        normalize_app_conversation(&lava, cache, &mut report, &WHATSAPP_CHAT)
+    );
+    stage!(
+        "Telegram messages",
+        normalize_app_conversation(&lava, cache, &mut report, &TELEGRAM_CHAT)
+    );
+    stage!(
+        "TikTok contacts",
+        normalize_tiktok_contacts(&lava, cache, &mut report)
+    );
 
     Ok(report)
 }
@@ -426,11 +455,16 @@ fn normalize_sms(
         .and_then(|p| crate::parsers::chats::parse_message_senders(p).ok())
         .unwrap_or_default();
 
+    // Order by the SAME effective key the grouping uses below
+    // (COALESCE(chat_id, chat_contact_id, 'unknown')), not by chat_id alone:
+    // otherwise rows with a NULL chat_id but different contacts interleave by
+    // time and the consecutive-grouping logic splits each conversation into many
+    // one-message threads.
     let mut stmt = lava.prepare(
         "SELECT chat_id, chat_contact_id, service, message_timestamp,
                 message, from_me, attachment_file, message_row_id
          FROM sms
-         ORDER BY chat_id, message_timestamp",
+         ORDER BY COALESCE(chat_id, chat_contact_id, 'unknown'), message_timestamp",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(SmsRow {
@@ -651,8 +685,9 @@ const TELEGRAM_CHAT: AppChatSpec = AppChatSpec {
 /// Rows group into threads by the chat id; `direction` = "Outgoing" is from-me;
 /// threads are named by their per-row chat label, or (TikTok) by the first
 /// incoming sender, whose `@handle` is stored as the sole participant so the
-/// header can show it. Media-only rows (NULL body) are skipped. One transaction
-/// — these run to hundreds of thousands of rows.
+/// header can show it. Media rows (NULL body) are kept so a conversation that is
+/// only media stays visible and its senders still count toward the group
+/// headcount. One transaction — these run to hundreds of thousands of rows.
 fn normalize_app_conversation(
     lava: &Connection,
     cache: &CacheDb,
@@ -666,8 +701,7 @@ fn normalize_app_conversation(
     let sql = format!(
         "SELECT {chat}, {ts}, {body}, {dir}, {sender}, {handle}, {chat_name}, {sender_id}
          FROM {table}
-         WHERE {body} IS NOT NULL
-         ORDER BY {chat}, {ts}",
+         ORDER BY COALESCE({chat}, 'unknown'), {ts}",
         chat = spec.chat_id,
         ts = spec.timestamp,
         body = spec.body,
@@ -1098,6 +1132,37 @@ mod tests {
     }
 
     #[test]
+    fn one_malformed_artifact_warns_but_others_import() {
+        // An `sms` table missing the `message` column makes normalize_sms fail to
+        // prepare its query. Isolation must turn that into a warning and still
+        // import the other artifacts (here: media).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("_lava_artifacts.db");
+        let conn = Connection::open(&path).unwrap();
+        fs::create_dir_all(tmp.path().join("media")).unwrap();
+        fs::write(tmp.path().join("media/x.png"), b"bytes").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _lava_media_items (id TEXT, source_path TEXT, extraction_path TEXT, type TEXT, is_embedded INTEGER);
+             INSERT INTO _lava_media_items VALUES ('m1', 'x', 'media/x.png', 'image/png', 0);
+             -- sms table present but missing the `message` column normalize_sms needs.
+             CREATE TABLE sms (chat_id TEXT, chat_contact_id TEXT, message_timestamp INTEGER);
+             INSERT INTO sms VALUES ('1', '+15551234567', 100);",
+        )
+        .unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+
+        let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
+        // Media still imported despite the broken sms table.
+        assert_eq!(report.media_items, 1);
+        assert_eq!(report.messages, 0);
+        assert!(
+            report.warnings.iter().any(|w| w.contains("Messages")),
+            "expected a Messages warning, got {:?}",
+            report.warnings
+        );
+    }
+
+    #[test]
     fn missing_media_bytes_warns_but_continues() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("_lava_artifacts.db");
@@ -1290,7 +1355,8 @@ mod tests {
                  (1675838000,'peerA','peer.a','Peer A','hi there',NULL,NULL,NULL,0,NULL,NULL,'me','f','convA','Incoming');
              INSERT INTO tiktok_messages VALUES
                  (1675838551,'me','me.handle','Me','hello back',NULL,NULL,NULL,0,NULL,NULL,'me','f','convA','Outgoing');
-             -- A non-text share (NULL message) — should be skipped.
+             -- A non-text share (NULL message) — kept, so media-only rows and
+             -- media-only conversations stay visible and count their senders.
              INSERT INTO tiktok_messages VALUES
                  (1675838600,'peerA','peer.a','Peer A',NULL,NULL,NULL,NULL,0,NULL,NULL,'me','f','convA','Incoming');
              -- Conversation B: one outgoing only (peer name unknown → NULL display).
@@ -1301,7 +1367,7 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         let report = normalize_lava(&path, tmp.path(), &cache).unwrap();
         assert_eq!(report.threads, 2);
-        assert_eq!(report.messages, 3); // the NULL-message share is skipped
+        assert_eq!(report.messages, 4); // includes the NULL-message media share
 
         let c = cache.conn();
         // Conversation A is named after the peer's nickname and counted.
@@ -1314,8 +1380,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(display.as_deref(), Some("Peer A"));
-        assert_eq!(count, 2);
-        assert_eq!(last, 1675838551);
+        assert_eq!(count, 3); // two texts + the media share
+        assert_eq!(last, 1675838600); // the media share is the latest
 
         // from-me / sender attribution.
         let (from_me, sender): (i64, Option<String>) = c
