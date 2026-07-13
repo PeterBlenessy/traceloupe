@@ -184,7 +184,9 @@ export function ListDetail({
 }) {
   return (
     <div className="flex h-full">
-      <div className="flex w-72 shrink-0 flex-col border-r">{master}</div>
+      {/* min-h-0 lets the master's scroll area shrink to the column height and
+          actually scroll, instead of growing with its content. */}
+      <div className="flex w-72 min-h-0 shrink-0 flex-col border-r">{master}</div>
       <div className="min-w-0 flex-1">{detail}</div>
     </div>
   );
