@@ -232,7 +232,6 @@ pub fn attachment_blob(
 /// created before the timeline feature.
 pub fn count_all_messages(cache: &CacheDb, service: Option<&str>) -> Result<i64> {
     let conn = cache.conn();
-    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
     // Undated messages can't be placed chronologically, so the timeline (and the
     // period buckets, whose range filters already exclude NULLs) omit them —
     // keeping the count and the windowed rows exactly aligned. `service` (None =
@@ -272,7 +271,6 @@ pub fn count_message_ranges(
     service: Option<&str>,
 ) -> Result<Vec<i64>> {
     let conn = cache.conn();
-    conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id)")?;
     let mut stmt = conn.prepare(
         "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
          WHERE (?1 IS NULL OR m.sent_at >= ?1)
@@ -571,9 +569,12 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
 
 /// Photos/videos in `source` ("Photos", "Messages", …), or all when NULL.
 pub fn count_media(cache: &CacheDb, source: Option<&str>) -> Result<i64> {
+    // `COALESCE(source,'Other')` so the synthesized "Other" bucket (NULL source)
+    // is actually selectable — `source = 'Other'` never matches a NULL. Matches
+    // the label built by `media_sources`.
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM media_items
-         WHERE local_path IS NOT NULL AND (?1 IS NULL OR source = ?1)",
+         WHERE local_path IS NOT NULL AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)",
         [source],
         |r| r.get(0),
     )?;
@@ -592,7 +593,7 @@ pub fn get_media_window(
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at
          FROM media_items
-         WHERE local_path IS NOT NULL AND (?1 IS NULL OR source = ?1)
+         WHERE local_path IS NOT NULL AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
