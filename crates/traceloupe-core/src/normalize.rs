@@ -44,6 +44,7 @@ pub struct NativeSkips {
     pub notes: bool,
     pub calls: bool,
     pub safari: bool,
+    pub contacts: bool,
 }
 
 pub fn normalize_lava(
@@ -114,13 +115,15 @@ pub fn normalize_lava_with_progress(
             normalize_safari(&lava, cache, &mut report)
         );
     }
-    // Contacts come from a native parse of the decrypted AddressBook that
-    // iLEAPP extracts (its own lava output for contacts is lossy — see
-    // docs/spike-ileapp.md). A missing DB just means no contacts.
-    stage!(
-        "Contacts",
-        normalize_contacts(engine_out_dir, cache, &mut report)
-    );
+    // Contacts: parsed from the AddressBook DB. Skipped when the orchestrator
+    // already self-extracted + parsed it natively (Phase 2); otherwise it parses
+    // the copy iLEAPP extracted. A missing DB just means no contacts.
+    if !skips.contacts {
+        stage!(
+            "Contacts",
+            normalize_contacts(engine_out_dir, cache, &mut report)
+        );
+    }
     // Notes: skipped when the orchestrator materialized them natively from
     // NoteStore.sqlite (Phase 2). Otherwise the iLEAPP `notes` path runs.
     if !skips.notes {
@@ -278,24 +281,8 @@ fn normalize_contacts(
         .and_then(|p| crate::parsers::address_book::parse_address_book_images(&p).ok())
         .unwrap_or_default();
 
-    let conn = cache.conn();
-    let tx = conn.unchecked_transaction()?;
-    for c in contacts {
-        tx.execute(
-            "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json, image)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                c.first_name,
-                c.last_name,
-                c.organization,
-                serde_json::to_string(&c.phones).unwrap_or_else(|_| "[]".into()),
-                serde_json::to_string(&c.emails).unwrap_or_else(|_| "[]".into()),
-                images.get(&c.id),
-            ],
-        )?;
-        report.contacts += 1;
-    }
-    tx.commit()?;
+    report.contacts +=
+        crate::parsers::address_book::insert_contacts(cache, &contacts, &images, false)?;
     Ok(())
 }
 

@@ -33,12 +33,8 @@ Companion to `../CHANGELOG.md` (milestones) and
 | Camera roll (photos/videos) | `Photos.sqlite` / DCIM | ✅ Native | 0.1.0 |
 | Call history | `CallHistory.storedata` | ✅ Native | 0.3.0 |
 | Safari history | `History.db` | ✅ Native | 0.3.0 |
-| Contacts | `AddressBook.sqlitedb` | 🟡 Via iLEAPP* | 0.3.0 (planned) |
+| Contacts | `AddressBook.sqlitedb` | ✅ Native | 0.3.0 |
 | Installed apps | app-state plist | 🟡 Via iLEAPP | 0.3.0 (planned) |
-
-\* Contacts are *parsed* natively, but iLEAPP currently **extracts** the
-`AddressBook` file for us. "Native since 0.3.0" = self-extracting it via the
-Manifest Index so no iLEAPP run is needed (0.3.0 Batch 1).
 
 ## Third-party apps
 

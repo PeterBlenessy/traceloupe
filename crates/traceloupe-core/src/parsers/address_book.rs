@@ -154,6 +154,40 @@ pub fn parse_address_book_images(
     Ok(out)
 }
 
+/// Insert parsed contacts (with their optional photos) into the cache `contacts`
+/// table, returning the number inserted. With `replace = true` the device
+/// address-book rows are cleared first — but third-party contacts (e.g. TikTok),
+/// which carry their own `source`, are left intact. Shared by the iLEAPP-extracted
+/// path and the native self-extracting path.
+pub fn insert_contacts(
+    cache: &crate::cache::CacheDb,
+    contacts: &[ParsedContact],
+    images: &std::collections::HashMap<i64, Vec<u8>>,
+    replace: bool,
+) -> Result<usize> {
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM contacts WHERE source = 'Address Book'", [])?;
+    }
+    for c in contacts {
+        tx.execute(
+            "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json, image)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                c.first_name,
+                c.last_name,
+                c.organization,
+                serde_json::to_string(&c.phones).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&c.emails).unwrap_or_else(|_| "[]".into()),
+                images.get(&c.id),
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(contacts.len())
+}
+
 fn images_table_exists(conn: &Connection, name: &str) -> bool {
     conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
@@ -216,6 +250,54 @@ mod tests {
         assert!(pizza.first_name.is_none() && pizza.last_name.is_none());
         assert_eq!(pizza.phones.len(), 1);
         assert!(pizza.emails.is_empty());
+    }
+
+    #[test]
+    fn insert_contacts_replace_preserves_third_party_rows() {
+        use crate::cache::CacheDb;
+        use std::collections::HashMap;
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        // A third-party contact (e.g. from TikTok) already in the cache.
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO contacts (first_name, phones_json, emails_json, source)
+                 VALUES ('Nyx', '[]', '[]', 'TikTok')",
+                [],
+            )
+            .unwrap();
+
+        let people = vec![ParsedContact {
+            id: 1,
+            first_name: Some("Alex".into()),
+            ..Default::default()
+        }];
+        let images: HashMap<i64, Vec<u8>> = HashMap::new();
+
+        insert_contacts(&cache, &people, &images, false).unwrap();
+        // A replace re-import: device rows cleared + re-inserted, TikTok row kept.
+        let n = insert_contacts(&cache, &people, &images, true).unwrap();
+        assert_eq!(n, 1);
+
+        let device: i64 = cache
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM contacts WHERE source = 'Address Book'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let tiktok: i64 = cache
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM contacts WHERE source = 'TikTok'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(device, 1, "replace should not accumulate device contacts");
+        assert_eq!(tiktok, 1, "third-party contacts must survive a replace");
     }
 
     #[test]
