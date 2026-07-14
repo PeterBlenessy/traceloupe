@@ -38,13 +38,16 @@ pub struct ImportReport {
 /// Which iLEAPP stages to skip because the orchestrator already materialized that
 /// artifact natively (Phase 2). Each `true` suppresses the corresponding iLEAPP
 /// normalize stage so the native and iLEAPP paths never double-insert.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct NativeSkips {
     pub messages: bool,
     pub notes: bool,
     pub calls: bool,
     pub safari: bool,
     pub contacts: bool,
+    /// Service labels of third-party chats already materialized natively (e.g.
+    /// "WhatsApp"); the matching iLEAPP app-conversation stage is skipped.
+    pub app_services: Vec<&'static str>,
 }
 
 pub fn normalize_lava(
@@ -130,19 +133,26 @@ pub fn normalize_lava_with_progress(
         stage!("Notes", normalize_notes(&lava, cache, &mut report));
     }
     // Third-party chat apps → the Messages view, tagged by service. Each is a
-    // no-op unless its lava table is present (the app was installed + parsed).
-    stage!(
-        "TikTok messages",
-        normalize_app_conversation(&lava, cache, &mut report, &TIKTOK_CHAT)
-    );
-    stage!(
-        "WhatsApp messages",
-        normalize_app_conversation(&lava, cache, &mut report, &WHATSAPP_CHAT)
-    );
-    stage!(
-        "Telegram messages",
-        normalize_app_conversation(&lava, cache, &mut report, &TELEGRAM_CHAT)
-    );
+    // no-op unless its lava table is present (the app was installed + parsed), and
+    // is skipped entirely when the app was already materialized natively.
+    if !skips.app_services.contains(&TIKTOK_CHAT.service) {
+        stage!(
+            "TikTok messages",
+            normalize_app_conversation(&lava, cache, &mut report, &TIKTOK_CHAT)
+        );
+    }
+    if !skips.app_services.contains(&WHATSAPP_CHAT.service) {
+        stage!(
+            "WhatsApp messages",
+            normalize_app_conversation(&lava, cache, &mut report, &WHATSAPP_CHAT)
+        );
+    }
+    if !skips.app_services.contains(&TELEGRAM_CHAT.service) {
+        stage!(
+            "Telegram messages",
+            normalize_app_conversation(&lava, cache, &mut report, &TELEGRAM_CHAT)
+        );
+    }
     stage!(
         "TikTok contacts",
         normalize_tiktok_contacts(&lava, cache, &mut report)

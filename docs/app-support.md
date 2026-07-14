@@ -48,23 +48,24 @@ Tiers mirror the roadmap (`product-architecture-description.md` §13.1), ordered
 prevalence × local-data richness × parse feasibility. Native rollout is by
 **scheduled batch, not strict tier order** — an app can be pulled forward.
 
-**Batch 1 (0.3.0) — first native third-party wave.** Alongside the Apple-app
-parity work, these get native parsers in 0.3.0 — prioritizing apps not yet
-surfaced at all:
+**Native app-module framework** (`parsers/apps/`): each app is a small module that
+locates its own DB and parses it into a shared message stream; one shared inserter
+writes the threads/messages. Adding an app is one module file + a registry entry.
+**WhatsApp is the first module** (cleanest schema — used to validate the framework).
 
-> TikTok (already surfaced via iLEAPP) · Instagram · Facebook ·
+**Batch 1 (0.3.0) — native third-party wave:**
+
+> WhatsApp (✅ done, framework pilot) · TikTok · Instagram · Facebook ·
 > Facebook Messenger · X/Twitter · Snapchat
 
-**WhatsApp and Telegram are deferred to 0.4.0.** They already read through iLEAPP,
-so there's no urgency to make them native first; they stay 🟡 until then.
-
+**Telegram is deferred to 0.4.0** (already reads through iLEAPP; no urgency).
 Everything else stays ⬜ Planned until scheduled into a later batch.
 
 ### Tier 1 — Top 10
 
 | App | What's stored locally | Status | Native since |
 |-----|-----------------------|--------|--------------|
-| WhatsApp | Messages (rich local SQLite) | 🟡 Via iLEAPP — messages | 0.4.0 (deferred) |
+| WhatsApp | Messages (rich local SQLite) | ✅ Native — messages | 0.3.0 |
 | TikTok | Messages + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | 0.3.0 (Batch 1) |
 | Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | 0.4.0 (deferred) |
 | Instagram | DMs, media cache | ⬜ Planned | 0.3.0 (Batch 1) |

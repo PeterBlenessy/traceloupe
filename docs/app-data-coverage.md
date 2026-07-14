@@ -121,10 +121,29 @@ backup. "In backup" reflects the known schema and can vary by iOS version.
 
 ## Third-party apps
 
-Sections are added as each app gets a native parser (see `app-support.md` for the
-schedule). Until then, TikTok / WhatsApp / Telegram are surfaced via iLEAPP as
-message threads only; their full field inventory is filled in when we read their
-local stores directly.
+Each app is a native module under `parsers/apps/` (see `app-support.md`). Sections
+below are filled in as each parser lands; apps still on iLEAPP show as message
+threads only until then.
 
-_TikTok, WhatsApp, Telegram, Instagram, Facebook, Facebook Messenger, X/Twitter,
-Snapchat — to be documented as their parsers land._
+### WhatsApp — `ChatStorage.sqlite` (native)
+
+Schema facts from iLEAPP `whatsApp.py`; provenance reference (§10).
+
+| Data | In backup | Surfaced | Notes |
+|------|:---------:|:--------:|-------|
+| Message text | ✅ | ✅ | `ZWAMESSAGE.ZTEXT` |
+| Timestamp | ✅ | ✅ | `ZMESSAGEDATE` (Core Data time) |
+| Direction (from-me) | ✅ | ✅ | `ZISFROMME` |
+| Conversation grouping | ✅ | ✅ | `ZWACHATSESSION.ZCONTACTJID` |
+| Chat / contact name | ✅ | ✅ | `ZPARTNERNAME` |
+| Has attachment (flag) | ✅ | ✅ | `ZWAMEDIAITEM.ZMEDIALOCALPATH` |
+| Attachment media (view/play) | ✅ | ⬜ | media path known; not yet served |
+| Group sender (per-message) | ✅ | ⬜ | `ZWAGROUPMEMBER` join |
+| Starred messages | ✅ | ⬜ | `ZSTARRED` |
+| Location messages (lat/long) | ✅ | ⬜ | `ZLONGITUDE` / `ZLATITUDE` |
+| Call history | ✅ | ⬜ | separate `CallHistory.sqlite` |
+| Contacts (registered) | ✅ | ⬜ | `ContactsV2.sqlite` |
+
+### TikTok / Telegram / Instagram / Facebook / Messenger / X / Snapchat
+
+_To be documented as each module lands (see `app-support.md` schedule)._
