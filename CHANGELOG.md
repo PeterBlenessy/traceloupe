@@ -59,17 +59,22 @@ the batched 0.3.0+ migration under "Planned" below.
   pending validation against a real backup that contains such notes.
 
 ## Planned — 0.3.0+ (native-first migration, in batches)
-- **Batch 1 (0.3.0) — first-party parity, no iLEAPP.** Native parsers for Calls
-  (`CallHistory.storedata`), Safari (`History.db`), Apps (app-state plist), and
-  self-extracted Contacts (`AddressBook.sqlitedb`) via the Manifest Index. Every
-  built-in view then materializes natively, and the redundant iLEAPP sms/notes
-  passes are dropped so import time actually falls.
+- **Batch 1 (0.3.0) — first-party parity + first native third-party wave.**
+  - *Apple apps, no iLEAPP:* native parsers for Calls (`CallHistory.storedata`),
+    Safari (`History.db`), Apps (app-state plist), and self-extracted Contacts
+    (`AddressBook.sqlitedb`) via the Manifest Index. Every built-in view then
+    materializes natively, and the redundant iLEAPP sms/notes passes are dropped
+    so import time actually falls.
+  - *Third-party, native:* WhatsApp, TikTok, Telegram (moved off iLEAPP to native),
+    plus Instagram, Facebook, Facebook Messenger, X/Twitter, and Snapchat. Snapchat
+    stores little locally (ephemeral by design), so its native parser surfaces only
+    what persists.
 - **Batch 2 (0.3.x) — iLEAPP optional.** Default install fully offline (no first-
   import download, no bundled ~222 MB engine); iLEAPP fetched on demand only when
   the user opts into deeper third-party coverage.
-- **Batch 3+ (0.4.0+) — native third-party modules** per the app-tier roadmap
-  (Top 10 first), replacing iLEAPP coverage incrementally. Per-app status and the
-  version each gains native support are tracked in `docs/app-support.md`.
+- **Batch 3+ (0.4.0+) — remaining native third-party modules** per the app-tier
+  roadmap, replacing iLEAPP coverage incrementally. Per-app status and the version
+  each gains native support are tracked in `docs/app-support.md`.
 
 ## [0.1.0] — 2026-07-13
 

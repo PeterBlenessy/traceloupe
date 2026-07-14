@@ -43,29 +43,38 @@ Manifest Index so no iLEAPP run is needed (0.3.0 Batch 1).
 ## Third-party apps
 
 Tiers mirror the roadmap (`product-architecture-description.md` §13.1), ordered by
-prevalence × local-data richness × parse feasibility. Native third-party parsing
-is **0.4.0+ (Batch 3)**; the three apps live today are read via iLEAPP.
+prevalence × local-data richness × parse feasibility. Native rollout is by
+**scheduled batch, not strict tier order** — an app can be pulled forward.
+
+**Batch 1 (0.3.0) — first native third-party wave.** Alongside the Apple-app
+parity work, these get native parsers in 0.3.0:
+
+> WhatsApp · TikTok · Telegram (the three already surfaced via iLEAPP) · Instagram ·
+> Facebook · Facebook Messenger · X/Twitter · Snapchat
+
+Everything else stays ⬜ Planned until scheduled into a later batch.
 
 ### Tier 1 — Top 10
 
 | App | What's stored locally | Status | Native since |
 |-----|-----------------------|--------|--------------|
-| WhatsApp | Messages (rich local SQLite) | 🟡 Via iLEAPP — messages | TBD (0.4.0+) |
-| TikTok | Messages + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | TBD (0.4.0+) |
-| Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | TBD (0.4.0+) |
-| Instagram | DMs, media cache | ⬜ Planned | TBD |
-| Facebook Messenger | Messages, media | ⬜ Planned | TBD |
+| WhatsApp | Messages (rich local SQLite) | 🟡 Via iLEAPP — messages | 0.3.0 (Batch 1) |
+| TikTok | Messages + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | 0.3.0 (Batch 1) |
+| Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | 0.3.0 (Batch 1) |
+| Instagram | DMs, media cache | ⬜ Planned | 0.3.0 (Batch 1) |
+| Facebook | Feed cache, messages, media | ⬜ Planned | 0.3.0 (Batch 1) |
+| Facebook Messenger | Messages, media | ⬜ Planned | 0.3.0 (Batch 1) |
+| Snapchat | Minimal — ephemeral by design (⚠ thin local store) | ⬜ Planned | 0.3.0 (Batch 1) |
 | YouTube | Watch/search history, cache | ⬜ Planned | TBD |
 | Gmail | Cached mail/metadata | ⬜ Planned | TBD |
 | WeChat | Messages, media | ⬜ Planned | TBD |
-| Snapchat | Minimal — ephemeral by design | ⚪ Little local data | — |
 | Signal | Minimal — encrypted local store | ⚪ Little local data | — |
 
 ### Tier 2 — Top 25 (adds)
 
 | App | Status | Native since |
 |-----|--------|--------------|
-| X / Twitter | ⬜ Planned | TBD |
+| X / Twitter | ⬜ Planned | 0.3.0 (Batch 1) |
 | Discord | ⬜ Planned | TBD |
 | Reddit | ⬜ Planned | TBD |
 | Spotify | ⬜ Planned | TBD |
