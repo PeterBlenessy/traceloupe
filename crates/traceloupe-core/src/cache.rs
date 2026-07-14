@@ -23,14 +23,14 @@ pub struct CacheDb {
 const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = r#"
-CREATE TABLE meta (
+CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
 
 -- One row per import attempt, so partial/failed imports are visible and
 -- resumable rather than silently half-populated.
-CREATE TABLE import_runs (
+CREATE TABLE IF NOT EXISTS import_runs (
     id             INTEGER PRIMARY KEY,
     engine         TEXT NOT NULL,             -- 'ileapp' | 'native'
     engine_version TEXT,
@@ -40,7 +40,7 @@ CREATE TABLE import_runs (
     error          TEXT
 );
 
-CREATE TABLE contacts (
+CREATE TABLE IF NOT EXISTS contacts (
     id           INTEGER PRIMARY KEY,
     first_name   TEXT,
     last_name    TEXT,
@@ -54,11 +54,11 @@ CREATE TABLE contacts (
 );
 
 -- Apps that were installed on the device (from Info.plist), for the Apps view.
-CREATE TABLE installed_apps (
+CREATE TABLE IF NOT EXISTS installed_apps (
     bundle_id TEXT PRIMARY KEY
 );
 
-CREATE TABLE threads (
+CREATE TABLE IF NOT EXISTS threads (
     id               INTEGER PRIMARY KEY,
     identifier       TEXT NOT NULL,            -- chat guid / group id / phone number
     display_name     TEXT,
@@ -67,9 +67,9 @@ CREATE TABLE threads (
     message_count    INTEGER NOT NULL DEFAULT 0,
     participants_json TEXT NOT NULL DEFAULT '[]'  -- group member handles
 );
-CREATE INDEX idx_threads_last_message ON threads(last_message_at DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_last_message ON threads(last_message_at DESC);
 
-CREATE TABLE messages (
+CREATE TABLE IF NOT EXISTS messages (
     id              INTEGER PRIMARY KEY,
     thread_id       INTEGER NOT NULL REFERENCES threads(id),
     sender          TEXT,                     -- handle; NULL when is_from_me
@@ -78,11 +78,11 @@ CREATE TABLE messages (
     sent_at         INTEGER,
     has_attachments INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX idx_messages_thread ON messages(thread_id, sent_at);
+CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, sent_at);
 -- Global chronological order for the cross-conversation timeline.
-CREATE INDEX idx_messages_sent ON messages(sent_at, id);
+CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at, id);
 
-CREATE TABLE attachments (
+CREATE TABLE IF NOT EXISTS attachments (
     id         INTEGER PRIMARY KEY,
     message_id INTEGER NOT NULL REFERENCES messages(id),
     filename   TEXT,
@@ -96,7 +96,7 @@ CREATE TABLE attachments (
     plain_size  INTEGER
 );
 
-CREATE TABLE calls (
+CREATE TABLE IF NOT EXISTS calls (
     id          INTEGER PRIMARY KEY,
     address     TEXT,                         -- phone number / FaceTime handle
     direction   TEXT,                         -- 'incoming' | 'outgoing'
@@ -105,18 +105,18 @@ CREATE TABLE calls (
     occurred_at INTEGER,
     service     TEXT                          -- 'phone' | 'facetime' | ...
 );
-CREATE INDEX idx_calls_occurred ON calls(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_calls_occurred ON calls(occurred_at DESC);
 
-CREATE TABLE safari_history (
+CREATE TABLE IF NOT EXISTS safari_history (
     id          INTEGER PRIMARY KEY,
     url         TEXT NOT NULL,
     title       TEXT,
     visited_at  INTEGER,
     visit_count INTEGER
 );
-CREATE INDEX idx_safari_visited ON safari_history(visited_at DESC);
+CREATE INDEX IF NOT EXISTS idx_safari_visited ON safari_history(visited_at DESC);
 
-CREATE TABLE notes (
+CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY,
     folder      TEXT,
     title       TEXT,
@@ -126,7 +126,7 @@ CREATE TABLE notes (
     modified_at INTEGER
 );
 
-CREATE TABLE media_items (
+CREATE TABLE IF NOT EXISTS media_items (
     id              INTEGER PRIMARY KEY,
     -- iLEAPP's `_lava_media_items.id`, so artifact rows can be linked back to
     -- their media during normalization. NULL for natively-parsed media.
@@ -152,9 +152,9 @@ CREATE TABLE media_items (
     -- block padding after on-demand decryption. NULL otherwise.
     plain_size      INTEGER
 );
-CREATE INDEX idx_media_taken ON media_items(taken_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_taken ON media_items(taken_at DESC);
 
-CREATE TABLE recordings (
+CREATE TABLE IF NOT EXISTS recordings (
     id            INTEGER PRIMARY KEY,
     -- User-set label, or NULL for an auto-named memo (the view falls back to the
     -- filename / date).
@@ -172,10 +172,10 @@ CREATE TABLE recordings (
     decrypt_key   BLOB,
     plain_size    INTEGER
 );
-CREATE INDEX idx_recordings_at ON recordings(recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_recordings_at ON recordings(recorded_at DESC);
 
 -- Cross-artifact full-text search. ref_kind/ref_id point back at the source row.
-CREATE VIRTUAL TABLE search_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     ref_kind UNINDEXED,
     ref_id   UNINDEXED,
     title,

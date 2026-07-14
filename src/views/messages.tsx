@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { FileText, ImageIcon, MessageSquare, Paperclip, Users } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -290,9 +291,14 @@ function Timeline({
 }) {
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   const { data: total } = useQuery({
     queryKey: ["timelineCount", service],
     queryFn: () => client.countTimelineMessages(service),
+    enabled: active === true,
   });
 
   return (
@@ -368,6 +374,10 @@ function Periods({
 }) {
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   // Anchor the buckets once so their bounds (and query keys) stay stable.
   const [now] = useState(() => Math.floor(Date.now() / 1000));
   const periods = useMemo(() => makePeriods(now), [now]);
@@ -375,6 +385,7 @@ function Periods({
   const { data: total } = useQuery({
     queryKey: ["timelineCount", service],
     queryFn: () => client.countTimelineMessages(service),
+    enabled: active === true,
   });
   const { data: counts } = useQuery({
     queryKey: ["messageRanges", now, service],
@@ -784,6 +795,15 @@ function MessageBubble({
   );
 }
 
+/** Open an attachment in the OS default app, toasting on failure. */
+function openAttachmentFile(id: number) {
+  client.openAttachment(id).catch((e) =>
+    toast.error("Couldn't open attachment", {
+      description: e instanceof Error ? e.message : String(e),
+    }),
+  );
+}
+
 /**
  * Renders one attachment by media type: images/audio/video play inline;
  * documents and everything else show an icon that opens the file on click.
@@ -796,7 +816,7 @@ function AttachmentView({ att }: { att: Attachment }) {
   if (available && mime.startsWith("image/")) {
     return (
       <button
-        onClick={() => client.openAttachment(att.id)}
+        onClick={() => openAttachmentFile(att.id)}
         className="block max-w-[240px] overflow-hidden rounded-lg"
         title={att.filename ?? "image"}
       >
@@ -829,7 +849,7 @@ function AttachmentView({ att }: { att: Attachment }) {
   const Icon = mime.startsWith("image/") ? ImageIcon : mime ? FileText : Paperclip;
   return (
     <button
-      onClick={() => available && client.openAttachment(att.id)}
+      onClick={() => available && openAttachmentFile(att.id)}
       disabled={!available}
       className={cn(
         "flex items-center gap-1.5 rounded-md text-xs",

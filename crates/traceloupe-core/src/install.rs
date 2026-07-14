@@ -110,6 +110,11 @@ pub(crate) fn install_engine_with(
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(manifest.size);
 
+    // Cap the download so a compromised/MITM'd host can't stream unbounded bytes
+    // to fill the disk before the checksum is ever checked (verification is at
+    // EOF). Allow a generous margin over the manifest's declared size.
+    let max_bytes = manifest.size.saturating_mul(2).max(256 * 1024 * 1024);
+
     let mut reader = resp.into_reader();
     let mut file = std::fs::File::create(&tmp).map_err(|e| Error::EngineDownload(e.to_string()))?;
     let mut hasher = Sha256::new();
@@ -122,10 +127,16 @@ pub(crate) fn install_engine_with(
         if n == 0 {
             break;
         }
+        received += n as u64;
+        if received > max_bytes {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(Error::EngineDownload(
+                "download exceeded the expected size; aborting".to_string(),
+            ));
+        }
         hasher.update(&buf[..n]);
         file.write_all(&buf[..n])
             .map_err(|e| Error::EngineDownload(e.to_string()))?;
-        received += n as u64;
         on_progress(InstallProgress::Downloading { received, total });
     }
     file.flush()

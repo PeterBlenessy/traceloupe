@@ -57,7 +57,9 @@ impl ManifestIndex {
             std::fs::create_dir_all(work_dir).map_err(|e| Error::io(work_dir, e))?;
             let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
             let tmp = work_dir.join(format!(".manifest-index-{seq}.db"));
-            std::fs::write(&tmp, dec.decrypt_manifest_db()?).map_err(|e| Error::io(&tmp, e))?;
+            // 0600: the decrypted manifest holds the file listing + wrapped keys.
+            crate::write_private(&tmp, &dec.decrypt_manifest_db()?)
+                .map_err(|e| Error::io(&tmp, e))?;
             (tmp.clone(), Some(tmp))
         } else {
             (backup_dir.join("Manifest.db"), None)
@@ -154,7 +156,8 @@ impl ManifestIndex {
         dest: &Path,
     ) -> Result<()> {
         let bytes = self.read_bytes(entry, decryptor)?;
-        std::fs::write(dest, bytes).map_err(|e| Error::io(dest, e))
+        // 0600: `dest` is decrypted plaintext (sms.db, NoteStore.sqlite, …).
+        crate::write_private(dest, &bytes).map_err(|e| Error::io(dest, e))
     }
 }
 

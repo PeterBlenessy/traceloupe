@@ -70,7 +70,7 @@ pub fn parse_camera_roll(
     let manifest_temp = media_cache_dir.join(".manifest.db");
     let manifest_path = if let Some(dec) = decryptor {
         std::fs::create_dir_all(media_cache_dir).map_err(|e| Error::io(media_cache_dir, e))?;
-        std::fs::write(&manifest_temp, dec.decrypt_manifest_db()?)
+        crate::write_private(&manifest_temp, &dec.decrypt_manifest_db()?)
             .map_err(|e| Error::io(&manifest_temp, e))?;
         manifest_temp.clone()
     } else {
@@ -218,7 +218,7 @@ fn resolve_thumb(
     let dest = dir.join(format!("{file_id}.JPG"));
     if !dest.exists() {
         let plain = dec.decrypt_file(blob, file_id)?;
-        std::fs::write(&dest, plain).map_err(|e| Error::io(&dest, e))?;
+        crate::write_private(&dest, &plain).map_err(|e| Error::io(&dest, e))?;
     }
     Ok(dest)
 }
@@ -243,14 +243,18 @@ fn load_photos_metadata(
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    // The fileID is from the untrusted Manifest; reject a non-hex value so the
+    // plaintext branch below can't `join` its way out of backup_dir (matches the
+    // guard on every other blob-path construction).
+    if !crypto::is_valid_file_id(&file_id) {
+        return Ok(HashMap::new());
+    }
 
     // Open Photos.sqlite `immutable` — it's WAL-mode with no sidecars in the
     // backup, so this reads the main file directly (ignoring the missing WAL).
     let conn = match decryptor {
         None => {
-            let photos = backup_dir
-                .join(&file_id[..2.min(file_id.len())])
-                .join(&file_id);
+            let photos = backup_dir.join(&file_id[..2]).join(&file_id);
             Connection::open_with_flags(
                 immutable_uri(&photos),
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
@@ -259,7 +263,7 @@ fn load_photos_metadata(
         Some(dec) => {
             let dest = media_cache_dir.join(".photos.sqlite");
             let plain = dec.decrypt_file(blob.as_deref().unwrap_or_default(), &file_id)?;
-            std::fs::write(&dest, plain).map_err(|e| Error::io(&dest, e))?;
+            crate::write_private(&dest, &plain).map_err(|e| Error::io(&dest, e))?;
             Connection::open_with_flags(
                 immutable_uri(&dest),
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
