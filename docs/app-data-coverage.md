@@ -214,6 +214,26 @@ against a real backup.**
 | Media payloads | ✅ | ⬜ | `postbox/media`; not decoded |
 | Forwarded-from info | ✅ | ⬜ | parsed then skipped |
 
+### Kik — `kik.sqlite` (native, unvalidated)
+
+`ZKIKMESSAGE` grouped by the partner/group (`ZKIKUSER.ZUSERNAME`); `ZTYPE` for
+direction; groups detected by `ZJID` (`_g@groups.kik.com`). Message text,
+timestamp, direction, chat/group name, has_attachment. Group **per-author** is
+NOT in this schema (iLEAPP doesn't surface it either), so a group is titled but
+its messages carry no author.
+
+### imo — `IMODb2.sqlite` (native, unvalidated)
+
+`ZIMOCHATMSG` grouped by `ZA_UID`; `ZALIAS` gives the **per-message author**
+(correct group attribution); `ZTS` nanoseconds; `ZISSENT` direction. has_attachment
+via `ZIMDATA` presence (best-effort; may over-flag non-media action items).
+
+### Threema — `ThreemaData.sqlite` (native, unvalidated)
+
+`ZMESSAGE` grouped by `ZCONVERSATION`; `ZGROUPNAME`/contact name for the title;
+`ZSENDER` gives correct **per-member** group attribution; `ZISOWN` direction;
+`ZDATE` Core-Data time; media/file FKs → has_attachment.
+
 ### X/Twitter · Facebook (main) · Snapchat
 
 X/Twitter, Facebook (main app), and Snapchat keep no clean local chat store (no

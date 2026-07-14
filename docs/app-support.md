@@ -117,8 +117,8 @@ decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifact
 | LinkedIn | ⬜ Planned | TBD |
 | Pinterest | ⬜ Planned | TBD |
 | Threads | ⬜ Planned | TBD |
-| Viber | ⬜ Planned | TBD |
-| LINE | ⬜ Planned | TBD |
+| Viber | ⬜ Planned — complex multi-CTE query (Contacts.data) | TBD |
+| LINE | ⬜ Planned — iLEAPP schema too thin (no conversation key) | TBD |
 | Google Maps | ⬜ Planned | TBD |
 
 ### Tier 3 — Top 50 (adds)
@@ -135,6 +135,20 @@ decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifact
 | Amazon | ⬜ Planned | TBD |
 | Strava | ⬜ Planned | TBD |
 | Notion | ⬜ Planned | TBD |
+
+### Additional messaging apps (native)
+
+Popular messengers outside the strict tier lists, done via the app-chat framework:
+
+| App | What's stored locally | Status | Native since |
+|-----|-----------------------|--------|--------------|
+| Kik | `kik.sqlite` (Core Data) | ✅ Native (unvalidated) — messages, groups | 0.4.0 |
+| imo | `IMODb2.sqlite` | ✅ Native (unvalidated) — messages, group authors | 0.4.0 |
+| Threema | `ThreemaData.sqlite` | ✅ Native (unvalidated) — messages, group authors | 0.4.0 |
+
+Candidate next (clean-ish SQLite / iLEAPP modules exist): Viber (multi-CTE),
+Discord/Slack (cached JSON, not clean SQL), Teams, Bumble (YapDatabase blobs),
+Reddit (Matrix JSON), LINE (thin schema), Zangi, teleguard.
 
 ### Tier 4 — Top 100 (the long tail)
 
