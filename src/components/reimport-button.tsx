@@ -5,6 +5,25 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { client, type ReimportResult } from "@/lib/ipc";
 
+/**
+ * React Query key prefixes each module's data feeds, so a re-import invalidates
+ * only the affected views rather than the whole cache (a blanket invalidate would
+ * mark heavy queries — e.g. a huge message timeline — stale for no reason).
+ */
+const INVALIDATE_KEYS: Record<string, string[]> = {
+  recordings: ["recordings"],
+  notes: ["notes"],
+  camera_roll: ["mediaCount", "mediaSources", "mediaWindow"],
+  messages: [
+    "threads",
+    "messageCount",
+    "messageWindow",
+    "messageRanges",
+    "timelineCount",
+    "timelineWindow",
+  ],
+};
+
 /** Human count of what a re-import produced, for the success toast. */
 function summarize(module: string, r: ReimportResult): string {
   const n =
@@ -47,7 +66,11 @@ export function ReimportButton({
     setRunning(true);
     try {
       const result = await client.reimportModule(module);
-      await qc.invalidateQueries();
+      // Refresh only the views this module feeds.
+      const prefixes = INVALIDATE_KEYS[module] ?? [];
+      await Promise.all(
+        prefixes.map((key) => qc.invalidateQueries({ queryKey: [key] })),
+      );
       toast.success(summarize(module, result));
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

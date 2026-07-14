@@ -43,9 +43,25 @@ struct Chat {
     participants: Vec<String>,
 }
 
-/// Parse a decrypted `sms.db` into the cache's `threads` + `messages`. Idempotent
-/// only against a fresh cache (it appends rows, like the normalizer).
-pub fn parse_messages(sms_db: &Path, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+/// SQL predicate for the threads this parser owns — iMessage/SMS, i.e. not the
+/// third-party app-chat services. Scopes a `replace` re-import's deletes so
+/// TikTok/WhatsApp/Telegram conversations are left intact. A fixed string (no user
+/// input), safe to interpolate.
+const NATIVE_THREADS: &str = "service IS NULL OR service NOT IN ('TikTok','WhatsApp','Telegram')";
+
+/// Parse a decrypted `sms.db` into the cache's `threads` + `messages`.
+///
+/// With `replace = false` it appends (for a fresh cache, like the normalizer).
+/// With `replace = true` it first deletes this parser's existing rows — child
+/// `attachments`, then `messages`, then `threads` (that order satisfies the
+/// foreign key) — **inside the same transaction as the re-insert**, so a partial
+/// re-import is atomic: a parse failure rolls the deletes back too.
+pub fn parse_messages(
+    sms_db: &Path,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+    replace: bool,
+) -> Result<()> {
     let src = Connection::open_with_flags(sms_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
     // handle.ROWID → phone/email.
@@ -104,6 +120,28 @@ pub fn parse_messages(sms_db: &Path, cache: &CacheDb, report: &mut ImportReport)
     let conn = cache.conn();
     // One transaction — messages run to tens of thousands of rows.
     let tx = conn.unchecked_transaction()?;
+
+    // Replace mode: clear this parser's prior rows before re-inserting, in the
+    // same transaction. Attachments first (they FK-reference messages), then
+    // messages, then threads.
+    if replace {
+        tx.execute(
+            &format!(
+                "DELETE FROM attachments WHERE message_id IN
+                   (SELECT id FROM messages WHERE thread_id IN
+                     (SELECT id FROM threads WHERE {NATIVE_THREADS}))"
+            ),
+            [],
+        )?;
+        tx.execute(
+            &format!(
+                "DELETE FROM messages WHERE thread_id IN
+                   (SELECT id FROM threads WHERE {NATIVE_THREADS})"
+            ),
+            [],
+        )?;
+        tx.execute(&format!("DELETE FROM threads WHERE {NATIVE_THREADS}"), [])?;
+    }
 
     // Messages in chat order (grouped), then time. Skip pure "action" items
     // (group renames, joins) which carry no text and no attachment.
@@ -185,12 +223,12 @@ pub fn parse_messages(sms_db: &Path, cache: &CacheDb, report: &mut ImportReport)
     drop(mstmt);
 
     // Denormalize the per-thread counters (only the threads we just wrote).
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "UPDATE threads SET
            message_count = (SELECT COUNT(*) FROM messages WHERE thread_id = threads.id),
            last_message_at = (SELECT MAX(sent_at) FROM messages WHERE thread_id = threads.id)
-         WHERE service IS NULL OR service NOT IN ('TikTok','WhatsApp','Telegram')",
-    )?;
+         WHERE {NATIVE_THREADS}"
+    ))?;
     tx.commit()?;
     Ok(())
 }
@@ -234,7 +272,7 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
 
-        parse_messages(&db, &cache, &mut report).unwrap();
+        parse_messages(&db, &cache, &mut report, false).unwrap();
 
         assert_eq!(report.threads, 2);
         assert_eq!(report.messages, 4); // action item (202) skipped
@@ -281,5 +319,60 @@ mod tests {
             .unwrap();
         assert_eq!(has_att, 1);
         assert_eq!(from_me, 1);
+    }
+
+    #[test]
+    fn replace_clears_prior_rows_including_attachment_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = make_sms_db(tmp.path());
+        let cache = CacheDb::open_in_memory().unwrap();
+
+        // Simulate a prior iLEAPP import: an iMessage thread + message with an
+        // attachment child, plus an app-chat (TikTok) thread that must survive.
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO threads (id, identifier, service) VALUES (900, 'old', 'iMessage');
+                 INSERT INTO threads (id, identifier, service) VALUES (901, 'tt', 'TikTok');
+                 INSERT INTO messages (id, thread_id, is_from_me, body, has_attachments)
+                   VALUES (9000, 900, 0, 'old msg', 1);
+                 INSERT INTO messages (id, thread_id, is_from_me, body) VALUES (9001, 901, 0, 'tiktok');
+                 INSERT INTO attachments (message_id, filename) VALUES (9000, 'old.jpg');",
+            )
+            .unwrap();
+
+        // replace=true must delete the attachment child before the message
+        // (FK ON, no cascade) — a bare message delete would fail here.
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, true).unwrap();
+
+        let c = cache.conn();
+        // Old iMessage thread + message + attachment gone; fresh ones inserted.
+        let old: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM threads WHERE identifier = 'old'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old, 0);
+        let orphan_att: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM attachments WHERE message_id = 9000",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphan_att, 0);
+        assert_eq!(report.threads, 2); // the two chats from the fresh sms.db
+                                       // The app-chat thread is untouched by a native-messages replace.
+        let tiktok: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM threads WHERE service = 'TikTok'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tiktok, 1);
     }
 }

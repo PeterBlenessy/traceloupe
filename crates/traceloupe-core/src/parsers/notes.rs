@@ -49,9 +49,18 @@ fn col_or_null(cols: &HashSet<String>, candidates: &[&str]) -> String {
     "NULL".to_string()
 }
 
-/// Parse a decrypted `NoteStore.sqlite` into the cache `notes` table. Appends
-/// rows (like the normalizer), so it's idempotent only against a fresh cache.
-pub fn parse_notes(note_store: &Path, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+/// Parse a decrypted `NoteStore.sqlite` into the cache `notes` table.
+///
+/// With `replace = false` it appends (for a fresh cache, like the normalizer).
+/// With `replace = true` it clears the `notes` table first, **in the same
+/// transaction as the re-insert**, so a partial re-import is atomic (a parse
+/// failure rolls the delete back too).
+pub fn parse_notes(
+    note_store: &Path,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+    replace: bool,
+) -> Result<()> {
     let src = Connection::open_with_flags(note_store, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
     // A recognizable modern Notes DB has these two tables. If they're absent this
@@ -113,6 +122,9 @@ pub fn parse_notes(note_store: &Path, cache: &CacheDb, report: &mut ImportReport
 
     let conn = cache.conn();
     let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM notes", [])?;
+    }
     let mut stmt = src.prepare(&sql)?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
@@ -387,7 +399,7 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
 
-        parse_notes(&db, &cache, &mut report).unwrap();
+        parse_notes(&db, &cache, &mut report, false).unwrap();
         assert_eq!(report.notes, 1);
 
         let c = cache.conn();
@@ -420,7 +432,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE foo (a INTEGER);").unwrap();
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
-        assert!(parse_notes(&db, &cache, &mut report).is_err());
+        assert!(parse_notes(&db, &cache, &mut report, false).is_err());
         assert_eq!(report.notes, 0);
     }
 }
