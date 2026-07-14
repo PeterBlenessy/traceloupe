@@ -56,9 +56,9 @@ writes the threads/messages. Adding an app is one module file + a registry entry
 **Batch 1 (0.3.0) — native third-party wave.** Which apps are feasible is set by
 what's actually in the backup (confirmed by whether iLEAPP even has a module):
 
-> ✅ done: **WhatsApp**, **Facebook Messenger** (both clean SQLite).
-> Remaining, harder: **TikTok** (protobuf message bodies), **Instagram** (messages
-> stored as archived plists) — framework-ready, need a blob decoder.
+> ✅ done: **WhatsApp**, **Facebook Messenger** (clean SQLite), **Instagram** (DMs
+> via a native NSKeyedArchiver decoder — unvalidated against a real backup yet).
+> Remaining, harder: **TikTok** (protobuf message bodies) — needs a protobuf decoder.
 > Investigate (data exists but not open-source-documented — see Research notes):
 > **Snapchat**, **X/Twitter**, **Facebook** (main app).
 
@@ -94,7 +94,7 @@ decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifact
 | WhatsApp | Messages (rich local SQLite) | ✅ Native — messages | 0.3.0 |
 | Facebook Messenger | Messages (`lightspeed` SQLite) | ✅ Native — messages | 0.3.0 |
 | TikTok | Messages (protobuf) + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | 0.3.0 (needs protobuf) |
-| Instagram | DMs as archived plists | ⬜ Planned | 0.3.0 (needs plist decode) |
+| Instagram | DMs as archived plists | ✅ Native (unvalidated) — DMs | 0.3.0 |
 | Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | 0.4.0 (deferred) |
 | Facebook (main app) | Chats via Messenger (done); feed/media in generic `Cache.db` | ⬜ Investigate (Cache.db) | TBD |
 | Snapchat | Chats/contacts DO persist on iOS (often encrypted) | ⬜ Investigate (real backup) | TBD |
