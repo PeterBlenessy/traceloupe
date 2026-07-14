@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { NotebookText } from "lucide-react";
+import { Lock, NotebookText } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
@@ -118,7 +119,7 @@ export function NotesView() {
 
 /** A note's display title: its title, else the first line of the snippet. */
 function noteTitle(n: Note): string {
-  return n.title?.trim() || n.snippet?.trim() || "Untitled note";
+  return n.title?.trim() || n.snippet?.trim() || (n.locked ? "Locked note" : "Untitled note");
 }
 
 function NoteRow({
@@ -135,13 +136,16 @@ function NoteRow({
       <button onClick={onClick} className="w-full text-left">
         <ItemContent className="gap-0.5">
           <div className="flex items-baseline justify-between gap-2">
-            <ItemTitle className="truncate">{noteTitle(note)}</ItemTitle>
+            <ItemTitle className="flex min-w-0 items-center gap-1.5">
+              {note.locked && <Lock className="size-3.5 shrink-0 text-muted-foreground" />}
+              <span className="truncate">{noteTitle(note)}</span>
+            </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatListTime(note.modifiedAt)}
             </span>
           </div>
           <ItemDescription className="truncate">
-            {note.snippet ?? note.folder ?? ""}
+            {note.locked ? "Password protected" : (note.snippet ?? note.folder ?? "")}
           </ItemDescription>
         </ItemContent>
       </button>
@@ -160,11 +164,73 @@ function NoteDetail({ note }: { note: Note }) {
           {note.modifiedAt && (
             <p className="mb-4 text-xs text-muted-foreground">{formatDateTime(note.modifiedAt)}</p>
           )}
-          <div className="select-text whitespace-pre-wrap break-words text-sm leading-relaxed">
-            {note.body ?? note.snippet ?? "(empty note)"}
-          </div>
+          {note.locked ? (
+            // Keyed by id so the password field / unlocked body reset per note.
+            <LockedNote key={note.id} note={note} />
+          ) : (
+            <div className="select-text whitespace-pre-wrap break-words text-sm leading-relaxed">
+              {note.body ?? note.snippet ?? "(empty note)"}
+            </div>
+          )}
         </div>
       </ScrollArea>
     </div>
+  );
+}
+
+/** A locked note: prompt for the password, decrypt on demand, show the body. The
+ *  decrypted text lives only in component state (session), never persisted. */
+function LockedNote({ note }: { note: Note }) {
+  const [password, setPassword] = useState("");
+  const [body, setBody] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function unlock(e: FormEvent) {
+    e.preventDefault();
+    if (!password || unlocking) return;
+    setUnlocking(true);
+    setError(null);
+    try {
+      setBody(await client.unlockNote(note.id, password));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUnlocking(false);
+    }
+  }
+
+  if (body !== null) {
+    return (
+      <div className="select-text whitespace-pre-wrap break-words text-sm leading-relaxed">
+        {body || "(empty note)"}
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={unlock} className="mx-auto max-w-sm space-y-3 pt-6 text-center">
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex size-12 items-center justify-center rounded-full bg-accent">
+          <Lock className="size-5 text-muted-foreground" />
+        </div>
+        <p className="text-sm text-muted-foreground">This note is password protected.</p>
+        {note.passwordHint && (
+          <p className="text-xs text-muted-foreground">Hint: {note.passwordHint}</p>
+        )}
+      </div>
+      <Input
+        type="password"
+        autoFocus
+        placeholder="Note password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        className="text-center select-text"
+      />
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <Button type="submit" disabled={!password || unlocking} className="w-full">
+        {unlocking ? "Unlocking…" : "Unlock"}
+      </Button>
+    </form>
   );
 }

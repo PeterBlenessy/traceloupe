@@ -439,6 +439,48 @@ fn be_u32(val: &[u8]) -> Result<u32> {
         .ok_or_else(|| err("keybag integer field too short"))
 }
 
+/// Decrypt an Apple Notes **password-protected** note body. Locked notes store
+/// their body as AES-128-GCM ciphertext (`ZENCRYPTEDDATA`) over the same gzip
+/// protobuf an unlocked note uses; the key is derived from the note password via
+/// PBKDF2-HMAC-SHA256(salt, iterations) → 16 bytes. `iv` is the 12-byte GCM nonce
+/// and `tag` the 16-byte auth tag Notes stores separately. Returns the gzip
+/// plaintext (feed it to the note-body decoder). A wrong password fails the GCM
+/// tag check, so this doubles as the password verifier.
+///
+/// provenance: reference implementation from the reverse-engineered Notes
+/// locked-note format; needs validation against a real locked note.
+pub fn decrypt_note(
+    password: &str,
+    salt: &[u8],
+    iterations: u32,
+    iv: &[u8],
+    tag: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>> {
+    use aes_gcm::aead::Aead;
+    use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
+
+    if iterations == 0 {
+        return Err(err("locked note has no PBKDF2 iteration count"));
+    }
+    if iv.len() != 12 {
+        return Err(err("locked note has an unexpected IV length"));
+    }
+    let key = Zeroizing::new(pbkdf2_hmac_array::<Sha256, 16>(
+        password.as_bytes(),
+        salt,
+        iterations,
+    ));
+    let cipher = Aes128Gcm::new_from_slice(&*key).map_err(|_| err("bad note key"))?;
+    // The aes-gcm crate expects `ciphertext || tag` as one buffer.
+    let mut buf = Vec::with_capacity(ciphertext.len() + tag.len());
+    buf.extend_from_slice(ciphertext);
+    buf.extend_from_slice(tag);
+    cipher
+        .decrypt(Nonce::from_slice(iv), buf.as_ref())
+        .map_err(|_| err("wrong password or corrupt note"))
+}
+
 /// A plist integer that may be encoded signed or unsigned. Rejects negatives: a
 /// file `Size` is never negative, and a negative read as `u64` would become a
 /// ~1.8e19 value that then trips the "size exceeds decrypted length" guard.
@@ -467,6 +509,32 @@ mod tests {
     use super::*;
     use aes::Aes256;
     use cbc::cipher::BlockEncryptMut;
+
+    #[test]
+    fn note_gcm_round_trips_and_rejects_wrong_password() {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
+
+        let password = "hunter2";
+        let salt = b"sixteen-byte-slt";
+        let iters = 1000u32;
+        let iv = [7u8; 12];
+        let body = b"gzip-protobuf-would-go-here";
+
+        // Encrypt exactly the way Notes does, to produce (ciphertext, tag).
+        let key = pbkdf2_hmac_array::<Sha256, 16>(password.as_bytes(), salt, iters);
+        let cipher = Aes128Gcm::new_from_slice(&key).unwrap();
+        let sealed = cipher
+            .encrypt(Nonce::from_slice(&iv), body.as_ref())
+            .unwrap();
+        let (ct, tag) = sealed.split_at(sealed.len() - 16);
+
+        // Right password recovers the body; wrong password fails the GCM tag.
+        let out = decrypt_note(password, salt, iters, &iv, tag, ct).unwrap();
+        assert_eq!(out, body);
+        assert!(decrypt_note("wrong", salt, iters, &iv, tag, ct).is_err());
+        assert!(decrypt_note(password, salt, iters, &[0u8; 8], tag, ct).is_err());
+    }
 
     const PW: &str = "traceloupe-test";
     const CLASS_ID: u32 = 3;

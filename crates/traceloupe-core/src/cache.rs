@@ -17,10 +17,11 @@ pub struct CacheDb {
     conn: Connection,
 }
 
-// Bumped to 4 so caches from earlier builds run the migration block once to catch
+// Bumped to 5 so caches from earlier builds run the migration block once to catch
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
-// attachment decrypt columns), then skip it on every subsequent open.
-const SCHEMA_VERSION: i64 = 4;
+// attachment decrypt columns; v5 adds the locked-note columns), then skip it on
+// every subsequent open.
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -111,7 +112,17 @@ CREATE TABLE IF NOT EXISTS notes (
     snippet     TEXT,
     body_html   TEXT,
     created_at  INTEGER,
-    modified_at INTEGER
+    modified_at INTEGER,
+    -- Password-protected (Apple Notes locked note): body is withheld until the
+    -- user supplies the note password. The crypto_* columns + encrypted_data are
+    -- everything needed to decrypt on demand (never the plaintext at rest).
+    locked         INTEGER NOT NULL DEFAULT 0,
+    password_hint  TEXT,
+    crypto_salt    BLOB,
+    crypto_iter    INTEGER,
+    crypto_iv      BLOB,
+    crypto_tag     BLOB,
+    encrypted_data BLOB
 );
 
 CREATE TABLE IF NOT EXISTS media_items (
@@ -259,6 +270,14 @@ impl CacheDb {
             // v4: native message attachments decrypt on demand like camera roll.
             ensure_column(&conn, "attachments", "decrypt_key", "BLOB")?;
             ensure_column(&conn, "attachments", "plain_size", "INTEGER")?;
+            // v5: locked (password-protected) notes.
+            ensure_column(&conn, "notes", "locked", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(&conn, "notes", "password_hint", "TEXT")?;
+            ensure_column(&conn, "notes", "crypto_salt", "BLOB")?;
+            ensure_column(&conn, "notes", "crypto_iter", "INTEGER")?;
+            ensure_column(&conn, "notes", "crypto_iv", "BLOB")?;
+            ensure_column(&conn, "notes", "crypto_tag", "BLOB")?;
+            ensure_column(&conn, "notes", "encrypted_data", "BLOB")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
