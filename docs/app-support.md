@@ -31,9 +31,9 @@ Companion to `../CHANGELOG.md` (milestones) and
 | Notes (incl. locked & pinned) | `NoteStore.sqlite` | ✅ Native | 0.2.0 |
 | Voice recordings | `CloudRecordings.db` + `.m4a` | ✅ Native | 0.2.0 |
 | Camera roll (photos/videos) | `Photos.sqlite` / DCIM | ✅ Native | 0.1.0 |
+| Call history | `CallHistory.storedata` | ✅ Native | 0.3.0 |
+| Safari history | `History.db` | ✅ Native | 0.3.0 |
 | Contacts | `AddressBook.sqlitedb` | 🟡 Via iLEAPP* | 0.3.0 (planned) |
-| Call history | `CallHistory.storedata` | 🟡 Via iLEAPP | 0.3.0 (planned) |
-| Safari history | `History.db` | 🟡 Via iLEAPP | 0.3.0 (planned) |
 | Installed apps | app-state plist | 🟡 Via iLEAPP | 0.3.0 (planned) |
 
 \* Contacts are *parsed* natively, but iLEAPP currently **extracts** the

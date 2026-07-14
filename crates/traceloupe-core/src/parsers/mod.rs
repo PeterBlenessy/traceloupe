@@ -11,8 +11,10 @@
 //! iLEAPP source.
 
 pub mod address_book;
+pub mod calls;
 pub mod camera_roll;
 pub mod chats;
 pub mod messages;
 pub mod notes;
 pub mod recordings;
+pub mod safari;
