@@ -43,13 +43,21 @@ pub fn import_backup(
     cancel: &CancelToken,
     mut on_phase: impl FnMut(ImportPhase),
 ) -> Result<ImportOutcome> {
-    // Start from a clean slate so re-importing is idempotent, not additive:
-    // iLEAPP writes a new timestamped subfolder each run (they'd pile up and
-    // find_lava_db could pick a stale one), and the normalizer appends rows
-    // (a leftover cache would duplicate everything). Also frees the previous
-    // run's disk before writing the new one.
+    // iLEAPP writes a fresh timestamped output folder each run, so wipe its
+    // scratch dir up front — it's transient, not user data.
     let _ = std::fs::remove_dir_all(work_dir);
-    remove_cache(cache_path);
+
+    // Atomic-swap re-import: build the new cache in a temp file beside the real
+    // one, leaving the existing cache LIVE (and browsable) for the whole run. Only
+    // on success do we swap it in; a cancel or failure discards the temp and the
+    // previous import stays completely intact. The guard removes the temp on any
+    // early return (cancel/error).
+    let import_cache_path = cache_path.with_file_name("cache.importing.db");
+    remove_cache_file(&import_cache_path);
+    let mut temp_guard = TempCacheGuard {
+        path: &import_cache_path,
+        committed: false,
+    };
 
     let lava_path = sidecar::run_import(
         cfg,
@@ -69,7 +77,8 @@ pub fn import_backup(
         .map(Path::to_path_buf)
         .unwrap_or_else(|| work_dir.to_path_buf());
 
-    let cache = CacheDb::open(cache_path)?;
+    // All writes go to the temp cache; the real one keeps serving the UI.
+    let cache = CacheDb::open(&import_cache_path)?;
     let effective = sidecar::effective_module_ids(module_ids);
 
     // Build the backup decryptor once (encrypted backups) — reused for native
@@ -146,8 +155,9 @@ pub fn import_backup(
     // thumbnails, so the gallery is fast and full images transcode on demand.
     if effective.contains(&"camera_roll") {
         // Reuses the decryptor built once above (None for unencrypted backups).
-        // Decrypted thumbnails and transient decrypted DBs live beside the cache.
-        // remove_cache (at import start) already cleared this, so no wipe here.
+        // The content-addressed `media` dir (decrypted thumbnails, keyed by
+        // fileID) is shared across runs and NOT wiped for the atomic swap, so a
+        // re-import reuses thumbnails it already decrypted instead of redoing them.
         let media_cache_dir = cache_path
             .parent()
             .map(|p| p.join("media"))
@@ -269,11 +279,63 @@ pub fn import_backup(
         tx.commit()?;
     }
 
+    // Everything landed in the temp cache — close it (checkpointing its WAL) and
+    // swap it in over the old cache, which stayed live until this instant.
+    drop(cache);
+    swap_cache_into_place(&import_cache_path, cache_path)?;
+    temp_guard.committed = true;
+
     on_phase(ImportPhase::Done(report.clone()));
     Ok(ImportOutcome {
         cache_path: cache_path.to_path_buf(),
         report,
     })
+}
+
+/// Removes its temp cache on drop unless the import committed (swapped it in), so
+/// a cancel/failure/panic never leaves a stray `cache.importing.db` behind.
+struct TempCacheGuard<'a> {
+    path: &'a Path,
+    committed: bool,
+}
+
+impl Drop for TempCacheGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            remove_cache_file(self.path);
+        }
+    }
+}
+
+/// Remove a cache DB file and its WAL/SHM sidecars (not the sibling media dirs).
+fn remove_cache_file(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    for suffix in ["-wal", "-shm"] {
+        let mut p = path.as_os_str().to_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// Retire the previous cache and move the freshly-built `temp` DB into `final_path`.
+/// The old cache stayed live during the import; here we drop its WAL/SHM (they'd
+/// mismatch the swapped-in DB) and the **id-keyed** derived caches — rendered
+/// thumbnails, attachment renders, decrypted-attachment copies — because
+/// media_item/attachment ids are reassigned on re-import. The content-addressed
+/// `media` dir (keyed by fileID) is shared and kept, so a re-import reuses already
+/// decrypted thumbnails instead of redoing them.
+fn swap_cache_into_place(temp: &Path, final_path: &Path) -> Result<()> {
+    for suffix in ["-wal", "-shm"] {
+        let mut p = final_path.as_os_str().to_os_string();
+        p.push(suffix);
+        let _ = std::fs::remove_file(p);
+    }
+    if let Some(dir) = final_path.parent() {
+        for sub in ["thumbs", "att-thumbs", "att-open"] {
+            let _ = std::fs::remove_dir_all(dir.join(sub));
+        }
+    }
+    std::fs::rename(temp, final_path).map_err(|e| crate::Error::io(final_path, e))
 }
 
 /// Materialize Messages natively: locate `sms.db` via the Manifest Index,
@@ -384,26 +446,6 @@ fn import_notes_native(
     };
     let _ = std::fs::remove_file(&note_store);
     ok
-}
-
-/// Remove a SQLite cache DB and its WAL/SHM sidecars, if present.
-/// Remove a backup's cache DB and all data derived from it: the WAL/SHM
-/// sidecars, and the sibling `media` / `thumbs` / `att-thumbs` directories
-/// (decrypted thumbnails and sips-converted JPEGs). Consolidated here so both
-/// re-import and "forget backup" clean up everything consistently — a re-import
-/// never serves a previous run's stale media, and forgetting leaves nothing.
-pub fn remove_cache(cache_path: &Path) {
-    let _ = std::fs::remove_file(cache_path);
-    for suffix in ["-wal", "-shm"] {
-        let mut sidecar = cache_path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        let _ = std::fs::remove_file(sidecar);
-    }
-    if let Some(dir) = cache_path.parent() {
-        for sub in ["media", "thumbs", "att-thumbs", "att-open"] {
-            let _ = std::fs::remove_dir_all(dir.join(sub));
-        }
-    }
 }
 
 /// The natively-parsed data types that can be re-imported on their own — no
@@ -937,6 +979,39 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             .query_row("SELECT COUNT(*) FROM recordings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// A failed/cancelled full import must NOT touch the existing cache — the
+    /// atomic-swap guarantee. Here the engine can't spawn, so the run fails before
+    /// any swap; the previous cache and its data survive, and no temp lingers.
+    #[test]
+    fn failed_import_leaves_the_existing_cache_intact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_path = tmp.path().join("caches").join("id").join("cache.db");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        // A pre-existing cache with a marker we expect to survive.
+        CacheDb::open(&cache_path)
+            .unwrap()
+            .set_meta("marker", "keep-me")
+            .unwrap();
+
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+        let work = tmp.path().join("work");
+        // An engine binary that doesn't exist → run_import errors before the swap.
+        let cfg = EngineConfig::frozen(tmp.path().join("no-such-ileapp"));
+        let cancel = CancelToken::new();
+
+        let result = import_backup(&cfg, &backup, "", &cache_path, &work, &[], &cancel, |_| {});
+        assert!(result.is_err());
+
+        // Old cache untouched; the temp is gone (guard cleaned it up).
+        let cache = CacheDb::open(&cache_path).unwrap();
+        assert_eq!(
+            cache.get_meta("marker").unwrap().as_deref(),
+            Some("keep-me")
+        );
+        assert!(!cache_path.with_file_name("cache.importing.db").exists());
     }
 
     // Small helper so the test can gracefully skip without sqlite3.
