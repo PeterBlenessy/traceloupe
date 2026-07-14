@@ -29,16 +29,7 @@ pub const MODULE: super::AppChatModule = super::AppChatModule {
     parse,
 };
 
-/// Read a column as a String whether it's stored TEXT or INTEGER (Meta ids have
-/// inconsistent affinity across schema versions; a strict typed read would abort
-/// the whole DB on one mistyped row).
-fn col_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option<String>> {
-    Ok(match r.get_ref(i)? {
-        rusqlite::types::ValueRef::Integer(n) => Some(n.to_string()),
-        rusqlite::types::ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
-        _ => None,
-    })
-}
+use super::col_string;
 
 /// Every `lightspeed-userDatabases/*.db` in the backup (Messenger's per-user
 /// message stores). The driver parses each; non-message DBs return empty.

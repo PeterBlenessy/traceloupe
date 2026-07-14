@@ -16,6 +16,7 @@
 
 pub mod facebook_messenger;
 pub mod instagram;
+pub mod kik;
 pub mod telegram;
 pub mod tiktok;
 pub mod whatsapp;
@@ -81,7 +82,19 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     instagram::MODULE,
     tiktok::MODULE,
     telegram::MODULE,
+    kik::MODULE,
 ];
+
+/// Read a column as a String whether it's stored TEXT or INTEGER — app schemas
+/// have inconsistent column affinity across versions, and a strict typed read
+/// would abort the whole DB on one mistyped row. NULL/other types → None.
+pub(crate) fn col_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option<String>> {
+    Ok(match r.get_ref(i)? {
+        rusqlite::types::ValueRef::Integer(n) => Some(n.to_string()),
+        rusqlite::types::ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
+        _ => None,
+    })
+}
 
 /// Insert a parsed app conversation stream into the cache as `threads` + messages,
 /// tagged with `service`. Messages are grouped by `chat_key`; a thread's name is
