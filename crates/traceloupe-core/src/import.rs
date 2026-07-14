@@ -279,8 +279,12 @@ pub fn import_backup(
         tx.commit()?;
     }
 
-    // Everything landed in the temp cache — close it (checkpointing its WAL) and
-    // swap it in over the old cache, which stayed live until this instant.
+    // Everything landed in the temp cache. Explicitly checkpoint + truncate its
+    // WAL so the `.db` is self-contained regardless of close-time behavior (belt
+    // and suspenders against a future stray open), then close it and swap it in.
+    let _ = cache
+        .conn()
+        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
     drop(cache);
     swap_cache_into_place(&import_cache_path, cache_path)?;
     temp_guard.committed = true;
@@ -318,24 +322,33 @@ fn remove_cache_file(path: &Path) {
 }
 
 /// Retire the previous cache and move the freshly-built `temp` DB into `final_path`.
-/// The old cache stayed live during the import; here we drop its WAL/SHM (they'd
-/// mismatch the swapped-in DB) and the **id-keyed** derived caches — rendered
-/// thumbnails, attachment renders, decrypted-attachment copies — because
-/// media_item/attachment ids are reassigned on re-import. The content-addressed
-/// `media` dir (keyed by fileID) is shared and kept, so a re-import reuses already
-/// decrypted thumbnails instead of redoing them.
+///
+/// The **rename happens first** (atomic same-directory replace), so if it fails we
+/// return `Err` having deleted nothing — the old cache and its derived caches stay
+/// intact. Only after a successful rename do we drop stale WAL/SHM sidecars (the
+/// temp had none after the checkpoint; any at `final_path` are the retired cache's,
+/// now orphaned) and the **id-keyed** derived caches — rendered thumbnails,
+/// attachment renders, decrypted-attachment copies — since media_item/attachment
+/// ids are reassigned on re-import. Doing the sidecar cleanup right after the
+/// rename also shrinks the window in which a concurrent reader could map a stale
+/// SHM (harmless — no WAL data is pending on the old cache, and SHM is rebuilt).
+/// The content-addressed `media` dir (keyed by fileID) is shared and kept, so a
+/// re-import reuses already-decrypted thumbnails instead of redoing them.
 fn swap_cache_into_place(temp: &Path, final_path: &Path) -> Result<()> {
-    for suffix in ["-wal", "-shm"] {
-        let mut p = final_path.as_os_str().to_os_string();
-        p.push(suffix);
-        let _ = std::fs::remove_file(p);
+    std::fs::rename(temp, final_path).map_err(|e| crate::Error::io(final_path, e))?;
+    for base in [temp, final_path] {
+        for suffix in ["-wal", "-shm"] {
+            let mut p = base.as_os_str().to_os_string();
+            p.push(suffix);
+            let _ = std::fs::remove_file(p);
+        }
     }
     if let Some(dir) = final_path.parent() {
         for sub in ["thumbs", "att-thumbs", "att-open"] {
             let _ = std::fs::remove_dir_all(dir.join(sub));
         }
     }
-    std::fs::rename(temp, final_path).map_err(|e| crate::Error::io(final_path, e))
+    Ok(())
 }
 
 /// Materialize Messages natively: locate `sms.db` via the Manifest Index,
