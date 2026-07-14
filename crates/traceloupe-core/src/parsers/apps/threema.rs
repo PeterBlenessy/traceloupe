@@ -55,12 +55,13 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     if !table_exists(&conn, "ZMESSAGE")? || !table_exists(&conn, "ZCONVERSATION")? {
         return Ok(Vec::new());
     }
-    // Resolve display names SQL-side (COALESCE(first[+last], nickname)); group
-    // authorship uses ZSENDER, 1:1 uses the conversation's contact.
+    // The chat title is the group name or the 1:1 partner. Message authorship keys
+    // off ZSENDER (present ⇒ an explicit author, i.e. a group message) — NOT off
+    // ZGROUPNAME, so unnamed groups still attribute correctly. System messages
+    // (Z_PRIMARYKEY.Z_NAME = 'SystemMessage') are excluded, matching iLEAPP.
     let mut stmt = conn.prepare(
         "SELECT
              m.ZCONVERSATION AS chat_key,
-             (conv.ZGROUPNAME IS NOT NULL) AS is_group,
              COALESCE(
                  conv.ZGROUPNAME,
                  NULLIF(TRIM(COALESCE(cont.ZFIRSTNAME,'') || ' ' || COALESCE(cont.ZLASTNAME,'')), ''),
@@ -69,6 +70,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
              m.ZISOWN AS is_own,
              COALESCE(m.ZTEXT, m.ZCAPTION) AS body,
              m.ZDATE AS zdate,
+             m.ZSENDER AS sender_pk,
              COALESCE(
                  NULLIF(TRIM(COALESCE(sd.ZFIRSTNAME,'') || ' ' || COALESCE(sd.ZLASTNAME,'')), ''),
                  sd.ZPUBLICNICKNAME
@@ -79,6 +81,8 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
          LEFT JOIN ZCONVERSATION conv ON m.ZCONVERSATION = conv.Z_PK
          LEFT JOIN ZCONTACT cont ON conv.ZCONTACT = cont.Z_PK
          LEFT JOIN ZCONTACT sd ON sd.Z_PK = m.ZSENDER
+         LEFT JOIN Z_PRIMARYKEY p ON m.Z_ENT = p.Z_ENT
+         WHERE COALESCE(p.Z_NAME, '') <> 'SystemMessage'
          ORDER BY chat_key, m.ZDATE",
     )?;
     let mut rows = stmt.query([])?;
@@ -87,26 +91,27 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let chat_key: String = super::col_string(r, 0)?
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".into());
-        let is_group = r.get::<_, Option<i64>>(1)?.unwrap_or(0) != 0;
-        let chat_name: Option<String> = super::col_string(r, 2)?.filter(|s| !s.trim().is_empty());
-        let is_from_me = r.get::<_, Option<i64>>(3)?.unwrap_or(0) == 1;
-        let body: Option<String> = super::col_string(r, 4)?;
+        let chat_name: Option<String> = super::col_string(r, 1)?.filter(|s| !s.trim().is_empty());
+        let is_from_me = r.get::<_, Option<i64>>(2)?.unwrap_or(0) == 1;
+        let body: Option<String> = super::col_string(r, 3)?;
         let timestamp = r
-            .get::<_, Option<f64>>(5)?
+            .get::<_, Option<f64>>(4)?
             .filter(|d| *d > 0.0)
             .map(|d| d as i64 + MAC_EPOCH);
-        let group_sender: Option<String> =
-            super::col_string(r, 6)?.filter(|s| !s.trim().is_empty());
+        // ZSENDER present ⇒ an explicit per-message author (a group message).
+        let sender_pk: Option<i64> = super::col_i64(r, 5)?;
+        let sender_name: Option<String> = super::col_string(r, 6)?.filter(|s| !s.trim().is_empty());
         let has_attachment = r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
 
-        // Sender for an incoming message: in a group it's the actual author
-        // (ZSENDER); in a 1:1 it's the conversation partner (== chat_name).
-        let sender_name = if is_from_me {
-            None
-        } else if is_group {
-            group_sender
+        // Incoming sender: an explicit author (ZSENDER → its contact name) when
+        // present, else the conversation partner (== chat_name) for a 1:1.
+        let (incoming_sender, incoming_id) = if sender_pk.is_some() {
+            (
+                sender_name.or_else(|| chat_name.clone()),
+                sender_pk.map(|p| p.to_string()),
+            )
         } else {
-            chat_name.clone()
+            (chat_name.clone(), None)
         };
 
         out.push(AppMessage {
@@ -115,14 +120,11 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             timestamp,
             body,
             is_from_me,
-            sender_name,
+            sender_name: if is_from_me { None } else { incoming_sender },
             sender_handle: None,
-            // Distinct group senders drive the framework's group labeling.
-            sender_id: if is_group && !is_from_me {
-                super::col_string(r, 6)?
-            } else {
-                None
-            },
+            // The author id (ZSENDER) lets the framework label an UNNAMED group by
+            // distinct-sender count; inert for a named group (title wins).
+            sender_id: if is_from_me { None } else { incoming_id },
             has_attachment,
         });
     }
@@ -141,34 +143,47 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE ZCONTACT (Z_PK INTEGER PRIMARY KEY, ZFIRSTNAME TEXT, ZLASTNAME TEXT, ZPUBLICNICKNAME TEXT);
              CREATE TABLE ZCONVERSATION (Z_PK INTEGER PRIMARY KEY, ZGROUPNAME TEXT, ZCONTACT INTEGER);
-             CREATE TABLE ZMESSAGE (Z_PK INTEGER PRIMARY KEY, ZDATE REAL, ZISOWN INTEGER, ZTEXT TEXT,
+             CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER PRIMARY KEY, Z_NAME TEXT);
+             CREATE TABLE ZMESSAGE (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, ZDATE REAL, ZISOWN INTEGER, ZTEXT TEXT,
                  ZCAPTION TEXT, ZCONVERSATION INTEGER, ZSENDER INTEGER, ZAUDIO INTEGER, ZVIDEO INTEGER,
                  ZIMAGE INTEGER, ZFILENAME TEXT);
+             INSERT INTO Z_PRIMARYKEY (Z_ENT, Z_NAME) VALUES (1, 'TextMessage'), (9, 'SystemMessage');
              INSERT INTO ZCONTACT (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (1, 'Mika', 'Laine');
              INSERT INTO ZCONTACT (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (2, 'Otto', NULL);
+             INSERT INTO ZCONTACT (Z_PK, ZFIRSTNAME, ZLASTNAME) VALUES (3, 'Aino', NULL);
              -- 1:1 conversation with Mika.
              INSERT INTO ZCONVERSATION (Z_PK, ZGROUPNAME, ZCONTACT) VALUES (10, NULL, 1);
-             -- group conversation.
+             -- named group.
              INSERT INTO ZCONVERSATION (Z_PK, ZGROUPNAME, ZCONTACT) VALUES (20, 'Sauna Club', NULL);
+             -- UNNAMED group (no ZGROUPNAME, no ZCONTACT).
+             INSERT INTO ZCONVERSATION (Z_PK, ZGROUPNAME, ZCONTACT) VALUES (30, NULL, NULL);
              -- 1:1: incoming from Mika, then owner reply. Mac-time 721692800 = unix 1_700_000_000.
-             INSERT INTO ZMESSAGE (Z_PK, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
-                VALUES (1, 721692800.0, 0, 'moi', 10, NULL);
-             INSERT INTO ZMESSAGE (Z_PK, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
-                VALUES (2, 721692900.0, 1, 'hei Mika', 10, NULL);
-             -- group: incoming authored by Otto (ZSENDER=2).
-             INSERT INTO ZMESSAGE (Z_PK, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
-                VALUES (3, 721693000.0, 0, 'sauna at 7', 20, 2);",
+             INSERT INTO ZMESSAGE (Z_PK, Z_ENT, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
+                VALUES (1, 1, 721692800.0, 0, 'moi', 10, NULL);
+             INSERT INTO ZMESSAGE (Z_PK, Z_ENT, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
+                VALUES (2, 1, 721692900.0, 1, 'hei Mika', 10, NULL);
+             -- named group: incoming authored by Otto (ZSENDER=2).
+             INSERT INTO ZMESSAGE (Z_PK, Z_ENT, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
+                VALUES (3, 1, 721693000.0, 0, 'sauna at 7', 20, 2);
+             -- a SystemMessage (should be skipped).
+             INSERT INTO ZMESSAGE (Z_PK, Z_ENT, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
+                VALUES (4, 9, 721693100.0, 0, NULL, 20, NULL);
+             -- UNNAMED group: two distinct authors (Otto, Aino) → real group.
+             INSERT INTO ZMESSAGE (Z_PK, Z_ENT, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
+                VALUES (5, 1, 721693200.0, 0, 'moikka', 30, 2);
+             INSERT INTO ZMESSAGE (Z_PK, Z_ENT, ZDATE, ZISOWN, ZTEXT, ZCONVERSATION, ZSENDER)
+                VALUES (6, 1, 721693300.0, 0, 'hei', 30, 3);",
         )
         .unwrap();
         db
     }
 
     #[test]
-    fn parses_1to1_and_group_with_author() {
+    fn parses_1to1_named_and_unnamed_groups() {
         let tmp = tempfile::tempdir().unwrap();
         let db = make_db(tmp.path());
         let msgs = parse(&db, "").unwrap();
-        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs.len(), 5, "the SystemMessage row is excluded");
 
         // 1:1 with Mika Laine.
         let one = msgs
@@ -180,15 +195,33 @@ mod tests {
         assert_eq!(one.timestamp, Some(1_700_000_000));
         assert_eq!(one.sender_name.as_deref(), Some("Mika Laine"));
 
-        // Group: titled by group; the incoming message is attributed to Otto.
+        // Named group: titled by group; incoming attributed to Otto.
         let grp = msgs.iter().find(|m| m.chat_key == "20").unwrap();
         assert_eq!(grp.chat_name.as_deref(), Some("Sauna Club"));
         assert_eq!(grp.sender_name.as_deref(), Some("Otto"));
 
+        // UNNAMED group: authors still attributed (Otto, Aino).
+        let u = msgs
+            .iter()
+            .find(|m| m.body.as_deref() == Some("moikka"))
+            .unwrap();
+        assert_eq!(u.chat_key, "30");
+        assert_eq!(u.sender_name.as_deref(), Some("Otto"));
+
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
         super::super::insert_app_conversation(&cache, "Threema", false, msgs, &mut report).unwrap();
-        assert_eq!(report.threads, 2);
-        assert_eq!(report.messages, 3);
+        assert_eq!(report.threads, 3);
+        assert_eq!(report.messages, 5);
+        // The unnamed group (2 distinct authors) is labeled a group.
+        let title: String = cache
+            .conn()
+            .query_row(
+                "SELECT display_name FROM threads WHERE identifier = '30'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(title.starts_with("Group chat"), "got: {title}");
     }
 }
