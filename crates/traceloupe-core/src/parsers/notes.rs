@@ -118,6 +118,8 @@ pub fn parse_notes(
     let iv = col_or_null(&cols, &["ZCRYPTOINITIALIZATIONVECTOR"]);
     let tag = col_or_null(&cols, &["ZCRYPTOTAG"]);
     let hint = col_or_null(&cols, &["ZPASSWORDHINT"]);
+    // Pinned-to-top flag (independent of lock state).
+    let pinned = col_or_null(&cols, &["ZISPINNED"]);
     // Include locked notes even though their ZNOTEDATA is often NULL.
     let or_encrypted = if cols.contains("ZENCRYPTEDDATA") {
         "OR n.ZENCRYPTEDDATA IS NOT NULL"
@@ -130,7 +132,7 @@ pub fn parse_notes(
     // NOT NULL` selects note objects (folders/accounts have no body data).
     let sql = format!(
         "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA,
-                {protected}, {enc_data}, {salt}, {iter}, {iv}, {tag}, {hint}
+                {protected}, {enc_data}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned}
          FROM ZICCLOUDSYNCINGOBJECT n
          LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = {folder_fk}
          LEFT JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
@@ -161,6 +163,7 @@ pub fn parse_notes(
         let password_hint: Option<String> = r
             .get::<_, Option<String>>(13)?
             .filter(|s| !s.trim().is_empty());
+        let pinned = r.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0;
 
         // Notes in "Recently Deleted" have no folder row of their own; label them
         // so they're distinguishable rather than showing an empty folder.
@@ -175,8 +178,8 @@ pub fn parse_notes(
             tx.execute(
                 "INSERT INTO notes
                     (folder, title, snippet, body_html, created_at, modified_at,
-                     locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data)
-                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10)",
+                     locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data, pinned)
+                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 rusqlite::params![
                     folder,
                     title,
@@ -188,6 +191,7 @@ pub fn parse_notes(
                     crypto_iv,
                     crypto_tag,
                     encrypted_data,
+                    pinned,
                 ],
             )?;
             report.notes += 1;
@@ -215,9 +219,9 @@ pub fn parse_notes(
             .or_else(|| derive_snippet(&body_text));
 
         tx.execute(
-            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
-            rusqlite::params![folder, title, snippet, body, created_at, modified_at],
+            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked, pinned)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)",
+            rusqlite::params![folder, title, snippet, body, created_at, modified_at, pinned],
         )?;
         report.notes += 1;
     }
@@ -439,7 +443,7 @@ mod tests {
             "CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZNOTE INTEGER, ZDATA BLOB);
              CREATE TABLE ZICCLOUDSYNCINGOBJECT (
                 Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT, ZSNIPPET TEXT,
-                ZFOLDER INTEGER, ZNOTEDATA INTEGER,
+                ZFOLDER INTEGER, ZNOTEDATA INTEGER, ZISPINNED INTEGER,
                 ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL, ZMARKEDFORDELETION INTEGER);
              -- A folder object (ZTITLE2 set, no note data).
              INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTITLE2) VALUES (1, 'Groceries');",
@@ -455,8 +459,8 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO ZICCLOUDSYNCINGOBJECT
-                (Z_PK, ZTITLE1, ZSNIPPET, ZFOLDER, ZNOTEDATA, ZCREATIONDATE1, ZMODIFICATIONDATE1, ZMARKEDFORDELETION)
-             VALUES (10, 'Shopping', NULL, 1, 5, 721692800.0, 721692900.0, 0)",
+                (Z_PK, ZTITLE1, ZSNIPPET, ZFOLDER, ZNOTEDATA, ZISPINNED, ZCREATIONDATE1, ZMODIFICATIONDATE1, ZMARKEDFORDELETION)
+             VALUES (10, 'Shopping', NULL, 1, 5, 1, 721692800.0, 721692900.0, 0)",
             [],
         )
         .unwrap();
@@ -474,17 +478,27 @@ mod tests {
         assert_eq!(report.notes, 1);
 
         let c = cache.conn();
-        let (folder, title, snippet, body, created): (
+        let (folder, title, snippet, body, created, pinned): (
             Option<String>,
             Option<String>,
             Option<String>,
             Option<String>,
             i64,
+            i64,
         ) = c
             .query_row(
-                "SELECT folder, title, snippet, body_html, created_at FROM notes",
+                "SELECT folder, title, snippet, body_html, created_at, pinned FROM notes",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(folder.as_deref(), Some("Groceries"));
@@ -493,6 +507,7 @@ mod tests {
         assert_eq!(body.as_deref(), Some("Milk\nEggs"));
         assert_eq!(snippet.as_deref(), Some("Milk"));
         assert_eq!(created, 1_700_000_000);
+        assert_eq!(pinned, 1, "ZISPINNED should carry through to the cache");
     }
 
     #[test]

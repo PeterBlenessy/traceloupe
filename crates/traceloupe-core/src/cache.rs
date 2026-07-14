@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS notes (
     body_html   TEXT,
     created_at  INTEGER,
     modified_at INTEGER,
+    -- Pinned to the top of the Notes app (ZISPINNED).
+    pinned      INTEGER NOT NULL DEFAULT 0,
     -- Password-protected (Apple Notes locked note): body is withheld until the
     -- user supplies the note password. The crypto_* columns + encrypted_data are
     -- everything needed to decrypt on demand (never the plaintext at rest).
@@ -278,6 +280,8 @@ impl CacheDb {
             ensure_column(&conn, "notes", "crypto_iv", "BLOB")?;
             ensure_column(&conn, "notes", "crypto_tag", "BLOB")?;
             ensure_column(&conn, "notes", "encrypted_data", "BLOB")?;
+            // v6: pinned notes.
+            ensure_column(&conn, "notes", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

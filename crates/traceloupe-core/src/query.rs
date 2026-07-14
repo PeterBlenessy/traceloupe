@@ -815,6 +815,8 @@ pub struct Note {
     pub body: Option<String>,
     pub created_at: Option<i64>,
     pub modified_at: Option<i64>,
+    /// Pinned to the top of the Notes app.
+    pub pinned: bool,
     /// Password-protected: the body is withheld until unlocked with the password.
     pub locked: bool,
     /// The user's password hint, if the note stored one.
@@ -825,7 +827,7 @@ pub struct Note {
 pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint
+        "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -840,6 +842,7 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
             modified_at: r.get(6)?,
             locked: r.get::<_, i64>(7)? != 0,
             password_hint: r.get(8)?,
+            pinned: r.get::<_, i64>(9)? != 0,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

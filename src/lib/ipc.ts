@@ -101,6 +101,8 @@ export interface Note {
   body: string | null;
   createdAt: number | null;
   modifiedAt: number | null;
+  /** Pinned to the top of the Notes app. */
+  pinned: boolean;
   /** Password-protected: the body is withheld until unlocked. */
   locked: boolean;
   /** The user's password hint, if the note stored one. */
@@ -744,26 +746,32 @@ const mockSafari: HistoryVisit[] = [
   },
 ];
 
+// Mock note timestamps are relative to "now" so the recency groupings (Last 7
+// Days, Last 30 Days, …) are demonstrable in the browser preview.
+const DAY = 86_400;
+const nowS = Math.floor(Date.now() / 1000);
 const mockNotes: Note[] = [
-  {
-    id: 1,
-    folder: "Notes",
-    title: "Hike checklist",
-    snippet: "Water, snacks, sunscreen…",
-    body: "Water\nSnacks\nSunscreen\nHat\nExtra socks",
-    createdAt: 1717000000,
-    modifiedAt: 1717838000,
-    locked: false,
-    passwordHint: null,
-  },
   {
     id: 2,
     folder: "Work",
     title: "Q3 ideas",
     snippet: "Ship the importer, then…",
     body: "Ship the importer, then work on lazy decode and the encrypted path.",
-    createdAt: 1716500000,
-    modifiedAt: 1717500000,
+    createdAt: nowS - 40 * DAY,
+    modifiedAt: nowS - 2 * DAY,
+    pinned: true,
+    locked: false,
+    passwordHint: null,
+  },
+  {
+    id: 1,
+    folder: "Notes",
+    title: "Hike checklist",
+    snippet: "Water, snacks, sunscreen…",
+    body: "Water\nSnacks\nSunscreen\nHat\nExtra socks",
+    createdAt: nowS - 6 * DAY,
+    modifiedAt: nowS - 3 * DAY,
+    pinned: false,
     locked: false,
     passwordHint: null,
   },
@@ -773,8 +781,9 @@ const mockNotes: Note[] = [
     title: null,
     snippet: "Grocery list",
     body: "Milk\nEggs\nBröd\nKaffe",
-    createdAt: 1683000000,
-    modifiedAt: 1684000000,
+    createdAt: nowS - 25 * DAY,
+    modifiedAt: nowS - 20 * DAY,
+    pinned: false,
     locked: false,
     passwordHint: null,
   },
@@ -784,8 +793,9 @@ const mockNotes: Note[] = [
     title: "Passwords",
     snippet: null,
     body: null,
-    createdAt: 1715000000,
-    modifiedAt: 1715500000,
+    createdAt: nowS - 400 * DAY,
+    modifiedAt: nowS - 300 * DAY,
+    pinned: false,
     locked: true,
     passwordHint: "the usual",
   },
