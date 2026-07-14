@@ -15,9 +15,23 @@ While pre-1.0, the **minor** version tracks major milestones:
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
 
-## [Unreleased]
+## [Unreleased] — 0.3.0 in progress
 
-_Nothing yet._
+### Added
+- **Native Calls, Safari & Contacts (no iLEAPP).** Call history
+  (`CallHistory.storedata`), Safari history (`History.db`), and Contacts
+  (`AddressBook.sqlitedb`, self-extracted) now materialize via native parsers
+  through the ManifestIndex, with iLEAPP kept as automatic fallback. Calls and
+  Safari also gained sidebar re-import actions. **All first-party views are now
+  native** — iLEAPP is invoked only for the third-party chats (TikTok/WhatsApp/
+  Telegram) until those go native, after which it becomes optional.
+- **Field-level coverage tracking.** `docs/app-data-coverage.md` inventories what
+  each app's DB holds vs. what we surface.
+
+### Remaining for 0.3.0
+- Native parsers for the third-party chats currently read via iLEAPP, plus the new
+  Batch-1 apps (Instagram, Facebook, Messenger, X/Twitter, Snapchat); then make
+  iLEAPP optional. See `docs/app-support.md`.
 
 ## [0.2.0] — 2026-07-14
 
