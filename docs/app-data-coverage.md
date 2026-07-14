@@ -177,11 +177,22 @@ reference (§10). **Unvalidated against a real backup — key paths may need tun
 | Shared media | ✅ | ⬜ | `content` media object |
 | Video-chat announcements | ✅ | ⬜ | `threadActivity` |
 
-### TikTok — `AwemeIM.db` (planned, needs protobuf)
+### TikTok — `AwemeIM.db` (native, unvalidated)
 
-Message bodies are protobuf blobs (`blackboxprotobuf` in iLEAPP) and contact
-tables are dynamically named (`AwemeContacts*`). Framework-ready; needs a protobuf
-decoder before the module can land.
+Messages from `TIMMessageORM`; `content` is JSON (`$.text`). Sender names join the
+dynamically-named `AwemeContacts*` tables; direction uses `account_id` = the DB's
+parent directory name. Schema facts from iLEAPP `tikTok.py` (reference, §10).
+**Unvalidated against a real backup.**
+
+| Data | In backup | Surfaced | Notes |
+|------|:---------:|:--------:|-------|
+| Message text | ✅ | ✅ | `content` JSON `$.text` |
+| Timestamp | ✅ | ✅ | `localcreatedat` (Unix s/ms) |
+| Direction (from-me) | ✅ | ✅ | sender vs path `account_id` |
+| Conversation grouping | ✅ | ✅ | `belongingConversationIdentifier` |
+| Sender nickname | ✅ | ✅ | `AwemeContacts*` join |
+| Contacts (social graph) | ✅ | 🟡 iLEAPP | still via iLEAPP, tagged in Contacts |
+| GIF / link / media | ✅ | ⬜ | `content` `$.url`, `$.display_name` |
 
 ### Telegram (0.4.0) · X/Twitter · Facebook (main) · Snapchat
 

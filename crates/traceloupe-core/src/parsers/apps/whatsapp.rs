@@ -39,7 +39,7 @@ fn locate(index: &ManifestIndex) -> Result<Vec<FileEntry>> {
         .collect())
 }
 
-fn parse(db_path: &Path) -> Result<Vec<AppMessage>> {
+fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt = src.prepare(
         "SELECT
@@ -120,7 +120,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db = make_chatstorage(tmp.path());
 
-        let msgs = parse(&db).unwrap();
+        let msgs = parse(&db, "").unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].chat_key, "15551234567@s.whatsapp.net");
         assert_eq!(msgs[0].sender_name.as_deref(), Some("Sam"));

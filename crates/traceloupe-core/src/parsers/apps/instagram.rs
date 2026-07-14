@@ -114,7 +114,7 @@ fn scalar_string(v: &Value) -> Option<String> {
     }
 }
 
-fn parse(db_path: &Path) -> Result<Vec<AppMessage>> {
+fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if !table_exists(&conn, "MESSAGES")? || !table_exists(&conn, "THREADS")? {
         return Ok(Vec::new());
@@ -270,7 +270,7 @@ mod tests {
         .unwrap();
         drop(conn);
 
-        let msgs = parse(&db).unwrap();
+        let msgs = parse(&db, "").unwrap();
         assert_eq!(msgs.len(), 2);
         let incoming = &msgs[0];
         assert_eq!(incoming.chat_key, "t1");

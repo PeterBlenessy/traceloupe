@@ -16,6 +16,7 @@
 
 pub mod facebook_messenger;
 pub mod instagram;
+pub mod tiktok;
 pub mod whatsapp;
 
 use std::path::Path;
@@ -59,10 +60,12 @@ pub struct AppChatModule {
     /// (e.g. Messenger's per-user `lightspeed-userDatabases/*.db`) have several,
     /// so this returns every candidate and the driver parses each.
     pub locate: fn(&ManifestIndex) -> Result<Vec<FileEntry>>,
-    /// Parse one extracted (decrypted) DB into a message stream. A DB that turns
-    /// out not to hold this app's messages returns an empty vec (not an error), so
-    /// non-matching candidates are skipped quietly.
-    pub parse: fn(&Path) -> Result<Vec<AppMessage>>,
+    /// Parse one extracted (decrypted) DB into a message stream. The second arg is
+    /// the source file's Manifest `relativePath` — needed by apps that encode
+    /// context in the path (e.g. TikTok's per-account directory name = the local
+    /// user id). A DB that turns out not to hold this app's messages returns an
+    /// empty vec (not an error), so non-matching candidates are skipped quietly.
+    pub parse: fn(&Path, &str) -> Result<Vec<AppMessage>>,
 }
 
 /// The registered native app chat modules. Add an entry to support a new app.
@@ -70,6 +73,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     whatsapp::MODULE,
     facebook_messenger::MODULE,
     instagram::MODULE,
+    tiktok::MODULE,
 ];
 
 /// Insert a parsed app conversation stream into the cache as `threads` + messages,

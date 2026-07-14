@@ -759,7 +759,7 @@ fn import_app_chats_native(
                     .push(format!("Native {}: couldn't read a DB ({e}).", m.service));
                 continue;
             }
-            match (m.parse)(&out) {
+            match (m.parse)(&out, &entry.relative_path) {
                 Ok(mut parsed) => {
                     msgs.append(&mut parsed);
                     parsed_any = true;
