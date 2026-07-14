@@ -45,7 +45,7 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-fn parse(db_path: &Path) -> Result<Vec<AppMessage>> {
+fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     // A lightspeed DB without thread_messages isn't a message store — skip quietly.
     if !table_exists(&src, "thread_messages")? {
@@ -134,7 +134,7 @@ mod tests {
     fn parses_and_inserts_messenger_thread() {
         let tmp = tempfile::tempdir().unwrap();
         let db = make_db(tmp.path());
-        let msgs = parse(&db).unwrap();
+        let msgs = parse(&db, "").unwrap();
         assert_eq!(msgs.len(), 2);
         // Incoming from Jordan, then outgoing from the local user.
         assert!(!msgs[0].is_from_me && msgs[0].sender_name.as_deref() == Some("Jordan"));
@@ -162,6 +162,6 @@ mod tests {
             .unwrap()
             .execute_batch("CREATE TABLE something (x INTEGER);")
             .unwrap();
-        assert!(parse(&db).unwrap().is_empty());
+        assert!(parse(&db, "").unwrap().is_empty());
     }
 }
