@@ -1,8 +1,21 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronLeft, ChevronRight, Image as ImageIcon, Play, X } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Image as ImageIcon,
+  Play,
+  X,
+} from "lucide-react";
 
 /** Media items fetched per lazy window (shared by the grid and the lightbox's
  *  neighbour lookup so their cache keys line up). */
@@ -13,7 +26,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
-import { ReimportButton } from "@/components/reimport-button";
 import { formatDateTime } from "@/lib/format";
 import { client, type MediaItem } from "@/lib/ipc";
 
@@ -43,7 +55,14 @@ export function PhotosView() {
     (page: number) => {
       void qc.prefetchQuery({
         queryKey: ["mediaWindow", sourceArg, sort.by, sort.desc, page],
-        queryFn: () => client.getMediaWindow(sourceArg, page * PAGE, PAGE, sort.by, sort.desc),
+        queryFn: () =>
+          client.getMediaWindow(
+            sourceArg,
+            page * PAGE,
+            PAGE,
+            sort.by,
+            sort.desc,
+          ),
       });
     },
     [qc, sourceArg, sort],
@@ -51,7 +70,11 @@ export function PhotosView() {
 
   if (active === false) {
     return (
-      <EmptyView icon={ImageIcon} title="No backup open" description="Import a backup to see photos and videos.">
+      <EmptyView
+        icon={ImageIcon}
+        title="No backup open"
+        description="Import a backup to see photos and videos."
+      >
         <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
       </EmptyView>
     );
@@ -62,9 +85,7 @@ export function PhotosView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Photos" count={count}>
-        <ReimportButton module="camera_roll" />
-      </ViewHeader>
+      <ViewHeader title="Photos" count={count} />
       <div className="flex shrink-0 items-center justify-between gap-2 border-b px-2 py-2">
         {hasFilter ? (
           <SourceFilter
@@ -210,13 +231,15 @@ function MediaGrid({
   const lastPage = Math.floor(((lastRow + 1) * cols - 1) / PAGE);
   const pages = useMemo(() => {
     const out: number[] = [];
-    for (let p = Math.max(0, firstPage); p <= Math.max(0, lastPage); p++) out.push(p);
+    for (let p = Math.max(0, firstPage); p <= Math.max(0, lastPage); p++)
+      out.push(p);
     return out;
   }, [firstPage, lastPage]);
   const queries = useQueries({
     queries: pages.map((p) => ({
       queryKey: ["mediaWindow", source, sort.by, sort.desc, p],
-      queryFn: () => client.getMediaWindow(source, p * PAGE, PAGE, sort.by, sort.desc),
+      queryFn: () =>
+        client.getMediaWindow(source, p * PAGE, PAGE, sort.by, sort.desc),
     })),
   });
   const loaded = new Map<number, MediaItem[]>();
@@ -232,7 +255,10 @@ function MediaGrid({
     // its full content height and the virtualizer mounts every row (and spawns a
     // `sips` transcode per thumbnail), freezing the app.
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-1">
-      <div className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
+      <div
+        className="relative w-full"
+        style={{ height: rowVirtualizer.getTotalSize() }}
+      >
         {virtualRows.map((row) => {
           const start = row.index * cols;
           return (
@@ -314,7 +340,8 @@ function Lightbox({
   const page = index != null ? Math.floor(index / PAGE) : 0;
   const { data: win } = useQuery({
     queryKey: ["mediaWindow", source, sort.by, sort.desc, page],
-    queryFn: () => client.getMediaWindow(source, page * PAGE, PAGE, sort.by, sort.desc),
+    queryFn: () =>
+      client.getMediaWindow(source, page * PAGE, PAGE, sort.by, sort.desc),
     enabled: index != null,
   });
   const item = index != null ? win?.[index % PAGE] : undefined;
@@ -354,7 +381,9 @@ function Lightbox({
         showCloseButton={false}
         className="flex h-[95vh] max-w-[95vw] flex-col border-none bg-transparent p-0 shadow-none sm:max-w-[95vw]"
       >
-        <DialogTitle className="sr-only">{item?.filename ?? "Media"}</DialogTitle>
+        <DialogTitle className="sr-only">
+          {item?.filename ?? "Media"}
+        </DialogTitle>
         {/* Close */}
         <button
           onClick={onClose}

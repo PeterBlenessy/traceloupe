@@ -9,6 +9,7 @@ import {
   Mic,
   NotebookText,
   Phone,
+  RefreshCw,
   Settings,
   Users,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -41,17 +43,23 @@ import { Switch } from "@/components/ui/switch";
 import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
+import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { type ClockFormat } from "@/lib/format";
 
 const nav = [
-  { to: "/photos", label: "Photos", icon: Image },
-  { to: "/messages", label: "Messages", icon: MessageSquare },
+  { to: "/photos", label: "Photos", icon: Image, module: "camera_roll" },
+  {
+    to: "/messages",
+    label: "Messages",
+    icon: MessageSquare,
+    module: "messages",
+  },
   { to: "/contacts", label: "Contacts", icon: Users },
   { to: "/calls", label: "Calls", icon: Phone },
   { to: "/safari", label: "Safari", icon: Globe },
-  { to: "/notes", label: "Notes", icon: NotebookText },
-  { to: "/recordings", label: "Recordings", icon: Mic },
+  { to: "/notes", label: "Notes", icon: NotebookText, module: "notes" },
+  { to: "/recordings", label: "Recordings", icon: Mic, module: "recordings" },
   { to: "/apps", label: "Apps", icon: Boxes },
 ] as const;
 
@@ -67,65 +75,85 @@ export function AppShell() {
   );
 
   return (
-    // ImportProvider lives above the routes so an import survives "run in
-    // background" and navigation between views.
+    // ImportProvider / ReimportProvider live above the routes so an import — and a
+    // single-module re-import's spinner — survive "run in background" and
+    // navigation between views.
     <ImportProvider>
-    {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
+      <ReimportProvider>
+        {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
         only sets `min-h-svh`, which lets the layout grow with its content — so a
         virtualized list's tall spacer would inflate the whole document and its
         scroll container would never actually scroll (it just grows), defeating
         every `min-h-0`/`overflow-auto` below. A fixed height gives the flex chain
         something to constrain against so overflow scrolls instead of expanding.
         `relative` anchors the sidebar resize handle. */}
-    <SidebarProvider
-      className="relative h-svh overflow-hidden"
-      style={{ "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
-    >
-      {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
+        <SidebarProvider
+          className="relative h-svh overflow-hidden"
+          style={
+            { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
+          }
+        >
+          {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
           rather than sliding it off-canvas. */}
-      <Sidebar collapsible="icon">
-        <SidebarHeader>
-          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 font-semibold">
-            <HardDrive className="size-4" />
-            <span className="group-data-[collapsible=icon]:hidden">TraceLoupe</span>
-          </Link>
-        </SidebarHeader>
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {nav.map(({ to, label, icon: Icon }) => (
-                  <SidebarMenuItem key={to}>
-                    <SidebarMenuButton asChild isActive={pathname === to} tooltip={label}>
-                      <Link to={to}>
-                        <Icon />
-                        <span>{label}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-      </Sidebar>
-      <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
-      <SidebarInset>
-        {/* A slim bar carrying the sidebar toggle and theme control; views
+          <Sidebar collapsible="icon">
+            <SidebarHeader>
+              <Link
+                to="/"
+                className="flex items-center gap-2 px-2 py-1.5 font-semibold"
+              >
+                <HardDrive className="size-4" />
+                <span className="group-data-[collapsible=icon]:hidden">
+                  TraceLoupe
+                </span>
+              </Link>
+            </SidebarHeader>
+            <SidebarContent>
+              <SidebarGroup>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {nav.map((item) => (
+                      <SidebarMenuItem key={item.to}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={pathname === item.to}
+                          tooltip={item.label}
+                        >
+                          <Link to={item.to}>
+                            <item.icon />
+                            <span>{item.label}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                        {"module" in item && (
+                          <ReimportAction
+                            module={item.module}
+                            label={item.label}
+                          />
+                        )}
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            </SidebarContent>
+          </Sidebar>
+          <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
+          <SidebarInset>
+            {/* A slim bar carrying the sidebar toggle and theme control; views
             render their own headers below it. */}
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
-          <SidebarTrigger />
-          <div className="ml-auto flex items-center gap-1">
-            <ImportIndicator />
-            <ModeToggle />
-            <SettingsMenu />
-          </div>
-        </div>
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <Outlet />
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+            <div className="flex h-10 shrink-0 items-center gap-2 border-b px-2">
+              <SidebarTrigger />
+              <div className="ml-auto flex items-center gap-1">
+                <ImportIndicator />
+                <ModeToggle />
+                <SettingsMenu />
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <Outlet />
+            </div>
+          </SidebarInset>
+        </SidebarProvider>
+      </ReimportProvider>
     </ImportProvider>
   );
 }
@@ -148,6 +176,34 @@ function SidebarResizeEdge({
       className="absolute inset-y-0 z-20 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40 active:bg-primary/60"
       style={{ left: "var(--sidebar-width)", transform: "translateX(-2px)" }}
     />
+  );
+}
+
+/**
+ * The per-view re-import control, living on its sidebar nav item: a spinner while
+ * that module re-imports (always visible so it's legible from any view), or a
+ * hover-revealed refresh button when idle. Hidden until a backup is open — there's
+ * nothing to re-import into otherwise. State comes from ReimportProvider (above
+ * the routes), so switching views never leaves the spinner stale.
+ */
+function ReimportAction({ module, label }: { module: string; label: string }) {
+  const { isRunning, reimport } = useReimport();
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
+  if (active !== true) return null;
+  const running = isRunning(module);
+  return (
+    <SidebarMenuAction
+      showOnHover={!running}
+      disabled={running}
+      onClick={() => reimport(module)}
+      title={running ? `Re-importing ${label}…` : `Re-import ${label}`}
+      aria-label={running ? `Re-importing ${label}` : `Re-import ${label}`}
+    >
+      {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+    </SidebarMenuAction>
   );
 }
 
@@ -198,10 +254,13 @@ function SettingsMenu() {
     queryFn: () => client.listImportModules(),
   });
   // Effective selection: the user's saved choice, or every default.
-  const selected = importModules ?? catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
+  const selected =
+    importModules ?? catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
   const toggleModule = (id: string, on: boolean) => {
     const base = selected;
-    setImportModules(on ? [...new Set([...base, id])] : base.filter((x) => x !== id));
+    setImportModules(
+      on ? [...new Set([...base, id])] : base.filter((x) => x !== id),
+    );
   };
 
   return (
@@ -220,24 +279,35 @@ function SettingsMenu() {
         </DialogHeader>
         <div className="flex flex-col gap-6">
           <SettingsGroup title="Display">
-            <SettingsRow label="Show contact names" description="Display saved names instead of phone numbers.">
+            <SettingsRow
+              label="Show contact names"
+              description="Display saved names instead of phone numbers."
+            >
               <Switch
                 aria-label="Show contact names"
                 checked={showContactNames}
                 onCheckedChange={setShowContactNames}
               />
             </SettingsRow>
-            <SettingsRow label="Show contact photos" description="Show contact avatars where available.">
+            <SettingsRow
+              label="Show contact photos"
+              description="Show contact avatars where available."
+            >
               <Switch
                 aria-label="Show contact photos"
                 checked={showAvatars}
                 onCheckedChange={setShowAvatars}
               />
             </SettingsRow>
-            <SettingsRow label="Time format" description="How clock times are shown.">
+            <SettingsRow
+              label="Time format"
+              description="How clock times are shown."
+            >
               <select
                 value={clockFormat}
-                onChange={(e) => setClockFormatPref(e.target.value as ClockFormat)}
+                onChange={(e) =>
+                  setClockFormatPref(e.target.value as ClockFormat)
+                }
                 aria-label="Time format"
                 className="rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -254,7 +324,11 @@ function SettingsMenu() {
               description="Choose which data types to parse. Applies to the next import or re-import."
             >
               {catalog.map((m) => (
-                <SettingsRow key={m.id} label={m.label} description={m.category}>
+                <SettingsRow
+                  key={m.id}
+                  label={m.label}
+                  description={m.category}
+                >
                   <Switch
                     aria-label={m.label}
                     checked={selected.includes(m.id)}
@@ -290,14 +364,26 @@ function SettingsMenu() {
             title="Developer"
             description="Backend logs print to the browser dev-tools console."
           >
-            <SettingsRow label="Log level" description="Verbosity of import & backend logs.">
+            <SettingsRow
+              label="Log level"
+              description="Verbosity of import & backend logs."
+            >
               <select
                 value={logLevel}
                 onChange={(e) => setLogLevel(e.target.value as LogLevel)}
                 aria-label="Log level"
                 className="rounded-md border bg-transparent px-2 py-1 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                {(["off", "error", "warn", "info", "debug", "trace"] as LogLevel[]).map((l) => (
+                {(
+                  [
+                    "off",
+                    "error",
+                    "warn",
+                    "info",
+                    "debug",
+                    "trace",
+                  ] as LogLevel[]
+                ).map((l) => (
                   <option key={l} value={l}>
                     {l}
                   </option>
@@ -331,7 +417,9 @@ function SettingsGroup({
           {title}
         </h3>
         {description && (
-          <p className="mt-1 text-xs leading-snug text-muted-foreground">{description}</p>
+          <p className="mt-1 text-xs leading-snug text-muted-foreground">
+            {description}
+          </p>
         )}
       </div>
       <div className="divide-y divide-border overflow-hidden rounded-xl border bg-card">
@@ -356,7 +444,9 @@ function SettingsRow({
       <div className="min-w-0">
         <div className="text-sm">{label}</div>
         {description && (
-          <div className="truncate text-xs text-muted-foreground">{description}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {description}
+          </div>
         )}
       </div>
       <div className="shrink-0">{children}</div>

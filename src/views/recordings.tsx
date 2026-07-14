@@ -4,12 +4,25 @@ import { useNavigate } from "@tanstack/react-router";
 import { Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Item, ItemContent, ItemDescription, ItemTitle } from "@/components/ui/item";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
-import { ReimportButton } from "@/components/reimport-button";
+import {
+  SortControl,
+  sortItems,
+  type SortState,
+} from "@/components/sort-control";
+import {
+  EmptyView,
+  ErrorState,
+  ListDetail,
+  ViewHeader,
+} from "@/components/view";
 import { formatDateTime, formatDuration, formatListTime } from "@/lib/format";
 import { client, type Recording } from "@/lib/ipc";
 
@@ -21,7 +34,11 @@ export function RecordingsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: recordings, isPending, error } = useQuery({
+  const {
+    data: recordings,
+    isPending,
+    error,
+  } = useQuery({
     queryKey: ["recordings"],
     queryFn: () => client.listRecordings(),
     enabled: active === true,
@@ -47,22 +64,26 @@ export function RecordingsView() {
 
   if (active === false) {
     return (
-      <EmptyView icon={Mic} title="No backup open" description="Import a backup to see recordings.">
+      <EmptyView
+        icon={Mic}
+        title="No backup open"
+        description="Import a backup to see recordings."
+      >
         <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
       </EmptyView>
     );
   }
 
   const selected =
-    sortedRecordings?.find((r) => r.id === selectedId) ?? sortedRecordings?.[0] ?? null;
+    sortedRecordings?.find((r) => r.id === selectedId) ??
+    sortedRecordings?.[0] ??
+    null;
 
   return (
     <ListDetail
       master={
         <>
-          <ViewHeader title="Recordings" count={recordings?.length}>
-            <ReimportButton module="recordings" />
-          </ViewHeader>
+          <ViewHeader title="Recordings" count={recordings?.length} />
           {(recordings?.length ?? 0) > 0 && (
             <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
               <SortControl
@@ -143,16 +164,24 @@ function RecordingRow({
 }) {
   const duration = formatDuration(Math.round(recording.durationS ?? 0));
   return (
-    <Item asChild data-active={active} className="rounded-none data-[active=true]:bg-accent">
+    <Item
+      asChild
+      data-active={active}
+      className="rounded-none data-[active=true]:bg-accent"
+    >
       <button onClick={onClick} className="w-full text-left">
         <ItemContent className="gap-0.5">
           <div className="flex items-baseline justify-between gap-2">
-            <ItemTitle className="truncate">{recordingTitle(recording)}</ItemTitle>
+            <ItemTitle className="truncate">
+              {recordingTitle(recording)}
+            </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatListTime(recording.recordedAt)}
             </span>
           </div>
-          <ItemDescription className="truncate">{duration || "—"}</ItemDescription>
+          <ItemDescription className="truncate">
+            {duration || "—"}
+          </ItemDescription>
         </ItemContent>
       </button>
     </Item>
@@ -164,7 +193,9 @@ function RecordingDetail({ recording }: { recording: Recording }) {
   return (
     <div className="flex h-full flex-col">
       <ViewHeader title={recordingTitle(recording)}>
-        {duration && <span className="text-xs text-muted-foreground">{duration}</span>}
+        {duration && (
+          <span className="text-xs text-muted-foreground">{duration}</span>
+        )}
       </ViewHeader>
       <div className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
         <div className="flex flex-col items-center gap-2 text-center">
@@ -172,7 +203,9 @@ function RecordingDetail({ recording }: { recording: Recording }) {
             <Mic className="h-7 w-7 text-muted-foreground" />
           </div>
           {recording.recordedAt && (
-            <p className="text-sm text-muted-foreground">{formatDateTime(recording.recordedAt)}</p>
+            <p className="text-sm text-muted-foreground">
+              {formatDateTime(recording.recordedAt)}
+            </p>
           )}
         </div>
         {/* `key` forces the element to reload its source when switching recordings. */}
@@ -184,7 +217,9 @@ function RecordingDetail({ recording }: { recording: Recording }) {
           className="w-full max-w-md"
         />
         {recording.fileName && (
-          <p className="max-w-md truncate text-xs text-muted-foreground">{recording.fileName}</p>
+          <p className="max-w-md truncate text-xs text-muted-foreground">
+            {recording.fileName}
+          </p>
         )}
       </div>
     </div>
