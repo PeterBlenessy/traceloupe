@@ -134,9 +134,16 @@ function Conversations({
   onSelect: (id: number) => void;
   service: string | null;
 }) {
+  // Gate on an open backup (React Query dedups this with the parent's copy), so
+  // list_threads isn't fired while `hasActiveBackup` is still resolving.
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   const { data: threads, isPending, error } = useQuery({
     queryKey: ["threads"],
     queryFn: () => client.listThreads(),
+    enabled: active === true,
   });
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();

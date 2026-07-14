@@ -70,8 +70,9 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
     })?;
 
     let mut contacts: Vec<ParsedContact> = Vec::new();
-    for row in rows {
-        let row = row?;
+    // Skip a single unreadable row (e.g. non-UTF-8 text) rather than aborting the
+    // whole contacts import.
+    for row in rows.flatten() {
         // Same person as the last row? (query is grouped by ROWID)
         let contact = match contacts.last_mut() {
             Some(c) if c.id == row.id => c,

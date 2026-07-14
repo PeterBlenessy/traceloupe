@@ -39,23 +39,6 @@ export function PhotosView() {
   const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
   const qc = useQueryClient();
 
-  // Resolve a gallery item by absolute index from the same windowed cache the
-  // grid fills, so the lightbox can page prev/next across the whole gallery.
-  const mediaAt = useCallback(
-    (index: number): MediaItem | undefined => {
-      if (index < 0 || (count != null && index >= count)) return undefined;
-      const page = Math.floor(index / PAGE);
-      const win = qc.getQueryData<MediaItem[]>([
-        "mediaWindow",
-        sourceArg,
-        sort.by,
-        sort.desc,
-        page,
-      ]);
-      return win?.[index % PAGE];
-    },
-    [qc, sourceArg, sort, count],
-  );
   const ensurePage = useCallback(
     (page: number) => {
       void qc.prefetchQuery({
@@ -130,7 +113,8 @@ export function PhotosView() {
       <Lightbox
         index={openIndex}
         count={count ?? 0}
-        mediaAt={mediaAt}
+        source={sourceArg}
+        sort={sort}
         ensurePage={ensurePage}
         onNavigate={setOpenIndex}
         onClose={() => setOpenIndex(null)}
@@ -309,20 +293,31 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
 function Lightbox({
   index,
   count,
-  mediaAt,
+  source,
+  sort,
   ensurePage,
   onNavigate,
   onClose,
 }: {
   index: number | null;
   count: number;
-  mediaAt: (index: number) => MediaItem | undefined;
+  source: string | null;
+  sort: SortState;
   ensurePage: (page: number) => void;
   onNavigate: (index: number) => void;
   onClose: () => void;
 }) {
   const open = index != null;
-  const item = index != null ? mediaAt(index) : undefined;
+  // Subscribe to the current item's window (same key the grid fills) so the view
+  // re-renders when a not-yet-loaded window resolves — a non-reactive cache read
+  // would leave the spinner stuck until the next interaction.
+  const page = index != null ? Math.floor(index / PAGE) : 0;
+  const { data: win } = useQuery({
+    queryKey: ["mediaWindow", source, sort.by, sort.desc, page],
+    queryFn: () => client.getMediaWindow(source, page * PAGE, PAGE, sort.by, sort.desc),
+    enabled: index != null,
+  });
+  const item = index != null ? win?.[index % PAGE] : undefined;
   const hasPrev = index != null && index > 0;
   const hasNext = index != null && index < count - 1;
   const go = (delta: number) => {

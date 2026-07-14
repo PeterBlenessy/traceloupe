@@ -244,13 +244,13 @@ impl BackupDecryptor {
     /// Manifest.db (carrying the wrapped per-file key and real size); `file_id`
     /// locates the ciphertext at `<backup>/<id[:2]>/<id>`.
     pub fn decrypt_file(&self, file_blob: &[u8], file_id: &str) -> Result<Vec<u8>> {
+        // `file_id` is from the untrusted Manifest; reject anything that isn't a
+        // content-addressed hex id so it can't `join` its way out of backup_dir.
+        if !is_valid_file_id(file_id) {
+            return Err(err("invalid file id"));
+        }
         let (enc_key, size) = file_key_field(file_blob)?;
-        // `.get(..2)` (not `[..2]`) so a short or non-ASCII file_id can't panic on
-        // a byte/char boundary; real ids are 40-char hex.
-        let ct_path = self
-            .backup_dir
-            .join(file_id.get(..2).unwrap_or(file_id))
-            .join(file_id);
+        let ct_path = self.backup_dir.join(&file_id[..2]).join(file_id);
         let ct = std::fs::read(&ct_path).map_err(|e| Error::io(&ct_path, e))?;
         self.decrypt_bytes(&enc_key, &ct, size.map(|s| s as usize))
     }
@@ -266,21 +266,17 @@ impl BackupDecryptor {
         ciphertext: &[u8],
         size: Option<usize>,
     ) -> Result<Vec<u8>> {
-        let key = unwrap_prefixed(&self.class_keys, enc_key_field)?;
+        // Zeroizing so the file key doesn't linger on the stack after decryption.
+        let key = Zeroizing::new(unwrap_prefixed(&self.class_keys, enc_key_field)?);
         let mut pt = aes_cbc_decrypt(&key, ciphertext)?;
         if let Some(size) = size {
-            // A declared size larger than the decrypted data means the wrong key
-            // or a corrupt/misparsed record — fail rather than serve padded
-            // garbage. The numbers are diagnostic: `size` far larger than the
-            // ciphertext points at a Size-metadata parse bug, not decryption.
-            if size > pt.len() {
-                return Err(err(format!(
-                    "declared plaintext size {size} exceeds decrypted length {} (ciphertext {} bytes)",
-                    pt.len(),
-                    ciphertext.len(),
-                )));
-            }
-            pt.truncate(size);
+            // Trim the CBC block padding back to the real plaintext length. A wrong
+            // key can't reach here as an over-long size: it yields garbage of the
+            // exact ciphertext length, so `size <= pt.len()` always holds for a
+            // valid record. A `size` beyond the buffer therefore only means bad
+            // `Size` metadata — clamp (serve untrimmed, ≤15 bytes of harmless
+            // trailing padding for a DB/media file) rather than failing the read.
+            pt.truncate(size.min(pt.len()));
         }
         Ok(pt)
     }
@@ -289,6 +285,14 @@ impl BackupDecryptor {
 /// Extract a Manifest.db `file` blob's class-prefixed wrapped key and plaintext
 /// size. The wrapped key can be stored per-file (it's useless without the class
 /// keys) so a photo can be decrypted on demand later via [`BackupDecryptor::decrypt_bytes`].
+/// Whether `id` is a content-addressed backup file id safe to use as a path
+/// component. Backup file ids are 40-char SHA-1 hex; requiring hex rejects the
+/// `..`, `/`, and absolute-path values a malicious Manifest could carry (which
+/// would otherwise escape `backup_dir` via `Path::join`).
+pub fn is_valid_file_id(id: &str) -> bool {
+    (2..=128).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 pub fn file_key_field(blob: &[u8]) -> Result<(Vec<u8>, Option<u64>)> {
     let meta = FileMeta::parse(blob)?;
     Ok((meta.enc_key, meta.size))
@@ -362,9 +366,14 @@ impl FileMeta {
             .ok_or_else(|| err("EncryptionKey object has no NS.data"))?
             .to_vec();
 
+        // `Size` is usually an inline integer, but resolve a UID reference too
+        // (NSKeyedArchiver can box it). An unreadable Size → None → the file is
+        // served untrimmed rather than mis-truncated.
         Ok(FileMeta {
             enc_key,
-            size: root.get("Size").and_then(plist_int),
+            size: root
+                .get("Size")
+                .and_then(|v| resolve_archived_int(v, objects)),
         })
     }
 }
@@ -379,12 +388,14 @@ fn unwrap_prefixed(class_keys: &HashMap<u32, [u8; 32]>, field: &[u8]) -> Result<
     let class_key = class_keys
         .get(&clas)
         .ok_or_else(|| err(format!("no key for protection class {clas}")))?;
-    let unwrapped = KekAes256::from(*class_key)
-        .unwrap_vec(&field[4..])
-        .map_err(|_| err("key unwrap failed (wrong password or corrupt keybag)"))?;
-    unwrapped
-        .try_into()
-        .map_err(|_| err("unexpected unwrapped-key length"))
+    // The unwrapped bytes are a plaintext class/file key — zeroize the heap buffer
+    // once it's copied into the fixed array.
+    let unwrapped = Zeroizing::new(
+        KekAes256::from(*class_key)
+            .unwrap_vec(&field[4..])
+            .map_err(|_| err("key unwrap failed (wrong password or corrupt keybag)"))?,
+    );
+    <[u8; 32]>::try_from(unwrapped.as_slice()).map_err(|_| err("unexpected unwrapped-key length"))
 }
 
 /// AES-256-CBC decrypt with a zero IV. `ct` must be a positive multiple of 16.
@@ -418,10 +429,27 @@ fn be_u32(val: &[u8]) -> Result<u32> {
         .ok_or_else(|| err("keybag integer field too short"))
 }
 
-/// A plist integer that may be encoded signed or unsigned.
+/// A plist integer that may be encoded signed or unsigned. Rejects negatives: a
+/// file `Size` is never negative, and a negative read as `u64` would become a
+/// ~1.8e19 value that then trips the "size exceeds decrypted length" guard.
 fn plist_int(v: &plist::Value) -> Option<u64> {
-    v.as_unsigned_integer()
-        .or_else(|| v.as_signed_integer().map(|i| i as u64))
+    if let Some(u) = v.as_unsigned_integer() {
+        return Some(u);
+    }
+    v.as_signed_integer().filter(|i| *i >= 0).map(|i| i as u64)
+}
+
+/// Resolve an archived integer field that may be stored inline, or (in an
+/// NSKeyedArchiver graph) as a UID reference to a boxed number in `$objects`.
+/// Returns None when it can't be confidently read — the caller then leaves the
+/// plaintext untrimmed (harmless trailing block padding) rather than truncating
+/// to a wrong length.
+fn resolve_archived_int(v: &plist::Value, objects: &[plist::Value]) -> Option<u64> {
+    if let Some(n) = plist_int(v) {
+        return Some(n);
+    }
+    let idx = v.as_uid()?.get() as usize;
+    objects.get(idx).and_then(plist_int)
 }
 
 #[cfg(test)]

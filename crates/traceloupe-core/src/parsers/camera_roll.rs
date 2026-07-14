@@ -95,11 +95,13 @@ fn enumerate(
 ) -> Result<Vec<CameraRollAsset>> {
     let conn = Connection::open_with_flags(manifest_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
-    // A backed-up file lives at `<backup>/<first two hex>/<fileID>`.
+    // A backed-up file lives at `<backup>/<first two hex>/<fileID>`. Reject
+    // non-hex ids from the untrusted Manifest so they can't `join` out of the dir.
     let file_path = |file_id: &str| -> PathBuf {
-        backup_dir
-            .join(&file_id[..2.min(file_id.len())])
-            .join(file_id)
+        if !crypto::is_valid_file_id(file_id) {
+            return backup_dir.join("__invalid_file_id__");
+        }
+        backup_dir.join(&file_id[..2]).join(file_id)
     };
 
     // Thumbnails keyed by "<album>/<original filename>" (e.g. "258APPLE/IMG_8998.HEIC").
@@ -174,11 +176,13 @@ fn enumerate(
 
         // Encrypted backups: keep the wrapped key + real size so the original
         // decrypts (and trims) on demand. Plaintext backups serve it directly.
+        // One asset with a missing/malformed `file` blob is skipped, not fatal —
+        // the rest of the roll still loads.
         let (decrypt_key, plain_size) = match decryptor {
-            Some(_) => {
-                let (enc_key, size) = crypto::file_key_field(&blob)?;
-                (Some(enc_key), size)
-            }
+            Some(_) => match crypto::file_key_field(&blob) {
+                Ok((enc_key, size)) => (Some(enc_key), size),
+                Err(_) => continue,
+            },
             None => (None, None),
         };
 

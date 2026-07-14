@@ -18,7 +18,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::{Error, Result};
 
@@ -317,29 +318,94 @@ pub fn run_import(
     let mut child = cmd.spawn().map_err(|e| {
         Error::EngineNotFound(format!("failed to spawn {}: {e}", cfg.program.display()))
     })?;
-
-    // Stream stdout for progress. iLEAPP prints progress to stdout.
     let stdout = child.stdout.take().expect("piped stdout");
-    let reader = BufReader::new(stdout);
+    let stderr = child.stderr.take().expect("piped stderr");
+
+    // Drain stderr on its own thread. iLEAPP is a verbose Python process; if we
+    // left stderr unread it could fill the OS pipe buffer, block the child, and
+    // (since the child then stops writing stdout) deadlock the stdout read loop
+    // below. Its tail also carries the real failure cause — Python tracebacks go
+    // to stderr, not stdout.
+    let stderr_tail = Arc::new(Mutex::new(Vec::<String>::new()));
+    let stderr_thread = {
+        let sink = stderr_tail.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr)
+                .lines()
+                .map_while(std::result::Result::ok)
+            {
+                push_tail(&mut sink.lock().unwrap(), line);
+            }
+        })
+    };
+
+    // Watchdog: kill the child promptly on cancel even when it's stalled and
+    // emitting no stdout (the read loop would otherwise block until the next line
+    // — possibly minutes, or forever). `done` stops the watchdog once the run ends.
+    let child = Arc::new(Mutex::new(child));
+    let done = Arc::new(AtomicBool::new(false));
+    let watchdog = {
+        let child = child.clone();
+        let cancel = cancel.clone();
+        let done = done.clone();
+        std::thread::spawn(move || {
+            while !done.load(Ordering::SeqCst) {
+                if cancel.is_cancelled() {
+                    if let Ok(mut c) = child.lock() {
+                        let _ = c.kill();
+                    }
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(150));
+            }
+        })
+    };
+
+    // Stream stdout for progress. iLEAPP prints progress there.
     let mut tail: Vec<String> = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(|e| Error::io(out_dir, e))?;
-        if cancel.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(Error::Cancelled);
+    let mut read_err: Option<std::io::Error> = None;
+    for line in BufReader::new(stdout).lines() {
+        match line {
+            Ok(line) => {
+                if let Some(p) = parse_progress(&line) {
+                    on_progress(p);
+                }
+                push_tail(&mut tail, line);
+            }
+            Err(e) => {
+                read_err = Some(e);
+                break;
+            }
         }
-        if let Some(p) = parse_progress(&line) {
-            on_progress(p);
-        }
-        push_tail(&mut tail, line);
     }
 
-    let status = child.wait().map_err(|e| Error::io(out_dir, e))?;
+    // stdout is closed (child exited, was killed by the watchdog, or a read
+    // error). Stop the watchdog and reap the child.
+    done.store(true, Ordering::SeqCst);
+    let _ = watchdog.join();
+    let _ = stderr_thread.join();
+    let status = {
+        let mut c = child.lock().unwrap();
+        c.wait().map_err(|e| Error::io(out_dir, e))?
+    };
+
+    if cancel.is_cancelled() {
+        return Err(Error::Cancelled);
+    }
+    if let Some(e) = read_err {
+        return Err(Error::io(out_dir, e));
+    }
     if !status.success() {
+        // Prefer stderr (the Python traceback) for the detail; fall back to stdout.
+        let err = stderr_tail.lock().unwrap();
+        let detail = if err.is_empty() {
+            tail.join("\n")
+        } else {
+            err.join("\n")
+        };
         return Err(Error::EngineFailed {
             code: status.code().unwrap_or(-1),
-            detail: tail.join("\n"),
+            detail,
         });
     }
 

@@ -143,10 +143,13 @@ pub fn parse_notes(
         // The note text repeats the title as its first line; drop it so the body
         // isn't a duplicate of the heading the UI already shows.
         let body_text = strip_leading_title(&body_text, title.as_deref());
-        let body_html = if body_text.is_empty() {
+        // Stored as PLAIN TEXT (newlines preserved): the Notes view renders the
+        // body in a `whitespace-pre-wrap` block as text, matching the iLEAPP path.
+        // (Emitting HTML here would show literal `<br>`/`&amp;` in the UI.)
+        let body = if body_text.is_empty() {
             None
         } else {
-            Some(text_to_html(&body_text))
+            Some(clean_note_text(&body_text))
         };
         // Prefer the stored snippet; otherwise derive one from the body.
         let snippet = snippet
@@ -161,7 +164,7 @@ pub fn parse_notes(
         tx.execute(
             "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![folder, title, snippet, body_html, created_at, modified_at],
+            rusqlite::params![folder, title, snippet, body, created_at, modified_at],
         )?;
         report.notes += 1;
     }
@@ -183,10 +186,16 @@ fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
 }
 
 /// gzip-inflate a `ZDATA` blob and extract the note's plain text. Returns None
-/// when the blob isn't gzip or the protobuf has no text field.
+/// when the blob isn't gzip or the protobuf has no text field. Inflation is
+/// capped so a crafted highly-compressible blob can't balloon to gigabytes and
+/// OOM the process (real note bodies are kilobytes).
 fn decode_note_body(zdata: &[u8]) -> Option<String> {
+    const MAX_NOTE_BYTES: u64 = 64 * 1024 * 1024;
     let mut buf = Vec::new();
-    GzDecoder::new(zdata).read_to_end(&mut buf).ok()?;
+    GzDecoder::new(zdata)
+        .take(MAX_NOTE_BYTES)
+        .read_to_end(&mut buf)
+        .ok()?;
     note_text_from_protobuf(&buf)
 }
 
@@ -279,25 +288,15 @@ fn derive_snippet(body: &str) -> Option<String> {
     Some(snippet)
 }
 
-/// Turn the note's plain text into minimal safe HTML: escape metacharacters and
-/// map newlines to `<br>` so paragraphs survive. (Rich formatting — bold, lists,
-/// attachments — lives in the protobuf's attribute runs, decoded in a later pass.)
-fn text_to_html(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 16);
-    for ch in text.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '\n' => out.push_str("<br>"),
-            // Object-replacement char marks attachments/tables in the text stream;
-            // drop it so it doesn't render as a stray glyph.
-            '\u{fffc}' => {}
-            '\r' => {}
-            c => out.push(c),
-        }
-    }
-    out
+/// Clean the note's extracted text for display: drop the object-replacement
+/// characters that mark attachments/tables in the stream, and carriage returns.
+/// Newlines are preserved — the UI renders the body as plain text in a
+/// `whitespace-pre-wrap` block. (Rich formatting — bold, lists, attachments —
+/// lives in the protobuf's attribute runs, decoded in a later pass.)
+fn clean_note_text(text: &str) -> String {
+    text.chars()
+        .filter(|&c| c != '\u{fffc}' && c != '\r')
+        .collect()
 }
 
 #[cfg(test)]
@@ -355,10 +354,11 @@ mod tests {
     }
 
     #[test]
-    fn strips_title_and_builds_html() {
+    fn strips_title_and_cleans_text() {
         let body = strip_leading_title("Shopping\nMilk\nEggs", Some("Shopping"));
         assert_eq!(body, "Milk\nEggs");
-        assert_eq!(text_to_html("a < b\nc & d"), "a &lt; b<br>c &amp; d");
+        // Plain text preserved (newlines kept); attachment markers / CRs dropped.
+        assert_eq!(clean_note_text("a < b\nc\u{fffc}\r & d"), "a < b\nc & d");
     }
 
     fn make_note_store(dir: &Path) -> std::path::PathBuf {
@@ -418,8 +418,8 @@ mod tests {
             .unwrap();
         assert_eq!(folder.as_deref(), Some("Groceries"));
         assert_eq!(title.as_deref(), Some("Shopping"));
-        // Title stripped from the body; derived snippet from the first body line.
-        assert_eq!(body.as_deref(), Some("Milk<br>Eggs"));
+        // Title stripped from the body; plain text with newlines preserved.
+        assert_eq!(body.as_deref(), Some("Milk\nEggs"));
         assert_eq!(snippet.as_deref(), Some("Milk"));
         assert_eq!(created, 1_700_000_000);
     }

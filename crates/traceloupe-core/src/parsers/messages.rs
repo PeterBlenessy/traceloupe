@@ -40,7 +40,8 @@ fn mac_to_unix(date: i64) -> Option<i64> {
         return None;
     }
     // Nanoseconds if the value is far larger than any plausible seconds count.
-    let secs = if date.abs() > 1_000_000_000_000 {
+    // `unsigned_abs` avoids the `i64::MIN` overflow panic `abs()` has in debug.
+    let secs = if date.unsigned_abs() > 1_000_000_000_000 {
         date / 1_000_000_000
     } else {
         date

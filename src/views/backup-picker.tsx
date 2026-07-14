@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { Check, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
 import {
   Card,
@@ -35,11 +36,17 @@ export function BackupPicker() {
   // away, encrypted asks for a password first — both via the dialog.
   async function handleOpen(b: BackupInfo) {
     if (imported.has(b.id)) {
-      await client.openBackup(b.id);
-      // Drop any cached artifact data from a previously-open backup; with
-      // staleTime: Infinity it would otherwise persist across backups.
-      await qc.invalidateQueries();
-      navigate({ to: "/messages" });
+      try {
+        await client.openBackup(b.id);
+        // Drop any cached artifact data from a previously-open backup; with
+        // staleTime: Infinity it would otherwise persist across backups.
+        await qc.invalidateQueries();
+        navigate({ to: "/messages" });
+      } catch (e) {
+        toast.error("Couldn't open backup", {
+          description: e instanceof Error ? e.message : String(e),
+        });
+      }
     } else {
       imp.open(b); // first-time read: the provider owns the import + its dialog
     }
@@ -55,17 +62,29 @@ export function BackupPicker() {
   // Delete an imported backup's caches + stored password (not the original), then
   // refresh which backups show as imported.
   async function handleForget(b: BackupInfo) {
-    await client.forgetBackup(b.id);
-    await qc.invalidateQueries({ queryKey: ["importedBackupIds"] });
-    await qc.invalidateQueries({ queryKey: ["hasActiveBackup"] });
+    try {
+      await client.forgetBackup(b.id);
+      await qc.invalidateQueries({ queryKey: ["importedBackupIds"] });
+      await qc.invalidateQueries({ queryKey: ["hasActiveBackup"] });
+    } catch (e) {
+      toast.error("Couldn't forget backup", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   async function chooseFolder() {
-    const picked = await client.pickBackupFolder();
-    if (picked) {
-      // Re-run discovery on the picked folder (setRoot changes the query key).
-      if (picked === root) void refetch();
-      else setRoot(picked);
+    try {
+      const picked = await client.pickBackupFolder();
+      if (picked) {
+        // Re-run discovery on the picked folder (setRoot changes the query key).
+        if (picked === root) void refetch();
+        else setRoot(picked);
+      }
+    } catch (e) {
+      toast.error("Couldn't open that folder", {
+        description: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 

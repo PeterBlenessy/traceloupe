@@ -290,12 +290,17 @@ pub fn count_message_ranges(
     // No app filter → no join to threads (the common case: one COUNT per bucket).
     let mut stmt = match service {
         None => conn.prepare(
+            // `sent_at IS NOT NULL` so an all-open range (lo/hi both NULL) counts
+            // only what the window (range_window) returns — undated messages are
+            // excluded from both, keeping count and rows aligned.
             "SELECT COUNT(*) FROM messages
-             WHERE (?1 IS NULL OR sent_at >= ?1) AND (?2 IS NULL OR sent_at < ?2)",
+             WHERE sent_at IS NOT NULL
+               AND (?1 IS NULL OR sent_at >= ?1) AND (?2 IS NULL OR sent_at < ?2)",
         )?,
         Some(_) => conn.prepare(
             "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
-             WHERE (?1 IS NULL OR m.sent_at >= ?1)
+             WHERE m.sent_at IS NOT NULL
+               AND (?1 IS NULL OR m.sent_at >= ?1)
                AND (?2 IS NULL OR m.sent_at < ?2)
                AND t.service = ?3",
         )?,
@@ -658,11 +663,25 @@ impl Sort {
     }
 }
 
+/// Escape LIKE metacharacters (`%`, `_`, `\`) in a user search term so they match
+/// literally instead of acting as wildcards. Pair with `ESCAPE '\'` in the query.
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Calls whose address matches `search` (substring), or all when NULL.
 pub fn count_calls(cache: &CacheDb, search: Option<&str>) -> Result<i64> {
+    let search = search.map(escape_like);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM calls
-         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%')",
+         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')",
         [search],
         |r| r.get(0),
     )?;
@@ -677,13 +696,14 @@ pub fn get_calls_window(
     sort: Sort,
 ) -> Result<Vec<Call>> {
     let conn = cache.conn();
+    let search = search.map(escape_like);
     // `sort.column()` is an allowlisted SQL fragment (never raw user input); see
     // the `Sort` type. `id` is the stable tiebreaker.
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
         "SELECT id, address, direction, answered, duration_s, occurred_at, service
          FROM calls
-         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%')
+         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
@@ -696,9 +716,11 @@ pub fn get_calls_window(
 
 /// Safari visits whose URL or title matches `search`, or all when NULL.
 pub fn count_safari(cache: &CacheDb, search: Option<&str>) -> Result<i64> {
+    let search = search.map(escape_like);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM safari_history
-         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' OR title LIKE '%' || ?1 || '%')",
+         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
+                          OR title LIKE '%' || ?1 || '%' ESCAPE '\\')",
         [search],
         |r| r.get(0),
     )?;
@@ -713,11 +735,13 @@ pub fn get_safari_window(
     sort: Sort,
 ) -> Result<Vec<HistoryVisit>> {
     let conn = cache.conn();
+    let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
         "SELECT id, url, title, visited_at, visit_count
          FROM safari_history
-         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' OR title LIKE '%' || ?1 || '%')
+         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
+                          OR title LIKE '%' || ?1 || '%' ESCAPE '\\')
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
