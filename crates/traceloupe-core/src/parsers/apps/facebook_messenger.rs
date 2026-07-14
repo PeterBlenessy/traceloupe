@@ -23,9 +23,22 @@ use crate::Result;
 pub const MODULE: super::AppChatModule = super::AppChatModule {
     id: "messenger",
     service: "Messenger",
+    // Messenger 1:1 threads use numeric thread_keys, so numeric-id ⇒ group is wrong.
+    numeric_id_groups: false,
     locate,
     parse,
 };
+
+/// Read a column as a String whether it's stored TEXT or INTEGER (Meta ids have
+/// inconsistent affinity across schema versions; a strict typed read would abort
+/// the whole DB on one mistyped row).
+fn col_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option<String>> {
+    Ok(match r.get_ref(i)? {
+        rusqlite::types::ValueRef::Integer(n) => Some(n.to_string()),
+        rusqlite::types::ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
+        _ => None,
+    })
+}
 
 /// Every `lightspeed-userDatabases/*.db` in the backup (Messenger's per-user
 /// message stores). The driver parses each; non-message DBs return empty.
@@ -59,25 +72,29 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     } else {
         "0"
     };
+    // The sender-name join is optional — a store without `contacts` is still valid.
+    let name_col = if table_exists(&src, "contacts")? {
+        "(SELECT name FROM contacts WHERE contacts.id = m.sender_id)"
+    } else {
+        "NULL"
+    };
     let sql = format!(
         "SELECT
              m.thread_key,
              m.timestamp_ms,
              m.text,
-             c.name,
+             {name_col} AS sender_name,
              m.sender_id,
              {from_me} AS is_from_me,
              COALESCE(m.has_attachment, 0)
          FROM thread_messages m
-         LEFT JOIN contacts c ON c.id = m.sender_id
          ORDER BY m.thread_key, m.timestamp_ms"
     );
     let mut stmt = src.prepare(&sql)?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
-        let chat_key: String = r
-            .get::<_, Option<String>>(0)?
+        let chat_key: String = col_string(r, 0)?
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".into());
         let timestamp = r
@@ -85,10 +102,8 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .filter(|ms| *ms > 0)
             .map(|ms| ms / 1000);
         let body: Option<String> = r.get(2)?;
-        let sender_name: Option<String> = r
-            .get::<_, Option<String>>(3)?
-            .filter(|s| !s.trim().is_empty());
-        let sender_id: Option<String> = r.get::<_, Option<i64>>(4)?.map(|v| v.to_string());
+        let sender_name: Option<String> = col_string(r, 3)?.filter(|s| !s.trim().is_empty());
+        let sender_id: Option<String> = col_string(r, 4)?;
         let is_from_me = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
         let has_attachment = r.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0;
 
@@ -143,7 +158,8 @@ mod tests {
 
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
-        super::super::insert_app_conversation(&cache, "Messenger", msgs, &mut report).unwrap();
+        super::super::insert_app_conversation(&cache, "Messenger", false, msgs, &mut report)
+            .unwrap();
         assert_eq!(report.threads, 1);
         assert_eq!(report.messages, 2);
         // Derived 1:1 title = the peer's name.
@@ -152,6 +168,42 @@ mod tests {
             .query_row("SELECT display_name FROM threads", [], |r| r.get(0))
             .unwrap();
         assert_eq!(name, "Jordan");
+    }
+
+    /// Regression: a 1:1 with a NUMERIC thread_key must stay 1:1 (peer name kept),
+    /// not be mislabeled "Group chat" by the TikTok-only numeric-id heuristic.
+    #[test]
+    fn numeric_thread_key_one_to_one_is_not_a_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("u.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _user_info (facebook_user_id INTEGER);
+             CREATE TABLE contacts (id INTEGER, name TEXT);
+             CREATE TABLE thread_messages (message_id INTEGER, thread_key TEXT, timestamp_ms INTEGER,
+                 sender_id INTEGER, text TEXT, has_attachment INTEGER);
+             INSERT INTO _user_info (facebook_user_id) VALUES (100);
+             INSERT INTO contacts (id, name) VALUES (200, 'Jordan');
+             -- numeric thread_key, one peer + the owner:
+             INSERT INTO thread_messages VALUES (1, '24500000001', 1700000000000, 200, 'hi', 0);
+             INSERT INTO thread_messages VALUES (2, '24500000001', 1700000100000, 100, 'yo', 0);",
+        )
+        .unwrap();
+        drop(conn);
+
+        let msgs = parse(&db, "").unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        super::super::insert_app_conversation(&cache, "Messenger", false, msgs, &mut report)
+            .unwrap();
+        let name: String = cache
+            .conn()
+            .query_row("SELECT display_name FROM threads", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            name, "Jordan",
+            "numeric-key 1:1 must keep the peer name, not become a group"
+        );
     }
 
     #[test]

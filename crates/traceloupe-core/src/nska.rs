@@ -13,7 +13,9 @@
 //! provenance: reference (own implementation) from the documented NSKeyedArchiver
 //! layout; not a port.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use plist::Value;
 
@@ -21,8 +23,11 @@ use crate::{Error, Result};
 
 /// The `$objects[0]` sentinel that stands in for `nil`.
 const NULL_SENTINEL: &str = "$null";
-/// Guard against pathological/cyclic archives.
-const MAX_DEPTH: usize = 96;
+/// Guard against pathologically deep archives (backstop; the memo/cycle set is the
+/// real defense against fan-out and cycles).
+const MAX_DEPTH: usize = 256;
+/// NSDate/Core-Data epoch (2001-01-01) as Unix seconds.
+const MAC_EPOCH_SECS: f64 = 978_307_200.0;
 
 /// Parse `bytes` as a plist and, if it's an `NSKeyedArchiver` archive, resolve its
 /// object graph into a plain [`Value`]. A plist that isn't keyed-archived is
@@ -51,97 +56,149 @@ pub fn resolve(bytes: &[u8]) -> Result<Value> {
         .and_then(Value::as_dictionary)
         .ok_or_else(|| Error::Parse("NSKeyedArchiver: missing $top".into()))?;
     // Resolve every root under $top into an output dictionary (usually just "root").
+    let mut r = Resolver::new(objects);
     let mut out = plist::Dictionary::new();
     for (k, v) in top {
-        out.insert(k.clone(), resolve_value(v, objects, 0));
+        out.insert(k.clone(), r.value(v, 0));
     }
     // A single "root" is the common case — unwrap it so callers navigate directly.
     if out.len() == 1 {
         if let Some(root) = out.remove("root") {
             return Ok(root);
         }
-        // (re-insert if the sole key wasn't "root")
+        // Sole key wasn't "root": `remove` was a no-op, so `out` is intact.
     }
     Ok(Value::Dictionary(out))
 }
 
-/// Resolve one value, following a UID into `$objects` if needed.
-fn resolve_value(v: &Value, objects: &[Value], depth: usize) -> Value {
-    if depth > MAX_DEPTH {
-        return Value::String(String::new());
-    }
-    match v {
-        Value::Uid(uid) => {
-            let idx = uid.get() as usize;
-            match objects.get(idx) {
-                Some(obj) => resolve_object(obj, objects, depth + 1),
-                None => Value::String(String::new()),
-            }
+/// Walks the `$objects` graph. Memoizes each object by index so a shared subtree
+/// is resolved once (not re-cloned exponentially), and tracks the in-progress set
+/// so a cyclic reference resolves to empty instead of recursing forever.
+struct Resolver<'a> {
+    objects: &'a [Value],
+    memo: HashMap<usize, Value>,
+    in_progress: HashSet<usize>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(objects: &'a [Value]) -> Self {
+        Self {
+            objects,
+            memo: HashMap::new(),
+            in_progress: HashSet::new(),
         }
-        // A non-UID value stands for itself.
-        other => other.clone(),
+    }
+
+    /// Resolve one value, following a UID into `$objects`.
+    fn value(&mut self, v: &Value, depth: usize) -> Value {
+        match v {
+            Value::Uid(uid) => match usize::try_from(uid.get()) {
+                Ok(idx) => self.object_at(idx, depth),
+                Err(_) => Value::String(String::new()), // UID out of addressable range
+            },
+            // A non-UID value stands for itself.
+            other => other.clone(),
+        }
+    }
+
+    /// Resolve `$objects[idx]`, using the memo and breaking cycles.
+    fn object_at(&mut self, idx: usize, depth: usize) -> Value {
+        if depth > MAX_DEPTH {
+            return Value::String(String::new());
+        }
+        if let Some(v) = self.memo.get(&idx) {
+            return v.clone();
+        }
+        if !self.in_progress.insert(idx) {
+            // Already resolving `idx` further up the stack → a cycle. Break it.
+            return Value::String(String::new());
+        }
+        // Clone the object out so we can borrow `self` mutably while resolving it.
+        let resolved = match self.objects.get(idx).cloned() {
+            Some(obj) => self.resolve_object(&obj, depth),
+            None => Value::String(String::new()), // dangling reference
+        };
+        self.in_progress.remove(&idx);
+        self.memo.insert(idx, resolved.clone());
+        resolved
+    }
+
+    /// Resolve an entry from `$objects` (a container, a custom object, or a scalar).
+    fn resolve_object(&mut self, obj: &Value, depth: usize) -> Value {
+        let next = depth + 1;
+        match obj {
+            Value::String(s) if s == NULL_SENTINEL => Value::String(String::new()),
+            Value::Dictionary(d) => {
+                // NSDictionary: parallel NS.keys / NS.objects UID arrays.
+                if let (Some(keys), Some(vals)) = (
+                    d.get("NS.keys").and_then(Value::as_array),
+                    d.get("NS.objects").and_then(Value::as_array),
+                ) {
+                    let mut map = plist::Dictionary::new();
+                    for (k, val) in keys.iter().zip(vals.iter()) {
+                        let key = match self.value(k, next) {
+                            Value::String(s) => s,
+                            Value::Integer(i) => i.to_string(),
+                            _ => continue,
+                        };
+                        map.insert(key, self.value(val, next));
+                    }
+                    return Value::Dictionary(map);
+                }
+                // NSArray / NSSet: NS.objects only.
+                if let Some(items) = d.get("NS.objects").and_then(Value::as_array) {
+                    let items: Vec<Value> = items.clone();
+                    return Value::Array(items.iter().map(|it| self.value(it, next)).collect());
+                }
+                // A plain NSString/NSMutableString stored as a dict.
+                if let Some(s) = d.get("NS.string").and_then(Value::as_string) {
+                    return Value::String(s.to_string());
+                }
+                // NSDate: `NS.time` is seconds since 2001-01-01 — convert to a
+                // Unix-based plist Date. Reject non-finite / out-of-range values so a
+                // crafted `NS.time` (inf, 1e300) can't panic `Duration::from_secs_f64`.
+                if let Some(t) = d.get("NS.time").and_then(|v| {
+                    v.as_real()
+                        .or_else(|| v.as_signed_integer().map(|i| i as f64))
+                }) {
+                    if let Some(date) = mac_time_to_date(t) {
+                        return Value::Date(date);
+                    }
+                }
+                // A custom object: resolve each property (skip archiver bookkeeping).
+                let entries: Vec<(String, Value)> =
+                    d.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                let mut map = plist::Dictionary::new();
+                for (k, val) in entries {
+                    if k == "$class" {
+                        continue;
+                    }
+                    map.insert(k, self.value(&val, next));
+                }
+                Value::Dictionary(map)
+            }
+            // Scalars (String/Integer/Real/Boolean/Date/Data) pass through.
+            other => other.clone(),
+        }
     }
 }
 
-/// Resolve an entry from `$objects` (a container, a custom object, or a scalar).
-fn resolve_object(obj: &Value, objects: &[Value], depth: usize) -> Value {
-    match obj {
-        Value::String(s) if s == NULL_SENTINEL => Value::String(String::new()),
-        Value::Dictionary(d) => {
-            // NSDictionary: parallel NS.keys / NS.objects UID arrays.
-            if let (Some(keys), Some(vals)) = (
-                d.get("NS.keys").and_then(Value::as_array),
-                d.get("NS.objects").and_then(Value::as_array),
-            ) {
-                let mut map = plist::Dictionary::new();
-                for (k, val) in keys.iter().zip(vals.iter()) {
-                    let key = match resolve_value(k, objects, depth) {
-                        Value::String(s) => s,
-                        Value::Integer(i) => i.to_string(),
-                        _ => continue,
-                    };
-                    map.insert(key, resolve_value(val, objects, depth));
-                }
-                return Value::Dictionary(map);
-            }
-            // NSArray / NSSet: NS.objects only.
-            if let Some(items) = d.get("NS.objects").and_then(Value::as_array) {
-                return Value::Array(
-                    items
-                        .iter()
-                        .map(|it| resolve_value(it, objects, depth))
-                        .collect(),
-                );
-            }
-            // A plain NSString/NSMutableString stored as a dict.
-            if let Some(s) = d.get("NS.string").and_then(Value::as_string) {
-                return Value::String(s.to_string());
-            }
-            // NSDate: `NS.time` is seconds since 2001-01-01 — convert to a Unix-based
-            // plist Date so callers get a real timestamp.
-            if let Some(t) = d.get("NS.time").and_then(|v| {
-                v.as_real()
-                    .or_else(|| v.as_signed_integer().map(|i| i as f64))
-            }) {
-                let unix = t + 978_307_200.0;
-                if unix >= 0.0 {
-                    let st = std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(unix);
-                    return Value::Date(st.into());
-                }
-            }
-            // A custom object: resolve each property (skip archiver bookkeeping).
-            let mut map = plist::Dictionary::new();
-            for (k, val) in d {
-                if k == "$class" {
-                    continue;
-                }
-                map.insert(k.clone(), resolve_value(val, objects, depth));
-            }
-            Value::Dictionary(map)
-        }
-        // Scalars (String/Integer/Real/Boolean/Date/Data) pass through.
-        other => other.clone(),
+/// Convert an `NS.time` (Core-Data seconds since 2001) to a plist `Date`, or
+/// `None` if the value is non-finite or outside the representable range. Handles
+/// pre-1970 instants (negative Unix seconds) too.
+fn mac_time_to_date(ns_time: f64) -> Option<plist::Date> {
+    let unix = ns_time + MAC_EPOCH_SECS;
+    if !unix.is_finite() || unix.abs() >= 8.0e18 {
+        return None; // beyond Duration's ~1.8e19-second range (or NaN/inf)
     }
+    let secs = unix.abs();
+    let dur = Duration::try_from_secs_f64(secs).ok()?;
+    let st: SystemTime = if unix >= 0.0 {
+        UNIX_EPOCH.checked_add(dur)?
+    } else {
+        UNIX_EPOCH.checked_sub(dur)?
+    };
+    Some(st.into())
 }
 
 #[cfg(test)]
@@ -187,6 +244,43 @@ mod tests {
         let d = resolved.as_dictionary().expect("root is a dict");
         assert_eq!(d.get("greeting").and_then(Value::as_string), Some("hi"));
         assert_eq!(d.get("n").and_then(Value::as_signed_integer), Some(7));
+    }
+
+    /// A cyclic / self-referential archive must resolve (to empty at the cycle),
+    /// not hang or blow up. `$objects[1]` is an array `[Uid(1), Uid(1)]` → the
+    /// former exponential-fan-out DoS.
+    #[test]
+    fn cyclic_and_shared_refs_terminate() {
+        use plist::{Uid, Value};
+        let mut arr = plist::Dictionary::new();
+        arr.insert(
+            "NS.objects".into(),
+            Value::Array(vec![Value::Uid(Uid::new(1)), Value::Uid(Uid::new(1))]),
+        );
+        let objects = Value::Array(vec![Value::String("$null".into()), Value::Dictionary(arr)]);
+        let mut top = plist::Dictionary::new();
+        top.insert("root".into(), Value::Uid(Uid::new(1)));
+        let mut archive = plist::Dictionary::new();
+        archive.insert("$archiver".into(), Value::String("NSKeyedArchiver".into()));
+        archive.insert("$top".into(), Value::Dictionary(top));
+        archive.insert("$objects".into(), objects);
+        let mut buf = Vec::new();
+        Value::Dictionary(archive)
+            .to_writer_binary(&mut buf)
+            .unwrap();
+        // Must return promptly without panicking or hanging.
+        let resolved = resolve(&buf).unwrap();
+        assert!(resolved.as_array().is_some());
+    }
+
+    /// A non-finite `NS.time` must not panic `Duration::from_secs_f64`.
+    #[test]
+    fn oversized_nsdate_does_not_panic() {
+        assert!(mac_time_to_date(f64::INFINITY).is_none());
+        assert!(mac_time_to_date(1e300).is_none());
+        assert!(mac_time_to_date(f64::NAN).is_none());
+        // A normal date still converts.
+        assert!(mac_time_to_date(721_692_800.0).is_some());
     }
 
     #[test]

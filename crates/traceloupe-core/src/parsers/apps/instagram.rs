@@ -29,6 +29,8 @@ use crate::{nska, Result};
 pub const MODULE: super::AppChatModule = super::AppChatModule {
     id: "instagram",
     service: "Instagram",
+    // Instagram 1:1 threads use numeric THREAD_IDs, so numeric-id ⇒ group is wrong.
+    numeric_id_groups: false,
     locate,
     parse,
 };
@@ -114,6 +116,15 @@ fn scalar_string(v: &Value) -> Option<String> {
     }
 }
 
+/// Same, for a SQLite column value (TEXT or INTEGER → String).
+fn scalar_string_ref(v: rusqlite::types::ValueRef) -> Option<String> {
+    match v {
+        rusqlite::types::ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
+        rusqlite::types::ValueRef::Integer(i) => Some(i.to_string()),
+        _ => None,
+    }
+}
+
 fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if !table_exists(&conn, "MESSAGES")? || !table_exists(&conn, "THREADS")? {
@@ -121,22 +132,31 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     }
     let users = build_userdict(&conn);
 
+    // LEFT JOIN so a message whose THREAD_ID has no THREADS row is still kept
+    // (viewer_id None → treated as received) rather than silently dropped.
     let mut stmt = conn.prepare(
         "SELECT m.THREAD_ID, m.ARCHIVE, t.VIEWER_ID
-         FROM MESSAGES m JOIN THREADS t ON t.THREAD_ID = m.THREAD_ID
+         FROM MESSAGES m LEFT JOIN THREADS t ON t.THREAD_ID = m.THREAD_ID
          WHERE m.ARCHIVE IS NOT NULL",
     )?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         let thread_id: String = r
-            .get::<_, Option<String>>(0)?
+            .get_ref(0)
+            .ok()
+            .and_then(scalar_string_ref)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".into());
         let archive: Vec<u8> = r.get(1)?;
-        let viewer_id: Option<String> = r.get::<_, Option<String>>(2)?;
+        // VIEWER_ID (an Instagram pk) may be TEXT or INTEGER — read either.
+        let viewer_id: Option<String> = r.get_ref(2).ok().and_then(scalar_string_ref);
 
-        let v = nska::resolve(&archive)?;
+        // One unparseable/unsupported archive must not abort the whole conversation
+        // import — skip the row (like build_userdict does), not the parse.
+        let Ok(v) = nska::resolve(&archive) else {
+            continue;
+        };
         let Some(root) = v.as_dictionary() else {
             continue;
         };

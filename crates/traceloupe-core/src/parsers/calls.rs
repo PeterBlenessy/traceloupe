@@ -90,20 +90,22 @@ pub fn parse_calls(
     if replace {
         tx.execute("DELETE FROM calls", [])?;
     }
+    let mut inserted: usize = 0;
     let mut stmt = src.prepare(&sql)?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        // ZADDRESS is usually a BLOB of ASCII bytes (sometimes TEXT); reading as
-        // bytes handles both, then we interpret as UTF-8 and trim padding.
-        let address = r
-            .get::<_, Option<Vec<u8>>>(0)?
-            .map(|b| {
-                String::from_utf8_lossy(&b)
+        // ZADDRESS is usually a BLOB of ASCII bytes but can be TEXT. rusqlite's
+        // Vec<u8> reader rejects TEXT, so read the raw value and accept both.
+        let address = match r.get_ref(0)? {
+            rusqlite::types::ValueRef::Blob(b) | rusqlite::types::ValueRef::Text(b) => Some(
+                String::from_utf8_lossy(b)
                     .trim_matches('\0')
                     .trim()
-                    .to_string()
-            })
-            .filter(|s| !s.is_empty());
+                    .to_string(),
+            ),
+            _ => None,
+        }
+        .filter(|s| !s.is_empty());
         let occurred_at = r
             .get::<_, Option<f64>>(1)?
             .filter(|d| *d > 0.0)
@@ -133,9 +135,11 @@ pub fn parse_calls(
                 service
             ],
         )?;
-        report.calls += 1;
+        inserted += 1;
     }
     tx.commit()?;
+    // Count only committed rows — a mid-loop error rolls back, adding nothing.
+    report.calls += inserted;
     Ok(())
 }
 

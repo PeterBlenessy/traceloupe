@@ -62,6 +62,7 @@ pub fn parse_safari(
     if replace {
         tx.execute("DELETE FROM safari_history", [])?;
     }
+    let mut inserted: usize = 0;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let url: String = r.get(0)?;
@@ -78,9 +79,11 @@ pub fn parse_safari(
              VALUES (?1, ?2, ?3, ?4)",
             rusqlite::params![url, title, visited_at, visit_count],
         )?;
-        report.safari_visits += 1;
+        inserted += 1;
     }
     tx.commit()?;
+    // Count only committed rows — a mid-loop error rolls back, adding nothing.
+    report.safari_visits += inserted;
     Ok(())
 }
 
