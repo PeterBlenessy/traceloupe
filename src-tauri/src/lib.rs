@@ -559,6 +559,7 @@ struct ReimportResult {
 /// recorded in its `source_dir` meta; the decrypt keys come from the session.
 #[tauri::command]
 async fn reimport_module(
+    app: AppHandle,
     active: State<'_, ActiveBackup>,
     session: State<'_, SessionKeys>,
     gate: State<'_, ReimportGate>,
@@ -567,8 +568,11 @@ async fn reimport_module(
     if !import::REIMPORTABLE_NATIVE.contains(&module_id.as_str()) {
         return Err(format!("'{module_id}' can't be re-imported on its own"));
     }
+    let label = reimport_label(&module_id);
     // Serialize re-imports: a second one waits here until the first finishes, so
     // they never contend on the cache writer or the shared manifest temp file.
+    logging::info(&app, format!("\u{25b6} Re-importing {label}\u{2026}"));
+    let started = Instant::now();
     let _gate = gate.0.lock().await;
     let cache_path = active.path()?;
     // …/caches/<id>/cache.db → id dir → caches dir → data dir → …/work/<id>
@@ -609,7 +613,23 @@ async fn reimport_module(
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        let e = e.to_string();
+        logging::error(&app, format!("\u{2717} Re-import {label} failed: {e}"));
+        e
+    })?;
+
+    let count = reimport_count(&module_id, &report);
+    logging::info(
+        &app,
+        format!(
+            "\u{2713} Re-imported {label}: {count} in {} ms",
+            started.elapsed().as_millis()
+        ),
+    );
+    for w in &report.warnings {
+        logging::warn(&app, w.clone());
+    }
 
     Ok(ReimportResult {
         module: module_id,
@@ -620,6 +640,28 @@ async fn reimport_module(
         notes: report.notes,
         warnings: report.warnings,
     })
+}
+
+/// Human label for a re-importable module id (for logs).
+fn reimport_label(module_id: &str) -> &'static str {
+    match module_id {
+        "recordings" => "voice recordings",
+        "camera_roll" => "camera roll",
+        "messages" => "messages",
+        "notes" => "notes",
+        _ => "data",
+    }
+}
+
+/// A human count line for a completed re-import (only the relevant field is set).
+fn reimport_count(module_id: &str, r: &traceloupe_core::normalize::ImportReport) -> String {
+    match module_id {
+        "recordings" => format!("{} recordings", r.recordings),
+        "camera_roll" => format!("{} photos & videos", r.media_items),
+        "messages" => format!("{} messages in {} threads", r.messages, r.threads),
+        "notes" => format!("{} notes", r.notes),
+        _ => String::new(),
+    }
 }
 
 /// Forget an imported backup: delete its cache DB and all derived caches
