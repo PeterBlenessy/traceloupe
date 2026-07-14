@@ -23,9 +23,19 @@ pub fn store(backup_id: &str, password: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-/// Retrieve the password for `backup_id`, if one was stored.
+/// Retrieve the password for `backup_id`, if one was stored. A missing entry is a
+/// quiet `None`; a genuine Keychain failure (access denied — e.g. an unsigned dev
+/// build whose signature the item's ACL doesn't recognize) is logged to stderr so
+/// the "keys silently didn't load" case is diagnosable.
 pub fn get(backup_id: &str) -> Option<String> {
-    entry(backup_id)?.get_password().ok()
+    match entry(backup_id)?.get_password() {
+        Ok(p) => Some(p),
+        Err(keyring::Error::NoEntry) => None,
+        Err(e) => {
+            eprintln!("keychain read failed for backup {backup_id}: {e}");
+            None
+        }
+    }
 }
 
 /// Remove any stored password for `backup_id` (best effort).
