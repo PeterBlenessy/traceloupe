@@ -45,7 +45,9 @@ fn locate(index: &ManifestIndex) -> Result<Vec<FileEntry>> {
     Ok(hits
         .into_iter()
         .filter(|e| {
-            e.relative_path.ends_with("ChatStorage.sqlite")
+            let rp = &e.relative_path;
+            // Whole path component, not just a suffix (don't match FooChatStorage.sqlite).
+            (rp == "ChatStorage.sqlite" || rp.ends_with("/ChatStorage.sqlite"))
                 && e.domain.to_lowercase().contains("whatsapp")
         })
         .collect())
@@ -54,16 +56,17 @@ fn locate(index: &ManifestIndex) -> Result<Vec<FileEntry>> {
 fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt = src.prepare(
+        // has_attachment via EXISTS (not a JOIN) so a message with several media
+        // items isn't fanned out into duplicate rows.
         "SELECT
              s.ZCONTACTJID,
              m.ZPARTNERNAME,
              m.ZMESSAGEDATE,
              m.ZISFROMME,
              m.ZTEXT,
-             md.ZMEDIALOCALPATH
+             EXISTS(SELECT 1 FROM ZWAMEDIAITEM md WHERE md.ZMESSAGE = m.Z_PK) AS has_media
          FROM ZWAMESSAGE m
          LEFT JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
-         LEFT JOIN ZWAMEDIAITEM md ON md.ZMESSAGE = m.Z_PK
          ORDER BY s.ZCONTACTJID, m.ZMESSAGEDATE",
     )?;
     let mut rows = stmt.query([])?;
@@ -82,7 +85,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .map(|d| d as i64 + MAC_EPOCH);
         let is_from_me = r.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0;
         let body: Option<String> = r.get(4)?;
-        let media: Option<String> = r.get(5)?;
+        let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
 
         out.push(AppMessage {
             chat_key,
@@ -94,7 +97,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             sender_name: if is_from_me { None } else { name },
             sender_handle: None,
             sender_id: None,
-            has_attachment: media.is_some(),
+            has_attachment,
         });
     }
     Ok(out)

@@ -148,7 +148,11 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .and_then(scalar_string_ref)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".into());
-        let archive: Vec<u8> = r.get(1)?;
+        // ARCHIVE is a BLOB; a non-blob value is skipped (not fatal to the parse).
+        let archive: Vec<u8> = match r.get_ref(1) {
+            Ok(rusqlite::types::ValueRef::Blob(b)) => b.to_vec(),
+            _ => continue,
+        };
         // VIEWER_ID (an Instagram pk) may be TEXT or INTEGER — read either.
         let viewer_id: Option<String> = r.get_ref(2).ok().and_then(scalar_string_ref);
 
