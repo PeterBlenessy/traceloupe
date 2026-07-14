@@ -242,23 +242,26 @@ pub fn import_backup(
     }
 
     // Diagnostic: flag any enabled data type that produced nothing, so an empty
-    // Safari/Calls (usually the source DB isn't in this backup) is visible
-    // instead of silently absent.
+    // Safari/Calls (usually the source DB isn't in this backup) is visible instead
+    // of silently absent. When the native path actually parsed the source (sms.db /
+    // NoteStore.sqlite present), a 0 count means "present but empty", not "absent".
     for id in effective {
-        let (label, count) = match id {
-            "messages" => ("Messages", report.messages),
-            "calls" => ("Call history", report.calls),
-            "contacts" => ("Contacts", report.contacts),
-            "safari" => ("Safari history", report.safari_visits),
-            "notes" => ("Notes", report.notes),
+        let (label, count, source_present) = match id {
+            "messages" => ("Messages", report.messages, native_messages),
+            "calls" => ("Call history", report.calls, false),
+            "contacts" => ("Contacts", report.contacts, false),
+            "safari" => ("Safari history", report.safari_visits, false),
+            "notes" => ("Notes", report.notes, native_notes),
             // camera_roll isn't checked here: media_items also holds message/app
             // attachments, so a 0-count test wouldn't be meaningful.
             _ => continue,
         };
         if count == 0 {
-            report.warnings.push(format!(
-                "{label}: nothing found — the source data isn't in this backup."
-            ));
+            report.warnings.push(if source_present {
+                format!("{label}: none found — the source is present in this backup but empty.")
+            } else {
+                format!("{label}: nothing found — the source data isn't in this backup.")
+            });
         }
     }
 

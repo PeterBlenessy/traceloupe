@@ -594,6 +594,12 @@ fn normalize_sms(
                 rusqlite::params![message_id, media_item_id],
             )?;
             if inserted == 0 {
+                // The referenced media isn't in the cache — clear the flag so the
+                // UI doesn't show an attachment indicator with nothing behind it.
+                tx.execute(
+                    "UPDATE messages SET has_attachments = 0 WHERE id = ?1",
+                    [message_id],
+                )?;
                 report.warnings.push(format!(
                     "message {message_id} references unknown media id {media_ref}"
                 ));

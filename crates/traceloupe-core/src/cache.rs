@@ -28,18 +28,6 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT NOT NULL
 );
 
--- One row per import attempt, so partial/failed imports are visible and
--- resumable rather than silently half-populated.
-CREATE TABLE IF NOT EXISTS import_runs (
-    id             INTEGER PRIMARY KEY,
-    engine         TEXT NOT NULL,             -- 'ileapp' | 'native'
-    engine_version TEXT,
-    started_at     INTEGER NOT NULL,
-    finished_at    INTEGER,
-    status         TEXT NOT NULL,             -- 'running' | 'succeeded' | 'failed' | 'cancelled'
-    error          TEXT
-);
-
 CREATE TABLE IF NOT EXISTS contacts (
     id           INTEGER PRIMARY KEY,
     first_name   TEXT,
