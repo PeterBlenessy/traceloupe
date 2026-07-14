@@ -2,7 +2,7 @@
 
 **Product & Architecture Description**
 
-*Working codename: TraceLoupe · Status: Draft v0.2 · Platform: macOS (desktop, Tauri v2)*
+*Working codename: TraceLoupe · Status: 0.2.0 (native lazy-decode core wired in alongside iLEAPP) · Platform: macOS (desktop, Tauri v2)*
 
 ---
 
@@ -225,8 +225,10 @@ Rollout is tiered by app popularity and by recovery/forensic value:
 
 ### 13.2 Platform & core
 
-- **MVP:** iLEAPP-powered import + native Tauri/shadcn UI over the cached report DB.
-- **Phase 2:** native lazy-decode core for messages, media, and Notes (on-demand decryption, deferred media, cache-once).
-- Progressively replace iLEAPP-parsed artifacts with native Rust parsers where "instant first-open" matters; keep iLEAPP as the background engine for the long tail.
-- A pure-Rust Notes parser to eliminate the Notes sidecar.
+- **`0.1.0` (MVP):** iLEAPP-powered import + native Tauri/shadcn UI over the cached report DB.
+- **`0.2.0` (shipped):** native lazy-decode core for Messages, Notes, Recordings, and Camera roll (on-demand decryption, deferred media, cache-once), wired into the import **alongside** iLEAPP — which still supplies Calls, Safari, Apps, and third-party chats.
+- **`0.3.0`+ native-first migration, in batches** — the plan for progressively replacing iLEAPP:
+  - **Batch 1 (`0.3.0`):** native parsers for the remaining first-party views — Calls (`CallHistory.storedata`), Safari (`History.db`), Apps (app-state plist), and self-extracted Contacts (`AddressBook.sqlitedb`) via the Manifest Index. All built-in views then materialize natively, and the redundant iLEAPP sms/notes passes are dropped so import time falls.
+  - **Batch 2 (`0.3.x`):** make iLEAPP **optional** — default install fully offline (no first-import download, no bundled ~222 MB engine); fetched on demand only for deeper third-party coverage. This keeps §8.5's breadth as opt-in rather than a hard dependency.
+  - **Batch 3+ (`0.4.0`+):** native third-party app modules per the §13.1 tiers (Top 10 first), replacing iLEAPP coverage incrementally.
 - Mobile targets via Tauri v2 (iOS/Android) — considered later, not part of the macOS-first scope.

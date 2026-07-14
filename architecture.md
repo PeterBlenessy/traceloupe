@@ -1,6 +1,6 @@
 # Local iOS Backup Browser — Architecture
 
-*Working codename: TraceLoupe · Status: Draft v0.2 · Companion to the Product & Architecture Description*
+*Working codename: TraceLoupe · Status: 0.2.0 (native lazy-decode core wired in alongside iLEAPP; native-first migration planned for 0.3.0+) · Companion to the Product & Architecture Description*
 
 ---
 
