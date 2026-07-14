@@ -234,6 +234,19 @@ via `ZIMDATA` presence (best-effort; may over-flag non-media action items).
 `ZSENDER` gives correct **per-member** group attribution; `ZISOWN` direction;
 `ZDATE` Core-Data time; media/file FKs → has_attachment.
 
+### Viber — `Contacts.data` (native, unvalidated)
+
+`ZVIBERMESSAGE` grouped by `ZCONVERSATION`; title = group `ZNAME` or the 1:1
+interlocutor; sender via `ZPHONENUMINDEX → ZMEMBER` (per-author in groups);
+`ZSTATEDATE` timestamp; `ZSTATE` direction (with a `ZPHONENUMINDEX` fallback for
+unknown states); `ZATTACHMENT` flag.
+
+### Microsoft Teams — `Skype*.sqlite` (native, unvalidated)
+
+`ZSMESSAGE` grouped by `ZTHREADID` (→ `ZTHREAD.ZTHREADTOPIC`); per-message sender
+(`ZIMDISPLAYNAME`/`ZFROM`); `ZTS_ISSENTBYME` direction; `ZARRIVALTIME` timestamp;
+HTML `ZCONTENT` → plain text (emoji `alt` recovered). Media not surfaced.
+
 ### X/Twitter · Facebook (main) · Snapchat
 
 X/Twitter, Facebook (main app), and Snapchat keep no clean local chat store (no
