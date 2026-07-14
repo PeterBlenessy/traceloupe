@@ -16,6 +16,7 @@
 
 pub mod facebook_messenger;
 pub mod instagram;
+pub mod telegram;
 pub mod tiktok;
 pub mod whatsapp;
 
@@ -79,6 +80,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     facebook_messenger::MODULE,
     instagram::MODULE,
     tiktok::MODULE,
+    telegram::MODULE,
 ];
 
 /// Insert a parsed app conversation stream into the cache as `threads` + messages,

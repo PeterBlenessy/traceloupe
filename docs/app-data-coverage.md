@@ -194,8 +194,27 @@ parent directory name. Schema facts from iLEAPP `tikTok.py` (reference, §10).
 | Contacts (social graph) | ✅ | 🟡 iLEAPP | still via iLEAPP, tagged in Contacts |
 | GIF / link / media | ✅ | ⬜ | `content` `$.url`, `$.display_name` |
 
-### Telegram (0.4.0) · X/Twitter · Facebook (main) · Snapchat
+### Telegram — `postbox/db/db_sqlite` (native, unvalidated)
 
-Telegram is deferred to 0.4.0. X/Twitter, Facebook (main app), and Snapchat keep
-no recoverable local chat store (no iLEAPP module exists for them), so there's
-nothing to surface — see `app-support.md`.
+Not readable SQL: messages are binary blobs in table `t7` (key = big-endian
+peerId/namespace/timestamp/mid; value = a linear "intermediate message" byte
+stream), peer names in `t2` (postbox keyed-object encoding). A native binary
+reader + minimal postbox decoder pull text/author/timestamp/direction/chat name.
+Schema facts from iLEAPP `telegramMesssages.py` (reference, §10). **Unvalidated
+against a real backup.**
+
+| Data | In backup | Surfaced | Notes |
+|------|:---------:|:--------:|-------|
+| Message text | ✅ | ✅ | intermediate-message `text` |
+| Timestamp | ✅ | ✅ | from the `t7` key |
+| Direction (from-me) | ✅ | ✅ | MessageFlags `Incoming` bit |
+| Conversation grouping | ✅ | ✅ | key `peerId` |
+| Chat / author name | ✅ | ✅ | `t2` postbox peer record (`fn`/`ln`/`t`/`un`) |
+| Has attachment (flag) | ✅ | ✅ | embedded-media count |
+| Media payloads | ✅ | ⬜ | `postbox/media`; not decoded |
+| Forwarded-from info | ✅ | ⬜ | parsed then skipped |
+
+### X/Twitter · Facebook (main) · Snapchat
+
+X/Twitter, Facebook (main app), and Snapchat keep no clean local chat store (no
+iLEAPP module; Snapchat's is encrypted). See `app-support.md` "Research notes".
