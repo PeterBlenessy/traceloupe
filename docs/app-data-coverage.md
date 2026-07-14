@@ -160,16 +160,28 @@ Schema facts from iLEAPP `facebookMessenger.py`; provenance reference (§10).
 | Calls | ✅ | ⬜ | attachment rows tagged "call" |
 | Secret / client conversations | ✅ | ⬜ | `secure_messages`, `client_messages` |
 
+### Instagram — `DirectSQLiteDatabase/*.db` (native, unvalidated)
+
+DMs are NSKeyedArchiver blobs in `MESSAGES.ARCHIVE`, resolved by the native
+`crate::nska` decoder. Schema facts from iLEAPP `instagramThreads.py`; provenance
+reference (§10). **Unvalidated against a real backup — key paths may need tuning.**
+
+| Data | In backup | Surfaced | Notes |
+|------|:---------:|:--------:|-------|
+| Message text | ✅ | ✅ | `content["NSString*string"]` |
+| Timestamp | ✅ | ✅ | `metadata["NSDate*serverTimestamp"]` |
+| Direction (from-me) | ✅ | ✅ | senderPk vs `THREADS.VIEWER_ID` |
+| Conversation grouping | ✅ | ✅ | `THREAD_ID` |
+| Sender name | ✅ | ✅ | from `THREADS.METADATA` user list |
+| Reactions (emoji) | ✅ | ⬜ | `reactions[].emojiUnicode` |
+| Shared media | ✅ | ⬜ | `content` media object |
+| Video-chat announcements | ✅ | ⬜ | `threadActivity` |
+
 ### TikTok — `AwemeIM.db` (planned, needs protobuf)
 
 Message bodies are protobuf blobs (`blackboxprotobuf` in iLEAPP) and contact
 tables are dynamically named (`AwemeContacts*`). Framework-ready; needs a protobuf
 decoder before the module can land.
-
-### Instagram — `DirectSQLite`/`THREADS`/`MESSAGES` (planned, needs plist decode)
-
-Messages are archived plists inside `MESSAGES.ARCHIVE`
-(`IGDirectPublishedMessageContent*content`). Needs a binary-plist decoder.
 
 ### Telegram (0.4.0) · X/Twitter · Facebook (main) · Snapchat
 

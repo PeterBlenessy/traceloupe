@@ -15,6 +15,7 @@
 //! written from those facts, not ported.
 
 pub mod facebook_messenger;
+pub mod instagram;
 pub mod whatsapp;
 
 use std::path::Path;
@@ -65,7 +66,11 @@ pub struct AppChatModule {
 }
 
 /// The registered native app chat modules. Add an entry to support a new app.
-pub const APP_CHAT_MODULES: &[AppChatModule] = &[whatsapp::MODULE, facebook_messenger::MODULE];
+pub const APP_CHAT_MODULES: &[AppChatModule] = &[
+    whatsapp::MODULE,
+    facebook_messenger::MODULE,
+    instagram::MODULE,
+];
 
 /// Insert a parsed app conversation stream into the cache as `threads` + messages,
 /// tagged with `service`. Messages are grouped by `chat_key`; a thread's name is
