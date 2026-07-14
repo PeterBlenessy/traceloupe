@@ -175,6 +175,20 @@ pub fn import_backup(
         )
     };
 
+    // Phase 2: materialize third-party chats (WhatsApp, …) natively from each
+    // app's own SQLite DB via the pluggable app-module registry. Returns the
+    // service labels handled, so the matching iLEAPP stages are skipped.
+    on_phase(ImportPhase::Normalizing {
+        step: "App chats".into(),
+    });
+    let native_app_services = import_app_chats_native(
+        backup_dir,
+        decryptor.as_ref(),
+        &cache,
+        work_dir,
+        &mut native,
+    );
+
     // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
     // stages materialized natively above are skipped.
     let mut report = normalize::normalize_lava_with_progress(
@@ -187,6 +201,7 @@ pub fn import_backup(
             calls: native_calls,
             safari: native_safari,
             contacts: native_contacts,
+            app_services: native_app_services,
         },
         |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
     )?;
@@ -695,6 +710,70 @@ fn import_contacts_native(
             false
         }
     }
+}
+
+/// Materialize third-party chats natively by driving the app-module registry:
+/// each module locates its own DB in the Manifest, we extract + parse it, and the
+/// shared inserter writes the threads/messages. Returns the service labels handled
+/// natively (so the equivalent iLEAPP stages are skipped). An app whose DB isn't in
+/// the backup, or that fails to parse, is silently left to the iLEAPP path.
+fn import_app_chats_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) -> Vec<&'static str> {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native app chats unavailable ({e}); using iLEAPP."));
+            return Vec::new();
+        }
+    };
+    let mut handled = Vec::new();
+    for m in crate::parsers::apps::APP_CHAT_MODULES {
+        let entry = match (m.locate)(&index) {
+            Ok(Some(e)) => e,
+            Ok(None) => continue, // app not in this backup → iLEAPP (or nothing)
+            Err(e) => {
+                report
+                    .warnings
+                    .push(format!("Native {}: Manifest read failed ({e}).", m.service));
+                continue;
+            }
+        };
+        let out = work_dir.join(format!(".app-{}.sqlite", m.id));
+        if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+            let _ = std::fs::remove_file(&out);
+            report.warnings.push(format!(
+                "Native {}: couldn't read its DB ({e}); using iLEAPP.",
+                m.service
+            ));
+            continue;
+        }
+        let parsed = (m.parse)(&out);
+        let _ = std::fs::remove_file(&out);
+        match parsed {
+            Ok(msgs) => {
+                match crate::parsers::apps::insert_app_conversation(cache, m.service, msgs, report)
+                {
+                    Ok(()) => handled.push(m.service),
+                    Err(e) => report.warnings.push(format!(
+                        "Native {}: insert failed ({e}); using iLEAPP.",
+                        m.service
+                    )),
+                }
+            }
+            Err(e) => report.warnings.push(format!(
+                "Native {}: parse failed ({e}); using iLEAPP.",
+                m.service
+            )),
+        }
+    }
+    handled
 }
 
 /// The natively-parsed data types that can be re-imported on their own — no
