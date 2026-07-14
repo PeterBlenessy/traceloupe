@@ -11,7 +11,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.1.0` | **MVP** — iLEAPP-powered import into a local cache, with a native browsing UI. |
 | `0.2.0` | **Native lazy-decode core, wired in** — Manifest Index + on-demand decryption + native Messages/Notes/Recordings/Camera-roll parsers, running *alongside* iLEAPP (which still supplies Calls, Safari, Apps, third-party chats). |
 | `0.3.0` | **Native-first, Batch 1** — all first-party views native (Calls, Safari, Apps, Contacts); a pluggable native app-chat framework with WhatsApp, Facebook Messenger, Instagram & TikTok. iLEAPP still runs for Telegram, TikTok contacts, and the long tail. |
-| `0.4.0`+ | **Native-first, continued** — native Telegram + the remaining apps, then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.4.0` | **More native chat apps** — Telegram (binary postbox), Kik, imo, Threema, via the app-chat framework. iLEAPP still runs for the long tail. |
+| `0.5.0`+ | **Native-first, continued** — more apps, then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -19,6 +20,35 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.4.0] — 2026-07-14
+
+Four more native third-party chat apps via the app-chat framework. All are
+unvalidated against a real backup and sit behind the automatic iLEAPP fallback.
+
+### Added
+- **Telegram** — a native reader for its binary "postbox" store
+  (`postbox/db/db_sqlite`): a bounds-checked byte reader, the `t7` message parse
+  (text/author/timestamp/direction), and a minimal `PostboxDecoder` for peer
+  names from `t2`. Media payloads aren't decoded.
+- **Kik** (`kik.sqlite`) — messages, direction (`ZTYPE`), and group detection via
+  the group `ZJID`. Group per-author isn't in this schema, so a group is titled
+  but its messages carry no author (as with iLEAPP).
+- **imo** (`IMODb2.sqlite`) — messages with correct **per-author group
+  attribution** via `ZALIAS`; nanosecond timestamps.
+- **Threema** (`ThreemaData.sqlite`) — messages with per-member group attribution
+  via `ZSENDER` (named and unnamed groups); system messages excluded.
+
+### Fixed
+- Each app was code-reviewed and hardened before release: group chats are no
+  longer mislabeled as 1:1 or mis-attributed (Kik/imo/Threema), a new shared
+  `col_i64` reads large integer timestamps without f64 precision loss, and
+  storage-class-tolerant column reads prevent one odd row from aborting a parse.
+
+### Notes & caveats
+- Telegram/Kik/imo/Threema native output is unvalidated against real backups;
+  all fall back to iLEAPP on any parse miss.
+- iLEAPP remains required for the long tail (Viber, Discord, Slack, Teams, etc.).
 
 ## [0.3.0] — 2026-07-14
 
