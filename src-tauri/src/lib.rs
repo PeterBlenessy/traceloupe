@@ -788,13 +788,48 @@ async fn get_range_window(
 /// Open a message attachment's file with the OS default app (for documents and
 /// anything not rendered inline).
 #[tauri::command]
-fn open_attachment(active: State<'_, ActiveBackup>, attachment_id: i64) -> Result<(), String> {
+fn open_attachment(
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    attachment_id: i64,
+) -> Result<(), String> {
     let cache = open_active_cache(&active)?;
-    let (path, _) = query::attachment_blob(&cache, attachment_id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "attachment file is not available".to_string())?;
+    let (local_path, _mime, decrypt_key, plain_size) =
+        query::attachment_blob(&cache, attachment_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "attachment file is not available".to_string())?;
+
+    // Encrypted backup: decrypt to a persistent temp beside the cache and open
+    // that (the external app needs to read it after this returns, so it isn't
+    // auto-deleted — a re-import/forget clears the dir). Plaintext: open directly.
+    let to_open = if let Some(key) = decrypt_key {
+        let dec = session
+            .get()
+            .ok_or_else(|| "backup keys are not loaded".to_string())?;
+        let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
+        let size = plain_size.and_then(|s| usize::try_from(s).ok());
+        let plain = dec
+            .decrypt_bytes(&key, &ciphertext, size)
+            .map_err(|e| e.to_string())?;
+        let dir = active
+            .path()?
+            .parent()
+            .map(|p| p.join("att-open"))
+            .ok_or_else(|| "unexpected cache layout".to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let name = std::path::Path::new(&local_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("attachment-{attachment_id}"));
+        let dest = dir.join(format!("{attachment_id}-{name}"));
+        write_private(&dest, &plain).map_err(|e| e.to_string())?;
+        dest
+    } else {
+        PathBuf::from(&local_path)
+    };
+
     std::process::Command::new("/usr/bin/open")
-        .arg(&path)
+        .arg(&to_open)
         .spawn()
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1230,26 +1265,50 @@ fn attachment_protocol_response(
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime))) = query::attachment_blob(&cache, id) else {
+    let Ok(Some((local_path, mime, decrypt_key, plain_size))) = query::attachment_blob(&cache, id)
+    else {
         return not_found();
     };
 
+    // Its own thumbs/temp dir so attachment ids can't collide with media ids.
+    let att_dir = cache_path
+        .parent()
+        .map(|p| p.join("att-thumbs"))
+        .unwrap_or_else(|| PathBuf::from("att-thumbs"));
+
+    // Resolve to a plaintext source: the backup file directly, or (encrypted
+    // backup) a short-lived decrypted temp removed when `_tmp` drops.
+    let (source_path, _tmp): (PathBuf, Option<TempPath>) = if let Some(key) = decrypt_key {
+        let Some(dec) = app.state::<SessionKeys>().get() else {
+            return not_found(); // encrypted attachment but no keys this session
+        };
+        let Ok(ciphertext) = std::fs::read(&local_path) else {
+            return not_found();
+        };
+        let size = plain_size.and_then(|s| usize::try_from(s).ok());
+        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, size) else {
+            return not_found();
+        };
+        let _ = std::fs::create_dir_all(&att_dir);
+        let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = att_dir.join(format!("att-{id}.{seq}.decrypted"));
+        if write_private(&tmp, &plain).is_err() {
+            return not_found();
+        }
+        (tmp.clone(), Some(TempPath(tmp)))
+    } else {
+        (PathBuf::from(&local_path), None)
+    };
+
     let is_image = mime.as_deref().is_some_and(|m| m.starts_with("image/"))
-        || local_path.to_ascii_lowercase().ends_with(".heic");
+        || source_path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .ends_with(".heic");
 
     if is_image {
-        // Its own thumbs dir so attachment ids can't collide with media ids.
-        let thumbs_dir = cache_path
-            .parent()
-            .map(|p| p.join("att-thumbs"))
-            .unwrap_or_else(|| PathBuf::from("att-thumbs"));
-        let Some(rendered) = media::render(
-            std::path::Path::new(&local_path),
-            &thumbs_dir,
-            id,
-            want_thumb,
-            mime.as_deref(),
-        ) else {
+        let Some(rendered) = media::render(&source_path, &att_dir, id, want_thumb, mime.as_deref())
+        else {
             return not_found();
         };
         return Response::builder()
@@ -1265,14 +1324,14 @@ fn attachment_protocol_response(
     // (and without reading the whole file into memory each time). The stored MIME
     // is from the backup, so validate it before it becomes a response header.
     let content_type = media::safe_content_type(mime.as_deref());
-    let Ok(meta) = std::fs::metadata(&local_path) else {
+    let Ok(meta) = std::fs::metadata(&source_path) else {
         return not_found();
     };
     let total = meta.len();
 
     if let Some((start, end)) = range.and_then(|r| parse_byte_range(r, total)) {
         use std::io::{Read, Seek, SeekFrom};
-        let Ok(mut file) = std::fs::File::open(&local_path) else {
+        let Ok(mut file) = std::fs::File::open(&source_path) else {
             return not_found();
         };
         if file.seek(SeekFrom::Start(start)).is_err() {
@@ -1292,7 +1351,7 @@ fn attachment_protocol_response(
             .unwrap();
     }
 
-    let Ok(bytes) = std::fs::read(&local_path) else {
+    let Ok(bytes) = std::fs::read(&source_path) else {
         return not_found();
     };
     Response::builder()

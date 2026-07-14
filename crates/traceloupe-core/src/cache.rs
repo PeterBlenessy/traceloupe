@@ -17,10 +17,10 @@ pub struct CacheDb {
     conn: Connection,
 }
 
-// Bumped to 3 so caches from earlier builds run the migration block once to catch
-// up (v2 added columns/index; v3 adds the `recordings` table), then skip it on
-// every subsequent open.
-const SCHEMA_VERSION: i64 = 3;
+// Bumped to 4 so caches from earlier builds run the migration block once to catch
+// up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
+// attachment decrypt columns), then skip it on every subsequent open.
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE meta (
@@ -87,8 +87,13 @@ CREATE TABLE attachments (
     message_id INTEGER NOT NULL REFERENCES messages(id),
     filename   TEXT,
     mime_type  TEXT,
-    -- Path to extracted bytes under the app cache dir, when materialized.
-    local_path TEXT
+    -- Path to the attachment bytes: an iLEAPP-extracted file, or (native path)
+    -- the backup's content-addressed blob (ciphertext on an encrypted backup).
+    local_path TEXT,
+    -- Encrypted backups only: wrapped key + real size to decrypt/trim local_path
+    -- on demand (see media_items). NULL when local_path is already plaintext.
+    decrypt_key BLOB,
+    plain_size  INTEGER
 );
 
 CREATE TABLE calls (
@@ -263,6 +268,9 @@ impl CacheDb {
                 );
                 CREATE INDEX IF NOT EXISTS idx_recordings_at ON recordings(recorded_at DESC);",
             )?;
+            // v4: native message attachments decrypt on demand like camera roll.
+            ensure_column(&conn, "attachments", "decrypt_key", "BLOB")?;
+            ensure_column(&conn, "attachments", "plain_size", "INTEGER")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

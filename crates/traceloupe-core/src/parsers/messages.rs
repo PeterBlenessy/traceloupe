@@ -12,13 +12,25 @@
 //! schema (the same schema `chats.rs` reads for metadata).
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OpenFlags};
 
 use crate::cache::CacheDb;
+use crate::crypto::{self, BackupDecryptor};
+use crate::manifest::ManifestIndex;
 use crate::normalize::ImportReport;
 use crate::Result;
+
+/// Context for resolving a message's attachments to their files in the backup.
+/// When `None`, attachment rows aren't written (e.g. a caller with no Manifest,
+/// or tests) — the messages themselves still parse.
+pub struct AttachmentSource<'a> {
+    pub index: &'a ManifestIndex,
+    /// `Some` for an encrypted backup — attachment blobs are then ciphertext and
+    /// their wrapped keys are stored for on-demand decryption at view time.
+    pub decryptor: Option<&'a BackupDecryptor>,
+}
 
 /// Apple absolute time counts from 2001-01-01 UTC. iOS 11+ stores nanoseconds;
 /// older backups store seconds. Convert to Unix epoch seconds; 0 → None.
@@ -56,13 +68,26 @@ const NATIVE_THREADS: &str = "service IS NULL OR service NOT IN ('TikTok','Whats
 /// `attachments`, then `messages`, then `threads` (that order satisfies the
 /// foreign key) — **inside the same transaction as the re-insert**, so a partial
 /// re-import is atomic: a parse failure rolls the deletes back too.
+///
+/// When `attachments` is `Some`, each message's attachments are resolved to their
+/// backup files and written to the `attachments` table (with a wrapped key for
+/// encrypted backups, so they decrypt on demand at view time).
 pub fn parse_messages(
     sms_db: &Path,
     cache: &CacheDb,
     report: &mut ImportReport,
     replace: bool,
+    attachments: Option<&AttachmentSource>,
 ) -> Result<()> {
     let src = Connection::open_with_flags(sms_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+
+    // Attachment tables (only when a caller can resolve files). `attachment.filename`
+    // is the on-device path; `transfer_name` the display name.
+    let (att_meta, msg_atts) = if attachments.is_some() {
+        load_attachments(&src)?
+    } else {
+        (HashMap::new(), HashMap::new())
+    };
 
     // handle.ROWID → phone/email.
     let handles: HashMap<i64, String> = {
@@ -146,7 +171,7 @@ pub fn parse_messages(
     // Messages in chat order (grouped), then time. Skip pure "action" items
     // (group renames, joins) which carry no text and no attachment.
     let mut mstmt = src.prepare(
-        "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments
+        "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID
          FROM message m
          JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
@@ -164,6 +189,7 @@ pub fn parse_messages(
         let date: i64 = r.get(3)?;
         let handle_id: i64 = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
         let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
+        let msg_rowid: i64 = r.get(6)?;
 
         if current_chat != Some(chat_id) {
             let chat = chats.get(&chat_id);
@@ -217,7 +243,42 @@ pub fn parse_messages(
                 has_attachment as i64,
             ],
         )?;
+        let message_id = tx.last_insert_rowid();
         report.messages += 1;
+
+        // Attachment rows: resolve each to its backup file so the UI can serve it.
+        if let (Some(src), Some(ids)) = (attachments, msg_atts.get(&msg_rowid)) {
+            for aid in ids {
+                let Some(a) = att_meta.get(aid) else { continue };
+                let resolved = a.path.as_deref().and_then(|p| resolve_attachment(src, p));
+                let (local_path, decrypt_key, plain_size) = match resolved {
+                    Some((path, key, size)) => {
+                        (Some(path.to_string_lossy().into_owned()), key, size)
+                    }
+                    None => (None, None, None),
+                };
+                // Display name: transfer_name, else the file's basename.
+                let filename = a.filename.clone().or_else(|| {
+                    a.path
+                        .as_deref()
+                        .and_then(|p| p.rsplit('/').next())
+                        .map(str::to_string)
+                });
+                tx.execute(
+                    "INSERT INTO attachments
+                        (message_id, filename, mime_type, local_path, decrypt_key, plain_size)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        message_id,
+                        filename,
+                        a.mime,
+                        local_path,
+                        decrypt_key,
+                        plain_size,
+                    ],
+                )?;
+            }
+        }
     }
     drop(rows);
     drop(mstmt);
@@ -231,6 +292,95 @@ pub fn parse_messages(
     ))?;
     tx.commit()?;
     Ok(())
+}
+
+/// One row of the `attachment` table we care about.
+struct Att {
+    /// On-device path (`attachment.filename`), e.g. `~/Library/SMS/Attachments/…`.
+    path: Option<String>,
+    /// Display name (`attachment.transfer_name`).
+    filename: Option<String>,
+    mime: Option<String>,
+}
+
+/// Read `attachment` (by ROWID) and `message_attachment_join` (message ROWID →
+/// attachment ROWIDs) so the main loop can attach files to each message.
+#[allow(clippy::type_complexity)]
+fn load_attachments(src: &Connection) -> Result<(HashMap<i64, Att>, HashMap<i64, Vec<i64>>)> {
+    // A minimal/older sms.db may lack these tables — then there are simply no
+    // attachments (not an error).
+    if !table_exists(src, "attachment") || !table_exists(src, "message_attachment_join") {
+        return Ok((HashMap::new(), HashMap::new()));
+    }
+    let mut meta: HashMap<i64, Att> = HashMap::new();
+    {
+        let mut stmt =
+            src.prepare("SELECT ROWID, filename, transfer_name, mime_type FROM attachment")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                Att {
+                    path: r.get::<_, Option<String>>(1)?,
+                    filename: r
+                        .get::<_, Option<String>>(2)?
+                        .filter(|s| !s.trim().is_empty()),
+                    mime: r.get::<_, Option<String>>(3)?,
+                },
+            ))
+        })?;
+        for row in rows.flatten() {
+            meta.insert(row.0, row.1);
+        }
+    }
+    let mut joins: HashMap<i64, Vec<i64>> = HashMap::new();
+    {
+        let mut stmt =
+            src.prepare("SELECT message_id, attachment_id FROM message_attachment_join")?;
+        for row in stmt
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))?
+            .flatten()
+        {
+            joins.entry(row.0).or_default().push(row.1);
+        }
+    }
+    Ok((meta, joins))
+}
+
+/// Resolve an on-device attachment path to its backup blob (+ wrapped key/size
+/// for an encrypted backup). None if the file isn't in the backup.
+fn resolve_attachment(
+    src: &AttachmentSource,
+    on_device_path: &str,
+) -> Option<(PathBuf, Option<Vec<u8>>, Option<u64>)> {
+    let rel = normalize_attachment_path(on_device_path)?;
+    let entry = src.index.find("MediaDomain", &rel).ok().flatten()?;
+    let path = src.index.blob_path(&entry.file_id);
+    let (key, size) = if src.decryptor.is_some() {
+        match crypto::file_key_field(&entry.file_blob) {
+            Ok((k, s)) => (Some(k), s),
+            Err(_) => (None, None),
+        }
+    } else {
+        (None, None)
+    };
+    Some((path, key, size))
+}
+
+/// Map an on-device SMS attachment path to its `MediaDomain` relativePath. iOS
+/// stores these as `~/Library/SMS/Attachments/…` (or an absolute variant); the
+/// backup keys them by `Library/SMS/Attachments/…`.
+fn normalize_attachment_path(p: &str) -> Option<String> {
+    p.find("Library/SMS/Attachments/")
+        .map(|i| p[i..].to_string())
+}
+
+fn table_exists(conn: &Connection, name: &str) -> bool {
+    conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+        [name],
+        |_| Ok(()),
+    )
+    .is_ok()
 }
 
 #[cfg(test)]
@@ -272,7 +422,7 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
 
-        parse_messages(&db, &cache, &mut report, false).unwrap();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
 
         assert_eq!(report.threads, 2);
         assert_eq!(report.messages, 4); // action item (202) skipped
@@ -344,7 +494,7 @@ mod tests {
         // replace=true must delete the attachment child before the message
         // (FK ON, no cascade) — a bare message delete would fail here.
         let mut report = ImportReport::default();
-        parse_messages(&db, &cache, &mut report, true).unwrap();
+        parse_messages(&db, &cache, &mut report, true, None).unwrap();
 
         let c = cache.conn();
         // Old iMessage thread + message + attachment gone; fresh ones inserted.
