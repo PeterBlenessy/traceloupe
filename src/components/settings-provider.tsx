@@ -92,33 +92,40 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     () => localStorage.getItem(BIOMETRIC_KEY) === "true",
   );
   const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
-
-  // Apply the biometric-gate preference to the backend on startup and on change,
-  // so an encrypted backup opened later is (or isn't) gated accordingly.
-  useEffect(() => {
-    void client.setBiometricRequired(biometricUnlock);
-  }, [biometricUnlock]);
+  const [signingChecked, setSigningChecked] = useState<boolean>(false);
 
   // Touch ID only works on a stably-signed build (an adhoc dev binary loses
   // Keychain access on rebuild). Detect it, and: disable the gate when unsigned,
   // or default it ON when signed and the user hasn't chosen — so a signed build
   // gets fingerprint-unlock automatically without a manual toggle. A stored user
-  // choice always wins (setBiometricUnlock persists; these paths don't).
+  // choice always wins (setBiometricUnlock persists; these paths don't). Fails
+  // CLOSED (treated as unsigned/off) so a failed check never leaves the toggle
+  // disabled-but-checked while the backend is actually gating.
   useEffect(() => {
     let cancelled = false;
-    void client.appSigningStatus().then((s) => {
+    const apply = (signed: boolean) => {
       if (cancelled) return;
-      setBiometricAvailable(s.signed);
-      if (!s.signed) {
-        setBiometricUnlockState(false);
-      } else if (localStorage.getItem(BIOMETRIC_KEY) === null) {
-        setBiometricUnlockState(true);
-      }
-    });
+      setBiometricAvailable(signed);
+      if (!signed) setBiometricUnlockState(false);
+      else if (localStorage.getItem(BIOMETRIC_KEY) === null) setBiometricUnlockState(true);
+      setSigningChecked(true);
+    };
+    client
+      .appSigningStatus()
+      .then((s) => apply(s.signed))
+      .catch(() => apply(false));
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // Push the gate preference to the backend — but only once the signing check has
+  // settled the effective value, so we never push a transient/wrong flag at
+  // startup. Re-pushed whenever the preference changes.
+  useEffect(() => {
+    if (!signingChecked) return;
+    void client.setBiometricRequired(biometricUnlock).catch(() => {});
+  }, [biometricUnlock, signingChecked]);
 
   // Apply the log level to the backend (it gates emission), and forward backend
   // log records to the dev-tools console. The level is re-applied whenever it

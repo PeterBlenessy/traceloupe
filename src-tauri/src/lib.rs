@@ -499,9 +499,16 @@ async fn import_backup(
         if let Err(e) = secret::store(&backup_id, &key_password) {
             eprintln!("could not store backup password in Keychain: {e}");
         }
-        let decryptor = BackupDecryptor::open(&source_dir, &key_password)
-            .ok()
-            .map(Arc::new);
+        // Deriving the keys is PBKDF2 (several hundred ms) — keep it off the async
+        // executor, like reopen_decryptor does.
+        let sd = source_dir.clone();
+        let pw = key_password.clone();
+        let decryptor = tauri::async_runtime::spawn_blocking(move || {
+            BackupDecryptor::open(&sd, &pw).ok().map(Arc::new)
+        })
+        .await
+        .ok()
+        .flatten();
         session.set(decryptor);
     }
 
@@ -541,18 +548,22 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
         .flatten();
     // Surface a silent key-load failure: if this backup is encrypted but we have
     // no decryptor, full-resolution photos and native re-imports won't work until
-    // the keys load. The usual dev cause is the app's code signature changing
-    // between builds, so the Keychain item's ACL no longer trusts it (see
-    // docs/signing.md).
+    // the keys load. Point at the likely cause — a cancelled/unavailable Touch ID
+    // prompt when biometric unlock is on, otherwise the Keychain-ACL/signing issue
+    // (a rebuilt dev binary loses access; see docs/signing.md).
     if decryptor.is_none() {
         if let Ok(Some(src)) = CacheDb::open(&cache_path).and_then(|c| c.get_meta("source_dir")) {
             if discovery::read_backup_info(Path::new(&src)).is_encrypted == Some(true) {
-                logging::warn(
-                    &app,
+                let msg = if biometric::is_required() {
+                    "Backup is encrypted and Touch ID unlock is on, but its keys weren't unlocked \
+                     (Touch ID cancelled/failed, or unavailable on this build). Authenticate when \
+                     prompted, or turn off Require Touch ID in Settings."
+                } else {
                     "Backup is encrypted but its keys couldn't be loaded from the Keychain — \
                      full-resolution photos and native re-imports are unavailable. Re-import with \
-                     the password, or sign the build with a stable identity (docs/signing.md).",
-                );
+                     the password, or sign the build with a stable identity (docs/signing.md)."
+                };
+                logging::warn(&app, msg);
             }
         }
     }
