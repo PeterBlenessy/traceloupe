@@ -37,6 +37,28 @@ pub fn safe_content_type(mime: Option<&str>) -> String {
     }
 }
 
+/// Content-Type for INLINE serving of a non-image attachment. Only audio/video are
+/// safe to hand to the webview inline; anything else (text/html, image/svg+xml,
+/// application/javascript, …) is forced to a download type so attacker-supplied
+/// attachment content can't execute as a document in the custom-scheme origin (the
+/// app ships without a strict CSP). Images take the transcode/render path instead.
+pub fn inline_media_content_type(mime: Option<&str>) -> String {
+    let is_av = mime
+        .map(|m| {
+            m.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .is_some_and(|m| m.starts_with("audio/") || m.starts_with("video/"));
+    if is_av {
+        safe_content_type(mime)
+    } else {
+        "application/octet-stream".to_string()
+    }
+}
+
 fn is_heic(src: &Path, mime: Option<&str>) -> bool {
     if let Some(m) = mime {
         let m = m.to_ascii_lowercase();
@@ -88,6 +110,14 @@ pub fn render(
             bytes,
             content_type: safe_content_type(src_mime),
         });
+    }
+    // The cached JPEG can be decrypted plaintext of an encrypted photo — restrict
+    // it to the owner (sips writes it world-readable by default), matching the
+    // rest of the decrypt-at-rest handling.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600));
     }
     let bytes = std::fs::read(&out).ok()?;
     Some(Rendered {

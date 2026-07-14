@@ -46,8 +46,12 @@ export function ImportDialog({
     queryKey: ["importModules"],
     queryFn: () => client.listImportModules(),
   });
-  const modules =
-    importModules ?? catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
+  // Fall back to the catalog defaults when nothing is selected. Without this, an
+  // explicitly-empty selection ([]) is passed to the importer, which reinterprets
+  // "empty" as "all defaults" — so unchecking everything would silently import
+  // everything. Never send [] downstream.
+  const defaults = catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
+  const modules = importModules && importModules.length > 0 ? importModules : defaults;
 
   // Unencrypted backups: kick off the read as soon as the dialog opens.
   useEffect(() => {

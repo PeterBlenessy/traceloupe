@@ -222,8 +222,18 @@ impl BackupDecryptor {
 
         let keybag = Keybag::parse(keybag_blob)?;
         let kek = Zeroizing::new(keybag.derive_kek(password.as_bytes()));
-        let class_keys = keybag.class_keys(&kek)?;
-        let manifest_key = unwrap_prefixed(&class_keys, manifest_key_field)?;
+        let mut class_keys = keybag.class_keys(&kek)?;
+        // On the happy path BackupDecryptor::Drop zeroizes class_keys; on this
+        // early error it would drop un-zeroized, so wipe the keys ourselves first.
+        let manifest_key = match unwrap_prefixed(&class_keys, manifest_key_field) {
+            Ok(k) => k,
+            Err(e) => {
+                for v in class_keys.values_mut() {
+                    v.zeroize();
+                }
+                return Err(e);
+            }
+        };
 
         Ok(BackupDecryptor {
             backup_dir: backup_dir.to_path_buf(),
@@ -252,7 +262,7 @@ impl BackupDecryptor {
         let (enc_key, size) = file_key_field(file_blob)?;
         let ct_path = self.backup_dir.join(&file_id[..2]).join(file_id);
         let ct = std::fs::read(&ct_path).map_err(|e| Error::io(&ct_path, e))?;
-        self.decrypt_bytes(&enc_key, &ct, size.map(|s| s as usize))
+        self.decrypt_bytes(&enc_key, &ct, size.and_then(|s| usize::try_from(s).ok()))
     }
 
     /// Decrypt raw ciphertext given a file's class-prefixed wrapped key (the

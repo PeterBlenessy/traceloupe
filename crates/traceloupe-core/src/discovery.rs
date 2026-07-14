@@ -113,7 +113,15 @@ pub fn read_backup_info(dir: &Path) -> BackupInfo {
         .and_then(|d| d.get("Last Backup Date"))
         .or_else(|| manifest_dict.and_then(|d| d.get("Date")))
         .and_then(|v| v.as_date())
-        .map(|d| time::OffsetDateTime::from(std::time::SystemTime::from(d)).unix_timestamp());
+        // Convert via a Unix-epoch duration, not `OffsetDateTime::from` — a crafted
+        // out-of-range plist date would panic that conversion (this fn is on the
+        // discovery/launch path). Degrade to None instead of crashing.
+        .and_then(|d| {
+            std::time::SystemTime::from(d)
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|dur| dur.as_secs() as i64)
+        });
 
     BackupInfo {
         id,

@@ -66,15 +66,15 @@ struct ActiveBackup(Mutex<Option<PathBuf>>);
 
 impl ActiveBackup {
     fn set(&self, path: PathBuf) {
-        *self.0.lock().unwrap() = Some(path);
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(path);
     }
     fn clear(&self) {
-        *self.0.lock().unwrap() = None;
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
     fn path(&self) -> Result<PathBuf, String> {
         self.0
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .clone()
             .ok_or_else(|| "no backup is open".to_string())
     }
@@ -89,10 +89,10 @@ struct SessionKeys(Mutex<Option<Arc<BackupDecryptor>>>);
 
 impl SessionKeys {
     fn set(&self, decryptor: Option<Arc<BackupDecryptor>>) {
-        *self.0.lock().unwrap() = decryptor;
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = decryptor;
     }
     fn get(&self) -> Option<Arc<BackupDecryptor>> {
-        self.0.lock().unwrap().clone()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -101,12 +101,14 @@ impl SessionKeys {
 #[derive(Default)]
 struct ImportCancel(Mutex<Option<CancelToken>>);
 
-/// Serializes partial re-imports: only one may touch the cache at a time. Two
-/// concurrent re-imports would otherwise contend on the single SQLite writer and
-/// collide on the shared manifest temp file. A second re-import waits here for the
-/// first to finish rather than failing.
+/// Serializes every cache-writing import for a backup — full imports AND partial
+/// re-imports. Only one may touch a backup's cache/media/temp files at a time.
+/// Without this, a full import's atomic swap (renaming a fresh cache over the live
+/// one) racing a re-import's in-place writes would silently drop the re-import's
+/// rows, and two full imports would collide on the shared `cache.importing.db`
+/// temp. Waiters queue rather than fail.
 #[derive(Default)]
-struct ReimportGate(tauri::async_runtime::Mutex<()>);
+struct ImportGate(tauri::async_runtime::Mutex<()>);
 
 /// Reconstruct the decryptor for an encrypted backup from its Keychain password
 /// and the source dir recorded in its cache. `None` if not encrypted / no key, or
@@ -124,11 +126,6 @@ fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecr
     BackupDecryptor::open(Path::new(&source_dir), &password)
         .ok()
         .map(Arc::new)
-}
-
-/// Open the active cache DB for a read query.
-fn open_active_cache(active: &ActiveBackup) -> Result<CacheDb, String> {
-    CacheDb::open(&active.path()?).map_err(|e| e.to_string())
 }
 
 /// A backup id is joined into cache/work paths and used as a Keychain account,
@@ -153,29 +150,37 @@ enum DiscoveryResult {
 }
 
 #[tauri::command]
-fn list_backups(root: Option<String>) -> Result<DiscoveryResult, String> {
-    // No root → scan the default MobileSync location (needs FDA). A root from
-    // the folder picker → discover_at, which also accepts a single backup dir.
-    let result = match root {
-        Some(r) => discovery::discover_at(&PathBuf::from(r)),
-        None => {
-            let root = discovery::default_backup_root()
-                .ok_or_else(|| "cannot resolve home directory".to_string())?;
-            discovery::discover_backups(&root)
+async fn list_backups(root: Option<String>) -> Result<DiscoveryResult, String> {
+    // A full MobileSync scan touches the disk; keep it off the main thread so the
+    // UI never freezes while discovering backups.
+    tauri::async_runtime::spawn_blocking(move || {
+        // No root → scan the default MobileSync location (needs FDA). A root from
+        // the folder picker → discover_at, which also accepts a single backup dir.
+        let result = match root {
+            Some(r) => discovery::discover_at(&PathBuf::from(r)),
+            None => {
+                let root = discovery::default_backup_root()
+                    .ok_or_else(|| "cannot resolve home directory".to_string())?;
+                discovery::discover_backups(&root)
+            }
+        };
+        match result {
+            Ok(backups) => Ok(DiscoveryResult::Ok { backups }),
+            Err(traceloupe_core::Error::PermissionDenied { path }) => {
+                Ok(DiscoveryResult::PermissionDenied {
+                    path: path.display().to_string(),
+                })
+            }
+            Err(traceloupe_core::Error::BackupDirNotFound { path }) => {
+                Ok(DiscoveryResult::NotFound {
+                    path: path.display().to_string(),
+                })
+            }
+            Err(e) => Err(e.to_string()),
         }
-    };
-    match result {
-        Ok(backups) => Ok(DiscoveryResult::Ok { backups }),
-        Err(traceloupe_core::Error::PermissionDenied { path }) => {
-            Ok(DiscoveryResult::PermissionDenied {
-                path: path.display().to_string(),
-            })
-        }
-        Err(traceloupe_core::Error::BackupDirNotFound { path }) => Ok(DiscoveryResult::NotFound {
-            path: path.display().to_string(),
-        }),
-        Err(e) => Err(e.to_string()),
-    }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The default Finder/MobileSync backup location, for seeding the folder
@@ -348,7 +353,12 @@ fn set_log_level(level: String) {
 /// Stop the in-flight import (kills the iLEAPP subprocess). No-op when idle.
 #[tauri::command]
 fn cancel_import(import_cancel: State<'_, ImportCancel>) {
-    if let Some(token) = import_cancel.0.lock().unwrap().as_ref() {
+    if let Some(token) = import_cancel
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
         token.cancel();
     }
 }
@@ -360,6 +370,7 @@ async fn import_backup(
     active: State<'_, ActiveBackup>,
     session: State<'_, SessionKeys>,
     import_cancel: State<'_, ImportCancel>,
+    gate: State<'_, ImportGate>,
     backup_path: String,
     backup_id: String,
     password: String,
@@ -368,6 +379,9 @@ async fn import_backup(
     if !valid_backup_id(&backup_id) {
         return Err("invalid backup id".to_string());
     }
+    // Serialize against re-imports and any other import: only one writer touches a
+    // backup's cache/temp at a time (held for the whole run).
+    let _gate = gate.0.lock().await;
     let cfg = resolve_engine(&app).ok_or_else(|| {
         "iLEAPP engine is not installed. Set TRACELOUPE_ILEAPP or install the engine.".to_string()
     })?;
@@ -384,7 +398,7 @@ async fn import_backup(
 
     let cancel = CancelToken::new();
     // Expose the token so `cancel_import` can stop this run (kills iLEAPP).
-    *import_cancel.0.lock().unwrap() = Some(cancel.clone());
+    *import_cancel.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
     let backup_path = PathBuf::from(backup_path);
     // Kept for post-import key setup (the originals are moved into the worker).
     let source_dir = backup_path.clone();
@@ -476,7 +490,7 @@ async fn import_backup(
 
     // The run is over (done, error, or cancelled) — clear the shared token so a
     // later cancel_import can't stop a future import, and free it.
-    *import_cancel.0.lock().unwrap() = None;
+    *import_cancel.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     let outcome = result
         .map_err(|e| format!("import task panicked: {e}"))?
@@ -622,7 +636,7 @@ async fn reimport_module(
     app: AppHandle,
     active: State<'_, ActiveBackup>,
     session: State<'_, SessionKeys>,
-    gate: State<'_, ReimportGate>,
+    gate: State<'_, ImportGate>,
     module_id: String,
 ) -> Result<ReimportResult, String> {
     if !import::REIMPORTABLE_NATIVE.contains(&module_id.as_str()) {
@@ -923,51 +937,56 @@ async fn get_range_window(
 /// Open a message attachment's file with the OS default app (for documents and
 /// anything not rendered inline).
 #[tauri::command]
-fn open_attachment(
+async fn open_attachment(
     active: State<'_, ActiveBackup>,
     session: State<'_, SessionKeys>,
     attachment_id: i64,
 ) -> Result<(), String> {
-    let cache = open_active_cache(&active)?;
-    let (local_path, _mime, decrypt_key, plain_size) =
-        query::attachment_blob(&cache, attachment_id)
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| "attachment file is not available".to_string())?;
+    let active_path = active.path()?;
+    let decryptor = session.get();
+    // Reading + full-file AES-decrypting a large attachment must not run on the
+    // main thread (it would freeze the UI); do it on a blocking worker.
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&active_path).map_err(|e| e.to_string())?;
+        let (local_path, _mime, decrypt_key, plain_size) =
+            query::attachment_blob(&cache, attachment_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| "attachment file is not available".to_string())?;
 
-    // Encrypted backup: decrypt to a persistent temp beside the cache and open
-    // that (the external app needs to read it after this returns, so it isn't
-    // auto-deleted — a re-import/forget clears the dir). Plaintext: open directly.
-    let to_open = if let Some(key) = decrypt_key {
-        let dec = session
-            .get()
-            .ok_or_else(|| "backup keys are not loaded".to_string())?;
-        let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
-        let size = plain_size.and_then(|s| usize::try_from(s).ok());
-        let plain = dec
-            .decrypt_bytes(&key, &ciphertext, size)
+        // Encrypted backup: decrypt to a persistent temp (0600) beside the cache
+        // and open that (the external app reads it after this returns, so it isn't
+        // auto-deleted — a re-import/forget clears the dir). Plaintext: open direct.
+        let to_open = if let Some(key) = decrypt_key {
+            let dec = decryptor.ok_or_else(|| "backup keys are not loaded".to_string())?;
+            let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
+            let size = plain_size.and_then(|s| usize::try_from(s).ok());
+            let plain = dec
+                .decrypt_bytes(&key, &ciphertext, size)
+                .map_err(|e| e.to_string())?;
+            let dir = active_path
+                .parent()
+                .map(|p| p.join("att-open"))
+                .ok_or_else(|| "unexpected cache layout".to_string())?;
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let name = std::path::Path::new(&local_path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("attachment-{attachment_id}"));
+            let dest = dir.join(format!("{attachment_id}-{name}"));
+            write_private(&dest, &plain).map_err(|e| e.to_string())?;
+            dest
+        } else {
+            PathBuf::from(&local_path)
+        };
+
+        std::process::Command::new("/usr/bin/open")
+            .arg(&to_open)
+            .spawn()
             .map_err(|e| e.to_string())?;
-        let dir = active
-            .path()?
-            .parent()
-            .map(|p| p.join("att-open"))
-            .ok_or_else(|| "unexpected cache layout".to_string())?;
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let name = std::path::Path::new(&local_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| format!("attachment-{attachment_id}"));
-        let dest = dir.join(format!("{attachment_id}-{name}"));
-        write_private(&dest, &plain).map_err(|e| e.to_string())?;
-        dest
-    } else {
-        PathBuf::from(&local_path)
-    };
-
-    std::process::Command::new("/usr/bin/open")
-        .arg(&to_open)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1454,11 +1473,11 @@ fn attachment_protocol_response(
             .unwrap();
     }
 
-    // Audio/video and anything else served inline: raw bytes with stored mime.
-    // Honor Range requests so <video>/<audio> can seek without re-downloading
-    // (and without reading the whole file into memory each time). The stored MIME
-    // is from the backup, so validate it before it becomes a response header.
-    let content_type = media::safe_content_type(mime.as_deref());
+    // Audio/video served inline (Range-seekable); anything else (html/svg/js/…)
+    // is forced to a download type so an attacker-supplied attachment can't run as
+    // a document in the custom-scheme origin. The stored MIME is untrusted, so it's
+    // validated for header-safety inside the helper.
+    let content_type = media::inline_media_content_type(mime.as_deref());
     let Ok(meta) = std::fs::metadata(&source_path) else {
         return not_found();
     };
@@ -1618,7 +1637,7 @@ pub fn run() {
         .manage(ActiveBackup::default())
         .manage(SessionKeys::default())
         .manage(ImportCancel::default())
-        .manage(ReimportGate::default())
+        .manage(ImportGate::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of

@@ -18,3 +18,25 @@ pub mod query;
 pub mod sidecar;
 
 pub use error::{Error, Result};
+
+/// Write bytes to a file with owner-only (0600) permissions on Unix, so decrypted
+/// plaintext (a Manifest, a transient DB) isn't left world-readable at rest. The
+/// file is created fresh (truncating any existing content).
+pub(crate) fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)
+    }
+}
