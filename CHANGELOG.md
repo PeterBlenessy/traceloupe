@@ -65,16 +65,19 @@ the batched 0.3.0+ migration under "Planned" below.
     (`AddressBook.sqlitedb`) via the Manifest Index. Every built-in view then
     materializes natively, and the redundant iLEAPP sms/notes passes are dropped
     so import time actually falls.
-  - *Third-party, native:* WhatsApp, TikTok, Telegram (moved off iLEAPP to native),
-    plus Instagram, Facebook, Facebook Messenger, X/Twitter, and Snapchat. Snapchat
-    stores little locally (ephemeral by design), so its native parser surfaces only
-    what persists.
+  - *Third-party, native:* TikTok (moved off iLEAPP), plus Instagram, Facebook,
+    Facebook Messenger, X/Twitter, and Snapchat. Snapchat stores little locally
+    (ephemeral by design), so its native parser surfaces only what persists.
+    WhatsApp and Telegram are deferred to 0.4.0 — they already read via iLEAPP, so
+    there's no urgency to convert them first.
 - **Batch 2 (0.3.x) — iLEAPP optional.** Default install fully offline (no first-
   import download, no bundled ~222 MB engine); iLEAPP fetched on demand only when
   the user opts into deeper third-party coverage.
 - **Batch 3+ (0.4.0+) — remaining native third-party modules** per the app-tier
-  roadmap, replacing iLEAPP coverage incrementally. Per-app status and the version
-  each gains native support are tracked in `docs/app-support.md`.
+  roadmap, replacing iLEAPP coverage incrementally — starting with WhatsApp and
+  Telegram (deferred from Batch 1, still read via iLEAPP until then). Per-app
+  status and the version each gains native support are tracked in
+  `docs/app-support.md`.
 
 ## [0.1.0] — 2026-07-13
 
