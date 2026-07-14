@@ -59,10 +59,33 @@ what's actually in the backup (confirmed by whether iLEAPP even has a module):
 > ✅ done: **WhatsApp**, **Facebook Messenger** (both clean SQLite).
 > Remaining, harder: **TikTok** (protobuf message bodies), **Instagram** (messages
 > stored as archived plists) — framework-ready, need a blob decoder.
-> ⚪ no recoverable local chat store (no iLEAPP module exists): **X/Twitter**,
-> **Facebook** (main app — chats live in Messenger), **Snapchat** (ephemeral).
+> Investigate (data exists but not open-source-documented — see Research notes):
+> **Snapchat**, **X/Twitter**, **Facebook** (main app).
 
 **Telegram is deferred to 0.4.0** (already reads through iLEAPP; no urgency).
+
+**Research notes — apps with no iLEAPP module** (web research, July 2026; "no
+iLEAPP module" ≠ "no data"). These need a real backup to pin exact schemas before
+a parser is safe to write:
+- **Snapchat** (`com.toyopagroup.picaboo`) — iOS *does* persist chats, contacts,
+  best-friends, and memories in the app's `Data/Application/<uuid>/` container
+  (SQLite under a `databases/`-style folder; message receipts too). Records
+  survive "Clear Conversation" in WAL/freelist. **Caveat:** the store is often
+  **encrypted** (Cellebrite/others decrypt it), so it may need key material — the
+  reason iLEAPP has no module. Upgraded from "no data" to *investigate*.
+- **X/Twitter** (`com.atebits.tweetie2`) — no documented clean message DB; DMs
+  aren't in a well-known SQLite. Cached API responses live in the **generic
+  `Cache.db`** (unencrypted CFURL cache: `cfurl_cache_response` +
+  `cfurl_cache_blob_data`). Best-effort carving, not a clean store.
+- **Facebook main app** (`com.facebook.Facebook`) — chats route through Messenger
+  (already native); the rest is feed/media in `Cache.db`.
+- **Generic `Cache.db` opportunity:** nearly every app has
+  `Library/Caches/<bundle>/Cache.db` holding cached network content. One generic
+  native module (iLEAPP does this via `fsCachedData`/`cachev0`/`parsecdCache`)
+  could surface cached data across many apps at once — a strong future addition.
+
+Sources: forensafe (iOS Snapchat/Messenger), Cellebrite & xperylab (Snapchat
+decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifacts).
 
 ### Tier 1 — Top 10
 
@@ -73,8 +96,8 @@ what's actually in the backup (confirmed by whether iLEAPP even has a module):
 | TikTok | Messages (protobuf) + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | 0.3.0 (needs protobuf) |
 | Instagram | DMs as archived plists | ⬜ Planned | 0.3.0 (needs plist decode) |
 | Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | 0.4.0 (deferred) |
-| Facebook (main app) | Feed/media cache; no local chat store | ⚪ Little local data | — |
-| Snapchat | Ephemeral by design | ⚪ Little local data | — |
+| Facebook (main app) | Chats via Messenger (done); feed/media in generic `Cache.db` | ⬜ Investigate (Cache.db) | TBD |
+| Snapchat | Chats/contacts DO persist on iOS (often encrypted) | ⬜ Investigate (real backup) | TBD |
 | YouTube | Watch/search history, cache | ⬜ Planned | TBD |
 | Gmail | Cached mail/metadata | ⬜ Planned | TBD |
 | WeChat | Messages, media | ⬜ Planned | TBD |
@@ -84,7 +107,7 @@ what's actually in the backup (confirmed by whether iLEAPP even has a module):
 
 | App | Status | Native since |
 |-----|--------|--------------|
-| X / Twitter | ⚪ Little local data (no chat store; no iLEAPP module) | — |
+| X / Twitter | ⬜ Investigate — DMs not in a clean DB; cached in generic `Cache.db` | TBD |
 | Discord | ⬜ Planned | TBD |
 | Reddit | ⬜ Planned | TBD |
 | Spotify | ⬜ Planned | TBD |
