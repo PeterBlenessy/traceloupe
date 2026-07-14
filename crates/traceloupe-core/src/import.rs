@@ -160,6 +160,21 @@ pub fn import_backup(
         )
     };
 
+    // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
+    // longer depend on iLEAPP to extract it for us.
+    let native_contacts = effective.contains(&"contacts") && {
+        on_phase(ImportPhase::Normalizing {
+            step: "Contacts".into(),
+        });
+        import_contacts_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        )
+    };
+
     // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
     // stages materialized natively above are skipped.
     let mut report = normalize::normalize_lava_with_progress(
@@ -171,6 +186,7 @@ pub fn import_backup(
             notes: native_notes,
             calls: native_calls,
             safari: native_safari,
+            contacts: native_contacts,
         },
         |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
     )?;
@@ -179,6 +195,7 @@ pub fn import_backup(
     report.notes += native.notes;
     report.calls += native.calls;
     report.safari_visits += native.safari_visits;
+    report.contacts += native.contacts;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -283,7 +300,7 @@ pub fn import_backup(
         let (label, count, source_present) = match id {
             "messages" => ("Messages", report.messages, native_messages),
             "calls" => ("Call history", report.calls, native_calls),
-            "contacts" => ("Contacts", report.contacts, false),
+            "contacts" => ("Contacts", report.contacts, native_contacts),
             "safari" => ("Safari history", report.safari_visits, native_safari),
             "notes" => ("Notes", report.notes, native_notes),
             // camera_roll isn't checked here: media_items also holds message/app
@@ -595,6 +612,89 @@ fn import_safari_native(
     };
     let _ = std::fs::remove_file(&out);
     ok
+}
+
+/// Self-extract + parse Contacts from `AddressBook.sqlitedb` (photos from the
+/// sibling `AddressBookImages.sqlitedb`). Returns true when Contacts were handled
+/// natively (so the iLEAPP contacts stage is skipped). The address-book insert
+/// only touches device contacts, leaving any third-party rows untouched.
+fn import_contacts_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) -> bool {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Contacts unavailable ({e}); using iLEAPP."));
+            return false;
+        }
+    };
+    let entry = match index.find("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb") {
+        Ok(Some(e)) => e,
+        Ok(None) => return false, // not in this backup → iLEAPP path
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Contacts: Manifest read failed ({e}); using iLEAPP."
+            ));
+            return false;
+        }
+    };
+    let ab = work_dir.join(".AddressBook.sqlitedb");
+    if let Err(e) = index.extract_to(&entry, decryptor, &ab) {
+        let _ = std::fs::remove_file(&ab);
+        report.warnings.push(format!(
+            "Native Contacts: couldn't read AddressBook.sqlitedb ({e}); using iLEAPP."
+        ));
+        return false;
+    }
+
+    // Photos are optional — a missing/odd images DB just means no avatars.
+    let images = match index.find(
+        "HomeDomain",
+        "Library/AddressBook/AddressBookImages.sqlitedb",
+    ) {
+        Ok(Some(ie)) => {
+            let ip = work_dir.join(".AddressBookImages.sqlitedb");
+            let m = if index.extract_to(&ie, decryptor, &ip).is_ok() {
+                crate::parsers::address_book::parse_address_book_images(&ip).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+            let _ = std::fs::remove_file(&ip);
+            m
+        }
+        _ => Default::default(),
+    };
+
+    let contacts = match crate::parsers::address_book::parse_address_book(&ab) {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&ab);
+            report.warnings.push(format!(
+                "Native Contacts: parse failed ({e}); using iLEAPP."
+            ));
+            return false;
+        }
+    };
+    let _ = std::fs::remove_file(&ab);
+
+    match crate::parsers::address_book::insert_contacts(cache, &contacts, &images, false) {
+        Ok(n) => {
+            report.contacts += n;
+            true
+        }
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Contacts: insert failed ({e}); using iLEAPP."
+            ));
+            false
+        }
+    }
 }
 
 /// The natively-parsed data types that can be re-imported on their own — no
