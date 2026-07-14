@@ -14,6 +14,7 @@
 //! modules (`whatsApp.py`, `tikTok.py`, `telegramMesssages.py`); the Rust is
 //! written from those facts, not ported.
 
+pub mod facebook_messenger;
 pub mod whatsapp;
 
 use std::path::Path;
@@ -53,14 +54,18 @@ pub struct AppChatModule {
     /// Service label shown in the Messages view (e.g. "WhatsApp"). Also the tag
     /// used to skip the equivalent iLEAPP stage.
     pub service: &'static str,
-    /// Locate this app's message DB in the Manifest (domain/path vary by app).
-    pub locate: fn(&ManifestIndex) -> Result<Option<FileEntry>>,
-    /// Parse the extracted (decrypted) DB into a message stream.
+    /// Locate this app's message DB(s) in the Manifest. Most apps have one; some
+    /// (e.g. Messenger's per-user `lightspeed-userDatabases/*.db`) have several,
+    /// so this returns every candidate and the driver parses each.
+    pub locate: fn(&ManifestIndex) -> Result<Vec<FileEntry>>,
+    /// Parse one extracted (decrypted) DB into a message stream. A DB that turns
+    /// out not to hold this app's messages returns an empty vec (not an error), so
+    /// non-matching candidates are skipped quietly.
     pub parse: fn(&Path) -> Result<Vec<AppMessage>>,
 }
 
 /// The registered native app chat modules. Add an entry to support a new app.
-pub const APP_CHAT_MODULES: &[AppChatModule] = &[whatsapp::MODULE];
+pub const APP_CHAT_MODULES: &[AppChatModule] = &[whatsapp::MODULE, facebook_messenger::MODULE];
 
 /// Insert a parsed app conversation stream into the cache as `threads` + messages,
 /// tagged with `service`. Messages are grouped by `chat_key`; a thread's name is

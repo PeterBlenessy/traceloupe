@@ -735,9 +735,8 @@ fn import_app_chats_native(
     };
     let mut handled = Vec::new();
     for m in crate::parsers::apps::APP_CHAT_MODULES {
-        let entry = match (m.locate)(&index) {
-            Ok(Some(e)) => e,
-            Ok(None) => continue, // app not in this backup → iLEAPP (or nothing)
+        let entries = match (m.locate)(&index) {
+            Ok(e) => e,
             Err(e) => {
                 report
                     .warnings
@@ -745,30 +744,45 @@ fn import_app_chats_native(
                 continue;
             }
         };
-        let out = work_dir.join(format!(".app-{}.sqlite", m.id));
-        if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        if entries.is_empty() {
+            continue; // app not in this backup → iLEAPP (or nothing)
+        }
+        // Some apps (Messenger) have several candidate DBs; parse each and combine.
+        let mut msgs = Vec::new();
+        let mut parsed_any = false;
+        for (i, entry) in entries.iter().enumerate() {
+            let out = work_dir.join(format!(".app-{}-{i}.sqlite", m.id));
+            if let Err(e) = index.extract_to(entry, decryptor, &out) {
+                let _ = std::fs::remove_file(&out);
+                report
+                    .warnings
+                    .push(format!("Native {}: couldn't read a DB ({e}).", m.service));
+                continue;
+            }
+            match (m.parse)(&out) {
+                Ok(mut parsed) => {
+                    msgs.append(&mut parsed);
+                    parsed_any = true;
+                }
+                Err(e) => report
+                    .warnings
+                    .push(format!("Native {}: parse failed ({e}).", m.service)),
+            }
             let _ = std::fs::remove_file(&out);
+        }
+        // Claim the app (and skip iLEAPP for it) only if we actually read its store
+        // — even if it held zero messages. A total failure leaves iLEAPP to try.
+        if !parsed_any {
             report.warnings.push(format!(
-                "Native {}: couldn't read its DB ({e}); using iLEAPP.",
+                "Native {}: no DB could be read; using iLEAPP.",
                 m.service
             ));
             continue;
         }
-        let parsed = (m.parse)(&out);
-        let _ = std::fs::remove_file(&out);
-        match parsed {
-            Ok(msgs) => {
-                match crate::parsers::apps::insert_app_conversation(cache, m.service, msgs, report)
-                {
-                    Ok(()) => handled.push(m.service),
-                    Err(e) => report.warnings.push(format!(
-                        "Native {}: insert failed ({e}); using iLEAPP.",
-                        m.service
-                    )),
-                }
-            }
+        match crate::parsers::apps::insert_app_conversation(cache, m.service, msgs, report) {
+            Ok(()) => handled.push(m.service),
             Err(e) => report.warnings.push(format!(
-                "Native {}: parse failed ({e}); using iLEAPP.",
+                "Native {}: insert failed ({e}); using iLEAPP.",
                 m.service
             )),
         }
