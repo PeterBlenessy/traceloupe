@@ -11,6 +11,8 @@ import { client, type ReimportResult } from "@/lib/ipc";
 const INVALIDATE_KEYS: Record<string, string[]> = {
   recordings: ["recordings"],
   notes: ["notes"],
+  calls: ["callsCount", "callsWindow"],
+  safari: ["safariCount", "safariWindow"],
   camera_roll: ["mediaCount", "mediaSources", "mediaWindow"],
   messages: [
     "threads",
@@ -24,22 +26,18 @@ const INVALIDATE_KEYS: Record<string, string[]> = {
 
 /** Human count of what a re-import produced, for the success toast. */
 function summarize(module: string, r: ReimportResult): string {
-  const n =
+  const { n, noun } =
     module === "recordings"
-      ? r.recordings
+      ? { n: r.recordings, noun: "recordings" }
       : module === "camera_roll"
-        ? r.mediaItems
+        ? { n: r.mediaItems, noun: "photos & videos" }
         : module === "notes"
-          ? r.notes
-          : r.messages;
-  const noun =
-    module === "recordings"
-      ? "recordings"
-      : module === "camera_roll"
-        ? "photos & videos"
-        : module === "notes"
-          ? "notes"
-          : "messages";
+          ? { n: r.notes, noun: "notes" }
+          : module === "calls"
+            ? { n: r.calls, noun: "calls" }
+            : module === "safari"
+              ? { n: r.safariVisits, noun: "Safari visits" }
+              : { n: r.messages, noun: "messages" };
   return `Re-imported ${n.toLocaleString()} ${noun}`;
 }
 

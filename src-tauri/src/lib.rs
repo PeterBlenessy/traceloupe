@@ -624,6 +624,8 @@ struct ReimportResult {
     messages: usize,
     threads: usize,
     notes: usize,
+    calls: usize,
+    safari_visits: usize,
     warnings: Vec<String>,
 }
 
@@ -745,6 +747,8 @@ async fn reimport_module(
         messages: report.messages,
         threads: report.threads,
         notes: report.notes,
+        calls: report.calls,
+        safari_visits: report.safari_visits,
         warnings: report.warnings,
     })
 }
@@ -756,6 +760,8 @@ fn reimport_label(module_id: &str) -> &'static str {
         "camera_roll" => "camera roll",
         "messages" => "messages",
         "notes" => "notes",
+        "calls" => "call history",
+        "safari" => "Safari history",
         _ => "data",
     }
 }
@@ -767,6 +773,8 @@ fn reimport_count(module_id: &str, r: &traceloupe_core::normalize::ImportReport)
         "camera_roll" => format!("{} photos & videos", r.media_items),
         "messages" => format!("{} messages in {} threads", r.messages, r.threads),
         "notes" => format!("{} notes", r.notes),
+        "calls" => format!("{} calls", r.calls),
+        "safari" => format!("{} Safari visits", r.safari_visits),
         _ => String::new(),
     }
 }

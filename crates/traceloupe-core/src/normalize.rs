@@ -35,27 +35,42 @@ pub struct ImportReport {
 
 /// Normalize the lava DB at `lava_path` into `cache`. `engine_out_dir` is the
 /// iLEAPP output folder that lava's `extraction_path`s are relative to.
+/// Which iLEAPP stages to skip because the orchestrator already materialized that
+/// artifact natively (Phase 2). Each `true` suppresses the corresponding iLEAPP
+/// normalize stage so the native and iLEAPP paths never double-insert.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NativeSkips {
+    pub messages: bool,
+    pub notes: bool,
+    pub calls: bool,
+    pub safari: bool,
+}
+
 pub fn normalize_lava(
     lava_path: &Path,
     engine_out_dir: &Path,
     cache: &CacheDb,
 ) -> Result<ImportReport> {
-    normalize_lava_with_progress(lava_path, engine_out_dir, cache, false, false, |_| {})
+    normalize_lava_with_progress(
+        lava_path,
+        engine_out_dir,
+        cache,
+        NativeSkips::default(),
+        |_| {},
+    )
 }
 
 /// Like [`normalize_lava`], but calls `on_step` with a human label before each
 /// sub-stage so the UI can show live progress during the (potentially long)
 /// normalize pass instead of one opaque "organizing" spinner.
-/// `skip_messages` skips the iLEAPP `sms` stage — set when the caller already
-/// materialized Messages natively from `sms.db` (Phase 2), to avoid duplicates.
-/// `skip_notes` likewise skips the iLEAPP `notes` stage when Notes were
-/// materialized natively from `NoteStore.sqlite`.
+/// `skips` suppresses each iLEAPP stage the caller already handled natively
+/// (Phase 2) — Messages from `sms.db`, Notes from `NoteStore.sqlite`, Calls from
+/// `CallHistory.storedata`, Safari from `History.db` — to avoid double-inserting.
 pub fn normalize_lava_with_progress(
     lava_path: &Path,
     engine_out_dir: &Path,
     cache: &CacheDb,
-    skip_messages: bool,
-    skip_notes: bool,
+    skips: NativeSkips,
     mut on_step: impl FnMut(&str),
 ) -> Result<ImportReport> {
     let lava = Connection::open_with_flags(lava_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -82,17 +97,23 @@ pub fn normalize_lava_with_progress(
     );
     // Messages: skipped when the orchestrator already materialized them natively
     // from sms.db (Phase 2). Otherwise the iLEAPP `sms` path runs.
-    if !skip_messages {
+    if !skips.messages {
         stage!(
             "Messages",
             normalize_sms(&lava, engine_out_dir, cache, &mut report)
         );
     }
-    stage!("Call history", normalize_calls(&lava, cache, &mut report));
-    stage!(
-        "Safari history",
-        normalize_safari(&lava, cache, &mut report)
-    );
+    // Calls / Safari: skipped when materialized natively from CallHistory.storedata
+    // / History.db (Phase 2); otherwise the iLEAPP path runs.
+    if !skips.calls {
+        stage!("Call history", normalize_calls(&lava, cache, &mut report));
+    }
+    if !skips.safari {
+        stage!(
+            "Safari history",
+            normalize_safari(&lava, cache, &mut report)
+        );
+    }
     // Contacts come from a native parse of the decrypted AddressBook that
     // iLEAPP extracts (its own lava output for contacts is lossy — see
     // docs/spike-ileapp.md). A missing DB just means no contacts.
@@ -102,7 +123,7 @@ pub fn normalize_lava_with_progress(
     );
     // Notes: skipped when the orchestrator materialized them natively from
     // NoteStore.sqlite (Phase 2). Otherwise the iLEAPP `notes` path runs.
-    if !skip_notes {
+    if !skips.notes {
         stage!("Notes", normalize_notes(&lava, cache, &mut report));
     }
     // Third-party chat apps → the Messages view, tagged by service. Each is a

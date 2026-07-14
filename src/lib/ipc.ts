@@ -127,6 +127,8 @@ export interface ReimportResult {
   messages: number;
   threads: number;
   notes: number;
+  calls: number;
+  safariVisits: number;
   warnings: string[];
 }
 
@@ -1243,6 +1245,8 @@ export const mockClient: TraceLoupeClient = {
     messages: 0,
     threads: 0,
     notes: 0,
+    calls: 0,
+    safariVisits: 0,
     warnings: [],
   }),
 };

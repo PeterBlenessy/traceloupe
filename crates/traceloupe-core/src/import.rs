@@ -132,19 +132,53 @@ pub fn import_backup(
         )
     };
 
+    // Phase 2: materialize Calls natively from CallHistory.storedata, and Safari
+    // history from History.db (both via the Manifest Index). Same fallback
+    // contract as Messages/Notes — any miss/parse failure declines and iLEAPP runs.
+    let native_calls = effective.contains(&"calls") && {
+        on_phase(ImportPhase::Normalizing {
+            step: "Call history".into(),
+        });
+        import_calls_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        )
+    };
+    let native_safari = effective.contains(&"safari") && {
+        on_phase(ImportPhase::Normalizing {
+            step: "Safari history".into(),
+        });
+        import_safari_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        )
+    };
+
     // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
-    // the Messages/Notes stages are skipped when handled natively above.
+    // stages materialized natively above are skipped.
     let mut report = normalize::normalize_lava_with_progress(
         &lava_path,
         &engine_out_dir,
         &cache,
-        native_messages,
-        native_notes,
+        normalize::NativeSkips {
+            messages: native_messages,
+            notes: native_notes,
+            calls: native_calls,
+            safari: native_safari,
+        },
         |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
     )?;
     report.threads += native.threads;
     report.messages += native.messages;
     report.notes += native.notes;
+    report.calls += native.calls;
+    report.safari_visits += native.safari_visits;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -248,9 +282,9 @@ pub fn import_backup(
     for id in effective {
         let (label, count, source_present) = match id {
             "messages" => ("Messages", report.messages, native_messages),
-            "calls" => ("Call history", report.calls, false),
+            "calls" => ("Call history", report.calls, native_calls),
             "contacts" => ("Contacts", report.contacts, false),
-            "safari" => ("Safari history", report.safari_visits, false),
+            "safari" => ("Safari history", report.safari_visits, native_safari),
             "notes" => ("Notes", report.notes, native_notes),
             // camera_roll isn't checked here: media_items also holds message/app
             // attachments, so a 0-count test wouldn't be meaningful.
@@ -464,9 +498,115 @@ fn import_notes_native(
     ok
 }
 
+/// Materialize Calls natively from `CallHistory.storedata`. Returns true when the
+/// native path handled Calls (so the iLEAPP `callhistory` stage is skipped); false
+/// on any miss/failure, leaving the iLEAPP path to run.
+fn import_calls_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) -> bool {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Calls unavailable ({e}); using iLEAPP."));
+            return false;
+        }
+    };
+    let entry = match index.find("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata") {
+        Ok(Some(e)) => e,
+        Ok(None) => return false, // not in this backup → iLEAPP path
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Calls: Manifest read failed ({e}); using iLEAPP."
+            ));
+            return false;
+        }
+    };
+    let out = work_dir.join(".CallHistory.storedata");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report.warnings.push(format!(
+            "Native Calls: couldn't read CallHistory.storedata ({e}); using iLEAPP."
+        ));
+        return false;
+    }
+    let ok = match crate::parsers::calls::parse_calls(&out, cache, report, false) {
+        Ok(()) => true,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Calls: parse failed ({e}); using iLEAPP."));
+            false
+        }
+    };
+    let _ = std::fs::remove_file(&out);
+    ok
+}
+
+/// Materialize Safari history natively from `History.db`. Returns true when the
+/// native path handled Safari (so the iLEAPP `safarihistory` stage is skipped).
+fn import_safari_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) -> bool {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Safari unavailable ({e}); using iLEAPP."));
+            return false;
+        }
+    };
+    let entry = match index.find("HomeDomain", "Library/Safari/History.db") {
+        Ok(Some(e)) => e,
+        Ok(None) => return false, // not in this backup → iLEAPP path
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Safari: Manifest read failed ({e}); using iLEAPP."
+            ));
+            return false;
+        }
+    };
+    let out = work_dir.join(".History.db");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report.warnings.push(format!(
+            "Native Safari: couldn't read History.db ({e}); using iLEAPP."
+        ));
+        return false;
+    }
+    let ok = match crate::parsers::safari::parse_safari(&out, cache, report, false) {
+        Ok(()) => true,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Safari: parse failed ({e}); using iLEAPP."));
+            false
+        }
+    };
+    let _ = std::fs::remove_file(&out);
+    ok
+}
+
 /// The natively-parsed data types that can be re-imported on their own — no
 /// iLEAPP, so it's fast. The UI offers a "re-import" action only for these.
-pub const REIMPORTABLE_NATIVE: &[&str] = &["recordings", "camera_roll", "messages", "notes"];
+pub const REIMPORTABLE_NATIVE: &[&str] = &[
+    "recordings",
+    "camera_roll",
+    "messages",
+    "notes",
+    "calls",
+    "safari",
+];
 
 /// Re-run one native data type into an existing cache, replacing just that type's
 /// rows. Unlike [`import_backup`] this skips iLEAPP entirely, so it's cheap — for
@@ -594,6 +734,36 @@ pub fn reimport_module(
             // replace=true clears + re-inserts atomically (see parse_notes).
             let r = crate::parsers::notes::parse_notes(&note_db, &cache, &mut report, true);
             let _ = std::fs::remove_file(&note_db);
+            r?;
+        }
+        "calls" => {
+            let index = crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir)?;
+            let entry = index
+                .find("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata")?
+                .ok_or_else(|| {
+                    crate::Error::Parse("CallHistory.storedata is not in this backup".into())
+                })?;
+            let out = work_dir.join(".reimport-CallHistory.storedata");
+            if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+                let _ = std::fs::remove_file(&out);
+                return Err(e);
+            }
+            let r = crate::parsers::calls::parse_calls(&out, &cache, &mut report, true);
+            let _ = std::fs::remove_file(&out);
+            r?;
+        }
+        "safari" => {
+            let index = crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir)?;
+            let entry = index
+                .find("HomeDomain", "Library/Safari/History.db")?
+                .ok_or_else(|| crate::Error::Parse("History.db is not in this backup".into()))?;
+            let out = work_dir.join(".reimport-History.db");
+            if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+                let _ = std::fs::remove_file(&out);
+                return Err(e);
+            }
+            let r = crate::parsers::safari::parse_safari(&out, &cache, &mut report, true);
+            let _ = std::fs::remove_file(&out);
             r?;
         }
         other => {
