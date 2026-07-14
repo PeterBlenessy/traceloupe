@@ -53,35 +53,38 @@ locates its own DB and parses it into a shared message stream; one shared insert
 writes the threads/messages. Adding an app is one module file + a registry entry.
 **WhatsApp is the first module** (cleanest schema — used to validate the framework).
 
-**Batch 1 (0.3.0) — native third-party wave:**
+**Batch 1 (0.3.0) — native third-party wave.** Which apps are feasible is set by
+what's actually in the backup (confirmed by whether iLEAPP even has a module):
 
-> WhatsApp (✅ done, framework pilot) · TikTok · Instagram · Facebook ·
-> Facebook Messenger · X/Twitter · Snapchat
+> ✅ done: **WhatsApp**, **Facebook Messenger** (both clean SQLite).
+> Remaining, harder: **TikTok** (protobuf message bodies), **Instagram** (messages
+> stored as archived plists) — framework-ready, need a blob decoder.
+> ⚪ no recoverable local chat store (no iLEAPP module exists): **X/Twitter**,
+> **Facebook** (main app — chats live in Messenger), **Snapchat** (ephemeral).
 
 **Telegram is deferred to 0.4.0** (already reads through iLEAPP; no urgency).
-Everything else stays ⬜ Planned until scheduled into a later batch.
 
 ### Tier 1 — Top 10
 
 | App | What's stored locally | Status | Native since |
 |-----|-----------------------|--------|--------------|
 | WhatsApp | Messages (rich local SQLite) | ✅ Native — messages | 0.3.0 |
-| TikTok | Messages + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | 0.3.0 (Batch 1) |
+| Facebook Messenger | Messages (`lightspeed` SQLite) | ✅ Native — messages | 0.3.0 |
+| TikTok | Messages (protobuf) + social-graph contacts | 🟡 Via iLEAPP — messages, contacts | 0.3.0 (needs protobuf) |
+| Instagram | DMs as archived plists | ⬜ Planned | 0.3.0 (needs plist decode) |
 | Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | 0.4.0 (deferred) |
-| Instagram | DMs, media cache | ⬜ Planned | 0.3.0 (Batch 1) |
-| Facebook | Feed cache, messages, media | ⬜ Planned | 0.3.0 (Batch 1) |
-| Facebook Messenger | Messages, media | ⬜ Planned | 0.3.0 (Batch 1) |
-| Snapchat | Minimal — ephemeral by design (⚠ thin local store) | ⬜ Planned | 0.3.0 (Batch 1) |
+| Facebook (main app) | Feed/media cache; no local chat store | ⚪ Little local data | — |
+| Snapchat | Ephemeral by design | ⚪ Little local data | — |
 | YouTube | Watch/search history, cache | ⬜ Planned | TBD |
 | Gmail | Cached mail/metadata | ⬜ Planned | TBD |
 | WeChat | Messages, media | ⬜ Planned | TBD |
-| Signal | Minimal — encrypted local store | ⚪ Little local data | — |
+| Signal | Encrypted local store | ⚪ Little local data | — |
 
 ### Tier 2 — Top 25 (adds)
 
 | App | Status | Native since |
 |-----|--------|--------------|
-| X / Twitter | ⬜ Planned | 0.3.0 (Batch 1) |
+| X / Twitter | ⚪ Little local data (no chat store; no iLEAPP module) | — |
 | Discord | ⬜ Planned | TBD |
 | Reddit | ⬜ Planned | TBD |
 | Spotify | ⬜ Planned | TBD |

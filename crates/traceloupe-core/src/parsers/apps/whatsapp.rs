@@ -31,11 +31,12 @@ pub const MODULE: super::AppChatModule = super::AppChatModule {
 
 /// Find `ChatStorage.sqlite` under a WhatsApp app-group domain. The app-group
 /// UUID varies, so match on the filename and require a WhatsApp domain.
-fn locate(index: &ManifestIndex) -> Result<Option<FileEntry>> {
+fn locate(index: &ManifestIndex) -> Result<Vec<FileEntry>> {
     let hits = index.find_relative_like("ChatStorage.sqlite")?;
     Ok(hits
         .into_iter()
-        .find(|e| e.domain.to_lowercase().contains("whatsapp")))
+        .filter(|e| e.domain.to_lowercase().contains("whatsapp"))
+        .collect())
 }
 
 fn parse(db_path: &Path) -> Result<Vec<AppMessage>> {

@@ -144,6 +144,35 @@ Schema facts from iLEAPP `whatsApp.py`; provenance reference (§10).
 | Call history | ✅ | ⬜ | separate `CallHistory.sqlite` |
 | Contacts (registered) | ✅ | ⬜ | `ContactsV2.sqlite` |
 
-### TikTok / Telegram / Instagram / Facebook / Messenger / X / Snapchat
+### Facebook Messenger — `lightspeed-userDatabases/*.db` (native)
 
-_To be documented as each module lands (see `app-support.md` schedule)._
+Schema facts from iLEAPP `facebookMessenger.py`; provenance reference (§10).
+
+| Data | In backup | Surfaced | Notes |
+|------|:---------:|:--------:|-------|
+| Message text | ✅ | ✅ | `thread_messages.text` |
+| Timestamp | ✅ | ✅ | `timestamp_ms` (Unix ms) |
+| Direction (from-me) | ✅ | ✅ | sender vs `_user_info.facebook_user_id` |
+| Conversation grouping | ✅ | ✅ | `thread_messages.thread_key` |
+| Sender name | ✅ | ✅ | `contacts.name` |
+| Has attachment (flag) | ✅ | ✅ | `has_attachment` |
+| Attachment media | ✅ | ⬜ | `attachments` / `attachment_items` |
+| Calls | ✅ | ⬜ | attachment rows tagged "call" |
+| Secret / client conversations | ✅ | ⬜ | `secure_messages`, `client_messages` |
+
+### TikTok — `AwemeIM.db` (planned, needs protobuf)
+
+Message bodies are protobuf blobs (`blackboxprotobuf` in iLEAPP) and contact
+tables are dynamically named (`AwemeContacts*`). Framework-ready; needs a protobuf
+decoder before the module can land.
+
+### Instagram — `DirectSQLite`/`THREADS`/`MESSAGES` (planned, needs plist decode)
+
+Messages are archived plists inside `MESSAGES.ARCHIVE`
+(`IGDirectPublishedMessageContent*content`). Needs a binary-plist decoder.
+
+### Telegram (0.4.0) · X/Twitter · Facebook (main) · Snapchat
+
+Telegram is deferred to 0.4.0. X/Twitter, Facebook (main app), and Snapchat keep
+no recoverable local chat store (no iLEAPP module exists for them), so there's
+nothing to surface — see `app-support.md`.
