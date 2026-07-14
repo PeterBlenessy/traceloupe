@@ -21,6 +21,7 @@ pub mod kik;
 pub mod telegram;
 pub mod threema;
 pub mod tiktok;
+pub mod viber;
 pub mod whatsapp;
 
 use std::path::Path;
@@ -87,6 +88,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     kik::MODULE,
     imo::MODULE,
     threema::MODULE,
+    viber::MODULE,
 ];
 
 /// Read a column as a String whether it's stored TEXT or INTEGER — app schemas
