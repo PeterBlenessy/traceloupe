@@ -770,8 +770,11 @@ fn import_app_chats_native(
             }
             let _ = std::fs::remove_file(&out);
         }
-        // Claim the app (and skip iLEAPP for it) only if we actually read its store
-        // — even if it held zero messages. A total failure leaves iLEAPP to try.
+        // Only claim the app (and skip iLEAPP for it) when the native path actually
+        // produced messages. A located-but-unrecognized DB (schema drift) parses to
+        // an empty stream — indistinguishable from a genuinely empty store — so we
+        // let iLEAPP run rather than risk silently dropping messages it could parse.
+        // (Worst case here is a redundant, empty iLEAPP pass for a truly-empty app.)
         if !parsed_any {
             report.warnings.push(format!(
                 "Native {}: no DB could be read; using iLEAPP.",
@@ -779,7 +782,16 @@ fn import_app_chats_native(
             ));
             continue;
         }
-        match crate::parsers::apps::insert_app_conversation(cache, m.service, msgs, report) {
+        if msgs.is_empty() {
+            continue; // recognized nothing / empty — leave the service to iLEAPP
+        }
+        match crate::parsers::apps::insert_app_conversation(
+            cache,
+            m.service,
+            m.numeric_id_groups,
+            msgs,
+            report,
+        ) {
             Ok(()) => handled.push(m.service),
             Err(e) => report.warnings.push(format!(
                 "Native {}: insert failed ({e}); using iLEAPP.",

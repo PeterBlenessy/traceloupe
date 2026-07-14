@@ -10,6 +10,12 @@
 //! - `ZWACHATSESSION(Z_PK, ZCONTACTJID, …)` — the chat; `ZCONTACTJID` is the
 //!   stable per-conversation key (a `@g.us` group jid or `@s.whatsapp.net` 1:1).
 //! - `ZWAMEDIAITEM(ZMESSAGE, ZMEDIALOCALPATH, …)` — attachment per message.
+//!
+//! LIMITATION: `ZPARTNERNAME` is the chat/session partner, not the per-message
+//! author, so in a GROUP chat every inbound message is attributed to the session
+//! partner (the real author lives in a member/jid table, e.g. `ZGROUPMEMBER`).
+//! 1:1 attribution is correct. Resolving group members needs validation against a
+//! real backup — tracked in docs/app-data-coverage.md.
 
 use std::path::Path;
 
@@ -25,17 +31,23 @@ const MAC_EPOCH: i64 = 978_307_200;
 pub const MODULE: super::AppChatModule = super::AppChatModule {
     id: "whatsapp",
     service: "WhatsApp",
+    // WhatsApp threads carry a chat name, so group inference never runs anyway.
+    numeric_id_groups: false,
     locate,
     parse,
 };
 
-/// Find `ChatStorage.sqlite` under a WhatsApp app-group domain. The app-group
-/// UUID varies, so match on the filename and require a WhatsApp domain.
+/// Find `ChatStorage.sqlite` under a WhatsApp app-group domain. The relativePath
+/// may carry a directory prefix, so match the filename suffix (leading `%`) and
+/// require a WhatsApp domain.
 fn locate(index: &ManifestIndex) -> Result<Vec<FileEntry>> {
-    let hits = index.find_relative_like("ChatStorage.sqlite")?;
+    let hits = index.find_relative_like("%ChatStorage.sqlite")?;
     Ok(hits
         .into_iter()
-        .filter(|e| e.domain.to_lowercase().contains("whatsapp"))
+        .filter(|e| {
+            e.relative_path.ends_with("ChatStorage.sqlite")
+                && e.domain.to_lowercase().contains("whatsapp")
+        })
         .collect())
 }
 
@@ -129,7 +141,8 @@ mod tests {
 
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
-        super::super::insert_app_conversation(&cache, "WhatsApp", msgs, &mut report).unwrap();
+        super::super::insert_app_conversation(&cache, "WhatsApp", false, msgs, &mut report)
+            .unwrap();
         assert_eq!(report.threads, 1);
         assert_eq!(report.messages, 2);
 

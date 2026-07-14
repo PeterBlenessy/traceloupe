@@ -24,6 +24,9 @@ use crate::Result;
 pub const MODULE: super::AppChatModule = super::AppChatModule {
     id: "tiktok",
     service: "TikTok",
+    // TikTok 1:1 conversation ids embed both user ids with ':'; a bare-numeric id
+    // IS a group, so the numeric-id heuristic is correct (and needed) here.
+    numeric_id_groups: true,
     locate,
     parse,
 };
@@ -69,17 +72,22 @@ fn build_contacts(conn: &Connection) -> HashMap<String, String> {
         return out;
     };
     for table in tables.flatten() {
-        // Table name comes from sqlite_master (not user input); still, only proceed
-        // if it exposes uid + nickname.
-        let sql = format!("SELECT uid, nickname FROM \"{table}\" WHERE uid IS NOT NULL");
+        // Table name comes from sqlite_master; still, escape it (double any `"`)
+        // before interpolating into the quoted identifier, for correctness.
+        let ident = table.replace('"', "\"\"");
+        let sql = format!("SELECT uid, nickname FROM \"{ident}\" WHERE uid IS NOT NULL");
         let Ok(mut s) = conn.prepare(&sql) else {
             continue;
         };
+        // uid may be TEXT or INTEGER — read type-agnostically so an integer uid
+        // still matches the (stringified) message sender.
         let Ok(rows) = s.query_map([], |r| {
-            Ok((
-                r.get::<_, Option<String>>(0)?,
-                r.get::<_, Option<String>>(1)?,
-            ))
+            let uid = match r.get_ref(0)? {
+                rusqlite::types::ValueRef::Integer(i) => Some(i.to_string()),
+                rusqlite::types::ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
+                _ => None,
+            };
+            Ok((uid, r.get::<_, Option<String>>(1)?))
         }) else {
             continue;
         };
@@ -212,7 +220,7 @@ mod tests {
 
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
-        super::super::insert_app_conversation(&cache, "TikTok", msgs, &mut report).unwrap();
+        super::super::insert_app_conversation(&cache, "TikTok", true, msgs, &mut report).unwrap();
         assert_eq!(report.threads, 1);
         assert_eq!(report.messages, 2);
     }

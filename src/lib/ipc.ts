@@ -347,7 +347,7 @@ export interface TraceLoupeClient {
   /**
    * Re-import one natively-parsed data type into the open backup, replacing just
    * that type's rows (no iLEAPP). `moduleId` is one of "recordings",
-   * "camera_roll", "messages", "notes".
+   * "camera_roll", "messages", "notes", "calls", "safari".
    */
   reimportModule(moduleId: string): Promise<ReimportResult>;
 }

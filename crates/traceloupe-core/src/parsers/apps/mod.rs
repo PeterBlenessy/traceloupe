@@ -56,6 +56,11 @@ pub struct AppChatModule {
     /// Service label shown in the Messages view (e.g. "WhatsApp"). Also the tag
     /// used to skip the equivalent iLEAPP stage.
     pub service: &'static str,
+    /// Whether an all-numeric `chat_key` denotes a GROUP for this app. True only
+    /// for TikTok (its 1:1 ids embed both user ids with `:`, so a bare number is a
+    /// group). For apps whose 1:1 threads also use bare-numeric ids (Messenger,
+    /// Instagram) this MUST be false, or every 1:1 is mislabeled a group.
+    pub numeric_id_groups: bool,
     /// Locate this app's message DB(s) in the Manifest. Most apps have one; some
     /// (e.g. Messenger's per-user `lightspeed-userDatabases/*.db`) have several,
     /// so this returns every candidate and the driver parses each.
@@ -84,6 +89,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
 pub fn insert_app_conversation(
     cache: &CacheDb,
     service: &str,
+    numeric_id_groups: bool,
     mut messages: Vec<AppMessage>,
     report: &mut ImportReport,
 ) -> Result<()> {
@@ -103,6 +109,10 @@ pub fn insert_app_conversation(
     let mut current_key: Option<String> = None;
     let mut thread_id: i64 = 0;
     let mut has_chat_name = false;
+    // Count into locals; fold into `report` only after commit, so a rollback
+    // doesn't leave phantom counts behind (which would double up if iLEAPP re-runs).
+    let mut n_threads: usize = 0;
+    let mut n_messages: usize = 0;
     let mut peer_nick: Option<String> = None;
     let mut peer_handle: Option<String> = None;
     let mut member_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -120,7 +130,13 @@ pub fn insert_app_conversation(
      -> Result<()> {
         let member_count = members.len();
         members.clear();
-        let id_is_group = !named && !key.is_empty() && key.bytes().all(|b| b.is_ascii_digit());
+        // Bare-numeric key ⇒ group ONLY for apps that encode 1:1s differently
+        // (TikTok). For Messenger/Instagram, whose 1:1 threads also use numeric
+        // ids, this must stay off or every 1:1 is mislabeled a group.
+        let id_is_group = numeric_id_groups
+            && !named
+            && !key.is_empty()
+            && key.bytes().all(|b| b.is_ascii_digit());
         if member_count > 1 || id_is_group {
             let label = if member_count > 1 {
                 format!("Group chat · {} people", member_count + 1)
@@ -170,7 +186,7 @@ pub fn insert_app_conversation(
             peer_nick = None;
             peer_handle = None;
             member_ids.clear();
-            report.threads += 1;
+            n_threads += 1;
         }
 
         let sender = if m.is_from_me {
@@ -207,7 +223,7 @@ pub fn insert_app_conversation(
                 m.has_attachment as i64
             ],
         )?;
-        report.messages += 1;
+        n_messages += 1;
     }
     if let Some(prev) = current_key.as_deref() {
         finalize(
@@ -230,5 +246,8 @@ pub fn insert_app_conversation(
         rusqlite::params![service],
     )?;
     tx.commit()?;
+    // Committed — now it's safe to count.
+    report.threads += n_threads;
+    report.messages += n_messages;
     Ok(())
 }
