@@ -68,7 +68,8 @@ the batched 0.3.0+ migration under "Planned" below.
   import download, no bundled ~222 MB engine); iLEAPP fetched on demand only when
   the user opts into deeper third-party coverage.
 - **Batch 3+ (0.4.0+) — native third-party modules** per the app-tier roadmap
-  (Top 10 first), replacing iLEAPP coverage incrementally.
+  (Top 10 first), replacing iLEAPP coverage incrementally. Per-app status and the
+  version each gains native support are tracked in `docs/app-support.md`.
 
 ## [0.1.0] — 2026-07-13
 

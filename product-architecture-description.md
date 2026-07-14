@@ -217,6 +217,8 @@ Rollout is tiered by app popularity and by recovery/forensic value:
 | 3 | Top 50 | *adds* Slack, Microsoft Teams, Zoom, Twitch, Tinder/Bumble/Hinge, PayPal/Venmo/Cash App, Uber, Amazon, Strava, Notion, and similar |
 | 4 | Top 100 | *adds* the long tail: regional messengers, banking/fintech, travel, fitness, productivity apps, and popular games |
 
+**Live coverage tracker.** Per-app status and the version each app gains native support are tracked in [`docs/app-support.md`](docs/app-support.md) — the living source of truth, updated as coverage lands.
+
 **Prioritization criteria** — each tier is ordered by (1) user prevalence, (2) richness of locally stored artifacts, and (3) technical feasibility of parsing.
 
 **Caveat.** Apps differ widely in what they persist locally. Some highly popular apps — Snapchat and Signal in particular — deliberately minimize or encrypt local storage, so recoverable artifacts may be limited to metadata or nothing at all. The roadmap targets what a backup actually contains, not what the app shows on-screen.
