@@ -530,6 +530,23 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
         .await
         .ok()
         .flatten();
+    // Surface a silent key-load failure: if this backup is encrypted but we have
+    // no decryptor, full-resolution photos and native re-imports won't work until
+    // the keys load. The usual dev cause is the app's code signature changing
+    // between builds, so the Keychain item's ACL no longer trusts it (see
+    // docs/signing.md).
+    if decryptor.is_none() {
+        if let Ok(Some(src)) = CacheDb::open(&cache_path).and_then(|c| c.get_meta("source_dir")) {
+            if discovery::read_backup_info(Path::new(&src)).is_encrypted == Some(true) {
+                logging::warn(
+                    &app,
+                    "Backup is encrypted but its keys couldn't be loaded from the Keychain — \
+                     full-resolution photos and native re-imports are unavailable. Re-import with \
+                     the password, or sign the build with a stable identity (docs/signing.md).",
+                );
+            }
+        }
+    }
     app.state::<SessionKeys>().set(decryptor);
     app.state::<ActiveBackup>().set(cache_path);
     true
