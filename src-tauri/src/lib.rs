@@ -476,16 +476,17 @@ async fn import_backup(
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
 
-    // Encrypted backup: remember its source dir, stash the password in the
-    // Keychain, and hold the decryptor for on-demand media decryption. For an
-    // unencrypted backup, clear any stale secret/keys.
+    // Remember the source dir for every backup — a partial re-import needs it to
+    // locate the backup's files (encrypted or not).
+    if let Ok(cache) = CacheDb::open(&outcome.cache_path) {
+        let _ = cache.set_meta("source_dir", &source_dir.display().to_string());
+    }
+    // Encrypted backup: stash the password in the Keychain and hold the decryptor
+    // for on-demand media decryption. Unencrypted: clear any stale secret/keys.
     if key_password.is_empty() {
         session.set(None);
         secret::delete(&backup_id);
     } else {
-        if let Ok(cache) = CacheDb::open(&outcome.cache_path) {
-            let _ = cache.set_meta("source_dir", &source_dir.display().to_string());
-        }
         if let Err(e) = secret::store(&backup_id, &key_password) {
             eprintln!("could not store backup password in Keychain: {e}");
         }
@@ -599,7 +600,33 @@ async fn reimport_module(
         })?;
     drop(cache);
 
-    let decryptor = session.get();
+    // Decryption keys. The session may not hold them (e.g. the backup was
+    // reopened in a session where the Keychain read didn't yield a live
+    // decryptor); rebuild from the Keychain if we can and cache it back.
+    let mut decryptor = session.get();
+    if decryptor.is_none() {
+        if let Some(d) = reopen_decryptor(&cache_path, backup_id) {
+            session.set(Some(d.clone()));
+            decryptor = Some(d);
+        }
+    }
+    // An encrypted backup with no keys would open its Manifest as plaintext and
+    // fail with a cryptic "file is not a database" — give an actionable error.
+    if decryptor.is_none()
+        && discovery::read_backup_info(Path::new(&source_dir)).is_encrypted == Some(true)
+    {
+        logging::error(
+            &app,
+            format!("\u{2717} Re-import {label}: backup keys aren't loaded"),
+        );
+        return Err(
+            "This backup is encrypted, but its decryption keys aren't loaded. Reopen the \
+             backup (allow Keychain access when prompted) or re-import it with its password, \
+             then try again."
+                .to_string(),
+        );
+    }
+
     let module = module_id.clone();
     let cp = cache_path.clone();
     let report = tauri::async_runtime::spawn_blocking(move || {
