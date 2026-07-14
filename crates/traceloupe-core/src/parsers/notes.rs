@@ -109,15 +109,32 @@ pub fn parse_notes(
         "NULL"
     };
 
-    // One row per note: its columns + its folder's title + its (gzipped) body
-    // blob. `WHERE n.ZNOTEDATA IS NOT NULL` selects note objects (folders and
-    // accounts have no body data).
+    // Password-protected (locked) notes: the body is AES-GCM in ZENCRYPTEDDATA
+    // instead of ZDATA, with the key derived from the note password + these params.
+    let protected = col_or_null(&cols, &["ZISPASSWORDPROTECTED"]);
+    let enc_data = col_or_null(&cols, &["ZENCRYPTEDDATA"]);
+    let salt = col_or_null(&cols, &["ZCRYPTOSALT"]);
+    let iter = col_or_null(&cols, &["ZCRYPTOITERATIONCOUNT"]);
+    let iv = col_or_null(&cols, &["ZCRYPTOINITIALIZATIONVECTOR"]);
+    let tag = col_or_null(&cols, &["ZCRYPTOTAG"]);
+    let hint = col_or_null(&cols, &["ZPASSWORDHINT"]);
+    // Include locked notes even though their ZNOTEDATA is often NULL.
+    let or_encrypted = if cols.contains("ZENCRYPTEDDATA") {
+        "OR n.ZENCRYPTEDDATA IS NOT NULL"
+    } else {
+        ""
+    };
+
+    // One row per note: its columns + its folder's title + its (gzipped) body blob
+    // (unlocked) or encrypted body + crypto params (locked). `WHERE ZNOTEDATA IS
+    // NOT NULL` selects note objects (folders/accounts have no body data).
     let sql = format!(
-        "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA
+        "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA,
+                {protected}, {enc_data}, {salt}, {iter}, {iv}, {tag}, {hint}
          FROM ZICCLOUDSYNCINGOBJECT n
          LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = {folder_fk}
          LEFT JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
-         WHERE n.ZNOTEDATA IS NOT NULL"
+         WHERE n.ZNOTEDATA IS NOT NULL {or_encrypted}"
     );
 
     let conn = cache.conn();
@@ -135,6 +152,47 @@ pub fn parse_notes(
         let marked_deleted = r.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0;
         let folder_name: Option<String> = r.get(5)?;
         let zdata: Option<Vec<u8>> = r.get(6)?;
+        let protected = r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
+        let encrypted_data: Option<Vec<u8>> = r.get(8)?;
+        let crypto_salt: Option<Vec<u8>> = r.get(9)?;
+        let crypto_iter: Option<i64> = r.get(10)?;
+        let crypto_iv: Option<Vec<u8>> = r.get(11)?;
+        let crypto_tag: Option<Vec<u8>> = r.get(12)?;
+        let password_hint: Option<String> = r
+            .get::<_, Option<String>>(13)?
+            .filter(|s| !s.trim().is_empty());
+
+        // Notes in "Recently Deleted" have no folder row of their own; label them
+        // so they're distinguishable rather than showing an empty folder.
+        let folder = folder_name
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| marked_deleted.then(|| "Recently Deleted".to_string()));
+
+        // A locked note has its body encrypted — withhold body/snippet and store
+        // the crypto params so it can be unlocked on demand (never plaintext here).
+        let locked = protected || encrypted_data.is_some();
+        if locked {
+            tx.execute(
+                "INSERT INTO notes
+                    (folder, title, snippet, body_html, created_at, modified_at,
+                     locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data)
+                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    folder,
+                    title,
+                    created_at,
+                    modified_at,
+                    password_hint,
+                    crypto_salt,
+                    crypto_iter,
+                    crypto_iv,
+                    crypto_tag,
+                    encrypted_data,
+                ],
+            )?;
+            report.notes += 1;
+            continue;
+        }
 
         let body_text = zdata
             .as_deref()
@@ -155,15 +213,10 @@ pub fn parse_notes(
         let snippet = snippet
             .filter(|s| !s.trim().is_empty())
             .or_else(|| derive_snippet(&body_text));
-        // Notes in "Recently Deleted" have no folder row of their own; label them
-        // so they're distinguishable rather than showing an empty folder.
-        let folder = folder_name
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| marked_deleted.then(|| "Recently Deleted".to_string()));
 
         tx.execute(
-            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
             rusqlite::params![folder, title, snippet, body, created_at, modified_at],
         )?;
         report.notes += 1;
@@ -172,6 +225,24 @@ pub fn parse_notes(
     drop(stmt);
     tx.commit()?;
     Ok(())
+}
+
+/// Decrypt a locked note's body from its stored crypto params + the note password.
+/// Returns the plain text, or None on a wrong password / undecodable body (the
+/// AES-GCM tag check makes a wrong password a clean failure). Never persisted.
+pub fn decrypt_locked_note(
+    password: &str,
+    salt: &[u8],
+    iterations: u32,
+    iv: &[u8],
+    tag: &[u8],
+    encrypted_data: &[u8],
+) -> Option<String> {
+    // The decrypted blob is the same gzip-protobuf an unlocked note stores.
+    let gz =
+        crate::crypto::decrypt_note(password, salt, iterations, iv, tag, encrypted_data).ok()?;
+    let text = decode_note_body(&gz)?;
+    Some(clean_note_text(&text))
 }
 
 /// Column names of `table`, upper-cased. Empty if the table doesn't exist.
@@ -422,6 +493,76 @@ mod tests {
         assert_eq!(body.as_deref(), Some("Milk\nEggs"));
         assert_eq!(snippet.as_deref(), Some("Milk"));
         assert_eq!(created, 1_700_000_000);
+    }
+
+    #[test]
+    fn parses_and_decrypts_a_password_protected_note() {
+        use aes_gcm::aead::Aead;
+        use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
+
+        let password = "letmein";
+        let salt = b"sixteen-byte-slt";
+        let iters = 1000u32;
+        let iv = [3u8; 12];
+        // The plaintext body is the same gzip-protobuf an unlocked note stores.
+        let body_gz = make_zdata("Secret\ntop secret");
+        let key = pbkdf2::pbkdf2_hmac_array::<sha2::Sha256, 16>(password.as_bytes(), salt, iters);
+        let sealed = Aes128Gcm::new_from_slice(&key)
+            .unwrap()
+            .encrypt(Nonce::from_slice(&iv), body_gz.as_slice())
+            .unwrap();
+        let (ct, tag) = sealed.split_at(sealed.len() - 16);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("NoteStore.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZNOTE INTEGER, ZDATA BLOB);
+             CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+                Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT, ZSNIPPET TEXT,
+                ZFOLDER INTEGER, ZNOTEDATA INTEGER, ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL,
+                ZMARKEDFORDELETION INTEGER, ZISPASSWORDPROTECTED INTEGER, ZENCRYPTEDDATA BLOB,
+                ZCRYPTOSALT BLOB, ZCRYPTOITERATIONCOUNT INTEGER,
+                ZCRYPTOINITIALIZATIONVECTOR BLOB, ZCRYPTOTAG BLOB, ZPASSWORDHINT TEXT);",
+        )
+        .unwrap();
+        // A locked note: ZNOTEDATA is NULL, the body is in ZENCRYPTEDDATA.
+        conn.execute(
+            "INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, ZTITLE1, ZISPASSWORDPROTECTED, ZENCRYPTEDDATA, ZCRYPTOSALT,
+                 ZCRYPTOITERATIONCOUNT, ZCRYPTOINITIALIZATIONVECTOR, ZCRYPTOTAG, ZPASSWORDHINT,
+                 ZCREATIONDATE1, ZMODIFICATIONDATE1)
+             VALUES (10, 'Locked', 1, ?1, ?2, ?3, ?4, ?5, 'my hint', 721692800.0, 721692900.0)",
+            rusqlite::params![ct, salt.as_slice(), iters, iv.as_slice(), tag],
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_notes(&db, &cache, &mut report, false).unwrap();
+        assert_eq!(report.notes, 1);
+
+        // Stored locked, with the hint, and NO plaintext body at rest.
+        let (id, locked, body, hint): (i64, i64, Option<String>, Option<String>) = cache
+            .conn()
+            .query_row(
+                "SELECT id, locked, body_html, password_hint FROM notes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(locked, 1);
+        assert_eq!(body, None);
+        assert_eq!(hint.as_deref(), Some("my hint"));
+
+        // The unlock path recovers the body with the right password, and only it.
+        let (salt, iter, iv, tag, enc) = crate::query::note_crypto(&cache, id).unwrap().unwrap();
+        let iterations = u32::try_from(iter).unwrap();
+        assert_eq!(
+            decrypt_locked_note(password, &salt, iterations, &iv, &tag, &enc).as_deref(),
+            Some("Secret\ntop secret"),
+        );
+        assert!(decrypt_locked_note("nope", &salt, iterations, &iv, &tag, &enc).is_none());
     }
 
     #[test]

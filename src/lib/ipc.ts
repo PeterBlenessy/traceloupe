@@ -91,9 +91,14 @@ export interface Note {
   folder: string | null;
   title: string | null;
   snippet: string | null;
+  /** Plain-text body. `null` for a locked note until unlocked with the password. */
   body: string | null;
   createdAt: number | null;
   modifiedAt: number | null;
+  /** Password-protected: the body is withheld until unlocked. */
+  locked: boolean;
+  /** The user's password hint, if the note stored one. */
+  passwordHint: string | null;
 }
 
 export interface Recording {
@@ -282,6 +287,8 @@ export interface TraceLoupeClient {
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
   listNotes(): Promise<Note[]>;
+  /** Decrypt a locked note's body with the note password. Rejects on wrong password. */
+  unlockNote(noteId: number, password: string): Promise<string>;
   listRecordings(): Promise<Recording[]>;
   listContacts(): Promise<Contact[]>;
   /** Bundle ids of apps that were installed on the device. */
@@ -378,6 +385,7 @@ const tauriClient: TraceLoupeClient = {
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listNotes: () => invoke<Note[]>("list_notes"),
+  unlockNote: (noteId, password) => invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
   countMedia: (source) => invoke<number>("count_media", { source }),
   getMediaWindow: (source, offset, limit, sortBy, desc) =>
@@ -549,9 +557,10 @@ const mockSafari: HistoryVisit[] = [
 ];
 
 const mockNotes: Note[] = [
-  { id: 1, folder: "Notes", title: "Hike checklist", snippet: "Water, snacks, sunscreen…", body: "Water\nSnacks\nSunscreen\nHat\nExtra socks", createdAt: 1717000000, modifiedAt: 1717838000 },
-  { id: 2, folder: "Work", title: "Q3 ideas", snippet: "Ship the importer, then…", body: "Ship the importer, then work on lazy decode and the encrypted path.", createdAt: 1716500000, modifiedAt: 1717500000 },
-  { id: 3, folder: "Notes", title: null, snippet: "Grocery list", body: "Milk\nEggs\nBröd\nKaffe", createdAt: 1716000000, modifiedAt: 1716600000 },
+  { id: 1, folder: "Notes", title: "Hike checklist", snippet: "Water, snacks, sunscreen…", body: "Water\nSnacks\nSunscreen\nHat\nExtra socks", createdAt: 1717000000, modifiedAt: 1717838000, locked: false, passwordHint: null },
+  { id: 2, folder: "Work", title: "Q3 ideas", snippet: "Ship the importer, then…", body: "Ship the importer, then work on lazy decode and the encrypted path.", createdAt: 1716500000, modifiedAt: 1717500000, locked: false, passwordHint: null },
+  { id: 3, folder: "Notes", title: null, snippet: "Grocery list", body: "Milk\nEggs\nBröd\nKaffe", createdAt: 1716000000, modifiedAt: 1716600000, locked: false, passwordHint: null },
+  { id: 4, folder: "Personal", title: "Passwords", snippet: null, body: null, createdAt: 1715000000, modifiedAt: 1715500000, locked: true, passwordHint: "the usual" },
 ];
 
 const mockRecordings: Recording[] = [
@@ -770,6 +779,10 @@ export const mockClient: TraceLoupeClient = {
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listNotes: async () => (mockActive ? mockNotes : []),
+  unlockNote: async (_noteId, password) =>
+    password === "test"
+      ? "Bank PIN: 1234\nWiFi: hunter2"
+      : Promise.reject(new Error("Wrong password.")),
   listRecordings: async () => (mockActive ? mockRecordings : []),
   countMedia: async (source) => (mockActive ? mockFilterMedia(source).length : 0),
   getMediaWindow: async (source, offset, limit, sortBy, desc) =>

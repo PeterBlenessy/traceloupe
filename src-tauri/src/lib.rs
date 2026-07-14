@@ -1011,6 +1011,32 @@ async fn list_notes(active: State<'_, ActiveBackup>) -> Result<Vec<Note>, String
     .map_err(|e| e.to_string())?
 }
 
+/// Decrypt a password-protected note's body on demand. The plaintext is returned
+/// to the UI but never stored. Runs off the async executor (PBKDF2 is CPU-heavy).
+#[tauri::command]
+async fn unlock_note(
+    active: State<'_, ActiveBackup>,
+    note_id: i64,
+    password: String,
+) -> Result<String, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        let (salt, iter, iv, tag, enc) = query::note_crypto(&cache, note_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                "This note isn't locked, or its encrypted data is missing.".to_string()
+            })?;
+        let iterations = u32::try_from(iter).unwrap_or(0);
+        traceloupe_core::parsers::notes::decrypt_locked_note(
+            &password, &salt, iterations, &iv, &tag, &enc,
+        )
+        .ok_or_else(|| "Wrong password.".to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn list_recordings(active: State<'_, ActiveBackup>) -> Result<Vec<Recording>, String> {
     let path = active.path()?;
@@ -1722,6 +1748,7 @@ pub fn run() {
             open_attachment,
             list_calls,
             list_notes,
+            unlock_note,
             list_recordings,
             list_safari_history,
             list_contacts,

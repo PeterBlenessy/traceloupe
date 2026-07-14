@@ -18,6 +18,7 @@ hex = { workspace = true }
 sha1 = { workspace = true }
 pbkdf2 = { workspace = true }
 aes = { workspace = true }
+aes-gcm = { workspace = true }
 cbc = { workspace = true }
 cipher = { workspace = true }
 zeroize = { workspace = true }

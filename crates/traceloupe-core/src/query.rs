@@ -811,17 +811,21 @@ pub struct Note {
     pub folder: Option<String>,
     pub title: Option<String>,
     pub snippet: Option<String>,
-    /// The note body (plain text extracted from the note's protobuf).
+    /// The note body (plain text). `None` for a locked note until it's unlocked.
     pub body: Option<String>,
     pub created_at: Option<i64>,
     pub modified_at: Option<i64>,
+    /// Password-protected: the body is withheld until unlocked with the password.
+    pub locked: bool,
+    /// The user's password hint, if the note stored one.
+    pub password_hint: Option<String>,
 }
 
 /// Notes, most-recently-modified first.
 pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, folder, title, snippet, body_html, created_at, modified_at
+        "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -834,10 +838,33 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
             body: r.get(4)?,
             created_at: r.get(5)?,
             modified_at: r.get(6)?,
+            locked: r.get::<_, i64>(7)? != 0,
+            password_hint: r.get(8)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// A locked note's crypto params: `(salt, iterations, iv, tag, encrypted_data)`.
+pub type NoteCrypto = (Vec<u8>, i64, Vec<u8>, Vec<u8>, Vec<u8>);
+
+/// The crypto params needed to unlock note `id`, if it's a locked note with all
+/// params present. Used by the unlock command to decrypt on demand.
+pub fn note_crypto(cache: &CacheDb, id: i64) -> Result<Option<NoteCrypto>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data
+             FROM notes
+             WHERE id = ?1 AND locked = 1
+               AND crypto_salt IS NOT NULL AND crypto_iter IS NOT NULL
+               AND crypto_iv IS NOT NULL AND crypto_tag IS NOT NULL
+               AND encrypted_data IS NOT NULL",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?)
 }
 
 /// One voice recording (Voice Memos).

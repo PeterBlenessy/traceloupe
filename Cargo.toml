@@ -23,6 +23,8 @@ hex = "0.4"
 sha1 = "0.10"
 pbkdf2 = "0.12"
 aes = "0.8"
+# Decrypt Apple Notes password-protected notes (AES-128-GCM). See crypto.rs.
+aes-gcm = "0.10"
 cbc = "0.1"
 zeroize = "1"
 # Direct dep only to turn on `block-padding`, which unlocks the batched
