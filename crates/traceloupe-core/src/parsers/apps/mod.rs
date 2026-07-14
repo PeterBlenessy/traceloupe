@@ -19,6 +19,7 @@ pub mod imo;
 pub mod instagram;
 pub mod kik;
 pub mod telegram;
+pub mod threema;
 pub mod tiktok;
 pub mod whatsapp;
 
@@ -85,6 +86,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     telegram::MODULE,
     kik::MODULE,
     imo::MODULE,
+    threema::MODULE,
 ];
 
 /// Read a column as a String whether it's stored TEXT or INTEGER — app schemas
@@ -94,6 +96,19 @@ pub(crate) fn col_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option
     Ok(match r.get_ref(i)? {
         rusqlite::types::ValueRef::Integer(n) => Some(n.to_string()),
         rusqlite::types::ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
+        _ => None,
+    })
+}
+
+/// Read a column as i64 tolerantly (INTEGER, or a TEXT/REAL that converts) so one
+/// oddly-typed row can't abort the whole DB. NULL/unparseable → None. Preferred
+/// over `get::<Option<f64>>` for large integers (e.g. nanosecond timestamps),
+/// which lose precision beyond 2^53 when routed through f64.
+pub(crate) fn col_i64(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option<i64>> {
+    Ok(match r.get_ref(i)? {
+        rusqlite::types::ValueRef::Integer(n) => Some(n),
+        rusqlite::types::ValueRef::Real(f) => Some(f as i64),
+        rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).trim().parse::<i64>().ok(),
         _ => None,
     })
 }
