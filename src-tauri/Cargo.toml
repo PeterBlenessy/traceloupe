@@ -23,6 +23,9 @@ tauri-plugin-dialog = "2.7.1"
 # Persist encrypted-backup passwords in the macOS Keychain (secure store), so
 # an encrypted backup can be reopened and its media decrypted without re-prompting.
 keyring = { version = "3", features = ["apple-native"] }
+# Optional Touch ID gate for releasing backup keys (biometric.rs). Wraps
+# LocalAuthentication (LAContext) so we don't hand-roll the FFI.
+robius-authentication = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

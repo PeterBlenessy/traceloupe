@@ -22,12 +22,16 @@ type SettingsProviderState = {
   /** Clock format for all timestamps: locale default, or forced 12-/24-hour. */
   clockFormat: ClockFormat;
   setClockFormatPref: (pref: ClockFormat) => void;
+  /** Require Touch ID before releasing an encrypted backup's keys (opt-in). */
+  biometricUnlock: boolean;
+  setBiometricUnlock: (v: boolean) => void;
 };
 
 const NAMES_KEY = "traceloupe-show-names";
 const AVATARS_KEY = "traceloupe-show-avatars";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
+const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
 
 const LOG_LEVELS: LogLevel[] = ["off", "error", "warn", "info", "debug", "trace"];
 
@@ -81,6 +85,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   );
   const [logLevel, setLogLevelState] = useState<LogLevel>(() => readLogLevel());
   const [clockFormat, setClockFormatState] = useState<ClockFormat>(() => readClockFormat());
+  // Off by default (opt-in): only true when explicitly stored.
+  const [biometricUnlock, setBiometricUnlockState] = useState<boolean>(
+    () => localStorage.getItem(BIOMETRIC_KEY) === "true",
+  );
+
+  // Apply the biometric-gate preference to the backend on startup and on change,
+  // so an encrypted backup opened later is (or isn't) gated accordingly.
+  useEffect(() => {
+    void client.setBiometricRequired(biometricUnlock);
+  }, [biometricUnlock]);
 
   // Apply the log level to the backend (it gates emission), and forward backend
   // log records to the dev-tools console. The level is re-applied whenever it
@@ -127,6 +141,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setClockFormatState(pref); // re-render consumers
   };
 
+  const setBiometricUnlock = (v: boolean) => {
+    localStorage.setItem(BIOMETRIC_KEY, String(v));
+    setBiometricUnlockState(v); // the effect above pushes it to the backend
+  };
+
   return (
     <SettingsProviderContext.Provider
       value={{
@@ -140,6 +159,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setLogLevel,
         clockFormat,
         setClockFormatPref,
+        biometricUnlock,
+        setBiometricUnlock,
       }}
     >
       {children}

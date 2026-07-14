@@ -226,6 +226,11 @@ export interface TraceLoupeClient {
   cancelImport(): Promise<void>;
   /** Set the dev-console log verbosity at runtime. */
   setLogLevel(level: LogLevel): Promise<void>;
+  /**
+   * Enable/disable the Touch ID gate for releasing an encrypted backup's keys.
+   * When on, reconstructing the decryptor prompts for Touch ID first.
+   */
+  setBiometricRequired(enabled: boolean): Promise<void>;
   /** Subscribe to backend log records (forwarded to the console). */
   onLog(cb: (r: LogRecord) => void): Promise<UnlistenFn>;
   hasActiveBackup(): Promise<boolean>;
@@ -338,6 +343,7 @@ const tauriClient: TraceLoupeClient = {
   onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
   cancelImport: () => invoke("cancel_import"),
   setLogLevel: (level) => invoke("set_log_level", { level }),
+  setBiometricRequired: (enabled) => invoke("set_biometric_required", { enabled }),
   onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
@@ -704,6 +710,7 @@ export const mockClient: TraceLoupeClient = {
   },
   cancelImport: async () => {},
   setLogLevel: async () => {},
+  setBiometricRequired: async () => {},
   onLog: async () => () => {},
   hasActiveBackup: async () => mockActive,
   openBackup: async (backupId) => {

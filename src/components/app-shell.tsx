@@ -189,6 +189,8 @@ function SettingsMenu() {
     setLogLevel,
     clockFormat,
     setClockFormatPref,
+    biometricUnlock,
+    setBiometricUnlock,
   } = useSettings();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
@@ -261,6 +263,22 @@ function SettingsMenu() {
               ))}
             </SettingsGroup>
           )}
+
+          <SettingsGroup
+            title="Security"
+            description="Encrypted backups store their password in the macOS Keychain."
+          >
+            <SettingsRow
+              label="Require Touch ID"
+              description="Ask for Touch ID before unlocking an encrypted backup's keys."
+            >
+              <Switch
+                aria-label="Require Touch ID"
+                checked={biometricUnlock}
+                onCheckedChange={setBiometricUnlock}
+              />
+            </SettingsRow>
+          </SettingsGroup>
 
           <SettingsGroup
             title="Developer"
