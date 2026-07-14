@@ -2,6 +2,7 @@
 //! Commands translate core results into serializable responses; no parsing
 //! or business logic lives here.
 
+mod biometric;
 mod logging;
 mod media;
 mod secret;
@@ -107,9 +108,16 @@ struct ImportCancel(Mutex<Option<CancelToken>>);
 struct ReimportGate(tauri::async_runtime::Mutex<()>);
 
 /// Reconstruct the decryptor for an encrypted backup from its Keychain password
-/// and the source dir recorded in its cache. `None` if not encrypted / no key.
+/// and the source dir recorded in its cache. `None` if not encrypted / no key, or
+/// if the biometric gate (when enabled) isn't satisfied. Blocks on the Touch ID
+/// prompt when biometric unlock is on, so call it off the async executor.
 fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecryptor>> {
+    // Fetch the stored password first: no key → plaintext backup → None, and the
+    // biometric prompt never fires for a plaintext backup.
     let password = secret::get(backup_id)?;
+    if biometric::gate("Unlock this iPhone backup to access its data").is_err() {
+        return None; // user cancelled / auth failed → keys stay locked
+    }
     let cache = CacheDb::open(cache_path).ok()?;
     let source_dir = cache.get_meta("source_dir").ok().flatten()?;
     BackupDecryptor::open(Path::new(&source_dir), &password)
@@ -558,6 +566,14 @@ fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
     active.path().is_ok()
 }
 
+/// Turn the Touch ID gate for backup keys on/off (persisted by the frontend and
+/// re-applied at startup). When on, reconstructing an encrypted backup's decryptor
+/// prompts for Touch ID first.
+#[tauri::command]
+fn set_biometric_required(enabled: bool) {
+    biometric::set_required(enabled);
+}
+
 /// Counts refreshed by a partial re-import (only the relevant one is non-zero).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -619,10 +635,17 @@ async fn reimport_module(
 
     // Decryption keys. The session may not hold them (e.g. the backup was
     // reopened in a session where the Keychain read didn't yield a live
-    // decryptor); rebuild from the Keychain if we can and cache it back.
+    // decryptor); rebuild from the Keychain if we can and cache it back. Off the
+    // async executor — reopen_decryptor may block on a Touch ID prompt.
     let mut decryptor = session.get();
     if decryptor.is_none() {
-        if let Some(d) = reopen_decryptor(&cache_path, backup_id) {
+        let cp = cache_path.clone();
+        let bid = backup_id.to_string();
+        let rebuilt = tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&cp, &bid))
+            .await
+            .ok()
+            .flatten();
+        if let Some(d) = rebuilt {
             session.set(Some(d.clone()));
             decryptor = Some(d);
         }
@@ -1639,6 +1662,7 @@ pub fn run() {
             import_backup,
             open_backup,
             has_active_backup,
+            set_biometric_required,
             reimport_module,
             forget_backup,
             imported_backup_ids,
