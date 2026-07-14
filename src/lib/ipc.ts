@@ -39,6 +39,16 @@ export interface LogRecord {
   message: string;
 }
 
+/** The app's macOS code-signing status (gates Touch ID / stable Keychain). */
+export interface SigningStatus {
+  /** Stably signed with a real identity — Keychain persists, Touch ID can work. */
+  signed: boolean;
+  /** Ad-hoc signed (the dev default) — Keychain access is lost on rebuild. */
+  adhoc: boolean;
+  /** The signing authority, when signed. */
+  identity: string | null;
+}
+
 /** A selectable data type for import (maps to iLEAPP modules behind the scenes). */
 export interface ImportModule {
   id: string;
@@ -231,6 +241,8 @@ export interface TraceLoupeClient {
    * When on, reconstructing the decryptor prompts for Touch ID first.
    */
   setBiometricRequired(enabled: boolean): Promise<void>;
+  /** The app's code-signing status — whether Touch ID / stable Keychain can work. */
+  appSigningStatus(): Promise<SigningStatus>;
   /** Subscribe to backend log records (forwarded to the console). */
   onLog(cb: (r: LogRecord) => void): Promise<UnlistenFn>;
   hasActiveBackup(): Promise<boolean>;
@@ -344,6 +356,7 @@ const tauriClient: TraceLoupeClient = {
   cancelImport: () => invoke("cancel_import"),
   setLogLevel: (level) => invoke("set_log_level", { level }),
   setBiometricRequired: (enabled) => invoke("set_biometric_required", { enabled }),
+  appSigningStatus: () => invoke<SigningStatus>("app_signing_status"),
   onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
@@ -711,6 +724,8 @@ export const mockClient: TraceLoupeClient = {
   cancelImport: async () => {},
   setLogLevel: async () => {},
   setBiometricRequired: async () => {},
+  // Pretend the mock/browser preview is signed so the enabled toggle UI shows.
+  appSigningStatus: async () => ({ signed: true, adhoc: false, identity: "Mock Identity" }),
   onLog: async () => () => {},
   hasActiveBackup: async () => mockActive,
   openBackup: async (backupId) => {

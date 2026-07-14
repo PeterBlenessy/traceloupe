@@ -191,6 +191,7 @@ function SettingsMenu() {
     setClockFormatPref,
     biometricUnlock,
     setBiometricUnlock,
+    biometricAvailable,
   } = useSettings();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
@@ -270,11 +271,16 @@ function SettingsMenu() {
           >
             <SettingsRow
               label="Require Touch ID"
-              description="Ask for Touch ID before unlocking an encrypted backup's keys."
+              description={
+                biometricAvailable
+                  ? "Ask for Touch ID before unlocking an encrypted backup's keys."
+                  : "Unavailable on an unsigned build — sign the app (docs/signing.md) to use Touch ID."
+              }
             >
               <Switch
                 aria-label="Require Touch ID"
                 checked={biometricUnlock}
+                disabled={!biometricAvailable}
                 onCheckedChange={setBiometricUnlock}
               />
             </SettingsRow>

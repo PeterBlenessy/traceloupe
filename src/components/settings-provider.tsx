@@ -25,6 +25,8 @@ type SettingsProviderState = {
   /** Require Touch ID before releasing an encrypted backup's keys (opt-in). */
   biometricUnlock: boolean;
   setBiometricUnlock: (v: boolean) => void;
+  /** Whether Touch ID can work — the app is stably signed (see docs/signing.md). */
+  biometricAvailable: boolean;
 };
 
 const NAMES_KEY = "traceloupe-show-names";
@@ -89,12 +91,34 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [biometricUnlock, setBiometricUnlockState] = useState<boolean>(
     () => localStorage.getItem(BIOMETRIC_KEY) === "true",
   );
+  const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
 
   // Apply the biometric-gate preference to the backend on startup and on change,
   // so an encrypted backup opened later is (or isn't) gated accordingly.
   useEffect(() => {
     void client.setBiometricRequired(biometricUnlock);
   }, [biometricUnlock]);
+
+  // Touch ID only works on a stably-signed build (an adhoc dev binary loses
+  // Keychain access on rebuild). Detect it, and: disable the gate when unsigned,
+  // or default it ON when signed and the user hasn't chosen — so a signed build
+  // gets fingerprint-unlock automatically without a manual toggle. A stored user
+  // choice always wins (setBiometricUnlock persists; these paths don't).
+  useEffect(() => {
+    let cancelled = false;
+    void client.appSigningStatus().then((s) => {
+      if (cancelled) return;
+      setBiometricAvailable(s.signed);
+      if (!s.signed) {
+        setBiometricUnlockState(false);
+      } else if (localStorage.getItem(BIOMETRIC_KEY) === null) {
+        setBiometricUnlockState(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Apply the log level to the backend (it gates emission), and forward backend
   // log records to the dev-tools console. The level is re-applied whenever it
@@ -161,6 +185,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setClockFormatPref,
         biometricUnlock,
         setBiometricUnlock,
+        biometricAvailable,
       }}
     >
       {children}

@@ -6,6 +6,7 @@ mod biometric;
 mod logging;
 mod media;
 mod secret;
+mod signing;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
@@ -572,6 +573,20 @@ fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
 #[tauri::command]
 fn set_biometric_required(enabled: bool) {
     biometric::set_required(enabled);
+}
+
+/// The running app's code-signing status. The UI uses it to decide whether Touch
+/// ID / stable Keychain persistence can work (they need a real, non-adhoc
+/// signature — see docs/signing.md).
+#[tauri::command]
+async fn app_signing_status() -> signing::SigningStatus {
+    tauri::async_runtime::spawn_blocking(signing::status)
+        .await
+        .unwrap_or(signing::SigningStatus {
+            signed: false,
+            adhoc: false,
+            identity: None,
+        })
 }
 
 /// Counts refreshed by a partial re-import (only the relevant one is non-zero).
@@ -1663,6 +1678,7 @@ pub fn run() {
             open_backup,
             has_active_backup,
             set_biometric_required,
+            app_signing_status,
             reimport_module,
             forget_backup,
             imported_backup_ids,
