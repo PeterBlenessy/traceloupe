@@ -9,37 +9,66 @@ While pre-1.0, the **minor** version tracks major milestones:
 | Version | Milestone |
 |---------|-----------|
 | `0.1.0` | **MVP** — iLEAPP-powered import into a local cache, with a native browsing UI. |
-| `0.2.0` | **Phase 2 complete** — native lazy-decode core (Manifest Index, on-demand decryption, native Messages/Notes parsers) replacing the eager import for the hot artifacts. |
+| `0.2.0` | **Native lazy-decode core, wired in** — Manifest Index + on-demand decryption + native Messages/Notes/Recordings/Camera-roll parsers, running *alongside* iLEAPP (which still supplies Calls, Safari, Apps, third-party chats). |
+| `0.3.0`+ | **Native-first migration, in batches** — replace iLEAPP for first-party data (Calls, Safari, Apps, self-extracted Contacts), then make iLEAPP an optional on-demand engine for third-party/long-tail apps, then native third-party modules per the roadmap. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
 
 ## [Unreleased]
 
-### Added
-- **Phase 2 — native Messages, wired in.** The import now materializes Messages
-  natively from the backup's `sms.db` via a reusable `ManifestIndex`
-  (decrypt-on-demand: resolve `domain/relativePath` → file + key, read one file),
-  skipping iLEAPP's `sms` normalize step. iLEAPP remains the automatic fallback
-  when `sms.db` is absent or the native parse fails.
-- **Phase 2 — native Notes, wired in.** Notes are now read natively from
-  `NoteStore.sqlite` (via the same `ManifestIndex`): each note's body is
-  gzip-inflated from `ZICNOTEDATA.ZDATA` and its text walked out of the
-  `NoteStoreProto` wire format, with folder/title/snippet/timestamps from the
-  Core Data columns (schema introspected so version-suffixed column names still
-  resolve). iLEAPP's `notes` step is skipped on success and remains the fallback.
-- **Voice recordings.** New Recordings view: the import reads Voice Memos
-  metadata (`CloudRecordings.db`) natively and pairs each memo with its `.m4a` in
-  the backup, which streams over a new `traceloupe-audio://` scheme — decrypted on
-  demand at play time on encrypted backups (never bulk-decrypted), with HTTP
-  Range support so the player can seek. Recordings with no metadata DB still
-  surface (filename as the label). Adds a `recordings` cache table (schema v3),
-  a `recordings` import module, and the `list_recordings` command.
+_Nothing yet._
 
-### Remaining for 0.2.0
-- iLEAPP still *runs* its `sms` and `notes` modules, so no import time is saved
-  yet — dropping them is next, gated on real-backup validation of the native
-  output.
+## [0.2.0] — 2026-07-14
+
+The native lazy-decode core, wired into the import — plus password-protected and
+pinned Notes, richer Notes browsing, and a reworked re-import UX. iLEAPP still
+runs (it supplies Calls, Safari, Apps, and third-party chats); replacing it is
+the batched 0.3.0+ migration under "Planned" below.
+
+### Added
+- **Native Messages, Notes, Recordings & Camera roll.** The import materializes
+  these natively from the backup via a reusable `ManifestIndex` (decrypt-on-
+  demand: resolve `domain/relativePath` → file + key, read one file). Messages
+  come from `sms.db`; Notes from `NoteStore.sqlite` (body gzip-inflated from
+  `ZICNOTEDATA.ZDATA`, text walked out of the `NoteStoreProto` wire format,
+  Core Data columns schema-introspected); Recordings from `CloudRecordings.db`
+  with `.m4a` streamed over a `traceloupe-audio://` scheme (Range-seekable,
+  decrypted at play time). iLEAPP stays the automatic fallback when a source DB
+  is absent or a native parse fails.
+- **Locked (password-protected) Notes.** Detected via `ZISPASSWORDPROTECTED` /
+  `ZENCRYPTEDDATA`; shown with a lock icon and unlocked on demand with the note
+  password (PBKDF2 → AES-128-GCM), the plaintext held only in session, never at
+  rest.
+- **Notes filters & date grouping.** Filter by folder, year, and locked state;
+  the list groups into Pinned + recency sections (Today, Yesterday, Previous 7/30
+  Days, months, years), matching the Notes app. Parses `ZISPINNED`.
+- **Re-import moved to the sidebar.** Per-data-type re-import is now an action on
+  each nav item, with a spinner that survives navigation (state lifted above the
+  routes); a cancelled re-import no longer destroys the previous import (atomic
+  temp-cache swap).
+- **Touch ID (opt-in) + signing detection.** An encrypted backup's Keychain
+  password can be gated behind Touch ID; the app detects whether it's stably
+  signed and enables the toggle accordingly (see `docs/signing.md`).
+
+### Notes & caveats
+- Native Messages/Notes/Recordings/Camera-roll run *in addition to* iLEAPP's
+  passes, so import time isn't reduced yet — that lands with the 0.3.0
+  first-party migration.
+- Locked-note AES-GCM decryption and `ZISPINNED` parsing are unit-tested but
+  pending validation against a real backup that contains such notes.
+
+## Planned — 0.3.0+ (native-first migration, in batches)
+- **Batch 1 (0.3.0) — first-party parity, no iLEAPP.** Native parsers for Calls
+  (`CallHistory.storedata`), Safari (`History.db`), Apps (app-state plist), and
+  self-extracted Contacts (`AddressBook.sqlitedb`) via the Manifest Index. Every
+  built-in view then materializes natively, and the redundant iLEAPP sms/notes
+  passes are dropped so import time actually falls.
+- **Batch 2 (0.3.x) — iLEAPP optional.** Default install fully offline (no first-
+  import download, no bundled ~222 MB engine); iLEAPP fetched on demand only when
+  the user opts into deeper third-party coverage.
+- **Batch 3+ (0.4.0+) — native third-party modules** per the app-tier roadmap
+  (Top 10 first), replacing iLEAPP coverage incrementally.
 
 ## [0.1.0] — 2026-07-13
 
