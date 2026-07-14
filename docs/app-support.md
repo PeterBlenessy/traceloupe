@@ -63,7 +63,9 @@ what's actually in the backup (confirmed by whether iLEAPP even has a module):
 > Investigate (data exists but not open-source-documented — see Research notes):
 > **Snapchat**, **X/Twitter**, **Facebook** (main app).
 
-**Telegram is deferred to 0.4.0** (already reads through iLEAPP; no urgency).
+**Telegram** — ✅ native as of 0.4.0 (dev): a native reader for its binary
+"postbox" format (`t7` messages, `t2` peers). Messages only; unvalidated, behind
+the iLEAPP fallback.
 
 **Research notes — apps with no iLEAPP module** (web research, July 2026; "no
 iLEAPP module" ≠ "no data"). These need a real backup to pin exact schemas before
@@ -96,7 +98,7 @@ decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifact
 | Facebook Messenger | Messages (`lightspeed` SQLite) | ✅ Native — messages | 0.3.0 |
 | TikTok | Messages (JSON) + social-graph contacts | ✅ Native (unvalidated) — messages; 🟡 contacts | 0.3.0 |
 | Instagram | DMs as archived plists | ✅ Native (unvalidated) — DMs | 0.3.0 |
-| Telegram | Messages (cloud-synced; local cache varies) | 🟡 Via iLEAPP — messages | 0.4.0 (deferred) |
+| Telegram | Messages (binary "postbox" format) | ✅ Native (unvalidated) — messages | 0.4.0 |
 | Facebook (main app) | Chats via Messenger (done); feed/media in generic `Cache.db` | ⬜ Investigate (Cache.db) | TBD |
 | Snapchat | Chats/contacts DO persist on iOS (often encrypted) | ⬜ Investigate (real backup) | TBD |
 | YouTube | Watch/search history, cache | ⬜ Planned | TBD |
