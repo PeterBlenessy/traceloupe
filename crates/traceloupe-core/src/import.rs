@@ -299,11 +299,18 @@ fn import_messages_native(
     };
     let entry = match index.find("HomeDomain", "Library/SMS/sms.db") {
         Ok(Some(e)) => e,
-        // sms.db not in this backup (or a read error) → let the iLEAPP path try.
-        _ => return false,
+        Ok(None) => return false, // sms.db not in this backup → iLEAPP path
+        Err(e) => {
+            // A real Manifest read error is worth surfacing, unlike a plain absence.
+            report.warnings.push(format!(
+                "Native Messages: Manifest read failed ({e}); using iLEAPP."
+            ));
+            return false;
+        }
     };
     let sms_db = work_dir.join(".sms.db");
     if let Err(e) = index.extract_to(&entry, decryptor, &sms_db) {
+        let _ = std::fs::remove_file(&sms_db);
         report.warnings.push(format!(
             "Native Messages: couldn't read sms.db ({e}); using iLEAPP."
         ));
@@ -350,11 +357,17 @@ fn import_notes_native(
     };
     let entry = match index.find("AppDomainGroup-group.com.apple.notes", "NoteStore.sqlite") {
         Ok(Some(e)) => e,
-        // NoteStore.sqlite not in this backup (or a read error) → iLEAPP path.
-        _ => return false,
+        Ok(None) => return false, // NoteStore.sqlite not in this backup → iLEAPP path
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Notes: Manifest read failed ({e}); using iLEAPP."
+            ));
+            return false;
+        }
     };
     let note_store = work_dir.join(".NoteStore.sqlite");
     if let Err(e) = index.extract_to(&entry, decryptor, &note_store) {
+        let _ = std::fs::remove_file(&note_store);
         report.warnings.push(format!(
             "Native Notes: couldn't read NoteStore.sqlite ({e}); using iLEAPP."
         ));
@@ -489,7 +502,10 @@ pub fn reimport_module(
                 .find("HomeDomain", "Library/SMS/sms.db")?
                 .ok_or_else(|| crate::Error::Parse("sms.db is not in this backup".into()))?;
             let sms_db = work_dir.join(".reimport-sms.db");
-            index.extract_to(&entry, decryptor, &sms_db)?;
+            if let Err(e) = index.extract_to(&entry, decryptor, &sms_db) {
+                let _ = std::fs::remove_file(&sms_db);
+                return Err(e);
+            }
             let att = crate::parsers::messages::AttachmentSource {
                 index: &index,
                 decryptor,
@@ -513,7 +529,10 @@ pub fn reimport_module(
                     crate::Error::Parse("NoteStore.sqlite is not in this backup".into())
                 })?;
             let note_db = work_dir.join(".reimport-notes.db");
-            index.extract_to(&entry, decryptor, &note_db)?;
+            if let Err(e) = index.extract_to(&entry, decryptor, &note_db) {
+                let _ = std::fs::remove_file(&note_db);
+                return Err(e);
+            }
             // replace=true clears + re-inserts atomically (see parse_notes).
             let r = crate::parsers::notes::parse_notes(&note_db, &cache, &mut report, true);
             let _ = std::fs::remove_file(&note_db);

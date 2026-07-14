@@ -81,10 +81,12 @@ pub fn parse_recordings(
         // Metadata is keyed by the ZPATH filename, so join on the audio's basename.
         let m = basename(&entry.relative_path).and_then(|n| meta.get(n));
         let (decrypt_key, plain_size) = match decryptor {
-            Some(_) => {
-                let (k, s) = crypto::file_key_field(&entry.file_blob)?;
-                (Some(k), s)
-            }
+            // Skip one recording with a malformed `file` blob rather than failing
+            // the whole list.
+            Some(_) => match crypto::file_key_field(&entry.file_blob) {
+                Ok((k, s)) => (Some(k), s),
+                Err(_) => continue,
+            },
             None => (None, None),
         };
         assets.push(RecordingAsset {

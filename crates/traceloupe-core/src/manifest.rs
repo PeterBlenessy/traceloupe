@@ -118,11 +118,15 @@ impl ManifestIndex {
             .map_err(Into::into)
     }
 
-    /// The on-disk (possibly ciphertext) path of a backed-up file.
+    /// The on-disk (possibly ciphertext) path of a backed-up file. `file_id` is
+    /// from the untrusted Manifest; a non-hex value (`../..`, `/etc/passwd`) would
+    /// escape `backup_dir` via `join`, so anything that isn't a content-addressed
+    /// id resolves to a nonexistent in-dir path (a later read simply fails).
     pub fn blob_path(&self, file_id: &str) -> PathBuf {
-        self.backup_dir
-            .join(file_id.get(..2).unwrap_or(file_id))
-            .join(file_id)
+        if !crate::crypto::is_valid_file_id(file_id) {
+            return self.backup_dir.join("__invalid_file_id__");
+        }
+        self.backup_dir.join(&file_id[..2]).join(file_id)
     }
 
     /// Read a file's PLAINTEXT bytes into memory, decrypting on the fly for an
