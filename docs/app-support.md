@@ -6,7 +6,9 @@ with no dependency on the iLEAPP sidecar. Update a row the moment its status
 changes; this file is the single source of truth for coverage.
 
 Companion to `../CHANGELOG.md` (milestones) and
-`../product-architecture-description.md` §13 (roadmap rationale).
+`../product-architecture-description.md` §13 (roadmap rationale). For *field-level*
+coverage within each app — everything in its DB and what we surface — see
+[`app-data-coverage.md`](app-data-coverage.md).
 
 **Last updated:** 2026-07-14 · current release **0.2.0**
 
@@ -34,7 +36,11 @@ Companion to `../CHANGELOG.md` (milestones) and
 | Call history | `CallHistory.storedata` | ✅ Native | 0.3.0 |
 | Safari history | `History.db` | ✅ Native | 0.3.0 |
 | Contacts | `AddressBook.sqlitedb` | ✅ Native | 0.3.0 |
-| Installed apps | app-state plist | 🟡 Via iLEAPP | 0.3.0 (planned) |
+| Installed apps | `Info.plist` (Installed Applications) | ✅ Native | 0.1.0 |
+
+**All first-party views are now native** — iLEAPP is no longer required for any
+built-in view. It's still invoked only for the third-party chats below (until
+those go native), after which it becomes optional (Batch 2).
 
 ## Third-party apps
 
