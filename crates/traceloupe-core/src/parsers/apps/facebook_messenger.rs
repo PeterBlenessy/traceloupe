@@ -12,7 +12,6 @@
 //! - Messenger stores no per-thread name here, so the conversation name is derived
 //!   from the peer (the shared inserter's derive mode).
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
@@ -76,8 +75,6 @@ fn parse(db_path: &Path) -> Result<Vec<AppMessage>> {
     let mut stmt = src.prepare(&sql)?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
-    // Track distinct senders per thread to know when a peer name is the 1:1 title.
-    let mut seen_ids: HashSet<String> = HashSet::new();
     while let Some(r) = rows.next()? {
         let chat_key: String = r
             .get::<_, Option<String>>(0)?
@@ -95,9 +92,6 @@ fn parse(db_path: &Path) -> Result<Vec<AppMessage>> {
         let is_from_me = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
         let has_attachment = r.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0;
 
-        if let Some(id) = &sender_id {
-            seen_ids.insert(id.clone());
-        }
         out.push(AppMessage {
             chat_key,
             chat_name: None, // derived from the peer by the inserter
