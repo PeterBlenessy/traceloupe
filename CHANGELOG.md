@@ -12,7 +12,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.2.0` | **Native lazy-decode core, wired in** — Manifest Index + on-demand decryption + native Messages/Notes/Recordings/Camera-roll parsers, running *alongside* iLEAPP (which still supplies Calls, Safari, Apps, third-party chats). |
 | `0.3.0` | **Native-first, Batch 1** — all first-party views native (Calls, Safari, Apps, Contacts); a pluggable native app-chat framework with WhatsApp, Facebook Messenger, Instagram & TikTok. iLEAPP still runs for Telegram, TikTok contacts, and the long tail. |
 | `0.4.0` | **More native chat apps** — Telegram (binary postbox), Kik, imo, Threema, via the app-chat framework. iLEAPP still runs for the long tail. |
-| `0.5.0`+ | **Native-first, continued** — more apps, then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.5.0` | **More native chat apps** — Viber, Microsoft Teams, via the app-chat framework. |
+| `0.6.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -20,6 +21,21 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.5.0] — 2026-07-15
+
+Two more native third-party chat apps via the app-chat framework, each
+code-reviewed and hardened. Both unvalidated against a real backup; behind the
+iLEAPP fallback.
+
+### Added
+- **Viber** (`com.viber/database/Contacts.data`) — messages, conversation
+  grouping, per-author group attribution, direction, attachment flag. Uses
+  `ZSTATEDATE` (creation) for the timestamp and infers direction robustly
+  (including failed sends).
+- **Microsoft Teams** (`SkypeSpacesDogfood/*/Skype*.sqlite`) — messages with
+  per-author group attribution; HTML content reduced to plain text (recovering
+  emoji `alt` text); `ZTHREADTOPIC` group titles.
 
 ## [0.4.0] — 2026-07-14
 
