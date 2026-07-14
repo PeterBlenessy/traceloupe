@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Lock, NotebookText } from "lucide-react";
+import { Lock, NotebookText, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -35,6 +35,89 @@ import {
 } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
 import { client, type Note } from "@/lib/ipc";
+
+/** A flattened list row: either a section header or a note (so the virtualized
+ *  list can render Apple Notes-style date groups inline). */
+type NoteRowItem =
+  | { kind: "header"; key: string; label: string }
+  | { kind: "note"; key: number; note: Note };
+
+const MS_DAY = 86_400_000;
+
+/**
+ * The recency bucket a note falls in, keyed off its modified date — matching the
+ * Notes app: Today, Yesterday, Previous 7/30 Days, then by month within the
+ * current year and by year before that.
+ */
+function dateBucket(
+  modifiedAt: number | null,
+  now: Date,
+): { key: string; label: string } {
+  if (modifiedAt == null) return { key: "none", label: "No date" };
+  const t = modifiedAt * 1000;
+  const startOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).getTime();
+  if (t >= startOfToday) return { key: "today", label: "Today" };
+  if (t >= startOfToday - MS_DAY)
+    return { key: "yesterday", label: "Yesterday" };
+  if (t >= startOfToday - 7 * MS_DAY)
+    return { key: "prev7", label: "Previous 7 Days" };
+  if (t >= startOfToday - 30 * MS_DAY)
+    return { key: "prev30", label: "Previous 30 Days" };
+  const d = new Date(t);
+  if (d.getFullYear() === now.getFullYear()) {
+    return {
+      key: `m-${d.getMonth()}`,
+      label: d.toLocaleString(undefined, { month: "long" }),
+    };
+  }
+  return { key: `y-${d.getFullYear()}`, label: String(d.getFullYear()) };
+}
+
+/**
+ * Flatten already-filtered+sorted notes into header/note rows. When sorted by
+ * modified date, notes are grouped into a Pinned section (always first) followed
+ * by recency date sections; any other sort stays a flat list (headers would be
+ * meaningless). Section order follows the sort direction; within a section the
+ * incoming note order is preserved.
+ */
+function groupNotes(notes: Note[], sort: SortState, now: Date): NoteRowItem[] {
+  if (sort.by !== "modified") {
+    return notes.map((n) => ({ kind: "note", key: n.id, note: n }));
+  }
+  type Section = { key: string; label: string; order: number; notes: Note[] };
+  const sections = new Map<string, Section>();
+  for (const n of notes) {
+    const { key, label } = n.pinned
+      ? { key: "pinned", label: "Pinned" }
+      : dateBucket(n.modifiedAt, now);
+    // Order sections by their most-recent note; null dates sort oldest.
+    const order = n.modifiedAt ?? -Infinity;
+    const s = sections.get(key);
+    if (s) {
+      s.notes.push(n);
+      s.order = Math.max(s.order, order);
+    } else {
+      sections.set(key, { key, label, order, notes: [n] });
+    }
+  }
+  const pinned = sections.get("pinned");
+  sections.delete("pinned");
+  const dated = [...sections.values()].sort((a, b) =>
+    sort.desc ? b.order - a.order : a.order - b.order,
+  );
+  const ordered = pinned ? [pinned, ...dated] : dated;
+
+  const rows: NoteRowItem[] = [];
+  for (const s of ordered) {
+    rows.push({ kind: "header", key: `h-${s.key}`, label: s.label });
+    for (const n of s.notes) rows.push({ kind: "note", key: n.id, note: n });
+  }
+  return rows;
+}
 
 export function NotesView() {
   const navigate = useNavigate();
@@ -107,6 +190,12 @@ export function NotesView() {
       sort.desc,
     );
   }, [notes, sort, folder, year, lockState]);
+
+  // Header/note rows for the list: Pinned + date sections when sorted by date.
+  const rows = useMemo(
+    () => (sortedNotes ? groupNotes(sortedNotes, sort, new Date()) : []),
+    [sortedNotes, sort],
+  );
 
   if (active === false) {
     return (
@@ -211,16 +300,20 @@ export function NotesView() {
           ) : (
             <VirtualList
               key={clockFormat}
-              items={sortedNotes!}
-              getKey={(n) => n.id}
+              items={rows}
+              getKey={(r) => r.key}
               estimateSize={64}
-              renderItem={(n) => (
-                <NoteRow
-                  note={n}
-                  active={selected?.id === n.id}
-                  onClick={() => setSelectedId(n.id)}
-                />
-              )}
+              renderItem={(r) =>
+                r.kind === "header" ? (
+                  <SectionHeader label={r.label} />
+                ) : (
+                  <NoteRow
+                    note={r.note}
+                    active={selected?.id === r.note.id}
+                    onClick={() => setSelectedId(r.note.id)}
+                  />
+                )
+              }
             />
           )}
         </>
@@ -251,6 +344,16 @@ function noteTitle(n: Note): string {
   );
 }
 
+/** A date/Pinned group label between note rows. */
+function SectionHeader({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-1.5 bg-background/95 px-3 pb-1 pt-3 text-xs font-semibold text-muted-foreground">
+      {label === "Pinned" && <Pin className="size-3" />}
+      {label}
+    </div>
+  );
+}
+
 function NoteRow({
   note,
   active,
@@ -270,6 +373,9 @@ function NoteRow({
         <ItemContent className="gap-0.5">
           <div className="flex items-baseline justify-between gap-2">
             <ItemTitle className="flex min-w-0 items-center gap-1.5">
+              {note.pinned && (
+                <Pin className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
               {note.locked && (
                 <Lock className="size-3.5 shrink-0 text-muted-foreground" />
               )}
