@@ -47,21 +47,43 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
-/// Reduce Teams' HTML message content to plain text: drop tags, decode the common
-/// entities, and collapse whitespace. Good enough for a readable message body.
+/// The `alt="…"` text of an HTML tag, if present. Teams renders emoji/stickers as
+/// `<img … alt="👍">`, so recovering the alt keeps an emoji-only message's content.
+fn extract_alt(tag: &str) -> Option<String> {
+    let start = tag.find("alt=\"")? + 5;
+    let rest = &tag[start..];
+    let end = rest.find('"')?;
+    let alt = rest[..end].trim();
+    if alt.is_empty() {
+        None
+    } else {
+        Some(alt.to_string())
+    }
+}
+
+/// Reduce Teams' HTML message content to plain text: drop tags (recovering emoji
+/// `alt` text), decode the common entities, and collapse whitespace.
 fn html_to_text(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
+    let mut tag = String::new();
     let mut in_tag = false;
     for c in html.chars() {
         match c {
             // A tag becomes a separator so `a<br>b` → `a b`, not `ab`.
             '<' => {
                 in_tag = true;
+                tag.clear();
                 out.push(' ');
             }
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(c),
-            _ => {}
+            '>' => {
+                in_tag = false;
+                if let Some(alt) = extract_alt(&tag) {
+                    out.push_str(&alt);
+                    out.push(' ');
+                }
+            }
+            _ if in_tag => tag.push(c),
+            _ => out.push(c),
         }
     }
     let out = out
@@ -99,10 +121,10 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".into());
         let chat_name: Option<String> = super::col_string(r, 1)?.filter(|s| !s.trim().is_empty());
-        let timestamp = r
-            .get::<_, Option<f64>>(2)?
-            .filter(|d| *d > 0.0)
-            .map(|d| d as i64 + MAC_EPOCH);
+        // Tolerant read (INTEGER/REAL/TEXT) so one odd row can't abort the parse.
+        let timestamp = super::col_i64(r, 2)?
+            .filter(|d| *d > 0)
+            .map(|d| d + MAC_EPOCH);
         let is_from_me = r.get::<_, Option<i64>>(3)?.unwrap_or(0) == 1;
         let body = super::col_string(r, 4)?
             .map(|h| html_to_text(&h))
@@ -135,6 +157,11 @@ mod tests {
     fn html_to_text_strips_and_decodes() {
         assert_eq!(html_to_text("<p>hi &amp; bye</p>"), "hi & bye");
         assert_eq!(html_to_text("a<br>b   c"), "a b c");
+        // An emoji-only message keeps its content via the img alt text.
+        assert_eq!(
+            html_to_text("<img itemtype=\"http://schema.skype.com/Emoji\" alt=\"👍\">"),
+            "👍"
+        );
     }
 
     fn make_db(dir: &Path) -> std::path::PathBuf {
