@@ -27,7 +27,13 @@ export type DiscoveryResult =
   | { status: "notFound"; path: string };
 
 export type ImportProgress =
-  | { phase: "parsing"; current: number; total: number; fraction: number; artifact: string }
+  | {
+      phase: "parsing";
+      current: number;
+      total: number;
+      fraction: number;
+      artifact: string;
+    }
   | { phase: "normalizing"; step: string };
 
 /** Dev-console log verbosity, mirrored in the Rust `set_log_level` command. */
@@ -275,7 +281,10 @@ export interface TraceLoupeClient {
     service?: string | null,
   ): Promise<TimelineMessage[]>;
   /** Message counts for each half-open [lo, hi) epoch-second window. */
-  countMessageRanges(ranges: TimeRange[], service?: string | null): Promise<number[]>;
+  countMessageRanges(
+    ranges: TimeRange[],
+    service?: string | null,
+  ): Promise<number[]>;
   /** A window of messages whose time falls in [lo, hi), oldest first. */
   getRangeWindow(
     lo: number | null,
@@ -343,7 +352,8 @@ const tauriClient: TraceLoupeClient = {
   listBackups: (root) => invoke<DiscoveryResult>("list_backups", { root }),
   defaultBackupRoot: () => invoke<string | null>("default_backup_root"),
   pickBackupFolder: async () => {
-    const defaultPath = (await invoke<string | null>("default_backup_root")) ?? undefined;
+    const defaultPath =
+      (await invoke<string | null>("default_backup_root")) ?? undefined;
     const chosen = await open({
       directory: true,
       multiple: false,
@@ -352,17 +362,21 @@ const tauriClient: TraceLoupeClient = {
     });
     return typeof chosen === "string" ? chosen : null;
   },
-  openFullDiskAccessSettings: () => invoke<void>("open_full_disk_access_settings"),
+  openFullDiskAccessSettings: () =>
+    invoke<void>("open_full_disk_access_settings"),
   engineStatus: () => invoke<boolean>("engine_status"),
   engineInfo: () => invoke<EngineInfo>("engine_info"),
   installEngine: () => invoke<void>("install_engine"),
-  onEngineProgress: (cb) => listen<EngineProgress>("engine://progress", (e) => cb(e.payload)),
+  onEngineProgress: (cb) =>
+    listen<EngineProgress>("engine://progress", (e) => cb(e.payload)),
   listImportModules: () => invoke<ImportModule[]>("list_import_modules"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
-  onImportProgress: (cb) => listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
+  onImportProgress: (cb) =>
+    listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
   cancelImport: () => invoke("cancel_import"),
   setLogLevel: (level) => invoke("set_log_level", { level }),
-  setBiometricRequired: (enabled) => invoke("set_biometric_required", { enabled }),
+  setBiometricRequired: (enabled) =>
+    invoke("set_biometric_required", { enabled }),
   appSigningStatus: () => invoke<SigningStatus>("app_signing_status"),
   onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
@@ -377,25 +391,51 @@ const tauriClient: TraceLoupeClient = {
   countTimelineMessages: (service) =>
     invoke<number>("count_timeline_messages", { service: service ?? null }),
   getTimelineWindow: (offset, limit, service) =>
-    invoke<TimelineMessage[]>("get_timeline_window", { offset, limit, service: service ?? null }),
+    invoke<TimelineMessage[]>("get_timeline_window", {
+      offset,
+      limit,
+      service: service ?? null,
+    }),
   countMessageRanges: (ranges, service) =>
-    invoke<number[]>("count_message_ranges", { ranges, service: service ?? null }),
+    invoke<number[]>("count_message_ranges", {
+      ranges,
+      service: service ?? null,
+    }),
   getRangeWindow: (lo, hi, offset, limit, service) =>
-    invoke<TimelineMessage[]>("get_range_window", { lo, hi, offset, limit, service: service ?? null }),
+    invoke<TimelineMessage[]>("get_range_window", {
+      lo,
+      hi,
+      offset,
+      limit,
+      service: service ?? null,
+    }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
   listNotes: () => invoke<Note[]>("list_notes"),
-  unlockNote: (noteId, password) => invoke<string>("unlock_note", { noteId, password }),
+  unlockNote: (noteId, password) =>
+    invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
   countMedia: (source) => invoke<number>("count_media", { source }),
   getMediaWindow: (source, offset, limit, sortBy, desc) =>
-    invoke<MediaItem[]>("get_media_window", { source, offset, limit, sortBy, desc }),
+    invoke<MediaItem[]>("get_media_window", {
+      source,
+      offset,
+      limit,
+      sortBy,
+      desc,
+    }),
   countCalls: (search) => invoke<number>("count_calls", { search }),
   getCallsWindow: (search, offset, limit, sortBy, desc) =>
     invoke<Call[]>("get_calls_window", { search, offset, limit, sortBy, desc }),
   countSafari: (search) => invoke<number>("count_safari", { search }),
   getSafariWindow: (search, offset, limit, sortBy, desc) =>
-    invoke<HistoryVisit[]>("get_safari_window", { search, offset, limit, sortBy, desc }),
+    invoke<HistoryVisit[]>("get_safari_window", {
+      search,
+      offset,
+      limit,
+      sortBy,
+      desc,
+    }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listInstalledApps: () => invoke<string[]>("list_installed_apps"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
@@ -408,7 +448,8 @@ const tauriClient: TraceLoupeClient = {
     `traceloupe-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
   audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
-  reimportModule: (moduleId) => invoke<ReimportResult>("reimport_module", { moduleId }),
+  reimportModule: (moduleId) =>
+    invoke<ReimportResult>("reimport_module", { moduleId }),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -484,20 +525,104 @@ const mockThreads: ThreadSummary[] = [
 
 const mockMessages: Record<number, Message[]> = {
   1: [
-    { id: 1, isFromMe: false, sender: "+15551234567", body: "Hey, are you around this weekend?", sentAt: 1717840800, attachments: [] },
-    { id: 2, isFromMe: true, sender: null, body: "Yeah! What did you have in mind?", sentAt: 1717840980, attachments: [] },
-    { id: 3, isFromMe: false, sender: "+15551234567", body: "Thinking of hiking Mission Peak", sentAt: 1717841100, attachments: [] },
-    { id: 4, isFromMe: true, sender: null, body: "I'm in. Saturday morning?", sentAt: 1717841220, attachments: [] },
-    { id: 5, isFromMe: false, sender: "+15551234567", body: "Here's the itinerary", sentAt: 1717841340, attachments: [{ id: 2, filename: "itinerary.pdf", mimeType: "application/pdf", localPath: "/mock/itinerary.pdf" }] },
-    { id: 6, isFromMe: true, sender: null, body: "Here's the trailhead 📷", sentAt: 1717841460, attachments: [{ id: 1, filename: "traceloupe-test.png", mimeType: "image/png", localPath: "/mock/traceloupe-test.png" }] },
+    {
+      id: 1,
+      isFromMe: false,
+      sender: "+15551234567",
+      body: "Hey, are you around this weekend?",
+      sentAt: 1717840800,
+      attachments: [],
+    },
+    {
+      id: 2,
+      isFromMe: true,
+      sender: null,
+      body: "Yeah! What did you have in mind?",
+      sentAt: 1717840980,
+      attachments: [],
+    },
+    {
+      id: 3,
+      isFromMe: false,
+      sender: "+15551234567",
+      body: "Thinking of hiking Mission Peak",
+      sentAt: 1717841100,
+      attachments: [],
+    },
+    {
+      id: 4,
+      isFromMe: true,
+      sender: null,
+      body: "I'm in. Saturday morning?",
+      sentAt: 1717841220,
+      attachments: [],
+    },
+    {
+      id: 5,
+      isFromMe: false,
+      sender: "+15551234567",
+      body: "Here's the itinerary",
+      sentAt: 1717841340,
+      attachments: [
+        {
+          id: 2,
+          filename: "itinerary.pdf",
+          mimeType: "application/pdf",
+          localPath: "/mock/itinerary.pdf",
+        },
+      ],
+    },
+    {
+      id: 6,
+      isFromMe: true,
+      sender: null,
+      body: "Here's the trailhead 📷",
+      sentAt: 1717841460,
+      attachments: [
+        {
+          id: 1,
+          filename: "traceloupe-test.png",
+          mimeType: "image/png",
+          localPath: "/mock/traceloupe-test.png",
+        },
+      ],
+    },
   ],
   2: [
-    { id: 7, isFromMe: true, sender: null, body: "Landing at 6, boarding now", sentAt: 1717499000, attachments: [] },
-    { id: 8, isFromMe: false, sender: "Mom", body: "Call me when you land ❤️", sentAt: 1717500000, attachments: [] },
+    {
+      id: 7,
+      isFromMe: true,
+      sender: null,
+      body: "Landing at 6, boarding now",
+      sentAt: 1717499000,
+      attachments: [],
+    },
+    {
+      id: 8,
+      isFromMe: false,
+      sender: "Mom",
+      body: "Call me when you land ❤️",
+      sentAt: 1717500000,
+      attachments: [],
+    },
   ],
   5: [
-    { id: 9, isFromMe: false, sender: "★ hembokke", body: "have you seen this one 😂", sentAt: 1717599000, attachments: [] },
-    { id: 10, isFromMe: true, sender: null, body: "sent you a video 🎵", sentAt: 1717600000, attachments: [] },
+    {
+      id: 9,
+      isFromMe: false,
+      sender: "★ hembokke",
+      body: "have you seen this one 😂",
+      sentAt: 1717599000,
+      attachments: [],
+    },
+    {
+      id: 10,
+      isFromMe: true,
+      sender: null,
+      body: "sent you a video 🎵",
+      sentAt: 1717600000,
+      attachments: [],
+    },
   ],
 };
 
@@ -522,9 +647,30 @@ mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
   attachments: [],
 }));
 mockMessages[4] = [
-  { id: 2000, isFromMe: false, sender: "+15559876543", body: "Who's in for Saturday?", sentAt: 1717841600, attachments: [] },
-  { id: 2001, isFromMe: true, sender: null, body: "I'm in!", sentAt: 1717841650, attachments: [] },
-  { id: 2002, isFromMe: false, sender: "+15550001111", body: "See you at the trailhead!", sentAt: 1717841700, attachments: [] },
+  {
+    id: 2000,
+    isFromMe: false,
+    sender: "+15559876543",
+    body: "Who's in for Saturday?",
+    sentAt: 1717841600,
+    attachments: [],
+  },
+  {
+    id: 2001,
+    isFromMe: true,
+    sender: null,
+    body: "I'm in!",
+    sentAt: 1717841650,
+    attachments: [],
+  },
+  {
+    id: 2002,
+    isFromMe: false,
+    sender: "+15550001111",
+    body: "See you at the trailhead!",
+    sentAt: 1717841700,
+    attachments: [],
+  },
 ];
 
 // All mock messages flattened into one chronological stream, for the timeline.
@@ -545,38 +691,195 @@ function inRange(sentAt: number | null, r: TimeRange): boolean {
 }
 
 const mockCalls: Call[] = [
-  { id: 1, address: "friend@icloud.com", direction: "incoming", answered: true, durationS: 128, occurredAt: 1717786800, service: "FaceTime Audio" },
-  { id: 2, address: "+15559876543", direction: "incoming", answered: false, durationS: 0, occurredAt: 1717785000, service: "Phone Call" },
-  { id: 3, address: "+15551234567", direction: "outgoing", answered: true, durationS: 312, occurredAt: 1717783200, service: "Phone Call" },
+  {
+    id: 1,
+    address: "friend@icloud.com",
+    direction: "incoming",
+    answered: true,
+    durationS: 128,
+    occurredAt: 1717786800,
+    service: "FaceTime Audio",
+  },
+  {
+    id: 2,
+    address: "+15559876543",
+    direction: "incoming",
+    answered: false,
+    durationS: 0,
+    occurredAt: 1717785000,
+    service: "Phone Call",
+  },
+  {
+    id: 3,
+    address: "+15551234567",
+    direction: "outgoing",
+    answered: true,
+    durationS: 312,
+    occurredAt: 1717783200,
+    service: "Phone Call",
+  },
 ];
 
 const mockSafari: HistoryVisit[] = [
-  { id: 1, url: "https://en.wikipedia.org/wiki/Mission_Peak", title: "Mission Peak - Wikipedia", visitedAt: 1717801200, visitCount: 2 },
-  { id: 2, url: "https://news.ycombinator.com/", title: "Hacker News", visitedAt: 1717797600, visitCount: 34 },
-  { id: 3, url: "https://www.apple.com/", title: "Apple", visitedAt: 1717794000, visitCount: 12 },
+  {
+    id: 1,
+    url: "https://en.wikipedia.org/wiki/Mission_Peak",
+    title: "Mission Peak - Wikipedia",
+    visitedAt: 1717801200,
+    visitCount: 2,
+  },
+  {
+    id: 2,
+    url: "https://news.ycombinator.com/",
+    title: "Hacker News",
+    visitedAt: 1717797600,
+    visitCount: 34,
+  },
+  {
+    id: 3,
+    url: "https://www.apple.com/",
+    title: "Apple",
+    visitedAt: 1717794000,
+    visitCount: 12,
+  },
 ];
 
 const mockNotes: Note[] = [
-  { id: 1, folder: "Notes", title: "Hike checklist", snippet: "Water, snacks, sunscreen…", body: "Water\nSnacks\nSunscreen\nHat\nExtra socks", createdAt: 1717000000, modifiedAt: 1717838000, locked: false, passwordHint: null },
-  { id: 2, folder: "Work", title: "Q3 ideas", snippet: "Ship the importer, then…", body: "Ship the importer, then work on lazy decode and the encrypted path.", createdAt: 1716500000, modifiedAt: 1717500000, locked: false, passwordHint: null },
-  { id: 3, folder: "Notes", title: null, snippet: "Grocery list", body: "Milk\nEggs\nBröd\nKaffe", createdAt: 1716000000, modifiedAt: 1716600000, locked: false, passwordHint: null },
-  { id: 4, folder: "Personal", title: "Passwords", snippet: null, body: null, createdAt: 1715000000, modifiedAt: 1715500000, locked: true, passwordHint: "the usual" },
+  {
+    id: 1,
+    folder: "Notes",
+    title: "Hike checklist",
+    snippet: "Water, snacks, sunscreen…",
+    body: "Water\nSnacks\nSunscreen\nHat\nExtra socks",
+    createdAt: 1717000000,
+    modifiedAt: 1717838000,
+    locked: false,
+    passwordHint: null,
+  },
+  {
+    id: 2,
+    folder: "Work",
+    title: "Q3 ideas",
+    snippet: "Ship the importer, then…",
+    body: "Ship the importer, then work on lazy decode and the encrypted path.",
+    createdAt: 1716500000,
+    modifiedAt: 1717500000,
+    locked: false,
+    passwordHint: null,
+  },
+  {
+    id: 3,
+    folder: "Notes",
+    title: null,
+    snippet: "Grocery list",
+    body: "Milk\nEggs\nBröd\nKaffe",
+    createdAt: 1683000000,
+    modifiedAt: 1684000000,
+    locked: false,
+    passwordHint: null,
+  },
+  {
+    id: 4,
+    folder: "Personal",
+    title: "Passwords",
+    snippet: null,
+    body: null,
+    createdAt: 1715000000,
+    modifiedAt: 1715500000,
+    locked: true,
+    passwordHint: "the usual",
+  },
 ];
 
 const mockRecordings: Recording[] = [
-  { id: 1, title: "Morning idea", folder: null, recordedAt: 1717838000, durationS: 42.5, fileName: "20240608 083320.m4a" },
-  { id: 2, title: "Meeting notes", folder: null, recordedAt: 1717500000, durationS: 195, fileName: "20240604 100000.m4a" },
-  { id: 3, title: null, folder: null, recordedAt: 1716600000, durationS: 9.2, fileName: "New Recording 3.m4a" },
+  {
+    id: 1,
+    title: "Morning idea",
+    folder: null,
+    recordedAt: 1717838000,
+    durationS: 42.5,
+    fileName: "20240608 083320.m4a",
+  },
+  {
+    id: 2,
+    title: "Meeting notes",
+    folder: null,
+    recordedAt: 1717500000,
+    durationS: 195,
+    fileName: "20240604 100000.m4a",
+  },
+  {
+    id: 3,
+    title: null,
+    folder: null,
+    recordedAt: 1716600000,
+    durationS: 9.2,
+    fileName: "New Recording 3.m4a",
+  },
 ];
 
 const mockContacts: Contact[] = [
-  { id: 1, firstName: "Jordan", lastName: "Kim", organization: "Acme Corp", phones: [{ label: "Work", value: "+15559876543" }], emails: [{ label: "Work", value: "jordan@acme.example" }], hasImage: true, source: "Address Book" },
-  { id: 2, firstName: "Alex", lastName: "Rivera", organization: null, phones: [{ label: "Mobile", value: "+15551234567" }], emails: [{ label: "Home", value: "alex@example.com" }], hasImage: true, source: "Address Book" },
-  { id: 3, firstName: "Sam", lastName: "Taylor", organization: null, phones: [], emails: [{ label: "Home", value: "sam.taylor@example.com" }], hasImage: false, source: "Address Book" },
-  { id: 4, firstName: null, lastName: null, organization: "Bella Vista Pizza", phones: [{ label: "Mobile", value: "+15550001111" }], emails: [], hasImage: false, source: "Address Book" },
+  {
+    id: 1,
+    firstName: "Jordan",
+    lastName: "Kim",
+    organization: "Acme Corp",
+    phones: [{ label: "Work", value: "+15559876543" }],
+    emails: [{ label: "Work", value: "jordan@acme.example" }],
+    hasImage: true,
+    source: "Address Book",
+  },
+  {
+    id: 2,
+    firstName: "Alex",
+    lastName: "Rivera",
+    organization: null,
+    phones: [{ label: "Mobile", value: "+15551234567" }],
+    emails: [{ label: "Home", value: "alex@example.com" }],
+    hasImage: true,
+    source: "Address Book",
+  },
+  {
+    id: 3,
+    firstName: "Sam",
+    lastName: "Taylor",
+    organization: null,
+    phones: [],
+    emails: [{ label: "Home", value: "sam.taylor@example.com" }],
+    hasImage: false,
+    source: "Address Book",
+  },
+  {
+    id: 4,
+    firstName: null,
+    lastName: null,
+    organization: "Bella Vista Pizza",
+    phones: [{ label: "Mobile", value: "+15550001111" }],
+    emails: [],
+    hasImage: false,
+    source: "Address Book",
+  },
   // A third-party app's social graph: name + @handle only (behind the filter).
-  { id: 5, firstName: "★ Alice ✿", lastName: null, organization: "@ccidkk", phones: [], emails: [], hasImage: false, source: "TikTok" },
-  { id: 6, firstName: "jhopesop", lastName: null, organization: "@jhopesop", phones: [], emails: [], hasImage: false, source: "TikTok" },
+  {
+    id: 5,
+    firstName: "★ Alice ✿",
+    lastName: null,
+    organization: "@ccidkk",
+    phones: [],
+    emails: [],
+    hasImage: false,
+    source: "TikTok",
+  },
+  {
+    id: 6,
+    firstName: "jhopesop",
+    lastName: null,
+    organization: "@jhopesop",
+    phones: [],
+    emails: [],
+    hasImage: false,
+    source: "TikTok",
+  },
 ];
 
 // Colored initials SVGs standing in for real contact photos in the browser mock.
@@ -588,10 +891,38 @@ function mockAvatarDataUrl(id: number): string {
 }
 
 const mockMedia: MediaItem[] = [
-  { id: 1, kind: "photo", source: "Messages", mimeType: "image/png", filename: "traceloupe-test.png", takenAt: 1717841460 },
-  { id: 2, kind: "photo", source: "Messages", mimeType: "image/png", filename: "sunset.png", takenAt: 1717841520 },
-  { id: 3, kind: "photo", source: "Photos", mimeType: "image/png", filename: "forest.png", takenAt: 1717841580 },
-  { id: 4, kind: "photo", source: "WhatsApp", mimeType: "image/heic", filename: "IMG_0421.heic", takenAt: 1717841640 },
+  {
+    id: 1,
+    kind: "photo",
+    source: "Messages",
+    mimeType: "image/png",
+    filename: "traceloupe-test.png",
+    takenAt: 1717841460,
+  },
+  {
+    id: 2,
+    kind: "photo",
+    source: "Messages",
+    mimeType: "image/png",
+    filename: "sunset.png",
+    takenAt: 1717841520,
+  },
+  {
+    id: 3,
+    kind: "photo",
+    source: "Photos",
+    mimeType: "image/png",
+    filename: "forest.png",
+    takenAt: 1717841580,
+  },
+  {
+    id: 4,
+    kind: "photo",
+    source: "WhatsApp",
+    mimeType: "image/heic",
+    filename: "IMG_0421.heic",
+    takenAt: 1717841640,
+  },
 ];
 
 // Solid-color SVG data URIs mirroring the fixture's seeded photos.
@@ -627,7 +958,9 @@ const mockImported = new Set<string>();
 // Mock-side filters mirroring the backend's windowed SQL, so the browser mock
 // behaves like the real windowed/filterable queries.
 function mockFilterMedia(source: string | null): MediaItem[] {
-  return source ? mockMedia.filter((m) => (m.source ?? "Other") === source) : mockMedia;
+  return source
+    ? mockMedia.filter((m) => (m.source ?? "Other") === source)
+    : mockMedia;
 }
 function mockFilterCalls(search: string | null): Call[] {
   if (!search) return mockCalls;
@@ -638,7 +971,9 @@ function mockFilterSafari(search: string | null): HistoryVisit[] {
   if (!search) return mockSafari;
   const q = search.toLowerCase();
   return mockSafari.filter(
-    (h) => h.url.toLowerCase().includes(q) || (h.title?.toLowerCase().includes(q) ?? false),
+    (h) =>
+      h.url.toLowerCase().includes(q) ||
+      (h.title?.toLowerCase().includes(q) ?? false),
   );
 }
 
@@ -659,7 +994,8 @@ function mockSortBy<T>(
     return ka < kb ? -sign : ka > kb ? sign : 0;
   });
 }
-const mediaKey = (by: string) => (m: MediaItem) => (by === "source" ? m.source : m.takenAt);
+const mediaKey = (by: string) => (m: MediaItem) =>
+  by === "source" ? m.source : m.takenAt;
 const callKey = (by: string) => (c: Call) =>
   by === "name" ? c.address : by === "duration" ? c.durationS : c.occurredAt;
 const safariKey = (by: string) => (h: HistoryVisit) =>
@@ -679,12 +1015,21 @@ export const mockClient: TraceLoupeClient = {
     "/Users/dev/Library/Application Support/MobileSync/Backup",
   openFullDiskAccessSettings: async () => {},
   engineStatus: async () => true,
-  engineInfo: async () => ({ installed: true, version: "iLEAPP v2026.1.0", canDownload: true }),
+  engineInfo: async () => ({
+    installed: true,
+    version: "iLEAPP v2026.1.0",
+    canDownload: true,
+  }),
   installEngine: async () => {
     for (let i = 1; i <= 5; i++) {
       await new Promise((r) => setTimeout(r, 200));
       mockEngineSubs.forEach((cb) =>
-        cb({ phase: "downloading", received: i * 15_000_000, total: 78_000_000, fraction: i / 5 }),
+        cb({
+          phase: "downloading",
+          received: i * 15_000_000,
+          total: 78_000_000,
+          fraction: i / 5,
+        }),
       );
     }
     mockEngineSubs.forEach((cb) => cb({ phase: "verifying" }));
@@ -696,15 +1041,41 @@ export const mockClient: TraceLoupeClient = {
     return () => mockEngineSubs.delete(cb);
   },
   listImportModules: async () => [
-    { id: "messages", label: "Messages", category: "Communication", default: true },
-    { id: "calls", label: "Call history", category: "Communication", default: true },
-    { id: "contacts", label: "Contacts", category: "Communication", default: true },
+    {
+      id: "messages",
+      label: "Messages",
+      category: "Communication",
+      default: true,
+    },
+    {
+      id: "calls",
+      label: "Call history",
+      category: "Communication",
+      default: true,
+    },
+    {
+      id: "contacts",
+      label: "Contacts",
+      category: "Communication",
+      default: true,
+    },
     { id: "safari", label: "Safari history", category: "Web", default: true },
     { id: "notes", label: "Notes", category: "Productivity", default: true },
-    { id: "camera_roll", label: "Camera roll photos", category: "Media", default: true },
+    {
+      id: "camera_roll",
+      label: "Camera roll photos",
+      category: "Media",
+      default: true,
+    },
   ],
   importBackup: async ({ backupId }) => {
-    const artifacts = ["contacts", "callHistory", "safariHistory", "notes", "sms"];
+    const artifacts = [
+      "contacts",
+      "callHistory",
+      "safariHistory",
+      "notes",
+      "sms",
+    ];
     for (let i = 0; i < artifacts.length; i++) {
       await new Promise((r) => setTimeout(r, 250));
       mockProgressSubs.forEach((cb) =>
@@ -717,14 +1088,28 @@ export const mockClient: TraceLoupeClient = {
         }),
       );
     }
-    for (const step of ["Messages", "Contacts", "TikTok messages", "Camera roll"]) {
+    for (const step of [
+      "Messages",
+      "Contacts",
+      "TikTok messages",
+      "Camera roll",
+    ]) {
       await new Promise((r) => setTimeout(r, 250));
       mockProgressSubs.forEach((cb) => cb({ phase: "normalizing", step }));
     }
     await new Promise((r) => setTimeout(r, 200));
     mockActive = true;
     mockImported.add(backupId);
-    return { cachePath: "/mock/cache.db", threads: 2, messages: 8, mediaItems: 4, calls: 3, safariVisits: 3, contacts: 4, warnings: [] };
+    return {
+      cachePath: "/mock/cache.db",
+      threads: 2,
+      messages: 8,
+      mediaItems: 4,
+      calls: 3,
+      safariVisits: 3,
+      contacts: 4,
+      warnings: [],
+    };
   },
   onImportProgress: async (cb) => {
     mockProgressSubs.add(cb);
@@ -734,7 +1119,11 @@ export const mockClient: TraceLoupeClient = {
   setLogLevel: async () => {},
   setBiometricRequired: async () => {},
   // Pretend the mock/browser preview is signed so the enabled toggle UI shows.
-  appSigningStatus: async () => ({ signed: true, adhoc: false, identity: "Mock Identity" }),
+  appSigningStatus: async () => ({
+    signed: true,
+    adhoc: false,
+    identity: "Mock Identity",
+  }),
   onLog: async () => () => {},
   hasActiveBackup: async () => mockActive,
   openBackup: async (backupId) => {
@@ -750,9 +1139,13 @@ export const mockClient: TraceLoupeClient = {
   countThreadMessages: async (threadId) =>
     mockActive ? (mockMessages[threadId]?.length ?? 0) : 0,
   getThreadMessageWindow: async (threadId, offset, limit) =>
-    mockActive ? (mockMessages[threadId] ?? []).slice(offset, offset + limit) : [],
+    mockActive
+      ? (mockMessages[threadId] ?? []).slice(offset, offset + limit)
+      : [],
   countTimelineMessages: async (service) =>
-    mockActive ? mockTimeline.filter((t) => !service || t.service === service).length : 0,
+    mockActive
+      ? mockTimeline.filter((t) => !service || t.service === service).length
+      : 0,
   getTimelineWindow: async (offset, limit, service) =>
     mockActive
       ? mockTimeline
@@ -763,7 +1156,9 @@ export const mockClient: TraceLoupeClient = {
     ranges.map((r) =>
       mockActive
         ? mockTimeline.filter(
-            (t) => inRange(t.message.sentAt, r) && (!service || t.service === service),
+            (t) =>
+              inRange(t.message.sentAt, r) &&
+              (!service || t.service === service),
           ).length
         : 0,
     ),
@@ -772,7 +1167,8 @@ export const mockClient: TraceLoupeClient = {
       ? mockTimeline
           .filter(
             (t) =>
-              inRange(t.message.sentAt, { lo, hi }) && (!service || t.service === service),
+              inRange(t.message.sentAt, { lo, hi }) &&
+              (!service || t.service === service),
           )
           .slice(offset, offset + limit)
       : [],
@@ -784,20 +1180,32 @@ export const mockClient: TraceLoupeClient = {
       ? "Bank PIN: 1234\nWiFi: hunter2"
       : Promise.reject(new Error("Wrong password.")),
   listRecordings: async () => (mockActive ? mockRecordings : []),
-  countMedia: async (source) => (mockActive ? mockFilterMedia(source).length : 0),
+  countMedia: async (source) =>
+    mockActive ? mockFilterMedia(source).length : 0,
   getMediaWindow: async (source, offset, limit, sortBy, desc) =>
     mockActive
-      ? mockSortBy(mockFilterMedia(source), mediaKey(sortBy), desc).slice(offset, offset + limit)
+      ? mockSortBy(mockFilterMedia(source), mediaKey(sortBy), desc).slice(
+          offset,
+          offset + limit,
+        )
       : [],
-  countCalls: async (search) => (mockActive ? mockFilterCalls(search).length : 0),
+  countCalls: async (search) =>
+    mockActive ? mockFilterCalls(search).length : 0,
   getCallsWindow: async (search, offset, limit, sortBy, desc) =>
     mockActive
-      ? mockSortBy(mockFilterCalls(search), callKey(sortBy), desc).slice(offset, offset + limit)
+      ? mockSortBy(mockFilterCalls(search), callKey(sortBy), desc).slice(
+          offset,
+          offset + limit,
+        )
       : [],
-  countSafari: async (search) => (mockActive ? mockFilterSafari(search).length : 0),
+  countSafari: async (search) =>
+    mockActive ? mockFilterSafari(search).length : 0,
   getSafariWindow: async (search, offset, limit, sortBy, desc) =>
     mockActive
-      ? mockSortBy(mockFilterSafari(search), safariKey(sortBy), desc).slice(offset, offset + limit)
+      ? mockSortBy(mockFilterSafari(search), safariKey(sortBy), desc).slice(
+          offset,
+          offset + limit,
+        )
       : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),

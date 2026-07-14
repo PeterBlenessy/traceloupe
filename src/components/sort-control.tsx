@@ -1,5 +1,6 @@
 import { ArrowDownWideNarrow, ArrowUpNarrowWide } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 /** One selectable sort field: the value sent to the backend + its label. */
 export interface SortField {
@@ -42,13 +43,15 @@ export function SortControl({
   fields,
   value,
   onChange,
+  className,
 }: {
   fields: SortField[];
   value: SortState;
   onChange: (next: SortState) => void;
+  className?: string;
 }) {
   return (
-    <div className="flex items-center gap-1">
+    <div className={cn("flex items-center gap-1", className)}>
       <select
         value={value.by}
         onChange={(e) => onChange({ ...value, by: e.target.value })}
@@ -66,7 +69,11 @@ export function SortControl({
         size="icon"
         onClick={() => onChange({ ...value, desc: !value.desc })}
         aria-label={value.desc ? "Sort descending" : "Sort ascending"}
-        title={value.desc ? "Descending — click for ascending" : "Ascending — click for descending"}
+        title={
+          value.desc
+            ? "Descending — click for ascending"
+            : "Ascending — click for descending"
+        }
       >
         {value.desc ? (
           <ArrowDownWideNarrow className="size-4" />
