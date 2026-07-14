@@ -33,7 +33,6 @@ import {
   ListDetail,
   ViewHeader,
 } from "@/components/view";
-import { ReimportButton } from "@/components/reimport-button";
 import { formatDateTime, formatListTime } from "@/lib/format";
 import { client, type Note } from "@/lib/ipc";
 
@@ -128,9 +127,7 @@ export function NotesView() {
     <ListDetail
       master={
         <>
-          <ViewHeader title="Notes" count={sortedNotes?.length}>
-            <ReimportButton module="notes" />
-          </ViewHeader>
+          <ViewHeader title="Notes" count={sortedNotes?.length} />
           {(notes?.length ?? 0) > 0 && (
             <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
               {folders.length > 1 && (

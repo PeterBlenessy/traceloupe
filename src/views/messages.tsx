@@ -2,25 +2,50 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { FileText, ImageIcon, MessageSquare, Paperclip, Users } from "lucide-react";
+import {
+  FileText,
+  ImageIcon,
+  MessageSquare,
+  Paperclip,
+  Users,
+} from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Message as MessageRow, MessageContent, MessageHeader } from "@/components/ui/message";
+import {
+  Message as MessageRow,
+  MessageContent,
+  MessageHeader,
+} from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import { EmptyView, ErrorState, ListDetail, ViewHeader } from "@/components/view";
-import { ReimportButton } from "@/components/reimport-button";
+import {
+  EmptyView,
+  ErrorState,
+  ListDetail,
+  ViewHeader,
+} from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { VirtualList } from "@/components/virtual-list";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import {
+  SortControl,
+  sortItems,
+  type SortState,
+} from "@/components/sort-control";
 import { useSettings } from "@/components/settings-provider";
 import { cn } from "@/lib/utils";
-import { formatDateHeader, formatListTime, formatMessageTime } from "@/lib/format";
+import {
+  formatDateHeader,
+  formatListTime,
+  formatMessageTime,
+} from "@/lib/format";
 import { initials } from "@/lib/contact";
-import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
+import {
+  useContactResolver,
+  type ResolvedContact,
+} from "@/lib/use-contact-resolver";
 import {
   client,
   type Attachment,
@@ -114,7 +139,11 @@ export function MessagesView() {
       </div>
       <div className="min-h-0 flex-1">
         {mode === "conversations" ? (
-          <Conversations selectedId={selectedId} onSelect={setSelectedId} service={service} />
+          <Conversations
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            service={service}
+          />
         ) : mode === "timeline" ? (
           <Timeline onOpenThread={openThread} service={service} />
         ) : (
@@ -141,7 +170,11 @@ function Conversations({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: threads, isPending, error } = useQuery({
+  const {
+    data: threads,
+    isPending,
+    error,
+  } = useQuery({
     queryKey: ["threads"],
     queryFn: () => client.listThreads(),
     enabled: active === true,
@@ -153,7 +186,9 @@ function Conversations({
 
   // The app filter lives in the shared header; here we just apply it, then sort.
   const visibleThreads = useMemo(() => {
-    const list = service ? threads?.filter((t) => t.service === service) : threads;
+    const list = service
+      ? threads?.filter((t) => t.service === service)
+      : threads;
     if (!list) return list;
     return sortItems(
       list,
@@ -168,15 +203,15 @@ function Conversations({
   }, [threads, service, sort]);
 
   const selected =
-    visibleThreads?.find((t) => t.id === selectedId) ?? visibleThreads?.[0] ?? null;
+    visibleThreads?.find((t) => t.id === selectedId) ??
+    visibleThreads?.[0] ??
+    null;
 
   return (
     <ListDetail
       master={
         <>
-          <ViewHeader title="Conversations" count={visibleThreads?.length}>
-            <ReimportButton module="messages" />
-          </ViewHeader>
+          <ViewHeader title="Conversations" count={visibleThreads?.length} />
           {(threads?.length ?? 0) > 0 && (
             <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
               <SortControl
@@ -262,7 +297,11 @@ function isGroup(thread: ThreadSummary): boolean {
 }
 
 /** Resolve a single handle to a display string (contact name or the handle). */
-function handleLabel(handle: string, resolve: Resolver, showContactNames: boolean): string {
+function handleLabel(
+  handle: string,
+  resolve: Resolver,
+  showContactNames: boolean,
+): string {
   if (!showContactNames) return handle;
   return resolve(handle)?.name ?? handle;
 }
@@ -271,10 +310,16 @@ function handleLabel(handle: string, resolve: Resolver, showContactNames: boolea
  * How a thread is labelled. Group chats show their name if set, otherwise the
  * members' names joined; 1:1 chats show the contact name or the raw handle.
  */
-function threadLabel(thread: ThreadSummary, resolve: Resolver, showContactNames: boolean): string {
+function threadLabel(
+  thread: ThreadSummary,
+  resolve: Resolver,
+  showContactNames: boolean,
+): string {
   if (isGroup(thread)) {
     if (thread.displayName?.trim()) return thread.displayName;
-    return thread.participants.map((h) => handleLabel(h, resolve, showContactNames)).join(", ");
+    return thread.participants
+      .map((h) => handleLabel(h, resolve, showContactNames))
+      .join(", ");
   }
   const handle = threadHandle(thread);
   if (!showContactNames) return handle;
@@ -310,7 +355,9 @@ function Timeline({
         resetKey={`timeline:${service ?? "all"}`}
         estimateSize={72}
         windowKey={(page) => ["timelineWindow", service, page]}
-        fetchWindow={(offset, limit) => client.getTimelineWindow(offset, limit, service)}
+        fetchWindow={(offset, limit) =>
+          client.getTimelineWindow(offset, limit, service)
+        }
         renderItem={(item, _i, prev) => (
           <TimelineRow
             item={item}
@@ -327,7 +374,12 @@ function Timeline({
 }
 
 /** A recency bucket: a labelled half-open time window with a message count. */
-type Period = { key: string; label: string; lo: number | null; hi: number | null };
+type Period = {
+  key: string;
+  label: string;
+  lo: number | null;
+  hi: number | null;
+};
 
 /** Earliest year to generate a bucket for — the first iPhone, so no iOS backup
  *  predates it. Empty years are hidden, so an over-wide floor costs nothing. */
@@ -390,7 +442,10 @@ function Periods({
   const { data: counts } = useQuery({
     queryKey: ["messageRanges", now, service],
     queryFn: () =>
-      client.countMessageRanges(periods.map((p) => ({ lo: p.lo, hi: p.hi })), service),
+      client.countMessageRanges(
+        periods.map((p) => ({ lo: p.lo, hi: p.hi })),
+        service,
+      ),
   });
 
   // The timeline is ascending (oldest first), so a period's starting row index is
@@ -405,12 +460,16 @@ function Periods({
   }, [periods, counts]);
 
   const [topIndex, setTopIndex] = useState(0);
-  const [jump, setJump] = useState<{ index: number; token: number } | undefined>();
+  const [jump, setJump] = useState<
+    { index: number; token: number } | undefined
+  >();
 
   // Which bucket the current scroll position sits in (start ≤ topIndex < next).
   const activeIndex = counts
     ? periods.findIndex(
-        (_, i) => topIndex >= startIndex[i] && topIndex < startIndex[i] + (counts[i] ?? 0),
+        (_, i) =>
+          topIndex >= startIndex[i] &&
+          topIndex < startIndex[i] + (counts[i] ?? 0),
       )
     : -1;
 
@@ -456,7 +515,9 @@ function Periods({
             jumpTo={jump}
             onTopIndexChange={setTopIndex}
             windowKey={(page) => ["timelineWindow", service, page]}
-            fetchWindow={(offset, limit) => client.getTimelineWindow(offset, limit, service)}
+            fetchWindow={(offset, limit) =>
+              client.getTimelineWindow(offset, limit, service)
+            }
             renderItem={(item, _i, prev) => (
               <TimelineRow
                 item={item}
@@ -565,7 +626,9 @@ function TimelineRow({
           <div className="flex items-baseline gap-2">
             <span className="truncate text-sm font-medium">{who}</span>
             {context && (
-              <span className="truncate text-xs text-muted-foreground">{context}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {context}
+              </span>
             )}
             {item.service && <ServiceBadge service={item.service} />}
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -596,12 +659,17 @@ function TimelineRow({
 }
 
 /** A day separator is shown when the calendar day changes between rows. */
-function dayChanged(prev: TimelineMessage | undefined, cur: TimelineMessage): boolean {
+function dayChanged(
+  prev: TimelineMessage | undefined,
+  cur: TimelineMessage,
+): boolean {
   if (!prev) return true;
   const p = prev.message.sentAt;
   const c = cur.message.sentAt;
   if (!p || !c) return false;
-  return new Date(p * 1000).toDateString() !== new Date(c * 1000).toDateString();
+  return (
+    new Date(p * 1000).toDateString() !== new Date(c * 1000).toDateString()
+  );
 }
 
 function ThreadRow({
@@ -622,7 +690,11 @@ function ThreadRow({
   const name = threadLabel(thread, resolve, showContactNames);
   const resolved = isGroup(thread) ? null : resolve(threadHandle(thread));
   return (
-    <Item asChild data-active={active} className="rounded-none data-[active=true]:bg-accent">
+    <Item
+      asChild
+      data-active={active}
+      className="rounded-none data-[active=true]:bg-accent"
+    >
       <button onClick={onClick} className="w-full text-left">
         {showAvatars && (
           <ItemMedia>
@@ -631,7 +703,10 @@ function ThreadRow({
             ) : (
               <Avatar>
                 {resolved?.hasImage && (
-                  <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
+                  <AvatarImage
+                    src={client.contactAvatarUrl(resolved.id)}
+                    alt=""
+                  />
                 )}
                 <AvatarFallback>{initials(name)}</AvatarFallback>
               </Avatar>
@@ -655,7 +730,13 @@ function ThreadRow({
 }
 
 /** A group chat avatar: up to two members' photos stacked, else a group icon. */
-function GroupAvatar({ thread, resolve }: { thread: ThreadSummary; resolve: Resolver }) {
+function GroupAvatar({
+  thread,
+  resolve,
+}: {
+  thread: ThreadSummary;
+  resolve: Resolver;
+}) {
   const members = thread.participants.slice(0, 2).map((h) => resolve(h));
   return (
     <div className="relative size-8 shrink-0">
@@ -667,7 +748,9 @@ function GroupAvatar({ thread, resolve }: { thread: ThreadSummary; resolve: Reso
             i === 0 ? "left-0 top-0" : "bottom-0 right-0",
           )}
         >
-          {m?.hasImage && <AvatarImage src={client.contactAvatarUrl(m.id)} alt="" />}
+          {m?.hasImage && (
+            <AvatarImage src={client.contactAvatarUrl(m.id)} alt="" />
+          )}
           <AvatarFallback className="text-[8px]">
             {m ? initials(m.name) : <Users className="size-2.5" />}
           </AvatarFallback>
@@ -690,7 +773,9 @@ function Conversation({
   const group = isGroup(thread);
   // For a group, list the members under the header.
   const members = group
-    ? thread.participants.map((h) => handleLabel(h, resolve, showContactNames)).join(", ")
+    ? thread.participants
+        .map((h) => handleLabel(h, resolve, showContactNames))
+        .join(", ")
     : null;
 
   // A thread can hold tens of thousands of messages; the count sizes the virtual
@@ -704,7 +789,10 @@ function Conversation({
     <div className="flex h-full flex-col">
       <ViewHeader title={name}>
         {group ? (
-          <span className="max-w-[60%] truncate text-xs text-muted-foreground" title={members ?? ""}>
+          <span
+            className="max-w-[60%] truncate text-xs text-muted-foreground"
+            title={members ?? ""}
+          >
             {thread.participants.length} people · {members}
           </span>
         ) : (
@@ -714,7 +802,9 @@ function Conversation({
             const handle = thread.participants.find((p) => p.startsWith("@"));
             const bits = [handle, thread.service].filter(Boolean);
             return bits.length > 0 ? (
-              <span className="text-xs text-muted-foreground">{bits.join(" · ")}</span>
+              <span className="text-xs text-muted-foreground">
+                {bits.join(" · ")}
+              </span>
             ) : null;
           })()
         )}
@@ -734,7 +824,9 @@ function Conversation({
             !prev || prev.isFromMe || prev.sender !== message.sender;
           const senderLabel =
             group && !message.isFromMe && message.sender && newSender
-              ? (showContactNames ? (resolve(message.sender)?.name ?? message.sender) : message.sender)
+              ? showContactNames
+                ? (resolve(message.sender)?.name ?? message.sender)
+                : message.sender
               : null;
           return (
             <div className="px-4 pb-1">
@@ -780,7 +872,9 @@ function MessageBubble({
           <Bubble variant={message.isFromMe ? "default" : "muted"}>
             <BubbleContent className="select-text">
               {message.body && (
-                <p className="whitespace-pre-wrap break-words">{message.body}</p>
+                <p className="whitespace-pre-wrap break-words">
+                  {message.body}
+                </p>
               )}
               {message.attachments.map((a) => (
                 <div key={a.id} className={cn(message.body && "mt-1.5")}>
@@ -841,12 +935,21 @@ function AttachmentView({ att }: { att: Attachment }) {
   }
   if (available && mime.startsWith("audio/")) {
     return (
-      <audio controls preload="none" src={client.attachmentUrl(att.id)} className="max-w-[240px]" />
+      <audio
+        controls
+        preload="none"
+        src={client.attachmentUrl(att.id)}
+        className="max-w-[240px]"
+      />
     );
   }
 
   // Documents and unknowns: an icon + filename that opens the file on click.
-  const Icon = mime.startsWith("image/") ? ImageIcon : mime ? FileText : Paperclip;
+  const Icon = mime.startsWith("image/")
+    ? ImageIcon
+    : mime
+      ? FileText
+      : Paperclip;
   return (
     <button
       onClick={() => available && openAttachmentFile(att.id)}
