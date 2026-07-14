@@ -10,12 +10,22 @@ While pre-1.0, the **minor** version tracks major milestones:
 |---------|-----------|
 | `0.1.0` | **MVP** — iLEAPP-powered import into a local cache, with a native browsing UI. |
 | `0.2.0` | **Native lazy-decode core, wired in** — Manifest Index + on-demand decryption + native Messages/Notes/Recordings/Camera-roll parsers, running *alongside* iLEAPP (which still supplies Calls, Safari, Apps, third-party chats). |
-| `0.3.0`+ | **Native-first migration, in batches** — replace iLEAPP for first-party data (Calls, Safari, Apps, self-extracted Contacts), then make iLEAPP an optional on-demand engine for third-party/long-tail apps, then native third-party modules per the roadmap. See "Planned" below. |
+| `0.3.0` | **Native-first, Batch 1** — all first-party views native (Calls, Safari, Apps, Contacts); a pluggable native app-chat framework with WhatsApp, Facebook Messenger, Instagram & TikTok. iLEAPP still runs for Telegram, TikTok contacts, and the long tail. |
+| `0.4.0`+ | **Native-first, continued** — native Telegram + the remaining apps, then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
 
-## [Unreleased] — 0.3.0 in progress
+## [Unreleased]
+
+_Nothing yet._
+
+## [0.3.0] — 2026-07-14
+
+Native-first, Batch 1: every built-in view now materializes without iLEAPP, and
+third-party chats gain native parsers behind a pluggable app-module framework.
+iLEAPP still runs for what isn't native yet (Telegram, TikTok's contact graph,
+and the long tail), so this is the first batch of the migration, not its end.
 
 ### Added
 - **Native Calls, Safari & Contacts (no iLEAPP).** Call history
@@ -23,15 +33,36 @@ While pre-1.0, the **minor** version tracks major milestones:
   (`AddressBook.sqlitedb`, self-extracted) now materialize via native parsers
   through the ManifestIndex, with iLEAPP kept as automatic fallback. Calls and
   Safari also gained sidebar re-import actions. **All first-party views are now
-  native** — iLEAPP is invoked only for the third-party chats (TikTok/WhatsApp/
-  Telegram) until those go native, after which it becomes optional.
-- **Field-level coverage tracking.** `docs/app-data-coverage.md` inventories what
-  each app's DB holds vs. what we surface.
+  native.** (Apps was already native from `Info.plist`.)
+- **Native third-party chat framework** (`parsers/apps/`). Each app is a small
+  module — locate its DB, parse it into a shared message stream — and one shared
+  inserter builds the same threads/messages the Messages view renders. Adding an
+  app is one module file plus a registry entry.
+  - **WhatsApp** (`ChatStorage.sqlite`) and **Facebook Messenger**
+    (`lightspeed-userDatabases/*.db`) — native, validated by synthetic fixtures.
+  - **Instagram** (`DirectSQLiteDatabase/*.db`) and **TikTok** (`AwemeIM.db`) —
+    native but **not yet validated against a real backup**, so they stay behind
+    the automatic iLEAPP fallback.
+- **NSKeyedArchiver decoder** (`crate::nska`) — resolves Apple keyed-archive
+  blobs (used by Instagram DMs); a reusable, standalone iOS-forensics primitive.
+- **Living coverage docs** — `docs/app-support.md` (native vs iLEAPP per app) and
+  `docs/app-data-coverage.md` (field-level: what each DB holds vs. what we
+  surface). Includes research notes on Snapchat / X / Facebook local stores.
 
-### Remaining for 0.3.0
-- Native parsers for the third-party chats currently read via iLEAPP, plus the new
-  Batch-1 apps (Instagram, Facebook, Messenger, X/Twitter, Snapchat); then make
-  iLEAPP optional. See `docs/app-support.md`.
+### Fixed
+- Hardening from a multi-agent code review of the native work: the
+  NSKeyedArchiver decoder no longer hangs or panics on a crafted/cyclic archive
+  (memoized graph resolution, guarded date conversion); 1:1 Messenger/Instagram
+  chats are no longer mislabeled "Group chat"; per-app import counts are folded in
+  only after commit; a schema-drifted third-party DB falls back to iLEAPP instead
+  of silently dropping messages; several column reads are storage-class-tolerant.
+
+### Notes & caveats
+- Instagram & TikTok native output is unvalidated against a real backup; both
+  degrade to iLEAPP on any parse miss. TikTok's contact social-graph still comes
+  from iLEAPP.
+- iLEAPP remains required (Telegram, TikTok contacts, long-tail apps). Making it
+  optional is a later batch.
 
 ## [0.2.0] — 2026-07-14
 
