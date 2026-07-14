@@ -15,6 +15,7 @@
 //! written from those facts, not ported.
 
 pub mod facebook_messenger;
+pub mod imo;
 pub mod instagram;
 pub mod kik;
 pub mod telegram;
@@ -83,6 +84,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     tiktok::MODULE,
     telegram::MODULE,
     kik::MODULE,
+    imo::MODULE,
 ];
 
 /// Read a column as a String whether it's stored TEXT or INTEGER — app schemas
