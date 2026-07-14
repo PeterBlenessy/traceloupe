@@ -309,15 +309,20 @@ fn import_messages_native(
         ));
         return false;
     }
-    let ok = match crate::parsers::messages::parse_messages(&sms_db, cache, report, false) {
-        Ok(()) => true,
-        Err(e) => {
-            report.warnings.push(format!(
-                "Native Messages: parse failed ({e}); using iLEAPP."
-            ));
-            false
-        }
+    let att = crate::parsers::messages::AttachmentSource {
+        index: &index,
+        decryptor,
     };
+    let ok =
+        match crate::parsers::messages::parse_messages(&sms_db, cache, report, false, Some(&att)) {
+            Ok(()) => true,
+            Err(e) => {
+                report.warnings.push(format!(
+                    "Native Messages: parse failed ({e}); using iLEAPP."
+                ));
+                false
+            }
+        };
     let _ = std::fs::remove_file(&sms_db);
     ok
 }
@@ -382,7 +387,7 @@ pub fn remove_cache(cache_path: &Path) {
         let _ = std::fs::remove_file(sidecar);
     }
     if let Some(dir) = cache_path.parent() {
-        for sub in ["media", "thumbs", "att-thumbs"] {
+        for sub in ["media", "thumbs", "att-thumbs", "att-open"] {
             let _ = std::fs::remove_dir_all(dir.join(sub));
         }
     }
@@ -485,8 +490,18 @@ pub fn reimport_module(
                 .ok_or_else(|| crate::Error::Parse("sms.db is not in this backup".into()))?;
             let sms_db = work_dir.join(".reimport-sms.db");
             index.extract_to(&entry, decryptor, &sms_db)?;
+            let att = crate::parsers::messages::AttachmentSource {
+                index: &index,
+                decryptor,
+            };
             // replace=true does the delete + re-insert atomically (see parse_messages).
-            let r = crate::parsers::messages::parse_messages(&sms_db, &cache, &mut report, true);
+            let r = crate::parsers::messages::parse_messages(
+                &sms_db,
+                &cache,
+                &mut report,
+                true,
+                Some(&att),
+            );
             let _ = std::fs::remove_file(&sms_db);
             r?;
         }
@@ -712,6 +727,80 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    /// Native Messages resolves an attachment to its backup file and writes an
+    /// `attachments` row with the servable path.
+    #[test]
+    fn native_messages_resolves_attachments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+
+        let sms_id = "ab00000000000000000000000000000000000042";
+        let att_id = "cd00000000000000000000000000000000000043";
+        for (id, bytes) in [(sms_id, None), (att_id, Some(b"jpeg".as_slice()))] {
+            let sub = backup.join(&id[..2]);
+            std::fs::create_dir_all(&sub).unwrap();
+            if let Some(b) = bytes {
+                std::fs::write(sub.join(id), b).unwrap();
+            }
+        }
+        let sms = Connection::open(backup.join(&sms_id[..2]).join(sms_id)).unwrap();
+        sms.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, transfer_name TEXT, mime_type TEXT);
+             CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             -- an attachment-only message (NULL text, has_attachments=1).
+             INSERT INTO message VALUES (100,NULL,0,721692800000000000,1,1);
+             INSERT INTO chat_message_join VALUES (10,100);
+             INSERT INTO attachment VALUES (5,'~/Library/SMS/Attachments/ab/00/GUID/pic.jpg','pic.jpg','image/jpeg');
+             INSERT INTO message_attachment_join VALUES (100,5);",
+        )
+        .unwrap();
+        drop(sms);
+
+        Connection::open(backup.join("Manifest.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+                 INSERT INTO Files VALUES ('{sms_id}','HomeDomain','Library/SMS/sms.db',1,NULL);
+                 INSERT INTO Files VALUES ('{att_id}','MediaDomain','Library/SMS/Attachments/ab/00/GUID/pic.jpg',1,NULL);"
+            ))
+            .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let mut report = ImportReport::default();
+
+        assert!(import_messages_native(
+            &backup,
+            None,
+            &cache,
+            &work,
+            &mut report
+        ));
+
+        let (filename, mime, local_path): (Option<String>, Option<String>, String) = cache
+            .conn()
+            .query_row(
+                "SELECT filename, mime_type, local_path FROM attachments",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(filename.as_deref(), Some("pic.jpg"));
+        assert_eq!(mime.as_deref(), Some("image/jpeg"));
+        // Resolved to the content-addressed blob (plaintext backup → no key).
+        assert!(local_path.ends_with(&format!("{}/{att_id}", &att_id[..2])));
     }
 
     /// No sms.db in the backup → the native path declines (returns false) so the
