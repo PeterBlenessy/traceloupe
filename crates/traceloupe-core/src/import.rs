@@ -309,7 +309,7 @@ fn import_messages_native(
         ));
         return false;
     }
-    let ok = match crate::parsers::messages::parse_messages(&sms_db, cache, report) {
+    let ok = match crate::parsers::messages::parse_messages(&sms_db, cache, report, false) {
         Ok(()) => true,
         Err(e) => {
             report.warnings.push(format!(
@@ -355,7 +355,7 @@ fn import_notes_native(
         ));
         return false;
     }
-    let ok = match crate::parsers::notes::parse_notes(&note_store, cache, report) {
+    let ok = match crate::parsers::notes::parse_notes(&note_store, cache, report, false) {
         Ok(()) => true,
         Err(e) => {
             report
@@ -485,23 +485,8 @@ pub fn reimport_module(
                 .ok_or_else(|| crate::Error::Parse("sms.db is not in this backup".into()))?;
             let sms_db = work_dir.join(".reimport-sms.db");
             index.extract_to(&entry, decryptor, &sms_db)?;
-            {
-                let conn = cache.conn();
-                let tx = conn.unchecked_transaction()?;
-                tx.execute(
-                    "DELETE FROM messages WHERE thread_id IN
-                        (SELECT id FROM threads
-                         WHERE service IS NULL OR service NOT IN ('TikTok','WhatsApp','Telegram'))",
-                    [],
-                )?;
-                tx.execute(
-                    "DELETE FROM threads
-                     WHERE service IS NULL OR service NOT IN ('TikTok','WhatsApp','Telegram')",
-                    [],
-                )?;
-                tx.commit()?;
-            }
-            let r = crate::parsers::messages::parse_messages(&sms_db, &cache, &mut report);
+            // replace=true does the delete + re-insert atomically (see parse_messages).
+            let r = crate::parsers::messages::parse_messages(&sms_db, &cache, &mut report, true);
             let _ = std::fs::remove_file(&sms_db);
             r?;
         }
@@ -514,13 +499,8 @@ pub fn reimport_module(
                 })?;
             let note_db = work_dir.join(".reimport-notes.db");
             index.extract_to(&entry, decryptor, &note_db)?;
-            {
-                let conn = cache.conn();
-                let tx = conn.unchecked_transaction()?;
-                tx.execute("DELETE FROM notes", [])?;
-                tx.commit()?;
-            }
-            let r = crate::parsers::notes::parse_notes(&note_db, &cache, &mut report);
+            // replace=true clears + re-inserts atomically (see parse_notes).
+            let r = crate::parsers::notes::parse_notes(&note_db, &cache, &mut report, true);
             let _ = std::fs::remove_file(&note_db);
             r?;
         }

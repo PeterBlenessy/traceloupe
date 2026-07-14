@@ -58,12 +58,12 @@ pub fn parse_recordings(
     // Matching on path (not a hard-coded domain) is robust to the layout moving
     // between `AppDomainGroup-group.com.apple.VoiceMemos` and `MediaDomain`
     // across iOS versions, and the `Recordings/` segment excludes message-audio
-    // attachments and ringtones (which live elsewhere). Keyed by filename.
+    // attachments and ringtones (which live elsewhere). Keyed by the full
+    // relativePath so two memos sharing a filename (different folders) both
+    // surface rather than one silently replacing the other.
     let mut audio: HashMap<String, FileEntry> = HashMap::new();
     for entry in index.find_relative_like("%Recordings/%.m4a")? {
-        if let Some(name) = basename(&entry.relative_path) {
-            audio.entry(name.to_string()).or_insert(entry);
-        }
+        audio.entry(entry.relative_path.clone()).or_insert(entry);
     }
     if audio.is_empty() {
         return Ok(Vec::new());
@@ -77,8 +77,9 @@ pub fn parse_recordings(
     // recording whose audio was evicted to iCloud (metadata but no blob) is
     // dropped — there's nothing to play.
     let mut assets = Vec::new();
-    for (name, entry) in &audio {
-        let m = meta.get(name);
+    for entry in audio.values() {
+        // Metadata is keyed by the ZPATH filename, so join on the audio's basename.
+        let m = basename(&entry.relative_path).and_then(|n| meta.get(n));
         let (decrypt_key, plain_size) = match decryptor {
             Some(_) => {
                 let (k, s) = crypto::file_key_field(&entry.file_blob)?;
