@@ -183,6 +183,16 @@ export interface MediaItem {
   location: string | null;
   /** User album names this photo is in, comma-separated, or null. */
   albums: string | null;
+  /** Pixel dimensions and (video) duration. */
+  width: number | null;
+  height: number | null;
+  durationS: number | null;
+  /** Original file size in bytes. */
+  fileSize: number | null;
+  /** Camera "<make> <model>", lens model, and a formatted EXIF exposure summary. */
+  camera: string | null;
+  lens: string | null;
+  exif: string | null;
 }
 
 /** A media source and how many items came from it, for the gallery filter. */
@@ -1191,6 +1201,13 @@ const mockMedia: MediaItem[] = [
     favorite: false,
     location: null,
     albums: null,
+    width: null,
+    height: null,
+    durationS: null,
+    fileSize: null,
+    camera: null,
+    lens: null,
+    exif: null,
   },
   {
     id: 2,
@@ -1205,6 +1222,13 @@ const mockMedia: MediaItem[] = [
     favorite: false,
     location: null,
     albums: null,
+    width: null,
+    height: null,
+    durationS: null,
+    fileSize: null,
+    camera: null,
+    lens: null,
+    exif: null,
   },
   {
     id: 3,
@@ -1219,6 +1243,13 @@ const mockMedia: MediaItem[] = [
     favorite: false,
     location: "Florida",
     albums: "Vacation",
+    width: 4032,
+    height: 3024,
+    durationS: null,
+    fileSize: 2097152,
+    camera: "Apple iPhone 14 Pro",
+    lens: "iPhone 14 Pro back camera",
+    exif: "ISO 100 · ƒ/1.8 · 1/125s · 26 mm",
   },
   {
     id: 4,
@@ -1233,6 +1264,13 @@ const mockMedia: MediaItem[] = [
     favorite: false,
     location: null,
     albums: null,
+    width: null,
+    height: null,
+    durationS: null,
+    fileSize: null,
+    camera: null,
+    lens: null,
+    exif: null,
   },
 ];
 
