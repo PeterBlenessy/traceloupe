@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Lock, NotebookText, Pin } from "lucide-react";
+import { Lock, LockOpen, NotebookText, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -224,117 +224,131 @@ export function NotesView() {
   const selected =
     sortedNotes?.find((n) => n.id === selectedId) ?? sortedNotes?.[0] ?? null;
 
+  const hasNotes = (notes?.length ?? 0) > 0;
+
   return (
-    <ListDetail
-      master={
-        <>
-          <ViewHeader title="Notes" count={sortedNotes?.length} />
-          {(notes?.length ?? 0) > 0 && (
-            <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
-              {folders.length > 1 && (
-                <Select value={folder} onValueChange={setFolder}>
-                  <SelectTrigger size="sm" className="h-7 w-[9rem] text-xs">
-                    <SelectValue placeholder="Folder" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All folders</SelectItem>
-                    {folders.map((f) => (
-                      <SelectItem key={f} value={f}>
-                        {f}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              <TimeFilterBar
-                presets={presets}
-                value={range}
-                onChange={setRange}
-                counts={presetCounts}
+    <div className="flex h-full flex-col">
+      {/* Row 1 (full width): title, folder, and the lock state. */}
+      <ViewHeader title="Notes" count={sortedNotes?.length}>
+        {hasNotes && (
+          <>
+            {folders.length > 1 && (
+              <Select value={folder} onValueChange={setFolder}>
+                <SelectTrigger size="sm" className="h-7 w-[9rem] text-xs">
+                  <SelectValue placeholder="Folder" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All folders</SelectItem>
+                  {folders.map((f) => (
+                    <SelectItem key={f} value={f}>
+                      {f}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {hasLocked && (
+              <ToggleGroup
+                type="single"
+                size="sm"
+                variant="outline"
+                value={lockState}
+                onValueChange={(v) => v && setLockState(v)}
+              >
+                <ToggleGroupItem value="all" className="px-2 text-xs">
+                  All
+                </ToggleGroupItem>
+                <ToggleGroupItem value="unlocked" className="gap-1 px-2 text-xs">
+                  <LockOpen className="size-3.5" />
+                  Unlocked
+                </ToggleGroupItem>
+                <ToggleGroupItem value="locked" className="gap-1 px-2 text-xs">
+                  <Lock className="size-3.5" />
+                  Locked
+                </ToggleGroupItem>
+              </ToggleGroup>
+            )}
+          </>
+        )}
+      </ViewHeader>
+      {/* Row 2 (full width): time filters + sort. */}
+      {hasNotes && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
+          <TimeFilterBar
+            className="flex-1"
+            presets={presets}
+            value={range}
+            onChange={setRange}
+            counts={presetCounts}
+          />
+          <SortControl
+            fields={[
+              { value: "modified", label: "Modified" },
+              { value: "title", label: "Title" },
+            ]}
+            value={sort}
+            onChange={setSort}
+          />
+        </div>
+      )}
+      {/* Then the note list + content panel. */}
+      <div className="min-h-0 flex-1">
+        <ListDetail
+          master={
+            error ? (
+              <ErrorState error={error} />
+            ) : isPending ? (
+              <div className="min-h-0 flex-1 overflow-auto">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="px-3 py-2">
+                    <Skeleton className="h-12 w-full" />
+                  </div>
+                ))}
+              </div>
+            ) : (notes?.length ?? 0) === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                No notes in this backup.
+              </p>
+            ) : (sortedNotes?.length ?? 0) === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                No notes match these filters.
+              </p>
+            ) : (
+              <VirtualList
+                key={clockFormat}
+                items={rows}
+                getKey={(r) => r.key}
+                estimateSize={64}
+                renderItem={(r) =>
+                  r.kind === "header" ? (
+                    <SectionHeader label={r.label} />
+                  ) : (
+                    <NoteRow
+                      note={r.note}
+                      active={selected?.id === r.note.id}
+                      onClick={() => setSelectedId(r.note.id)}
+                    />
+                  )
+                }
               />
-              {hasLocked && (
-                <ToggleGroup
-                  type="single"
-                  size="sm"
-                  variant="outline"
-                  value={lockState}
-                  onValueChange={(v) => v && setLockState(v)}
-                >
-                  <ToggleGroupItem value="all" className="px-2 text-xs">
-                    All
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="unlocked" className="px-2 text-xs">
-                    Unlocked
-                  </ToggleGroupItem>
-                  <ToggleGroupItem value="locked" className="px-2 text-xs">
-                    Locked
-                  </ToggleGroupItem>
-                </ToggleGroup>
-              )}
-              <SortControl
-                className="ml-auto"
-                fields={[
-                  { value: "modified", label: "Modified" },
-                  { value: "title", label: "Title" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
-            </div>
-          )}
-          {error ? (
-            <ErrorState error={error} />
-          ) : isPending ? (
-            <div className="min-h-0 flex-1 overflow-auto">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="px-3 py-2">
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              ))}
-            </div>
-          ) : (notes?.length ?? 0) === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              No notes in this backup.
-            </p>
-          ) : (sortedNotes?.length ?? 0) === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              No notes match these filters.
-            </p>
-          ) : (
-            <VirtualList
-              key={clockFormat}
-              items={rows}
-              getKey={(r) => r.key}
-              estimateSize={64}
-              renderItem={(r) =>
-                r.kind === "header" ? (
-                  <SectionHeader label={r.label} />
-                ) : (
-                  <NoteRow
-                    note={r.note}
-                    active={selected?.id === r.note.id}
-                    onClick={() => setSelectedId(r.note.id)}
-                  />
-                )
-              }
-            />
-          )}
-        </>
-      }
-      detail={
-        selected ? (
-          <NoteDetail note={selected} />
-        ) : (
-          !isPending && (
-            <EmptyView
-              icon={NotebookText}
-              title="No note selected"
-              description="Pick a note on the left."
-            />
-          )
-        )
-      }
-    />
+            )
+          }
+          detail={
+            selected ? (
+              <NoteDetail note={selected} />
+            ) : (
+              !isPending && (
+                <EmptyView
+                  icon={NotebookText}
+                  title="No note selected"
+                  description="Pick a note on the left."
+                />
+              )
+            )
+          }
+        />
+      </div>
+    </div>
   );
 }
 
