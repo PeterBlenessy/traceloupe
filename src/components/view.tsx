@@ -20,14 +20,17 @@ import { cn } from "@/lib/utils";
 export function ViewHeader({
   title,
   count,
+  icon,
   children,
 }: {
   title: string;
   count?: number;
+  icon?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+      {icon}
       <h1 className="text-base font-semibold">{title}</h1>
       {count !== undefined && (
         <span className="text-sm text-muted-foreground">{count}</span>
