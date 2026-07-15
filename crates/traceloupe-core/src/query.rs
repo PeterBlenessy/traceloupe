@@ -44,6 +44,10 @@ pub struct Message {
 pub struct TimelineMessage {
     pub thread_id: i64,
     pub thread_title: String,
+    /// The thread's identifier — for a 1:1 chat this is the other party's handle,
+    /// so the timeline can resolve/show the conversation partner even on your own
+    /// outgoing messages (where `message.sender` is you). Empty if unknown.
+    pub thread_handle: String,
     pub service: Option<String>,
     pub message: Message,
 }
@@ -375,9 +379,13 @@ fn range_window(
             |r| {
                 let display_name: Option<String> = r.get(6)?;
                 let identifier: String = r.get(7)?;
+                let thread_title = display_name
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| identifier.clone());
                 Ok(TimelineMessage {
                     thread_id: r.get(5)?,
-                    thread_title: display_name.filter(|s| !s.is_empty()).unwrap_or(identifier),
+                    thread_title,
+                    thread_handle: identifier,
                     service: r.get(8)?,
                     message: Message {
                         id: r.get(0)?,
