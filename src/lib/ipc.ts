@@ -168,6 +168,8 @@ export interface Contact {
   note: string | null;
   phones: LabeledValue[];
   emails: LabeledValue[];
+  /** Postal addresses, each formatted to one line with its label. */
+  addresses: LabeledValue[];
   /** Whether a contact photo is stored (load it via `contactAvatarUrl`). */
   hasImage: boolean;
   /** 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter. */
@@ -1129,6 +1131,7 @@ const contactExtras = {
   department: null,
   birthdayAt: null,
   note: null,
+  addresses: [] as LabeledValue[],
 };
 const mockContacts: Contact[] = [
   {
@@ -1155,6 +1158,7 @@ const mockContacts: Contact[] = [
     jobTitle: "Engineer",
     birthdayAt: 1678307200,
     note: "met at the conference",
+    addresses: [{ label: "Home", value: "1 Market St, Springfield, CA 90001, USA" }],
   },
   {
     id: 3,

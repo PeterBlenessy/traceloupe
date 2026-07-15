@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -359,6 +359,13 @@ impl CacheDb {
             ensure_column(&conn, "contacts", "department", "TEXT")?;
             ensure_column(&conn, "contacts", "birthday_at", "INTEGER")?;
             ensure_column(&conn, "contacts", "note", "TEXT")?;
+            // v15: structured postal addresses (JSON [{label,value}], like phones).
+            ensure_column(
+                &conn,
+                "contacts",
+                "addresses_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
