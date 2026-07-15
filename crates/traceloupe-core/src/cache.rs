@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -382,6 +382,8 @@ impl CacheDb {
                 "deleted",
                 "INTEGER NOT NULL DEFAULT 0",
             )?;
+            // v21: camera-roll media subtype ("screenshot" | "panorama").
+            ensure_column(&conn, "media_items", "subtype", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

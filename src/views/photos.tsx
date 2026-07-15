@@ -15,11 +15,13 @@ import {
   ChevronLeft,
   ChevronRight,
   EyeOff,
+  Frame,
   Heart,
   Image as ImageIcon,
   Images,
   MapPin,
   Play,
+  Smartphone,
   Users,
   X,
 } from "lucide-react";
@@ -475,6 +477,18 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
             title={item.persons}
           >
             <Users className="size-3" />
+          </span>
+        )}
+        {item.subtype && (
+          <span
+            className="rounded-full bg-black/55 p-1 text-white"
+            title={item.subtype}
+          >
+            {item.subtype === "panorama" ? (
+              <Frame className="size-3" />
+            ) : (
+              <Smartphone className="size-3" />
+            )}
           </span>
         )}
       </div>
