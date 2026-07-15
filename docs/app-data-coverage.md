@@ -247,6 +247,13 @@ unknown states); `ZATTACHMENT` flag.
 (`ZIMDISPLAYNAME`/`ZFROM`); `ZTS_ISSENTBYME` direction; `ZARRIVALTIME` timestamp;
 HTML `ZCONTENT` → plain text (emoji `alt` recovered). Media not surfaced.
 
+### LinkedIn — `msg_database.sqlite` (native, unvalidated)
+
+`messages` grouped by `conversationUrn`; sender/direction/body from the
+`serializedMessage` JSON (`$.sender…member`, `distance == "SELF"`, `$.body.text`);
+chat name from the non-owner participant in `serializedConversation`. `deliveredAt`
+is Unix ms.
+
 ### X/Twitter · Facebook (main) · Snapchat
 
 X/Twitter, Facebook (main app), and Snapchat keep no clean local chat store (no

@@ -13,7 +13,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.3.0` | **Native-first, Batch 1** — all first-party views native (Calls, Safari, Apps, Contacts); a pluggable native app-chat framework with WhatsApp, Facebook Messenger, Instagram & TikTok. iLEAPP still runs for Telegram, TikTok contacts, and the long tail. |
 | `0.4.0` | **More native chat apps** — Telegram (binary postbox), Kik, imo, Threema, via the app-chat framework. iLEAPP still runs for the long tail. |
 | `0.5.0` | **More native chat apps** — Viber, Microsoft Teams, via the app-chat framework. |
-| `0.6.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.6.0` | **LinkedIn** native chat. |
+| `0.7.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -21,6 +22,15 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.6.0] — 2026-07-15
+
+### Added
+- **LinkedIn** (`Documents/msg_database.sqlite`) — messages grouped by
+  `conversationUrn`; sender, direction (`distance == "SELF"`), and body decoded
+  from the `serializedMessage` JSON; the chat name from the non-owner participant
+  in `serializedConversation`. Unvalidated against a real backup; behind the
+  iLEAPP fallback.
 
 ## [0.5.0] — 2026-07-15
 
