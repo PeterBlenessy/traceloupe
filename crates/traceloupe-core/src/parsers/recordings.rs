@@ -28,6 +28,9 @@ use crate::Result;
 pub struct RecordingAsset {
     /// User label, or None for an auto-named memo.
     pub title: Option<String>,
+    /// Containing Voice Memos folder (a custom folder or "Recently Deleted"),
+    /// None for the default "All Recordings".
+    pub folder: Option<String>,
     pub recorded_at: Option<i64>,
     pub duration_s: Option<f64>,
     /// e.g. `Recordings/20240101 090000.m4a`.
@@ -99,6 +102,7 @@ pub fn parse_recordings(
             .or_else(|| m.and_then(|m| m.title.clone()));
         assets.push(RecordingAsset {
             title,
+            folder: m.and_then(|m| m.folder.clone()),
             recorded_at: m.and_then(|m| m.recorded_at),
             duration_s: m.and_then(|m| m.duration_s),
             full_path: index.blob_path(&entry.file_id),
@@ -115,6 +119,7 @@ pub fn parse_recordings(
 
 struct RecordingMeta {
     title: Option<String>,
+    folder: Option<String>,
     recorded_at: Option<i64>,
     duration_s: Option<f64>,
 }
@@ -211,8 +216,27 @@ fn read_recording_rows(db: &Path) -> Result<HashMap<String, RecordingMeta>> {
         return Ok(HashMap::new());
     };
 
+    // Folder name lives in a separate ZFOLDER table (ZENCRYPTEDNAME is plaintext
+    // locally); a correlated subquery resolves the recording's ZFOLDER FK to it.
+    // NULL when the schema has no folders (older DBs) or the memo is unfiled.
+    let folder_fk = pick(&cols, &["ZFOLDER"]);
+    let folder_name_col = if table_exists(&conn, "ZFOLDER") {
+        let fcols = table_columns(&conn, "ZFOLDER")?;
+        ["ZENCRYPTEDNAME", "ZNAME"]
+            .into_iter()
+            .find(|c| fcols.contains(*c))
+    } else {
+        None
+    };
+    let folder = match (folder_fk, folder_name_col) {
+        (Some(fk), Some(name_col)) => {
+            format!("(SELECT {name_col} FROM ZFOLDER WHERE ZFOLDER.Z_PK = {table}.{fk})")
+        }
+        _ => "NULL".to_string(),
+    };
+
     let sql = format!(
-        "SELECT {path}, {title}, {date}, {duration} FROM {table} WHERE {path} IS NOT NULL",
+        "SELECT {path}, {title}, {date}, {duration}, {folder} FROM {table} WHERE {path} IS NOT NULL",
         title = title.as_deref().unwrap_or("NULL"),
         date = date.as_deref().unwrap_or("NULL"),
         duration = duration.as_deref().unwrap_or("NULL"),
@@ -234,10 +258,15 @@ fn read_recording_rows(db: &Path) -> Result<HashMap<String, RecordingMeta>> {
             .filter(|d| *d > 0.0)
             .map(|d| (d + MAC_EPOCH) as i64);
         let duration_s = r.get::<_, Option<f64>>(3)?.filter(|d| *d > 0.0);
+        let folder: Option<String> = r
+            .get::<_, Option<String>>(4)?
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         map.insert(
             name,
             RecordingMeta {
                 title,
+                folder,
                 recorded_at,
                 duration_s,
             },

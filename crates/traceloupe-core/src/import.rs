@@ -374,9 +374,10 @@ pub fn import_backup(
                         "INSERT INTO recordings
                             (title, folder, recorded_at, duration_s, relative_path,
                              local_path, mime_type, decrypt_key, plain_size)
-                         VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         rusqlite::params![
                             rec.title,
+                            rec.folder,
                             rec.recorded_at,
                             rec.duration_s,
                             rec.relative_path,
