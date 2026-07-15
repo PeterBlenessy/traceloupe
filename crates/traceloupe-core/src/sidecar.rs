@@ -149,39 +149,46 @@ pub struct ImportModule {
 /// The catalog of importable data types the app can surface today. Extend this
 /// as more views are added (Notes, Safari bookmarks/tabs, …).
 pub const IMPORT_CATALOG: &[ImportModule] = &[
+    // These five are now parsed NATIVELY straight from the backup (via the Manifest
+    // Index) — see import_{messages,notes,calls,safari,contacts}_native. Their iLEAPP
+    // `keys` are intentionally EMPTY so iLEAPP no longer eagerly re-parses them: on a
+    // large backup iLEAPP's `sms` pass alone took minutes (hundreds of thousands of
+    // messages) that the native parser does in ~2s. Removing them from the profile is
+    // the import-time win. (The native path has no iLEAPP fallback for these anymore;
+    // native first-party parsing is validated and reliable.)
     ImportModule {
         id: "messages",
         label: "Messages",
         category: "Communication",
-        keys: &["sms"],
+        keys: &[],
         default: true,
     },
     ImportModule {
         id: "calls",
         label: "Call history",
         category: "Communication",
-        keys: &["callHistory"],
+        keys: &[],
         default: true,
     },
     ImportModule {
         id: "contacts",
         label: "Contacts",
         category: "Communication",
-        keys: &["addressBook"],
+        keys: &[],
         default: true,
     },
     ImportModule {
         id: "safari",
         label: "Safari history",
         category: "Web",
-        keys: &["safariHistory"],
+        keys: &[],
         default: true,
     },
     ImportModule {
         id: "notes",
         label: "Notes",
         category: "Productivity",
-        keys: &["notes"],
+        keys: &[],
         default: true,
     },
     ImportModule {
