@@ -53,6 +53,12 @@ _Nothing yet._
 
 ### Added
 
+- **Search rows for Photos, Messages, and Safari.** Photos gets a full-width
+  filename search; the Messages timeline gets a full-width search over body /
+  sender / conversation; Safari's search moved to its own full-width row. All
+  compose with the existing time filter and sort. (Photos person/face tags aren't
+  parsed yet — a future `Photos.sqlite` parser — so photo search is filename-only
+  for now.)
 - **Native Safari bookmarks, reading list, and open tabs.** New parsers read
   `Bookmarks.db` (bookmarks + reading-list items, with their added/viewed dates
   and preview text) and `SafariTabs.db` (open tabs, grouped by tab group). The

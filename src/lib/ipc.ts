@@ -293,18 +293,24 @@ export interface TraceLoupeClient {
   ): Promise<Message[]>;
   /** Total messages across all conversations (filtered by `service`, null=all);
    * drives the timeline scroller. */
-  countTimelineMessages(service?: string | null): Promise<number>;
-  /** A window of the all-conversations timeline from `offset`; `desc` newest-first. */
+  countTimelineMessages(
+    service?: string | null,
+    search?: string | null,
+  ): Promise<number>;
+  /** A window of the all-conversations timeline from `offset`; `desc` newest-first.
+   * `search` matches message body / sender / conversation. */
   getTimelineWindow(
     offset: number,
     limit: number,
     service?: string | null,
+    search?: string | null,
     desc?: boolean,
   ): Promise<TimelineMessage[]>;
   /** Message counts for each half-open [lo, hi) epoch-second window. */
   countMessageRanges(
     ranges: TimeRange[],
     service?: string | null,
+    search?: string | null,
   ): Promise<number[]>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
   getRangeWindow(
@@ -313,6 +319,7 @@ export interface TraceLoupeClient {
     offset: number,
     limit: number,
     service?: string | null,
+    search?: string | null,
     desc?: boolean,
   ): Promise<TimelineMessage[]>;
   listCalls(): Promise<Call[]>;
@@ -332,16 +339,19 @@ export interface TraceLoupeClient {
     source: string | null,
     lo?: number | null,
     hi?: number | null,
+    search?: string | null,
   ): Promise<number>;
   /** Media counts for each [lo, hi) window in `source` — Photos time-filter chips. */
   countMediaRanges(
     source: string | null,
     ranges: TimeRange[],
+    search?: string | null,
   ): Promise<number[]>;
   getMediaWindow(
     source: string | null,
     lo: number | null,
     hi: number | null,
+    search: string | null,
     offset: number,
     limit: number,
     sortBy: string,
@@ -459,27 +469,33 @@ const tauriClient: TraceLoupeClient = {
       limit,
       desc,
     }),
-  countTimelineMessages: (service) =>
-    invoke<number>("count_timeline_messages", { service: service ?? null }),
-  getTimelineWindow: (offset, limit, service, desc = false) =>
+  countTimelineMessages: (service, search = null) =>
+    invoke<number>("count_timeline_messages", {
+      service: service ?? null,
+      search: search ?? null,
+    }),
+  getTimelineWindow: (offset, limit, service, search = null, desc = false) =>
     invoke<TimelineMessage[]>("get_timeline_window", {
       offset,
       limit,
       service: service ?? null,
+      search: search ?? null,
       desc,
     }),
-  countMessageRanges: (ranges, service) =>
+  countMessageRanges: (ranges, service, search = null) =>
     invoke<number[]>("count_message_ranges", {
       ranges,
       service: service ?? null,
+      search: search ?? null,
     }),
-  getRangeWindow: (lo, hi, offset, limit, service, desc = false) =>
+  getRangeWindow: (lo, hi, offset, limit, service, search = null, desc = false) =>
     invoke<TimelineMessage[]>("get_range_window", {
       lo,
       hi,
       offset,
       limit,
       service: service ?? null,
+      search: search ?? null,
       desc,
     }),
   listCalls: () => invoke<Call[]>("list_calls"),
@@ -488,15 +504,16 @@ const tauriClient: TraceLoupeClient = {
   unlockNote: (noteId, password) =>
     invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
-  countMedia: (source, lo = null, hi = null) =>
-    invoke<number>("count_media", { source, lo, hi }),
-  countMediaRanges: (source, ranges) =>
-    invoke<number[]>("count_media_ranges", { source, ranges }),
-  getMediaWindow: (source, lo, hi, offset, limit, sortBy, desc) =>
+  countMedia: (source, lo = null, hi = null, search = null) =>
+    invoke<number>("count_media", { source, lo, hi, search }),
+  countMediaRanges: (source, ranges, search = null) =>
+    invoke<number[]>("count_media_ranges", { source, ranges, search }),
+  getMediaWindow: (source, lo, hi, search, offset, limit, sortBy, desc) =>
     invoke<MediaItem[]>("get_media_window", {
       source,
       lo,
       hi,
+      search,
       offset,
       limit,
       sortBy,
@@ -787,6 +804,30 @@ const mockTimeline: TimelineMessage[] = mockThreads
 function inRange(sentAt: number | null, r: TimeRange): boolean {
   if (sentAt == null) return false;
   return (r.lo == null || sentAt >= r.lo) && (r.hi == null || sentAt < r.hi);
+}
+function mockFilterTimeline(
+  service: string | null | undefined,
+  range: TimeRange | undefined,
+  search: string | null | undefined,
+): TimelineMessage[] {
+  const q = search?.toLowerCase() ?? null;
+  return mockTimeline.filter((t) => {
+    if (service && t.service !== service) return false;
+    if (range && !inRange(t.message.sentAt, range)) return false;
+    if (q) {
+      const hay = [
+        t.message.body,
+        t.message.sender,
+        t.threadTitle,
+        t.threadHandle,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 }
 
 const mockCalls: Call[] = [
@@ -1120,12 +1161,17 @@ const mockImported = new Set<string>();
 function mockFilterMedia(
   source: string | null,
   range?: TimeRange,
+  search?: string | null,
 ): MediaItem[] {
   let out = source
     ? mockMedia.filter((m) => (m.source ?? "Other") === source)
     : mockMedia;
   if (range && (range.lo != null || range.hi != null)) {
     out = out.filter((m) => inRange(m.takenAt ?? null, range));
+  }
+  if (search) {
+    const q = search.toLowerCase();
+    out = out.filter((m) => (m.filename?.toLowerCase().includes(q) ?? false));
   }
   return out;
 }
@@ -1339,35 +1385,35 @@ export const mockClient: TraceLoupeClient = {
     const ordered = desc ? [...all].reverse() : all;
     return ordered.slice(offset, offset + limit);
   },
-  countTimelineMessages: async (service) =>
-    mockActive
-      ? mockTimeline.filter((t) => !service || t.service === service).length
-      : 0,
-  getTimelineWindow: async (offset, limit, service, desc = false) => {
+  countTimelineMessages: async (service, search = null) =>
+    mockActive ? mockFilterTimeline(service, undefined, search).length : 0,
+  getTimelineWindow: async (
+    offset,
+    limit,
+    service,
+    search = null,
+    desc = false,
+  ) => {
     if (!mockActive) return [];
-    const filtered = mockTimeline.filter(
-      (t) => !service || t.service === service,
-    );
+    const filtered = mockFilterTimeline(service, undefined, search);
     const ordered = desc ? [...filtered].reverse() : filtered;
     return ordered.slice(offset, offset + limit);
   },
-  countMessageRanges: async (ranges, service) =>
+  countMessageRanges: async (ranges, service, search = null) =>
     ranges.map((r) =>
-      mockActive
-        ? mockTimeline.filter(
-            (t) =>
-              inRange(t.message.sentAt, r) &&
-              (!service || t.service === service),
-          ).length
-        : 0,
+      mockActive ? mockFilterTimeline(service, r, search).length : 0,
     ),
-  getRangeWindow: async (lo, hi, offset, limit, service, desc = false) => {
+  getRangeWindow: async (
+    lo,
+    hi,
+    offset,
+    limit,
+    service,
+    search = null,
+    desc = false,
+  ) => {
     if (!mockActive) return [];
-    const filtered = mockTimeline.filter(
-      (t) =>
-        inRange(t.message.sentAt, { lo, hi }) &&
-        (!service || t.service === service),
-    );
+    const filtered = mockFilterTimeline(service, { lo, hi }, search);
     const ordered = desc ? [...filtered].reverse() : filtered;
     return ordered.slice(offset, offset + limit);
   },
@@ -1379,14 +1425,16 @@ export const mockClient: TraceLoupeClient = {
       ? "Bank PIN: 1234\nWiFi: hunter2"
       : Promise.reject(new Error("Wrong password.")),
   listRecordings: async () => (mockActive ? mockRecordings : []),
-  countMedia: async (source, lo = null, hi = null) =>
-    mockActive ? mockFilterMedia(source, { lo, hi }).length : 0,
-  countMediaRanges: async (source, ranges) =>
-    ranges.map((r) => (mockActive ? mockFilterMedia(source, r).length : 0)),
-  getMediaWindow: async (source, lo, hi, offset, limit, sortBy, desc) =>
+  countMedia: async (source, lo = null, hi = null, search = null) =>
+    mockActive ? mockFilterMedia(source, { lo, hi }, search).length : 0,
+  countMediaRanges: async (source, ranges, search = null) =>
+    ranges.map((r) =>
+      mockActive ? mockFilterMedia(source, r, search).length : 0,
+    ),
+  getMediaWindow: async (source, lo, hi, search, offset, limit, sortBy, desc) =>
     mockActive
       ? mockSortBy(
-          mockFilterMedia(source, { lo, hi }),
+          mockFilterMedia(source, { lo, hi }, search),
           mediaKey(sortBy),
           desc,
         ).slice(offset, offset + limit)
