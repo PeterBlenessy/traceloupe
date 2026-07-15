@@ -2,7 +2,7 @@ import { useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Bookmark, BookOpen, Globe, SquareStack } from "lucide-react";
+import { Bookmark, BookOpen, Globe, SquareStack, Trash2 } from "lucide-react";
 import {
   Item,
   ItemContent,
@@ -17,6 +17,7 @@ import { SortControl, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
 import {
   client,
@@ -202,16 +203,20 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
         className="w-full text-left"
       >
         <ItemMedia>
-          <Globe className="size-5 text-muted-foreground" />
+          {visit.deleted ? (
+            <Trash2 className="size-5 text-muted-foreground" />
+          ) : (
+            <Globe className="size-5 text-muted-foreground" />
+          )}
         </ItemMedia>
         <ItemContent>
-          <ItemTitle className="truncate">
+          <ItemTitle className={cn("truncate", visit.deleted && "line-through")}>
             {visit.title ?? hostOf(visit.url)}
           </ItemTitle>
           <ItemDescription className="truncate">{visit.url}</ItemDescription>
         </ItemContent>
         <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
-          <span>{formatDateTime(visit.visitedAt)}</span>
+          <span>{visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}</span>
           {visit.visitCount != null && <span>{visit.visitCount} visits</span>}
         </div>
       </button>

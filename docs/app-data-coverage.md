@@ -104,7 +104,7 @@ Parser extracts 6 of ~45 `ZCALLRECORD` columns.
 | History URL / per-visit title / visit time | ✅ 691 items / 2,046 visits | ✅ | searchable, time-filtered, sortable |
 | Total visit count | ✅ | ✅ | sort-by-visits |
 | Redirect chains | ✅ 92 links | ⬜ | `redirect_source/destination` — navigation graph not reconstructed |
-| Deleted-history tombstones | ✅ 2,477 | ⬜ | `history_tombstones` never read — sizeable forensic signal |
+| Deleted-history tombstones | ✅ 2,477 | ✅ | `history_tombstones` → surfaced in the History list flagged `deleted` (trash icon + strikethrough, "Deleted" instead of a visit time) |
 | Load status / HTTP method / origin / score | ✅ | ⬜ | Not parsed |
 | Daily/weekly visit-count blobs | ✅ | ⬜ | Visit-time histogram unused |
 | Bookmarks (title/url) | ✅ 8 | ✅ | + open external |
