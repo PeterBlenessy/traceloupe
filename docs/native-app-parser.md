@@ -32,6 +32,12 @@ schema facts, write fresh Rust — provenance: reference, architecture §10).
    the app stores as surfaced ✅ / not-surfaced ⬜ / not-in-backup —, and record it
    in `docs/app-data-coverage.md`. Implement a gap now only if high-value + cheap
    (a patch); else leave a ⬜ follow-up. Doesn't block release — correctness does.
+5c. **UI/UX check** — usually a no-op (apps add no UI; they flow into the shared
+   Messages view). Only when the app brings a *new rendering shape* (no sender,
+   no timestamp, HTML/emoji-only body, unnamed group, long/RTL name) verify it
+   degrades gracefully; and *periodically* (roster growth) sanity-check the shared
+   view (service filter overflow, labels/icons, empty states, virtualization).
+   Findings are fixes to the shared view (a patch), not the module.
 6. **Self-improve** — whenever correctness review catches a bug, add/sharpen a
    known-pitfalls checklist item in the skill so no future app repeats it, and
    commit that with the fix. Then `/loop` moves to the next app.
