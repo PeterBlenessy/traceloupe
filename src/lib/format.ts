@@ -76,6 +76,12 @@ export function formatDateTime(epochSeconds: number | null): string {
   return dayTime.format(new Date(epochSeconds * 1000));
 }
 
+/** A date without a time, e.g. "May 15, 1990" — used for birthdays. */
+export function formatDate(epochSeconds: number | null): string {
+  if (epochSeconds == null) return "";
+  return dateYear.format(new Date(epochSeconds * 1000));
+}
+
 const dateHeader = new Intl.DateTimeFormat(undefined, {
   weekday: "short",
   month: "short",

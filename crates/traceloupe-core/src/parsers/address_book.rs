@@ -33,13 +33,22 @@ pub struct ParsedContact {
     pub id: i64,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    pub middle_name: Option<String>,
+    pub nickname: Option<String>,
     pub organization: Option<String>,
+    pub job_title: Option<String>,
+    pub department: Option<String>,
+    /// Birthday as a Unix timestamp (from Core Data's 2001 epoch), or None.
+    pub birthday_at: Option<i64>,
+    pub note: Option<String>,
     pub phones: Vec<LabeledValue>,
     pub emails: Vec<LabeledValue>,
 }
 
 const PROP_PHONE: i64 = 3;
 const PROP_EMAIL: i64 = 4;
+/// Core Data epoch (2001-01-01) → Unix, for the `Birthday` timestamp column.
+const MAC_EPOCH: i64 = 978_307_200;
 
 /// Parse all contacts from an AddressBook database, ordered by name.
 pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
@@ -49,7 +58,8 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
     // phone/email still appear. Ordered so grouping in Rust is a single pass.
     let mut stmt = conn.prepare(
         "SELECT p.ROWID, p.First, p.Last, p.Organization,
-                mv.property, mv.value, lbl.value
+                mv.property, mv.value, lbl.value,
+                p.Middle, p.Nickname, p.JobTitle, p.Department, p.Birthday, p.Note
          FROM ABPerson p
          LEFT JOIN ABMultiValue mv
                 ON mv.record_id = p.ROWID AND mv.property IN (?1, ?2)
@@ -58,6 +68,12 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
     )?;
 
     let rows = stmt.query_map([PROP_PHONE, PROP_EMAIL], |r| {
+        // Birthday is a Core Data timestamp stored as a TEXT float; parse + shift
+        // to Unix. None if absent or unparseable.
+        let birthday_at = r
+            .get::<_, Option<String>>(11)?
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .map(|t| t as i64 + MAC_EPOCH);
         Ok(Row {
             id: r.get(0)?,
             first: r.get(1)?,
@@ -66,6 +82,12 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
             property: r.get(4)?,
             value: r.get(5)?,
             label: r.get(6)?,
+            middle: r.get(7)?,
+            nickname: r.get(8)?,
+            job_title: r.get(9)?,
+            department: r.get(10)?,
+            birthday_at,
+            note: r.get(12)?,
         })
     })?;
 
@@ -81,7 +103,13 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
                     id: row.id,
                     first_name: row.first,
                     last_name: row.last,
+                    middle_name: row.middle,
+                    nickname: row.nickname,
                     organization: row.organization,
+                    job_title: row.job_title,
+                    department: row.department,
+                    birthday_at: row.birthday_at,
+                    note: row.note,
                     ..Default::default()
                 });
                 contacts.last_mut().unwrap()
@@ -110,6 +138,12 @@ struct Row {
     property: Option<i64>,
     value: Option<String>,
     label: Option<String>,
+    middle: Option<String>,
+    nickname: Option<String>,
+    job_title: Option<String>,
+    department: Option<String>,
+    birthday_at: Option<i64>,
+    note: Option<String>,
 }
 
 /// Contact photo thumbnails from `AddressBookImages.sqlitedb`, keyed by the
@@ -172,8 +206,10 @@ pub fn insert_contacts(
     }
     for c in contacts {
         tx.execute(
-            "INSERT INTO contacts (first_name, last_name, organization, phones_json, emails_json, image)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO contacts
+                (first_name, last_name, organization, phones_json, emails_json, image,
+                 middle_name, nickname, job_title, department, birthday_at, note)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             rusqlite::params![
                 c.first_name,
                 c.last_name,
@@ -181,6 +217,12 @@ pub fn insert_contacts(
                 serde_json::to_string(&c.phones).unwrap_or_else(|_| "[]".into()),
                 serde_json::to_string(&c.emails).unwrap_or_else(|_| "[]".into()),
                 images.get(&c.id),
+                c.middle_name,
+                c.nickname,
+                c.job_title,
+                c.department,
+                c.birthday_at,
+                c.note,
             ],
         )?;
     }
@@ -212,11 +254,14 @@ mod tests {
     fn make_db(path: &Path) {
         let conn = Connection::open(path).unwrap();
         conn.execute_batch(
-            "CREATE TABLE ABPerson (ROWID INTEGER PRIMARY KEY, First TEXT, Last TEXT, Middle TEXT, Organization TEXT);
+            "CREATE TABLE ABPerson (ROWID INTEGER PRIMARY KEY, First TEXT, Last TEXT, Middle TEXT,
+                 Organization TEXT, Nickname TEXT, JobTitle TEXT, Department TEXT, Birthday TEXT, Note TEXT);
              CREATE TABLE ABMultiValueLabel (value TEXT);
              CREATE TABLE ABMultiValue (UID INTEGER PRIMARY KEY, record_id INTEGER, property INTEGER, label INTEGER, value TEXT);
              INSERT INTO ABMultiValueLabel (rowid, value) VALUES (1, '_$!<Mobile>!$_'), (2, '_$!<Home>!$_');
-             INSERT INTO ABPerson (ROWID, First, Last, Organization) VALUES (1, 'Alex', 'Rivera', NULL);
+             -- Birthday 700000000.0 Core Data = 700000000 + 978307200 = 1678307200 Unix.
+             INSERT INTO ABPerson (ROWID, First, Last, JobTitle, Birthday, Note)
+                 VALUES (1, 'Alex', 'Rivera', 'Engineer', '700000000.0', 'met at the conference');
              INSERT INTO ABPerson (ROWID, First, Last, Organization) VALUES (2, NULL, NULL, 'Bella Vista Pizza');
              INSERT INTO ABMultiValue (record_id, property, label, value) VALUES (1, 3, 1, '+15551234567');
              INSERT INTO ABMultiValue (record_id, property, label, value) VALUES (1, 4, 2, 'alex@example.com');
@@ -244,6 +289,9 @@ mod tests {
         assert_eq!(alex.phones[0].label.as_deref(), Some("Mobile")); // magic string cleaned
         assert_eq!(alex.emails.len(), 1);
         assert_eq!(alex.emails[0].value, "alex@example.com");
+        assert_eq!(alex.job_title.as_deref(), Some("Engineer"));
+        assert_eq!(alex.note.as_deref(), Some("met at the conference"));
+        assert_eq!(alex.birthday_at, Some(1_678_307_200)); // 700000000 + MAC_EPOCH
 
         // Org-only contact with no name.
         let pizza = contacts.iter().find(|c| c.organization.is_some()).unwrap();
@@ -329,7 +377,8 @@ mod tests {
         let db = tmp.path().join("AddressBook.sqlitedb");
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(
-            "CREATE TABLE ABPerson (ROWID INTEGER PRIMARY KEY, First TEXT, Last TEXT, Middle TEXT, Organization TEXT);
+            "CREATE TABLE ABPerson (ROWID INTEGER PRIMARY KEY, First TEXT, Last TEXT, Middle TEXT,
+                 Organization TEXT, Nickname TEXT, JobTitle TEXT, Department TEXT, Birthday TEXT, Note TEXT);
              CREATE TABLE ABMultiValueLabel (value TEXT);
              CREATE TABLE ABMultiValue (UID INTEGER PRIMARY KEY, record_id INTEGER, property INTEGER, label INTEGER, value TEXT);",
         )

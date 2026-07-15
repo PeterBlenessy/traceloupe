@@ -612,7 +612,14 @@ pub struct Contact {
     pub id: i64,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    pub middle_name: Option<String>,
+    pub nickname: Option<String>,
     pub organization: Option<String>,
+    pub job_title: Option<String>,
+    pub department: Option<String>,
+    /// Birthday as a Unix timestamp, or None.
+    pub birthday_at: Option<i64>,
+    pub note: Option<String>,
     pub phones: Vec<crate::parsers::address_book::LabeledValue>,
     pub emails: Vec<crate::parsers::address_book::LabeledValue>,
     /// Whether a photo is stored for this contact (fetched via `contact_image`).
@@ -626,7 +633,8 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, first_name, last_name, organization, phones_json, emails_json,
-                image IS NOT NULL, source
+                image IS NOT NULL, source,
+                middle_name, nickname, job_title, department, birthday_at, note
          FROM contacts
          ORDER BY last_name IS NULL AND first_name IS NULL,
                   last_name COLLATE NOCASE, first_name COLLATE NOCASE, id",
@@ -643,6 +651,12 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
             emails: serde_json::from_str(&emails).unwrap_or_default(),
             has_image: r.get(6)?,
             source: r.get(7)?,
+            middle_name: r.get(8)?,
+            nickname: r.get(9)?,
+            job_title: r.get(10)?,
+            department: r.get(11)?,
+            birthday_at: r.get(12)?,
+            note: r.get(13)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

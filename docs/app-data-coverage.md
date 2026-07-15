@@ -124,15 +124,16 @@ properties 3 & 4).
 |------|:---------:|:--------:|-------|
 | First / last name | ✅ | ✅ | drives sort |
 | Organization | — 0 here | ✅ (capable) | parsed + shown; none populated |
-| Middle / prefix / suffix / nickname / phonetic | — 0 here | ⬜ | not parsed |
-| Job title / department | — 0 here | ⬜ | not parsed |
+| Middle name / nickname | — 0 here | ✅ | parsed + shown in detail; none populated in this backup |
+| Prefix / suffix / phonetic | — 0 here | ⬜ | not parsed |
+| Job title / department | — 0 here | ✅ | parsed + shown ("Work" section); none populated here |
 | Phone numbers (+ labels) | ✅ 77 | ✅ | tel: links; also feeds message matching |
 | Emails (+ labels) | ✅ 11 | ✅ | mailto: |
 | Postal addresses | ✅ 6 | ⬜ | structured `ABMultiValueEntry` tables never queried |
 | Social / IM handles | ✅ 1 | ⬜ | property 46 |
 | Related names (relationship graph) | ✅ 24 | ⬜ | Mother/Father/custom — fully dropped |
-| Birthday / custom dates | ✅ 11 | ⬜ | |
-| Contact note | ✅ 22 | ⬜ | free-text on ~31% of contacts |
+| Birthday | ✅ 11 | ✅ | `Birthday` Core Data timestamp → shown in detail |
+| Contact note | ✅ 22 | ✅ | shown in the detail "Note" section |
 | Groups + membership | ✅ 3 / 40 | ⬜ | `ABGroup`/`ABGroupMembers` untouched |
 | Photo | ✅ 54 | ✅ | thumbnail w/ full-size fallback |
 | Memoji / avatar recipe | ✅ | ⬜ | |

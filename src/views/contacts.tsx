@@ -1,7 +1,17 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Building2, Mail, MessageSquare, Phone, Users } from "lucide-react";
+import {
+  Briefcase,
+  Building2,
+  Cake,
+  Mail,
+  MessageSquare,
+  Phone,
+  StickyNote,
+  User,
+  Users,
+} from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
@@ -23,6 +33,7 @@ import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
 import { client, type Contact } from "@/lib/ipc";
+import { formatDate } from "@/lib/format";
 
 export function ContactsView() {
   const navigate = useNavigate();
@@ -285,6 +296,31 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
               ))}
             </FieldGroup>
           )}
+          {(contact.jobTitle || contact.department) && (
+            <FieldGroup title="Work">
+              {contact.jobTitle && (
+                <Field icon={Briefcase} label="Title" value={contact.jobTitle} />
+              )}
+              {contact.department && (
+                <Field icon={Building2} label="Department" value={contact.department} />
+              )}
+            </FieldGroup>
+          )}
+          {contact.nickname && (
+            <FieldGroup title="Nickname">
+              <Field icon={User} label={null} value={contact.nickname} />
+            </FieldGroup>
+          )}
+          {contact.birthdayAt != null && (
+            <FieldGroup title="Birthday">
+              <Field icon={Cake} label={null} value={formatDate(contact.birthdayAt)} />
+            </FieldGroup>
+          )}
+          {contact.note && (
+            <FieldGroup title="Note">
+              <Field icon={StickyNote} label={null} value={contact.note} wrap />
+            </FieldGroup>
+          )}
           {conversations.length > 0 && (
             <FieldGroup title={`Conversations (${conversations.length})`}>
               {conversations.map((t) => (
@@ -339,25 +375,36 @@ function Field({
   label,
   value,
   href,
+  wrap,
 }: {
   icon: typeof Phone;
   label: string | null;
   value: string;
-  href: string;
+  /** When set, the field is a clickable link (tel:/mailto:). Plain text otherwise. */
+  href?: string;
+  /** Let a long value (e.g. a note) wrap instead of truncating. */
+  wrap?: boolean;
 }) {
-  return (
-    <a
-      href={href}
-      className={cn(
-        "flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0",
-        "transition-colors hover:bg-accent/50",
-      )}
-    >
+  const inner = (
+    <>
       <Icon className="size-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0">
         {label && <div className="text-xs text-muted-foreground">{label}</div>}
-        <div className="select-text truncate text-sm">{value}</div>
+        <div className={cn("select-text text-sm", wrap ? "break-words" : "truncate")}>
+          {value}
+        </div>
       </div>
+    </>
+  );
+  const className = cn(
+    "flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0",
+    href && "transition-colors hover:bg-accent/50",
+  );
+  return href ? (
+    <a href={href} className={className}>
+      {inner}
     </a>
+  ) : (
+    <div className={className}>{inner}</div>
   );
 }
