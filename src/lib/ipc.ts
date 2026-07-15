@@ -158,7 +158,14 @@ export interface Contact {
   id: number;
   firstName: string | null;
   lastName: string | null;
+  middleName: string | null;
+  nickname: string | null;
   organization: string | null;
+  jobTitle: string | null;
+  department: string | null;
+  /** Birthday as a Unix timestamp, or null. */
+  birthdayAt: number | null;
+  note: string | null;
   phones: LabeledValue[];
   emails: LabeledValue[];
   /** Whether a contact photo is stored (load it via `contactAvatarUrl`). */
@@ -1115,6 +1122,14 @@ const mockRecordings: Recording[] = [
   },
 ];
 
+const contactExtras = {
+  middleName: null,
+  nickname: null,
+  jobTitle: null,
+  department: null,
+  birthdayAt: null,
+  note: null,
+};
 const mockContacts: Contact[] = [
   {
     id: 1,
@@ -1125,6 +1140,7 @@ const mockContacts: Contact[] = [
     emails: [{ label: "Work", value: "jordan@acme.example" }],
     hasImage: true,
     source: "Address Book",
+    ...contactExtras,
   },
   {
     id: 2,
@@ -1135,6 +1151,10 @@ const mockContacts: Contact[] = [
     emails: [{ label: "Home", value: "alex@example.com" }],
     hasImage: true,
     source: "Address Book",
+    ...contactExtras,
+    jobTitle: "Engineer",
+    birthdayAt: 1678307200,
+    note: "met at the conference",
   },
   {
     id: 3,
@@ -1145,6 +1165,7 @@ const mockContacts: Contact[] = [
     emails: [{ label: "Home", value: "sam.taylor@example.com" }],
     hasImage: false,
     source: "Address Book",
+    ...contactExtras,
   },
   {
     id: 4,
@@ -1155,6 +1176,7 @@ const mockContacts: Contact[] = [
     emails: [],
     hasImage: false,
     source: "Address Book",
+    ...contactExtras,
   },
   // A third-party app's social graph: name + @handle only (behind the filter).
   {
@@ -1166,6 +1188,7 @@ const mockContacts: Contact[] = [
     emails: [],
     hasImage: false,
     source: "TikTok",
+    ...contactExtras,
   },
   {
     id: 6,
@@ -1176,6 +1199,7 @@ const mockContacts: Contact[] = [
     emails: [],
     hasImage: false,
     source: "TikTok",
+    ...contactExtras,
   },
 ];
 
