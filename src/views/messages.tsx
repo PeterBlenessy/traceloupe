@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  ArrowLeft,
   FileText,
   ImageIcon,
   MessageSquare,
@@ -68,9 +69,19 @@ export function MessagesView() {
   // Which conversation is open in the master-detail view. Lifted here so that
   // clicking a row in the Timeline or Periods view can jump to its conversation.
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const openThread = (threadId: number) => {
+  // Where a jump into a conversation came from, so the conversation view can
+  // offer a "back" button to return to that overview (null = opened normally
+  // from the conversation list, so no back button).
+  const [openedFrom, setOpenedFrom] = useState<Mode | null>(null);
+  const openThread = (threadId: number, from: Mode | null = null) => {
+    setOpenedFrom(from);
     setSelectedId(threadId);
     setMode("conversations");
+  };
+  // Switching mode via the top toggle is a fresh navigation — drop any "back".
+  const switchMode = (next: Mode) => {
+    setOpenedFrom(null);
+    setMode(next);
   };
 
   // Filter by source app (iMessage / SMS / TikTok / …), shared across all three
@@ -113,7 +124,7 @@ export function MessagesView() {
         <ToggleGroup
           type="single"
           value={mode}
-          onValueChange={(v) => v && setMode(v as Mode)}
+          onValueChange={(v) => v && switchMode(v as Mode)}
           variant="outline"
           size="sm"
         >
@@ -151,11 +162,19 @@ export function MessagesView() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             service={service}
+            onBack={openedFrom ? () => setMode(openedFrom) : undefined}
+            backLabel={openedFrom === "periods" ? "Periods" : "Timeline"}
           />
         ) : mode === "timeline" ? (
-          <Timeline onOpenThread={openThread} service={service} />
+          <Timeline
+            onOpenThread={(id) => openThread(id, "timeline")}
+            service={service}
+          />
         ) : (
-          <Periods onOpenThread={openThread} service={service} />
+          <Periods
+            onOpenThread={(id) => openThread(id, "periods")}
+            service={service}
+          />
         )}
       </div>
     </div>
@@ -167,10 +186,14 @@ function Conversations({
   selectedId,
   onSelect,
   service,
+  onBack,
+  backLabel,
 }: {
   selectedId: number | null;
   onSelect: (id: number) => void;
   service: string | null;
+  onBack?: () => void;
+  backLabel?: string;
 }) {
   // Gate on an open backup (React Query dedups this with the parent's copy), so
   // list_threads isn't fired while `hasActiveBackup` is still resolving.
@@ -274,6 +297,8 @@ function Conversations({
             thread={selected}
             resolve={resolve}
             showContactNames={showContactNames}
+            onBack={onBack}
+            backLabel={backLabel}
           />
         ) : (
           !isPending && (
@@ -369,7 +394,7 @@ function Timeline({
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`timeline:${service ?? "all"}:${order.desc}`}
-        estimateSize={72}
+        estimateSize={56}
         windowKey={(page) => ["timelineWindow", service, order.desc, page]}
         fetchWindow={(offset, limit) =>
           client.getTimelineWindow(offset, limit, service, order.desc)
@@ -540,7 +565,7 @@ function Periods({
             count={total ?? 0}
             startAtBottom={!order.desc}
             resetKey={`periods-timeline:${service ?? "all"}:${order.desc}`}
-            estimateSize={72}
+            estimateSize={56}
             jumpTo={jump}
             onTopIndexChange={setTopIndex}
             windowKey={(page) => ["timelineWindow", service, order.desc, page]}
@@ -599,17 +624,6 @@ function PeriodRow({
   );
 }
 
-/** A small pill labelling a message's source app (iMessage / SMS / TikTok / …). */
-function ServiceBadge({ service }: { service: string }) {
-  const slug = serviceSlug(service);
-  return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded border px-1 py-px text-[10px] leading-none text-muted-foreground">
-      {hasBrandIcon(slug) && <BrandIcon slug={slug} name={service} className="size-3" />}
-      {service}
-    </span>
-  );
-}
-
 function TimelineRow({
   item,
   showDate,
@@ -626,19 +640,14 @@ function TimelineRow({
   showAvatars: boolean;
 }) {
   const m = item.message;
+  // The avatar represents whoever sent this message: the contact for incoming,
+  // "you" for your own outgoing ones. The recipient is always the backup owner,
+  // so the conversation label added nothing and is gone.
   const resolved = !m.isFromMe && m.sender ? resolve(m.sender) : null;
-  // Who sent this row: the sender for incoming, "You" for outgoing.
   const sender = m.isFromMe
     ? "You"
     : (showContactNames && resolved?.name) || m.sender || item.threadTitle;
-  // The conversation this message belongs to — shown as the row's primary label
-  // so the timeline makes clear WHICH chat (and, for 1:1s, who it was sent
-  // to/from), not just who typed it.
-  const conversation = item.threadTitle;
-  // Prefix the snippet with the sender only when it isn't already the
-  // conversation label — i.e. your own outgoing messages and group chats. In a
-  // 1:1 the sender equals the conversation, so the prefix would be redundant.
-  const senderPrefix = sender !== conversation ? sender : null;
+  const slug = item.service ? serviceSlug(item.service) : null;
   return (
     <div>
       {showDate && m.sentAt && (
@@ -646,46 +655,42 @@ function TimelineRow({
           {formatDateHeader(m.sentAt)}
         </div>
       )}
+      {/* One flat row — avatar | message | app icon | time — with the message
+          free to wrap over multiple lines while the icon and time stay pinned
+          top-right. Click opens the full conversation. */}
       <button
         onClick={onOpen}
-        className="flex w-full gap-3 px-4 py-2 text-left hover:bg-accent"
+        className="flex w-full items-start gap-3 px-4 py-2 text-left hover:bg-accent"
       >
         {showAvatars && (
           <Avatar className="mt-0.5 size-8 shrink-0">
             {resolved?.hasImage && (
               <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
             )}
-            <AvatarFallback>{initials(conversation)}</AvatarFallback>
+            <AvatarFallback>{initials(sender)}</AvatarFallback>
           </Avatar>
         )}
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex items-baseline gap-2">
-            <span className="truncate text-sm font-medium">{conversation}</span>
-            {item.service && <ServiceBadge service={item.service} />}
-            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-              {formatMessageTime(m.sentAt)}
+        <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
+          {m.body ? (
+            m.body
+          ) : m.attachments.length ? (
+            <span className="inline-flex items-center gap-1 text-muted-foreground">
+              <Paperclip className="size-3.5" />
+              {m.attachments[0].filename ?? "attachment"}
             </span>
-          </div>
-          {/* One line, truncated: the timeline is a scannable overview, and a
-              fixed row height keeps virtualized scrolling smooth and the
-              scrollbar position accurate (variable-height rows make the
-              virtualizer re-measure and the list jump). Click opens the full
-              thread. */}
-          <div className="truncate text-sm text-foreground/90">
-            {senderPrefix && (
-              <span className="text-muted-foreground">{senderPrefix}: </span>
-            )}
-            {m.body ? (
-              m.body
-            ) : m.attachments.length ? (
-              <span className="inline-flex items-center gap-1 text-muted-foreground">
-                <Paperclip className="size-3.5" />
-                {m.attachments[0].filename ?? "attachment"}
-              </span>
-            ) : (
-              <span className="text-muted-foreground">—</span>
-            )}
-          </div>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </div>
+        <div className="mt-0.5 flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          {slug && hasBrandIcon(slug) && (
+            <BrandIcon
+              slug={slug}
+              name={item.service ?? ""}
+              className="size-3.5"
+            />
+          )}
+          <span className="tabular-nums">{formatMessageTime(m.sentAt)}</span>
         </div>
       </button>
     </div>
@@ -807,10 +812,14 @@ function Conversation({
   thread,
   resolve,
   showContactNames,
+  onBack,
+  backLabel,
 }: {
   thread: ThreadSummary;
   resolve: Resolver;
   showContactNames: boolean;
+  onBack?: () => void;
+  backLabel?: string;
 }) {
   const name = threadLabel(thread, resolve, showContactNames);
   const group = isGroup(thread);
@@ -831,20 +840,36 @@ function Conversation({
     queryFn: () => client.countThreadMessages(thread.id),
   });
 
+  const brandIcon = hasBrandIcon(serviceSlug(thread.service)) ? (
+    <BrandIcon
+      slug={serviceSlug(thread.service)}
+      name={thread.service ?? ""}
+      className="size-4 shrink-0"
+    />
+  ) : null;
+  // A back button appears only when this conversation was jumped into from the
+  // Timeline/Periods overview, returning the user to where they came from.
+  const headerIcon =
+    onBack || brandIcon ? (
+      <div className="flex items-center gap-2">
+        {onBack && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-2 h-7 gap-1 px-2 text-muted-foreground"
+            onClick={onBack}
+          >
+            <ArrowLeft className="size-4" />
+            {backLabel ?? "Back"}
+          </Button>
+        )}
+        {brandIcon}
+      </div>
+    ) : undefined;
+
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader
-        title={name}
-        icon={
-          hasBrandIcon(serviceSlug(thread.service)) ? (
-            <BrandIcon
-              slug={serviceSlug(thread.service)}
-              name={thread.service ?? ""}
-              className="size-4 shrink-0"
-            />
-          ) : undefined
-        }
-      >
+      <ViewHeader title={name} icon={headerIcon}>
         {group ? (
           <span
             className="max-w-[60%] truncate text-xs text-muted-foreground"

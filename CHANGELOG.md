@@ -21,7 +21,19 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+
+- **Timeline/Periods rows redesigned** to a single flat line — avatar · message ·
+  app icon · time — with the message free to wrap over multiple lines. The
+  always-the-owner conversation phone number is gone, and the source app is now
+  just its brand icon (no "iMessage"/etc. text), pinned to the left of the time.
+- **All large counts now use a thousands separator** (`450 897`, non-breaking) so
+  they read clearly and never wrap mid-number.
+
+### Added
+
+- **Back button** in a conversation opened from the Timeline or Periods view,
+  returning you to that overview.
 
 ## [0.6.3]
 

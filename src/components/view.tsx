@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
+import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 /** The header strip at the top of a view: title, optional count, actions. */
@@ -33,7 +34,9 @@ export function ViewHeader({
       {icon}
       <h1 className="text-base font-semibold">{title}</h1>
       {count !== undefined && (
-        <span className="text-sm text-muted-foreground">{count}</span>
+        <span className="text-sm tabular-nums text-muted-foreground">
+          {formatCount(count)}
+        </span>
       )}
       {children && <div className="ml-auto flex items-center gap-2">{children}</div>}
     </header>
