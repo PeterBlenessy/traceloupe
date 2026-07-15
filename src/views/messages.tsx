@@ -42,7 +42,8 @@ import {
   formatMessageTime,
 } from "@/lib/format";
 import { initials } from "@/lib/contact";
-import { serviceIcon } from "@/lib/apps";
+import { serviceSlug } from "@/lib/apps";
+import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import {
   useContactResolver,
   type ResolvedContact,
@@ -131,10 +132,12 @@ export function MessagesView() {
           >
             <ToggleGroupItem value="all">All</ToggleGroupItem>
             {services.map((s) => {
-              const icon = serviceIcon(s);
+              const slug = serviceSlug(s);
               return (
                 <ToggleGroupItem key={s} value={s}>
-                  {icon && <span className="mr-1">{icon}</span>}
+                  {hasBrandIcon(slug) && (
+                    <BrandIcon slug={slug} name={s} className="mr-1 size-3.5" />
+                  )}
                   {s}
                 </ToggleGroupItem>
               );
@@ -577,8 +580,10 @@ function PeriodRow({
 
 /** A small pill labelling a message's source app (iMessage / SMS / TikTok / …). */
 function ServiceBadge({ service }: { service: string }) {
+  const slug = serviceSlug(service);
   return (
-    <span className="shrink-0 rounded border px-1 py-px text-[10px] leading-none text-muted-foreground">
+    <span className="inline-flex shrink-0 items-center gap-1 rounded border px-1 py-px text-[10px] leading-none text-muted-foreground">
+      {hasBrandIcon(slug) && <BrandIcon slug={slug} name={service} className="size-3" />}
       {service}
     </span>
   );
@@ -720,7 +725,16 @@ function ThreadRow({
         )}
         <ItemContent className="gap-0.5">
           <div className="flex items-baseline justify-between gap-2">
-            <ItemTitle className="truncate">{name}</ItemTitle>
+            <ItemTitle className="flex min-w-0 items-center gap-1.5">
+              {hasBrandIcon(serviceSlug(thread.service)) && (
+                <BrandIcon
+                  slug={serviceSlug(thread.service)}
+                  name={thread.service ?? ""}
+                  className="size-3.5 shrink-0 self-center"
+                />
+              )}
+              <span className="truncate">{name}</span>
+            </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatListTime(thread.lastMessageAt)}
             </span>
@@ -792,7 +806,18 @@ function Conversation({
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={name}>
+      <ViewHeader
+        title={name}
+        icon={
+          hasBrandIcon(serviceSlug(thread.service)) ? (
+            <BrandIcon
+              slug={serviceSlug(thread.service)}
+              name={thread.service ?? ""}
+              className="size-4 shrink-0"
+            />
+          ) : undefined
+        }
+      >
         {group ? (
           <span
             className="max-w-[60%] truncate text-xs text-muted-foreground"

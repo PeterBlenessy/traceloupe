@@ -16,81 +16,56 @@ export type AppSupport =
 export interface AppMeta {
   name: string;
   support: AppSupport;
-  /** A locally-rendered icon (emoji — the app blocks remote assets via CSP). */
-  icon?: string;
+  /** simple-icons brand slug (rendered by `BrandIcon`); absent → monogram. */
+  slug?: string;
 }
 
 const CATALOG: Record<string, AppMeta> = {
   // Native chat apps (parsed via the app-chat framework).
-  "net.whatsapp.WhatsApp": { name: "WhatsApp", support: "native", icon: "💬" },
-  "com.burbn.instagram": { name: "Instagram", support: "native", icon: "📸" },
-  "com.zhiliaoapp.musically": { name: "TikTok", support: "native", icon: "🎵" },
-  "org.telegram.messenger": { name: "Telegram", support: "native", icon: "✈️" },
-  "com.facebook.Messenger": {
-    name: "Messenger",
-    support: "native",
-    icon: "💬",
-  },
-  "com.kik.chat": { name: "Kik", support: "native", icon: "💬" },
-  "com.imo.imoim": { name: "imo", support: "native", icon: "💬" },
-  "ch.threema.iapp": { name: "Threema", support: "native", icon: "🔒" },
-  "com.viber": { name: "Viber", support: "native", icon: "💜" },
-  "com.microsoft.skype.teams": {
-    name: "Microsoft Teams",
-    support: "native",
-    icon: "👥",
-  },
-  "com.linkedin.LinkedIn": { name: "LinkedIn", support: "native", icon: "💼" },
+  "net.whatsapp.WhatsApp": { name: "WhatsApp", support: "native", slug: "whatsapp" },
+  "com.burbn.instagram": { name: "Instagram", support: "native", slug: "instagram" },
+  "com.zhiliaoapp.musically": { name: "TikTok", support: "native", slug: "tiktok" },
+  "org.telegram.messenger": { name: "Telegram", support: "native", slug: "telegram" },
+  "com.facebook.Messenger": { name: "Messenger", support: "native", slug: "messenger" },
+  "com.kik.chat": { name: "Kik", support: "native", slug: "kik" },
+  "com.imo.imoim": { name: "imo", support: "native" },
+  "ch.threema.iapp": { name: "Threema", support: "native", slug: "threema" },
+  "com.viber": { name: "Viber", support: "native", slug: "viber" },
+  "com.microsoft.skype.teams": { name: "Microsoft Teams", support: "native" },
+  "com.linkedin.LinkedIn": { name: "LinkedIn", support: "native", slug: "linkedin" },
   // Cache.db apps — data lives in the CFURL cache; parser pending.
-  "com.hammerandchisel.discord": {
-    name: "Discord",
-    support: "planned",
-    icon: "🎮",
-  },
-  "com.tinyspeck.chatlyio": { name: "Slack", support: "planned", icon: "💬" },
-  "com.atebits.Tweetie2": {
-    name: "X (Twitter)",
-    support: "planned",
-    icon: "🐦",
-  },
+  "com.hammerandchisel.discord": { name: "Discord", support: "planned", slug: "discord" },
+  "com.tinyspeck.chatlyio": { name: "Slack", support: "planned", slug: "slack" },
+  "com.atebits.Tweetie2": { name: "X (Twitter)", support: "planned", slug: "x" },
   // Little/no recoverable local store.
-  "com.toyopagroup.picaboo": {
-    name: "Snapchat",
-    support: "limited",
-    icon: "👻",
-  },
-  "org.whispersystems.signal": {
-    name: "Signal",
-    support: "limited",
-    icon: "🔒",
-  },
+  "com.toyopagroup.picaboo": { name: "Snapchat", support: "limited", slug: "snapchat" },
+  "org.whispersystems.signal": { name: "Signal", support: "limited", slug: "signal" },
   // On the roadmap.
-  "com.spotify.client": { name: "Spotify", support: "planned", icon: "🎧" },
-  "com.google.Gmail": { name: "Gmail", support: "planned", icon: "✉️" },
-  "com.ubercab.UberClient": { name: "Uber", support: "planned", icon: "🚗" },
+  "com.spotify.client": { name: "Spotify", support: "planned", slug: "spotify" },
+  "com.google.Gmail": { name: "Gmail", support: "planned", slug: "gmail" },
+  "com.ubercab.UberClient": { name: "Uber", support: "planned", slug: "uber" },
 };
 
-/** Display names of the services parsed natively (keyed for `serviceIcon`). */
-const SERVICE_ICONS: Record<string, string> = {
-  WhatsApp: "💬",
-  Instagram: "📸",
-  TikTok: "🎵",
-  Telegram: "✈️",
-  Messenger: "💬",
-  Kik: "💬",
-  imo: "💬",
-  Threema: "🔒",
-  Viber: "💜",
-  Teams: "👥",
-  LinkedIn: "💼",
-  iMessage: "🟦",
-  SMS: "💬",
+/** Messages service display name → simple-icons brand slug. */
+const SERVICE_SLUGS: Record<string, string> = {
+  iMessage: "imessage",
+  WhatsApp: "whatsapp",
+  Instagram: "instagram",
+  TikTok: "tiktok",
+  Telegram: "telegram",
+  Messenger: "messenger",
+  Threema: "threema",
+  Viber: "viber",
+  LinkedIn: "linkedin",
+  Kik: "kik",
+  Snapchat: "snapchat",
+  Signal: "signal",
 };
 
-/** An emoji icon for a Messages service label (filter chips, thread rows). */
-export function serviceIcon(service: string | null | undefined): string | null {
+/** The brand slug for a Messages service label (filter chips), or null. */
+export function serviceSlug(service: string | null | undefined): string | null {
   if (!service) return null;
-  return SERVICE_ICONS[service] ?? null;
+  return SERVICE_SLUGS[service] ?? null;
 }
 
 /** Resolve a bundle id to display metadata, guessing a name when unknown. */

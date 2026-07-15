@@ -14,13 +14,14 @@ import {
 } from "@/components/ui/item";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
+import { BrandIcon } from "@/lib/brand-icon";
 import { client } from "@/lib/ipc";
 
 interface AppRow {
   bundleId: string;
   name: string;
   support: AppSupport;
-  icon?: string;
+  slug?: string;
 }
 
 export function AppsView() {
@@ -111,12 +112,8 @@ function AppItem({ app }: { app: AppRow }) {
   return (
     <Item>
       <ItemMedia>
-        <div className="flex size-9 items-center justify-center rounded-lg bg-muted text-base">
-          {app.icon ?? (
-            <span className="text-xs font-semibold text-muted-foreground">
-              {app.name.slice(0, 2).toUpperCase()}
-            </span>
-          )}
+        <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+          <BrandIcon slug={app.slug} name={app.name} className="size-5" />
         </div>
       </ItemMedia>
       <ItemContent>
