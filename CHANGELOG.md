@@ -25,6 +25,13 @@ _Nothing yet._
 
 ## [0.7.0]
 
+### Fixed
+
+- **Photos source filter no longer breaks on a narrow window** — the pills scroll
+  horizontally within the title row instead of wrapping out of it. The long
+  "iTunes Backup - Installed Applications" source is shortened to "iTunes Backup"
+  (and its numbered variants collapse into one).
+
 ### Changed
 
 - **Timeline rows redesigned** to a single flat line — avatar · direction · message ·

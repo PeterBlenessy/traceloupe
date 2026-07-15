@@ -190,28 +190,43 @@ function SourceFilter({
   onChange: (v: string) => void;
 }) {
   return (
-    <ToggleGroup
-      type="single"
-      value={value}
-      onValueChange={(v) => onChange(v || "all")}
-      variant="outline"
-      size="sm"
-      className="flex-wrap justify-start"
-    >
-      <ToggleGroupItem value="all">All {formatCount(total)}</ToggleGroupItem>
-      {sources.map(([name, count]) => {
-        const slug = serviceSlug(name);
-        return (
-          <ToggleGroupItem key={name} value={name}>
-            {hasBrandIcon(slug) && (
-              <BrandIcon slug={slug} name={name} className="mr-1 size-3.5" />
-            )}
-            {name} {formatCount(count)}
-          </ToggleGroupItem>
-        );
-      })}
-    </ToggleGroup>
+    // Horizontal scroll (not wrap) so a long list of sources never spills out of
+    // the fixed-height title row on a narrow window.
+    <div className="min-w-0 overflow-x-auto">
+      <ToggleGroup
+        type="single"
+        value={value}
+        onValueChange={(v) => onChange(v || "all")}
+        variant="outline"
+        size="sm"
+        className="flex-nowrap justify-start"
+      >
+        <ToggleGroupItem value="all" className="shrink-0 whitespace-nowrap">
+          All {formatCount(total)}
+        </ToggleGroupItem>
+        {sources.map(([name, count]) => {
+          const slug = serviceSlug(name);
+          return (
+            <ToggleGroupItem
+              key={name}
+              value={name}
+              className="shrink-0 whitespace-nowrap"
+            >
+              {hasBrandIcon(slug) && (
+                <BrandIcon slug={slug} name={name} className="mr-1 size-3.5" />
+              )}
+              {sourceLabel(name)} {formatCount(count)}
+            </ToggleGroupItem>
+          );
+        })}
+      </ToggleGroup>
+    </div>
   );
+}
+
+/** Shorten noisy media-source names for display (the filter value stays raw). */
+function sourceLabel(name: string): string {
+  return name.startsWith("iTunes Backup") ? "iTunes Backup" : name;
 }
 
 /**
