@@ -755,7 +755,7 @@ fn import_photos_metadata_native(
             .push(format!("Photo people: couldn't read Photos.sqlite ({e})."));
         return;
     }
-    if let Err(e) = crate::parsers::photos_meta::parse_photos_persons(&out, cache) {
+    if let Err(e) = crate::parsers::photos_meta::parse_photos_metadata(&out, cache) {
         report
             .warnings
             .push(format!("Photo people: parse failed ({e})."));

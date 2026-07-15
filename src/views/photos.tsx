@@ -12,7 +12,9 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronLeft,
   ChevronRight,
+  Heart,
   Image as ImageIcon,
+  MapPin,
   Play,
   Users,
   X,
@@ -133,7 +135,7 @@ export function PhotosView() {
         <ListSearch
           value={q}
           onChange={setQ}
-          placeholder="Search by filename or person"
+          placeholder="Search photos by filename or person (e.g. a name)"
         />
       </div>
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
@@ -408,14 +410,21 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
           {item.source}
         </span>
       )}
-      {item.persons && (
-        <span
-          className="absolute right-1 top-1 rounded-full bg-black/55 p-1 text-white"
-          title={item.persons}
-        >
-          <Users className="size-3" />
-        </span>
-      )}
+      <div className="absolute right-1 top-1 flex gap-1">
+        {item.favorite && (
+          <span className="rounded-full bg-black/55 p-1" title="Favorite">
+            <Heart className="size-3 fill-red-500 text-red-500" />
+          </span>
+        )}
+        {item.persons && (
+          <span
+            className="rounded-full bg-black/55 p-1 text-white"
+            title={item.persons}
+          >
+            <Users className="size-3" />
+          </span>
+        )}
+      </div>
       {isVideo && (
         <span className="absolute inset-0 flex items-center justify-center bg-black/20">
           <Play className="size-8 fill-white text-white" />
@@ -565,6 +574,9 @@ function Lightbox({
         </div>
         <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-white/80">
           <div className="flex min-w-0 items-center gap-3">
+            {item?.favorite && (
+              <Heart className="size-3.5 shrink-0 fill-red-500 text-red-500" />
+            )}
             <span className="select-text truncate">{item?.filename ?? "—"}</span>
             {item?.persons && (
               <span
@@ -577,6 +589,14 @@ function Lightbox({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-3">
+            {item?.latitude != null && item?.longitude != null && (
+              <span className="inline-flex items-center gap-1" title="Location">
+                <MapPin className="size-3.5" />
+                <span className="select-text tabular-nums">
+                  {item.latitude.toFixed(4)}, {item.longitude.toFixed(4)}
+                </span>
+              </span>
+            )}
             {index != null && (
               <span className="tabular-nums">
                 {formatCount(index + 1)} / {formatCount(count)}

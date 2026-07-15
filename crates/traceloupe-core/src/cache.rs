@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -161,6 +161,10 @@ CREATE TABLE IF NOT EXISTS media_items (
     -- Comma-separated names of people detected in the photo (from Photos.sqlite
     -- face recognition); NULL if none/unknown. Searchable + shown on the item.
     persons         TEXT,
+    -- GPS coordinates + favorite flag, from Photos.sqlite (camera roll only).
+    latitude        REAL,
+    longitude       REAL,
+    is_favorite     INTEGER NOT NULL DEFAULT 0,
     -- Paths under the app cache dir; NULL until materialized.
     thumb_path      TEXT,
     local_path      TEXT,
@@ -318,6 +322,15 @@ impl CacheDb {
             )?;
             // v8: people detected in each photo (Photos.sqlite face recognition).
             ensure_column(&conn, "media_items", "persons", "TEXT")?;
+            // v9: GPS + favorite from Photos.sqlite.
+            ensure_column(&conn, "media_items", "latitude", "REAL")?;
+            ensure_column(&conn, "media_items", "longitude", "REAL")?;
+            ensure_column(
+                &conn,
+                "media_items",
+                "is_favorite",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
