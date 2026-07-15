@@ -998,6 +998,11 @@ function MessageBubble({
           {senderLabel && <MessageHeader>{senderLabel}</MessageHeader>}
           <Bubble variant={message.isFromMe ? "default" : "muted"}>
             <BubbleContent className="select-text">
+              {message.replyToSnippet && (
+                <p className="mb-1 border-l-2 border-current/30 pl-2 text-xs italic opacity-70">
+                  {message.replyToSnippet}
+                </p>
+              )}
               {message.body && (
                 <p className="whitespace-pre-wrap break-words">
                   {message.body}
