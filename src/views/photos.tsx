@@ -14,6 +14,7 @@ import {
   Camera,
   ChevronLeft,
   ChevronRight,
+  EyeOff,
   Heart,
   Image as ImageIcon,
   Images,
@@ -455,6 +456,14 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         </span>
       )}
       <div className="absolute right-1 top-1 flex gap-1">
+        {item.hidden && (
+          <span
+            className="rounded-full bg-black/55 p-1 text-white"
+            title="In the Hidden album"
+          >
+            <EyeOff className="size-3" />
+          </span>
+        )}
         {item.favorite && (
           <span className="rounded-full bg-black/55 p-1" title="Favorite">
             <Heart className="size-3 fill-red-500 text-red-500" />
@@ -618,6 +627,9 @@ function Lightbox({
         </div>
         <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-white/80">
           <div className="flex min-w-0 items-center gap-3">
+            {item?.hidden && (
+              <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />
+            )}
             {item?.favorite && (
               <Heart className="size-3.5 shrink-0 fill-red-500 text-red-500" />
             )}
