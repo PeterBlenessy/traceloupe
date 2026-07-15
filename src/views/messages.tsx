@@ -642,12 +642,12 @@ function TimelineRow({
       <button
         onClick={onOpen}
         className={cn(
-          "flex w-full items-start gap-2.5 px-4 py-2 text-left hover:bg-accent",
+          "flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-accent",
           m.isFromMe && "bg-primary/5",
         )}
       >
         {showAvatars && (
-          <Avatar className="mt-0.5 size-8 shrink-0">
+          <Avatar className="size-8 shrink-0">
             {resolved?.hasImage && (
               <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
             )}
@@ -656,7 +656,7 @@ function TimelineRow({
         )}
         {/* Direction: → you sent it, ← you received it. */}
         <span
-          className="mt-1.5 shrink-0"
+          className="shrink-0"
           title={m.isFromMe ? "You sent this" : "Received"}
         >
           {m.isFromMe ? (
@@ -683,7 +683,7 @@ function TimelineRow({
             <span className="text-muted-foreground">—</span>
           )}
         </div>
-        <div className="mt-0.5 flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           {slug && hasBrandIcon(slug) && (
             <BrandIcon
               slug={slug}
