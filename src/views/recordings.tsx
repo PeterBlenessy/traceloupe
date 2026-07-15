@@ -244,7 +244,7 @@ function RecordingRow({
             </span>
           </div>
           <ItemDescription className="truncate">
-            {duration || "—"}
+            {[duration || "—", recording.folder].filter(Boolean).join(" · ")}
           </ItemDescription>
         </ItemContent>
       </button>
@@ -269,6 +269,11 @@ function RecordingDetail({ recording }: { recording: Recording }) {
           {recording.recordedAt && (
             <p className="text-sm text-muted-foreground">
               {formatDateTime(recording.recordedAt)}
+            </p>
+          )}
+          {recording.folder && (
+            <p className="text-xs text-muted-foreground">
+              {recording.folder}
             </p>
           )}
         </div>

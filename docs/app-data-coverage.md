@@ -147,7 +147,7 @@ properties 3 & 4).
 | Composition-manifest title | ✅ 276 | ✅ | `.composition/manifest.plist` `RCSavedRecordingTitle` (preferred when present) |
 | Recorded-at date / duration | ✅ | ✅ | |
 | Audio playback (`.m4a`) | ✅ | ✅ | Range-seekable, decrypt-on-demand |
-| Folder | ✅ 245/606, 8 folders | ⬜ | `ZFOLDER.ZENCRYPTEDNAME` — cache has a `folder` column but the parser never joins it (always NULL) |
+| Folder | ✅ 245/606, 8 folders | ✅ | `ZFOLDER.ZENCRYPTEDNAME` joined via the recording's `ZFOLDER` FK; shown in the row subtitle + detail |
 | Recently-deleted (`ZEVICTIONDATE`) | ✅ (0 set) | ⬜ | A trashed memo would show as normal |
 | Playback position / studio-mix flags | ✅ (0 set) | ⬜ | minor |
 | Transcript / favorite / geo | — | — | Not present in this DB (source limitation, not a parser gap) |
