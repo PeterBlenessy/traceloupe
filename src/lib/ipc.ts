@@ -83,6 +83,10 @@ export interface Call {
   durationS: number | null;
   occurredAt: number | null;
   service: string | null;
+  /** FaceTime medium: "audio" | "video"; null for phone calls. */
+  callType: string | null;
+  /** Carrier/geo location shown beside the call, if any. */
+  location: string | null;
 }
 
 export interface HistoryVisit {
@@ -914,7 +918,9 @@ const mockCalls: Call[] = [
     answered: true,
     durationS: 128,
     occurredAt: 1717786800,
-    service: "FaceTime Audio",
+    service: "facetime",
+    callType: "audio",
+    location: null,
   },
   {
     id: 2,
@@ -923,7 +929,9 @@ const mockCalls: Call[] = [
     answered: false,
     durationS: 0,
     occurredAt: 1717785000,
-    service: "Phone Call",
+    service: "phone",
+    callType: null,
+    location: "California",
   },
   {
     id: 3,
@@ -932,7 +940,9 @@ const mockCalls: Call[] = [
     answered: true,
     durationS: 312,
     occurredAt: 1717783200,
-    service: "Phone Call",
+    service: "phone",
+    callType: null,
+    location: null,
   },
 ];
 

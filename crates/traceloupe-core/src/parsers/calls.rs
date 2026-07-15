@@ -78,9 +78,12 @@ pub fn parse_calls(
     let originated = col_or_null(&cols, "ZORIGINATED");
     let answered = col_or_null(&cols, "ZANSWERED");
     let provider = col_or_null(&cols, "ZSERVICE_PROVIDER");
+    let call_type = col_or_null(&cols, "ZCALLTYPE");
+    let location = col_or_null(&cols, "ZLOCATION");
 
     let sql = format!(
-        "SELECT {address}, {date}, {duration}, {originated}, {answered}, {provider}
+        "SELECT {address}, {date}, {duration}, {originated}, {answered}, {provider},
+                {call_type}, {location}
          FROM ZCALLRECORD n
          ORDER BY {date} DESC"
     );
@@ -122,17 +125,32 @@ pub fn parse_calls(
         };
         let answered = r.get::<_, Option<i64>>(4)?.map(|a| (a != 0) as i64);
         let service = classify_service(r.get::<_, Option<String>>(5)?.as_deref());
+        // ZCALLTYPE distinguishes FaceTime video (16) from audio (8); 1 = phone.
+        // Only the FaceTime audio/video split is meaningful — map the rest to NULL.
+        let call_type = match r.get::<_, Option<i64>>(6)? {
+            Some(16) => Some("video"),
+            Some(8) => Some("audio"),
+            _ => None,
+        };
+        // ZLOCATION is a carrier/geo string iOS shows beside the call.
+        let location = r
+            .get::<_, Option<String>>(7)?
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         tx.execute(
-            "INSERT INTO calls (address, direction, answered, duration_s, occurred_at, service)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO calls
+                (address, direction, answered, duration_s, occurred_at, service, call_type, location)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 address,
                 direction,
                 answered,
                 duration_s,
                 occurred_at,
-                service
+                service,
+                call_type,
+                location
             ],
         )?;
         inserted += 1;

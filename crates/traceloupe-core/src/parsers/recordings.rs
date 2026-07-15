@@ -198,7 +198,12 @@ fn read_recording_rows(db: &Path) -> Result<HashMap<String, RecordingMeta>> {
     let cols = table_columns(&conn, table)?;
 
     let path = pick(&cols, &["ZPATH"]);
-    let title = pick(&cols, &["ZCUSTOMLABEL", "ZTITLE", "ZLABEL"]);
+    // Title: prefer ZENCRYPTEDTITLE — despite the name it is the plaintext display
+    // title stored locally (the location auto-name or a user rename), populated on
+    // every row. ZCUSTOMLABEL is only a raw timestamp auto-label, so fall back to it
+    // (and older ZTITLE/ZLABEL) only when a real title is absent. Empty strings are
+    // skipped so a blank title doesn't shadow a populated fallback.
+    let title = coalesce_nonempty(&cols, &["ZENCRYPTEDTITLE", "ZCUSTOMLABEL", "ZTITLE", "ZLABEL"]);
     let date = pick(&cols, &["ZDATE", "ZRECORDINGDATE", "ZCREATIONDATE"]);
     let duration = pick(&cols, &["ZDURATION"]);
     // ZPATH is required to join to audio; without it there's nothing to key on.
@@ -271,6 +276,23 @@ fn pick(cols: &HashSet<String>, candidates: &[&str]) -> Option<String> {
         .iter()
         .find(|c| cols.contains(**c))
         .map(|c| c.to_string())
+}
+
+/// Build a `COALESCE(NULLIF(col,''), …)` SQL expression over whichever candidate
+/// columns actually exist, so the first *present and non-empty* value wins — a
+/// column that exists but is NULL/empty on this schema can't shadow a populated
+/// fallback. Returns None if none of the candidates exist.
+fn coalesce_nonempty(cols: &HashSet<String>, candidates: &[&str]) -> Option<String> {
+    let present: Vec<String> = candidates
+        .iter()
+        .filter(|c| cols.contains(**c))
+        .map(|c| format!("NULLIF({c}, '')"))
+        .collect();
+    match present.len() {
+        0 => None,
+        1 => present.into_iter().next(),
+        _ => Some(format!("COALESCE({})", present.join(", "))),
+    }
 }
 
 #[cfg(test)]
