@@ -1010,6 +1010,13 @@ function MessageBubble({
               ))}
             </BubbleContent>
           </Bubble>
+          {message.isFromMe && (message.readAt || message.deliveredAt) && (
+            <span className="mt-0.5 text-[10px] text-muted-foreground">
+              {message.readAt
+                ? `Read ${formatMessageTime(message.readAt)}`
+                : "Delivered"}
+            </span>
+          )}
         </MessageContent>
       </MessageRow>
     </div>

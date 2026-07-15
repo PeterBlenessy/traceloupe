@@ -234,6 +234,9 @@ export interface Message {
   sender: string | null;
   body: string | null;
   sentAt: number | null;
+  /** iMessage receipts (Unix): when read / delivered, if known. */
+  readAt: number | null;
+  deliveredAt: number | null;
   attachments: Attachment[];
 }
 
@@ -747,6 +750,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: "+15551234567",
       body: "Hey, are you around this weekend?",
       sentAt: 1717840800,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
     {
@@ -755,6 +760,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: null,
       body: "Yeah! What did you have in mind?",
       sentAt: 1717840980,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
     {
@@ -763,6 +770,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: "+15551234567",
       body: "Thinking of hiking Mission Peak",
       sentAt: 1717841100,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
     {
@@ -771,6 +780,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: null,
       body: "I'm in. Saturday morning?",
       sentAt: 1717841220,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
     {
@@ -779,6 +790,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: "+15551234567",
       body: "Here's the itinerary",
       sentAt: 1717841340,
+      readAt: null,
+      deliveredAt: null,
       attachments: [
         {
           id: 2,
@@ -794,6 +807,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: null,
       body: "Here's the trailhead 📷",
       sentAt: 1717841460,
+      readAt: null,
+      deliveredAt: null,
       attachments: [
         {
           id: 1,
@@ -811,6 +826,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: null,
       body: "Landing at 6, boarding now",
       sentAt: 1717499000,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
     {
@@ -819,6 +836,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: "Mom",
       body: "Call me when you land ❤️",
       sentAt: 1717500000,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
   ],
@@ -829,6 +848,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: "★ hembokke",
       body: "have you seen this one 😂",
       sentAt: 1717599000,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
     {
@@ -837,6 +858,8 @@ const mockMessages: Record<number, Message[]> = {
       sender: null,
       body: "sent you a video 🎵",
       sentAt: 1717600000,
+      readAt: null,
+      deliveredAt: null,
       attachments: [],
     },
   ],
@@ -860,6 +883,8 @@ mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
   sender: i % 3 === 0 ? null : "Big Test Group",
   body: `Message number ${i + 1} in the big test thread`,
   sentAt: 1717000000 + i * 600,
+  readAt: null,
+  deliveredAt: null,
   attachments: [],
 }));
 mockMessages[4] = [
@@ -869,6 +894,8 @@ mockMessages[4] = [
     sender: "+15559876543",
     body: "Who's in for Saturday?",
     sentAt: 1717841600,
+    readAt: null,
+    deliveredAt: null,
     attachments: [],
   },
   {
@@ -877,6 +904,8 @@ mockMessages[4] = [
     sender: null,
     body: "I'm in!",
     sentAt: 1717841650,
+    readAt: null,
+    deliveredAt: null,
     attachments: [],
   },
   {
@@ -885,6 +914,8 @@ mockMessages[4] = [
     sender: "+15550001111",
     body: "See you at the trailhead!",
     sentAt: 1717841700,
+    readAt: null,
+    deliveredAt: null,
     attachments: [],
   },
 ];

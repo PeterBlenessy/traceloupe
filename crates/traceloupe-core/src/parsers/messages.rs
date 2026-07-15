@@ -197,7 +197,8 @@ pub fn parse_messages(
     // Messages in chat order (grouped), then time. Skip pure "action" items
     // (group renames, joins) which carry no text and no attachment.
     let mut mstmt = src.prepare(
-        "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID
+        "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
+                m.date_read, m.date_delivered
          FROM message m
          JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
@@ -216,6 +217,8 @@ pub fn parse_messages(
         let handle_id: i64 = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
         let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
         let msg_rowid: i64 = r.get(6)?;
+        let read_at = mac_to_unix(r.get::<_, Option<i64>>(7)?.unwrap_or(0));
+        let delivered_at = mac_to_unix(r.get::<_, Option<i64>>(8)?.unwrap_or(0));
 
         if current_chat != Some(chat_id) {
             let chat = chats.get(&chat_id);
@@ -269,8 +272,9 @@ pub fn parse_messages(
         let kind = crate::normalize::message_kind(text.as_deref(), has_media);
         tx.execute(
             "INSERT INTO messages
-                (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
+                 read_at, delivered_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 thread_id,
                 sender,
@@ -279,6 +283,8 @@ pub fn parse_messages(
                 sent_unix,
                 has_attachment as i64,
                 kind,
+                read_at,
+                delivered_at,
             ],
         )?;
         let message_id = tx.last_insert_rowid();
@@ -455,7 +461,7 @@ mod tests {
             "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
              CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
              CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
-             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER);
              CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
              INSERT INTO handle VALUES (1,'+15550001111'), (2,'+15550002222');
              -- A 1:1 chat with one peer, and a group chat with a name + two peers.
@@ -463,13 +469,14 @@ mod tests {
              INSERT INTO chat VALUES (20,'chat99','Hiking Crew','iMessage');
              INSERT INTO chat_handle_join VALUES (10,1),(20,1),(20,2);
              -- date is Apple-absolute nanoseconds; unix 1_700_000_000 = 721692800000000000.
-             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0);
-             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0);
-             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0);
+             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0,0,0);
+             -- outgoing, delivered + read (date_delivered / date_read set).
+             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0,721692900000000000,721692880000000000);
+             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0,0,0);
              -- an attachment-only message (NULL text) is kept.
-             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1);
+             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1,0,0);
              -- a pure action item (NULL text, no attachment) is skipped.
-             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0);
+             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0,0,0);
              INSERT INTO chat_message_join VALUES (10,100),(10,101),(20,200),(20,201),(20,202);",
         )
         .unwrap();
@@ -519,6 +526,17 @@ mod tests {
             .unwrap();
         assert_eq!(sent_at, 1_700_007_200); // 721700000000000000 ns → Unix
         assert_eq!(sender.as_deref(), Some("+15550002222"));
+
+        // Read/delivered receipts on the outgoing "hi back" message (ns → Unix).
+        let (read_at, delivered_at): (Option<i64>, Option<i64>) = c
+            .query_row(
+                "SELECT read_at, delivered_at FROM messages WHERE body = 'hi back'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(delivered_at, Some(1_700_000_080));
+        assert_eq!(read_at, Some(1_700_000_100));
 
         // Attachment-only message kept, flagged, outgoing.
         let (has_att, from_me): (i64, i64) = c

@@ -32,7 +32,7 @@ iMessage is unsurfaced.
 | Message text (`text`) | ✅ 133k | ✅ | Plaintext only |
 | Rich text (`attributedBody`) | ✅ 142k | ⬜ | **Not decoded** — messages whose text lives only here render blank; styling/mentions/inline-link text lost |
 | Timestamp (sent) | ✅ | ✅ | `date` |
-| Read / delivered receipts | ✅ 100k / 63k | ⬜ | `date_read`, `date_delivered`, `is_read/is_delivered/error` flags unused — no status shown |
+| Read / delivered receipts | ✅ 100k / 63k | ✅ | `date_read`/`date_delivered` → a "Read <time>" / "Delivered" line under sent bubbles (the `is_read/error` flags remain unused) |
 | Edited-message history | ✅ 897 edits | ⬜ | `date_edited` + `message_summary_info` blob (on 138k rows) never decoded |
 | Unsent / retracted | — 0 | — | Empty in this backup |
 | Direction + sender handle | ✅ | ✅ | `is_from_me`, `handle.id` (contact-resolved) |
