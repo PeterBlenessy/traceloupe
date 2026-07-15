@@ -5,10 +5,11 @@ description: >-
   iLEAPP fallback. Runs a disciplined process: scout the iLEAPP reference →
   design against known pitfalls → implement → validate against REAL data
   (diff vs iLEAPP + a public test-image fixture) → commit → subagent review →
-  fix → re-review → push → cut a version when substantial. Invoke as
+  fix → re-review → push → bump the minor version + tag. Picks the next app from
+  docs/app-support.md when none is named. Invoke as
   `/create-native-app-parser <app>` (e.g. `discord`). To work through many apps
   toward the top-50 list, wrap it with the built-in `/loop` (this skill does one
-  app; `/loop` handles the repetition).
+  app + a minor release; `/loop` handles the repetition).
 ---
 
 # Create a native app parser
@@ -31,7 +32,20 @@ reference, validate against real data (step 3) before trusting it.
 
 ## The loop
 
-### 0. Scout
+### 0a. Select the app
+- **If an app was named** (`/create-native-app-parser discord`), use it.
+- **If not** (e.g. running under `/loop`), pick the next one from
+  **`docs/app-support.md`** — the worklist and single source of truth for status.
+  Choose the highest-value app that is **not yet ✅ native** and has a **clean
+  groupable store** (an iLEAPP module + SQLite with a thread key + author column):
+  prefer higher tiers (Top 10 → 25 → 50) and clean SQLite over heavy-machinery
+  apps. **Skip** apps marked ⚪ (no recoverable local store) and defer ones needing
+  new machinery (cached-JSON/`Cache.db`, YapDatabase, Matrix-JSON) unless building
+  that machinery is the explicit task. If every remaining app needs machinery,
+  build the highest-leverage decoder as its own sub-skill instead.
+- Mark it in the tracker (status → in progress) so a resumed loop doesn't repeat it.
+
+### 0b. Scout
 - Read the app's iLEAPP module: `engine/iLEAPP/scripts/artifacts/<app>*.py`.
 - Confirm it has a **clean, groupable local store** (SQLite with a real
   conversation/thread key + a per-message author column). If messages live in
@@ -86,13 +100,19 @@ provenance reference §10, and the validation status).
 - Fix every real finding in the same pass (standing rule: fix bugs you find).
 - Re-review substantial fixes with a second subagent focused on the fix.
 
-### 6. Push; version when substantial
-- Push after review is clean.
-- When a batch of apps is substantial (~2+), cut a version: bump `package.json`,
-  workspace `Cargo.toml`, `Cargo.lock` (via `cargo check`), `tauri.conf.json`;
-  add a CHANGELOG entry + milestone-table row; update `docs/app-support.md`,
-  `docs/app-data-coverage.md`, and the `traceloupe-versioning` memory; tag
-  `vX.Y.Z`; push the tag.
+### 6. Push + bump the minor version (every turn)
+Once review is clean, close out the app **each turn** (not batched):
+- Update the docs: mark the app ✅ native in `docs/app-support.md`, add its
+  field-coverage row to `docs/app-data-coverage.md`.
+- **Bump the minor version** (`0.5.0 → 0.6.0 → …`): `package.json`, workspace
+  `Cargo.toml`, `src-tauri/tauri.conf.json`, and `Cargo.lock` (via `cargo check`).
+- Add a CHANGELOG entry + milestone-table row; update the `traceloupe-versioning`
+  memory.
+- Commit, `git tag -a vX.Y.0`, and `git push origin main && git push origin vX.Y.0`.
+
+(One native app = one user-visible feature = one minor release. If you'd rather
+batch several apps per release, that's the one line to change here — but the
+default is per-turn.)
 
 That completes one app. To continue app-by-app toward the top-50 list (see
 `docs/app-support.md`), run this skill under the built-in **`/loop`** — it handles

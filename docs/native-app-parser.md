@@ -8,9 +8,12 @@ schema facts, write fresh Rust — provenance: reference, architecture §10).
 
 ## Steps
 
-0. **Scout** the iLEAPP module (`engine/iLEAPP/scripts/artifacts/<app>*.py`).
-   Confirm a clean, groupable SQLite store (thread key + per-message author). Note
-   from its `sample_data` which public test image has the app.
+0. **Select + scout.** If no app is named (e.g. under `/loop`), pick the next one
+   from `docs/app-support.md` — highest-value app not yet ✅ native with a clean
+   groupable store; skip ⚪ (no local store) and defer machinery-heavy ones. Then
+   read the iLEAPP module (`engine/iLEAPP/scripts/artifacts/<app>*.py`); confirm a
+   thread key + per-message author; note from `sample_data` which public test
+   image has the app.
 1. **Pitfall-check** — design against the checklist below *before* writing.
 2. **Implement** a `parsers/apps/<app>.rs` module (`AppChatModule` + `locate` +
    `parse`), register it, reuse `col_string`/`col_i64`/`insert_app_conversation`;
@@ -21,7 +24,10 @@ schema facts, write fresh Rust — provenance: reference, architecture §10).
    fixture. Only then drop the "unvalidated" caveat.
 4. **Commit.**
 5. **Review** (subagent) → **fix** → **re-review** substantial fixes.
-6. **Push**; cut a version when a batch (~2+ apps) is substantial.
+6. **Push + bump the minor version each turn** — mark the app ✅ in
+   `docs/app-support.md`, bump `package.json`/`Cargo.toml`/`tauri.conf.json`/
+   `Cargo.lock`, add a CHANGELOG entry, tag `vX.Y.0`, push tag. One app = one
+   minor release. Then `/loop` moves to the next app.
 
 ## Known-pitfalls checklist
 
