@@ -858,6 +858,7 @@ async fn get_thread_message_window(
     thread_id: i64,
     offset: i64,
     limit: i64,
+    desc: bool,
 ) -> Result<Vec<Message>, String> {
     // Async + spawn_blocking: a synchronous command runs on the main thread and
     // would freeze the whole native UI. Only the requested window is read, so
@@ -865,7 +866,7 @@ async fn get_thread_message_window(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_message_window(&cache, thread_id, offset, limit).map_err(|e| e.to_string())
+        query::get_message_window(&cache, thread_id, offset, limit, desc).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -891,11 +892,12 @@ async fn get_timeline_window(
     offset: i64,
     limit: i64,
     service: Option<String>,
+    desc: bool,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_timeline_window(&cache, offset, limit, service.as_deref())
+        query::get_timeline_window(&cache, offset, limit, service.as_deref(), desc)
             .map_err(|e| e.to_string())
     })
     .await
@@ -925,6 +927,7 @@ async fn get_range_window(
     offset: i64,
     limit: i64,
     service: Option<String>,
+    desc: bool,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -935,6 +938,7 @@ async fn get_range_window(
             offset,
             limit,
             service.as_deref(),
+            desc,
         )
         .map_err(|e| e.to_string())
     })

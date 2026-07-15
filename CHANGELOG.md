@@ -23,6 +23,29 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.6.3]
+
+### Fixed
+
+- **Message views no longer stick while scrolling.** The lazy virtual list was
+  measuring not-yet-loaded placeholder rows as their true height, collapsing the
+  total size and then re-expanding each row as its window resolved — the jump
+  that made Timeline/Periods/conversation scrolling feel frozen. Unloaded rows
+  now reserve their estimated height and are never measured; only real content
+  is. Also disables the browser's own scroll-anchoring so it can't fight the
+  virtualizer.
+- **Timeline & Periods now show which conversation each message belongs to.**
+  Rows led with the sender only; the conversation is now the primary label
+  (making clear who a 1:1 was with / which group), with the sender shown as a
+  prefix on the snippet for your own and group messages.
+
+### Added
+
+- **Sort messages by time direction** (oldest-first ↔ newest-first) in the
+  Timeline, Periods, and conversation views — previously only the conversation
+  *list* could be sorted. Newest-first pins the newest message to the top;
+  oldest-first keeps the chat-like newest-at-bottom layout.
+
 ## [0.6.0] — 2026-07-15
 
 ### Added

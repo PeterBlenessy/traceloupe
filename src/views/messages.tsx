@@ -353,18 +353,26 @@ function Timeline({
     queryFn: () => client.countTimelineMessages(service),
     enabled: active === true,
   });
+  // Oldest-first by default (newest at the bottom); toggle flips to newest-first.
+  const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Timeline" count={total} />
+      <ViewHeader title="Timeline" count={total}>
+        <SortControl
+          fields={[{ value: "time", label: "Time" }]}
+          value={order}
+          onChange={setOrder}
+        />
+      </ViewHeader>
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
-        startAtBottom
-        resetKey={`timeline:${service ?? "all"}`}
+        startAtBottom={!order.desc}
+        resetKey={`timeline:${service ?? "all"}:${order.desc}`}
         estimateSize={72}
-        windowKey={(page) => ["timelineWindow", service, page]}
+        windowKey={(page) => ["timelineWindow", service, order.desc, page]}
         fetchWindow={(offset, limit) =>
-          client.getTimelineWindow(offset, limit, service)
+          client.getTimelineWindow(offset, limit, service, order.desc)
         }
         renderItem={(item, _i, prev) => (
           <TimelineRow
@@ -441,6 +449,8 @@ function Periods({
   // Anchor the buckets once so their bounds (and query keys) stay stable.
   const [now] = useState(() => Math.floor(Date.now() / 1000));
   const periods = useMemo(() => makePeriods(now), [now]);
+  // Oldest-first by default; toggling flips the stream and the bucket→row math.
+  const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
 
   const { data: total } = useQuery({
     queryKey: ["timelineCount", service],
@@ -456,16 +466,21 @@ function Periods({
       ),
   });
 
-  // The timeline is ascending (oldest first), so a period's starting row index is
-  // the number of messages older than it — the sum of all older buckets' counts.
-  // periods is newest-first, so "older" buckets are those later in the array.
+  // A period's starting row index is the number of messages that sort before it
+  // in the current order. `periods` is newest-first. Oldest-first stream: the
+  // rows before period i are the OLDER buckets (later in the array, j > i).
+  // Newest-first stream: the rows before it are the NEWER buckets (j < i).
   const startIndex = useMemo(() => {
     return periods.map((_, i) => {
       let s = 0;
-      for (let j = i + 1; j < periods.length; j++) s += counts?.[j] ?? 0;
+      if (order.desc) {
+        for (let j = 0; j < i; j++) s += counts?.[j] ?? 0;
+      } else {
+        for (let j = i + 1; j < periods.length; j++) s += counts?.[j] ?? 0;
+      }
       return s;
     });
-  }, [periods, counts]);
+  }, [periods, counts, order.desc]);
 
   const [topIndex, setTopIndex] = useState(0);
   const [jump, setJump] = useState<
@@ -514,17 +529,23 @@ function Periods({
       }
       detail={
         <div className="flex h-full flex-col">
-          <ViewHeader title="All messages" count={total} />
+          <ViewHeader title="All messages" count={total}>
+            <SortControl
+              fields={[{ value: "time", label: "Time" }]}
+              value={order}
+              onChange={setOrder}
+            />
+          </ViewHeader>
           <LazyVirtualList<TimelineMessage>
             count={total ?? 0}
-            startAtBottom
-            resetKey={`periods-timeline:${service ?? "all"}`}
+            startAtBottom={!order.desc}
+            resetKey={`periods-timeline:${service ?? "all"}:${order.desc}`}
             estimateSize={72}
             jumpTo={jump}
             onTopIndexChange={setTopIndex}
-            windowKey={(page) => ["timelineWindow", service, page]}
+            windowKey={(page) => ["timelineWindow", service, order.desc, page]}
             fetchWindow={(offset, limit) =>
-              client.getTimelineWindow(offset, limit, service)
+              client.getTimelineWindow(offset, limit, service, order.desc)
             }
             renderItem={(item, _i, prev) => (
               <TimelineRow
@@ -605,14 +626,19 @@ function TimelineRow({
   showAvatars: boolean;
 }) {
   const m = item.message;
-  // The person on this row: the sender for incoming, "You" for outgoing.
   const resolved = !m.isFromMe && m.sender ? resolve(m.sender) : null;
-  const who = m.isFromMe
+  // Who sent this row: the sender for incoming, "You" for outgoing.
+  const sender = m.isFromMe
     ? "You"
     : (showContactNames && resolved?.name) || m.sender || item.threadTitle;
-  // Show the conversation as context only when it differs from `who` (group
-  // chats, or your own outgoing messages).
-  const context = who !== item.threadTitle ? item.threadTitle : null;
+  // The conversation this message belongs to — shown as the row's primary label
+  // so the timeline makes clear WHICH chat (and, for 1:1s, who it was sent
+  // to/from), not just who typed it.
+  const conversation = item.threadTitle;
+  // Prefix the snippet with the sender only when it isn't already the
+  // conversation label — i.e. your own outgoing messages and group chats. In a
+  // 1:1 the sender equals the conversation, so the prefix would be redundant.
+  const senderPrefix = sender !== conversation ? sender : null;
   return (
     <div>
       {showDate && m.sentAt && (
@@ -629,17 +655,12 @@ function TimelineRow({
             {resolved?.hasImage && (
               <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
             )}
-            <AvatarFallback>{initials(who)}</AvatarFallback>
+            <AvatarFallback>{initials(conversation)}</AvatarFallback>
           </Avatar>
         )}
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex items-baseline gap-2">
-            <span className="truncate text-sm font-medium">{who}</span>
-            {context && (
-              <span className="truncate text-xs text-muted-foreground">
-                {context}
-              </span>
-            )}
+            <span className="truncate text-sm font-medium">{conversation}</span>
             {item.service && <ServiceBadge service={item.service} />}
             <span className="ml-auto shrink-0 text-xs text-muted-foreground">
               {formatMessageTime(m.sentAt)}
@@ -651,6 +672,9 @@ function TimelineRow({
               virtualizer re-measure and the list jump). Click opens the full
               thread. */}
           <div className="truncate text-sm text-foreground/90">
+            {senderPrefix && (
+              <span className="text-muted-foreground">{senderPrefix}: </span>
+            )}
             {m.body ? (
               m.body
             ) : m.attachments.length ? (
@@ -790,6 +814,9 @@ function Conversation({
 }) {
   const name = threadLabel(thread, resolve, showContactNames);
   const group = isGroup(thread);
+  // Message order: oldest-first by default (chat-like, newest at the bottom).
+  // Toggling to newest-first flips the query and pins the list to the top.
+  const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
   // For a group, list the members under the header.
   const members = group
     ? thread.participants
@@ -838,14 +865,19 @@ function Conversation({
             ) : null;
           })()
         )}
+        <SortControl
+          fields={[{ value: "time", label: "Time" }]}
+          value={order}
+          onChange={setOrder}
+        />
       </ViewHeader>
       <LazyVirtualList<Message>
         count={total ?? 0}
-        startAtBottom
-        resetKey={thread.id}
-        windowKey={(page) => ["messageWindow", thread.id, page]}
+        startAtBottom={!order.desc}
+        resetKey={`${thread.id}:${order.desc}`}
+        windowKey={(page) => ["messageWindow", thread.id, order.desc, page]}
         fetchWindow={(offset, limit) =>
-          client.getThreadMessageWindow(thread.id, offset, limit)
+          client.getThreadMessageWindow(thread.id, offset, limit, order.desc)
         }
         renderItem={(message, _i, prev) => {
           // In a group, label an incoming message with its sender — but only
