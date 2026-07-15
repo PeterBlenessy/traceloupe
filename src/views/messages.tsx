@@ -903,11 +903,20 @@ function openAttachmentFile(id: number) {
  * documents and everything else show an icon that opens the file on click.
  * Only materialized attachments (with extracted bytes) are interactive.
  */
+/** An image by MIME, or by filename extension when the MIME is missing (sms.db
+ *  often stores a NULL mime for image attachments — the backend transcodes them
+ *  to JPEG regardless, so we should still render them inline). */
+function isImageAttachment(mime: string, filename: string | null): boolean {
+  if (mime.startsWith("image/")) return true;
+  const f = (filename ?? "").toLowerCase();
+  return /\.(jpe?g|png|gif|heic|heif|webp|tiff?|bmp)$/.test(f);
+}
+
 function AttachmentView({ att }: { att: Attachment }) {
   const mime = att.mimeType ?? "";
   const available = !!att.localPath;
 
-  if (available && mime.startsWith("image/")) {
+  if (available && isImageAttachment(mime, att.filename)) {
     return (
       <button
         onClick={() => openAttachmentFile(att.id)}
@@ -945,7 +954,7 @@ function AttachmentView({ att }: { att: Attachment }) {
   }
 
   // Documents and unknowns: an icon + filename that opens the file on click.
-  const Icon = mime.startsWith("image/")
+  const Icon = isImageAttachment(mime, att.filename)
     ? ImageIcon
     : mime
       ? FileText
