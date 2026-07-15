@@ -16,7 +16,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.6.0` | **LinkedIn** native chat. |
 | `0.7.0` | **Native-first complete** — native TikTok contacts (the last iLEAPP-only artifact); default import fully native (~35s, no engine subprocess); `Photos.sqlite` metadata (people/date/GPS/favorite); native Safari bookmarks, reading list & tabs. |
 | `0.8.0` | **Native TikTok DMs + UI overhaul** — TikTok direct messages (validated) with a message content-kind filter, friendlier voice-memo titles, and message media in the gallery; a shared `PanelHeader`, badge filters, a UI density setting, and persisted per-view state. |
-| `0.9.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.9.0` | **Data-coverage pass** — a field-level audit against a real backup, then filling the high-value gaps: Calls FaceTime/location, Photos EXIF/hidden/subtypes, Contacts detail (birthday/note/addresses), Messages receipts/reactions/replies, Safari deleted-history. |
+| `0.10.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), the untapped stores (Health, Calendar, Device Info), then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -24,6 +25,51 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.9.0] — 2026-07-15
+
+A **data-coverage pass**: a field-level audit of the real backup (parser →
+cache → query → UI) followed by filling every high-value, tractable gap it
+found. Each item below is verified end-to-end. See
+[`docs/app-data-coverage.md`](docs/app-data-coverage.md) for the full inventory
+and the remaining (large-feature / password-blocked) gaps.
+
+### Added
+
+- **Calls: FaceTime audio vs video + call location.** `ZCALLTYPE` distinguishes
+  FaceTime Audio from Video (only video gets the video icon); `ZLOCATION`
+  (carrier/geo) shows in the call row.
+- **Photos: EXIF, dimensions, file size, video duration.** Camera make/model,
+  lens, and a compact "ISO · ƒ · shutter · mm" exposure summary in the lightbox,
+  plus pixel dimensions, original file size, and video length.
+- **Photos: hidden-album flag** — hidden assets are badged (eye-off), shown and
+  flagged rather than silently mixed in (forensic stance).
+- **Photos: screenshot / panorama subtype badges.**
+- **Contacts detail** — birthday, note, job title, department, nickname, middle
+  name, and structured postal addresses.
+- **Voice Memos folder** — recordings show their containing folder.
+- **Messages: read/delivered receipts** ("Read <time>" / "Delivered" under sent
+  bubbles), **tapbacks/reactions** (add/remove folded into a "❤️×2 👍" badge,
+  incl. custom emoji), and **inline replies** (a quoted preview above the reply).
+- **Safari: deleted-history tombstones** — cleared URLs surface in the History
+  list flagged deleted (trash icon + strikethrough).
+
+### Fixed
+
+- **Voice-memo titles** — read `ZENCRYPTEDTITLE` (plaintext locally, on every
+  row) so all memos show their real name, not just the ~276 with a composition
+  manifest.
+- **Notes creation dates** — COALESCE the suffixed Core Data date columns so a
+  present-but-NULL `ZCREATIONDATE1` no longer shadows the populated
+  `ZCREATIONDATE3` (was NULL on every note).
+- **`safari_bookmarks.rs`** items-after-test-module and a `manual_is_multiple_of`
+  lint (pre-existing, blocked `clippy -D warnings`).
+
+### Known
+
+- **Locked-note decryption is broken** and unfixed: the ciphertext is read from a
+  nonexistent column and the AES-key-unwrap step is missing. A correct fix needs
+  validation with a real note password.
 
 ## [0.8.0] — 2026-07-15
 
