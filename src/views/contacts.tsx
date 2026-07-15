@@ -6,6 +6,7 @@ import {
   Building2,
   Cake,
   Mail,
+  MapPin,
   MessageSquare,
   Phone,
   StickyNote,
@@ -293,6 +294,13 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
             <FieldGroup title="Email">
               {contact.emails.map((e, i) => (
                 <Field key={i} icon={Mail} label={e.label} value={e.value} href={`mailto:${e.value}`} />
+              ))}
+            </FieldGroup>
+          )}
+          {contact.addresses.length > 0 && (
+            <FieldGroup title="Address">
+              {contact.addresses.map((a, i) => (
+                <Field key={i} icon={MapPin} label={a.label} value={a.value} wrap />
               ))}
             </FieldGroup>
           )}

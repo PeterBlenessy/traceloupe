@@ -129,7 +129,7 @@ properties 3 & 4).
 | Job title / department | — 0 here | ✅ | parsed + shown ("Work" section); none populated here |
 | Phone numbers (+ labels) | ✅ 77 | ✅ | tel: links; also feeds message matching |
 | Emails (+ labels) | ✅ 11 | ✅ | mailto: |
-| Postal addresses | ✅ 6 | ⬜ | structured `ABMultiValueEntry` tables never queried |
+| Postal addresses | ✅ 6 | ✅ | `ABMultiValueEntry` (Street/City/State/ZIP/Country) → one-line address, shown with its label |
 | Social / IM handles | ✅ 1 | ⬜ | property 46 |
 | Related names (relationship graph) | ✅ 24 | ⬜ | Mother/Father/custom — fully dropped |
 | Birthday | ✅ 11 | ✅ | `Birthday` Core Data timestamp → shown in detail |

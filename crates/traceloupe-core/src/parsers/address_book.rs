@@ -43,10 +43,13 @@ pub struct ParsedContact {
     pub note: Option<String>,
     pub phones: Vec<LabeledValue>,
     pub emails: Vec<LabeledValue>,
+    /// Postal addresses, each formatted to one line with its (cleaned) label.
+    pub addresses: Vec<LabeledValue>,
 }
 
 const PROP_PHONE: i64 = 3;
 const PROP_EMAIL: i64 = 4;
+const PROP_ADDRESS: i64 = 5;
 /// Core Data epoch (2001-01-01) → Unix, for the `Birthday` timestamp column.
 const MAC_EPOCH: i64 = 978_307_200;
 
@@ -127,7 +130,104 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
             }
         }
     }
+
+    // Structured postal addresses (property 5) live in the entry tables, not the
+    // multivalue `value`; attach them by record_id.
+    let mut addrs = parse_addresses(&conn)?;
+    for c in &mut contacts {
+        if let Some(a) = addrs.remove(&c.id) {
+            c.addresses = a;
+        }
+    }
     Ok(contacts)
+}
+
+/// Postal addresses (property 5), formatted one-line, keyed by ABPerson ROWID.
+/// Each address's components live in `ABMultiValueEntry(parent_id, key, value)`
+/// with `key` → `ABMultiValueEntryKey` ("Street"/"City"/"State"/"ZIP"/"Country"…).
+/// Returns an empty map if the entry tables are absent (older schema).
+fn parse_addresses(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<i64, Vec<LabeledValue>>> {
+    use std::collections::{BTreeMap, HashMap};
+
+    let mut out: HashMap<i64, Vec<LabeledValue>> = HashMap::new();
+    let has_entries = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ABMultiValueEntry'",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_entries {
+        return Ok(out);
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT mv.record_id, mv.UID, lbl.value, k.value, e.value
+         FROM ABMultiValue mv
+         JOIN ABMultiValueEntry e ON e.parent_id = mv.UID
+         JOIN ABMultiValueEntryKey k ON e.key = k.ROWID
+         LEFT JOIN ABMultiValueLabel lbl ON mv.label = lbl.ROWID
+         WHERE mv.property = ?1
+         ORDER BY mv.record_id, mv.UID",
+    )?;
+    // Group each address's key/value pairs by its multivalue UID (ordered so the
+    // output is deterministic). label is carried on the multivalue row.
+    // (label, key→value) for one address.
+    type Group = (Option<String>, HashMap<String, String>);
+    let mut groups: BTreeMap<(i64, i64), Group> = BTreeMap::new();
+    let mut rows = stmt.query([PROP_ADDRESS])?;
+    while let Some(r) = rows.next()? {
+        let rec: i64 = r.get(0)?;
+        let uid: i64 = r.get(1)?;
+        let label: Option<String> = r.get(2)?;
+        let key: Option<String> = r.get(3)?;
+        let value: Option<String> = r.get(4)?;
+        let entry = groups.entry((rec, uid)).or_insert_with(|| (label, HashMap::new()));
+        if let (Some(k), Some(v)) = (key, value) {
+            if !v.trim().is_empty() {
+                entry.1.insert(k, v);
+            }
+        }
+    }
+    for ((rec, _uid), (label, fields)) in groups {
+        if let Some(value) = format_address(&fields) {
+            out.entry(rec).or_default().push(LabeledValue {
+                label: label.as_deref().map(clean_label),
+                value,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Format an address's components into one line: "Street, City, State ZIP, Country".
+fn format_address(fields: &std::collections::HashMap<String, String>) -> Option<String> {
+    let get = |k: &str| fields.get(k).map(|s| s.trim()).filter(|s| !s.is_empty());
+    // "City, State ZIP" — comma between city and state, space before the ZIP.
+    let mut locality = String::new();
+    if let Some(c) = get("City") {
+        locality.push_str(c);
+    }
+    if let Some(s) = get("State") {
+        if !locality.is_empty() {
+            locality.push_str(", ");
+        }
+        locality.push_str(s);
+    }
+    if let Some(z) = get("ZIP") {
+        if !locality.is_empty() {
+            locality.push(' ');
+        }
+        locality.push_str(z);
+    }
+    let locality = (!locality.is_empty()).then_some(locality);
+    let parts: Vec<&str> = [get("Street"), locality.as_deref(), get("Country")]
+        .into_iter()
+        .flatten()
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 struct Row {
@@ -208,8 +308,8 @@ pub fn insert_contacts(
         tx.execute(
             "INSERT INTO contacts
                 (first_name, last_name, organization, phones_json, emails_json, image,
-                 middle_name, nickname, job_title, department, birthday_at, note)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 middle_name, nickname, job_title, department, birthday_at, note, addresses_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 c.first_name,
                 c.last_name,
@@ -223,6 +323,7 @@ pub fn insert_contacts(
                 c.department,
                 c.birthday_at,
                 c.note,
+                serde_json::to_string(&c.addresses).unwrap_or_else(|_| "[]".into()),
             ],
         )?;
     }
@@ -258,14 +359,20 @@ mod tests {
                  Organization TEXT, Nickname TEXT, JobTitle TEXT, Department TEXT, Birthday TEXT, Note TEXT);
              CREATE TABLE ABMultiValueLabel (value TEXT);
              CREATE TABLE ABMultiValue (UID INTEGER PRIMARY KEY, record_id INTEGER, property INTEGER, label INTEGER, value TEXT);
+             CREATE TABLE ABMultiValueEntry (parent_id INTEGER, key INTEGER, value TEXT);
+             CREATE TABLE ABMultiValueEntryKey (ROWID INTEGER PRIMARY KEY, value TEXT);
              INSERT INTO ABMultiValueLabel (rowid, value) VALUES (1, '_$!<Mobile>!$_'), (2, '_$!<Home>!$_');
+             INSERT INTO ABMultiValueEntryKey (ROWID, value) VALUES (1,'Street'),(2,'City'),(3,'State'),(4,'ZIP'),(5,'Country');
              -- Birthday 700000000.0 Core Data = 700000000 + 978307200 = 1678307200 Unix.
              INSERT INTO ABPerson (ROWID, First, Last, JobTitle, Birthday, Note)
                  VALUES (1, 'Alex', 'Rivera', 'Engineer', '700000000.0', 'met at the conference');
              INSERT INTO ABPerson (ROWID, First, Last, Organization) VALUES (2, NULL, NULL, 'Bella Vista Pizza');
-             INSERT INTO ABMultiValue (record_id, property, label, value) VALUES (1, 3, 1, '+15551234567');
-             INSERT INTO ABMultiValue (record_id, property, label, value) VALUES (1, 4, 2, 'alex@example.com');
-             INSERT INTO ABMultiValue (record_id, property, label, value) VALUES (2, 3, 1, '+15550001111');",
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (10, 1, 3, 1, '+15551234567');
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (11, 1, 4, 2, 'alex@example.com');
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (12, 2, 3, 1, '+15550001111');
+             -- A Home address (property 5) for Alex, split across entry rows.
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (13, 1, 5, 2, NULL);
+             INSERT INTO ABMultiValueEntry (parent_id, key, value) VALUES (13,1,'1 Market St'),(13,2,'Springfield'),(13,3,'CA'),(13,4,'90001'),(13,5,'USA');",
         )
         .unwrap();
     }
@@ -292,6 +399,12 @@ mod tests {
         assert_eq!(alex.job_title.as_deref(), Some("Engineer"));
         assert_eq!(alex.note.as_deref(), Some("met at the conference"));
         assert_eq!(alex.birthday_at, Some(1_678_307_200)); // 700000000 + MAC_EPOCH
+        assert_eq!(alex.addresses.len(), 1);
+        assert_eq!(alex.addresses[0].label.as_deref(), Some("Home"));
+        assert_eq!(
+            alex.addresses[0].value,
+            "1 Market St, Springfield, CA 90001, USA"
+        );
 
         // Org-only contact with no name.
         let pizza = contacts.iter().find(|c| c.organization.is_some()).unwrap();

@@ -622,6 +622,7 @@ pub struct Contact {
     pub note: Option<String>,
     pub phones: Vec<crate::parsers::address_book::LabeledValue>,
     pub emails: Vec<crate::parsers::address_book::LabeledValue>,
+    pub addresses: Vec<crate::parsers::address_book::LabeledValue>,
     /// Whether a photo is stored for this contact (fetched via `contact_image`).
     pub has_image: bool,
     /// 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter.
@@ -634,7 +635,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let mut stmt = conn.prepare(
         "SELECT id, first_name, last_name, organization, phones_json, emails_json,
                 image IS NOT NULL, source,
-                middle_name, nickname, job_title, department, birthday_at, note
+                middle_name, nickname, job_title, department, birthday_at, note, addresses_json
          FROM contacts
          ORDER BY last_name IS NULL AND first_name IS NULL,
                   last_name COLLATE NOCASE, first_name COLLATE NOCASE, id",
@@ -642,6 +643,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let rows = stmt.query_map([], |r| {
         let phones: String = r.get(4)?;
         let emails: String = r.get(5)?;
+        let addresses: String = r.get(14)?;
         Ok(Contact {
             id: r.get(0)?,
             first_name: r.get(1)?,
@@ -649,6 +651,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
             organization: r.get(3)?,
             phones: serde_json::from_str(&phones).unwrap_or_default(),
             emails: serde_json::from_str(&emails).unwrap_or_default(),
+            addresses: serde_json::from_str(&addresses).unwrap_or_default(),
             has_image: r.get(6)?,
             source: r.get(7)?,
             middle_name: r.get(8)?,
