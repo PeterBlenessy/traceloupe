@@ -59,23 +59,33 @@ pub fn import_backup(
         committed: false,
     };
 
-    let lava_path = sidecar::run_import(
-        cfg,
-        backup_dir,
-        password,
-        work_dir,
-        module_ids,
-        cancel,
-        |p| on_phase(ImportPhase::Parsing(p)),
-    )?;
+    // Only run the (slow) iLEAPP subprocess if some requested module still needs
+    // it. First-party data and most app chats are native now, so a default import
+    // usually only needs iLEAPP for the residual app fallbacks (e.g. TikTok) — and
+    // when nothing does, we skip iLEAPP entirely and the import is fully native.
+    let needs_ileapp = !sidecar::resolve_module_keys(module_ids).is_empty();
+    let (lava_path, engine_out_dir) = if needs_ileapp {
+        let lava = sidecar::run_import(
+            cfg,
+            backup_dir,
+            password,
+            work_dir,
+            module_ids,
+            cancel,
+            |p| on_phase(ImportPhase::Parsing(p)),
+        )?;
+        let dir = lava
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| work_dir.to_path_buf());
+        (Some(lava), dir)
+    } else {
+        (None, work_dir.to_path_buf())
+    };
 
     on_phase(ImportPhase::Normalizing {
         step: "Reading results".into(),
     });
-    let engine_out_dir = lava_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| work_dir.to_path_buf());
 
     // All writes go to the temp cache; the real one keeps serving the UI.
     let cache = CacheDb::open(&import_cache_path)?;
@@ -190,21 +200,26 @@ pub fn import_backup(
     );
 
     // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
-    // stages materialized natively above are skipped.
-    let mut report = normalize::normalize_lava_with_progress(
-        &lava_path,
-        &engine_out_dir,
-        &cache,
-        normalize::NativeSkips {
-            messages: native_messages,
-            notes: native_notes,
-            calls: native_calls,
-            safari: native_safari,
-            contacts: native_contacts,
-            app_services: native_app_services,
-        },
-        |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
-    )?;
+    // stages materialized natively above are skipped. Skipped entirely when iLEAPP
+    // didn't run (fully-native import).
+    let mut report = if let Some(lava) = &lava_path {
+        normalize::normalize_lava_with_progress(
+            lava,
+            &engine_out_dir,
+            &cache,
+            normalize::NativeSkips {
+                messages: native_messages,
+                notes: native_notes,
+                calls: native_calls,
+                safari: native_safari,
+                contacts: native_contacts,
+                app_services: native_app_services,
+            },
+            |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
+        )?
+    } else {
+        ImportReport::default()
+    };
     report.threads += native.threads;
     report.messages += native.messages;
     report.notes += native.notes;
