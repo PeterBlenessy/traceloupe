@@ -40,6 +40,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
@@ -270,128 +271,153 @@ function SettingsMenu() {
           <Settings className="size-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] gap-5 overflow-y-auto rounded-2xl sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] gap-4 overflow-hidden rounded-2xl sm:max-w-2xl">
         <DialogHeader className="items-center">
           <DialogTitle className="text-center text-base">Settings</DialogTitle>
           <DialogDescription className="sr-only">
-            Display, data-import, and developer preferences.
+            Display, apps to import, and developer preferences.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-6">
-          <SettingsGroup title="Display">
-            <SettingsRow
-              label="Show contact names"
-              description="Display saved names instead of phone numbers."
-            >
-              <Switch
-                aria-label="Show contact names"
-                checked={showContactNames}
-                onCheckedChange={setShowContactNames}
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Show contact photos"
-              description="Show contact avatars where available."
-            >
-              <Switch
-                aria-label="Show contact photos"
-                checked={showAvatars}
-                onCheckedChange={setShowAvatars}
-              />
-            </SettingsRow>
-            <SettingsRow
-              label="Time format"
-              description="How clock times are shown."
-            >
-              <select
-                value={clockFormat}
-                onChange={(e) =>
-                  setClockFormatPref(e.target.value as ClockFormat)
-                }
-                aria-label="Time format"
-                className="rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="system">System</option>
-                <option value="24h">24-hour</option>
-                <option value="12h">12-hour</option>
-              </select>
-            </SettingsRow>
-          </SettingsGroup>
+        <Tabs defaultValue="general" className="gap-4">
+          <TabsList className="w-full">
+            <TabsTrigger value="general">General</TabsTrigger>
+            <TabsTrigger value="apps">Apps</TabsTrigger>
+            <TabsTrigger value="developer">Developer</TabsTrigger>
+          </TabsList>
 
-          {catalog && catalog.length > 0 && (
-            <SettingsGroup
-              title="Data to import"
-              description="Choose which data types to parse. Applies to the next import or re-import."
-            >
-              {catalog.map((m) => (
-                <SettingsRow
-                  key={m.id}
-                  label={m.label}
-                  description={m.category}
+          <TabsContent
+            value="general"
+            className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto"
+          >
+            <SettingsGroup title="Display">
+              <SettingsRow
+                label="Show contact names"
+                description="Display saved names instead of phone numbers."
+              >
+                <Switch
+                  aria-label="Show contact names"
+                  checked={showContactNames}
+                  onCheckedChange={setShowContactNames}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Show contact photos"
+                description="Show contact avatars where available."
+              >
+                <Switch
+                  aria-label="Show contact photos"
+                  checked={showAvatars}
+                  onCheckedChange={setShowAvatars}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Time format"
+                description="How clock times are shown."
+              >
+                <select
+                  value={clockFormat}
+                  onChange={(e) =>
+                    setClockFormatPref(e.target.value as ClockFormat)
+                  }
+                  aria-label="Time format"
+                  className="rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <Switch
-                    aria-label={m.label}
-                    checked={selected.includes(m.id)}
-                    onCheckedChange={(on) => toggleModule(m.id, on)}
-                  />
-                </SettingsRow>
-              ))}
+                  <option value="system">System</option>
+                  <option value="24h">24-hour</option>
+                  <option value="12h">12-hour</option>
+                </select>
+              </SettingsRow>
             </SettingsGroup>
-          )}
 
-          <SettingsGroup
-            title="Security"
-            description="Encrypted backups store their password in the macOS Keychain."
-          >
-            <SettingsRow
-              label="Require Touch ID"
-              description={
-                biometricAvailable
-                  ? "Ask for Touch ID before unlocking an encrypted backup's keys."
-                  : "Unavailable on an unsigned build — sign the app (docs/signing.md) to use Touch ID."
-              }
+            <SettingsGroup
+              title="Security"
+              description="Encrypted backups store their password in the macOS Keychain."
             >
-              <Switch
-                aria-label="Require Touch ID"
-                checked={biometricUnlock}
-                disabled={!biometricAvailable}
-                onCheckedChange={setBiometricUnlock}
-              />
-            </SettingsRow>
-          </SettingsGroup>
-
-          <SettingsGroup
-            title="Developer"
-            description="Backend logs print to the browser dev-tools console."
-          >
-            <SettingsRow
-              label="Log level"
-              description="Verbosity of import & backend logs."
-            >
-              <select
-                value={logLevel}
-                onChange={(e) => setLogLevel(e.target.value as LogLevel)}
-                aria-label="Log level"
-                className="rounded-md border bg-transparent px-2 py-1 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              <SettingsRow
+                label="Require Touch ID"
+                description={
+                  biometricAvailable
+                    ? "Ask for Touch ID before unlocking an encrypted backup's keys."
+                    : "Unavailable on an unsigned build — sign the app (docs/signing.md) to use Touch ID."
+                }
               >
-                {(
-                  [
-                    "off",
-                    "error",
-                    "warn",
-                    "info",
-                    "debug",
-                    "trace",
-                  ] as LogLevel[]
-                ).map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
+                <Switch
+                  aria-label="Require Touch ID"
+                  checked={biometricUnlock}
+                  disabled={!biometricAvailable}
+                  onCheckedChange={setBiometricUnlock}
+                />
+              </SettingsRow>
+            </SettingsGroup>
+          </TabsContent>
+
+          <TabsContent
+            value="apps"
+            className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto"
+          >
+            {catalog && catalog.length > 0 ? (
+              <SettingsGroup
+                title="Data to import"
+                description="Choose which data types to parse. Applies to the next import or re-import."
+              >
+                {catalog.map((m) => (
+                  <SettingsRow
+                    key={m.id}
+                    label={m.label}
+                    description={m.category}
+                  >
+                    <Switch
+                      aria-label={m.label}
+                      checked={selected.includes(m.id)}
+                      onCheckedChange={(on) => toggleModule(m.id, on)}
+                    />
+                  </SettingsRow>
                 ))}
-              </select>
-            </SettingsRow>
-          </SettingsGroup>
-        </div>
+              </SettingsGroup>
+            ) : (
+              <p className="px-1 py-6 text-sm text-muted-foreground">
+                No import catalog available.
+              </p>
+            )}
+          </TabsContent>
+
+          <TabsContent
+            value="developer"
+            className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto"
+          >
+            <SettingsGroup
+              title="Developer"
+              description="Backend logs print to the browser dev-tools console."
+            >
+              <SettingsRow
+                label="Log level"
+                description="Verbosity of import & backend logs."
+              >
+                <select
+                  value={logLevel}
+                  onChange={(e) => setLogLevel(e.target.value as LogLevel)}
+                  aria-label="Log level"
+                  className="rounded-md border bg-transparent px-2 py-1 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {(
+                    [
+                      "off",
+                      "error",
+                      "warn",
+                      "info",
+                      "debug",
+                      "trace",
+                    ] as LogLevel[]
+                  ).map((l) => (
+                    <option key={l} value={l}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </SettingsRow>
+            </SettingsGroup>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
