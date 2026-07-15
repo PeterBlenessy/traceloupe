@@ -175,7 +175,7 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Recently-deleted / trashed | ✅ 48 | ◑ | excluded from grid; not shown as a category |
 | Faces / people (named) | ✅ 69 named / 72k faces | ✅ | badge + lightbox + search (named only) |
 | Live Photo / burst | 381 / 53 | ⬜ | not paired/grouped |
-| Subtype (screenshot ~62k, HDR ~18k, portrait, pano, slo-mo) | ⬜ | ⬜ | no badge/filter |
+| Subtype — screenshot (~62k), panorama (384) | ✅ | ✅ | `ZISDETECTEDSCREENSHOT`/`ZKINDSUBTYPE` → grid badge (phone/frame icon). HDR/portrait/slo-mo codes left unclassified (ambiguous) |
 | Video duration | ✅ 7.1k | ✅ | `ZDURATION` → `media_items.duration_s` |
 | Description | ⬜ «redacted» | ⬜ | `ZASSETDESCRIPTION` unread |
 | Edited-vs-original / import session / cloud state | ⬜ 17k edited | ⬜ | provenance + edit state unread |
