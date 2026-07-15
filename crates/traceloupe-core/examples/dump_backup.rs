@@ -25,8 +25,19 @@ use traceloupe_core::Result;
 /// File extensions worth extracting for schema inspection (lower-cased). Covers
 /// SQLite in its many guises, Core Data, property lists, and app JSON/archives.
 const DATA_EXT: &[&str] = &[
-    "db", "sqlite", "sqlitedb", "sqlite3", "storedata", "realm", "plist", "json",
-    "archive", "strings", "yap", "data", "binarypb",
+    "db",
+    "sqlite",
+    "sqlitedb",
+    "sqlite3",
+    "storedata",
+    "realm",
+    "plist",
+    "json",
+    "archive",
+    "strings",
+    "yap",
+    "data",
+    "binarypb",
 ];
 
 fn is_data_file(relative_path: &str) -> bool {
@@ -42,9 +53,7 @@ fn is_data_file(relative_path: &str) -> bool {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        eprintln!(
-            "usage: TRACELOUPE_BACKUP_PASSWORD=… dump_backup <backup_dir> <dest_dir> [all]"
-        );
+        eprintln!("usage: TRACELOUPE_BACKUP_PASSWORD=… dump_backup <backup_dir> <dest_dir> [all]");
         std::process::exit(2);
     }
     let backup_dir = Path::new(&args[1]);
@@ -68,7 +77,11 @@ fn main() -> Result<()> {
     println!(
         "{} files in backup; extracting {}",
         entries.len(),
-        if include_all { "everything" } else { "data files only (db/plist/json/…)" },
+        if include_all {
+            "everything"
+        } else {
+            "data files only (db/plist/json/…)"
+        },
     );
 
     let mut ok = 0usize;

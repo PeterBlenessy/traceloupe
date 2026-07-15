@@ -24,7 +24,12 @@ LOG="$HOME/.traceloupe-dev/extract.log"
 udid="${1:-}"
 mode="${2:-data}"
 if [[ -z "$udid" ]]; then
-  mapfile -t backups < <(find "$BACKUP_ROOT" -maxdepth 2 -name Manifest.db -print 2>/dev/null | xargs -n1 dirname 2>/dev/null)
+  # Collect backup dirs (those with a Manifest.db). Avoid `mapfile` — macOS ships
+  # bash 3.2, which doesn't have it.
+  backups=()
+  while IFS= read -r manifest; do
+    backups+=("$(dirname "$manifest")")
+  done < <(find "$BACKUP_ROOT" -maxdepth 2 -name Manifest.db 2>/dev/null)
   if [[ ${#backups[@]} -eq 0 ]]; then
     echo "No backup found under: $BACKUP_ROOT" >&2
     exit 1

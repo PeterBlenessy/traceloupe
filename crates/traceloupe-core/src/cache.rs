@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -104,6 +104,21 @@ CREATE TABLE IF NOT EXISTS safari_history (
     visit_count INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_safari_visited ON safari_history(visited_at DESC);
+
+-- Safari bookmarks, reading-list items, and open tabs (History lives above).
+-- `kind` selects which one, so the view can filter by type.
+CREATE TABLE IF NOT EXISTS safari_bookmarks (
+    id           INTEGER PRIMARY KEY,
+    kind         TEXT NOT NULL,      -- 'bookmark' | 'reading_list' | 'tab'
+    title        TEXT,
+    url          TEXT,
+    folder       TEXT,               -- containing folder / tab-group name
+    date_added   INTEGER,            -- unix seconds (reading list: DateAdded)
+    date_viewed  INTEGER,            -- reading list DateLastViewed
+    preview_text TEXT,               -- reading list preview snippet
+    position     INTEGER             -- source order_index, for stable sorting
+);
+CREATE INDEX IF NOT EXISTS idx_safari_bookmarks_kind ON safari_bookmarks(kind, position);
 
 CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY,
@@ -282,6 +297,22 @@ impl CacheDb {
             ensure_column(&conn, "notes", "encrypted_data", "BLOB")?;
             // v6: pinned notes.
             ensure_column(&conn, "notes", "pinned", "INTEGER NOT NULL DEFAULT 0")?;
+            // v7: Safari bookmarks / reading list / tabs (History is unchanged).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS safari_bookmarks (
+                    id           INTEGER PRIMARY KEY,
+                    kind         TEXT NOT NULL,
+                    title        TEXT,
+                    url          TEXT,
+                    folder       TEXT,
+                    date_added   INTEGER,
+                    date_viewed  INTEGER,
+                    preview_text TEXT,
+                    position     INTEGER
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_safari_bookmarks_kind
+                    ON safari_bookmarks(kind, position);",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

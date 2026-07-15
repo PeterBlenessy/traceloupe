@@ -19,3 +19,4 @@ pub mod messages;
 pub mod notes;
 pub mod recordings;
 pub mod safari;
+pub mod safari_bookmarks;

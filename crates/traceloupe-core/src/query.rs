@@ -846,6 +846,118 @@ pub fn get_safari_window(
         .map_err(Into::into)
 }
 
+/// A Safari bookmark, reading-list item, or open tab (kind selects which).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SafariBookmark {
+    pub id: i64,
+    pub kind: String,
+    pub title: Option<String>,
+    pub url: Option<String>,
+    pub folder: Option<String>,
+    pub date_added: Option<i64>,
+    pub date_viewed: Option<i64>,
+    pub preview_text: Option<String>,
+}
+
+fn row_to_bookmark(r: &rusqlite::Row<'_>) -> rusqlite::Result<SafariBookmark> {
+    Ok(SafariBookmark {
+        id: r.get(0)?,
+        kind: r.get(1)?,
+        title: r.get(2)?,
+        url: r.get(3)?,
+        folder: r.get(4)?,
+        date_added: r.get(5)?,
+        date_viewed: r.get(6)?,
+        preview_text: r.get(7)?,
+    })
+}
+
+/// Count of one Safari `kind` ('bookmark' | 'reading_list' | 'tab') matching
+/// `search` (url/title substring) within `range` (over `date_added`).
+pub fn count_safari_bookmarks(
+    cache: &CacheDb,
+    kind: &str,
+    search: Option<&str>,
+    range: TimeRange,
+) -> Result<i64> {
+    let search = search.map(escape_like);
+    let n = cache.conn().query_row(
+        "SELECT COUNT(*) FROM safari_bookmarks
+         WHERE kind = ?1
+           AND (?2 IS NULL OR url LIKE '%' || ?2 || '%' ESCAPE '\\'
+                          OR title LIKE '%' || ?2 || '%' ESCAPE '\\')
+           AND (?3 IS NULL OR date_added >= ?3)
+           AND (?4 IS NULL OR date_added < ?4)",
+        rusqlite::params![kind, search, range.lo, range.hi],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+/// Per-range counts of one Safari `kind` (respecting `search`) — the time chips.
+pub fn count_safari_bookmark_ranges(
+    cache: &CacheDb,
+    kind: &str,
+    search: Option<&str>,
+    ranges: &[TimeRange],
+) -> Result<Vec<i64>> {
+    let search = search.map(escape_like);
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM safari_bookmarks
+         WHERE kind = ?1
+           AND (?2 IS NULL OR url LIKE '%' || ?2 || '%' ESCAPE '\\'
+                          OR title LIKE '%' || ?2 || '%' ESCAPE '\\')
+           AND (?3 IS NULL OR date_added >= ?3)
+           AND (?4 IS NULL OR date_added < ?4)",
+    )?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        out.push(
+            stmt.query_row(rusqlite::params![kind, search, r.lo, r.hi], |row| {
+                row.get(0)
+            })?,
+        );
+    }
+    Ok(out)
+}
+
+/// A window of one Safari `kind`, matching `search` within `range`, ordered by
+/// `sort` (an allowlisted column from the command layer).
+pub fn get_safari_bookmarks_window(
+    cache: &CacheDb,
+    kind: &str,
+    search: Option<&str>,
+    range: TimeRange,
+    offset: i64,
+    limit: i64,
+    sort: Sort,
+) -> Result<Vec<SafariBookmark>> {
+    let conn = cache.conn();
+    let search = search.map(escape_like);
+    let (dir, nulls) = sort.order_sql();
+    let sql = format!(
+        "SELECT id, kind, title, url, folder, date_added, date_viewed, preview_text
+         FROM safari_bookmarks
+         WHERE kind = ?1
+           AND (?2 IS NULL OR url LIKE '%' || ?2 || '%' ESCAPE '\\'
+                          OR title LIKE '%' || ?2 || '%' ESCAPE '\\')
+           AND (?5 IS NULL OR date_added >= ?5)
+           AND (?6 IS NULL OR date_added < ?6)
+         ORDER BY {} {dir} {nulls}, id {dir}
+         LIMIT ?3 OFFSET ?4",
+        sort.column(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params![kind, search, limit, offset, range.lo, range.hi],
+        row_to_bookmark,
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// Distinct media sources present, with a count each, for the gallery filter.
 /// Ordered by count descending (biggest sources first).
 pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {

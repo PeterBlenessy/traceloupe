@@ -169,6 +169,20 @@ pub fn import_backup(
             &mut native,
         )
     };
+    // Safari bookmarks / reading list / open tabs (native-only; no iLEAPP path).
+    if effective.contains(&"safari") {
+        on_phase(ImportPhase::Normalizing {
+            step: "Safari bookmarks".into(),
+        });
+        import_safari_bookmarks_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+            false,
+        );
+    }
 
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
@@ -644,6 +658,65 @@ fn import_safari_native(
     ok
 }
 
+/// Extract + parse Safari `Bookmarks.db` (bookmarks + reading list) and
+/// `SafariTabs.db` (open tabs) into the cache. Native-only — iLEAPP doesn't feed
+/// these — so it just does nothing (bar a warning) when a file is absent or
+/// unreadable, rather than falling back.
+fn import_safari_bookmarks_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+    replace: bool,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Safari bookmarks unavailable ({e})."));
+            return;
+        }
+    };
+    // (relativePath, temp filename, which store) — parsed in turn.
+    let stores = [
+        ("Library/Safari/Bookmarks.db", ".Bookmarks.db", "bookmarks"),
+        ("Library/Safari/SafariTabs.db", ".SafariTabs.db", "tabs"),
+    ];
+    for (rel, tmp, which) in stores {
+        let entry = match index.find("HomeDomain", rel) {
+            Ok(Some(e)) => e,
+            Ok(None) => continue, // not in this backup
+            Err(e) => {
+                report.warnings.push(format!(
+                    "Native Safari {which}: Manifest read failed ({e})."
+                ));
+                continue;
+            }
+        };
+        let out = work_dir.join(tmp);
+        if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+            let _ = std::fs::remove_file(&out);
+            report
+                .warnings
+                .push(format!("Native Safari {which}: extract failed ({e})."));
+            continue;
+        }
+        let res = if which == "bookmarks" {
+            crate::parsers::safari_bookmarks::parse_safari_bookmarks(&out, cache, report, replace)
+        } else {
+            crate::parsers::safari_bookmarks::parse_safari_tabs(&out, cache, report, replace)
+        };
+        if let Err(e) = res {
+            report
+                .warnings
+                .push(format!("Native Safari {which}: parse failed ({e})."));
+        }
+        let _ = std::fs::remove_file(&out);
+    }
+}
+
 /// Self-extract + parse Contacts from `AddressBook.sqlitedb` (photos from the
 /// sibling `AddressBookImages.sqlitedb`). Returns true when Contacts were handled
 /// natively (so the iLEAPP contacts stage is skipped). The address-book insert
@@ -985,6 +1058,15 @@ pub fn reimport_module(
             let r = crate::parsers::safari::parse_safari(&out, &cache, &mut report, true);
             let _ = std::fs::remove_file(&out);
             r?;
+            // Refresh bookmarks / reading list / tabs alongside history.
+            import_safari_bookmarks_native(
+                backup_dir,
+                decryptor,
+                &cache,
+                work_dir,
+                &mut report,
+                true,
+            );
         }
         other => {
             return Err(crate::Error::Parse(format!(
