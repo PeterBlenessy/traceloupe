@@ -32,8 +32,17 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ### Added
 
-- **Back button** in a conversation opened from the Timeline or Periods view,
-  returning you to that overview.
+- **Back button** in a conversation opened from the Timeline view, returning you
+  to that overview.
+- **Timeline time filters.** Merged the separate Periods view into Timeline: the
+  toolbar now carries quick-filter chips (All · 24h · 7d · 30d · year, each with
+  its message count) plus a custom from–to date range, left-aligned beside the
+  sort control. Selecting a chip or range filters the stream (rather than the old
+  jump-to-bucket behaviour).
+
+### Removed
+
+- The standalone **Periods** view (folded into Timeline's filters, above).
 
 ## [0.6.3]
 
