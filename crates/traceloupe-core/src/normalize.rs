@@ -26,6 +26,8 @@ pub struct ImportReport {
     pub media_items: usize,
     pub calls: usize,
     pub safari_visits: usize,
+    /// Safari bookmarks + reading-list items + open tabs.
+    pub safari_bookmarks: usize,
     pub contacts: usize,
     pub notes: usize,
     pub recordings: usize,

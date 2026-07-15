@@ -21,6 +21,10 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.7.0]
+
 ### Changed
 
 - **Timeline rows redesigned** to a single flat line — avatar · direction · message ·
@@ -36,6 +40,12 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ### Added
 
+- **Native Safari bookmarks, reading list, and open tabs.** New parsers read
+  `Bookmarks.db` (bookmarks + reading-list items, with their added/viewed dates
+  and preview text) and `SafariTabs.db` (open tabs, grouped by tab group). The
+  Safari view gains a **type filter** on the title row — History · Bookmarks ·
+  Reading List · Tabs — with the same search + time filter + sort across all of
+  them.
 - **Back button** in a conversation opened from the Timeline view, returning you
   to that overview.
 - **Timeline time filters.** Merged the separate Periods view into Timeline: the

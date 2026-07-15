@@ -10,7 +10,7 @@ Companion to `../CHANGELOG.md` (milestones) and
 coverage within each app — everything in its DB and what we surface — see
 [`app-data-coverage.md`](app-data-coverage.md).
 
-**Last updated:** 2026-07-15 · current release **0.6.2**
+**Last updated:** 2026-07-15 · current release **0.7.0**
 
 ## Status legend
 
@@ -35,6 +35,8 @@ coverage within each app — everything in its DB and what we surface — see
 | Camera roll (photos/videos) | `Photos.sqlite` / DCIM | ✅ Native | 0.1.0 |
 | Call history | `CallHistory.storedata` | ✅ Native | 0.3.0 |
 | Safari history | `History.db` | ✅ Native | 0.3.0 |
+| Safari bookmarks / reading list | `Bookmarks.db` | ✅ Native | 0.7.0 |
+| Safari open tabs / tab groups | `SafariTabs.db` | ✅ Native | 0.7.0 |
 | Contacts | `AddressBook.sqlitedb` | ✅ Native | 0.3.0 |
 | Installed apps | `Info.plist` (Installed Applications) | ✅ Native | 0.1.0 |
 

@@ -92,6 +92,18 @@ export interface HistoryVisit {
   visitCount: number | null;
 }
 
+/** A Safari bookmark, reading-list item, or open tab (`kind` selects which). */
+export interface SafariBookmark {
+  id: number;
+  kind: "bookmark" | "reading_list" | "tab";
+  title: string | null;
+  url: string | null;
+  folder: string | null;
+  dateAdded: number | null;
+  dateViewed: number | null;
+  previewText: string | null;
+}
+
 export interface Note {
   id: number;
   folder: string | null;
@@ -362,6 +374,28 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<HistoryVisit[]>;
+  /** Count of one Safari `kind` (bookmark/reading_list/tab) matching search+range. */
+  countSafariBookmarks(
+    kind: string,
+    search: string | null,
+    lo?: number | null,
+    hi?: number | null,
+  ): Promise<number>;
+  countSafariBookmarkRanges(
+    kind: string,
+    search: string | null,
+    ranges: TimeRange[],
+  ): Promise<number[]>;
+  getSafariBookmarksWindow(
+    kind: string,
+    search: string | null,
+    lo: number | null,
+    hi: number | null,
+    offset: number,
+    limit: number,
+    sortBy: string,
+    desc: boolean,
+  ): Promise<SafariBookmark[]>;
   /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
   mediaUrl(id: number, opts?: { thumb?: boolean }): string;
   /** URL the webview can load for a contact's photo. */
@@ -477,6 +511,21 @@ const tauriClient: TraceLoupeClient = {
     invoke<number[]>("count_safari_ranges", { search, ranges }),
   getSafariWindow: (search, lo, hi, offset, limit, sortBy, desc) =>
     invoke<HistoryVisit[]>("get_safari_window", {
+      search,
+      lo,
+      hi,
+      offset,
+      limit,
+      sortBy,
+      desc,
+    }),
+  countSafariBookmarks: (kind, search, lo = null, hi = null) =>
+    invoke<number>("count_safari_bookmarks", { kind, search, lo, hi }),
+  countSafariBookmarkRanges: (kind, search, ranges) =>
+    invoke<number[]>("count_safari_bookmark_ranges", { kind, search, ranges }),
+  getSafariBookmarksWindow: (kind, search, lo, hi, offset, limit, sortBy, desc) =>
+    invoke<SafariBookmark[]>("get_safari_bookmarks_window", {
+      kind,
       search,
       lo,
       hi,
@@ -794,6 +843,59 @@ const mockSafari: HistoryVisit[] = [
   },
 ];
 
+const mockSafariBookmarks: SafariBookmark[] = [
+  {
+    id: 1,
+    kind: "bookmark",
+    title: "Apple",
+    url: "https://www.apple.com/",
+    folder: null,
+    dateAdded: 1700000000,
+    dateViewed: null,
+    previewText: null,
+  },
+  {
+    id: 2,
+    kind: "bookmark",
+    title: "Hacker News",
+    url: "https://news.ycombinator.com/",
+    folder: "Tech",
+    dateAdded: 1699000000,
+    dateViewed: null,
+    previewText: null,
+  },
+  {
+    id: 3,
+    kind: "reading_list",
+    title: "A long read",
+    url: "https://example.com/article",
+    folder: null,
+    dateAdded: 1712000000,
+    dateViewed: 1712500000,
+    previewText: "An interesting article saved for later.",
+  },
+  {
+    id: 4,
+    kind: "tab",
+    title: "Wikipedia",
+    url: "https://en.wikipedia.org/",
+    folder: "Local",
+    dateAdded: 1717000000,
+    dateViewed: null,
+    previewText: null,
+  },
+  {
+    id: 5,
+    kind: "tab",
+    title: "Shopping cart",
+    url: "https://shop.example.com/cart",
+    folder: "shopping",
+    dateAdded: 1717500000,
+    dateViewed: null,
+    previewText: null,
+  },
+];
+
 // Mock note timestamps are relative to "now" so the recency groupings (Last 7
 // Days, Last 30 Days, …) are demonstrable in the browser preview.
 const DAY = 86_400;
@@ -1050,6 +1152,25 @@ function mockFilterSafari(
   }
   return out;
 }
+function mockFilterBookmarks(
+  kind: string,
+  search: string | null,
+  range?: TimeRange,
+): SafariBookmark[] {
+  let out = mockSafariBookmarks.filter((b) => b.kind === kind);
+  if (search) {
+    const q = search.toLowerCase();
+    out = out.filter(
+      (b) =>
+        (b.url?.toLowerCase().includes(q) ?? false) ||
+        (b.title?.toLowerCase().includes(q) ?? false),
+    );
+  }
+  if (range && (range.lo != null || range.hi != null)) {
+    out = out.filter((b) => inRange(b.dateAdded ?? null, range));
+  }
+  return out;
+}
 
 /** Mirror the backend's sort for the in-browser mock: nulls last regardless of
  *  direction, so sorted mock lists match the real app. */
@@ -1288,6 +1409,29 @@ export const mockClient: TraceLoupeClient = {
       ? mockSortBy(
           mockFilterSafari(search, { lo, hi }),
           safariKey(sortBy),
+          desc,
+        ).slice(offset, offset + limit)
+      : [],
+  countSafariBookmarks: async (kind, search, lo = null, hi = null) =>
+    mockActive ? mockFilterBookmarks(kind, search, { lo, hi }).length : 0,
+  countSafariBookmarkRanges: async (kind, search, ranges) =>
+    ranges.map((r) =>
+      mockActive ? mockFilterBookmarks(kind, search, r).length : 0,
+    ),
+  getSafariBookmarksWindow: async (
+    kind,
+    search,
+    lo,
+    hi,
+    offset,
+    limit,
+    sortBy,
+    desc,
+  ) =>
+    mockActive
+      ? mockSortBy(
+          mockFilterBookmarks(kind, search, { lo, hi }),
+          (b) => (sortBy === "title" ? (b.title ?? "") : b.dateAdded),
           desc,
         ).slice(offset, offset + limit)
       : [],
