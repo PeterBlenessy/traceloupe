@@ -956,7 +956,7 @@ async fn open_attachment(
     // main thread (it would freeze the UI); do it on a blocking worker.
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&active_path).map_err(|e| e.to_string())?;
-        let (local_path, _mime, decrypt_key, plain_size) =
+        let (local_path, _filename, _mime, decrypt_key, plain_size) =
             query::attachment_blob(&cache, attachment_id)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "attachment file is not available".to_string())?;
@@ -1453,7 +1453,8 @@ fn attachment_protocol_response(
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime, decrypt_key, plain_size))) = query::attachment_blob(&cache, id)
+    let Ok(Some((local_path, filename, mime, decrypt_key, plain_size))) =
+        query::attachment_blob(&cache, id)
     else {
         return not_found();
     };
@@ -1488,11 +1489,12 @@ fn attachment_protocol_response(
         (PathBuf::from(&local_path), None)
     };
 
+    // Detect an image by MIME, else by the ORIGINAL filename's extension — an
+    // encrypted backup's on-disk source is a `.decrypted` temp with no meaningful
+    // extension, and sms.db often stores a NULL mime for image attachments, so
+    // MIME-only detection would serve them as octet-stream (won't render).
     let is_image = mime.as_deref().is_some_and(|m| m.starts_with("image/"))
-        || source_path
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with(".heic");
+        || media::has_image_extension(filename.as_deref());
 
     if is_image {
         let Some(rendered) = media::render(&source_path, &att_dir, id, want_thumb, mime.as_deref())

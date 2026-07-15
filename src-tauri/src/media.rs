@@ -37,6 +37,18 @@ pub fn safe_content_type(mime: Option<&str>) -> String {
     }
 }
 
+/// Whether `filename`'s extension is a raster image `sips` can transcode. Used to
+/// recognize an image attachment when its stored MIME is NULL (common for sms.db)
+/// or its on-disk path is an extension-less decrypted temp.
+pub fn has_image_extension(filename: Option<&str>) -> bool {
+    const IMAGE_EXTS: &[&str] = &[
+        ".jpg", ".jpeg", ".png", ".gif", ".heic", ".heif", ".webp", ".tiff", ".tif", ".bmp",
+    ];
+    filename
+        .map(|f| f.to_ascii_lowercase())
+        .is_some_and(|f| IMAGE_EXTS.iter().any(|ext| f.ends_with(ext)))
+}
+
 /// Content-Type for INLINE serving of a non-image attachment. Only audio/video are
 /// safe to hand to the webview inline; anything else (text/html, image/svg+xml,
 /// application/javascript, …) is forced to a download type so attacker-supplied
@@ -154,6 +166,16 @@ mod tests {
 
     fn jpeg_magic(bytes: &[u8]) -> bool {
         bytes.starts_with(&[0xFF, 0xD8, 0xFF])
+    }
+
+    #[test]
+    fn image_extension_detects_common_types() {
+        assert!(has_image_extension(Some("IMG_0001.HEIC")));
+        assert!(has_image_extension(Some("photo.jpg")));
+        assert!(has_image_extension(Some("a.png")));
+        assert!(!has_image_extension(Some("clip.mov")));
+        assert!(!has_image_extension(Some("doc.pdf")));
+        assert!(!has_image_extension(None));
     }
 
     #[test]

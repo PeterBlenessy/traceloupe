@@ -208,25 +208,35 @@ fn load_attachments(
     Ok(())
 }
 
-/// Path + mime + (encrypted-backup) decrypt fields for a message attachment.
-/// `decrypt_key`/`plain_size` are `None` when `local_path` is already plaintext
-/// (an iLEAPP-extracted file or an unencrypted backup). Used by the attachment
-/// protocol/opener; returns None when the file wasn't resolved during import.
-pub type AttachmentBlob = (String, Option<String>, Option<Vec<u8>>, Option<i64>);
+/// Path + filename + mime + (encrypted-backup) decrypt fields for a message
+/// attachment. `decrypt_key`/`plain_size` are `None` when `local_path` is already
+/// plaintext (an iLEAPP-extracted file or an unencrypted backup). The `filename`
+/// carries the original name (with its real extension) — needed to detect an
+/// image when `mime_type` is NULL, since an encrypted backup's on-disk path is a
+/// content-addressed / `.decrypted` temp with no meaningful extension. Returns
+/// None when the file wasn't resolved during import.
+pub type AttachmentBlob = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<i64>,
+);
 
 pub fn attachment_blob(cache: &CacheDb, attachment_id: i64) -> Result<Option<AttachmentBlob>> {
     let row = cache
         .conn()
         .query_row(
-            "SELECT local_path, mime_type, decrypt_key, plain_size FROM attachments
+            "SELECT local_path, filename, mime_type, decrypt_key, plain_size FROM attachments
              WHERE id = ?1 AND local_path IS NOT NULL",
             [attachment_id],
             |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<Vec<u8>>>(2)?,
-                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
                 ))
             },
         )
