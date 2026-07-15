@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -366,6 +366,8 @@ impl CacheDb {
                 "addresses_json",
                 "TEXT NOT NULL DEFAULT '[]'",
             )?;
+            // v16: camera-roll hidden-album flag (surfaced as a badge, not excluded).
+            ensure_column(&conn, "media_items", "hidden", "INTEGER NOT NULL DEFAULT 0")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

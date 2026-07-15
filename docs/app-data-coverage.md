@@ -171,7 +171,7 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Albums — user | ✅ 482 | ✅ | lightbox chip + search |
 | Albums — smart/system | ⬜ 235 | ⬜ | excluded (`ZKIND=2` only) |
 | Favorite | ✅ 17k | ✅ | heart badge + search |
-| Hidden | ⬜ 46k | ⬜ | **Not filtered and not flagged** — hidden assets appear in the grid indistinguishably |
+| Hidden | ✅ 46k | ✅ | `ZHIDDEN` → an eye-off badge on the grid tile + lightbox (shown, not excluded — forensic) |
 | Recently-deleted / trashed | ✅ 48 | ◑ | excluded from grid; not shown as a category |
 | Faces / people (named) | ✅ 69 named / 72k faces | ✅ | badge + lightbox + search (named only) |
 | Live Photo / burst | 381 / 53 | ⬜ | not paired/grouped |

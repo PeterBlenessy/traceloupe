@@ -32,6 +32,8 @@ struct AssetMeta {
     latitude: Option<f64>,
     longitude: Option<f64>,
     favorite: bool,
+    /// In the Hidden album (`ZASSET.ZHIDDEN`).
+    hidden: bool,
     persons: Option<String>,
     /// Moment place/event title (e.g. "Häljarp", "New Year's Day") — searchable.
     location: Option<String>,
@@ -149,7 +151,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         let mut stmt = src.prepare(
             "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
                     a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE,
-                    a.ZWIDTH, a.ZHEIGHT, a.ZDURATION
+                    a.ZWIDTH, a.ZHEIGHT, a.ZDURATION, a.ZHIDDEN
              FROM ZASSET a
              LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
              WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
@@ -182,6 +184,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
             let width = r.get::<_, Option<i64>>(8)?.filter(|v| *v > 0);
             let height = r.get::<_, Option<i64>>(9)?.filter(|v| *v > 0);
             let duration_s = r.get::<_, Option<f64>>(10)?.filter(|v| *v > 0.0);
+            let hidden = r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0;
             let suffix = format!("{dir}/{file}");
             pk_to_suffix.insert(pk, suffix.clone());
             by_suffix.insert(
@@ -191,6 +194,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                     latitude,
                     longitude,
                     favorite,
+                    hidden,
                     location,
                     width,
                     height,
@@ -346,8 +350,9 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                  file_size = ?11,
                  camera = ?12,
                  lens = ?13,
-                 exif = ?14
-             WHERE id = ?15",
+                 exif = ?14,
+                 hidden = ?15
+             WHERE id = ?16",
             rusqlite::params![
                 meta.persons,
                 meta.latitude,
@@ -363,6 +368,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 meta.camera,
                 meta.lens,
                 meta.exif,
+                meta.hidden as i64,
                 id
             ],
         )?;
@@ -381,7 +387,7 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZDIRECTORY TEXT, ZFILENAME TEXT,
                  ZDATECREATED REAL, ZLATITUDE REAL, ZLONGITUDE REAL, ZFAVORITE INTEGER, ZMOMENT INTEGER,
-                 ZWIDTH INTEGER, ZHEIGHT INTEGER, ZDURATION REAL);
+                 ZWIDTH INTEGER, ZHEIGHT INTEGER, ZDURATION REAL, ZHIDDEN INTEGER);
              CREATE TABLE ZPERSON (Z_PK INTEGER PRIMARY KEY, ZFULLNAME TEXT, ZDISPLAYNAME TEXT);
              CREATE TABLE ZDETECTEDFACE (Z_PK INTEGER PRIMARY KEY, ZASSETFORFACE INTEGER, ZPERSONFORFACE INTEGER);
              CREATE TABLE ZMOMENT (Z_PK INTEGER PRIMARY KEY, ZTITLE TEXT);
@@ -395,9 +401,9 @@ mod tests {
              INSERT INTO ZMOMENT VALUES (500, 'Florida');
              -- Asset 1: named people, a real date (721692800 Mac = 1_700_000_000 unix),
              -- a GPS fix, favorited, in the 'Florida' moment, 4032x3024 photo.
-             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0);
-             -- Asset 2: no named people, no location (-180 sentinel), not favorited, no moment.
-             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL);
+             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0, 0);
+             -- Asset 2: no named people, no location (-180 sentinel), not favorited, no moment, hidden.
+             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 1);
              -- EXIF + file size for asset 1 (make 'Apple' + model 'iPhone 14 Pro').
              INSERT INTO ZEXTENDEDATTRIBUTES VALUES (1, 1, 'Apple', 'iPhone 14 Pro', 'iPhone 14 Pro back camera', 100, 1.8, 0.008, 26.0);
              INSERT INTO ZADDITIONALASSETATTRIBUTES VALUES (1, 1, 2097152);
@@ -490,17 +496,18 @@ mod tests {
         // ISO 100 · ƒ/1.8 · 1/125s (0.008 = 1/125) · 26 mm.
         assert_eq!(exif.as_deref(), Some("ISO 100 · ƒ/1.8 · 1/125s · 26 mm"));
 
-        // Asset 2: no people, no location (sentinel dropped), not favorite.
-        let (persons2, lat2, fav2): (Option<String>, Option<f64>, i64) = conn
+        // Asset 2: no people, no location (sentinel dropped), not favorite, hidden.
+        let (persons2, lat2, fav2, hidden2): (Option<String>, Option<f64>, i64, i64) = conn
             .query_row(
-                "SELECT persons, latitude, is_favorite FROM media_items
+                "SELECT persons, latitude, is_favorite, hidden FROM media_items
                  WHERE relative_path LIKE '%IMG_0002%'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
         assert_eq!(persons2, None);
         assert_eq!(lat2, None);
         assert_eq!(fav2, 0);
+        assert_eq!(hidden2, 1, "asset 2 is in the Hidden album");
     }
 }

@@ -712,6 +712,8 @@ pub struct MediaItem {
     pub camera: Option<String>,
     pub lens: Option<String>,
     pub exif: Option<String>,
+    /// In the device's Hidden album (surfaced as a badge, not excluded).
+    pub hidden: bool,
 }
 
 /// Media items that have materialized bytes, newest first. Only items with a
@@ -721,7 +723,7 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
-                width, height, duration_s, file_size, camera, lens, exif
+                width, height, duration_s, file_size, camera, lens, exif, hidden
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -754,6 +756,7 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         camera: r.get(16)?,
         lens: r.get(17)?,
         exif: r.get(18)?,
+        hidden: r.get::<_, i64>(19)? != 0,
     })
 }
 
@@ -840,7 +843,7 @@ pub fn get_media_window(
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
-                width, height, duration_s, file_size, camera, lens, exif
+                width, height, duration_s, file_size, camera, lens, exif, hidden
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
