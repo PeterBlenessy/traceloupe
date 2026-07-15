@@ -10,7 +10,7 @@ Companion to `../CHANGELOG.md` (milestones) and
 coverage within each app — everything in its DB and what we surface — see
 [`app-data-coverage.md`](app-data-coverage.md).
 
-**Last updated:** 2026-07-14 · current release **0.2.0**
+**Last updated:** 2026-07-15 · current release **0.6.0**
 
 ## Status legend
 
@@ -114,7 +114,7 @@ decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifact
 | Discord | ⬜ Planned | TBD |
 | Reddit | ⬜ Planned | TBD |
 | Spotify | ⬜ Planned | TBD |
-| LinkedIn | ⬜ Planned | TBD |
+| LinkedIn | ✅ Native (unvalidated) — messages | 0.6.0 |
 | Pinterest | ⬜ Planned | TBD |
 | Threads | ⬜ Planned | TBD |
 | Viber | ✅ Native (unvalidated) — messages, groups | 0.5.0 |
