@@ -111,7 +111,9 @@ function FilterChip({
     >
       {label}
       {count !== undefined && (
-        <span className="tabular-nums opacity-70">{formatCount(count)}</span>
+        <span className="text-[10px] tabular-nums opacity-50">
+          {formatCount(count)}
+        </span>
       )}
     </button>
   );

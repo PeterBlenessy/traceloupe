@@ -84,6 +84,11 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
       }
       off();
       unlisten.current = null;
+      // The import made this backup active on the backend. Set that optimistically
+      // BEFORE invalidating: queries use staleTime: Infinity, so without this the
+      // navigated-to view could read a stale `hasActiveBackup: false`, show "No
+      // backup open", and bounce the user back to click Open again.
+      qc.setQueryData(["hasActiveBackup"], true);
       qc.invalidateQueries();
       const wasForeground = foreground.current;
       setActive(null);

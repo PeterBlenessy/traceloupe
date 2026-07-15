@@ -34,7 +34,7 @@ export function ViewHeader({
       {icon}
       <h1 className="text-base font-semibold">{title}</h1>
       {count !== undefined && (
-        <span className="text-sm tabular-nums text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground/60">
           {formatCount(count)}
         </span>
       )}

@@ -38,6 +38,10 @@ export function BackupPicker() {
     if (imported.has(b.id)) {
       try {
         await client.openBackup(b.id);
+        // Mark active optimistically before invalidating (queries are
+        // staleTime: Infinity), so the target view doesn't read a stale
+        // `hasActiveBackup: false` and bounce back to the picker.
+        qc.setQueryData(["hasActiveBackup"], true);
         // Drop any cached artifact data from a previously-open backup; with
         // staleTime: Infinity it would otherwise persist across backups.
         await qc.invalidateQueries();
