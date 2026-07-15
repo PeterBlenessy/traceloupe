@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -18,12 +19,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
-import { client, type Call } from "@/lib/ipc";
+import { client, type Call, type TimeRange } from "@/lib/ipc";
 
 export function CallsView() {
   const navigate = useNavigate();
@@ -33,13 +35,25 @@ export function CallsView() {
   });
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
-  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  const [sort, setSort] = usePersistedState<SortState>("calls:sort", { by: "date", desc: true });
+  // Time filter — same preset chips + custom range as Photos/Safari, over the call date.
+  const { now, presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   // Subscribe to the clock preference so rows re-render (with the new time
   // format) when it changes; folded into resetKey below.
   const { clockFormat } = useSettings();
   const { data: count, error } = useQuery({
-    queryKey: ["callsCount", search],
-    queryFn: () => client.countCalls(search),
+    queryKey: ["callsCount", search, range.lo, range.hi],
+    queryFn: () => client.countCalls(search, range.lo, range.hi),
+    enabled: active === true,
+  });
+  const { data: presetCounts } = useQuery({
+    queryKey: ["callRanges", now, search],
+    queryFn: () =>
+      client.countCallRanges(
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+        search,
+      ),
     enabled: active === true,
   });
   // Resolve each call's phone number to a saved contact, like Messages does.
@@ -58,13 +72,18 @@ export function CallsView() {
       title="Calls"
       count={active === true ? count : undefined}
       error={error}
-      resetKey={`${search ?? ""}:${clockFormat}:${sort.by}:${sort.desc}`}
+      resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching calls." : "No calls in this backup."}
-      header={
-        <div className="flex items-center gap-2">
-          <div className="w-56">
-            <ListSearch value={q} onChange={setQ} placeholder="Search calls" />
-          </div>
+      search={<ListSearch value={q} onChange={setQ} placeholder="Search calls" />}
+      toolbar={
+        <>
+          <TimeFilterBar
+            className="flex-1"
+            presets={presets}
+            value={range}
+            onChange={setRange}
+            counts={presetCounts}
+          />
           <SortControl
             fields={[
               { value: "date", label: "Date" },
@@ -74,11 +93,27 @@ export function CallsView() {
             value={sort}
             onChange={setSort}
           />
-        </div>
+        </>
       }
-      windowKey={(page) => ["callsWindow", search, sort.by, sort.desc, page]}
+      windowKey={(page) => [
+        "callsWindow",
+        search,
+        range.lo,
+        range.hi,
+        sort.by,
+        sort.desc,
+        page,
+      ]}
       fetchWindow={(offset, limit) =>
-        client.getCallsWindow(search, offset, limit, sort.by, sort.desc)
+        client.getCallsWindow(
+          search,
+          range.lo,
+          range.hi,
+          offset,
+          limit,
+          sort.by,
+          sort.desc,
+        )
       }
       renderItem={(c) => <CallRow call={c} contact={resolve(c.address)} />}
     />

@@ -165,21 +165,34 @@ function RunningView({
   onRunInBackground: () => void;
 }) {
   const parsing = progress?.phase === "parsing" ? progress : null;
-  const normalizing = progress?.phase === "normalizing" ? progress : null;
-  // During parsing show real fraction; during normalizing show a full-ish bar
-  // (no per-row fraction) with the live sub-step so it doesn't look stuck.
-  const pct = normalizing ? 100 : parsing ? Math.round(parsing.fraction * 100) : 3;
-  const label = normalizing
-    ? `Organizing ${normalizing.step.toLowerCase()}…`
+  const indexing = progress?.phase === "indexing" ? progress : null;
+  // Indexing fills the bar step-by-step (index/total); parsing (iLEAPP, if ever
+  // re-enabled) shows its own fraction. The bar restarts at 0% when indexing
+  // begins so it never sits pinned at 100%.
+  const pct = indexing
+    ? Math.round((indexing.index / indexing.total) * 100)
     : parsing
-      ? `Reading ${parsing.artifact} (${parsing.current}/${parsing.total})`
+      ? Math.round(parsing.fraction * 100)
+      : 3;
+  const label = indexing
+    ? `${indexing.step}…`
+    : parsing
+      ? `Reading ${parsing.artifact}`
       : "Opening the backup…";
+  // Step counter, kept in its own right-aligned column so it doesn't shift as the
+  // (variable-width) label on the left changes between steps.
+  const count = indexing
+    ? `${indexing.index}/${indexing.total}`
+    : parsing
+      ? `${parsing.current}/${parsing.total}`
+      : null;
 
   return (
     <div className="space-y-3 py-2">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="size-4 animate-spin" />
+        <Loader2 className="size-4 shrink-0 animate-spin" />
         <span className="truncate">{label}</span>
+        {count && <span className="ml-auto shrink-0 tabular-nums">{count}</span>}
       </div>
       <Progress value={pct} />
       <p className="text-xs text-muted-foreground">

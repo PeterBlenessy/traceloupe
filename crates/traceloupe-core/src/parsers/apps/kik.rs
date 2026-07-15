@@ -114,6 +114,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             sender_handle: None,
             sender_id: None,
             has_attachment,
+            kind: None,
         });
     }
     Ok(out)

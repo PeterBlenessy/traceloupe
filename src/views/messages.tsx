@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  ArrowDownWideNarrow,
   ArrowLeft,
   ArrowRight,
+  ArrowUpNarrowWide,
   FileText,
   ImageIcon,
   MessageSquare,
@@ -13,6 +15,7 @@ import {
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { BadgeFilter } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -39,10 +42,12 @@ import {
 import { useSettings } from "@/components/settings-provider";
 import { cn } from "@/lib/utils";
 import {
+  formatCount,
   formatDateHeader,
   formatListTime,
   formatMessageTime,
 } from "@/lib/format";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
 import { useDebounced } from "@/lib/use-debounced";
@@ -63,13 +68,74 @@ import {
 
 type Mode = "conversations" | "timeline";
 
+// Grouped content-filter buckets (order + labels for the pills). Kinds not present
+// in the current scope are hidden, so the pills only ever show what's available.
+const KIND_LABELS: Record<string, string> = {
+  text: "Text",
+  media: "Photos & Videos",
+  link: "Links",
+  shared: "Shared",
+  sticker: "Stickers",
+  system: "System",
+};
+const KIND_ORDER = ["text", "media", "link", "shared", "sticker", "system"];
+
+/** Clickable content-kind badges (same pill component as the Apps "Native"/"Coming
+ *  soon" tags). Shows only the kinds present in `available`, and hides itself unless
+ *  there are at least two to choose between. */
+function MessageKindFilter({
+  available,
+  value,
+  onChange,
+}: {
+  available: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const kinds = KIND_ORDER.filter((k) => available.includes(k));
+  if (kinds.length < 2) return null; // one (or no) kind → nothing to filter
+  return (
+    <BadgeFilter
+      value={kinds.includes(value) ? value : "all"}
+      onChange={onChange}
+      options={[
+        { value: "all", label: "All" },
+        ...kinds.map((k) => ({ value: k, label: KIND_LABELS[k] })),
+      ]}
+    />
+  );
+}
+
+/** A compact oldest/newest toggle — replaces the single-field "Time" sort picker. */
+function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={onToggle}
+      className="h-8 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
+      title={desc ? "Newest first — click for oldest" : "Oldest first — click for newest"}
+    >
+      {desc ? (
+        <ArrowDownWideNarrow className="size-4" />
+      ) : (
+        <ArrowUpNarrowWide className="size-4" />
+      )}
+      {desc ? "Newest" : "Oldest"}
+    </Button>
+  );
+}
+
 export function MessagesView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const [mode, setMode] = useState<Mode>("conversations");
+  const [mode, setMode] = usePersistedState<Mode>(
+    "messages:mode",
+    "conversations",
+  );
   // Which conversation is open in the master-detail view. Lifted here so that
   // clicking a row in the Timeline view can jump to its conversation.
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -90,25 +156,67 @@ export function MessagesView() {
 
   // Filter by source app (iMessage / SMS / TikTok / …), shared across all three
   // modes so it applies to both Conversations and Timeline.
-  const [serviceFilter, setServiceFilter] = useState<string>("all");
+  const [serviceFilter, setServiceFilter] = usePersistedState<string>(
+    "messages:service",
+    "all",
+  );
   const { data: threadsForServices } = useQuery({
     queryKey: ["threads"],
     queryFn: () => client.listThreads(),
     enabled: active === true,
   });
-  const services = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of threadsForServices ?? []) if (t.service) set.add(t.service);
-    return [...set].sort();
+  // Distinct services present + the total message count per service (for the
+  // filter chips, e.g. "SMS 200", "TikTok 30 000").
+  const { services, serviceCounts, totalCount } = useMemo(() => {
+    const counts = new Map<string, number>();
+    let total = 0;
+    for (const t of threadsForServices ?? []) {
+      total += t.messageCount;
+      if (t.service)
+        counts.set(t.service, (counts.get(t.service) ?? 0) + t.messageCount);
+    }
+    return {
+      services: [...counts.keys()].sort(),
+      serviceCounts: counts,
+      totalCount: total,
+    };
   }, [threadsForServices]);
-  const service = serviceFilter === "all" ? null : serviceFilter;
+  // A persisted service that isn't in this backup falls back to "all".
+  const service =
+    serviceFilter === "all" || !services.includes(serviceFilter)
+      ? null
+      : serviceFilter;
 
-  // Deep link from elsewhere (e.g. a contact's "Conversations"): ?thread=<id>.
-  const search = useSearch({ strict: false }) as { thread?: number };
+  // Content-kind filter (grouped buckets). The pill control lives in each view's
+  // toolbar; the selection is shared + persisted across Timeline and conversations.
+  const [contentKind, setContentKind] = usePersistedState<string>(
+    "messages:kind",
+    "all",
+  );
+
+  // Deep link from elsewhere (e.g. a contact's "Conversations"): ?thread=<id>,
+  // or ?service=<label> from the Apps view to preselect that app's chats.
+  const search = useSearch({ strict: false }) as {
+    thread?: number;
+    service?: string;
+  };
   useEffect(() => {
     if (search.thread != null) openThread(search.thread);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search.thread]);
+  // Apply a `?service=` deep-link ONCE per distinct value — not on every `services`
+  // refetch, which would otherwise snap the filter back after the user changed it.
+  const appliedServiceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      search.service &&
+      search.service !== appliedServiceRef.current &&
+      services.includes(search.service)
+    ) {
+      setServiceFilter(search.service);
+      appliedServiceRef.current = search.service;
+    }
+  }, [search.service, services, setServiceFilter]);
 
   if (active === false) {
     return (
@@ -136,27 +244,27 @@ export function MessagesView() {
           <ToggleGroupItem value="timeline">Timeline</ToggleGroupItem>
         </ToggleGroup>
         {services.length > 1 && (
-          <ToggleGroup
-            type="single"
-            size="sm"
-            variant="outline"
-            value={serviceFilter}
-            onValueChange={(v) => v && setServiceFilter(v)}
-            className="ml-auto flex-wrap justify-end"
-          >
-            <ToggleGroupItem value="all">All</ToggleGroupItem>
-            {services.map((s) => {
-              const slug = serviceSlug(s);
-              return (
-                <ToggleGroupItem key={s} value={s}>
-                  {hasBrandIcon(slug) && (
-                    <BrandIcon slug={slug} name={s} className="mr-1 size-3.5" />
-                  )}
-                  {s}
-                </ToggleGroupItem>
-              );
-            })}
-          </ToggleGroup>
+          <BadgeFilter
+            className="ml-auto"
+            // Display the clamped value so a stale persisted service (absent from
+            // this backup) highlights "All" rather than no pill at all.
+            value={service ?? "all"}
+            onChange={setServiceFilter}
+            options={[
+              { value: "all", label: "All", count: totalCount },
+              ...services.map((s) => {
+                const slug = serviceSlug(s);
+                return {
+                  value: s,
+                  label: s,
+                  count: serviceCounts.get(s) ?? 0,
+                  icon: hasBrandIcon(slug) ? (
+                    <BrandIcon slug={slug} name={s} className="size-3.5" />
+                  ) : undefined,
+                };
+              }),
+            ]}
+          />
         )}
       </div>
       <div className="min-h-0 flex-1">
@@ -165,6 +273,8 @@ export function MessagesView() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             service={service}
+            kindValue={contentKind}
+            onKindChange={setContentKind}
             onBack={openedFrom ? () => setMode(openedFrom) : undefined}
             backLabel="Timeline"
           />
@@ -172,6 +282,8 @@ export function MessagesView() {
           <Timeline
             onOpenThread={(id) => openThread(id, "timeline")}
             service={service}
+            kindValue={contentKind}
+            onKindChange={setContentKind}
           />
         )}
       </div>
@@ -184,12 +296,16 @@ function Conversations({
   selectedId,
   onSelect,
   service,
+  kindValue,
+  onKindChange,
   onBack,
   backLabel,
 }: {
   selectedId: number | null;
   onSelect: (id: number) => void;
   service: string | null;
+  kindValue: string;
+  onKindChange: (v: string) => void;
   onBack?: () => void;
   backLabel?: string;
 }) {
@@ -211,7 +327,10 @@ function Conversations({
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
 
-  const [sort, setSort] = useState<SortState>({ by: "recent", desc: true });
+  const [sort, setSort] = usePersistedState<SortState>("messages:sort", {
+    by: "recent",
+    desc: true,
+  });
 
   // The app filter lives in the shared header; here we just apply it, then sort.
   const visibleThreads = useMemo(() => {
@@ -240,9 +359,13 @@ function Conversations({
     <ListDetail
       master={
         <>
-          <ViewHeader title="Conversations" count={visibleThreads?.length} />
+          {/* No "Conversations" title here — the mode toggle above already says
+              it. Just the count + sort in one slim row. */}
           {(threads?.length ?? 0) > 0 && (
-            <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
+            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5">
+              <span className="text-xs tabular-nums text-muted-foreground/60">
+                {formatCount(visibleThreads?.length ?? 0)}
+              </span>
               <SortControl
                 fields={[
                   { value: "recent", label: "Recent" },
@@ -276,14 +399,16 @@ function Conversations({
               getKey={(t) => t.id}
               estimateSize={64}
               renderItem={(t) => (
-                <ThreadRow
-                  thread={t}
-                  resolve={resolve}
-                  showContactNames={showContactNames}
-                  showAvatars={showAvatars}
-                  active={selected?.id === t.id}
-                  onClick={() => onSelect(t.id)}
-                />
+                <div className="px-2 py-0.5">
+                  <ThreadRow
+                    thread={t}
+                    resolve={resolve}
+                    showContactNames={showContactNames}
+                    showAvatars={showAvatars}
+                    active={selected?.id === t.id}
+                    onClick={() => onSelect(t.id)}
+                  />
+                </div>
               )}
             />
           )}
@@ -295,6 +420,8 @@ function Conversations({
             thread={selected}
             resolve={resolve}
             showContactNames={showContactNames}
+            kindValue={kindValue}
+            onKindChange={onKindChange}
             onBack={onBack}
             backLabel={backLabel}
           />
@@ -361,9 +488,13 @@ function threadLabel(
 function Timeline({
   onOpenThread,
   service,
+  kindValue,
+  onKindChange,
 }: {
   onOpenThread: (threadId: number) => void;
   service: string | null;
+  kindValue: string;
+  onKindChange: (v: string) => void;
 }) {
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
@@ -371,6 +502,15 @@ function Timeline({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
+  // Content kinds present across the timeline (scoped to the service filter).
+  const { data: kindsData } = useQuery({
+    queryKey: ["messageKinds", null, service],
+    queryFn: () => client.messageKinds(null, service),
+    enabled: active === true,
+  });
+  const available = (kindsData ?? []).map(([k]) => k);
+  // A selection that isn't present in this scope filters nothing.
+  const kind = kindValue !== "all" && available.includes(kindValue) ? kindValue : null;
   // Anchor "now" once so preset bounds and query keys stay stable.
   const { now, presets } = useTimePresets();
   // Oldest-first by default (newest at the bottom); toggle flips to newest-first.
@@ -383,20 +523,21 @@ function Timeline({
 
   // Per-preset message counts for the chip labels (e.g. "7d · 812").
   const { data: presetCounts } = useQuery({
-    queryKey: ["messageRanges", now, service, search, "presets"],
+    queryKey: ["messageRanges", now, service, search, kind, "presets"],
     queryFn: () =>
       client.countMessageRanges(
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         service,
         search,
+        kind,
       ),
     enabled: active === true,
   });
   // Count for the active range — sizes the virtual scroller.
   const { data: total } = useQuery({
-    queryKey: ["timelineRangeCount", range.lo, range.hi, service, search],
+    queryKey: ["timelineRangeCount", range.lo, range.hi, service, search, kind],
     queryFn: async () =>
-      (await client.countMessageRanges([range], service, search))[0] ?? 0,
+      (await client.countMessageRanges([range], service, search, kind))[0] ?? 0,
     enabled: active === true,
   });
 
@@ -417,20 +558,25 @@ function Timeline({
           onChange={setRange}
           counts={presetCounts}
         />
-        <SortControl
-          fields={[{ value: "time", label: "Time" }]}
-          value={order}
-          onChange={setOrder}
+        <MessageKindFilter
+          available={available}
+          value={kindValue}
+          onChange={onKindChange}
+        />
+        <OrderToggle
+          desc={order.desc}
+          onToggle={() => setOrder({ by: "time", desc: !order.desc })}
         />
       </div>
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom={!order.desc}
-        resetKey={`timeline:${service ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
+        resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
         estimateSize={56}
         windowKey={(page) => [
           "timelineWindow",
           service,
+          kind,
           range.lo,
           range.hi,
           search,
@@ -446,6 +592,7 @@ function Timeline({
             service,
             search,
             order.desc,
+            kind,
           )
         }
         renderItem={(item, _i, prev) => (
@@ -491,7 +638,7 @@ function TimelineRow({
     (showContactNames && resolved?.name) || partnerHandle || item.threadTitle;
   const slug = item.service ? serviceSlug(item.service) : null;
   return (
-    <div>
+    <div className="px-2 py-0.5">
       {showDate && m.sentAt && (
         <div className="px-4 py-1.5 text-center text-xs font-medium text-muted-foreground">
           {formatDateHeader(m.sentAt)}
@@ -502,9 +649,10 @@ function TimelineRow({
           also tinted). The message wraps; the icon and time stay top-right. */}
       <button
         onClick={onOpen}
+        data-slot="list-row"
         className={cn(
-          "flex w-full items-center gap-2.5 px-4 py-2 text-left hover:bg-accent",
-          m.isFromMe && "bg-primary/5",
+          "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/50",
+          m.isFromMe && "bg-primary/5 hover:bg-primary/10",
         )}
       >
         {showAvatars && (
@@ -593,8 +741,9 @@ function ThreadRow({
   return (
     <Item
       asChild
+      size="sm"
       data-active={active}
-      className="rounded-none data-[active=true]:bg-accent"
+      className="rounded-md transition-colors hover:bg-accent/50 data-[active=true]:bg-accent data-[active=true]:hover:bg-accent"
     >
       <button onClick={onClick} className="w-full text-left">
         {showAvatars && (
@@ -674,12 +823,16 @@ function Conversation({
   thread,
   resolve,
   showContactNames,
+  kindValue,
+  onKindChange,
   onBack,
   backLabel,
 }: {
   thread: ThreadSummary;
   resolve: Resolver;
   showContactNames: boolean;
+  kindValue: string;
+  onKindChange: (v: string) => void;
   onBack?: () => void;
   backLabel?: string;
 }) {
@@ -688,6 +841,13 @@ function Conversation({
   // Message order: oldest-first by default (chat-like, newest at the bottom).
   // Toggling to newest-first flips the query and pins the list to the top.
   const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
+  // Content kinds present in THIS conversation (drives the pills below).
+  const { data: kindsData } = useQuery({
+    queryKey: ["messageKinds", thread.id, null],
+    queryFn: () => client.messageKinds(thread.id, null),
+  });
+  const available = (kindsData ?? []).map(([k]) => k);
+  const kind = kindValue !== "all" && available.includes(kindValue) ? kindValue : null;
   // For a group, list the members under the header.
   const members = group
     ? thread.participants
@@ -698,8 +858,8 @@ function Conversation({
   // A thread can hold tens of thousands of messages; the count sizes the virtual
   // scroller and LazyVirtualList fetches only the windows it renders.
   const { data: total } = useQuery({
-    queryKey: ["messageCount", thread.id],
-    queryFn: () => client.countThreadMessages(thread.id),
+    queryKey: ["messageCount", thread.id, kind],
+    queryFn: () => client.countThreadMessages(thread.id, kind),
   });
 
   const brandIcon = hasBrandIcon(serviceSlug(thread.service)) ? (
@@ -752,19 +912,23 @@ function Conversation({
             ) : null;
           })()
         )}
-        <SortControl
-          fields={[{ value: "time", label: "Time" }]}
-          value={order}
-          onChange={setOrder}
+        <MessageKindFilter
+          available={available}
+          value={kindValue}
+          onChange={onKindChange}
+        />
+        <OrderToggle
+          desc={order.desc}
+          onToggle={() => setOrder({ by: "time", desc: !order.desc })}
         />
       </ViewHeader>
       <LazyVirtualList<Message>
         count={total ?? 0}
         startAtBottom={!order.desc}
-        resetKey={`${thread.id}:${order.desc}`}
-        windowKey={(page) => ["messageWindow", thread.id, order.desc, page]}
+        resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}`}
+        windowKey={(page) => ["messageWindow", thread.id, kind, order.desc, page]}
         fetchWindow={(offset, limit) =>
-          client.getThreadMessageWindow(thread.id, offset, limit, order.desc)
+          client.getThreadMessageWindow(thread.id, offset, limit, order.desc, kind)
         }
         renderItem={(message, _i, prev) => {
           // In a group, label an incoming message with its sender — but only

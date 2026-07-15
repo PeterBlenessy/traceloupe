@@ -10,7 +10,12 @@ import {
   NotebookText,
   Phone,
   RefreshCw,
+  Rows2,
+  Rows3,
+  Rows4,
   Settings,
+  SlidersHorizontal,
+  Terminal,
   Users,
 } from "lucide-react";
 import {
@@ -35,14 +40,18 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogHeader,
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
-import { useSettings } from "@/components/settings-provider";
+import {
+  useSettings,
+  DENSITIES,
+  type Density,
+} from "@/components/settings-provider";
+import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
@@ -145,6 +154,7 @@ export function AppShell() {
               <SidebarTrigger />
               <div className="ml-auto flex items-center gap-1">
                 <ImportIndicator />
+                <DensityToggle />
                 <ModeToggle />
                 <SettingsMenu />
               </div>
@@ -214,8 +224,8 @@ function ImportIndicator() {
   if (!backgrounded || !active) return null;
   const p = active.progress;
   const detail =
-    p?.phase === "normalizing"
-      ? `Organizing ${p.step.toLowerCase()}…`
+    p?.phase === "indexing"
+      ? `${p.step}… (${p.index}/${p.total})`
       : p?.phase === "parsing"
         ? `Reading ${p.artifact}…`
         : "starting…";
@@ -230,6 +240,38 @@ function ImportIndicator() {
         Importing {active.backup.deviceName ?? active.backup.id} · {detail}
       </span>
     </button>
+  );
+}
+
+// A "rows" glyph per level (more rows = denser), à la Airtable/Notion's row-height
+// control — the recognizable idiom for density (unlike "A", which reads as text size).
+const DENSITY_META: Record<
+  Density,
+  { icon: typeof Rows2; label: string }
+> = {
+  comfortable: { icon: Rows2, label: "Comfortable" },
+  cozy: { icon: Rows3, label: "Cozy" },
+  compact: { icon: Rows4, label: "Compact" },
+};
+
+/** A single header button that cycles list density; the icon reflects the level. */
+function DensityToggle() {
+  const { density, setDensity } = useSettings();
+  const next = DENSITIES[(DENSITIES.indexOf(density) + 1) % DENSITIES.length];
+  const { icon: Icon, label } = DENSITY_META[density];
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="size-7"
+      onClick={() => setDensity(next)}
+      title={`Density: ${label} — click for ${DENSITY_META[next].label}`}
+    >
+      <Icon className="size-4" />
+      <span className="sr-only">
+        Density: {label}. Switch to {DENSITY_META[next].label}.
+      </span>
+    </Button>
   );
 }
 
@@ -249,7 +291,10 @@ function SettingsMenu() {
     biometricUnlock,
     setBiometricUnlock,
     biometricAvailable,
+    density,
+    setDensity,
   } = useSettings();
+  const { theme, setTheme } = useTheme();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
     queryFn: () => client.listImportModules(),
@@ -271,25 +316,66 @@ function SettingsMenu() {
           <Settings className="size-4" />
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] gap-4 overflow-hidden rounded-2xl sm:max-w-2xl">
-        <DialogHeader className="items-center">
-          <DialogTitle className="text-center text-base">Settings</DialogTitle>
-          <DialogDescription className="sr-only">
-            Display, apps to import, and developer preferences.
-          </DialogDescription>
-        </DialogHeader>
-        <Tabs defaultValue="general" className="gap-4">
-          <TabsList className="w-full">
-            <TabsTrigger value="general">General</TabsTrigger>
-            <TabsTrigger value="apps">Apps</TabsTrigger>
-            <TabsTrigger value="developer">Developer</TabsTrigger>
+      <DialogContent className="flex h-[75vh] gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-2xl">
+        <DialogTitle className="sr-only">Settings</DialogTitle>
+        <DialogDescription className="sr-only">
+          Display, apps to import, and developer preferences.
+        </DialogDescription>
+        {/* macOS System Settings-style two-pane layout: a full-height sidebar
+            (its own background, bleeding to the dialog's rounded edges) beside a
+            scrolling content pane. `contents` dissolves the Tabs wrapper so its
+            children become the dialog's flex items directly. */}
+        <Tabs defaultValue="general" orientation="vertical" className="contents">
+          <TabsList
+            variant="line"
+            className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-muted/30 !rounded-none !p-3"
+          >
+            <div className="mb-1.5 px-2 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+              TraceLoupe
+            </div>
+            {(
+              [
+                ["general", "General", SlidersHorizontal],
+                ["apps", "Apps", Boxes],
+                ["developer", "Developer", Terminal],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <TabsTrigger
+                key={value}
+                value={value}
+                // Sidebar row: icon + label, filled accent pill when active.
+                // `flex-none h-8` stops the trigger's base `flex-1` from stretching
+                // rows to fill the tall sidebar; `[&::after]:hidden` drops the line
+                // variant's edge bar.
+                className="h-8 flex-none justify-start gap-2.5 rounded-md px-2 text-[13px] hover:bg-muted [&::after]:hidden data-[state=active]:!bg-accent data-[state=active]:!text-accent-foreground data-[state=active]:font-medium data-[state=active]:shadow-sm"
+              >
+                <Icon className="size-4 shrink-0" />
+                <span className="flex-1 truncate text-left">{label}</span>
+              </TabsTrigger>
+            ))}
           </TabsList>
 
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto px-8 pt-8 pb-6">
           <TabsContent
             value="general"
-            className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto"
+            className="mt-0 flex flex-col gap-6"
           >
             <SettingsGroup title="Display">
+              <SettingsRow
+                label="Appearance"
+                description="Light, dark, or follow the system."
+              >
+                <select
+                  value={theme}
+                  onChange={(e) => setTheme(e.target.value as Theme)}
+                  aria-label="Appearance"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="system">System</option>
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </SettingsRow>
               <SettingsRow
                 label="Show contact names"
                 description="Display saved names instead of phone numbers."
@@ -320,11 +406,26 @@ function SettingsMenu() {
                     setClockFormatPref(e.target.value as ClockFormat)
                   }
                   aria-label="Time format"
-                  className="rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="system">System</option>
                   <option value="24h">24-hour</option>
                   <option value="12h">12-hour</option>
+                </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Density"
+                description="How tightly lists and controls pack together."
+              >
+                <select
+                  value={density}
+                  onChange={(e) => setDensity(e.target.value as Density)}
+                  aria-label="Density"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="comfortable">Comfortable</option>
+                  <option value="cozy">Cozy</option>
+                  <option value="compact">Compact</option>
                 </select>
               </SettingsRow>
             </SettingsGroup>
@@ -353,7 +454,7 @@ function SettingsMenu() {
 
           <TabsContent
             value="apps"
-            className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto"
+            className="mt-0 flex flex-col gap-6"
           >
             {catalog && catalog.length > 0 ? (
               <SettingsGroup
@@ -383,7 +484,7 @@ function SettingsMenu() {
 
           <TabsContent
             value="developer"
-            className="flex max-h-[60vh] flex-col gap-6 overflow-y-auto"
+            className="mt-0 flex flex-col gap-6"
           >
             <SettingsGroup
               title="Developer"
@@ -397,7 +498,7 @@ function SettingsMenu() {
                   value={logLevel}
                   onChange={(e) => setLogLevel(e.target.value as LogLevel)}
                   aria-label="Log level"
-                  className="rounded-md border bg-transparent px-2 py-1 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {(
                     [
@@ -417,6 +518,7 @@ function SettingsMenu() {
               </SettingsRow>
             </SettingsGroup>
           </TabsContent>
+          </div>
         </Tabs>
       </DialogContent>
     </Dialog>

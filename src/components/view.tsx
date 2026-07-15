@@ -64,6 +64,48 @@ export function ErrorState({ error }: { error: unknown }) {
 }
 
 /**
+ * The canonical panel header every list view shares (see docs/ui.md): a title row
+ * (title + count + inline filter chips), an optional full-width search row, and an
+ * optional filter/sort toolbar row. Used by `VirtualListView`/`LazyListView` and
+ * composed directly by the master column of `ListDetail` views — so all list
+ * headers are consistent by construction, not by copy-paste.
+ */
+export function PanelHeader({
+  title,
+  count,
+  icon,
+  actions,
+  search,
+  toolbar,
+}: {
+  title: string;
+  count?: number;
+  icon?: React.ReactNode;
+  /** Inline controls on the title row (e.g. source/type filter chips). */
+  actions?: React.ReactNode;
+  /** A full-width search row directly below the title. */
+  search?: React.ReactNode;
+  /** A full-width filter/sort toolbar row below the search. */
+  toolbar?: React.ReactNode;
+}) {
+  return (
+    <>
+      <ViewHeader title={title} count={count} icon={icon}>
+        {actions}
+      </ViewHeader>
+      {search && <div className="shrink-0 border-b px-3 py-1.5">{search}</div>}
+      {toolbar && (
+        // No wrap: a wide toolbar (time chips + sort) scrolls its own content
+        // rather than pushing the sort onto a second row.
+        <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-3 py-1.5">
+          {toolbar}
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * A full-height, single-column view whose rows are virtualized — the same shape
  * as ListView, but only the visible rows mount, so it stays fast for lists of
  * tens of thousands of items (Calls, Safari, Apps). Rows are centered to the
@@ -73,6 +115,8 @@ export function VirtualListView<T>({
   title,
   count,
   header,
+  search,
+  toolbar,
   items,
   renderItem,
   getKey,
@@ -84,6 +128,8 @@ export function VirtualListView<T>({
   title: string;
   count?: number;
   header?: React.ReactNode;
+  search?: React.ReactNode;
+  toolbar?: React.ReactNode;
   items: T[];
   renderItem: (item: T) => React.ReactNode;
   getKey?: (item: T, index: number) => React.Key;
@@ -94,9 +140,13 @@ export function VirtualListView<T>({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={title} count={count}>
-        {header}
-      </ViewHeader>
+      <PanelHeader
+        title={title}
+        count={count}
+        actions={header}
+        search={search}
+        toolbar={toolbar}
+      />
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
@@ -160,17 +210,13 @@ export function LazyListView<T>({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={title} count={count}>
-        {header}
-      </ViewHeader>
-      {search && (
-        <div className="shrink-0 border-b px-3 py-1.5">{search}</div>
-      )}
-      {toolbar && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
-          {toolbar}
-        </div>
-      )}
+      <PanelHeader
+        title={title}
+        count={count}
+        actions={header}
+        search={search}
+        toolbar={toolbar}
+      />
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (

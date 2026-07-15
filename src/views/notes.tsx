@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, LockOpen, NotebookText, Pin } from "lucide-react";
@@ -20,7 +21,7 @@ import {
   type SortState,
 } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { BadgeFilter } from "@/components/badge-filter";
 import {
   Select,
   SelectContent,
@@ -33,6 +34,7 @@ import {
   ErrorState,
   ListDetail,
   ListSearch,
+  PanelHeader,
   ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
@@ -140,10 +142,10 @@ export function NotesView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [sort, setSort] = useState<SortState>({ by: "modified", desc: true });
+  const [sort, setSort] = usePersistedState<SortState>("notes:sort", { by: "modified", desc: true });
   // Filters — all derived client-side from the note metadata we already hold.
-  const [folder, setFolder] = useState<string>("all");
-  const [lockState, setLockState] = useState<string>("all");
+  const [folder, setFolder] = usePersistedState<string>("notes:folder", "all");
+  const [lockState, setLockState] = usePersistedState<string>("notes:lock", "all");
   // Free-text search over title / snippet / folder.
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim().toLowerCase());
@@ -163,6 +165,11 @@ export function NotesView() {
     [notes],
   );
   const hasLocked = useMemo(() => (notes ?? []).some((n) => n.locked), [notes]);
+  // Clamp persisted filters to what THIS backup actually has, so a stale
+  // `notes:folder`/`notes:lock` from another backup can't silently empty the list
+  // (its control may be hidden, leaving no way to reset).
+  const effFolder = folder !== "all" && folders.includes(folder) ? folder : "all";
+  const effLock = hasLocked ? lockState : "all";
 
   // Whether a note's modified date falls in a [lo, hi) window (undated notes
   // only pass the fully-open "All" window).
@@ -180,9 +187,9 @@ export function NotesView() {
   // and the time-chip counts.
   const baseFiltered = useMemo(() => {
     return (notes ?? []).filter((n) => {
-      if (folder !== "all" && n.folder !== folder) return false;
-      if (lockState === "locked" && !n.locked) return false;
-      if (lockState === "unlocked" && n.locked) return false;
+      if (effFolder !== "all" && n.folder !== effFolder) return false;
+      if (effLock === "locked" && !n.locked) return false;
+      if (effLock === "unlocked" && n.locked) return false;
       if (search) {
         const hay = [n.title, n.snippet, n.folder]
           .filter(Boolean)
@@ -192,7 +199,7 @@ export function NotesView() {
       }
       return true;
     });
-  }, [notes, folder, lockState, search]);
+  }, [notes, effFolder, effLock, search]);
 
   const presetCounts = useMemo(
     () =>
@@ -240,75 +247,76 @@ export function NotesView() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Row 1 (full width): title, folder, and the lock state. */}
-      <ViewHeader title="Notes" count={sortedNotes?.length}>
-        {hasNotes && (
-          <>
-            {folders.length > 1 && (
-              <Select value={folder} onValueChange={setFolder}>
-                <SelectTrigger size="sm" className="h-7 w-[9rem] text-xs">
-                  <SelectValue placeholder="Folder" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All folders</SelectItem>
-                  {folders.map((f) => (
-                    <SelectItem key={f} value={f}>
-                      {f}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {hasLocked && (
-              <ToggleGroup
-                type="single"
-                size="sm"
-                variant="outline"
-                value={lockState}
-                onValueChange={(v) => v && setLockState(v)}
-              >
-                <ToggleGroupItem value="all" className="px-2 text-xs">
-                  All
-                </ToggleGroupItem>
-                <ToggleGroupItem value="unlocked" className="gap-1 px-2 text-xs">
-                  <LockOpen className="size-3.5" />
-                  Unlocked
-                </ToggleGroupItem>
-                <ToggleGroupItem value="locked" className="gap-1 px-2 text-xs">
-                  <Lock className="size-3.5" />
-                  Locked
-                </ToggleGroupItem>
-              </ToggleGroup>
-            )}
-          </>
-        )}
-      </ViewHeader>
-      {/* Row 2 (full width): search. */}
-      {hasNotes && (
-        <div className="shrink-0 border-b px-3 py-1.5">
-          <ListSearch value={q} onChange={setQ} placeholder="Search notes" />
-        </div>
-      )}
-      {/* Row 3 (full width): time filters + sort. */}
-      {hasNotes && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
-          <TimeFilterBar
-            className="flex-1"
-            presets={presets}
-            value={range}
-            onChange={setRange}
-            counts={presetCounts}
-          />
-          <SortControl
-            fields={[
-              { value: "modified", label: "Modified" },
-              { value: "title", label: "Title" },
-            ]}
-            value={sort}
-            onChange={setSort}
-          />
-        </div>
-      )}
+      <PanelHeader
+        title="Notes"
+        count={sortedNotes?.length}
+        actions={
+          hasNotes ? (
+            <>
+              {folders.length > 1 && (
+                <Select value={effFolder} onValueChange={setFolder}>
+                  <SelectTrigger size="sm" className="h-7 w-[9rem] text-xs">
+                    <SelectValue placeholder="Folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All folders</SelectItem>
+                    {folders.map((f) => (
+                      <SelectItem key={f} value={f}>
+                        {f}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {hasLocked && (
+                <BadgeFilter
+                  value={effLock}
+                  onChange={setLockState}
+                  options={[
+                    { value: "all", label: "All" },
+                    {
+                      value: "unlocked",
+                      label: "Unlocked",
+                      icon: <LockOpen className="size-3.5" />,
+                    },
+                    {
+                      value: "locked",
+                      label: "Locked",
+                      icon: <Lock className="size-3.5" />,
+                    },
+                  ]}
+                />
+              )}
+            </>
+          ) : undefined
+        }
+        search={
+          hasNotes ? (
+            <ListSearch value={q} onChange={setQ} placeholder="Search notes" />
+          ) : undefined
+        }
+        toolbar={
+          hasNotes ? (
+            <>
+              <TimeFilterBar
+                className="flex-1"
+                presets={presets}
+                value={range}
+                onChange={setRange}
+                counts={presetCounts}
+              />
+              <SortControl
+                fields={[
+                  { value: "modified", label: "Modified" },
+                  { value: "title", label: "Title" },
+                ]}
+                value={sort}
+                onChange={setSort}
+              />
+            </>
+          ) : undefined
+        }
+      />
       {/* Then the note list + content panel. */}
       <div className="min-h-0 flex-1">
         <ListDetail
@@ -341,11 +349,13 @@ export function NotesView() {
                   r.kind === "header" ? (
                     <SectionHeader label={r.label} />
                   ) : (
-                    <NoteRow
-                      note={r.note}
-                      active={selected?.id === r.note.id}
-                      onClick={() => setSelectedId(r.note.id)}
-                    />
+                    <div className="px-2 py-0.5">
+                      <NoteRow
+                        note={r.note}
+                        active={selected?.id === r.note.id}
+                        onClick={() => setSelectedId(r.note.id)}
+                      />
+                    </div>
                   )
                 }
               />
@@ -402,7 +412,7 @@ function NoteRow({
     <Item
       asChild
       data-active={active}
-      className="rounded-none data-[active=true]:bg-accent"
+      className="rounded-md transition-colors hover:bg-accent/50 data-[active=true]:bg-accent data-[active=true]:hover:bg-accent"
     >
       <button onClick={onClick} className="w-full text-left">
         <ItemContent className="gap-0.5">

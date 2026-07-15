@@ -312,9 +312,12 @@ enum ImportEvent {
         fraction: f32,
         artifact: String,
     },
-    Normalizing {
-        /// The sub-stage being organized (e.g. "Messages", "Camera roll").
+    Indexing {
+        /// Ready-to-display label for the current step (e.g. "Indexing Messages").
         step: String,
+        /// 1-based step number and total, so the UI fills the bar `index/total`.
+        index: u32,
+        total: u32,
     },
 }
 
@@ -440,7 +443,7 @@ async fn import_backup(
                             artifact: p.artifact.clone(),
                         })
                     }
-                    ImportPhase::Normalizing { step } => {
+                    ImportPhase::Indexing { step, index, total } => {
                         if let Some(prev) = current_step.take() {
                             logging::info(
                                 &app,
@@ -450,10 +453,14 @@ async fn import_backup(
                                 ),
                             );
                         }
-                        logging::info(&app, format!("\u{25b6} Organizing {step}"));
+                        logging::info(&app, format!("\u{25b6} {step} ({index}/{total})"));
                         current_step = Some(step.clone());
                         step_start = Instant::now();
-                        Some(ImportEvent::Normalizing { step: step.clone() })
+                        Some(ImportEvent::Indexing {
+                            step: step.clone(),
+                            index: *index,
+                            total: *total,
+                        })
                     }
                     ImportPhase::Done(report) => {
                         if let Some(prev) = current_step.take() {
@@ -839,15 +846,33 @@ async fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSumma
     .map_err(|e| e.to_string())?
 }
 
+/// Distinct content kinds present (with counts) for the message content filter.
+/// `thread_id` scopes to a conversation; otherwise all messages in `service`.
+#[tauri::command]
+async fn message_kinds(
+    active: State<'_, ActiveBackup>,
+    thread_id: Option<i64>,
+    service: Option<String>,
+) -> Result<Vec<(String, i64)>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::message_kinds(&cache, thread_id, service.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn count_thread_messages(
     active: State<'_, ActiveBackup>,
     thread_id: i64,
+    kind: Option<String>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_messages(&cache, thread_id).map_err(|e| e.to_string())
+        query::count_messages(&cache, thread_id, kind.as_deref()).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -859,6 +884,7 @@ async fn get_thread_message_window(
     thread_id: i64,
     offset: i64,
     limit: i64,
+    kind: Option<String>,
     desc: bool,
 ) -> Result<Vec<Message>, String> {
     // Async + spawn_blocking: a synchronous command runs on the main thread and
@@ -867,7 +893,8 @@ async fn get_thread_message_window(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_message_window(&cache, thread_id, offset, limit, desc).map_err(|e| e.to_string())
+        query::get_message_window(&cache, thread_id, offset, limit, kind.as_deref(), desc)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -878,11 +905,12 @@ async fn count_timeline_messages(
     active: State<'_, ActiveBackup>,
     service: Option<String>,
     search: Option<String>,
+    kind: Option<String>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_all_messages(&cache, service.as_deref(), search.as_deref())
+        query::count_all_messages(&cache, service.as_deref(), search.as_deref(), kind.as_deref())
             .map_err(|e| e.to_string())
     })
     .await
@@ -890,12 +918,14 @@ async fn count_timeline_messages(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: paging + service + search + kind + dir.
 async fn get_timeline_window(
     active: State<'_, ActiveBackup>,
     offset: i64,
     limit: i64,
     service: Option<String>,
     search: Option<String>,
+    kind: Option<String>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
@@ -907,6 +937,7 @@ async fn get_timeline_window(
             limit,
             service.as_deref(),
             search.as_deref(),
+            kind.as_deref(),
             desc,
         )
         .map_err(|e| e.to_string())
@@ -921,12 +952,19 @@ async fn count_message_ranges(
     ranges: Vec<query::TimeRange>,
     service: Option<String>,
     search: Option<String>,
+    kind: Option<String>,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_message_ranges(&cache, &ranges, service.as_deref(), search.as_deref())
-            .map_err(|e| e.to_string())
+        query::count_message_ranges(
+            &cache,
+            &ranges,
+            service.as_deref(),
+            search.as_deref(),
+            kind.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -942,6 +980,7 @@ async fn get_range_window(
     limit: i64,
     service: Option<String>,
     search: Option<String>,
+    kind: Option<String>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
@@ -954,6 +993,7 @@ async fn get_range_window(
             limit,
             service.as_deref(),
             search.as_deref(),
+            kind.as_deref(),
             desc,
         )
         .map_err(|e| e.to_string())
@@ -1247,20 +1287,41 @@ async fn get_media_window(
 async fn count_calls(
     active: State<'_, ActiveBackup>,
     search: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_calls(&cache, search.as_deref()).map_err(|e| e.to_string())
+        query::count_calls(&cache, search.as_deref(), query::TimeRange { lo, hi })
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
+async fn count_call_ranges(
+    active: State<'_, ActiveBackup>,
+    ranges: Vec<query::TimeRange>,
+    search: Option<String>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_call_ranges(&cache, &ranges, search.as_deref()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: search + range + paging + sort.
 async fn get_calls_window(
     active: State<'_, ActiveBackup>,
     search: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
     offset: i64,
     limit: i64,
     sort_by: String,
@@ -1272,6 +1333,7 @@ async fn get_calls_window(
         query::get_calls_window(
             &cache,
             search.as_deref(),
+            query::TimeRange { lo, hi },
             offset,
             limit,
             calls_sort(&sort_by, desc),
@@ -1902,6 +1964,7 @@ pub fn run() {
             forget_backup,
             imported_backup_ids,
             list_threads,
+            message_kinds,
             count_thread_messages,
             get_thread_message_window,
             count_timeline_messages,
@@ -1922,6 +1985,7 @@ pub fn run() {
             count_media_ranges,
             get_media_window,
             count_calls,
+            count_call_ranges,
             get_calls_window,
             count_safari,
             count_safari_ranges,

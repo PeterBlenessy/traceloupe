@@ -261,6 +261,58 @@ pub fn parse_safari_bookmarks(
     Ok(())
 }
 
+/// Parse `SafariTabs.db` into the cache `safari_bookmarks` table as `kind = 'tab'`
+/// rows, each tagged with its tab group. With `replace`, clears existing tabs
+/// first (leaving bookmarks/reading list untouched).
+pub fn parse_safari_tabs(
+    db_path: &Path,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+    replace: bool,
+) -> Result<()> {
+    let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    if !table_exists(&src, "bookmarks")? {
+        return Err(crate::Error::Parse(
+            "SafariTabs.db is not a recognized Safari schema".into(),
+        ));
+    }
+    let nodes = load_nodes(&src)?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM safari_bookmarks WHERE kind = 'tab'", [])?;
+    }
+    let mut inserted = 0usize;
+    for node in nodes.values() {
+        if node.is_folder {
+            continue;
+        }
+        let Some(url) = &node.url else { continue };
+        let anc = ancestry(&nodes, node.parent);
+        let group = anc
+            .top_group
+            .and_then(|g| nodes.get(&g))
+            .and_then(|g| tab_group_name(g.title.as_deref()));
+        tx.execute(
+            "INSERT INTO safari_bookmarks
+                (kind, title, url, folder, date_added, date_viewed, preview_text, position)
+             VALUES ('tab', ?1, ?2, ?3, ?4, NULL, NULL, ?5)",
+            rusqlite::params![
+                node.title,
+                url,
+                group,
+                node.last_modified.map(|t| t as i64),
+                node.order_index
+            ],
+        )?;
+        inserted += 1;
+    }
+    tx.commit()?;
+    report.safari_bookmarks += inserted;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -333,56 +385,4 @@ mod tests {
         // 2023-01-01T00:00:00Z.
         assert_eq!(added, Some(1_672_531_200));
     }
-}
-
-/// Parse `SafariTabs.db` into the cache `safari_bookmarks` table as `kind = 'tab'`
-/// rows, each tagged with its tab group. With `replace`, clears existing tabs
-/// first (leaving bookmarks/reading list untouched).
-pub fn parse_safari_tabs(
-    db_path: &Path,
-    cache: &CacheDb,
-    report: &mut ImportReport,
-    replace: bool,
-) -> Result<()> {
-    let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    if !table_exists(&src, "bookmarks")? {
-        return Err(crate::Error::Parse(
-            "SafariTabs.db is not a recognized Safari schema".into(),
-        ));
-    }
-    let nodes = load_nodes(&src)?;
-
-    let conn = cache.conn();
-    let tx = conn.unchecked_transaction()?;
-    if replace {
-        tx.execute("DELETE FROM safari_bookmarks WHERE kind = 'tab'", [])?;
-    }
-    let mut inserted = 0usize;
-    for node in nodes.values() {
-        if node.is_folder {
-            continue;
-        }
-        let Some(url) = &node.url else { continue };
-        let anc = ancestry(&nodes, node.parent);
-        let group = anc
-            .top_group
-            .and_then(|g| nodes.get(&g))
-            .and_then(|g| tab_group_name(g.title.as_deref()));
-        tx.execute(
-            "INSERT INTO safari_bookmarks
-                (kind, title, url, folder, date_added, date_viewed, preview_text, position)
-             VALUES ('tab', ?1, ?2, ?3, ?4, NULL, NULL, ?5)",
-            rusqlite::params![
-                node.title,
-                url,
-                group,
-                node.last_modified.map(|t| t as i64),
-                node.order_index
-            ],
-        )?;
-        inserted += 1;
-    }
-    tx.commit()?;
-    report.safari_bookmarks += inserted;
-    Ok(())
 }

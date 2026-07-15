@@ -155,6 +155,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             // detection (LinkedIn is mostly 1:1, where chat_name wins anyway).
             sender_id: if is_from_me { None } else { sender_name },
             has_attachment: false,
+            kind: None,
         });
     }
     Ok(out)

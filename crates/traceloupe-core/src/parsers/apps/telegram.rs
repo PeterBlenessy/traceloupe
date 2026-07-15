@@ -421,6 +421,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             sender_handle: None,
             sender_id: msg.author_id.map(|a| a.to_string()),
             has_attachment: msg.has_media,
+            kind: None,
         });
     }
     Ok(out)

@@ -68,7 +68,7 @@ pub fn normalize_lava(
 
 /// Like [`normalize_lava`], but calls `on_step` with a human label before each
 /// sub-stage so the UI can show live progress during the (potentially long)
-/// normalize pass instead of one opaque "organizing" spinner.
+/// normalize pass instead of one opaque indexing spinner.
 /// `skips` suppresses each iLEAPP stage the caller already handled natively
 /// (Phase 2) — Messages from `sms.db`, Notes from `NoteStore.sqlite`, Calls from
 /// `CallHistory.storedata`, Safari from `History.db` — to avoid double-inserting.
@@ -421,6 +421,27 @@ fn media_source(lava: &Connection, media_item_id: &str) -> Result<Option<String>
         )
         .optional()?
         .map(|a| friendly_source(&a)))
+}
+
+/// Classify a message's content for the Messages content filter. `has_media` is
+/// true when the message carries an image/video attachment. The grouped buckets:
+/// 'media' (photos/videos), 'link', 'text', 'other' (an empty/attachment-only
+/// message). App-specific kinds ('shared', 'sticker', 'system') are set by the
+/// app parser and not derived here.
+pub fn message_kind(body: Option<&str>, has_media: bool) -> &'static str {
+    if has_media {
+        return "media";
+    }
+    match body.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(b) if is_link(b) => "link",
+        Some(_) => "text",
+        None => "other",
+    }
+}
+
+/// A cheap "does this text contain a URL" check for the `link` bucket.
+fn is_link(s: &str) -> bool {
+    s.contains("http://") || s.contains("https://") || s.contains("www.")
 }
 
 /// Map an iLEAPP artifact name to a gallery-friendly source label.

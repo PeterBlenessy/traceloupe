@@ -44,8 +44,8 @@ const itemVariants = cva(
         muted: "bg-muted/50",
       },
       size: {
-        default: "gap-4 p-4",
-        sm: "gap-2.5 px-4 py-3",
+        default: "gap-4 px-4 py-2.5",
+        sm: "gap-2.5 px-4 py-2",
       },
     },
     defaultVariants: {

@@ -102,7 +102,7 @@ fn main() -> Result<()> {
         match index.extract_to(e, decryptor.as_ref(), &dest) {
             Ok(()) => {
                 ok += 1;
-                if ok % 250 == 0 {
+                if ok.is_multiple_of(250) {
                     println!("  … {ok} extracted");
                 }
             }

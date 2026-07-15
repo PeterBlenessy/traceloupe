@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -27,10 +28,10 @@ const PAGE = 100;
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { BadgeFilter } from "@/components/badge-filter";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
-import { EmptyView, ErrorState, ListSearch, ViewHeader } from "@/components/view";
+import { EmptyView, ErrorState, ListSearch, PanelHeader } from "@/components/view";
 import { useDebounced } from "@/lib/use-debounced";
 import { formatCount, formatDateTime } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
@@ -43,7 +44,22 @@ export function PhotosView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const [source, setSource] = useState<string>("all");
+  const [sourcePref, setSource] = usePersistedState<string>(
+    "photos:source",
+    "all",
+  );
+  const { data: sources } = useQuery({
+    queryKey: ["mediaSources"],
+    queryFn: () => client.mediaSources(),
+    enabled: active === true,
+  });
+  // Clamp a stale persisted source to what THIS backup actually has, so a filter
+  // carried over from another backup can't leave the grid stuck empty (its chip
+  // may be hidden, leaving no way to reset).
+  const source =
+    sourcePref !== "all" && (sources ?? []).some(([s]) => s === sourcePref)
+      ? sourcePref
+      : "all";
   const sourceArg = source === "all" ? null : source;
   // Time filter — same presets + custom range as the Timeline.
   const { now, presets } = useTimePresets();
@@ -54,11 +70,6 @@ export function PhotosView() {
   const { data: count, error } = useQuery({
     queryKey: ["mediaCount", source, range.lo, range.hi, search],
     queryFn: () => client.countMedia(sourceArg, range.lo, range.hi, search),
-    enabled: active === true,
-  });
-  const { data: sources } = useQuery({
-    queryKey: ["mediaSources"],
-    queryFn: () => client.mediaSources(),
     enabled: active === true,
   });
   // Per-preset counts for the time chips, within the current source + search.
@@ -73,7 +84,7 @@ export function PhotosView() {
     enabled: active === true,
   });
   const [openIndex, setOpenIndex] = useState<number | null>(null);
-  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  const [sort, setSort] = usePersistedState<SortState>("photos:sort", { by: "date", desc: true });
   const qc = useQueryClient();
 
   const ensurePage = useCallback(
@@ -122,40 +133,46 @@ export function PhotosView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Photos" count={count}>
-        {hasFilter && (
-          <SourceFilter
-            sources={sources ?? []}
-            total={total}
-            value={source}
-            onChange={setSource}
+      <PanelHeader
+        title="Photos"
+        count={count}
+        actions={
+          hasFilter ? (
+            <SourceFilter
+              sources={sources ?? []}
+              total={total}
+              value={source}
+              onChange={setSource}
+            />
+          ) : undefined
+        }
+        search={
+          <ListSearch
+            value={q}
+            onChange={setQ}
+            placeholder="Search filename, person, place, or album (e.g. Florida)"
           />
-        )}
-      </ViewHeader>
-      <div className="shrink-0 border-b px-3 py-1.5">
-        <ListSearch
-          value={q}
-          onChange={setQ}
-          placeholder="Search filename, person, place, or album (e.g. Florida)"
-        />
-      </div>
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
-        <TimeFilterBar
-          className="flex-1"
-          presets={presets}
-          value={range}
-          onChange={setRange}
-          counts={presetCounts}
-        />
-        <SortControl
-          fields={[
-            { value: "date", label: "Date" },
-            { value: "source", label: "Source" },
-          ]}
-          value={sort}
-          onChange={setSort}
-        />
-      </div>
+        }
+        toolbar={
+          <>
+            <TimeFilterBar
+              className="flex-1"
+              presets={presets}
+              value={range}
+              onChange={setRange}
+              counts={presetCounts}
+            />
+            <SortControl
+              fields={[
+                { value: "date", label: "Date" },
+                { value: "source", label: "Source" },
+              ]}
+              value={sort}
+              onChange={setSort}
+            />
+          </>
+        }
+      />
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (
@@ -211,43 +228,24 @@ function SourceFilter({
   onChange: (v: string) => void;
 }) {
   return (
-    // Horizontal scroll (not wrap) so a long list of sources never spills out of
-    // the fixed-height title row on a narrow window.
-    <div className="min-w-0 overflow-x-auto">
-      <ToggleGroup
-        type="single"
-        value={value}
-        onValueChange={(v) => onChange(v || "all")}
-        variant="outline"
-        size="sm"
-        className="flex-nowrap justify-start"
-      >
-        <ToggleGroupItem value="all" className="shrink-0 whitespace-nowrap">
-          All
-          <span className="text-[10px] tabular-nums opacity-50">
-            {formatCount(total)}
-          </span>
-        </ToggleGroupItem>
-        {sources.map(([name, count]) => {
+    <BadgeFilter
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: "all", label: "All", count: total },
+        ...sources.map(([name, count]) => {
           const slug = serviceSlug(name);
-          return (
-            <ToggleGroupItem
-              key={name}
-              value={name}
-              className="shrink-0 whitespace-nowrap"
-            >
-              {hasBrandIcon(slug) && (
-                <BrandIcon slug={slug} name={name} className="mr-1 size-3.5" />
-              )}
-              {sourceLabel(name)}
-              <span className="text-[10px] tabular-nums opacity-50">
-                {formatCount(count)}
-              </span>
-            </ToggleGroupItem>
-          );
-        })}
-      </ToggleGroup>
-    </div>
+          return {
+            value: name,
+            label: sourceLabel(name),
+            count,
+            icon: hasBrandIcon(slug) ? (
+              <BrandIcon slug={slug} name={name} className="size-3.5" />
+            ) : undefined,
+          };
+        }),
+      ]}
+    />
   );
 }
 

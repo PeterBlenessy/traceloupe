@@ -1,44 +1,33 @@
-import { Monitor, Moon, Sun } from "lucide-react";
+import { Moon, Sun, SunMoon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { useTheme, type Theme } from "@/components/theme-provider";
 
-const options: { value: Theme; label: string; icon: typeof Sun }[] = [
-  { value: "light", label: "Light", icon: Sun },
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "system", label: "System", icon: Monitor },
-];
+// Cycle order and per-theme presentation. Clicking advances to the next theme.
+const ORDER: Theme[] = ["system", "light", "dark"];
+const META: Record<Theme, { icon: typeof Sun; label: string }> = {
+  system: { icon: SunMoon, label: "System" },
+  light: { icon: Sun, label: "Light" },
+  dark: { icon: Moon, label: "Dark" },
+};
 
+/** A single button that cycles System → Light → Dark on click (no menu). */
 export function ModeToggle() {
-  const { theme, setTheme, resolvedTheme } = useTheme();
-  const Icon = resolvedTheme === "dark" ? Moon : Sun;
+  const { theme, setTheme } = useTheme();
+  const Icon = META[theme].icon;
+  const next = ORDER[(ORDER.indexOf(theme) + 1) % ORDER.length];
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-7">
-          <Icon className="size-4" />
-          <span className="sr-only">Toggle theme</span>
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        {options.map(({ value, label, icon: Icon }) => (
-          <DropdownMenuItem
-            key={value}
-            onClick={() => setTheme(value)}
-            data-active={theme === value}
-            className="data-[active=true]:font-medium"
-          >
-            <Icon className="size-4" />
-            {label}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button
+      variant="ghost"
+      size="icon"
+      className="size-7"
+      onClick={() => setTheme(next)}
+      title={`Theme: ${META[theme].label} — click for ${META[next].label}`}
+    >
+      <Icon className="size-4" />
+      <span className="sr-only">
+        Theme: {META[theme].label}. Switch to {META[next].label}.
+      </span>
+    </Button>
   );
 }

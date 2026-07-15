@@ -72,6 +72,10 @@ pub fn parse_recordings(
     // Metadata from the first Voice Memos DB we can find + read. Keyed by the
     // audio filename so we can join it to the blobs above.
     let meta = read_metadata(&index, decryptor, work_dir).unwrap_or_default();
+    // The user-facing title (location- or user-named, e.g. "Klippanvägen 55") is
+    // in each memo's `<name>.composition/manifest.plist`, NOT the DB's
+    // `ZCUSTOMLABEL` (which is a raw ISO timestamp for auto-named memos). Prefer it.
+    let comp_titles = read_composition_titles(&index, decryptor, work_dir);
 
     // Build one asset per audio file, enriching with metadata where present. A
     // recording whose audio was evicted to iCloud (metadata but no blob) is
@@ -89,8 +93,12 @@ pub fn parse_recordings(
             },
             None => (None, None),
         };
+        // Friendly `.composition` title first, then the DB label as a fallback.
+        let title = basename(&entry.relative_path)
+            .and_then(|n| comp_titles.get(n).cloned())
+            .or_else(|| m.and_then(|m| m.title.clone()));
         assets.push(RecordingAsset {
-            title: m.and_then(|m| m.title.clone()),
+            title,
             recorded_at: m.and_then(|m| m.recorded_at),
             duration_s: m.and_then(|m| m.duration_s),
             full_path: index.blob_path(&entry.file_id),
@@ -109,6 +117,50 @@ struct RecordingMeta {
     title: Option<String>,
     recorded_at: Option<i64>,
     duration_s: Option<f64>,
+}
+
+/// Map `<audio>.m4a → RCSavedRecordingTitle`, read from each memo's
+/// `Recordings/<name>.composition/manifest.plist`. That plist holds the friendly,
+/// user-visible title (location name or a user rename); the metadata DB only has a
+/// timestamp label for auto-named memos. The audio filename is the composition
+/// folder name with `.composition` → `.m4a` (how iOS/iLEAPP pair them).
+/// Best-effort: unreadable plists are skipped.
+fn read_composition_titles(
+    index: &ManifestIndex,
+    decryptor: Option<&BackupDecryptor>,
+    work_dir: &Path,
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let entries = match index.find_relative_like("%Recordings/%.composition/manifest.plist") {
+        Ok(e) => e,
+        Err(_) => return out,
+    };
+    let tmp = work_dir.join(".voicememo.plist");
+    for entry in entries {
+        // Parent dir (`…/<name>.composition/manifest.plist`) → `<name>.m4a`.
+        let Some(dir) = entry.relative_path.rsplit('/').nth(1) else {
+            continue;
+        };
+        if !dir.ends_with(".composition") {
+            continue;
+        }
+        let audio = format!("{}.m4a", dir.trim_end_matches(".composition"));
+        if index.extract_to(&entry, decryptor, &tmp).is_err() {
+            continue;
+        }
+        if let Ok(plist::Value::Dictionary(d)) = plist::Value::from_file(&tmp) {
+            if let Some(t) = d
+                .get("RCSavedRecordingTitle")
+                .and_then(|v| v.as_string())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                out.insert(audio, t.to_string());
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&tmp);
+    out
 }
 
 /// Read the Voice Memos metadata DB (if any), returning a map keyed by audio
