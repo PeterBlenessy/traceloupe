@@ -95,6 +95,8 @@ export interface HistoryVisit {
   title: string | null;
   visitedAt: number | null;
   visitCount: number | null;
+  /** URL recorded as deleted from history (a tombstone), not a live visit. */
+  deleted: boolean;
 }
 
 /** A Safari bookmark, reading-list item, or open tab (`kind` selects which). */
@@ -1037,6 +1039,7 @@ const mockSafari: HistoryVisit[] = [
     title: "Mission Peak - Wikipedia",
     visitedAt: 1717801200,
     visitCount: 2,
+    deleted: false,
   },
   {
     id: 2,
@@ -1044,6 +1047,7 @@ const mockSafari: HistoryVisit[] = [
     title: "Hacker News",
     visitedAt: 1717797600,
     visitCount: 34,
+    deleted: false,
   },
   {
     id: 3,
@@ -1051,6 +1055,15 @@ const mockSafari: HistoryVisit[] = [
     title: "Apple",
     visitedAt: 1717794000,
     visitCount: 12,
+    deleted: false,
+  },
+  {
+    id: 4,
+    url: "https://secret.example/cleared",
+    title: null,
+    visitedAt: 1717790000,
+    visitCount: null,
+    deleted: true,
   },
 ];
 

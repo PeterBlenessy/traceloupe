@@ -75,12 +75,36 @@ pub fn parse_safari(
             .map(|t| t as i64 + MAC_EPOCH);
         let visit_count: Option<i64> = r.get(3)?;
         tx.execute(
-            "INSERT INTO safari_history (url, title, visited_at, visit_count)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO safari_history (url, title, visited_at, visit_count, deleted)
+             VALUES (?1, ?2, ?3, ?4, 0)",
             rusqlite::params![url, title, visited_at, visit_count],
         )?;
         inserted += 1;
     }
+
+    // Deleted-history tombstones: URLs Safari recorded as removed from history.
+    // Surface them flagged (deleted = 1), keyed by their deletion time, so an
+    // analyst sees what was browsed-then-cleared. Guarded — the table is optional.
+    if table_exists(&src, "history_tombstones")? {
+        let mut tstmt = src.prepare(
+            "SELECT url, end_time FROM history_tombstones WHERE url IS NOT NULL",
+        )?;
+        let mut trows = tstmt.query([])?;
+        while let Some(r) = trows.next()? {
+            let url: String = r.get(0)?;
+            let deleted_at = r
+                .get::<_, Option<f64>>(1)?
+                .filter(|t| *t > 0.0)
+                .map(|t| t as i64 + MAC_EPOCH);
+            tx.execute(
+                "INSERT INTO safari_history (url, title, visited_at, visit_count, deleted)
+                 VALUES (?1, NULL, ?2, NULL, 1)",
+                rusqlite::params![url, deleted_at],
+            )?;
+            inserted += 1;
+        }
+    }
+
     tx.commit()?;
     // Count only committed rows — a mid-loop error rolls back, adding nothing.
     report.safari_visits += inserted;
@@ -107,7 +131,11 @@ mod tests {
              -- An item with no url is ignored.
              INSERT INTO history_items (id, url, visit_count) VALUES (2, NULL, 1);
              INSERT INTO history_visits (id, history_item, title, visit_time)
-                VALUES (12, 2, NULL, 721692400.0);",
+                VALUES (12, 2, NULL, 721692400.0);
+             -- A deleted-history tombstone.
+             CREATE TABLE history_tombstones (id INTEGER PRIMARY KEY, start_time REAL, end_time REAL, url TEXT, generation INTEGER);
+             INSERT INTO history_tombstones (id, start_time, end_time, url)
+                VALUES (1, 721692000.0, 721692000.0, 'https://deleted.example');",
         )
         .unwrap();
         db
@@ -122,9 +150,21 @@ mod tests {
 
         parse_safari(&db, &cache, &mut report, false).unwrap();
         assert_eq!(
-            report.safari_visits, 2,
-            "one row per visit, url-less item skipped"
+            report.safari_visits, 3,
+            "one row per visit (url-less skipped) + one tombstone"
         );
+
+        // The tombstone is stored flagged deleted, with no visit count.
+        let (deleted_count, tomb_deleted): (i64, i64) = cache
+            .conn()
+            .query_row(
+                "SELECT COUNT(*), MAX(deleted) FROM safari_history WHERE url = 'https://deleted.example'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(deleted_count, 1);
+        assert_eq!(tomb_deleted, 1, "tombstone flagged deleted");
 
         let c = cache.conn();
         let (url, title, visited, count): (String, String, i64, i64) = c

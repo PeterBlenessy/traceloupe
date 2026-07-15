@@ -597,13 +597,15 @@ pub struct HistoryVisit {
     pub title: Option<String>,
     pub visited_at: Option<i64>,
     pub visit_count: Option<i64>,
+    /// This URL was recorded as deleted from history (a tombstone), not a live visit.
+    pub deleted: bool,
 }
 
 /// Safari history, most recent first.
 pub fn list_safari_history(cache: &CacheDb) -> Result<Vec<HistoryVisit>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, url, title, visited_at, visit_count
+        "SELECT id, url, title, visited_at, visit_count, deleted
          FROM safari_history ORDER BY visited_at DESC NULLS LAST, id DESC",
     )?;
     let rows = stmt.query_map([], row_to_visit)?;
@@ -618,6 +620,7 @@ fn row_to_visit(r: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryVisit> {
         title: r.get(2)?,
         visited_at: r.get(3)?,
         visit_count: r.get(4)?,
+        deleted: r.get::<_, i64>(5)? != 0,
     })
 }
 
@@ -1042,7 +1045,7 @@ pub fn get_safari_window(
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, url, title, visited_at, visit_count
+        "SELECT id, url, title, visited_at, visit_count, deleted
          FROM safari_history
          WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
                           OR title LIKE '%' || ?1 || '%' ESCAPE '\\')
