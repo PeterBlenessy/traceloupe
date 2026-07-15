@@ -105,3 +105,17 @@ export function formatDuration(seconds: number | null): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
+
+/**
+ * A count with a thousands separator, e.g. 450897 → "450 897". Uses a
+ * non-breaking space (U+00A0) so a large count never wraps mid-number.
+ * Returns "" for null/undefined so callers can show their own placeholder.
+ */
+export function formatCount(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "";
+  const neg = n < 0;
+  const digits = Math.abs(Math.trunc(n))
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return neg ? `-${digits}` : digits;
+}

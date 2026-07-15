@@ -26,7 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
-import { formatDateTime } from "@/lib/format";
+import { formatCount, formatDateTime } from "@/lib/format";
 import { client, type MediaItem } from "@/lib/ipc";
 
 export function PhotosView() {
@@ -164,10 +164,10 @@ function SourceFilter({
       size="sm"
       className="flex-wrap justify-start"
     >
-      <ToggleGroupItem value="all">All {total}</ToggleGroupItem>
+      <ToggleGroupItem value="all">All {formatCount(total)}</ToggleGroupItem>
       {sources.map(([name, count]) => (
         <ToggleGroupItem key={name} value={name}>
-          {name} {count}
+          {name} {formatCount(count)}
         </ToggleGroupItem>
       ))}
     </ToggleGroup>
@@ -437,7 +437,7 @@ function Lightbox({
           <div className="flex shrink-0 items-center gap-3">
             {index != null && (
               <span className="tabular-nums">
-                {index + 1} / {count}
+                {formatCount(index + 1)} / {formatCount(count)}
               </span>
             )}
             {item?.source && <span>{item.source}</span>}
