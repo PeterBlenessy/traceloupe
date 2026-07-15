@@ -116,15 +116,18 @@ pub fn get_message_window(
     thread_id: i64,
     offset: i64,
     limit: i64,
+    desc: bool,
 ) -> Result<Vec<Message>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    // Direction is a fixed keyword chosen here, never interpolated user input.
+    let dir = if desc { "DESC" } else { "ASC" };
+    let mut stmt = conn.prepare(&format!(
         "SELECT id, is_from_me, sender, body, sent_at
          FROM messages
          WHERE thread_id = ?1
-         ORDER BY sent_at ASC, id ASC
+         ORDER BY sent_at {dir}, id {dir}
          LIMIT ?2 OFFSET ?3",
-    )?;
+    ))?;
     let mut messages = stmt
         .query_map(rusqlite::params![thread_id, limit, offset], row_to_message)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -278,6 +281,7 @@ pub fn get_timeline_window(
     offset: i64,
     limit: i64,
     service: Option<&str>,
+    desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
     range_window(
         cache,
@@ -285,6 +289,7 @@ pub fn get_timeline_window(
         offset,
         limit,
         service,
+        desc,
     )
 }
 
@@ -333,8 +338,9 @@ pub fn get_range_window(
     offset: i64,
     limit: i64,
     service: Option<&str>,
+    desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
-    range_window(cache, range, offset, limit, service)
+    range_window(cache, range, offset, limit, service, desc)
 }
 
 /// Shared implementation: messages in `range` (open bounds allowed) and optional
@@ -346,9 +352,12 @@ fn range_window(
     offset: i64,
     limit: i64,
     service: Option<&str>,
+    desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    // Direction is a fixed keyword chosen here, never interpolated user input.
+    let dir = if desc { "DESC" } else { "ASC" };
+    let mut stmt = conn.prepare(&format!(
         "SELECT m.id, m.is_from_me, m.sender, m.body, m.sent_at,
                 m.thread_id, t.display_name, t.identifier, t.service
          FROM messages m
@@ -357,9 +366,9 @@ fn range_window(
            AND (?1 IS NULL OR m.sent_at >= ?1)
            AND (?2 IS NULL OR m.sent_at < ?2)
            AND (?5 IS NULL OR t.service = ?5)
-         ORDER BY m.sent_at ASC, m.id ASC
+         ORDER BY m.sent_at {dir}, m.id {dir}
          LIMIT ?3 OFFSET ?4",
-    )?;
+    ))?;
     let mut items = stmt
         .query_map(
             rusqlite::params![range.lo, range.hi, limit, offset, service],

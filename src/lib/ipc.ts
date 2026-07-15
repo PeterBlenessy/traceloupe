@@ -269,33 +269,36 @@ export interface TraceLoupeClient {
   listThreads(): Promise<ThreadSummary[]>;
   /** Total messages in a thread; drives the lazily-loaded virtual scroller. */
   countThreadMessages(threadId: number): Promise<number>;
-  /** A window of a thread's messages, oldest first, starting at `offset`. */
+  /** A window of a thread's messages from `offset`; `desc` newest-first. */
   getThreadMessageWindow(
     threadId: number,
     offset: number,
     limit: number,
+    desc?: boolean,
   ): Promise<Message[]>;
   /** Total messages across all conversations (filtered by `service`, null=all);
    * drives the timeline scroller. */
   countTimelineMessages(service?: string | null): Promise<number>;
-  /** A window of the all-conversations timeline, oldest first, from `offset`. */
+  /** A window of the all-conversations timeline from `offset`; `desc` newest-first. */
   getTimelineWindow(
     offset: number,
     limit: number,
     service?: string | null,
+    desc?: boolean,
   ): Promise<TimelineMessage[]>;
   /** Message counts for each half-open [lo, hi) epoch-second window. */
   countMessageRanges(
     ranges: TimeRange[],
     service?: string | null,
   ): Promise<number[]>;
-  /** A window of messages whose time falls in [lo, hi), oldest first. */
+  /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
   getRangeWindow(
     lo: number | null,
     hi: number | null,
     offset: number,
     limit: number,
     service?: string | null,
+    desc?: boolean,
   ): Promise<TimelineMessage[]>;
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
@@ -390,28 +393,35 @@ const tauriClient: TraceLoupeClient = {
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   countThreadMessages: (threadId) =>
     invoke<number>("count_thread_messages", { threadId }),
-  getThreadMessageWindow: (threadId, offset, limit) =>
-    invoke<Message[]>("get_thread_message_window", { threadId, offset, limit }),
+  getThreadMessageWindow: (threadId, offset, limit, desc = false) =>
+    invoke<Message[]>("get_thread_message_window", {
+      threadId,
+      offset,
+      limit,
+      desc,
+    }),
   countTimelineMessages: (service) =>
     invoke<number>("count_timeline_messages", { service: service ?? null }),
-  getTimelineWindow: (offset, limit, service) =>
+  getTimelineWindow: (offset, limit, service, desc = false) =>
     invoke<TimelineMessage[]>("get_timeline_window", {
       offset,
       limit,
       service: service ?? null,
+      desc,
     }),
   countMessageRanges: (ranges, service) =>
     invoke<number[]>("count_message_ranges", {
       ranges,
       service: service ?? null,
     }),
-  getRangeWindow: (lo, hi, offset, limit, service) =>
+  getRangeWindow: (lo, hi, offset, limit, service, desc = false) =>
     invoke<TimelineMessage[]>("get_range_window", {
       lo,
       hi,
       offset,
       limit,
       service: service ?? null,
+      desc,
     }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
@@ -1150,20 +1160,24 @@ export const mockClient: TraceLoupeClient = {
   listThreads: async () => (mockActive ? mockThreads : []),
   countThreadMessages: async (threadId) =>
     mockActive ? (mockMessages[threadId]?.length ?? 0) : 0,
-  getThreadMessageWindow: async (threadId, offset, limit) =>
-    mockActive
-      ? (mockMessages[threadId] ?? []).slice(offset, offset + limit)
-      : [],
+  getThreadMessageWindow: async (threadId, offset, limit, desc = false) => {
+    if (!mockActive) return [];
+    const all = mockMessages[threadId] ?? [];
+    const ordered = desc ? [...all].reverse() : all;
+    return ordered.slice(offset, offset + limit);
+  },
   countTimelineMessages: async (service) =>
     mockActive
       ? mockTimeline.filter((t) => !service || t.service === service).length
       : 0,
-  getTimelineWindow: async (offset, limit, service) =>
-    mockActive
-      ? mockTimeline
-          .filter((t) => !service || t.service === service)
-          .slice(offset, offset + limit)
-      : [],
+  getTimelineWindow: async (offset, limit, service, desc = false) => {
+    if (!mockActive) return [];
+    const filtered = mockTimeline.filter(
+      (t) => !service || t.service === service,
+    );
+    const ordered = desc ? [...filtered].reverse() : filtered;
+    return ordered.slice(offset, offset + limit);
+  },
   countMessageRanges: async (ranges, service) =>
     ranges.map((r) =>
       mockActive
@@ -1174,16 +1188,16 @@ export const mockClient: TraceLoupeClient = {
           ).length
         : 0,
     ),
-  getRangeWindow: async (lo, hi, offset, limit, service) =>
-    mockActive
-      ? mockTimeline
-          .filter(
-            (t) =>
-              inRange(t.message.sentAt, { lo, hi }) &&
-              (!service || t.service === service),
-          )
-          .slice(offset, offset + limit)
-      : [],
+  getRangeWindow: async (lo, hi, offset, limit, service, desc = false) => {
+    if (!mockActive) return [];
+    const filtered = mockTimeline.filter(
+      (t) =>
+        inRange(t.message.sentAt, { lo, hi }) &&
+        (!service || t.service === service),
+    );
+    const ordered = desc ? [...filtered].reverse() : filtered;
+    return ordered.slice(offset, offset + limit);
+  },
   listCalls: async () => (mockActive ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listNotes: async () => (mockActive ? mockNotes : []),

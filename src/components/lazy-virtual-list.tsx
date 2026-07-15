@@ -24,6 +24,11 @@ const PAGE = 100;
  *   - The page set is memoized on the primitive first/last page, NOT on the
  *     fresh-every-render `getVirtualItems()` array. An unstable `useQueries`
  *     input makes its store emit a new snapshot each render — an infinite loop.
+ *   - Only loaded rows are handed to `measureElement`; unloaded rows reserve
+ *     `estimateSize` and are never measured. Measuring a short placeholder as a
+ *     row's true height collapses the total size, then every row re-expands as
+ *     its window resolves — the jump users feel as the list "sticking" while
+ *     scrolling. See the render block below.
  */
 export function LazyVirtualList<T>({
   count,
@@ -98,9 +103,17 @@ export function LazyVirtualList<T>({
   const scrolledFor = useRef<unknown>(undefined);
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (startAtBottom && el && count > 0 && scrolledFor.current !== resetKey) {
+    // Only lists that define a resetKey get an anchored initial/reset position.
+    if (
+      el &&
+      count > 0 &&
+      resetKey !== undefined &&
+      scrolledFor.current !== resetKey
+    ) {
       scrolledFor.current = resetKey;
-      el.scrollTop = el.scrollHeight;
+      // Ascending (oldest-first) pins the newest row at the bottom; descending
+      // (newest-first) pins the newest row at the top.
+      el.scrollTop = startAtBottom ? el.scrollHeight : 0;
     }
   }, [count, resetKey, startAtBottom]);
 
@@ -127,13 +140,44 @@ export function LazyVirtualList<T>({
   }, [topIndex]);
 
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+    // `overflow-anchor: none` stops the browser's own scroll-anchoring from
+    // fighting the virtualizer when row heights settle after a window loads.
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-auto [overflow-anchor:none]"
+    >
       <div
         className="relative w-full"
         style={{ height: virtualizer.getTotalSize() }}
       >
         {virtualItems.map((vi) => {
           const item = itemAt(vi.index);
+          // Only rows with real content are measured. A not-yet-loaded row
+          // reserves exactly `estimateSize` and is NOT handed to
+          // `measureElement`: otherwise its short skeleton would be measured as
+          // the row's true height, react-virtual would collapse the total size,
+          // then re-expand each row as its window resolves — that collapse/
+          // re-expand under the scroll position is the "stuck then un-stuck"
+          // jump. Reserving the estimate keeps scrolling smooth over unloaded
+          // regions; the real height is measured once content arrives.
+          if (!item) {
+            return (
+              <div
+                key={vi.key}
+                className="absolute left-0 top-0 w-full"
+                style={{
+                  transform: `translateY(${vi.start}px)`,
+                  height: estimateSize,
+                }}
+              >
+                {renderPlaceholder?.(vi.index) ?? (
+                  <div className="px-4 pb-1">
+                    <div className="h-9 animate-pulse rounded-2xl bg-muted/40" />
+                  </div>
+                )}
+              </div>
+            );
+          }
           return (
             <div
               key={vi.key}
@@ -142,13 +186,7 @@ export function LazyVirtualList<T>({
               className="absolute left-0 top-0 w-full"
               style={{ transform: `translateY(${vi.start}px)` }}
             >
-              {item
-                ? renderItem(item, vi.index, itemAt(vi.index - 1))
-                : (renderPlaceholder?.(vi.index) ?? (
-                    <div className="px-4 pb-1">
-                      <div className="h-9 animate-pulse rounded-2xl bg-muted/40" />
-                    </div>
-                  ))}
+              {renderItem(item, vi.index, itemAt(vi.index - 1))}
             </div>
           );
         })}
