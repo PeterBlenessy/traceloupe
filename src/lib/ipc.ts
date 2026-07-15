@@ -237,6 +237,8 @@ export interface Message {
   /** iMessage receipts (Unix): when read / delivered, if known. */
   readAt: number | null;
   deliveredAt: number | null;
+  /** Tapback summary folded onto this message, e.g. "❤️×2 👍", or null. */
+  reactions: string | null;
   attachments: Attachment[];
 }
 
@@ -752,6 +754,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717840800,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
     {
@@ -762,6 +765,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717840980,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
     {
@@ -772,6 +776,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717841100,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
     {
@@ -782,6 +787,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717841220,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
     {
@@ -792,6 +798,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717841340,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [
         {
           id: 2,
@@ -809,6 +816,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717841460,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [
         {
           id: 1,
@@ -828,6 +836,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717499000,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
     {
@@ -838,6 +847,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717500000,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
   ],
@@ -850,6 +860,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717599000,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
     {
@@ -860,6 +871,7 @@ const mockMessages: Record<number, Message[]> = {
       sentAt: 1717600000,
       readAt: null,
       deliveredAt: null,
+      reactions: null,
       attachments: [],
     },
   ],
@@ -885,6 +897,7 @@ mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
   sentAt: 1717000000 + i * 600,
   readAt: null,
   deliveredAt: null,
+  reactions: null,
   attachments: [],
 }));
 mockMessages[4] = [
@@ -896,6 +909,7 @@ mockMessages[4] = [
     sentAt: 1717841600,
     readAt: null,
     deliveredAt: null,
+    reactions: null,
     attachments: [],
   },
   {
@@ -906,6 +920,7 @@ mockMessages[4] = [
     sentAt: 1717841650,
     readAt: null,
     deliveredAt: null,
+    reactions: null,
     attachments: [],
   },
   {
@@ -916,6 +931,7 @@ mockMessages[4] = [
     sentAt: 1717841700,
     readAt: null,
     deliveredAt: null,
+    reactions: null,
     attachments: [],
   },
 ];

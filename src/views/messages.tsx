@@ -1010,6 +1010,11 @@ function MessageBubble({
               ))}
             </BubbleContent>
           </Bubble>
+          {message.reactions && (
+            <span className="mt-0.5 w-fit rounded-full border bg-background px-1.5 py-0.5 text-xs leading-none shadow-sm">
+              {message.reactions}
+            </span>
+          )}
           {message.isFromMe && (message.readAt || message.deliveredAt) && (
             <span className="mt-0.5 text-[10px] text-muted-foreground">
               {message.readAt
