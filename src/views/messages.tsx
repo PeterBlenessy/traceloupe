@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  CalendarRange,
   FileText,
   ImageIcon,
   MessageSquare,
@@ -13,7 +14,11 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
@@ -38,6 +43,7 @@ import {
 import { useSettings } from "@/components/settings-provider";
 import { cn } from "@/lib/utils";
 import {
+  formatCount,
   formatDateHeader,
   formatListTime,
   formatMessageTime,
@@ -54,10 +60,11 @@ import {
   type Attachment,
   type Message,
   type ThreadSummary,
+  type TimeRange,
   type TimelineMessage,
 } from "@/lib/ipc";
 
-type Mode = "conversations" | "timeline" | "periods";
+type Mode = "conversations" | "timeline";
 
 export function MessagesView() {
   const navigate = useNavigate();
@@ -67,7 +74,7 @@ export function MessagesView() {
   });
   const [mode, setMode] = useState<Mode>("conversations");
   // Which conversation is open in the master-detail view. Lifted here so that
-  // clicking a row in the Timeline or Periods view can jump to its conversation.
+  // clicking a row in the Timeline view can jump to its conversation.
   const [selectedId, setSelectedId] = useState<number | null>(null);
   // Where a jump into a conversation came from, so the conversation view can
   // offer a "back" button to return to that overview (null = opened normally
@@ -85,7 +92,7 @@ export function MessagesView() {
   };
 
   // Filter by source app (iMessage / SMS / TikTok / …), shared across all three
-  // modes so it applies to Conversations, Timeline, and Periods alike.
+  // modes so it applies to both Conversations and Timeline.
   const [serviceFilter, setServiceFilter] = useState<string>("all");
   const { data: threadsForServices } = useQuery({
     queryKey: ["threads"],
@@ -130,7 +137,6 @@ export function MessagesView() {
         >
           <ToggleGroupItem value="conversations">Conversations</ToggleGroupItem>
           <ToggleGroupItem value="timeline">Timeline</ToggleGroupItem>
-          <ToggleGroupItem value="periods">Periods</ToggleGroupItem>
         </ToggleGroup>
         {services.length > 1 && (
           <ToggleGroup
@@ -163,16 +169,11 @@ export function MessagesView() {
             onSelect={setSelectedId}
             service={service}
             onBack={openedFrom ? () => setMode(openedFrom) : undefined}
-            backLabel={openedFrom === "periods" ? "Periods" : "Timeline"}
-          />
-        ) : mode === "timeline" ? (
-          <Timeline
-            onOpenThread={(id) => openThread(id, "timeline")}
-            service={service}
+            backLabel="Timeline"
           />
         ) : (
-          <Periods
-            onOpenThread={(id) => openThread(id, "periods")}
+          <Timeline
+            onOpenThread={(id) => openThread(id, "timeline")}
             service={service}
           />
         )}
@@ -373,31 +374,84 @@ function Timeline({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: total } = useQuery({
-    queryKey: ["timelineCount", service],
-    queryFn: () => client.countTimelineMessages(service),
-    enabled: active === true,
-  });
+  // Anchor "now" once so preset bounds and query keys stay stable.
+  const [now] = useState(() => Math.floor(Date.now() / 1000));
+  const presets = useMemo(() => makePresets(now), [now]);
   // Oldest-first by default (newest at the bottom); toggle flips to newest-first.
   const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
+  // The active time filter as a half-open [lo, hi) range; {null,null} = all time.
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+
+  // Per-preset message counts for the chip labels (e.g. "7d · 812").
+  const { data: presetCounts } = useQuery({
+    queryKey: ["messageRanges", now, service, "presets"],
+    queryFn: () =>
+      client.countMessageRanges(
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+        service,
+      ),
+    enabled: active === true,
+  });
+  // Count for the active range — sizes the virtual scroller.
+  const { data: total } = useQuery({
+    queryKey: ["timelineRangeCount", range.lo, range.hi, service],
+    queryFn: async () =>
+      (await client.countMessageRanges([range], service))[0] ?? 0,
+    enabled: active === true,
+  });
+
+  // Which chip (if any) matches the active range, so it can be highlighted; a
+  // custom date range matches no preset (activeKey null).
+  const activeKey =
+    presets.find((p) => p.lo === range.lo && p.hi === range.hi)?.key ?? null;
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Timeline" count={total}>
+      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5">
+        <div className="flex flex-1 flex-wrap items-center gap-1">
+          {presets.map((p, i) => (
+            <FilterChip
+              key={p.key}
+              label={p.label}
+              count={presetCounts?.[i]}
+              active={activeKey === p.key}
+              onClick={() => setRange({ lo: p.lo, hi: p.hi })}
+            />
+          ))}
+          <DateRangeFilter
+            value={range}
+            active={activeKey === null}
+            onChange={setRange}
+          />
+        </div>
         <SortControl
           fields={[{ value: "time", label: "Time" }]}
           value={order}
           onChange={setOrder}
         />
-      </ViewHeader>
+      </div>
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom={!order.desc}
-        resetKey={`timeline:${service ?? "all"}:${order.desc}`}
+        resetKey={`timeline:${service ?? "all"}:${range.lo}:${range.hi}:${order.desc}`}
         estimateSize={56}
-        windowKey={(page) => ["timelineWindow", service, order.desc, page]}
+        windowKey={(page) => [
+          "timelineWindow",
+          service,
+          range.lo,
+          range.hi,
+          order.desc,
+          page,
+        ]}
         fetchWindow={(offset, limit) =>
-          client.getTimelineWindow(offset, limit, service, order.desc)
+          client.getRangeWindow(
+            range.lo,
+            range.hi,
+            offset,
+            limit,
+            service,
+            order.desc,
+          )
         }
         renderItem={(item, _i, prev) => (
           <TimelineRow
@@ -414,213 +468,136 @@ function Timeline({
   );
 }
 
-/** A recency bucket: a labelled half-open time window with a message count. */
-type Period = {
+/** A cumulative quick-filter: everything since `lo` (null = no lower bound). */
+type Preset = {
   key: string;
   label: string;
   lo: number | null;
   hi: number | null;
 };
 
-/** Earliest year to generate a bucket for — the first iPhone, so no iOS backup
- *  predates it. Empty years are hidden, so an over-wide floor costs nothing. */
-const FLOOR_YEAR = 2007;
-
 /**
- * Non-overlapping buckets, newest first, anchored at `now` (epoch s): three
- * recency buckets, then one bucket per calendar year for everything older than
- * 30 days (2025, 2024, …). Year buckets with no messages are hidden at render.
+ * The quick time filters shown as chips, anchored at `now` (epoch seconds):
+ * All, then cumulative recency windows, then the current calendar year. These
+ * are *filters* (each includes everything more recent), unlike the old Periods
+ * buckets which were disjoint jump targets.
  */
-function makePeriods(now: number): Period[] {
+function makePresets(now: number): Preset[] {
   const DAY = 86_400;
-  const thirtyDaysAgo = now - 30 * DAY;
-  const periods: Period[] = [
-    { key: "24h", label: "Last 24 hours", lo: now - DAY, hi: null },
-    { key: "7d", label: "Last 7 days", lo: now - 7 * DAY, hi: now - DAY },
-    { key: "30d", label: "Last 30 days", lo: thirtyDaysAgo, hi: now - 7 * DAY },
+  const year = new Date(now * 1000).getFullYear();
+  const yearStart = Math.floor(new Date(year, 0, 1).getTime() / 1000);
+  return [
+    { key: "all", label: "All", lo: null, hi: null },
+    { key: "24h", label: "24h", lo: now - DAY, hi: null },
+    { key: "7d", label: "7d", lo: now - 7 * DAY, hi: null },
+    { key: "30d", label: "30d", lo: now - 30 * DAY, hi: null },
+    { key: "year", label: String(year), lo: yearStart, hi: null },
   ];
-  const currentYear = new Date(now * 1000).getFullYear();
-  for (let y = currentYear; y >= FLOOR_YEAR; y--) {
-    const yearStart = Math.floor(new Date(y, 0, 1).getTime() / 1000);
-    const nextYearStart = Math.floor(new Date(y + 1, 0, 1).getTime() / 1000);
-    // The current year stops at the 30-day cutoff so it doesn't overlap the
-    // recency buckets above; older years span their whole calendar year.
-    const hi = Math.min(nextYearStart, thirtyDaysAgo);
-    if (hi <= yearStart) continue; // fully covered by the recency buckets
-    periods.push({ key: `y${y}`, label: String(y), lo: yearStart, hi });
-  }
-  return periods;
 }
 
-/**
- * The full all-conversations timeline, with recency buckets on the left acting
- * as jump shortcuts INTO that one continuous list — not filters. Selecting a
- * bucket scrolls to where that period begins; scrolling past it flows naturally
- * into the neighbouring periods, and the active bucket follows the scroll.
- */
-function Periods({
-  onOpenThread,
-  service,
-}: {
-  onOpenThread: (threadId: number) => void;
-  service: string | null;
-}) {
-  const resolve = useContactResolver();
-  const { showContactNames, showAvatars } = useSettings();
-  const { data: active } = useQuery({
-    queryKey: ["hasActiveBackup"],
-    queryFn: () => client.hasActiveBackup(),
-  });
-  // Anchor the buckets once so their bounds (and query keys) stay stable.
-  const [now] = useState(() => Math.floor(Date.now() / 1000));
-  const periods = useMemo(() => makePeriods(now), [now]);
-  // Oldest-first by default; toggling flips the stream and the bucket→row math.
-  const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
-
-  const { data: total } = useQuery({
-    queryKey: ["timelineCount", service],
-    queryFn: () => client.countTimelineMessages(service),
-    enabled: active === true,
-  });
-  const { data: counts } = useQuery({
-    queryKey: ["messageRanges", now, service],
-    queryFn: () =>
-      client.countMessageRanges(
-        periods.map((p) => ({ lo: p.lo, hi: p.hi })),
-        service,
-      ),
-  });
-
-  // A period's starting row index is the number of messages that sort before it
-  // in the current order. `periods` is newest-first. Oldest-first stream: the
-  // rows before period i are the OLDER buckets (later in the array, j > i).
-  // Newest-first stream: the rows before it are the NEWER buckets (j < i).
-  const startIndex = useMemo(() => {
-    return periods.map((_, i) => {
-      let s = 0;
-      if (order.desc) {
-        for (let j = 0; j < i; j++) s += counts?.[j] ?? 0;
-      } else {
-        for (let j = i + 1; j < periods.length; j++) s += counts?.[j] ?? 0;
-      }
-      return s;
-    });
-  }, [periods, counts, order.desc]);
-
-  const [topIndex, setTopIndex] = useState(0);
-  const [jump, setJump] = useState<
-    { index: number; token: number } | undefined
-  >();
-
-  // Which bucket the current scroll position sits in (start ≤ topIndex < next).
-  const activeIndex = counts
-    ? periods.findIndex(
-        (_, i) =>
-          topIndex >= startIndex[i] &&
-          topIndex < startIndex[i] + (counts[i] ?? 0),
-      )
-    : -1;
-
-  return (
-    <ListDetail
-      master={
-        <>
-          <ViewHeader title="Periods" />
-          <ScrollArea className="flex-1">
-            {periods.map((p, i) => {
-              const count = counts?.[i];
-              // Hide calendar-year buckets with no messages (an over-wide year
-              // floor then costs nothing); keep the recency buckets always
-              // visible so the list never collapses to nothing while loading.
-              if (p.key.startsWith("y") && !count) return null;
-              return (
-                <PeriodRow
-                  key={p.key}
-                  label={p.label}
-                  count={count}
-                  active={activeIndex === i}
-                  disabled={!count}
-                  onClick={() =>
-                    setJump((prev) => ({
-                      index: startIndex[i],
-                      token: (prev?.token ?? 0) + 1,
-                    }))
-                  }
-                />
-              );
-            })}
-          </ScrollArea>
-        </>
-      }
-      detail={
-        <div className="flex h-full flex-col">
-          <ViewHeader title="All messages" count={total}>
-            <SortControl
-              fields={[{ value: "time", label: "Time" }]}
-              value={order}
-              onChange={setOrder}
-            />
-          </ViewHeader>
-          <LazyVirtualList<TimelineMessage>
-            count={total ?? 0}
-            startAtBottom={!order.desc}
-            resetKey={`periods-timeline:${service ?? "all"}:${order.desc}`}
-            estimateSize={56}
-            jumpTo={jump}
-            onTopIndexChange={setTopIndex}
-            windowKey={(page) => ["timelineWindow", service, order.desc, page]}
-            fetchWindow={(offset, limit) =>
-              client.getTimelineWindow(offset, limit, service, order.desc)
-            }
-            renderItem={(item, _i, prev) => (
-              <TimelineRow
-                item={item}
-                showDate={dayChanged(prev, item)}
-                onOpen={() => onOpenThread(item.threadId)}
-                resolve={resolve}
-                showContactNames={showContactNames}
-                showAvatars={showAvatars}
-              />
-            )}
-          />
-        </div>
-      }
-    />
-  );
-}
-
-function PeriodRow({
+/** A pill toggle for a quick time filter, showing its message count. */
+function FilterChip({
   label,
   count,
   active,
-  disabled,
   onClick,
 }: {
   label: string;
   count: number | undefined;
   active: boolean;
-  disabled: boolean;
   onClick: () => void;
 }) {
   return (
-    <Item
-      asChild
+    <button
+      type="button"
+      onClick={onClick}
       data-active={active}
-      className="rounded-none py-2 data-[active=true]:bg-accent"
+      className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
     >
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        className="w-full text-left disabled:opacity-50"
-      >
-        <ItemContent>
-          <ItemTitle>{label}</ItemTitle>
-        </ItemContent>
-        <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
-          {count ?? "…"}
-        </span>
-      </button>
-    </Item>
+      {label}
+      {count !== undefined && (
+        <span className="tabular-nums opacity-70">{formatCount(count)}</span>
+      )}
+    </button>
+  );
+}
+
+/** Epoch seconds → a `yyyy-mm-dd` string for a native date input (local time). */
+function toDateInput(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/**
+ * A custom from–to date filter. Emits a half-open [lo, hi) epoch-second range
+ * where the "to" day is inclusive (hi = start of the following day). Reflects
+ * the bounds only while a custom range is active — a preset shouldn't populate
+ * the date fields.
+ */
+function DateRangeFilter({
+  value,
+  active,
+  onChange,
+}: {
+  value: TimeRange;
+  active: boolean;
+  onChange: (r: TimeRange) => void;
+}) {
+  const fromStr = active && value.lo != null ? toDateInput(value.lo) : "";
+  const toStr = active && value.hi != null ? toDateInput(value.hi - 1) : "";
+
+  const apply = (from: string, to: string) => {
+    const lo = from
+      ? Math.floor(new Date(`${from}T00:00:00`).getTime() / 1000)
+      : null;
+    const hi = to
+      ? Math.floor(new Date(`${to}T00:00:00`).getTime() / 1000) + 86_400
+      : null;
+    onChange({ lo, hi });
+  };
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-active={active}
+          className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
+        >
+          <CalendarRange className="size-3.5" />
+          {active ? `${fromStr || "…"} – ${toStr || "…"}` : "Range"}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 space-y-3">
+        <label className="block space-y-1">
+          <span className="text-xs text-muted-foreground">From</span>
+          <input
+            type="date"
+            value={fromStr}
+            onChange={(e) => apply(e.target.value, toStr)}
+            className="w-full rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
+        <label className="block space-y-1">
+          <span className="text-xs text-muted-foreground">To</span>
+          <input
+            type="date"
+            value={toStr}
+            onChange={(e) => apply(fromStr, e.target.value)}
+            className="w-full rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </label>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="w-full"
+          onClick={() => onChange({ lo: null, hi: null })}
+        >
+          Clear
+        </Button>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -664,13 +641,30 @@ function TimelineRow({
       >
         {showAvatars && (
           <Avatar className="mt-0.5 size-8 shrink-0">
-            {resolved?.hasImage && (
+            {!m.isFromMe && resolved?.hasImage && (
               <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
             )}
-            <AvatarFallback>{initials(sender)}</AvatarFallback>
+            {/* Outgoing messages get a distinct primary "You" avatar so your own
+                messages are never mistaken for the contact's. */}
+            <AvatarFallback
+              className={
+                m.isFromMe
+                  ? "bg-primary text-[10px] font-medium text-primary-foreground"
+                  : undefined
+              }
+            >
+              {m.isFromMe ? "You" : initials(sender)}
+            </AvatarFallback>
           </Avatar>
         )}
         <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
+          {/* When avatars are hidden, the "You" avatar cue is gone — mark your
+              own outgoing messages inline instead. */}
+          {m.isFromMe && !showAvatars && (
+            <span className="mr-1.5 rounded bg-primary/10 px-1 py-px text-xs font-medium text-primary">
+              You
+            </span>
+          )}
           {m.body ? (
             m.body
           ) : m.attachments.length ? (
