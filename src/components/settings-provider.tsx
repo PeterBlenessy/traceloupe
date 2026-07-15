@@ -2,6 +2,12 @@ import { createContext, useContext, useEffect, useState } from "react";
 import { client, type LogLevel, type LogRecord } from "@/lib/ipc";
 import { CLOCK_KEY, readClockFormat, setClockFormat, type ClockFormat } from "@/lib/format";
 
+/** UI density: how tight rows, headers and controls pack together. Drives the
+ *  global Tailwind `--spacing` scale via `data-density` on the document root. */
+export type Density = "comfortable" | "cozy" | "compact";
+/** Ordered least-dense → most-dense; drives the density stepper in the header. */
+export const DENSITIES: Density[] = ["comfortable", "cozy", "compact"];
+
 /**
  * Settings provider — holds app-wide display preferences, reads their initial
  * values from localStorage, and persists on change. Mirrors the theme-provider
@@ -27,6 +33,9 @@ type SettingsProviderState = {
   setBiometricUnlock: (v: boolean) => void;
   /** Whether Touch ID can work — the app is stably signed (see docs/signing.md). */
   biometricAvailable: boolean;
+  /** How tightly the UI packs (rows, headers, controls). */
+  density: Density;
+  setDensity: (d: Density) => void;
 };
 
 const NAMES_KEY = "traceloupe-show-names";
@@ -34,6 +43,13 @@ const AVATARS_KEY = "traceloupe-show-avatars";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
+const DENSITY_KEY = "traceloupe-density";
+
+/** Read the persisted density, defaulting to "comfortable". */
+function readDensity(): Density {
+  const raw = localStorage.getItem(DENSITY_KEY);
+  return DENSITIES.includes(raw as Density) ? (raw as Density) : "comfortable";
+}
 
 const LOG_LEVELS: LogLevel[] = ["off", "error", "warn", "info", "debug", "trace"];
 
@@ -93,6 +109,15 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   );
   const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
   const [signingChecked, setSigningChecked] = useState<boolean>(false);
+  const [density, setDensityState] = useState<Density>(() => readDensity());
+
+  // Reflect density onto the document root; a CSS rule keyed off `data-density`
+  // scales the global Tailwind `--spacing`, so every spacing utility tightens at
+  // once. "comfortable" is the default (no attribute needed) but we always set it
+  // so a change back clears any previous value.
+  useEffect(() => {
+    document.documentElement.dataset.density = density;
+  }, [density]);
 
   // Touch ID only works on a stably-signed build (an adhoc dev binary loses
   // Keychain access on rebuild). Detect it, and: disable the gate when unsigned,
@@ -177,6 +202,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setBiometricUnlockState(v); // the effect above pushes it to the backend
   };
 
+  const setDensity = (d: Density) => {
+    localStorage.setItem(DENSITY_KEY, d);
+    setDensityState(d); // the effect above applies it to the document root
+  };
+
   return (
     <SettingsProviderContext.Provider
       value={{
@@ -193,6 +223,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         biometricUnlock,
         setBiometricUnlock,
         biometricAvailable,
+        density,
+        setDensity,
       }}
     >
       {children}

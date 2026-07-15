@@ -102,10 +102,11 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
 
 /// Total number of messages in a thread. Cheap; drives the virtual scroller so
 /// the UI can lazily fetch only the windows it renders.
-pub fn count_messages(cache: &CacheDb, thread_id: i64) -> Result<i64> {
+pub fn count_messages(cache: &CacheDb, thread_id: i64, kind: Option<&str>) -> Result<i64> {
     let n = cache.conn().query_row(
-        "SELECT COUNT(*) FROM messages WHERE thread_id = ?1",
-        [thread_id],
+        "SELECT COUNT(*) FROM messages
+         WHERE thread_id = ?1 AND (?2 IS NULL OR kind = ?2)",
+        rusqlite::params![thread_id, kind],
         |r| r.get(0),
     )?;
     Ok(n)
@@ -120,6 +121,7 @@ pub fn get_message_window(
     thread_id: i64,
     offset: i64,
     limit: i64,
+    kind: Option<&str>,
     desc: bool,
 ) -> Result<Vec<Message>> {
     let conn = cache.conn();
@@ -128,12 +130,12 @@ pub fn get_message_window(
     let mut stmt = conn.prepare(&format!(
         "SELECT id, is_from_me, sender, body, sent_at
          FROM messages
-         WHERE thread_id = ?1
+         WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
          ORDER BY sent_at {dir}, id {dir}
          LIMIT ?2 OFFSET ?3",
     ))?;
     let mut messages = stmt
-        .query_map(rusqlite::params![thread_id, limit, offset], row_to_message)?
+        .query_map(rusqlite::params![thread_id, limit, offset, kind], row_to_message)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     // Load attachments only for this window's messages, not the whole thread —
     // otherwise every window fetch rescans all of a large thread's attachments.
@@ -254,10 +256,46 @@ pub fn attachment_blob(cache: &CacheDb, attachment_id: i64) -> Result<Option<Att
 /// Total messages across every conversation. Drives the timeline's virtual
 /// scroller. Also ensures the timeline ordering index exists, migrating caches
 /// created before the timeline feature.
+/// Distinct content `kind`s present (with counts), for the message content filter
+/// pills. `thread_id` scopes to one conversation; otherwise all messages, optionally
+/// narrowed to one `service`. NULL kinds (pre-v11 rows) and the catch-all 'other'
+/// are omitted (nothing worth a pill).
+pub fn message_kinds(
+    cache: &CacheDb,
+    thread_id: Option<i64>,
+    service: Option<&str>,
+) -> Result<Vec<(String, i64)>> {
+    let conn = cache.conn();
+    let map = |r: &rusqlite::Row<'_>| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?));
+    if let Some(tid) = thread_id {
+        let mut stmt = conn.prepare(
+            "SELECT kind, COUNT(*) FROM messages
+             WHERE thread_id = ?1 AND kind IS NOT NULL AND kind <> 'other'
+             GROUP BY kind ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt
+            .query_map([tid], map)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT m.kind, COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
+             WHERE m.kind IS NOT NULL AND m.kind <> 'other'
+               AND (?1 IS NULL OR t.service = ?1)
+             GROUP BY m.kind ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt
+            .query_map([service], map)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+}
+
 pub fn count_all_messages(
     cache: &CacheDb,
     service: Option<&str>,
     search: Option<&str>,
+    kind: Option<&str>,
 ) -> Result<i64> {
     let conn = cache.conn();
     // Undated messages can't be placed chronologically, so the timeline (and the
@@ -269,8 +307,9 @@ pub fn count_all_messages(
     let search = search.map(escape_like);
     let n = if service.is_none() && search.is_none() {
         conn.query_row(
-            "SELECT COUNT(*) FROM messages WHERE sent_at IS NOT NULL",
-            [],
+            "SELECT COUNT(*) FROM messages
+             WHERE sent_at IS NOT NULL AND (?1 IS NULL OR kind = ?1)",
+            rusqlite::params![kind],
             |r| r.get(0),
         )?
     } else {
@@ -278,11 +317,12 @@ pub fn count_all_messages(
             "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
              WHERE m.sent_at IS NOT NULL
                AND (?1 IS NULL OR t.service = ?1)
+               AND (?3 IS NULL OR m.kind = ?3)
                AND (?2 IS NULL OR m.body LIKE '%' || ?2 || '%' ESCAPE '\\'
                               OR m.sender LIKE '%' || ?2 || '%' ESCAPE '\\'
                               OR t.display_name LIKE '%' || ?2 || '%' ESCAPE '\\'
                               OR t.identifier LIKE '%' || ?2 || '%' ESCAPE '\\')",
-            rusqlite::params![service, search],
+            rusqlite::params![service, search, kind],
             |r| r.get(0),
         )?
     };
@@ -297,6 +337,7 @@ pub fn get_timeline_window(
     limit: i64,
     service: Option<&str>,
     search: Option<&str>,
+    kind: Option<&str>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
     range_window(
@@ -306,6 +347,7 @@ pub fn get_timeline_window(
         limit,
         service,
         search,
+        kind,
         desc,
     )
 }
@@ -318,23 +360,25 @@ pub fn count_message_ranges(
     ranges: &[TimeRange],
     service: Option<&str>,
     search: Option<&str>,
+    kind: Option<&str>,
 ) -> Result<Vec<i64>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
     let mut out = Vec::with_capacity(ranges.len());
     // No app/text filter → no join to threads (the common case: one COUNT per
-    // bucket over idx_messages_sent).
+    // bucket over idx_messages_sent). `kind` lives on `messages`, so it stays on
+    // the join-free path.
     if service.is_none() && search.is_none() {
         // `sent_at IS NOT NULL` so an all-open range (lo/hi both NULL) counts only
         // what range_window returns — undated messages are excluded from both,
         // keeping count and rows aligned.
         let mut stmt = conn.prepare(
             "SELECT COUNT(*) FROM messages
-             WHERE sent_at IS NOT NULL
+             WHERE sent_at IS NOT NULL AND (?3 IS NULL OR kind = ?3)
                AND (?1 IS NULL OR sent_at >= ?1) AND (?2 IS NULL OR sent_at < ?2)",
         )?;
         for r in ranges {
-            out.push(stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?);
+            out.push(stmt.query_row(rusqlite::params![r.lo, r.hi, kind], |row| row.get(0))?);
         }
     } else {
         let mut stmt = conn.prepare(
@@ -343,6 +387,7 @@ pub fn count_message_ranges(
                AND (?1 IS NULL OR m.sent_at >= ?1)
                AND (?2 IS NULL OR m.sent_at < ?2)
                AND (?3 IS NULL OR t.service = ?3)
+               AND (?5 IS NULL OR m.kind = ?5)
                AND (?4 IS NULL OR m.body LIKE '%' || ?4 || '%' ESCAPE '\\'
                               OR m.sender LIKE '%' || ?4 || '%' ESCAPE '\\'
                               OR t.display_name LIKE '%' || ?4 || '%' ESCAPE '\\'
@@ -350,7 +395,7 @@ pub fn count_message_ranges(
         )?;
         for r in ranges {
             out.push(
-                stmt.query_row(rusqlite::params![r.lo, r.hi, service, search], |row| {
+                stmt.query_row(rusqlite::params![r.lo, r.hi, service, search, kind], |row| {
                     row.get(0)
                 })?,
             );
@@ -361,6 +406,7 @@ pub fn count_message_ranges(
 
 /// A window of every message whose timestamp falls in `range`, oldest first,
 /// across all conversations. Backs a selected period bucket.
+#[allow(clippy::too_many_arguments)]
 pub fn get_range_window(
     cache: &CacheDb,
     range: TimeRange,
@@ -368,14 +414,16 @@ pub fn get_range_window(
     limit: i64,
     service: Option<&str>,
     search: Option<&str>,
+    kind: Option<&str>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
-    range_window(cache, range, offset, limit, service, search, desc)
+    range_window(cache, range, offset, limit, service, search, kind, desc)
 }
 
 /// Shared implementation: messages in `range` (open bounds allowed) and optional
 /// `service`, joined to their thread for labeling, with attachments, ordered
 /// chronologically.
+#[allow(clippy::too_many_arguments)]
 fn range_window(
     cache: &CacheDb,
     range: TimeRange,
@@ -383,6 +431,7 @@ fn range_window(
     limit: i64,
     service: Option<&str>,
     search: Option<&str>,
+    kind: Option<&str>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
     let conn = cache.conn();
@@ -398,6 +447,7 @@ fn range_window(
            AND (?1 IS NULL OR m.sent_at >= ?1)
            AND (?2 IS NULL OR m.sent_at < ?2)
            AND (?5 IS NULL OR t.service = ?5)
+           AND (?7 IS NULL OR m.kind = ?7)
            AND (?6 IS NULL OR m.body LIKE '%' || ?6 || '%' ESCAPE '\\'
                           OR m.sender LIKE '%' || ?6 || '%' ESCAPE '\\'
                           OR t.display_name LIKE '%' || ?6 || '%' ESCAPE '\\'
@@ -407,7 +457,7 @@ fn range_window(
     ))?;
     let mut items = stmt
         .query_map(
-            rusqlite::params![range.lo, range.hi, limit, offset, service, search],
+            rusqlite::params![range.lo, range.hi, limit, offset, service, search, kind],
             |r| {
                 let display_name: Option<String> = r.get(6)?;
                 let identifier: String = r.get(7)?;
@@ -813,20 +863,44 @@ fn escape_like(s: &str) -> String {
 }
 
 /// Calls whose address matches `search` (substring), or all when NULL.
-pub fn count_calls(cache: &CacheDb, search: Option<&str>) -> Result<i64> {
+pub fn count_calls(cache: &CacheDb, search: Option<&str>, range: TimeRange) -> Result<i64> {
     let search = search.map(escape_like);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM calls
-         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')",
-        [search],
+         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?2 IS NULL OR occurred_at >= ?2)
+           AND (?3 IS NULL OR occurred_at < ?3)",
+        rusqlite::params![search, range.lo, range.hi],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
+/// Call counts for each `range` (respecting `search`) — powers the time-filter chips.
+pub fn count_call_ranges(
+    cache: &CacheDb,
+    ranges: &[TimeRange],
+    search: Option<&str>,
+) -> Result<Vec<i64>> {
+    let conn = cache.conn();
+    let search = search.map(escape_like);
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM calls
+         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?2 IS NULL OR occurred_at >= ?2)
+           AND (?3 IS NULL OR occurred_at < ?3)",
+    )?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        out.push(stmt.query_row(rusqlite::params![search, r.lo, r.hi], |row| row.get(0))?);
+    }
+    Ok(out)
+}
+
 pub fn get_calls_window(
     cache: &CacheDb,
     search: Option<&str>,
+    range: TimeRange,
     offset: i64,
     limit: i64,
     sort: Sort,
@@ -840,12 +914,17 @@ pub fn get_calls_window(
         "SELECT id, address, direction, answered, duration_s, occurred_at, service
          FROM calls
          WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?4 IS NULL OR occurred_at >= ?4)
+           AND (?5 IS NULL OR occurred_at < ?5)
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_call)?;
+    let rows = stmt.query_map(
+        rusqlite::params![search, limit, offset, range.lo, range.hi],
+        row_to_call,
+    )?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }

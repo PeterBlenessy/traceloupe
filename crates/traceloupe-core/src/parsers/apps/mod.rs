@@ -54,6 +54,10 @@ pub struct AppMessage {
     pub sender_id: Option<String>,
     /// Whether this message carries an attachment (media).
     pub has_attachment: bool,
+    /// Explicit content class for the message filter ('shared', 'sticker',
+    /// 'system', …) when the app knows it (TikTok). `None` → derived from
+    /// body/attachment by the inserter.
+    pub kind: Option<&'static str>,
 }
 
 /// A native chat parser for one third-party app.
@@ -85,7 +89,9 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     whatsapp::MODULE,
     facebook_messenger::MODULE,
     instagram::MODULE,
-    tiktok::MODULE,
+    // NOTE: TikTok is NOT here — its messages (`ChatFiles/*/db.sqlite`) and names
+    // (`AwemeIM.db`) live in two separate DBs, which the single-file module API
+    // can't join, so it's driven by `import_tiktok_messages_native` instead.
     telegram::MODULE,
     kik::MODULE,
     imo::MODULE,
@@ -248,17 +254,22 @@ pub fn insert_app_conversation(
                 });
             }
         }
+        // App-provided content class (TikTok markers) or derived from body/media.
+        let kind = m
+            .kind
+            .unwrap_or_else(|| crate::normalize::message_kind(m.body.as_deref(), m.has_attachment));
         tx.execute(
             "INSERT INTO messages
-                 (thread_id, sender, is_from_me, body, sent_at, has_attachments)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 thread_id,
                 sender,
                 m.is_from_me as i64,
                 m.body,
                 m.timestamp,
-                m.has_attachment as i64
+                m.has_attachment as i64,
+                kind,
             ],
         )?;
         n_messages += 1;

@@ -30,10 +30,18 @@ const routes = [
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/messages",
-    // `?thread=<id>` deep-links to a conversation (e.g. from a contact).
-    validateSearch: (search: Record<string, unknown>): { thread?: number } => {
+    // `?thread=<id>` deep-links to a conversation (e.g. from a contact);
+    // `?service=<label>` preselects the service filter (e.g. from the Apps view).
+    validateSearch: (
+      search: Record<string, unknown>,
+    ): { thread?: number; service?: string } => {
       const t = Number(search.thread);
-      return Number.isFinite(t) ? { thread: t } : {};
+      const service =
+        typeof search.service === "string" ? search.service : undefined;
+      return {
+        ...(Number.isFinite(t) ? { thread: t } : {}),
+        ...(service ? { service } : {}),
+      };
     },
     component: MessagesView,
   }),

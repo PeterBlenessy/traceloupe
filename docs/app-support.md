@@ -65,9 +65,12 @@ writes the threads/messages. Adding an app is one module file + a registry entry
 what's actually in the backup (confirmed by whether iLEAPP even has a module):
 
 > ✅ done: **WhatsApp**, **Facebook Messenger** (clean SQLite), **Instagram** (DMs
-> via a native NSKeyedArchiver decoder), **TikTok** — messages (JSON `content`)
-> AND contacts/social-graph (`AwemeIM.db` `TTKIMContactBaseUser*`/`AwemeContacts*`,
-> validated at 145 contacts). Instagram is *unvalidated* against a real backup.
+> via a native NSKeyedArchiver decoder), **TikTok** — messages
+> (`ChatFiles/<uid>/db.sqlite` `TIMMessageORM`, JSON `content` classified into text
+> + typed markers for shared video/sticker/profile) AND contacts/social-graph
+> (`AwemeIM.db` `TTKIMContactBaseUser*`/`AwemeContacts*`). Both TikTok DBs are now
+> **validated against a real backup** (263k messages, 145 contacts). Instagram is
+> *unvalidated* against a real backup.
 > Investigate (data exists but not open-source-documented — see Research notes):
 > **Snapchat**, **X/Twitter**, **Facebook** (main app).
 
@@ -103,7 +106,7 @@ decryption), TrustedSec (iOS `Cache.db`), SANS ISC / AboutDFIR (iOS app artifact
 |-----|-----------------------|--------|--------------|
 | WhatsApp | Messages (rich local SQLite) | ✅ Native — messages | 0.3.0 |
 | Facebook Messenger | Messages (`lightspeed` SQLite) | ✅ Native — messages | 0.3.0 |
-| TikTok | Messages (JSON) + social-graph contacts | ✅ Native (unvalidated) — messages; 🟡 contacts | 0.3.0 |
+| TikTok | Messages (JSON) + social-graph contacts | ✅ Native (validated) — messages + content kinds; 🟡 contacts | 0.3.0 |
 | Instagram | DMs as archived plists | ✅ Native (unvalidated) — DMs | 0.3.0 |
 | Telegram | Messages (binary "postbox" format) | ✅ Native (unvalidated) — messages | 0.4.0 |
 | Facebook (main app) | Chats via Messenger (done); feed/media in generic `Cache.db` | ⬜ Investigate (Cache.db) | TBD |

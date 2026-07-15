@@ -71,7 +71,14 @@ export function TimeFilterBar({
   const activeKey =
     presets.find((p) => p.lo === value.lo && p.hi === value.hi)?.key ?? null;
   return (
-    <div className={cn("flex flex-wrap items-center gap-1", className)}>
+    // Never wrap — scroll horizontally when the toolbar is too narrow (so the
+    // period chips can't push the header onto a second row), like the filter badges.
+    <div
+      className={cn(
+        "flex min-w-0 flex-nowrap items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden",
+        className,
+      )}
+    >
       {presets.map((p, i) => (
         <FilterChip
           key={p.key}
@@ -107,7 +114,7 @@ function FilterChip({
       type="button"
       onClick={onClick}
       data-active={active}
-      className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
+      className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
     >
       {label}
       {count !== undefined && (
@@ -160,7 +167,7 @@ function DateRangeFilter({
         <button
           type="button"
           data-active={active}
-          className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
+          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
         >
           <CalendarRange className="size-3.5" />
           {active ? `${fromStr || "…"} – ${toStr || "…"}` : "Range"}

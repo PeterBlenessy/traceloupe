@@ -15,6 +15,7 @@ import {
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
 import { BrandIcon } from "@/lib/brand-icon";
+import { cn } from "@/lib/utils";
 import { client } from "@/lib/ipc";
 
 interface AppRow {
@@ -89,11 +90,9 @@ export function AppsView() {
       isPending={isPending}
       error={error}
       emptyMessage="No installed-app list in this backup."
-      header={
+      search={
         apps.length > 0 ? (
-          <div className="w-56">
-            <ListSearch value={q} onChange={setQ} placeholder="Search apps" />
-          </div>
+          <ListSearch value={q} onChange={setQ} placeholder="Search apps" />
         ) : undefined
       }
       items={filtered}
@@ -104,6 +103,7 @@ export function AppsView() {
 }
 
 function AppItem({ app }: { app: AppRow }) {
+  const navigate = useNavigate();
   const label = SUPPORT_LABEL[app.support];
   // Only the "coming soon" placeholder — never for apps we already parse natively
   // (their chats show in Messages) or that keep no local data.
@@ -120,7 +120,17 @@ function AppItem({ app }: { app: AppRow }) {
         <ItemTitle className="flex items-center gap-2">
           {app.name}
           {label && (
-            <Badge variant={app.support === "native" ? "default" : "secondary"}>
+            // Both states share the soft "secondary" pill shape (identical box, so
+            // no optical height difference); "native" only re-tints it. A solid
+            // near-white `default` badge optically blooms taller on the dark row.
+            <Badge
+              variant="secondary"
+              className={cn(
+                "px-2 py-0.5 font-medium",
+                app.support === "native" &&
+                  "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+              )}
+            >
               {label}
             </Badge>
           )}
@@ -129,9 +139,16 @@ function AppItem({ app }: { app: AppRow }) {
       </ItemContent>
       {app.support === "native" ? (
         <ItemActions>
-          <span className="text-xs text-muted-foreground">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              navigate({ to: "/messages", search: { service: app.name } })
+            }
+            className="text-xs text-muted-foreground"
+          >
             Chats in Messages →
-          </span>
+          </Button>
         </ItemActions>
       ) : canExtract ? (
         <ItemActions>

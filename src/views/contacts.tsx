@@ -7,11 +7,18 @@ import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { BadgeFilter } from "@/components/badge-filter";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { EmptyView, ErrorState, ListDetail, ListSearch, ViewHeader } from "@/components/view";
+import {
+  EmptyView,
+  ErrorState,
+  ListDetail,
+  ListSearch,
+  PanelHeader,
+} from "@/components/view";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
@@ -32,8 +39,11 @@ export function ContactsView() {
   const [q, setQ] = useState("");
   // Source filter: the device address book vs a third-party app's social graph
   // (e.g. TikTok). Default to the address book so app contacts don't bury it.
-  const [source, setSource] = useState("Address Book");
-  const [sort, setSort] = useState<SortState>({ by: "name", desc: false });
+  const [source, setSource] = usePersistedState("contacts:source", "Address Book");
+  const [sort, setSort] = usePersistedState<SortState>("contacts:sort", {
+    by: "name",
+    desc: false,
+  });
   const { showAvatars } = useSettings();
 
   const sources = useMemo(() => {
@@ -90,80 +100,89 @@ export function ContactsView() {
   const selected = sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
 
   return (
-    <ListDetail
-      master={
-        <>
-          <ViewHeader title="Contacts" count={filtered.length} />
-          <div className="space-y-2 border-b p-2">
-            <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />
-            {sources.length > 1 && (
-              <ToggleGroup
-                type="single"
-                size="sm"
-                variant="outline"
-                value={activeSource}
-                onValueChange={(v) => v && setSource(v)}
-                className="flex-wrap justify-start"
-              >
-                {sources.map((s) => (
-                  <ToggleGroupItem key={s} value={s}>
-                    {s}
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-            )}
-            <div className="flex justify-end">
-              <SortControl
-                fields={[
-                  { value: "name", label: "Name" },
-                  { value: "organization", label: "Organization" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
-            </div>
-          </div>
-          {error ? (
-            <ErrorState error={error} />
-          ) : isPending ? (
-            <div className="min-h-0 flex-1 overflow-auto">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="px-3 py-2">
-                  <Skeleton className="h-9 w-full" />
-                </div>
-              ))}
-            </div>
-          ) : filtered.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              {(contacts?.length ?? 0) === 0
-                ? "No contacts in this backup."
-                : "No matching contacts."}
-            </p>
-          ) : (
-            <VirtualList
-              items={sorted}
-              getKey={(c) => c.id}
-              estimateSize={56}
-              renderItem={(c) => (
-                <ContactRow
-                  contact={c}
-                  showAvatars={showAvatars}
-                  active={selected?.id === c.id}
-                  onClick={() => setSelectedId(c.id)}
-                />
-              )}
+    // Full-width header across the top; the list + detail split sits below it.
+    <div className="flex h-full flex-col">
+      <PanelHeader
+        title="Contacts"
+        count={filtered.length}
+        actions={
+          sources.length > 1 ? (
+            <BadgeFilter
+              value={activeSource}
+              onChange={setSource}
+              options={sources.map((s) => ({ value: s, label: s }))}
             />
-          )}
-        </>
-      }
-      detail={
-        selected ? (
-          <ContactDetail contact={selected} showAvatars={showAvatars} />
-        ) : (
-          !isPending && <EmptyView icon={Users} title="No contact selected" description="Pick someone on the left." />
-        )
-      }
-    />
+          ) : undefined
+        }
+        search={
+          <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />
+        }
+        toolbar={
+          <div className="ml-auto">
+            <SortControl
+              fields={[
+                { value: "name", label: "Name" },
+                { value: "organization", label: "Organization" },
+              ]}
+              value={sort}
+              onChange={setSort}
+            />
+          </div>
+        }
+      />
+      <div className="min-h-0 flex-1">
+        <ListDetail
+          master={
+            error ? (
+              <ErrorState error={error} />
+            ) : isPending ? (
+              <div className="min-h-0 flex-1 overflow-auto">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div key={i} className="px-3 py-2">
+                    <Skeleton className="h-9 w-full" />
+                  </div>
+                ))}
+              </div>
+            ) : filtered.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                {(contacts?.length ?? 0) === 0
+                  ? "No contacts in this backup."
+                  : "No matching contacts."}
+              </p>
+            ) : (
+              <VirtualList
+                items={sorted}
+                getKey={(c) => c.id}
+                estimateSize={56}
+                renderItem={(c) => (
+                  <div className="px-2 py-0.5">
+                    <ContactRow
+                      contact={c}
+                      showAvatars={showAvatars}
+                      active={selected?.id === c.id}
+                      onClick={() => setSelectedId(c.id)}
+                    />
+                  </div>
+                )}
+              />
+            )
+          }
+          detail={
+            selected ? (
+              <ContactDetail contact={selected} showAvatars={showAvatars} />
+            ) : (
+              !isPending && (
+                <EmptyView
+                  icon={Users}
+                  title="No contact selected"
+                  description="Pick someone on the left."
+                />
+              )
+            )
+          }
+        />
+      </div>
+    </div>
   );
 }
 
@@ -181,7 +200,12 @@ function ContactRow({
   const name = contactName(contact);
   const isOrg = !contact.firstName && !contact.lastName && !!contact.organization;
   return (
-    <Item asChild data-active={active} className="rounded-none data-[active=true]:bg-accent">
+    <Item
+      asChild
+      size="sm"
+      data-active={active}
+      className="rounded-md transition-colors hover:bg-accent/50 data-[active=true]:bg-accent data-[active=true]:hover:bg-accent"
+    >
       <button onClick={onClick} className="w-full text-left">
         {showAvatars && (
           <ItemMedia>
@@ -226,7 +250,8 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
   );
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={name} />
+      {/* No header-bar name here — it's already the big name under the avatar
+          below (and highlighted in the list), so a top-bar title just repeats it. */}
       <ScrollArea className="flex-1">
         <div className="mx-auto max-w-xl p-6">
           <div className="flex flex-col items-center gap-3 pb-6 text-center">

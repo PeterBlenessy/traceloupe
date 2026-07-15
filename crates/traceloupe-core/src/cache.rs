@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -65,7 +65,10 @@ CREATE TABLE IF NOT EXISTS messages (
     is_from_me      INTEGER NOT NULL DEFAULT 0,
     body            TEXT,
     sent_at         INTEGER,
-    has_attachments INTEGER NOT NULL DEFAULT 0
+    has_attachments INTEGER NOT NULL DEFAULT 0,
+    -- Content class for the message filter: 'text' | 'media' | 'link' | 'shared'
+    -- | 'sticker' | 'system' | 'other'. NULL on rows imported before v11.
+    kind            TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, sent_at);
 -- Global chronological order for the cross-conversation timeline.
@@ -337,6 +340,8 @@ impl CacheDb {
             // v10: photo location (moment title) + user album names.
             ensure_column(&conn, "media_items", "location", "TEXT")?;
             ensure_column(&conn, "media_items", "albums", "TEXT")?;
+            // v11: message content class, for the Messages content filter.
+            ensure_column(&conn, "messages", "kind", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

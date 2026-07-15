@@ -177,22 +177,39 @@ reference (§10). **Unvalidated against a real backup — key paths may need tun
 | Shared media | ✅ | ⬜ | `content` media object |
 | Video-chat announcements | ✅ | ⬜ | `threadActivity` |
 
-### TikTok — `AwemeIM.db` (native, unvalidated)
+### TikTok — two databases (native, validated on a real backup)
 
-Messages from `TIMMessageORM`; `content` is JSON (`$.text`). Sender names join the
-dynamically-named `AwemeContacts*` tables; direction uses `account_id` = the DB's
-parent directory name. Schema facts from iLEAPP `tikTok.py` (reference, §10).
-**Unvalidated against a real backup.**
+TikTok spans **two** DBs, so it is driven by dedicated importers rather than the
+generic single-file chat registry:
+
+- **Messages** — `…/Library/Application Support/ChatFiles/<account_id>/db.sqlite`,
+  table `TIMMessageORM(localCreatedAt, sender, content, belongingConversationIdentifier)`.
+  `content` is JSON; direction uses `account_id` = the DB's parent directory name
+  (the local user's uid). The `-wal` sidecar is extracted alongside so unflushed
+  rows are replayed.
+- **Contacts / sender names** — `AwemeIM.db`, the dynamically-named `AwemeContacts*`
+  tables, read into a `uid → (nickname, @handle)` map to resolve senders.
+
+`content` comes in many shapes (the numeric `type`): real text carries `$.text`;
+other kinds carry nothing renderable locally (the shared video, sticker, profile
+card all live on TikTok's servers). Rather than drop them or render blank bubbles,
+those are surfaced as **typed markers** (📹 shared video, 🖼 sticker, 👋 nudge,
+👤 shared profile) and system notices (`$.tips`) as text — each tagged with a
+`kind` the Messages content-filter badges expose. Empty control messages (`{}`,
+placeholders) are skipped. Schema facts from iLEAPP `tikTok.py` (reference, §10),
+**validated against a real backup** (263k messages parsed; see `xcheck_tiktok`).
 
 | Data | In backup | Surfaced | Notes |
 |------|:---------:|:--------:|-------|
 | Message text | ✅ | ✅ | `content` JSON `$.text` |
-| Timestamp | ✅ | ✅ | `localcreatedat` (Unix s/ms) |
+| Timestamp | ✅ | ✅ | `localCreatedAt` (Unix s/ms) |
 | Direction (from-me) | ✅ | ✅ | sender vs path `account_id` |
 | Conversation grouping | ✅ | ✅ | `belongingConversationIdentifier` |
-| Sender nickname | ✅ | ✅ | `AwemeContacts*` join |
+| Sender nickname / handle | ✅ | ✅ | `AwemeContacts*` join (`AwemeIM.db`) |
+| Content kind (video/sticker/…) | ✅ | ✅ | typed marker + `kind` filter badge |
+| System notices | ✅ | ✅ | `content` `$.tips` |
 | Contacts (social graph) | ✅ | 🟡 iLEAPP | still via iLEAPP, tagged in Contacts |
-| GIF / link / media | ✅ | ⬜ | `content` `$.url`, `$.display_name` |
+| Shared video / sticker payloads | ⬜ | ⬜ | server-side only; not in the backup |
 
 ### Telegram — `postbox/db/db_sqlite` (native, unvalidated)
 

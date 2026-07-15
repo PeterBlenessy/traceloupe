@@ -18,10 +18,15 @@ use crate::Result;
 pub enum ImportPhase {
     /// iLEAPP is parsing the backup; carries per-artifact progress.
     Parsing(Progress),
-    /// Reading iLEAPP's output into the cache DB; `step` is the sub-stage being
-    /// processed (e.g. "Messages", "TikTok messages", "Camera roll") so the UI
-    /// can show live progress instead of one opaque "organizing" spinner.
-    Normalizing { step: String },
+    /// Building the searchable indexes from the backup's own databases. `step` is
+    /// the ready-to-display label (e.g. "Indexing Messages", "Indexing Photos"),
+    /// and `index`/`total` let the UI fill the bar `index/total` across the run
+    /// instead of pinning it at one opaque value.
+    Indexing {
+        step: String,
+        index: u32,
+        total: u32,
+    },
     /// Done; carries the final report.
     Done(ImportReport),
 }
@@ -91,13 +96,39 @@ pub fn import_backup(
         _ => (None, work_dir.to_path_buf()),
     };
 
-    on_phase(ImportPhase::Normalizing {
-        step: "Reading results".into(),
-    });
+    let effective = sidecar::effective_module_ids(module_ids);
+
+    // Total number of indexing steps we'll emit, so the UI can fill the bar
+    // `index/total`. Three always run (Preparing, App Chats, Installed Apps);
+    // Safari and the camera roll each contribute two. KEEP IN SYNC with the
+    // `step!(…)` calls below.
+    let index_total: u32 = 3
+        + effective.contains(&"messages") as u32
+        + effective.contains(&"notes") as u32
+        + effective.contains(&"calls") as u32
+        + effective.contains(&"safari") as u32 * 2
+        + effective.contains(&"contacts") as u32
+        + effective.contains(&"tiktok") as u32 * 2
+        + effective.contains(&"camera_roll") as u32 * 2
+        + effective.contains(&"recordings") as u32;
+    let mut step_i: u32 = 0;
+    // Emit the next indexing step with a running `index/total`. `$label` is the
+    // ready-to-display string (e.g. "Indexing Messages").
+    macro_rules! step {
+        ($label:expr) => {{
+            step_i += 1;
+            on_phase(ImportPhase::Indexing {
+                step: $label.into(),
+                index: step_i,
+                total: index_total,
+            });
+        }};
+    }
+
+    step!("Preparing");
 
     // All writes go to the temp cache; the real one keeps serving the UI.
     let cache = CacheDb::open(&import_cache_path)?;
-    let effective = sidecar::effective_module_ids(module_ids);
 
     // Build the backup decryptor once (encrypted backups) — reused for native
     // Messages and the camera roll. An empty password means an unencrypted
@@ -122,9 +153,7 @@ pub fn import_backup(
     // parse fails.
     let mut native = ImportReport::default();
     let native_messages = effective.contains(&"messages") && {
-        on_phase(ImportPhase::Normalizing {
-            step: "Messages".into(),
-        });
+        step!("Indexing Messages");
         import_messages_native(
             backup_dir,
             decryptor.as_ref(),
@@ -138,9 +167,7 @@ pub fn import_backup(
     // Index), skipping iLEAPP's eager notes pass. Same fallback contract as
     // Messages: any miss/parse failure declines and the iLEAPP path runs.
     let native_notes = effective.contains(&"notes") && {
-        on_phase(ImportPhase::Normalizing {
-            step: "Notes".into(),
-        });
+        step!("Indexing Notes");
         import_notes_native(
             backup_dir,
             decryptor.as_ref(),
@@ -154,9 +181,7 @@ pub fn import_backup(
     // history from History.db (both via the Manifest Index). Same fallback
     // contract as Messages/Notes — any miss/parse failure declines and iLEAPP runs.
     let native_calls = effective.contains(&"calls") && {
-        on_phase(ImportPhase::Normalizing {
-            step: "Call history".into(),
-        });
+        step!("Indexing Call History");
         import_calls_native(
             backup_dir,
             decryptor.as_ref(),
@@ -166,9 +191,7 @@ pub fn import_backup(
         )
     };
     let native_safari = effective.contains(&"safari") && {
-        on_phase(ImportPhase::Normalizing {
-            step: "Safari history".into(),
-        });
+        step!("Indexing Safari History");
         import_safari_native(
             backup_dir,
             decryptor.as_ref(),
@@ -179,9 +202,7 @@ pub fn import_backup(
     };
     // Safari bookmarks / reading list / open tabs (native-only; no iLEAPP path).
     if effective.contains(&"safari") {
-        on_phase(ImportPhase::Normalizing {
-            step: "Safari bookmarks".into(),
-        });
+        step!("Indexing Safari Bookmarks");
         import_safari_bookmarks_native(
             backup_dir,
             decryptor.as_ref(),
@@ -195,9 +216,7 @@ pub fn import_backup(
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
     let native_contacts = effective.contains(&"contacts") && {
-        on_phase(ImportPhase::Normalizing {
-            step: "Contacts".into(),
-        });
+        step!("Indexing Contacts");
         import_contacts_native(
             backup_dir,
             decryptor.as_ref(),
@@ -210,9 +229,7 @@ pub fn import_backup(
     // Phase 2: materialize third-party chats (WhatsApp, …) natively from each
     // app's own SQLite DB via the pluggable app-module registry. Returns the
     // service labels handled, so the matching iLEAPP stages are skipped.
-    on_phase(ImportPhase::Normalizing {
-        step: "App chats".into(),
-    });
+    step!("Indexing App Chats");
     let native_app_services = import_app_chats_native(
         backup_dir,
         decryptor.as_ref(),
@@ -225,9 +242,15 @@ pub fn import_backup(
     // chat parser reads) into the Contacts view — the last artifact that used to
     // need iLEAPP.
     if effective.contains(&"tiktok") {
-        on_phase(ImportPhase::Normalizing {
-            step: "TikTok contacts".into(),
-        });
+        step!("Indexing TikTok Messages");
+        import_tiktok_messages_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
+        step!("Indexing TikTok Contacts");
         import_tiktok_contacts_native(
             backup_dir,
             decryptor.as_ref(),
@@ -253,7 +276,14 @@ pub fn import_backup(
                 contacts: native_contacts,
                 app_services: native_app_services,
             },
-            |step| on_phase(ImportPhase::Normalizing { step: step.into() }),
+            // Dead path (iLEAPP never runs); label without disturbing the counter.
+            |s| {
+                on_phase(ImportPhase::Indexing {
+                    step: format!("Indexing {s}"),
+                    index: step_i,
+                    total: index_total,
+                })
+            },
         )?
     } else {
         ImportReport::default()
@@ -267,12 +297,10 @@ pub fn import_backup(
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
-    on_phase(ImportPhase::Normalizing {
-        step: "Camera roll".into(),
-    });
     // Camera roll: read the backup's Manifest natively and reference iOS's own
     // thumbnails, so the gallery is fast and full images transcode on demand.
     if effective.contains(&"camera_roll") {
+        step!("Indexing Photos");
         // Reuses the decryptor built once above (None for unencrypted backups).
         // The content-addressed `media` dir (decrypted thumbnails, keyed by
         // fileID) is shared across runs and NOT wiped for the atomic swap, so a
@@ -321,9 +349,7 @@ pub fn import_backup(
         }
         // Enrich the camera-roll rows just inserted with the people detected in
         // each photo (Photos.sqlite face recognition) — powers person search/tags.
-        on_phase(ImportPhase::Normalizing {
-            step: "Photo people".into(),
-        });
+        step!("Indexing People in Photos");
         import_photos_metadata_native(
             backup_dir,
             decryptor.as_ref(),
@@ -337,9 +363,7 @@ pub fn import_backup(
     // decrypt on demand at play time, like the camera roll). No iLEAPP fallback —
     // there's no recordings normalizer — so a failure is just a warning.
     if effective.contains(&"recordings") {
-        on_phase(ImportPhase::Normalizing {
-            step: "Voice recordings".into(),
-        });
+        step!("Indexing Voice Recordings");
         match crate::parsers::recordings::parse_recordings(backup_dir, decryptor.as_ref(), work_dir)
         {
             Ok(recordings) => {
@@ -396,9 +420,7 @@ pub fn import_backup(
         }
     }
 
-    on_phase(ImportPhase::Normalizing {
-        step: "Installed apps".into(),
-    });
+    step!("Indexing Installed Apps");
     // Record which apps were on the device (from Info.plist) for the Apps view.
     let apps = crate::discovery::installed_apps(backup_dir);
     {
@@ -753,6 +775,37 @@ fn import_safari_bookmarks_native(
     }
 }
 
+/// Extract `entry` to `out`, plus its `-wal`/`-shm` siblings (looked up in `all`
+/// by relative path) so a read-only SQLite open replays an un-checkpointed WAL —
+/// otherwise recently-written rows still sitting in the WAL are lost. Returns the
+/// temp files created (the main DB first) for cleanup; empty if the main extract
+/// failed. `all` must include the sidecar entries (query with a trailing `%`).
+fn extract_with_wal(
+    index: &crate::manifest::ManifestIndex,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    entry: &crate::manifest::FileEntry,
+    all: &[crate::manifest::FileEntry],
+    out: &Path,
+) -> Vec<PathBuf> {
+    if index.extract_to(entry, decryptor, out).is_err() {
+        let _ = std::fs::remove_file(out);
+        return Vec::new();
+    }
+    let mut temps = vec![out.to_path_buf()];
+    for suf in ["-wal", "-shm"] {
+        let sib_rel = format!("{}{suf}", entry.relative_path);
+        if let Some(sib) = all.iter().find(|e| e.relative_path == sib_rel) {
+            let sc = PathBuf::from(format!("{}{suf}", out.display()));
+            if index.extract_to(sib, decryptor, &sc).is_ok() {
+                temps.push(sc);
+            } else {
+                let _ = std::fs::remove_file(&sc);
+            }
+        }
+    }
+    temps
+}
+
 /// Locate + extract `AwemeIM.db` and parse TikTok contacts (social graph) into
 /// the cache `contacts` table (source 'TikTok'). Native-only, best-effort.
 fn import_tiktok_contacts_native(
@@ -766,30 +819,139 @@ fn import_tiktok_contacts_native(
         Ok(i) => i,
         Err(_) => return,
     };
-    let mut hits = match index.find_relative_like("%AwemeIM.db") {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    hits.retain(|e| e.relative_path.ends_with("AwemeIM.db"));
-    let Some(entry) = hits.into_iter().next() else {
+    // TikTok keeps a per-account `AwemeIM-<accountid>.db`, so match every
+    // `AwemeIM*.db` (trailing `%` also catches the `-wal`/`-shm` sidecars) and read
+    // them all, bringing each DB's WAL so a recently-added contact isn't missed.
+    let (mains, temps) = extract_aweme_dbs(&index, decryptor, work_dir);
+    if mains.is_empty() {
         return; // no TikTok in this backup
-    };
-    let out = work_dir.join(".AwemeIM.db");
-    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
-        let _ = std::fs::remove_file(&out);
-        report
-            .warnings
-            .push(format!("TikTok contacts: couldn't read AwemeIM.db ({e})."));
-        return;
     }
     if let Err(e) =
-        crate::parsers::tiktok_contacts::parse_tiktok_contacts(&out, cache, report, false)
+        crate::parsers::tiktok_contacts::parse_tiktok_contacts(&mains, cache, report, false)
     {
         report
             .warnings
             .push(format!("TikTok contacts: parse failed ({e})."));
     }
-    let _ = std::fs::remove_file(&out);
+    for t in &temps {
+        let _ = std::fs::remove_file(t);
+    }
+}
+
+/// Extract every `AwemeIM*.db` (with its WAL sidecars) to temp files. Returns
+/// `(main db paths, all temp paths incl. sidecars)`; caller parses the mains and
+/// removes all temps. Shared by the TikTok contacts + messages importers.
+fn extract_aweme_dbs(
+    index: &crate::manifest::ManifestIndex,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    work_dir: &Path,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let hits = index
+        .find_relative_like("%AwemeIM%.db%")
+        .unwrap_or_default();
+    let mut mains = Vec::new();
+    let mut all_temps = Vec::new();
+    let is_main = |e: &crate::manifest::FileEntry| {
+        let base = e.relative_path.rsplit('/').next().unwrap_or(&e.relative_path);
+        base.starts_with("AwemeIM") && base.ends_with(".db")
+    };
+    let main_entries: Vec<_> = hits.iter().filter(|e| is_main(e)).collect();
+    for (i, entry) in main_entries.iter().enumerate() {
+        let out = work_dir.join(format!(".tt-aweme-{i}.db"));
+        let temps = extract_with_wal(index, decryptor, entry, &hits, &out);
+        if let Some(main) = temps.first() {
+            mains.push(main.clone());
+        }
+        all_temps.extend(temps);
+    }
+    (mains, all_temps)
+}
+
+/// Materialize TikTok chats natively. TikTok is special: messages live in
+/// per-account `…/ChatFiles/<account>/db.sqlite` (`TIMMessageORM`), while sender
+/// names live in the `AwemeContacts*` tables of `AwemeIM.db` — two DBs the generic
+/// single-file app-module API can't join, so it gets a dedicated importer. Best-
+/// effort: a backup without TikTok, or an unreadable DB, just yields nothing.
+fn import_tiktok_messages_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+
+    // 1. Build the sender-name map from every `AwemeIM*.db` (with WAL sidecars, so
+    //    a recently-added contact resolves); collect, then drop the temps.
+    let uid_map = {
+        let (mains, temps) = extract_aweme_dbs(&index, decryptor, work_dir);
+        let map = crate::parsers::tiktok_contacts::collect_uid_map(&mains);
+        for t in &temps {
+            let _ = std::fs::remove_file(t);
+        }
+        map
+    };
+
+    // 2. Locate the per-account chat databases (`ChatFiles/<account>/db.sqlite`).
+    let all_hits = match index.find_relative_like("%ChatFiles%db.sqlite%") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let mains: Vec<_> = all_hits
+        .iter()
+        .filter(|e| {
+            let base = e
+                .relative_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&e.relative_path);
+            base == "db.sqlite" && e.relative_path.contains("ChatFiles")
+        })
+        .cloned()
+        .collect();
+    if mains.is_empty() {
+        return; // no TikTok chats in this backup
+    }
+
+    // 3. Parse each chat DB and insert per-account (conversations don't span
+    //    accounts, so per-file grouping is correct and bounds memory).
+    for (i, entry) in mains.iter().enumerate() {
+        // Bring the -wal/-shm so SQLite replays uncommitted messages.
+        let out = work_dir.join(format!(".tt-chat-{i}.db"));
+        let temps = extract_with_wal(&index, decryptor, entry, &all_hits, &out);
+        let Some(base) = temps.first() else {
+            report
+                .warnings
+                .push("TikTok messages: couldn't read a chat DB.".into());
+            continue;
+        };
+
+        match crate::parsers::apps::tiktok::parse_tiktok_messages(
+            base,
+            &entry.relative_path,
+            &uid_map,
+        ) {
+            Ok(msgs) if !msgs.is_empty() => {
+                if let Err(e) = crate::parsers::apps::insert_app_conversation(
+                    cache, "TikTok", true, msgs, report,
+                ) {
+                    report
+                        .warnings
+                        .push(format!("TikTok messages: insert failed ({e})."));
+                }
+            }
+            Ok(_) => {}
+            Err(e) => report
+                .warnings
+                .push(format!("TikTok messages: parse failed ({e}).")),
+        }
+        for t in &temps {
+            let _ = std::fs::remove_file(t);
+        }
+    }
 }
 
 /// Extract Photos.sqlite and tag camera-roll `media_items` with the people

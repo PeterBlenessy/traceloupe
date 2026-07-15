@@ -122,6 +122,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             // senders; inert for a named group (title wins).
             sender_id: if is_from_me { None } else { sender_id },
             has_attachment,
+            kind: None,
         });
     }
     Ok(out)

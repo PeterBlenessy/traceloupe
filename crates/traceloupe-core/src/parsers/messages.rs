@@ -49,6 +49,29 @@ fn mac_to_unix(date: i64) -> Option<i64> {
     Some(secs + MAC_EPOCH)
 }
 
+/// Classify an attachment as gallery media by MIME, falling back to the filename
+/// extension (sms.db often stores a NULL mime for image attachments). Returns the
+/// `media_items.kind` ("photo"/"video"), or None for non-media (docs, vCards, …).
+fn media_kind(mime: Option<&str>, filename: Option<&str>) -> Option<&'static str> {
+    if let Some(m) = mime {
+        if m.starts_with("image/") {
+            return Some("photo");
+        }
+        if m.starts_with("video/") {
+            return Some("video");
+        }
+    }
+    let f = filename.unwrap_or("").to_ascii_lowercase();
+    let ext = f.rsplit('.').next().unwrap_or("");
+    match ext {
+        "jpg" | "jpeg" | "png" | "gif" | "heic" | "heif" | "webp" | "tiff" | "tif" | "bmp" => {
+            Some("photo")
+        }
+        "mov" | "mp4" | "m4v" | "avi" | "3gp" | "webm" => Some("video"),
+        _ => None,
+    }
+}
+
 struct Chat {
     identifier: String,
     display_name: Option<String>,
@@ -167,6 +190,8 @@ pub fn parse_messages(
             [],
         )?;
         tx.execute(&format!("DELETE FROM threads WHERE {NATIVE_THREADS}"), [])?;
+        // Also clear the gallery mirror of message media (see below).
+        tx.execute("DELETE FROM media_items WHERE source = 'Messages'", [])?;
     }
 
     // Messages in chat order (grouped), then time. Skip pure "action" items
@@ -232,16 +257,28 @@ pub fn parse_messages(
                 }
             })
         };
+        let sent_unix = mac_to_unix(date);
+        // Content class for the filter: does any attachment look like image/video?
+        let has_media = msg_atts.get(&msg_rowid).is_some_and(|ids| {
+            ids.iter().any(|aid| {
+                att_meta
+                    .get(aid)
+                    .is_some_and(|a| media_kind(a.mime.as_deref(), a.filename.as_deref()).is_some())
+            })
+        });
+        let kind = crate::normalize::message_kind(text.as_deref(), has_media);
         tx.execute(
-            "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, has_attachments)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO messages
+                (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 thread_id,
                 sender,
                 is_from_me as i64,
                 text,
-                mac_to_unix(date),
+                sent_unix,
                 has_attachment as i64,
+                kind,
             ],
         )?;
         let message_id = tx.last_insert_rowid();
@@ -278,6 +315,29 @@ pub fn parse_messages(
                         plain_size,
                     ],
                 )?;
+                // Mirror image/video attachments into `media_items` (source
+                // 'Messages') so they also appear in the Photos gallery — restoring
+                // the pre-iLEAPP behavior (message photos were a gallery source).
+                // Only materialized media (has a local_path); docs/vCards stay out.
+                if let (Some(kind), Some(lp)) =
+                    (media_kind(a.mime.as_deref(), filename.as_deref()), &local_path)
+                {
+                    tx.execute(
+                        "INSERT INTO media_items
+                            (domain, relative_path, kind, source, mime_type, taken_at,
+                             thumb_path, local_path, decrypt_key, plain_size)
+                         VALUES ('MediaDomain', ?1, ?2, 'Messages', ?3, ?4, NULL, ?5, ?6, ?7)",
+                        rusqlite::params![
+                            a.path.clone().unwrap_or_else(|| lp.clone()),
+                            kind,
+                            a.mime,
+                            sent_unix,
+                            lp,
+                            decrypt_key,
+                            plain_size,
+                        ],
+                    )?;
+                }
             }
         }
     }

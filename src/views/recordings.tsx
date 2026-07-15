@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Mic } from "lucide-react";
@@ -11,6 +12,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { VirtualList } from "@/components/virtual-list";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { useSettings } from "@/components/settings-provider";
 import {
   SortControl,
@@ -21,10 +23,12 @@ import {
   EmptyView,
   ErrorState,
   ListDetail,
+  ListSearch,
+  PanelHeader,
   ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatDuration, formatListTime } from "@/lib/format";
-import { client, type Recording } from "@/lib/ipc";
+import { client, type Recording, type TimeRange } from "@/lib/ipc";
 
 export function RecordingsView() {
   const navigate = useNavigate();
@@ -44,23 +48,53 @@ export function RecordingsView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [sort, setSort] = useState<SortState>({ by: "recorded", desc: true });
-  const sortedRecordings = useMemo(
+  const [q, setQ] = useState("");
+  const [sort, setSort] = usePersistedState<SortState>("recordings:sort", { by: "recorded", desc: true });
+  // Time filter — same preset chips + custom range as Photos/Notes, over the
+  // recording's recorded date.
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+
+  // Whether a recording's date falls in a [lo, hi) window (undated ones only pass
+  // the fully-open "All" window).
+  const inWindow = (at: number | null, lo: number | null, hi: number | null) => {
+    if (lo == null && hi == null) return true;
+    if (at == null) return false;
+    return (lo == null || at >= lo) && (hi == null || at < hi);
+  };
+
+  // Search + title match, before the time filter — the base for the chip counts.
+  const baseFiltered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (recordings ?? []).filter(
+      (r) => !needle || recordingTitle(r).toLowerCase().includes(needle),
+    );
+  }, [recordings, q]);
+
+  const presetCounts = useMemo(
     () =>
-      recordings
-        ? sortItems(
-            recordings,
-            (r) =>
-              sort.by === "title"
-                ? recordingTitle(r).toLowerCase()
-                : sort.by === "duration"
-                  ? (r.durationS ?? 0)
-                  : r.recordedAt,
-            sort.desc,
-          )
-        : recordings,
-    [recordings, sort],
+      presets.map(
+        (p) => baseFiltered.filter((r) => inWindow(r.recordedAt, p.lo, p.hi)).length,
+      ),
+    [presets, baseFiltered],
   );
+
+  const sortedRecordings = useMemo(() => {
+    if (!recordings) return recordings;
+    const matched = baseFiltered.filter((r) =>
+      inWindow(r.recordedAt, range.lo, range.hi),
+    );
+    return sortItems(
+      matched,
+      (r) =>
+        sort.by === "title"
+          ? recordingTitle(r).toLowerCase()
+          : sort.by === "duration"
+            ? (r.durationS ?? 0)
+            : r.recordedAt,
+      sort.desc,
+    );
+  }, [recordings, sort, baseFiltered, range]);
 
   if (active === false) {
     return (
@@ -80,12 +114,30 @@ export function RecordingsView() {
     null;
 
   return (
-    <ListDetail
-      master={
-        <>
-          <ViewHeader title="Recordings" count={recordings?.length} />
-          {(recordings?.length ?? 0) > 0 && (
-            <div className="flex shrink-0 justify-end border-b px-2 py-1.5">
+    // Full-width header across the top; the list + detail split sits below it.
+    <div className="flex h-full flex-col">
+      <PanelHeader
+        title="Recordings"
+        count={sortedRecordings?.length}
+        search={
+          (recordings?.length ?? 0) > 0 ? (
+            <ListSearch
+              value={q}
+              onChange={setQ}
+              placeholder="Search recordings"
+            />
+          ) : undefined
+        }
+        toolbar={
+          (recordings?.length ?? 0) > 0 ? (
+            <>
+              <TimeFilterBar
+                className="flex-1"
+                presets={presets}
+                value={range}
+                onChange={setRange}
+                counts={presetCounts}
+              />
               <SortControl
                 fields={[
                   { value: "recorded", label: "Date" },
@@ -95,53 +147,65 @@ export function RecordingsView() {
                 value={sort}
                 onChange={setSort}
               />
-            </div>
-          )}
-          {error ? (
-            <ErrorState error={error} />
-          ) : isPending ? (
-            <div className="min-h-0 flex-1 overflow-auto">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="px-3 py-2">
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              ))}
-            </div>
-          ) : (recordings?.length ?? 0) === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              No voice recordings in this backup.
-            </p>
-          ) : (
-            <VirtualList
-              key={clockFormat}
-              items={sortedRecordings!}
-              getKey={(r) => r.id}
-              estimateSize={64}
-              renderItem={(r) => (
-                <RecordingRow
-                  recording={r}
-                  active={selected?.id === r.id}
-                  onClick={() => setSelectedId(r.id)}
+            </>
+          ) : undefined
+        }
+      />
+      <div className="min-h-0 flex-1">
+        <ListDetail
+          master={
+            error ? (
+              <ErrorState error={error} />
+            ) : isPending ? (
+              <div className="min-h-0 flex-1 overflow-auto">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="px-3 py-2">
+                    <Skeleton className="h-12 w-full" />
+                  </div>
+                ))}
+              </div>
+            ) : (recordings?.length ?? 0) === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                No voice recordings in this backup.
+              </p>
+            ) : (sortedRecordings?.length ?? 0) === 0 ? (
+              <p className="px-4 py-6 text-sm text-muted-foreground">
+                No recordings match the current search or time range.
+              </p>
+            ) : (
+              <VirtualList
+                key={clockFormat}
+                items={sortedRecordings!}
+                getKey={(r) => r.id}
+                estimateSize={64}
+                renderItem={(r) => (
+                  <div className="px-2 py-0.5">
+                    <RecordingRow
+                      recording={r}
+                      active={selected?.id === r.id}
+                      onClick={() => setSelectedId(r.id)}
+                    />
+                  </div>
+                )}
+              />
+            )
+          }
+          detail={
+            selected ? (
+              <RecordingDetail recording={selected} />
+            ) : (
+              !isPending && (
+                <EmptyView
+                  icon={Mic}
+                  title="No recording selected"
+                  description="Pick a recording on the left."
                 />
-              )}
-            />
-          )}
-        </>
-      }
-      detail={
-        selected ? (
-          <RecordingDetail recording={selected} />
-        ) : (
-          !isPending && (
-            <EmptyView
-              icon={Mic}
-              title="No recording selected"
-              description="Pick a recording on the left."
-            />
-          )
-        )
-      }
-    />
+              )
+            )
+          }
+        />
+      </div>
+    </div>
   );
 }
 
@@ -167,7 +231,7 @@ function RecordingRow({
     <Item
       asChild
       data-active={active}
-      className="rounded-none data-[active=true]:bg-accent"
+      className="rounded-md transition-colors hover:bg-accent/50 data-[active=true]:bg-accent data-[active=true]:hover:bg-accent"
     >
       <button onClick={onClick} className="w-full text-left">
         <ItemContent className="gap-0.5">

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Bookmark, BookOpen, Globe, SquareStack } from "lucide-react";
@@ -10,7 +11,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { BadgeFilter } from "@/components/badge-filter";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
@@ -45,10 +46,10 @@ export function SafariView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const [type, setType] = useState<SafariType>("history");
+  const [type, setType] = usePersistedState<SafariType>("safari:type", "history");
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
-  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  const [sort, setSort] = usePersistedState<SortState>("safari:sort", { by: "date", desc: true });
   const { now, presets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   // Subscribe to the clock preference so times re-render on change.
@@ -101,20 +102,11 @@ export function SafariView() {
       resetKey={`${type}:${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matches." : EMPTY[type]}
       header={
-        <ToggleGroup
-          type="single"
-          size="sm"
-          variant="outline"
+        <BadgeFilter
           value={type}
-          onValueChange={(v) => v && changeType(v as SafariType)}
-          className="flex-wrap justify-end"
-        >
-          {TYPES.map((t) => (
-            <ToggleGroupItem key={t.value} value={t.value}>
-              {t.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+          onChange={(v) => changeType(v as SafariType)}
+          options={TYPES.map((t) => ({ value: t.value, label: t.label }))}
+        />
       }
       search={
         <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />
@@ -199,20 +191,30 @@ function hostOf(url: string): string {
 
 function VisitRow({ visit }: { visit: HistoryVisit }) {
   return (
-    <Item>
-      <ItemMedia>
-        <Globe className="size-5 text-muted-foreground" />
-      </ItemMedia>
-      <ItemContent>
-        <ItemTitle className="truncate">
-          {visit.title ?? hostOf(visit.url)}
-        </ItemTitle>
-        <ItemDescription className="truncate">{visit.url}</ItemDescription>
-      </ItemContent>
-      <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
-        <span>{formatDateTime(visit.visitedAt)}</span>
-        {visit.visitCount != null && <span>{visit.visitCount} visits</span>}
-      </div>
+    <Item
+      asChild
+      className="rounded-md transition-colors hover:bg-accent/50"
+    >
+      <button
+        type="button"
+        onClick={() => void client.openExternal(visit.url)}
+        title={`Open ${visit.url}`}
+        className="w-full text-left"
+      >
+        <ItemMedia>
+          <Globe className="size-5 text-muted-foreground" />
+        </ItemMedia>
+        <ItemContent>
+          <ItemTitle className="truncate">
+            {visit.title ?? hostOf(visit.url)}
+          </ItemTitle>
+          <ItemDescription className="truncate">{visit.url}</ItemDescription>
+        </ItemContent>
+        <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
+          <span>{formatDateTime(visit.visitedAt)}</span>
+          {visit.visitCount != null && <span>{visit.visitCount} visits</span>}
+        </div>
+      </button>
     </Item>
   );
 }
@@ -227,18 +229,17 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
   // Reading-list items carry a preview snippet; bookmarks/tabs show their folder.
   const secondary =
     item.kind === "reading_list" ? item.previewText : item.folder;
-  return (
-    <Item>
+  const url = item.url;
+  const inner = (
+    <>
       <ItemMedia>
         <Icon className="size-5 text-muted-foreground" />
       </ItemMedia>
       <ItemContent>
         <ItemTitle className="truncate">
-          {item.title ?? (item.url ? hostOf(item.url) : "Untitled")}
+          {item.title ?? (url ? hostOf(url) : "Untitled")}
         </ItemTitle>
-        {item.url && (
-          <ItemDescription className="truncate">{item.url}</ItemDescription>
-        )}
+        {url && <ItemDescription className="truncate">{url}</ItemDescription>}
         {secondary && (
           <ItemDescription className="truncate text-muted-foreground/80">
             {secondary}
@@ -250,6 +251,20 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
           {formatDateTime(item.dateAdded)}
         </div>
       )}
+    </>
+  );
+  // Openable when it has a URL (bookmarks/tabs/reading list); folders don't.
+  if (!url) return <Item>{inner}</Item>;
+  return (
+    <Item asChild className="rounded-md transition-colors hover:bg-accent/50">
+      <button
+        type="button"
+        onClick={() => void client.openExternal(url)}
+        title={`Open ${url}`}
+        className="w-full text-left"
+      >
+        {inner}
+      </button>
     </Item>
   );
 }

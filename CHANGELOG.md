@@ -14,7 +14,9 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.4.0` | **More native chat apps** — Telegram (binary postbox), Kik, imo, Threema, via the app-chat framework. iLEAPP still runs for the long tail. |
 | `0.5.0` | **More native chat apps** — Viber, Microsoft Teams, via the app-chat framework. |
 | `0.6.0` | **LinkedIn** native chat. |
-| `0.7.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.7.0` | **Native-first complete** — native TikTok contacts (the last iLEAPP-only artifact); default import fully native (~35s, no engine subprocess); `Photos.sqlite` metadata (people/date/GPS/favorite); native Safari bookmarks, reading list & tabs. |
+| `0.8.0` | **Native TikTok DMs + UI overhaul** — TikTok direct messages (validated) with a message content-kind filter, friendlier voice-memo titles, and message media in the gallery; a shared `PanelHeader`, badge filters, a UI density setting, and persisted per-view state. |
+| `0.9.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -23,7 +25,66 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
-## [0.7.0]
+## [0.8.0] — 2026-07-15
+
+### Added
+
+- **Native TikTok DM messages**, validated on a real backup (263k messages). Parsed
+  from `ChatFiles/<uid>/db.sqlite` (`TIMMessageORM`) — a *separate* DB from the
+  `AwemeIM.db` social graph — with sender names resolved from `AwemeContacts*`. The
+  `-wal` sidecar is extracted alongside each DB so unflushed rows are replayed.
+- **Typed markers for non-text TikTok messages.** Shared videos, stickers, nudges
+  and profile cards (whose payloads live only on TikTok's servers) surface as
+  labelled markers instead of blank bubbles, and each carries a content `kind`.
+- **Message content-kind filter** in the open conversation — clickable badges
+  (text / link / media / shared / sticker / system) showing only the kinds actually
+  present. Threaded through SQL, the Tauri commands and the cache (schema v11 adds
+  `messages.kind`).
+- **Friendlier voice-memo titles** — read from each recording's
+  `.composition/manifest.plist` (`RCSavedRecordingTitle`), falling back to the DB
+  label then the filename, instead of the cryptic folder name.
+- **Message image/video attachments now appear in the Photos gallery** (mirrored
+  into `media_items` with source `Messages`).
+- **UI density setting** (Comfortable / Cozy / Compact) — "True Density": fonts and
+  icons keep their size, only spacing tightens. A rows-icon toggle in the top bar
+  cycles the levels; list rows, the Timeline and chat bubbles all respond.
+- **Time-range + search filters** extended to Contacts, Calls and Recordings, matching
+  Photos / Safari / Notes.
+
+### Changed
+
+- **Shared `PanelHeader` header** across every list view (title · count · filter
+  badges / search / toolbar). Master-detail views (Contacts, Recordings, Notes,
+  Messages) now put the full-width header across the top with the list+detail split
+  below it, instead of a header trapped in the narrow master column.
+- **All filter chips are now `BadgeFilter` badges** and **never wrap** — they scroll
+  horizontally when the window is narrow, so filters can't push the header taller.
+  The time-range period chips got the same no-wrap treatment.
+- **Import progress** now separates the *Indexing* phase from import, restarts at 0%,
+  shows a right-aligned `step n/N`, and uses Title-Case entity labels.
+- **Appearance toggle** in the top bar is a single button that cycles
+  System → Light → Dark (lucide `sun-moon` for system); also surfaced in Settings.
+- **Settings dialog** redesigned to a fixed-size, macOS-System-Settings-style layout
+  with a vertical tab rail.
+- Selection, active filter and sort order now **persist across navigation and restarts**
+  for every view (`usePersistedState`).
+- Removed the redundant single-field "Time" sort picker in Messages (a direction
+  toggle replaces it).
+
+### Fixed
+
+- **Stale persisted filters can no longer strand a view empty.** Photos' source and
+  Notes' folder/lock filters are clamped to what the *current* backup actually has,
+  so a choice carried over from another backup falls back to "all" instead of leaving
+  an unrecoverable empty grid.
+- A `?service=` deep-link into Messages now applies **once** per value instead of
+  snapping the filter back on every refetch.
+- Recordings show a distinct "no matches" message when a search/time filter excludes
+  every recording (vs. "no recordings in this backup").
+- TikTok message parsing reads `content`/`chat_key` tolerantly, so a single odd row
+  (BLOB content, numeric group id) no longer aborts the whole account.
+
+## [0.7.0] — 2026-07-15
 
 ### Fixed
 
@@ -100,7 +161,7 @@ _Nothing yet._
 - The standalone **Periods** view (folded into Timeline's filters, above).
 - The Notes **year dropdown** (superseded by the time-filter chips + range).
 
-## [0.6.3]
+## [0.6.3] — 2026-07-15
 
 ### Fixed
 
