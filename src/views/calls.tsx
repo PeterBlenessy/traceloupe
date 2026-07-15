@@ -122,7 +122,9 @@ export function CallsView() {
 
 function callVisual(call: Call): { Icon: typeof PhoneCall; className: string } {
   const missed = call.answered === false && call.direction === "incoming";
-  if (call.service?.toLowerCase().includes("facetime")) {
+  // Only actual video calls get the video icon — FaceTime *audio* (callType
+  // "audio") falls through to the direction icons, like a phone call.
+  if (call.callType === "video") {
     return { Icon: Video, className: "text-muted-foreground" };
   }
   if (missed) return { Icon: PhoneMissed, className: "text-destructive" };
@@ -130,6 +132,18 @@ function callVisual(call: Call): { Icon: typeof PhoneCall; className: string } {
     return { Icon: PhoneOutgoing, className: "text-muted-foreground" };
   }
   return { Icon: PhoneIncoming, className: "text-muted-foreground" };
+}
+
+/// A friendly medium label: "FaceTime Video" / "FaceTime Audio" / "Phone".
+function serviceLabel(call: Call): string | null {
+  const isFaceTime = call.service?.toLowerCase().includes("facetime");
+  if (isFaceTime) {
+    if (call.callType === "video") return "FaceTime Video";
+    if (call.callType === "audio") return "FaceTime Audio";
+    return "FaceTime";
+  }
+  if (call.service?.toLowerCase() === "phone") return "Phone";
+  return call.service;
 }
 
 function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | null }) {
@@ -141,8 +155,9 @@ function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | nul
   const title = contact?.name ?? call.address ?? "Unknown";
   const subtitle = [
     contact && call.address ? call.address : null,
-    call.service,
+    serviceLabel(call),
     call.direction,
+    call.location,
   ]
     .filter(Boolean)
     .join(" · ");

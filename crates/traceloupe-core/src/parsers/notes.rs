@@ -49,6 +49,22 @@ fn col_or_null(cols: &HashSet<String>, candidates: &[&str]) -> String {
     "NULL".to_string()
 }
 
+/// Like [`col_or_null`] but builds `COALESCE(n.a, n.b, …)` over *every* candidate
+/// that exists, so a present-but-NULL column can't shadow a populated sibling
+/// (Core Data's suffixed date columns). Returns `"NULL"` if none exist.
+fn coalesce_or_null(cols: &HashSet<String>, candidates: &[&str]) -> String {
+    let present: Vec<String> = candidates
+        .iter()
+        .filter(|c| cols.contains(**c))
+        .map(|c| format!("n.{c}"))
+        .collect();
+    match present.len() {
+        0 => "NULL".to_string(),
+        1 => present.into_iter().next().unwrap(),
+        _ => format!("COALESCE({})", present.join(", ")),
+    }
+}
+
 /// Parse a decrypted `NoteStore.sqlite` into the cache `notes` table.
 ///
 /// With `replace = false` it appends (for a fresh cache, like the normalizer).
@@ -83,7 +99,12 @@ pub fn parse_notes(
     let title = col_or_null(&cols, &["ZTITLE1", "ZTITLE"]);
     let snippet = col_or_null(&cols, &["ZSNIPPET"]);
     let folder_fk = col_or_null(&cols, &["ZFOLDER"]);
-    let created = col_or_null(
+    // Core Data keeps several suffixed date columns and only one is populated —
+    // e.g. on a modern NoteStore ZCREATIONDATE1 exists but is entirely NULL while
+    // the real value moved to ZCREATIONDATE3. Picking the first *existing* column
+    // (col_or_null) would lock onto the NULL one, so COALESCE across all that
+    // exist and let the populated sibling win.
+    let created = coalesce_or_null(
         &cols,
         &[
             "ZCREATIONDATE1",
@@ -92,7 +113,7 @@ pub fn parse_notes(
             "ZCREATIONDATE2",
         ],
     );
-    let modified = col_or_null(
+    let modified = coalesce_or_null(
         &cols,
         &[
             "ZMODIFICATIONDATE1",

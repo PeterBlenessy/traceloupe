@@ -8,8 +8,10 @@ import {
   ArrowRight,
   ArrowUpNarrowWide,
   FileText,
+  GalleryVerticalEnd,
   ImageIcon,
   MessageSquare,
+  MessagesSquare,
   Paperclip,
   Users,
 } from "lucide-react";
@@ -232,16 +234,28 @@ export function MessagesView() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
+      {/* Match ViewHeader's height/padding (h-14 px-4) so this bar aligns with
+          every other view's header; the mode toggle sits beside the title. */}
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+        <h1 className="text-base font-semibold">Messages</h1>
         <ToggleGroup
           type="single"
           value={mode}
           onValueChange={(v) => v && switchMode(v as Mode)}
           variant="outline"
           size="sm"
+          className="ml-1"
         >
-          <ToggleGroupItem value="conversations">Conversations</ToggleGroupItem>
-          <ToggleGroupItem value="timeline">Timeline</ToggleGroupItem>
+          <ToggleGroupItem
+            value="conversations"
+            aria-label="Conversations"
+            title="Conversations"
+          >
+            <MessagesSquare className="size-4" />
+          </ToggleGroupItem>
+          <ToggleGroupItem value="timeline" aria-label="Timeline" title="Timeline">
+            <GalleryVerticalEnd className="size-4" />
+          </ToggleGroupItem>
         </ToggleGroup>
         {services.length > 1 && (
           <BadgeFilter
@@ -266,7 +280,7 @@ export function MessagesView() {
             ]}
           />
         )}
-      </div>
+      </header>
       <div className="min-h-0 flex-1">
         {mode === "conversations" ? (
           <Conversations
@@ -362,7 +376,9 @@ function Conversations({
           {/* No "Conversations" title here — the mode toggle above already says
               it. Just the count + sort in one slim row. */}
           {(threads?.length ?? 0) > 0 && (
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5">
+            // h-14 px-4 matches the detail pane's ViewHeader so the two top rows
+            // line up in height.
+            <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4">
               <span className="text-xs tabular-nums text-muted-foreground/60">
                 {formatCount(visibleThreads?.length ?? 0)}
               </span>
@@ -901,14 +917,12 @@ function Conversation({
           </span>
         ) : (
           // App threads (e.g. TikTok) store the peer's @handle as the sole
-          // participant — show it next to the service.
+          // participant — show it. The service name is intentionally omitted: it's
+          // already in the conversation list and implied by the active filter.
           (() => {
             const handle = thread.participants.find((p) => p.startsWith("@"));
-            const bits = [handle, thread.service].filter(Boolean);
-            return bits.length > 0 ? (
-              <span className="text-xs text-muted-foreground">
-                {bits.join(" · ")}
-              </span>
+            return handle ? (
+              <span className="text-xs text-muted-foreground">{handle}</span>
             ) : null;
           })()
         )}

@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -95,7 +95,9 @@ CREATE TABLE IF NOT EXISTS calls (
     answered    INTEGER,
     duration_s  INTEGER,
     occurred_at INTEGER,
-    service     TEXT                          -- 'phone' | 'facetime' | ...
+    service     TEXT,                         -- 'phone' | 'facetime' | ...
+    call_type   TEXT,                         -- 'audio' | 'video' (FaceTime), else NULL
+    location    TEXT                          -- carrier/geo string stored on the call
 );
 CREATE INDEX IF NOT EXISTS idx_calls_occurred ON calls(occurred_at DESC);
 
@@ -342,6 +344,9 @@ impl CacheDb {
             ensure_column(&conn, "media_items", "albums", "TEXT")?;
             // v11: message content class, for the Messages content filter.
             ensure_column(&conn, "messages", "kind", "TEXT")?;
+            // v12: FaceTime audio-vs-video type + carrier/geo location on calls.
+            ensure_column(&conn, "calls", "call_type", "TEXT")?;
+            ensure_column(&conn, "calls", "location", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
