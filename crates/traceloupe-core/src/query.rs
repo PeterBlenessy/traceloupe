@@ -775,22 +775,50 @@ pub fn get_calls_window(
         .map_err(Into::into)
 }
 
-/// Safari visits whose URL or title matches `search`, or all when NULL.
-pub fn count_safari(cache: &CacheDb, search: Option<&str>) -> Result<i64> {
+/// Safari visits whose URL or title matches `search` (or all when NULL) and
+/// whose `visited_at` falls in `range` (open bounds = no limit; undated visits
+/// only count when both bounds are open).
+pub fn count_safari(cache: &CacheDb, search: Option<&str>, range: TimeRange) -> Result<i64> {
     let search = search.map(escape_like);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM safari_history
          WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
-                          OR title LIKE '%' || ?1 || '%' ESCAPE '\\')",
-        [search],
+                          OR title LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?2 IS NULL OR visited_at >= ?2)
+           AND (?3 IS NULL OR visited_at < ?3)",
+        rusqlite::params![search, range.lo, range.hi],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
+/// Safari-visit counts for each `range` (respecting `search`) — the time-filter
+/// chips. One row per range, order preserved.
+pub fn count_safari_ranges(
+    cache: &CacheDb,
+    search: Option<&str>,
+    ranges: &[TimeRange],
+) -> Result<Vec<i64>> {
+    let search = search.map(escape_like);
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM safari_history
+         WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
+                          OR title LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?2 IS NULL OR visited_at >= ?2)
+           AND (?3 IS NULL OR visited_at < ?3)",
+    )?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        out.push(stmt.query_row(rusqlite::params![search, r.lo, r.hi], |row| row.get(0))?);
+    }
+    Ok(out)
+}
+
 pub fn get_safari_window(
     cache: &CacheDb,
     search: Option<&str>,
+    range: TimeRange,
     offset: i64,
     limit: i64,
     sort: Sort,
@@ -803,12 +831,17 @@ pub fn get_safari_window(
          FROM safari_history
          WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
                           OR title LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?4 IS NULL OR visited_at >= ?4)
+           AND (?5 IS NULL OR visited_at < ?5)
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params![search, limit, offset], row_to_visit)?;
+    let rows = stmt.query_map(
+        rusqlite::params![search, limit, offset, range.lo, range.hi],
+        row_to_visit,
+    )?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }

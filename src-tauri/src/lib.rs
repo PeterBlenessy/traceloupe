@@ -1252,20 +1252,41 @@ async fn get_calls_window(
 async fn count_safari(
     active: State<'_, ActiveBackup>,
     search: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_safari(&cache, search.as_deref()).map_err(|e| e.to_string())
+        query::count_safari(&cache, search.as_deref(), query::TimeRange { lo, hi })
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
+async fn count_safari_ranges(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+    ranges: Vec<query::TimeRange>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_safari_ranges(&cache, search.as_deref(), &ranges).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: search + time range + paging + sort.
 async fn get_safari_window(
     active: State<'_, ActiveBackup>,
     search: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
     offset: i64,
     limit: i64,
     sort_by: String,
@@ -1277,6 +1298,7 @@ async fn get_safari_window(
         query::get_safari_window(
             &cache,
             search.as_deref(),
+            query::TimeRange { lo, hi },
             offset,
             limit,
             safari_sort(&sort_by, desc),
@@ -1797,6 +1819,7 @@ pub fn run() {
             count_calls,
             get_calls_window,
             count_safari,
+            count_safari_ranges,
             get_safari_window
         ])
         .run(tauri::generate_context!())

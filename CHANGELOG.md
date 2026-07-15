@@ -44,10 +44,15 @@ While pre-1.0, the **minor** version tracks major milestones:
   sort control. Selecting a chip or range filters the stream (rather than the old
   jump-to-bucket behaviour).
 
-- **Time filters on Photos and Notes.** The same preset chips + custom from–to
-  range as the Timeline now filter Photos (by capture date, server-side) and
-  Notes (by modified date). On Photos the app/source filter moved up beside the
-  title; on Notes the time chips replace the old year dropdown.
+- **Time filters on Photos, Notes, and Safari.** The same preset chips + custom
+  from–to range as the Timeline now filter Photos (by capture date, server-side),
+  Notes (by modified date), and Safari history (by visit date, server-side). On
+  Photos the app/source filter moved up beside the title; on Notes the time chips
+  replace the old year dropdown.
+- **Notes layout** rebuilt into full-width rows: title + folder + lock state (now
+  with lock/unlock icons) on the first row, time filters + sort on the second.
+- **Brand icons on the Photos source filter** (same treatment as the message
+  filter chips).
 
 ### Removed
 

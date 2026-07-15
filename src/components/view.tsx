@@ -129,6 +129,7 @@ export function VirtualListView<T>({
 export function LazyListView<T>({
   title,
   header,
+  toolbar,
   count,
   windowKey,
   fetchWindow,
@@ -140,6 +141,8 @@ export function LazyListView<T>({
 }: {
   title: string;
   header?: React.ReactNode;
+  /** An optional full-width row below the title (filters, etc.). */
+  toolbar?: React.ReactNode;
   /** Total matching rows (from a count query); undefined while loading. */
   count: number | undefined;
   windowKey: (page: number) => unknown[];
@@ -155,6 +158,11 @@ export function LazyListView<T>({
       <ViewHeader title={title} count={count}>
         {header}
       </ViewHeader>
+      {toolbar && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
+          {toolbar}
+        </div>
+      )}
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (

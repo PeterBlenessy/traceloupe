@@ -343,9 +343,20 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<Call[]>;
-  countSafari(search: string | null): Promise<number>;
+  countSafari(
+    search: string | null,
+    lo?: number | null,
+    hi?: number | null,
+  ): Promise<number>;
+  /** Safari-visit counts for each [lo, hi) window (respecting `search`). */
+  countSafariRanges(
+    search: string | null,
+    ranges: TimeRange[],
+  ): Promise<number[]>;
   getSafariWindow(
     search: string | null,
+    lo: number | null,
+    hi: number | null,
     offset: number,
     limit: number,
     sortBy: string,
@@ -460,10 +471,15 @@ const tauriClient: TraceLoupeClient = {
   countCalls: (search) => invoke<number>("count_calls", { search }),
   getCallsWindow: (search, offset, limit, sortBy, desc) =>
     invoke<Call[]>("get_calls_window", { search, offset, limit, sortBy, desc }),
-  countSafari: (search) => invoke<number>("count_safari", { search }),
-  getSafariWindow: (search, offset, limit, sortBy, desc) =>
+  countSafari: (search, lo = null, hi = null) =>
+    invoke<number>("count_safari", { search, lo, hi }),
+  countSafariRanges: (search, ranges) =>
+    invoke<number[]>("count_safari_ranges", { search, ranges }),
+  getSafariWindow: (search, lo, hi, offset, limit, sortBy, desc) =>
     invoke<HistoryVisit[]>("get_safari_window", {
       search,
+      lo,
+      hi,
       offset,
       limit,
       sortBy,
@@ -1016,14 +1032,23 @@ function mockFilterCalls(search: string | null): Call[] {
   const q = search.toLowerCase();
   return mockCalls.filter((c) => c.address?.toLowerCase().includes(q));
 }
-function mockFilterSafari(search: string | null): HistoryVisit[] {
-  if (!search) return mockSafari;
-  const q = search.toLowerCase();
-  return mockSafari.filter(
-    (h) =>
-      h.url.toLowerCase().includes(q) ||
-      (h.title?.toLowerCase().includes(q) ?? false),
-  );
+function mockFilterSafari(
+  search: string | null,
+  range?: TimeRange,
+): HistoryVisit[] {
+  let out = mockSafari;
+  if (search) {
+    const q = search.toLowerCase();
+    out = out.filter(
+      (h) =>
+        h.url.toLowerCase().includes(q) ||
+        (h.title?.toLowerCase().includes(q) ?? false),
+    );
+  }
+  if (range && (range.lo != null || range.hi != null)) {
+    out = out.filter((h) => inRange(h.visitedAt ?? null, range));
+  }
+  return out;
 }
 
 /** Mirror the backend's sort for the in-browser mock: nulls last regardless of
@@ -1254,14 +1279,17 @@ export const mockClient: TraceLoupeClient = {
           offset + limit,
         )
       : [],
-  countSafari: async (search) =>
-    mockActive ? mockFilterSafari(search).length : 0,
-  getSafariWindow: async (search, offset, limit, sortBy, desc) =>
+  countSafari: async (search, lo = null, hi = null) =>
+    mockActive ? mockFilterSafari(search, { lo, hi }).length : 0,
+  countSafariRanges: async (search, ranges) =>
+    ranges.map((r) => (mockActive ? mockFilterSafari(search, r).length : 0)),
+  getSafariWindow: async (search, lo, hi, offset, limit, sortBy, desc) =>
     mockActive
-      ? mockSortBy(mockFilterSafari(search), safariKey(sortBy), desc).slice(
-          offset,
-          offset + limit,
-        )
+      ? mockSortBy(
+          mockFilterSafari(search, { lo, hi }),
+          safariKey(sortBy),
+          desc,
+        ).slice(offset, offset + limit)
       : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),

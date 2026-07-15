@@ -12,10 +12,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
-import { client, type HistoryVisit } from "@/lib/ipc";
+import { client, type HistoryVisit, type TimeRange } from "@/lib/ipc";
 
 export function SafariView() {
   const navigate = useNavigate();
@@ -26,11 +27,23 @@ export function SafariView() {
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
   const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+  // Time filter — same presets + range as the other views (over visit date).
+  const { now, presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   // Subscribe to the clock preference so times re-render on change.
   const { clockFormat } = useSettings();
   const { data: count, error } = useQuery({
-    queryKey: ["safariCount", search],
-    queryFn: () => client.countSafari(search),
+    queryKey: ["safariCount", search, range.lo, range.hi],
+    queryFn: () => client.countSafari(search, range.lo, range.hi),
+    enabled: active === true,
+  });
+  const { data: presetCounts } = useQuery({
+    queryKey: ["safariRanges", now, search],
+    queryFn: () =>
+      client.countSafariRanges(
+        search,
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+      ),
     enabled: active === true,
   });
 
@@ -47,13 +60,22 @@ export function SafariView() {
       title="Safari"
       count={count}
       error={error}
-      resetKey={`${search ?? ""}:${clockFormat}:${sort.by}:${sort.desc}`}
+      resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching history." : "No Safari history in this backup."}
       header={
-        <div className="flex items-center gap-2">
-          <div className="w-56">
-            <ListSearch value={q} onChange={setQ} placeholder="Search history" />
-          </div>
+        <div className="w-56">
+          <ListSearch value={q} onChange={setQ} placeholder="Search history" />
+        </div>
+      }
+      toolbar={
+        <>
+          <TimeFilterBar
+            className="flex-1"
+            presets={presets}
+            value={range}
+            onChange={setRange}
+            counts={presetCounts}
+          />
           <SortControl
             fields={[
               { value: "date", label: "Date" },
@@ -63,11 +85,27 @@ export function SafariView() {
             value={sort}
             onChange={setSort}
           />
-        </div>
+        </>
       }
-      windowKey={(page) => ["safariWindow", search, sort.by, sort.desc, page]}
+      windowKey={(page) => [
+        "safariWindow",
+        search,
+        range.lo,
+        range.hi,
+        sort.by,
+        sort.desc,
+        page,
+      ]}
       fetchWindow={(offset, limit) =>
-        client.getSafariWindow(search, offset, limit, sort.by, sort.desc)
+        client.getSafariWindow(
+          search,
+          range.lo,
+          range.hi,
+          offset,
+          limit,
+          sort.by,
+          sort.desc,
+        )
       }
       renderItem={(h) => <VisitRow visit={h} />}
     />
