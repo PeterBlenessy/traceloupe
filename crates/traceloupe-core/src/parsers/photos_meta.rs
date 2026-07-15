@@ -33,6 +33,34 @@ struct AssetMeta {
     longitude: Option<f64>,
     favorite: bool,
     persons: Option<String>,
+    /// Moment place/event title (e.g. "Häljarp", "New Year's Day") — searchable.
+    location: Option<String>,
+    /// User-created album names this photo belongs to, comma-joined.
+    albums: Option<String>,
+}
+
+/// Find the album↔asset join table (`Z_<n>ASSETS` with a `Z_<n>ALBUMS` column) —
+/// the entity number varies by iOS version, so we discover it rather than hardcode
+/// it. Returns (table, album_column, asset_column).
+fn album_join(conn: &Connection) -> Result<Option<(String, String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name GLOB 'Z_[0-9]*ASSETS'",
+    )?;
+    let tables: Vec<String> = stmt
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for t in tables {
+        let cols: Vec<String> = conn
+            .prepare(&format!("SELECT name FROM pragma_table_info('{t}')"))?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let album_col = cols.iter().find(|c| c.ends_with("ALBUMS")).cloned();
+        let asset_col = cols.iter().find(|c| c.ends_with("ASSETS")).cloned();
+        if let (Some(a), Some(s)) = (album_col, asset_col) {
+            return Ok(Some((t, a, s)));
+        }
+    }
+    Ok(None)
 }
 
 fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
@@ -57,26 +85,31 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         }
     }
 
-    // asset path suffix ("DCIM/100APPLE/IMG_0058.JPG") -> metadata.
+    // asset path suffix ("DCIM/100APPLE/IMG_0058.JPG") -> metadata, and the
+    // asset's Core Data Z_PK -> suffix (album/keyword joins are keyed by PK).
     let mut by_suffix: HashMap<String, AssetMeta> = HashMap::new();
+    let mut pk_to_suffix: HashMap<i64, String> = HashMap::new();
 
-    // Base metadata for every asset: date, GPS, favorite.
+    // Base metadata for every asset: date, GPS, favorite, and moment place name.
     {
         let mut stmt = src.prepare(
-            "SELECT ZDIRECTORY, ZFILENAME, ZDATECREATED, ZLATITUDE, ZLONGITUDE, ZFAVORITE
-             FROM ZASSET
-             WHERE ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL",
+            "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
+                    a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE
+             FROM ZASSET a
+             LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
+             WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
         )?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
-            let dir: String = r.get(0)?;
-            let file: String = r.get(1)?;
+            let pk: i64 = r.get(0)?;
+            let dir: String = r.get(1)?;
+            let file: String = r.get(2)?;
             let taken_at = r
-                .get::<_, Option<f64>>(2)?
+                .get::<_, Option<f64>>(3)?
                 .filter(|t| *t > 0.0)
                 .map(|t| t as i64 + MAC_EPOCH);
-            let lat: Option<f64> = r.get(3)?;
-            let lon: Option<f64> = r.get(4)?;
+            let lat: Option<f64> = r.get(4)?;
+            let lon: Option<f64> = r.get(5)?;
             // iOS stores -180.0 (or an out-of-range value) when there's no fix.
             let (latitude, longitude) = match (lat, lon) {
                 (Some(a), Some(o))
@@ -86,17 +119,53 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 }
                 _ => (None, None),
             };
-            let favorite = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
+            let favorite = r.get::<_, Option<i64>>(6)?.unwrap_or(0) != 0;
+            let location = r
+                .get::<_, Option<String>>(7)?
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let suffix = format!("{dir}/{file}");
+            pk_to_suffix.insert(pk, suffix.clone());
             by_suffix.insert(
-                format!("{dir}/{file}"),
+                suffix,
                 AssetMeta {
                     taken_at,
                     latitude,
                     longitude,
                     favorite,
-                    persons: None,
+                    location,
+                    ..Default::default()
                 },
             );
+        }
+    }
+
+    // User-created album names (ZKIND = 2) per asset, via the album↔asset join.
+    if let Some((join, album_col, asset_col)) = album_join(&src)? {
+        let mut albums: HashMap<String, BTreeSet<String>> = HashMap::new();
+        let sql = format!(
+            "SELECT j.{asset_col}, g.ZTITLE
+             FROM {join} j
+             JOIN ZGENERICALBUM g ON g.Z_PK = j.{album_col}
+             WHERE g.ZKIND = 2 AND g.ZTITLE IS NOT NULL AND g.ZTITLE <> ''"
+        );
+        let mut stmt = src.prepare(&sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let pk: i64 = r.get(0)?;
+            let title: String = r.get::<_, String>(1)?.trim().to_string();
+            if title.is_empty() {
+                continue;
+            }
+            if let Some(suffix) = pk_to_suffix.get(&pk) {
+                albums.entry(suffix.clone()).or_default().insert(title);
+            }
+        }
+        for (suffix, set) in albums {
+            let joined = set.into_iter().collect::<Vec<_>>().join(", ");
+            if let Some(meta) = by_suffix.get_mut(&suffix) {
+                meta.albums = Some(joined);
+            }
         }
     }
 
@@ -160,14 +229,18 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                  latitude = ?2,
                  longitude = ?3,
                  is_favorite = ?4,
-                 taken_at = COALESCE(?5, taken_at)
-             WHERE id = ?6",
+                 taken_at = COALESCE(?5, taken_at),
+                 location = ?6,
+                 albums = ?7
+             WHERE id = ?8",
             rusqlite::params![
                 meta.persons,
                 meta.latitude,
                 meta.longitude,
                 meta.favorite as i64,
                 meta.taken_at,
+                meta.location,
+                meta.albums,
                 id
             ],
         )?;
@@ -185,20 +258,30 @@ mod tests {
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(
             "CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZDIRECTORY TEXT, ZFILENAME TEXT,
-                 ZDATECREATED REAL, ZLATITUDE REAL, ZLONGITUDE REAL, ZFAVORITE INTEGER);
+                 ZDATECREATED REAL, ZLATITUDE REAL, ZLONGITUDE REAL, ZFAVORITE INTEGER, ZMOMENT INTEGER);
              CREATE TABLE ZPERSON (Z_PK INTEGER PRIMARY KEY, ZFULLNAME TEXT, ZDISPLAYNAME TEXT);
              CREATE TABLE ZDETECTEDFACE (Z_PK INTEGER PRIMARY KEY, ZASSETFORFACE INTEGER, ZPERSONFORFACE INTEGER);
+             CREATE TABLE ZMOMENT (Z_PK INTEGER PRIMARY KEY, ZTITLE TEXT);
+             CREATE TABLE ZGENERICALBUM (Z_PK INTEGER PRIMARY KEY, ZKIND INTEGER, ZTITLE TEXT);
+             CREATE TABLE Z_33ASSETS (Z_33ALBUMS INTEGER, Z_3ASSETS INTEGER);
+             INSERT INTO ZMOMENT VALUES (500, 'Florida');
              -- Asset 1: named people, a real date (721692800 Mac = 1_700_000_000 unix),
-             -- a GPS fix, and favorited.
-             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1);
-             -- Asset 2: no named people, no location (-180 sentinel), not favorited.
-             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0);
+             -- a GPS fix, favorited, in the 'Florida' moment.
+             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500);
+             -- Asset 2: no named people, no location (-180 sentinel), not favorited, no moment.
+             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL);
              INSERT INTO ZPERSON VALUES (10, 'Alice', NULL);
              INSERT INTO ZPERSON VALUES (11, NULL, 'Bob');
              INSERT INTO ZPERSON VALUES (12, '', '');  -- unnamed cluster, ignored
              INSERT INTO ZDETECTEDFACE VALUES (100, 1, 10);
              INSERT INTO ZDETECTEDFACE VALUES (101, 1, 11);
-             INSERT INTO ZDETECTEDFACE VALUES (102, 2, 12);",
+             INSERT INTO ZDETECTEDFACE VALUES (102, 2, 12);
+             -- Album: a user album (ZKIND 2) 'Vacation' containing asset 1; a smart
+             -- album (ZKIND 1509) 'Recents' is ignored.
+             INSERT INTO ZGENERICALBUM VALUES (20, 2, 'Vacation');
+             INSERT INTO ZGENERICALBUM VALUES (21, 1509, 'Recents');
+             INSERT INTO Z_33ASSETS VALUES (20, 1);
+             INSERT INTO Z_33ASSETS VALUES (21, 1);",
         )
         .unwrap();
         db
@@ -241,6 +324,16 @@ mod tests {
         assert_eq!(lon, Some(18.06));
         assert_eq!(fav, 1);
         assert_eq!(taken, Some(1_700_000_000));
+
+        let (location, albums): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT location, albums FROM media_items WHERE relative_path LIKE '%IMG_0001%'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(location.as_deref(), Some("Florida"));
+        assert_eq!(albums.as_deref(), Some("Vacation"), "smart album excluded");
 
         // Asset 2: no people, no location (sentinel dropped), not favorite.
         let (persons2, lat2, fav2): (Option<String>, Option<f64>, i64) = conn
