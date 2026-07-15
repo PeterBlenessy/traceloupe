@@ -23,11 +23,14 @@ schema facts, write fresh Rust — provenance: reference, architecture §10).
    (Hickman/CTF — no need for the app in your own backup), diff, and keep a real
    fixture. Only then drop the "unvalidated" caveat.
 4. **Commit.**
-5. **Review** (subagent) → **fix** → **re-review** substantial fixes.
-6. **Push + bump the minor version each turn** — mark the app ✅ in
-   `docs/app-support.md`, bump `package.json`/`Cargo.toml`/`tauri.conf.json`/
-   `Cargo.lock`, add a CHANGELOG entry, tag `vX.Y.0`, push tag. One app = one
-   minor release. Then `/loop` moves to the next app.
+4b. **Commit + MINOR release** — mark ✅ in `docs/app-support.md`, bump the minor
+   version (`0.6.0`), CHANGELOG + tag `vX.Y.0`, push. One app = one minor release.
+5. **Review loop** — subagent review, varying the lens each round; fix real
+   findings; each fix round is a **PATCH release** (`vX.Y.1`, `vX.Y.2`…). Keep
+   iterating **until a round finds nothing** (min 2 rounds), not just twice.
+6. **Self-improve** — whenever review catches a correctness bug, add/sharpen a
+   known-pitfalls checklist item in the skill so no future app repeats it, and
+   commit that with the fix. Then `/loop` moves to the next app.
 
 ## Known-pitfalls checklist
 

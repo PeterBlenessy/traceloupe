@@ -4,12 +4,12 @@ description: >-
   Add native support for ONE iOS app's chat data to TraceLoupe, replacing the
   iLEAPP fallback. Runs a disciplined process: scout the iLEAPP reference →
   design against known pitfalls → implement → validate against REAL data
-  (diff vs iLEAPP + a public test-image fixture) → commit → subagent review →
-  fix → re-review → push → bump the minor version + tag. Picks the next app from
-  docs/app-support.md when none is named. Invoke as
-  `/create-native-app-parser <app>` (e.g. `discord`). To work through many apps
-  toward the top-50 list, wrap it with the built-in `/loop` (this skill does one
-  app + a minor release; `/loop` handles the repetition).
+  (diff vs iLEAPP + a public test-image fixture) → commit + MINOR release →
+  review-loop until clean (each fix round a PATCH release) → self-improve the
+  checklist when review bites. Picks the next app from docs/app-support.md when
+  none is named. Invoke as `/create-native-app-parser <app>` (e.g. `discord`). To
+  work through many apps toward the top-50 list, wrap it with the built-in `/loop`
+  (this skill does one app end-to-end; `/loop` handles the repetition).
 ---
 
 # Create a native app parser
@@ -89,37 +89,50 @@ decoder. Break the circularity:
   the image/row-count in the module doc).
 - Only after this does the module lose its "unvalidated" caveat in the docs.
 
-### 4. Commit
-Commit the module (message: what it reads, schema facts from `<app>.py`,
-provenance reference §10, and the validation status).
+### 4. Commit + MINOR release (the app lands)
+Commit the validated module (message: what it reads, schema facts from `<app>.py`,
+provenance reference §10, validation status). Then cut the app's minor release:
+- Mark it ✅ native in `docs/app-support.md`; add its row to
+  `docs/app-data-coverage.md`.
+- **Bump the MINOR version** (`0.5.0 → 0.6.0`): `package.json`, workspace
+  `Cargo.toml`, `src-tauri/tauri.conf.json`, `Cargo.lock` (via `cargo check`).
+- CHANGELOG entry + milestone row; update the `traceloupe-versioning` memory.
+- Commit, `git tag -a vX.Y.0`, `git push origin main && git push origin vX.Y.0`.
 
-### 5. Review → fix → re-review
-- Launch a `general-purpose` subagent to correctness-review the module against
-  the checklist (see the review prompt template below). Give it the schema facts
-  and tell it to skim the iLEAPP module.
-- Fix every real finding in the same pass (standing rule: fix bugs you find).
-- Re-review substantial fixes with a second subagent focused on the fix.
+(One native app = one user-visible feature = one minor release.)
 
-### 6. Push + bump the minor version (every turn)
-Once review is clean, close out the app **each turn** (not batched):
-- Update the docs: mark the app ✅ native in `docs/app-support.md`, add its
-  field-coverage row to `docs/app-data-coverage.md`.
-- **Bump the minor version** (`0.5.0 → 0.6.0 → …`): `package.json`, workspace
-  `Cargo.toml`, `src-tauri/tauri.conf.json`, and `Cargo.lock` (via `cargo check`).
-- Add a CHANGELOG entry + milestone-table row; update the `traceloupe-versioning`
-  memory.
-- Commit, `git tag -a vX.Y.0`, and `git push origin main && git push origin vX.Y.0`.
+### 5. Review loop → PATCH release per fix round (iterate until clean)
+Harden the app through **repeated** review rounds — not just twice:
+- Launch a `general-purpose` subagent to correctness-review the module against the
+  checklist (prompt template below). Give it the schema facts; tell it to skim the
+  iLEAPP module. **Vary the lens each round** (round 1: schema/attribution; round
+  2: timestamps/direction/types; round 3: adversarial/edge cases) so fresh eyes
+  catch what the last round didn't.
+- Fix every real (correctness) finding in the same pass — ignore style/nits.
+- Each fix round is a **PATCH release**: bump the patch (`vX.Y.0 → vX.Y.1`), add a
+  CHANGELOG line under the app's entry, commit, tag `vX.Y.Z`, push main + tag.
+- **Keep looping** until a full review round returns **no real findings**
+  (minimum 2 rounds; if a round finds something, do another after fixing). Only
+  then is the app done.
 
-(One native app = one user-visible feature = one minor release. If you'd rather
-batch several apps per release, that's the one line to change here — but the
-default is per-turn.)
+### 6. Self-improve (make the loop learn) — do this whenever a review bites
+If a review round surfaced a **correctness bug**, ask: *would the pitfall
+checklist have prevented it at design time?*
+- **Not on the checklist** → add a new checklist item (concrete: the signal to
+  look for + the fix), so no future app repeats it.
+- **On the checklist but you still shipped it** → sharpen that item (a clearer
+  rule / a "watch for" note) and add it as a mandatory pre-commit self-check.
+- Recurring across apps → promote it to the top of the checklist.
+Commit the `SKILL.md` change with the app's fixes. This is the step that stops the
+same mistake (e.g. group attribution — found 4×) from recurring: the skill's
+checklist should get *stronger* every time review catches something.
 
-That completes one app. To continue app-by-app toward the top-50 list (see
-`docs/app-support.md`), run this skill under the built-in **`/loop`** — it handles
-the repetition, so **don't stop to ask whether to continue**. Stop only when the
-list is covered or the next app genuinely needs new machinery (a generic
-`Cache.db` reader, a YapDatabase decoder) that warrants a fresh, focused effort —
-which is a good moment to split that machinery out as its own sub-skill.
+### 7. Next app
+That completes one app. Under the built-in **`/loop`**, go straight to the next
+(step 0a) — **don't stop to ask whether to continue**. Stop only when the top-50
+list (`docs/app-support.md`) is covered or the next app needs new machinery (a
+generic `Cache.db` reader, a YapDatabase decoder) that warrants a fresh, focused
+effort — split that machinery out as its own sub-skill.
 
 ---
 
