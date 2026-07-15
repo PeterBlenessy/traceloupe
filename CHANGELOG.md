@@ -44,9 +44,15 @@ While pre-1.0, the **minor** version tracks major milestones:
   sort control. Selecting a chip or range filters the stream (rather than the old
   jump-to-bucket behaviour).
 
+- **Time filters on Photos and Notes.** The same preset chips + custom from–to
+  range as the Timeline now filter Photos (by capture date, server-side) and
+  Notes (by modified date). On Photos the app/source filter moved up beside the
+  title; on Notes the time chips replace the old year dropdown.
+
 ### Removed
 
 - The standalone **Periods** view (folded into Timeline's filters, above).
+- The Notes **year dropdown** (superseded by the time-filter chips + range).
 
 ## [0.6.3]
 

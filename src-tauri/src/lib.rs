@@ -1152,20 +1152,41 @@ fn media_sort(field: &str, desc: bool) -> query::Sort {
 async fn count_media(
     active: State<'_, ActiveBackup>,
     source: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media(&cache, source.as_deref()).map_err(|e| e.to_string())
+        query::count_media(&cache, source.as_deref(), query::TimeRange { lo, hi })
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
+async fn count_media_ranges(
+    active: State<'_, ActiveBackup>,
+    source: Option<String>,
+    ranges: Vec<query::TimeRange>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_media_ranges(&cache, source.as_deref(), &ranges).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: source + time range + paging + sort.
 async fn get_media_window(
     active: State<'_, ActiveBackup>,
     source: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
     offset: i64,
     limit: i64,
     sort_by: String,
@@ -1177,6 +1198,7 @@ async fn get_media_window(
         query::get_media_window(
             &cache,
             source.as_deref(),
+            query::TimeRange { lo, hi },
             offset,
             limit,
             media_sort(&sort_by, desc),
@@ -1770,6 +1792,7 @@ pub fn run() {
             list_media,
             media_sources,
             count_media,
+            count_media_ranges,
             get_media_window,
             count_calls,
             get_calls_window,

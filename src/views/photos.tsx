@@ -25,9 +25,10 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SortControl, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
 import { formatCount, formatDateTime } from "@/lib/format";
-import { client, type MediaItem } from "@/lib/ipc";
+import { client, type MediaItem, type TimeRange } from "@/lib/ipc";
 
 export function PhotosView() {
   const navigate = useNavigate();
@@ -37,14 +38,27 @@ export function PhotosView() {
   });
   const [source, setSource] = useState<string>("all");
   const sourceArg = source === "all" ? null : source;
+  // Time filter — same presets + custom range as the Timeline.
+  const { now, presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   const { data: count, error } = useQuery({
-    queryKey: ["mediaCount", source],
-    queryFn: () => client.countMedia(sourceArg),
+    queryKey: ["mediaCount", source, range.lo, range.hi],
+    queryFn: () => client.countMedia(sourceArg, range.lo, range.hi),
     enabled: active === true,
   });
   const { data: sources } = useQuery({
     queryKey: ["mediaSources"],
     queryFn: () => client.mediaSources(),
+    enabled: active === true,
+  });
+  // Per-preset counts for the time chips, within the current source filter.
+  const { data: presetCounts } = useQuery({
+    queryKey: ["mediaRanges", now, source],
+    queryFn: () =>
+      client.countMediaRanges(
+        sourceArg,
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+      ),
     enabled: active === true,
   });
   const [openIndex, setOpenIndex] = useState<number | null>(null);
@@ -54,10 +68,20 @@ export function PhotosView() {
   const ensurePage = useCallback(
     (page: number) => {
       void qc.prefetchQuery({
-        queryKey: ["mediaWindow", sourceArg, sort.by, sort.desc, page],
+        queryKey: [
+          "mediaWindow",
+          sourceArg,
+          range.lo,
+          range.hi,
+          sort.by,
+          sort.desc,
+          page,
+        ],
         queryFn: () =>
           client.getMediaWindow(
             sourceArg,
+            range.lo,
+            range.hi,
             page * PAGE,
             PAGE,
             sort.by,
@@ -65,7 +89,7 @@ export function PhotosView() {
           ),
       });
     },
-    [qc, sourceArg, sort],
+    [qc, sourceArg, range, sort],
   );
 
   if (active === false) {
@@ -85,18 +109,24 @@ export function PhotosView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Photos" count={count} />
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-2 py-2">
-        {hasFilter ? (
+      <ViewHeader title="Photos" count={count}>
+        {hasFilter && (
           <SourceFilter
             sources={sources ?? []}
             total={total}
             value={source}
             onChange={setSource}
           />
-        ) : (
-          <span />
         )}
+      </ViewHeader>
+      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
+        <TimeFilterBar
+          className="flex-1"
+          presets={presets}
+          value={range}
+          onChange={setRange}
+          counts={presetCounts}
+        />
         <SortControl
           fields={[
             { value: "date", label: "Date" },
@@ -121,11 +151,12 @@ export function PhotosView() {
             : "No media from this source."}
         </p>
       ) : (
-        // key by source+sort so the grid remounts (scroll + measurement reset) on change.
+        // key by source+range+sort so the grid remounts (scroll + measurement reset) on change.
         <MediaGrid
-          key={`${source}:${sort.by}:${sort.desc}`}
+          key={`${source}:${range.lo}:${range.hi}:${sort.by}:${sort.desc}`}
           count={count}
           source={sourceArg}
+          range={range}
           sort={sort}
           onOpen={setOpenIndex}
         />
@@ -135,6 +166,7 @@ export function PhotosView() {
         index={openIndex}
         count={count ?? 0}
         source={sourceArg}
+        range={range}
         sort={sort}
         ensurePage={ensurePage}
         onNavigate={setOpenIndex}
@@ -183,11 +215,13 @@ function SourceFilter({
 function MediaGrid({
   count,
   source,
+  range,
   sort,
   onOpen,
 }: {
   count: number;
   source: string | null;
+  range: TimeRange;
   sort: SortState;
   onOpen: (index: number) => void;
 }) {
@@ -237,9 +271,17 @@ function MediaGrid({
   }, [firstPage, lastPage]);
   const queries = useQueries({
     queries: pages.map((p) => ({
-      queryKey: ["mediaWindow", source, sort.by, sort.desc, p],
+      queryKey: ["mediaWindow", source, range.lo, range.hi, sort.by, sort.desc, p],
       queryFn: () =>
-        client.getMediaWindow(source, p * PAGE, PAGE, sort.by, sort.desc),
+        client.getMediaWindow(
+          source,
+          range.lo,
+          range.hi,
+          p * PAGE,
+          PAGE,
+          sort.by,
+          sort.desc,
+        ),
     })),
   });
   const loaded = new Map<number, MediaItem[]>();
@@ -320,6 +362,7 @@ function Lightbox({
   index,
   count,
   source,
+  range,
   sort,
   ensurePage,
   onNavigate,
@@ -328,6 +371,7 @@ function Lightbox({
   index: number | null;
   count: number;
   source: string | null;
+  range: TimeRange;
   sort: SortState;
   ensurePage: (page: number) => void;
   onNavigate: (index: number) => void;
@@ -339,9 +383,17 @@ function Lightbox({
   // would leave the spinner stuck until the next interaction.
   const page = index != null ? Math.floor(index / PAGE) : 0;
   const { data: win } = useQuery({
-    queryKey: ["mediaWindow", source, sort.by, sort.desc, page],
+    queryKey: ["mediaWindow", source, range.lo, range.hi, sort.by, sort.desc, page],
     queryFn: () =>
-      client.getMediaWindow(source, page * PAGE, PAGE, sort.by, sort.desc),
+      client.getMediaWindow(
+        source,
+        range.lo,
+        range.hi,
+        page * PAGE,
+        PAGE,
+        sort.by,
+        sort.desc,
+      ),
     enabled: index != null,
   });
   const item = index != null ? win?.[index % PAGE] : undefined;

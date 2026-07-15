@@ -625,23 +625,51 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
 // happens in SQL so the count and the windows stay consistent. A NULL filter
 // matches everything.
 
-/// Photos/videos in `source` ("Photos", "Messages", …), or all when NULL.
-pub fn count_media(cache: &CacheDb, source: Option<&str>) -> Result<i64> {
+/// Photos/videos in `source` ("Photos", "Messages", …), or all when NULL, whose
+/// `taken_at` falls in `range` (open bounds = no limit; undated media only count
+/// when both bounds are open).
+pub fn count_media(cache: &CacheDb, source: Option<&str>, range: TimeRange) -> Result<i64> {
     // `COALESCE(source,'Other')` so the synthesized "Other" bucket (NULL source)
     // is actually selectable — `source = 'Other'` never matches a NULL. Matches
     // the label built by `media_sources`.
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM media_items
-         WHERE local_path IS NOT NULL AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)",
-        [source],
+         WHERE local_path IS NOT NULL
+           AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
+           AND (?2 IS NULL OR taken_at >= ?2)
+           AND (?3 IS NULL OR taken_at < ?3)",
+        rusqlite::params![source, range.lo, range.hi],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
+/// Media counts for each `range` in `source` — powers the Photos time-filter
+/// chips. One row per range, order preserved.
+pub fn count_media_ranges(
+    cache: &CacheDb,
+    source: Option<&str>,
+    ranges: &[TimeRange],
+) -> Result<Vec<i64>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM media_items
+         WHERE local_path IS NOT NULL
+           AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
+           AND (?2 IS NULL OR taken_at >= ?2)
+           AND (?3 IS NULL OR taken_at < ?3)",
+    )?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        out.push(stmt.query_row(rusqlite::params![source, r.lo, r.hi], |row| row.get(0))?);
+    }
+    Ok(out)
+}
+
 pub fn get_media_window(
     cache: &CacheDb,
     source: Option<&str>,
+    range: TimeRange,
     offset: i64,
     limit: i64,
     sort: Sort,
@@ -651,13 +679,19 @@ pub fn get_media_window(
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at
          FROM media_items
-         WHERE local_path IS NOT NULL AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
+         WHERE local_path IS NOT NULL
+           AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
+           AND (?4 IS NULL OR taken_at >= ?4)
+           AND (?5 IS NULL OR taken_at < ?5)
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params![source, limit, offset], row_to_media)?;
+    let rows = stmt.query_map(
+        rusqlite::params![source, limit, offset, range.lo, range.hi],
+        row_to_media,
+    )?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
