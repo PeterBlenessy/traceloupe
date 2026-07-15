@@ -38,7 +38,9 @@ export function ViewHeader({
           {formatCount(count)}
         </span>
       )}
-      {children && <div className="ml-auto flex items-center gap-2">{children}</div>}
+      {children && (
+        <div className="ml-auto flex min-w-0 items-center gap-2">{children}</div>
+      )}
     </header>
   );
 }

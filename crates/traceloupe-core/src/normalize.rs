@@ -429,6 +429,9 @@ fn friendly_source(artifact: &str) -> String {
         "SMS" => "Messages".to_string(),
         // Both camera-roll modules collapse to one "Photos" source.
         "Photos.sqlite Metadata" | "Photos.sqlite EXIF Analysis" => "Photos".to_string(),
+        // iLEAPP's "iTunes Backup - Installed Applications N" artifacts are long and
+        // numbered; collapse them to one short "iTunes Backup" source.
+        a if a.starts_with("iTunes Backup") => "iTunes Backup".to_string(),
         other => other.to_string(),
     }
 }
