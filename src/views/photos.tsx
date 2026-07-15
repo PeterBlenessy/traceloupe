@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Image as ImageIcon,
   Play,
+  Users,
   X,
 } from "lucide-react";
 
@@ -129,7 +130,11 @@ export function PhotosView() {
         )}
       </ViewHeader>
       <div className="shrink-0 border-b px-3 py-1.5">
-        <ListSearch value={q} onChange={setQ} placeholder="Search by filename" />
+        <ListSearch
+          value={q}
+          onChange={setQ}
+          placeholder="Search by filename or person"
+        />
       </div>
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
         <TimeFilterBar
@@ -403,6 +408,14 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
           {item.source}
         </span>
       )}
+      {item.persons && (
+        <span
+          className="absolute right-1 top-1 rounded-full bg-black/55 p-1 text-white"
+          title={item.persons}
+        >
+          <Users className="size-3" />
+        </span>
+      )}
       {isVideo && (
         <span className="absolute inset-0 flex items-center justify-center bg-black/20">
           <Play className="size-8 fill-white text-white" />
@@ -551,7 +564,18 @@ function Lightbox({
           )}
         </div>
         <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-white/80">
-          <span className="select-text truncate">{item?.filename ?? "—"}</span>
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="select-text truncate">{item?.filename ?? "—"}</span>
+            {item?.persons && (
+              <span
+                className="inline-flex min-w-0 shrink items-center gap-1 text-white/70"
+                title={item.persons}
+              >
+                <Users className="size-3.5 shrink-0" />
+                <span className="select-text truncate">{item.persons}</span>
+              </span>
+            )}
+          </div>
           <div className="flex shrink-0 items-center gap-3">
             {index != null && (
               <span className="tabular-nums">

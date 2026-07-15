@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -158,6 +158,9 @@ CREATE TABLE IF NOT EXISTS media_items (
     width           INTEGER,
     height          INTEGER,
     duration_s      REAL,
+    -- Comma-separated names of people detected in the photo (from Photos.sqlite
+    -- face recognition); NULL if none/unknown. Searchable + shown on the item.
+    persons         TEXT,
     -- Paths under the app cache dir; NULL until materialized.
     thumb_path      TEXT,
     local_path      TEXT,
@@ -313,6 +316,8 @@ impl CacheDb {
                  CREATE INDEX IF NOT EXISTS idx_safari_bookmarks_kind
                     ON safari_bookmarks(kind, position);",
             )?;
+            // v8: people detected in each photo (Photos.sqlite face recognition).
+            ensure_column(&conn, "media_items", "persons", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

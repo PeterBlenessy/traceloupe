@@ -53,6 +53,12 @@ _Nothing yet._
 
 ### Added
 
+- **Photo people (face-recognition person tags).** A native `Photos.sqlite`
+  parser reads the camera roll's detected faces and writes the recognised
+  people onto each photo. Photo search now matches person names, the lightbox
+  shows who's in a photo, and tagged thumbnails carry a small people badge.
+- **Search in Notes** — a full-width search row over title / snippet / folder,
+  alongside the folder, lock, time, and sort filters.
 - **Search rows for Photos, Messages, and Safari.** Photos gets a full-width
   filename search; the Messages timeline gets a full-width search over body /
   sender / conversation; Safari's search moved to its own full-width row. All

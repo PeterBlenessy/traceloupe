@@ -33,6 +33,7 @@ coverage within each app — everything in its DB and what we surface — see
 | Notes (incl. locked & pinned) | `NoteStore.sqlite` | ✅ Native | 0.2.0 |
 | Voice recordings | `CloudRecordings.db` + `.m4a` | ✅ Native | 0.2.0 |
 | Camera roll (photos/videos) | `Photos.sqlite` / DCIM | ✅ Native | 0.1.0 |
+| Photo people (face tags) | `Photos.sqlite` (ZDETECTEDFACE→ZPERSON) | ✅ Native | 0.7.0 |
 | Call history | `CallHistory.storedata` | ✅ Native | 0.3.0 |
 | Safari history | `History.db` | ✅ Native | 0.3.0 |
 | Safari bookmarks / reading list | `Bookmarks.db` | ✅ Native | 0.7.0 |
