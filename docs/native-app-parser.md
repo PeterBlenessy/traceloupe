@@ -25,10 +25,14 @@ schema facts, write fresh Rust — provenance: reference, architecture §10).
 4. **Commit.**
 4b. **Commit + MINOR release** — mark ✅ in `docs/app-support.md`, bump the minor
    version (`0.6.0`), CHANGELOG + tag `vX.Y.0`, push. One app = one minor release.
-5. **Review loop** — subagent review, varying the lens each round; fix real
-   findings; each fix round is a **PATCH release** (`vX.Y.1`, `vX.Y.2`…). Keep
+5. **Correctness review loop** — subagent review, varying the lens each round; fix
+   real findings; each fix round is a **PATCH release** (`vX.Y.1`, `vX.Y.2`…). Keep
    iterating **until a round finds nothing** (min 2 rounds), not just twice.
-6. **Self-improve** — whenever review catches a correctness bug, add/sharpen a
+5b. **Completeness review** — objectively (vs the schema + iLEAPP) list every field
+   the app stores as surfaced ✅ / not-surfaced ⬜ / not-in-backup —, and record it
+   in `docs/app-data-coverage.md`. Implement a gap now only if high-value + cheap
+   (a patch); else leave a ⬜ follow-up. Doesn't block release — correctness does.
+6. **Self-improve** — whenever correctness review catches a bug, add/sharpen a
    known-pitfalls checklist item in the skill so no future app repeats it, and
    commit that with the fix. Then `/loop` moves to the next app.
 

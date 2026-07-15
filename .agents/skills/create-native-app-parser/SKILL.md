@@ -5,8 +5,10 @@ description: >-
   iLEAPP fallback. Runs a disciplined process: scout the iLEAPP reference →
   design against known pitfalls → implement → validate against REAL data
   (diff vs iLEAPP + a public test-image fixture) → commit + MINOR release →
-  review-loop until clean (each fix round a PATCH release) → self-improve the
-  checklist when review bites. Picks the next app from docs/app-support.md when
+  correctness review-loop until clean (each fix round a PATCH release) →
+  completeness review (measure surfaced-vs-available fields into the coverage doc)
+  → self-improve the checklist when review bites. Picks the next app from
+  docs/app-support.md when
   none is named. Invoke as `/create-native-app-parser <app>` (e.g. `discord`). To
   work through many apps toward the top-50 list, wrap it with the built-in `/loop`
   (this skill does one app end-to-end; `/loop` handles the repetition).
@@ -129,6 +131,25 @@ Harden the app through **repeated** review rounds — not just twice:
 - **Keep looping** until a full review round returns **no real findings**
   (minimum 2 rounds; if a round finds something, do another after fixing). Only
   then is the app done.
+
+### 5b. Completeness review (are we surfacing everything?)
+Correctness asks "is what we extract right?"; completeness asks "did we extract
+**all** the app stores?" Measure it **objectively** against two references, not by
+feel:
+- the app's real **schema** (tables/columns actually present), and
+- **iLEAPP's module** (the fields a mature tool surfaces — the practical superset).
+
+Run a completeness pass (a `general-purpose` subagent, or an inline field-by-field
+walk): enumerate every message-relevant field the app persists, and mark each
+**surfaced ✅ / present-but-not-surfaced ⬜ / not-in-backup —**. Then:
+- **Record the result in `docs/app-data-coverage.md`** — this review *is* what
+  fills that table honestly (reactions, edits, read receipts, replies, media
+  payloads, location, forwarded-from, etc.).
+- **Implement a gap now** only if it's **high-value AND cheap** (another column on
+  the same query) — that's a PATCH. Don't gold-plate: an expensive or niche field
+  stays a ⬜ row (a logged follow-up), so the loop keeps moving.
+- Completeness gaps **do not block** the app's release — correctness does. The
+  point is an *honest, measured* coverage record, not 100% coverage per app.
 
 ### 6. Self-improve (make the loop learn) — do this whenever a review bites
 If a review round surfaced a **correctness bug**, ask: *would the pitfall
