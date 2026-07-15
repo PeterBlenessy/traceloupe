@@ -215,31 +215,41 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         default: true,
     },
     ImportModule {
-        // Third-party app DMs, normalized into the Messages view (service =
-        // "TikTok"). iLEAPP parses TikTok's ChatFiles/AwemeIM DBs; users without
-        // TikTok pay ~nothing (no files matched), so it's a safe default.
+        // TikTok DMs → Messages, now parsed natively (AwemeIM.db). Empty `keys`:
+        // the native app-chat parser handles it, so nothing is added to the iLEAPP
+        // profile.
         id: "tiktok",
-        label: "TikTok messages & contacts",
+        label: "TikTok messages",
         category: "Apps",
-        keys: &["tiktok_messages", "tiktok_contacts"],
+        keys: &[],
         default: true,
     },
     ImportModule {
-        // WhatsApp/Telegram DMs → Messages, same normalizer path as TikTok. The
-        // column mapping is derived from the iLEAPP module source but UNVALIDATED
-        // against a real backup yet; a no-op unless the app's data is present.
+        // WhatsApp/Telegram DMs → Messages, also native (app-chat framework).
         id: "whatsapp",
         label: "WhatsApp messages",
         category: "Apps",
-        keys: &["whatsAppMessages"],
+        keys: &[],
         default: true,
     },
     ImportModule {
         id: "telegram",
         label: "Telegram messages",
         category: "Apps",
-        keys: &["telegramMessages"],
+        keys: &[],
         default: true,
+    },
+    ImportModule {
+        // The one artifact with no native parser yet — TikTok's contact/social
+        // graph. It's the *only* thing that needs iLEAPP, whose whole-backup scan
+        // adds minutes to an import, so it's OFF by default: a default import is
+        // fully native (no iLEAPP subprocess at all). Enable this to pull the
+        // TikTok social graph, accepting the slower iLEAPP pass.
+        id: "tiktok_contacts",
+        label: "TikTok contacts / social graph (slow — runs iLEAPP)",
+        category: "Apps",
+        keys: &["tiktok_contacts"],
+        default: false,
     },
 ];
 
