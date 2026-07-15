@@ -254,26 +254,37 @@ pub fn attachment_blob(cache: &CacheDb, attachment_id: i64) -> Result<Option<Att
 /// Total messages across every conversation. Drives the timeline's virtual
 /// scroller. Also ensures the timeline ordering index exists, migrating caches
 /// created before the timeline feature.
-pub fn count_all_messages(cache: &CacheDb, service: Option<&str>) -> Result<i64> {
+pub fn count_all_messages(
+    cache: &CacheDb,
+    service: Option<&str>,
+    search: Option<&str>,
+) -> Result<i64> {
     let conn = cache.conn();
     // Undated messages can't be placed chronologically, so the timeline (and the
     // period buckets, whose range filters already exclude NULLs) omit them —
     // keeping the count and the windowed rows exactly aligned. `service` (None =
-    // all) filters to one source app (iMessage/SMS/TikTok/…) for the app filter.
-    // No app filter → count messages directly (idx_messages_sent), skipping the
-    // join to threads entirely; only the service filter needs it.
-    let n = match service {
-        None => conn.query_row(
+    // all) filters to one source app; `search` matches body/sender/conversation.
+    // No filter → count messages directly (idx_messages_sent), skipping the join
+    // to threads entirely; a service or search filter needs the join.
+    let search = search.map(escape_like);
+    let n = if service.is_none() && search.is_none() {
+        conn.query_row(
             "SELECT COUNT(*) FROM messages WHERE sent_at IS NOT NULL",
             [],
             |r| r.get(0),
-        )?,
-        Some(svc) => conn.query_row(
+        )?
+    } else {
+        conn.query_row(
             "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
-             WHERE m.sent_at IS NOT NULL AND t.service = ?1",
-            [svc],
+             WHERE m.sent_at IS NOT NULL
+               AND (?1 IS NULL OR t.service = ?1)
+               AND (?2 IS NULL OR m.body LIKE '%' || ?2 || '%' ESCAPE '\\'
+                              OR m.sender LIKE '%' || ?2 || '%' ESCAPE '\\'
+                              OR t.display_name LIKE '%' || ?2 || '%' ESCAPE '\\'
+                              OR t.identifier LIKE '%' || ?2 || '%' ESCAPE '\\')",
+            rusqlite::params![service, search],
             |r| r.get(0),
-        )?,
+        )?
     };
     Ok(n)
 }
@@ -285,6 +296,7 @@ pub fn get_timeline_window(
     offset: i64,
     limit: i64,
     service: Option<&str>,
+    search: Option<&str>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
     range_window(
@@ -293,6 +305,7 @@ pub fn get_timeline_window(
         offset,
         limit,
         service,
+        search,
         desc,
     )
 }
@@ -304,32 +317,44 @@ pub fn count_message_ranges(
     cache: &CacheDb,
     ranges: &[TimeRange],
     service: Option<&str>,
+    search: Option<&str>,
 ) -> Result<Vec<i64>> {
     let conn = cache.conn();
-    // No app filter → no join to threads (the common case: one COUNT per bucket).
-    let mut stmt = match service {
-        None => conn.prepare(
-            // `sent_at IS NOT NULL` so an all-open range (lo/hi both NULL) counts
-            // only what the window (range_window) returns — undated messages are
-            // excluded from both, keeping count and rows aligned.
+    let search = search.map(escape_like);
+    let mut out = Vec::with_capacity(ranges.len());
+    // No app/text filter → no join to threads (the common case: one COUNT per
+    // bucket over idx_messages_sent).
+    if service.is_none() && search.is_none() {
+        // `sent_at IS NOT NULL` so an all-open range (lo/hi both NULL) counts only
+        // what range_window returns — undated messages are excluded from both,
+        // keeping count and rows aligned.
+        let mut stmt = conn.prepare(
             "SELECT COUNT(*) FROM messages
              WHERE sent_at IS NOT NULL
                AND (?1 IS NULL OR sent_at >= ?1) AND (?2 IS NULL OR sent_at < ?2)",
-        )?,
-        Some(_) => conn.prepare(
+        )?;
+        for r in ranges {
+            out.push(stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?);
+        }
+    } else {
+        let mut stmt = conn.prepare(
             "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
              WHERE m.sent_at IS NOT NULL
                AND (?1 IS NULL OR m.sent_at >= ?1)
                AND (?2 IS NULL OR m.sent_at < ?2)
-               AND t.service = ?3",
-        )?,
-    };
-    let mut out = Vec::with_capacity(ranges.len());
-    for r in ranges {
-        out.push(match service {
-            None => stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?,
-            Some(svc) => stmt.query_row(rusqlite::params![r.lo, r.hi, svc], |row| row.get(0))?,
-        });
+               AND (?3 IS NULL OR t.service = ?3)
+               AND (?4 IS NULL OR m.body LIKE '%' || ?4 || '%' ESCAPE '\\'
+                              OR m.sender LIKE '%' || ?4 || '%' ESCAPE '\\'
+                              OR t.display_name LIKE '%' || ?4 || '%' ESCAPE '\\'
+                              OR t.identifier LIKE '%' || ?4 || '%' ESCAPE '\\')",
+        )?;
+        for r in ranges {
+            out.push(
+                stmt.query_row(rusqlite::params![r.lo, r.hi, service, search], |row| {
+                    row.get(0)
+                })?,
+            );
+        }
     }
     Ok(out)
 }
@@ -342,9 +367,10 @@ pub fn get_range_window(
     offset: i64,
     limit: i64,
     service: Option<&str>,
+    search: Option<&str>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
-    range_window(cache, range, offset, limit, service, desc)
+    range_window(cache, range, offset, limit, service, search, desc)
 }
 
 /// Shared implementation: messages in `range` (open bounds allowed) and optional
@@ -356,9 +382,11 @@ fn range_window(
     offset: i64,
     limit: i64,
     service: Option<&str>,
+    search: Option<&str>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>> {
     let conn = cache.conn();
+    let search = search.map(escape_like);
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
@@ -370,12 +398,16 @@ fn range_window(
            AND (?1 IS NULL OR m.sent_at >= ?1)
            AND (?2 IS NULL OR m.sent_at < ?2)
            AND (?5 IS NULL OR t.service = ?5)
+           AND (?6 IS NULL OR m.body LIKE '%' || ?6 || '%' ESCAPE '\\'
+                          OR m.sender LIKE '%' || ?6 || '%' ESCAPE '\\'
+                          OR t.display_name LIKE '%' || ?6 || '%' ESCAPE '\\'
+                          OR t.identifier LIKE '%' || ?6 || '%' ESCAPE '\\')
          ORDER BY m.sent_at {dir}, m.id {dir}
          LIMIT ?3 OFFSET ?4",
     ))?;
     let mut items = stmt
         .query_map(
-            rusqlite::params![range.lo, range.hi, limit, offset, service],
+            rusqlite::params![range.lo, range.hi, limit, offset, service, search],
             |r| {
                 let display_name: Option<String> = r.get(6)?;
                 let identifier: String = r.get(7)?;
@@ -628,40 +660,54 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
 /// Photos/videos in `source` ("Photos", "Messages", …), or all when NULL, whose
 /// `taken_at` falls in `range` (open bounds = no limit; undated media only count
 /// when both bounds are open).
-pub fn count_media(cache: &CacheDb, source: Option<&str>, range: TimeRange) -> Result<i64> {
+pub fn count_media(
+    cache: &CacheDb,
+    source: Option<&str>,
+    range: TimeRange,
+    search: Option<&str>,
+) -> Result<i64> {
     // `COALESCE(source,'Other')` so the synthesized "Other" bucket (NULL source)
     // is actually selectable — `source = 'Other'` never matches a NULL. Matches
-    // the label built by `media_sources`.
+    // the label built by `media_sources`. `search` matches the filename.
+    let search = search.map(escape_like);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?2 IS NULL OR taken_at >= ?2)
-           AND (?3 IS NULL OR taken_at < ?3)",
-        rusqlite::params![source, range.lo, range.hi],
+           AND (?3 IS NULL OR taken_at < ?3)
+           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\')",
+        rusqlite::params![source, range.lo, range.hi, search],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
-/// Media counts for each `range` in `source` — powers the Photos time-filter
-/// chips. One row per range, order preserved.
+/// Media counts for each `range` in `source` (respecting `search`) — powers the
+/// Photos time-filter chips. One row per range, order preserved.
 pub fn count_media_ranges(
     cache: &CacheDb,
     source: Option<&str>,
     ranges: &[TimeRange],
+    search: Option<&str>,
 ) -> Result<Vec<i64>> {
+    let search = search.map(escape_like);
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT COUNT(*) FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?2 IS NULL OR taken_at >= ?2)
-           AND (?3 IS NULL OR taken_at < ?3)",
+           AND (?3 IS NULL OR taken_at < ?3)
+           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\')",
     )?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
-        out.push(stmt.query_row(rusqlite::params![source, r.lo, r.hi], |row| row.get(0))?);
+        out.push(
+            stmt.query_row(rusqlite::params![source, r.lo, r.hi, search], |row| {
+                row.get(0)
+            })?,
+        );
     }
     Ok(out)
 }
@@ -670,11 +716,13 @@ pub fn get_media_window(
     cache: &CacheDb,
     source: Option<&str>,
     range: TimeRange,
+    search: Option<&str>,
     offset: i64,
     limit: i64,
     sort: Sort,
 ) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
+    let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at
@@ -683,13 +731,14 @@ pub fn get_media_window(
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?4 IS NULL OR taken_at >= ?4)
            AND (?5 IS NULL OR taken_at < ?5)
+           AND (?6 IS NULL OR relative_path LIKE '%' || ?6 || '%' ESCAPE '\\')
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        rusqlite::params![source, limit, offset, range.lo, range.hi],
+        rusqlite::params![source, limit, offset, range.lo, range.hi, search],
         row_to_media,
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

@@ -26,6 +26,7 @@ import {
   EmptyView,
   ErrorState,
   ListDetail,
+  ListSearch,
   ViewHeader,
 } from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
@@ -44,6 +45,7 @@ import {
 } from "@/lib/format";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
+import { useDebounced } from "@/lib/use-debounced";
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import {
@@ -375,27 +377,38 @@ function Timeline({
   const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
   // The active time filter as a half-open [lo, hi) range; {null,null} = all time.
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // Free-text search over message body / sender / conversation (debounced).
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim()) || null;
 
   // Per-preset message counts for the chip labels (e.g. "7d · 812").
   const { data: presetCounts } = useQuery({
-    queryKey: ["messageRanges", now, service, "presets"],
+    queryKey: ["messageRanges", now, service, search, "presets"],
     queryFn: () =>
       client.countMessageRanges(
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         service,
+        search,
       ),
     enabled: active === true,
   });
   // Count for the active range — sizes the virtual scroller.
   const { data: total } = useQuery({
-    queryKey: ["timelineRangeCount", range.lo, range.hi, service],
+    queryKey: ["timelineRangeCount", range.lo, range.hi, service, search],
     queryFn: async () =>
-      (await client.countMessageRanges([range], service))[0] ?? 0,
+      (await client.countMessageRanges([range], service, search))[0] ?? 0,
     enabled: active === true,
   });
 
   return (
     <div className="flex h-full flex-col">
+      <div className="shrink-0 border-b px-3 py-1.5">
+        <ListSearch
+          value={q}
+          onChange={setQ}
+          placeholder="Search messages, sender…"
+        />
+      </div>
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5">
         <TimeFilterBar
           className="flex-1"
@@ -413,13 +426,14 @@ function Timeline({
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom={!order.desc}
-        resetKey={`timeline:${service ?? "all"}:${range.lo}:${range.hi}:${order.desc}`}
+        resetKey={`timeline:${service ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
         estimateSize={56}
         windowKey={(page) => [
           "timelineWindow",
           service,
           range.lo,
           range.hi,
+          search,
           order.desc,
           page,
         ]}
@@ -430,6 +444,7 @@ function Timeline({
             offset,
             limit,
             service,
+            search,
             order.desc,
           )
         }

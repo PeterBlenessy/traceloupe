@@ -116,11 +116,11 @@ export function SafariView() {
           ))}
         </ToggleGroup>
       }
+      search={
+        <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />
+      }
       toolbar={
         <>
-          <div className="w-56">
-            <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />
-          </div>
           <TimeFilterBar
             className="flex-1"
             presets={presets}

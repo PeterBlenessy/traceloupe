@@ -876,11 +876,13 @@ async fn get_thread_message_window(
 async fn count_timeline_messages(
     active: State<'_, ActiveBackup>,
     service: Option<String>,
+    search: Option<String>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_all_messages(&cache, service.as_deref()).map_err(|e| e.to_string())
+        query::count_all_messages(&cache, service.as_deref(), search.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -892,13 +894,21 @@ async fn get_timeline_window(
     offset: i64,
     limit: i64,
     service: Option<String>,
+    search: Option<String>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_timeline_window(&cache, offset, limit, service.as_deref(), desc)
-            .map_err(|e| e.to_string())
+        query::get_timeline_window(
+            &cache,
+            offset,
+            limit,
+            service.as_deref(),
+            search.as_deref(),
+            desc,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -909,17 +919,20 @@ async fn count_message_ranges(
     active: State<'_, ActiveBackup>,
     ranges: Vec<query::TimeRange>,
     service: Option<String>,
+    search: Option<String>,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_message_ranges(&cache, &ranges, service.as_deref()).map_err(|e| e.to_string())
+        query::count_message_ranges(&cache, &ranges, service.as_deref(), search.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: time range + service + search + paging + dir.
 async fn get_range_window(
     active: State<'_, ActiveBackup>,
     lo: Option<i64>,
@@ -927,6 +940,7 @@ async fn get_range_window(
     offset: i64,
     limit: i64,
     service: Option<String>,
+    search: Option<String>,
     desc: bool,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
@@ -938,6 +952,7 @@ async fn get_range_window(
             offset,
             limit,
             service.as_deref(),
+            search.as_deref(),
             desc,
         )
         .map_err(|e| e.to_string())
@@ -1162,12 +1177,18 @@ async fn count_media(
     source: Option<String>,
     lo: Option<i64>,
     hi: Option<i64>,
+    search: Option<String>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media(&cache, source.as_deref(), query::TimeRange { lo, hi })
-            .map_err(|e| e.to_string())
+        query::count_media(
+            &cache,
+            source.as_deref(),
+            query::TimeRange { lo, hi },
+            search.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1178,23 +1199,26 @@ async fn count_media_ranges(
     active: State<'_, ActiveBackup>,
     source: Option<String>,
     ranges: Vec<query::TimeRange>,
+    search: Option<String>,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media_ranges(&cache, source.as_deref(), &ranges).map_err(|e| e.to_string())
+        query::count_media_ranges(&cache, source.as_deref(), &ranges, search.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)] // Tauri command: source + time range + paging + sort.
+#[allow(clippy::too_many_arguments)] // Tauri command: source + time range + search + paging + sort.
 async fn get_media_window(
     active: State<'_, ActiveBackup>,
     source: Option<String>,
     lo: Option<i64>,
     hi: Option<i64>,
+    search: Option<String>,
     offset: i64,
     limit: i64,
     sort_by: String,
@@ -1207,6 +1231,7 @@ async fn get_media_window(
             &cache,
             source.as_deref(),
             query::TimeRange { lo, hi },
+            search.as_deref(),
             offset,
             limit,
             media_sort(&sort_by, desc),

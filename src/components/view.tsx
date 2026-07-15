@@ -131,6 +131,7 @@ export function VirtualListView<T>({
 export function LazyListView<T>({
   title,
   header,
+  search,
   toolbar,
   count,
   windowKey,
@@ -143,6 +144,8 @@ export function LazyListView<T>({
 }: {
   title: string;
   header?: React.ReactNode;
+  /** An optional full-width search row directly below the title. */
+  search?: React.ReactNode;
   /** An optional full-width row below the title (filters, etc.). */
   toolbar?: React.ReactNode;
   /** Total matching rows (from a count query); undefined while loading. */
@@ -160,6 +163,9 @@ export function LazyListView<T>({
       <ViewHeader title={title} count={count}>
         {header}
       </ViewHeader>
+      {search && (
+        <div className="shrink-0 border-b px-3 py-1.5">{search}</div>
+      )}
       {toolbar && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
           {toolbar}
