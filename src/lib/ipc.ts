@@ -8,6 +8,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface BackupInfo {
   id: string;
@@ -174,6 +175,10 @@ export interface MediaItem {
   latitude: number | null;
   longitude: number | null;
   favorite: boolean;
+  /** Moment place/event name (e.g. "Florida"), or null. */
+  location: string | null;
+  /** User album names this photo is in, comma-separated, or null. */
+  albums: string | null;
 }
 
 /** A media source and how many items came from it, for the gallery filter. */
@@ -250,6 +255,8 @@ export interface TraceLoupeClient {
   pickBackupFolder(): Promise<string | null>;
   /** Open System Settings at the Full Disk Access pane. */
   openFullDiskAccessSettings(): Promise<void>;
+  /** Open a URL in the user's default browser (e.g. an Apple Maps link). */
+  openExternal(url: string): Promise<void>;
   engineStatus(): Promise<boolean>;
   engineInfo(): Promise<EngineInfo>;
   /** Download + verify + install the pinned engine. */
@@ -445,6 +452,7 @@ const tauriClient: TraceLoupeClient = {
   },
   openFullDiskAccessSettings: () =>
     invoke<void>("open_full_disk_access_settings"),
+  openExternal: (url) => openUrl(url),
   engineStatus: () => invoke<boolean>("engine_status"),
   engineInfo: () => invoke<EngineInfo>("engine_info"),
   installEngine: () => invoke<void>("install_engine"),
@@ -1108,6 +1116,8 @@ const mockMedia: MediaItem[] = [
     latitude: null,
     longitude: null,
     favorite: false,
+    location: null,
+    albums: null,
   },
   {
     id: 2,
@@ -1120,6 +1130,8 @@ const mockMedia: MediaItem[] = [
     latitude: null,
     longitude: null,
     favorite: false,
+    location: null,
+    albums: null,
   },
   {
     id: 3,
@@ -1132,6 +1144,8 @@ const mockMedia: MediaItem[] = [
     latitude: null,
     longitude: null,
     favorite: false,
+    location: "Florida",
+    albums: "Vacation",
   },
   {
     id: 4,
@@ -1144,6 +1158,8 @@ const mockMedia: MediaItem[] = [
     latitude: null,
     longitude: null,
     favorite: false,
+    location: null,
+    albums: null,
   },
 ];
 
@@ -1192,10 +1208,10 @@ function mockFilterMedia(
   }
   if (search) {
     const q = search.toLowerCase();
-    out = out.filter(
-      (m) =>
-        (m.filename?.toLowerCase().includes(q) ?? false) ||
-        (m.persons?.toLowerCase().includes(q) ?? false),
+    out = out.filter((m) =>
+      [m.filename, m.persons, m.location, m.albums].some(
+        (f) => f?.toLowerCase().includes(q) ?? false,
+      ),
     );
   }
   return out;
@@ -1280,6 +1296,9 @@ export const mockClient: TraceLoupeClient = {
   pickBackupFolder: async () =>
     "/Users/dev/Library/Application Support/MobileSync/Backup",
   openFullDiskAccessSettings: async () => {},
+  openExternal: async (url) => {
+    window.open(url, "_blank");
+  },
   engineStatus: async () => true,
   engineInfo: async () => ({
     installed: true,

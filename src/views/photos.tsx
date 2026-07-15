@@ -14,6 +14,7 @@ import {
   ChevronRight,
   Heart,
   Image as ImageIcon,
+  Images,
   MapPin,
   Play,
   Users,
@@ -135,7 +136,7 @@ export function PhotosView() {
         <ListSearch
           value={q}
           onChange={setQ}
-          placeholder="Search photos by filename or person (e.g. a name)"
+          placeholder="Search filename, person, place, or album (e.g. Florida)"
         />
       </div>
       <div className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5">
@@ -392,6 +393,37 @@ function MediaGrid({
   );
 }
 
+/** The photo's location as a clickable Apple Maps link — the moment place name
+ *  when known, else the coordinates. */
+function LocationTag({ item }: { item: MediaItem }) {
+  const hasCoords = item.latitude != null && item.longitude != null;
+  const label =
+    item.location ??
+    (hasCoords
+      ? `${item.latitude!.toFixed(4)}, ${item.longitude!.toFixed(4)}`
+      : null);
+  if (!label) return null;
+  const url = hasCoords
+    ? `https://maps.apple.com/?ll=${item.latitude},${item.longitude}${
+        item.location ? `&q=${encodeURIComponent(item.location)}` : ""
+      }`
+    : `https://maps.apple.com/?q=${encodeURIComponent(item.location!)}`;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        void client.openExternal(url);
+      }}
+      className="inline-flex items-center gap-1 hover:text-white hover:underline"
+      title="Open in Maps"
+    >
+      <MapPin className="size-3.5" />
+      <span className="max-w-[12rem] truncate">{label}</span>
+    </button>
+  );
+}
+
 function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   const isVideo = item.kind === "video";
   return (
@@ -587,16 +619,18 @@ function Lightbox({
                 <span className="select-text truncate">{item.persons}</span>
               </span>
             )}
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            {item?.latitude != null && item?.longitude != null && (
-              <span className="inline-flex items-center gap-1" title="Location">
-                <MapPin className="size-3.5" />
-                <span className="select-text tabular-nums">
-                  {item.latitude.toFixed(4)}, {item.longitude.toFixed(4)}
-                </span>
+            {item?.albums && (
+              <span
+                className="inline-flex min-w-0 shrink items-center gap-1 text-white/70"
+                title={`Albums: ${item.albums}`}
+              >
+                <Images className="size-3.5 shrink-0" />
+                <span className="select-text truncate">{item.albums}</span>
               </span>
             )}
+          </div>
+          <div className="flex shrink-0 items-center gap-3">
+            {item && <LocationTag item={item} />}
             {index != null && (
               <span className="tabular-nums">
                 {formatCount(index + 1)} / {formatCount(count)}

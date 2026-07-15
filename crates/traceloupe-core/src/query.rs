@@ -625,6 +625,10 @@ pub struct MediaItem {
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
     pub favorite: bool,
+    /// Moment place/event name (e.g. "Florida"), or None.
+    pub location: Option<String>,
+    /// User album names this photo is in, comma-separated, or None.
+    pub albums: Option<String>,
 }
 
 /// Media items that have materialized bytes, newest first. Only items with a
@@ -633,7 +637,7 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
-                latitude, longitude, is_favorite
+                latitude, longitude, is_favorite, location, albums
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -657,6 +661,8 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         latitude: r.get(7)?,
         longitude: r.get(8)?,
         favorite: r.get::<_, i64>(9)? != 0,
+        location: r.get(10)?,
+        albums: r.get(11)?,
     })
 }
 
@@ -687,7 +693,9 @@ pub fn count_media(
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
            AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
-                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\')",
+                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
+                          OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
+                          OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')",
         rusqlite::params![source, range.lo, range.hi, search],
         |r| r.get(0),
     )?;
@@ -711,7 +719,9 @@ pub fn count_media_ranges(
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
            AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
-                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\')",
+                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
+                          OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
+                          OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')",
     )?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
@@ -738,14 +748,16 @@ pub fn get_media_window(
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
-                latitude, longitude, is_favorite
+                latitude, longitude, is_favorite, location, albums
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?4 IS NULL OR taken_at >= ?4)
            AND (?5 IS NULL OR taken_at < ?5)
            AND (?6 IS NULL OR relative_path LIKE '%' || ?6 || '%' ESCAPE '\\'
-                          OR persons LIKE '%' || ?6 || '%' ESCAPE '\\')
+                          OR persons LIKE '%' || ?6 || '%' ESCAPE '\\'
+                          OR location LIKE '%' || ?6 || '%' ESCAPE '\\'
+                          OR albums LIKE '%' || ?6 || '%' ESCAPE '\\')
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),
