@@ -34,6 +34,9 @@ pub struct Message {
     pub sender: Option<String>,
     pub body: Option<String>,
     pub sent_at: Option<i64>,
+    /// iMessage receipts (Unix): when the message was read / delivered, if known.
+    pub read_at: Option<i64>,
+    pub delivered_at: Option<i64>,
     pub attachments: Vec<Attachment>,
 }
 
@@ -128,7 +131,7 @@ pub fn get_message_window(
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, is_from_me, sender, body, sent_at
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at
          FROM messages
          WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
          ORDER BY sent_at {dir}, id {dir}
@@ -154,7 +157,7 @@ pub fn get_message_window(
 pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, is_from_me, sender, body, sent_at
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at
          FROM messages
          WHERE thread_id = ?1
          ORDER BY sent_at ASC, id ASC",
@@ -173,6 +176,8 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         sender: r.get(2)?,
         body: r.get(3)?,
         sent_at: r.get(4)?,
+        read_at: r.get(5)?,
+        delivered_at: r.get(6)?,
         attachments: Vec::new(),
     })
 }
@@ -475,6 +480,9 @@ fn range_window(
                         sender: r.get(2)?,
                         body: r.get(3)?,
                         sent_at: r.get(4)?,
+                        // Timeline rows don't show receipts.
+                        read_at: None,
+                        delivered_at: None,
                         attachments: Vec::new(),
                     },
                 })
