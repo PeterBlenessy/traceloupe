@@ -99,7 +99,22 @@ provenance reference §10, validation status). Then cut the app's minor release:
 - CHANGELOG entry + milestone row; update the `traceloupe-versioning` memory.
 - Commit, `git tag -a vX.Y.0`, `git push origin main && git push origin vX.Y.0`.
 
-(One native app = one user-visible feature = one minor release.)
+**Minor vs patch — an OBJECTIVE rule (don't judge "size").** Whether a change
+"feels big" is subjective and inconsistent, so don't decide the bump that way.
+Decide by *kind*:
+- **A new app / new message store / new conversation source** → **MINOR**, always,
+  regardless of how few fields it has. Every distinct app is a user-visible
+  feature.
+- **Extending an app already native** — a new field, a second table, or a
+  sub-artifact of the same app (e.g. TikTok *contacts* for the already-native
+  TikTok chats) → **PATCH**, folded into that app's line.
+- **Reusable machinery** (a decoder like `nska`, a `Cache.db` reader) → ships with
+  the first app that needs it; call it out in the changelog. It doesn't get its
+  own version.
+
+This keeps the loop deterministic. Only deviate — batching a couple of apps into
+one minor — if there's an explicit reason (a coordinated release); the default is
+one app per minor.
 
 ### 5. Review loop → PATCH release per fix round (iterate until clean)
 Harden the app through **repeated** review rounds — not just twice:
