@@ -42,6 +42,7 @@ import {
   formatMessageTime,
 } from "@/lib/format";
 import { initials } from "@/lib/contact";
+import { serviceIcon } from "@/lib/apps";
 import {
   useContactResolver,
   type ResolvedContact,
@@ -129,11 +130,15 @@ export function MessagesView() {
             className="ml-auto flex-wrap justify-end"
           >
             <ToggleGroupItem value="all">All</ToggleGroupItem>
-            {services.map((s) => (
-              <ToggleGroupItem key={s} value={s}>
-                {s}
-              </ToggleGroupItem>
-            ))}
+            {services.map((s) => {
+              const icon = serviceIcon(s);
+              return (
+                <ToggleGroupItem key={s} value={s}>
+                  {icon && <span className="mr-1">{icon}</span>}
+                  {s}
+                </ToggleGroupItem>
+              );
+            })}
           </ToggleGroup>
         )}
       </div>

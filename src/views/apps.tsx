@@ -20,6 +20,7 @@ interface AppRow {
   bundleId: string;
   name: string;
   support: AppSupport;
+  icon?: string;
 }
 
 export function AppsView() {
@@ -28,7 +29,11 @@ export function AppsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: bundleIds, isPending, error } = useQuery({
+  const {
+    data: bundleIds,
+    isPending,
+    error,
+  } = useQuery({
     queryKey: ["installedApps"],
     queryFn: () => client.listInstalledApps(),
     enabled: active === true,
@@ -39,28 +44,38 @@ export function AppsView() {
   const apps: AppRow[] = useMemo(() => {
     if (!bundleIds) return [];
     const rank: Record<AppSupport, number> = {
-      available: 0,
-      planned: 1,
-      limited: 2,
-      unknown: 3,
-      system: 4,
+      native: 0,
+      available: 1,
+      planned: 2,
+      limited: 3,
+      unknown: 4,
+      system: 5,
     };
     return bundleIds
       .map((bundleId) => ({ bundleId, ...appMeta(bundleId) }))
-      .sort((a, b) => rank[a.support] - rank[b.support] || a.name.localeCompare(b.name));
+      .sort(
+        (a, b) =>
+          rank[a.support] - rank[b.support] || a.name.localeCompare(b.name),
+      );
   }, [bundleIds]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return apps;
     return apps.filter(
-      (a) => a.name.toLowerCase().includes(needle) || a.bundleId.toLowerCase().includes(needle),
+      (a) =>
+        a.name.toLowerCase().includes(needle) ||
+        a.bundleId.toLowerCase().includes(needle),
     );
   }, [apps, q]);
 
   if (active === false) {
     return (
-      <EmptyView icon={Boxes} title="No backup open" description="Import a backup to see its apps.">
+      <EmptyView
+        icon={Boxes}
+        title="No backup open"
+        description="Import a backup to see its apps."
+      >
         <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
       </EmptyView>
     );
@@ -89,27 +104,39 @@ export function AppsView() {
 
 function AppItem({ app }: { app: AppRow }) {
   const label = SUPPORT_LABEL[app.support];
-  const canExtract = app.support === "available" || app.support === "planned";
+  // Only the "coming soon" placeholder — never for apps we already parse natively
+  // (their chats show in Messages) or that keep no local data.
+  const canExtract = app.support === "planned";
 
   return (
     <Item>
       <ItemMedia>
-        <div className="flex size-9 items-center justify-center rounded-lg bg-muted text-xs font-semibold text-muted-foreground">
-          {app.name.slice(0, 2).toUpperCase()}
+        <div className="flex size-9 items-center justify-center rounded-lg bg-muted text-base">
+          {app.icon ?? (
+            <span className="text-xs font-semibold text-muted-foreground">
+              {app.name.slice(0, 2).toUpperCase()}
+            </span>
+          )}
         </div>
       </ItemMedia>
       <ItemContent>
         <ItemTitle className="flex items-center gap-2">
           {app.name}
           {label && (
-            <Badge variant={app.support === "available" ? "default" : "secondary"}>
+            <Badge variant={app.support === "native" ? "default" : "secondary"}>
               {label}
             </Badge>
           )}
         </ItemTitle>
         <ItemDescription className="truncate">{app.bundleId}</ItemDescription>
       </ItemContent>
-      {canExtract && (
+      {app.support === "native" ? (
+        <ItemActions>
+          <span className="text-xs text-muted-foreground">
+            Chats in Messages →
+          </span>
+        </ItemActions>
+      ) : canExtract ? (
         <ItemActions>
           <Button
             variant="outline"
@@ -121,7 +148,7 @@ function AppItem({ app }: { app: AppRow }) {
             Extract data
           </Button>
         </ItemActions>
-      )}
+      ) : null}
     </Item>
   );
 }
