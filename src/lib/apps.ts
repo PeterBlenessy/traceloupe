@@ -46,9 +46,11 @@ const CATALOG: Record<string, AppMeta> = {
   "com.ubercab.UberClient": { name: "Uber", support: "planned", slug: "uber" },
 };
 
-/** Messages service display name → simple-icons brand slug. */
+/** Messages service / media-source display name → simple-icons brand slug. */
 const SERVICE_SLUGS: Record<string, string> = {
   iMessage: "imessage",
+  // Media whose source is the Messages app (attachments) — show the iMessage mark.
+  Messages: "imessage",
   WhatsApp: "whatsapp",
   Instagram: "instagram",
   TikTok: "tiktok",

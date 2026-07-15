@@ -28,6 +28,8 @@ import { SortControl, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
 import { formatCount, formatDateTime } from "@/lib/format";
+import { serviceSlug } from "@/lib/apps";
+import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { client, type MediaItem, type TimeRange } from "@/lib/ipc";
 
 export function PhotosView() {
@@ -197,11 +199,17 @@ function SourceFilter({
       className="flex-wrap justify-start"
     >
       <ToggleGroupItem value="all">All {formatCount(total)}</ToggleGroupItem>
-      {sources.map(([name, count]) => (
-        <ToggleGroupItem key={name} value={name}>
-          {name} {formatCount(count)}
-        </ToggleGroupItem>
-      ))}
+      {sources.map(([name, count]) => {
+        const slug = serviceSlug(name);
+        return (
+          <ToggleGroupItem key={name} value={name}>
+            {hasBrandIcon(slug) && (
+              <BrandIcon slug={slug} name={name} className="mr-1 size-3.5" />
+            )}
+            {name} {formatCount(count)}
+          </ToggleGroupItem>
+        );
+      })}
     </ToggleGroup>
   );
 }
