@@ -1179,7 +1179,9 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             "pw",
             &cache_path,
             &work_dir,
-            &[],
+            // Request an iLEAPP-only module so the engine actually runs (the
+            // default modules are all native now — no iLEAPP subprocess).
+            &["tiktok_contacts".to_string()],
             &CancelToken::new(),
             |ph| phases.push(ph),
         )
@@ -1238,7 +1240,7 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
                 "pw",
                 &cache_path,
                 &work_dir,
-                &[],
+                &["tiktok_contacts".to_string()],
                 &CancelToken::new(),
                 |_| {},
             )
@@ -1539,7 +1541,18 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
         let cfg = EngineConfig::frozen(tmp.path().join("no-such-ileapp"));
         let cancel = CancelToken::new();
 
-        let result = import_backup(&cfg, &backup, "", &cache_path, &work, &[], &cancel, |_| {});
+        // Force the iLEAPP path (default modules are native) so the missing
+        // engine binary makes run_import fail.
+        let result = import_backup(
+            &cfg,
+            &backup,
+            "",
+            &cache_path,
+            &work,
+            &["tiktok_contacts".to_string()],
+            &cancel,
+            |_| {},
+        );
         assert!(result.is_err());
 
         // Old cache untouched; the temp is gone (guard cleaned it up).
