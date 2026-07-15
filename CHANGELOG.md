@@ -27,10 +27,16 @@ _Nothing yet._
 
 ### Fixed
 
+- **Opening an encrypted backup no longer needs a second "Open" click.** After the
+  password step the backup is now marked active optimistically, so the target
+  view no longer reads a stale "no backup open" state and bounce back to the
+  picker (queries use `staleTime: Infinity`).
 - **Photos source filter no longer breaks on a narrow window** — the pills scroll
   horizontally within the title row instead of wrapping out of it. The long
   "iTunes Backup - Installed Applications" source is shortened to "iTunes Backup"
   (and its numbered variants collapse into one).
+- Filter/header **item counts are now smaller and dimmer** across all views, so
+  they read as secondary to the labels they annotate.
 
 ### Changed
 

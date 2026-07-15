@@ -202,7 +202,10 @@ function SourceFilter({
         className="flex-nowrap justify-start"
       >
         <ToggleGroupItem value="all" className="shrink-0 whitespace-nowrap">
-          All {formatCount(total)}
+          All
+          <span className="text-[10px] tabular-nums opacity-50">
+            {formatCount(total)}
+          </span>
         </ToggleGroupItem>
         {sources.map(([name, count]) => {
           const slug = serviceSlug(name);
@@ -215,7 +218,10 @@ function SourceFilter({
               {hasBrandIcon(slug) && (
                 <BrandIcon slug={slug} name={name} className="mr-1 size-3.5" />
               )}
-              {sourceLabel(name)} {formatCount(count)}
+              {sourceLabel(name)}
+              <span className="text-[10px] tabular-nums opacity-50">
+                {formatCount(count)}
+              </span>
             </ToggleGroupItem>
           );
         })}
