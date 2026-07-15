@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  ArrowRight,
   CalendarRange,
   FileText,
   ImageIcon,
@@ -617,13 +618,16 @@ function TimelineRow({
   showAvatars: boolean;
 }) {
   const m = item.message;
-  // The avatar represents whoever sent this message: the contact for incoming,
-  // "you" for your own outgoing ones. The recipient is always the backup owner,
-  // so the conversation label added nothing and is gone.
-  const resolved = !m.isFromMe && m.sender ? resolve(m.sender) : null;
-  const sender = m.isFromMe
-    ? "You"
-    : (showContactNames && resolved?.name) || m.sender || item.threadTitle;
+  // The avatar ALWAYS shows the conversation partner (the other party), so a row
+  // makes clear which chat it belongs to regardless of who sent it: for incoming
+  // that's the actual sender; for your own outgoing messages it's the thread's
+  // counterpart handle. A direction arrow (← received, → sent) marks who sent.
+  const partnerHandle = m.isFromMe
+    ? item.threadHandle
+    : (m.sender ?? item.threadHandle);
+  const resolved = partnerHandle ? resolve(partnerHandle) : null;
+  const partnerName =
+    (showContactNames && resolved?.name) || partnerHandle || item.threadTitle;
   const slug = item.service ? serviceSlug(item.service) : null;
   return (
     <div>
@@ -632,37 +636,40 @@ function TimelineRow({
           {formatDateHeader(m.sentAt)}
         </div>
       )}
-      {/* One flat row — avatar | message | app icon | time — with the message
-          free to wrap over multiple lines while the icon and time stay pinned
-          top-right. Click opens the full conversation. */}
+      {/* One flat row — avatar | ↔ | message | app icon | time. The avatar is the
+          conversation partner; the arrow marks direction (your own messages are
+          also tinted). The message wraps; the icon and time stay top-right. */}
       <button
         onClick={onOpen}
-        className="flex w-full items-start gap-3 px-4 py-2 text-left hover:bg-accent"
+        className={cn(
+          "flex w-full items-start gap-2.5 px-4 py-2 text-left hover:bg-accent",
+          m.isFromMe && "bg-primary/5",
+        )}
       >
         {showAvatars && (
           <Avatar className="mt-0.5 size-8 shrink-0">
-            {!m.isFromMe && resolved?.hasImage && (
+            {resolved?.hasImage && (
               <AvatarImage src={client.contactAvatarUrl(resolved.id)} alt="" />
             )}
-            {/* Outgoing messages get a distinct primary "You" avatar so your own
-                messages are never mistaken for the contact's. */}
-            <AvatarFallback
-              className={
-                m.isFromMe
-                  ? "bg-primary text-[10px] font-medium text-primary-foreground"
-                  : undefined
-              }
-            >
-              {m.isFromMe ? "You" : initials(sender)}
-            </AvatarFallback>
+            <AvatarFallback>{initials(partnerName)}</AvatarFallback>
           </Avatar>
         )}
+        {/* Direction: → you sent it, ← you received it. */}
+        <span
+          className="mt-1.5 shrink-0"
+          title={m.isFromMe ? "You sent this" : "Received"}
+        >
+          {m.isFromMe ? (
+            <ArrowRight className="size-3.5 text-primary" />
+          ) : (
+            <ArrowLeft className="size-3.5 text-muted-foreground" />
+          )}
+        </span>
         <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
-          {/* When avatars are hidden, the "You" avatar cue is gone — mark your
-              own outgoing messages inline instead. */}
-          {m.isFromMe && !showAvatars && (
-            <span className="mr-1.5 rounded bg-primary/10 px-1 py-px text-xs font-medium text-primary">
-              You
+          {/* Without avatars, name the partner inline so the row still says who. */}
+          {!showAvatars && (
+            <span className="mr-1.5 font-medium text-foreground/70">
+              {partnerName}
             </span>
           )}
           {m.body ? (

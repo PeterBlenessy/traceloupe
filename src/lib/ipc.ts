@@ -194,6 +194,9 @@ export interface Message {
 export interface TimelineMessage {
   threadId: number;
   threadTitle: string;
+  /** The thread's identifier — for a 1:1 chat, the other party's handle. Lets
+   * the timeline show the conversation partner even on your outgoing messages. */
+  threadHandle: string;
   service: string | null;
   message: Message;
 }
@@ -693,6 +696,7 @@ const mockTimeline: TimelineMessage[] = mockThreads
     (mockMessages[t.id] ?? []).map((message) => ({
       threadId: t.id,
       threadTitle: t.displayName ?? t.identifier,
+      threadHandle: t.identifier,
       service: t.service,
       message,
     })),
