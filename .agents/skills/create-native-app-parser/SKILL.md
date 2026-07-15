@@ -151,6 +151,25 @@ walk): enumerate every message-relevant field the app persists, and mark each
 - Completeness gaps **do not block** the app's release — correctness does. The
   point is an *honest, measured* coverage record, not 100% coverage per app.
 
+### 5c. UI/UX check (conditional + periodic — usually a no-op)
+These modules add **no new UI** — every app flows into the shared Messages view
+(threads list + conversation), tagged by service. So there's nothing to review per
+app *unless*:
+- **New rendering shape (per app, only if it applies):** the app introduces
+  something the view hasn't handled — no sender name, missing timestamp, HTML/
+  emoji-only body, an **unnamed group**, an empty body with only an attachment, a
+  very long or RTL name. Verify it **degrades gracefully** in the Messages view.
+  Cheap tier: reason about it / add a mock thread for the service in the mock
+  client (`src/lib/ipc.ts`) and check it renders. Real tier: load it in the
+  Messages view (mock or a backup) and eyeball via browser automation.
+- **Roster growth (periodic, ~every few apps / at a version milestone):** with
+  many services now present, sanity-check the *shared* UI — the service filter
+  (overflow, ordering, the "All" option, chip legibility), service labels/icons,
+  empty/degraded states, and thread-list virtualization at scale. This is a
+  batched pass, **not** something to run every turn.
+
+A UI/UX finding is usually a fix to the shared view (a patch), not to the module.
+
 ### 6. Self-improve (make the loop learn) — do this whenever a review bites
 If a review round surfaced a **correctness bug**, ask: *would the pitfall
 checklist have prevented it at design time?*
