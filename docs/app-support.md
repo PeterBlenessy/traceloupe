@@ -204,10 +204,22 @@ iOSSecurity**, **Kaspersky SafeKids** — security agents. **WidgetSmith**
 (Gmail/Drive/Docs/Classroom/Calendar — Google-server-side; Gmail already tracked
 in Tier 1) carry nothing of forensic interest locally.
 
-**Takeaway:** the chat-parser loop has effectively exhausted this backup. The
-next high-value native work for *this device* is a **creations/media extractor**
-(PicCollage → ibisPaintX) surfacing user-made images in the Gallery — a new path,
-not another chat module.
+**Priority order (set by the project owner):**
+1. **Support every app in this backup** — extract whatever each app stores
+   locally (media, records, cached content), regardless of whether it's a chat
+   app. The parser loop generalizes from "chat modules" to **app-artifact
+   modules**: each app module locates its container files and emits whatever
+   TraceLoupe can surface (Gallery media, structured records, etc.).
+   Build order by data richness: **PicCollage → ibisPaintX** (real creative
+   media) first, then the web-view/thin apps (best-effort), then record the
+   ⚪ nothing-local apps with their reason so they're not re-investigated.
+2. **Then** move on to other popular apps beyond this backup (the Tier 1–3 lists
+   above), using public DFIR test images where we lack local data.
+
+This means the app-chat framework (`parsers/apps/`) grows a sibling notion of a
+**media/artifact module** that writes into the Gallery (and, later, other views)
+instead of the message stream. PicCollage is the first such module and validates
+the generalized path.
 
 ## How to update this file
 
