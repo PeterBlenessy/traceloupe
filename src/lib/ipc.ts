@@ -169,6 +169,8 @@ export interface MediaItem {
   mimeType: string | null;
   filename: string | null;
   takenAt: number | null;
+  /** Comma-separated names of people detected in the photo, or null. */
+  persons: string | null;
 }
 
 /** A media source and how many items came from it, for the gallery filter. */
@@ -1099,6 +1101,7 @@ const mockMedia: MediaItem[] = [
     mimeType: "image/png",
     filename: "traceloupe-test.png",
     takenAt: 1717841460,
+    persons: null,
   },
   {
     id: 2,
@@ -1107,6 +1110,7 @@ const mockMedia: MediaItem[] = [
     mimeType: "image/png",
     filename: "sunset.png",
     takenAt: 1717841520,
+    persons: null,
   },
   {
     id: 3,
@@ -1115,6 +1119,7 @@ const mockMedia: MediaItem[] = [
     mimeType: "image/png",
     filename: "forest.png",
     takenAt: 1717841580,
+    persons: "Alice, Bob",
   },
   {
     id: 4,
@@ -1123,6 +1128,7 @@ const mockMedia: MediaItem[] = [
     mimeType: "image/heic",
     filename: "IMG_0421.heic",
     takenAt: 1717841640,
+    persons: null,
   },
 ];
 
@@ -1171,7 +1177,11 @@ function mockFilterMedia(
   }
   if (search) {
     const q = search.toLowerCase();
-    out = out.filter((m) => (m.filename?.toLowerCase().includes(q) ?? false));
+    out = out.filter(
+      (m) =>
+        (m.filename?.toLowerCase().includes(q) ?? false) ||
+        (m.persons?.toLowerCase().includes(q) ?? false),
+    );
   }
   return out;
 }

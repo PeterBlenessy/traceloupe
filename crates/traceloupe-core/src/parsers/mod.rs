@@ -17,6 +17,7 @@ pub mod camera_roll;
 pub mod chats;
 pub mod messages;
 pub mod notes;
+pub mod photos_meta;
 pub mod recordings;
 pub mod safari;
 pub mod safari_bookmarks;

@@ -295,6 +295,18 @@ pub fn import_backup(
                 .warnings
                 .push(format!("Camera roll: couldn't read the backup ({e}).")),
         }
+        // Enrich the camera-roll rows just inserted with the people detected in
+        // each photo (Photos.sqlite face recognition) — powers person search/tags.
+        on_phase(ImportPhase::Normalizing {
+            step: "Photo people".into(),
+        });
+        import_photos_metadata_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut report,
+        );
     }
 
     // Voice recordings: read Voice Memos metadata + `.m4a` blobs natively (they
@@ -717,6 +729,40 @@ fn import_safari_bookmarks_native(
     }
 }
 
+/// Extract Photos.sqlite and tag camera-roll `media_items` with the people
+/// detected in each photo. Native-only, best-effort: a missing/unreadable
+/// Photos.sqlite (or no named people) just leaves media untagged.
+fn import_photos_metadata_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let entry = match index.find("CameraRollDomain", "Media/PhotoData/Photos.sqlite") {
+        Ok(Some(e)) => e,
+        _ => return, // not in this backup
+    };
+    let out = work_dir.join(".Photos.sqlite");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report
+            .warnings
+            .push(format!("Photo people: couldn't read Photos.sqlite ({e})."));
+        return;
+    }
+    if let Err(e) = crate::parsers::photos_meta::parse_photos_persons(&out, cache) {
+        report
+            .warnings
+            .push(format!("Photo people: parse failed ({e})."));
+    }
+    let _ = std::fs::remove_file(&out);
+}
+
 /// Self-extract + parse Contacts from `AddressBook.sqlitedb` (photos from the
 /// sibling `AddressBookImages.sqlitedb`). Returns true when Contacts were handled
 /// natively (so the iLEAPP contacts stage is skipped). The address-book insert
@@ -983,6 +1029,9 @@ pub fn reimport_module(
             }
             tx.commit()?;
             report.media_items = assets.len();
+            // Re-tag the fresh rows with photo people (the re-insert above cleared
+            // the persons column).
+            import_photos_metadata_native(backup_dir, decryptor, &cache, work_dir, &mut report);
         }
         "messages" => {
             // Extract sms.db first — the decrypt happens here, so a failure aborts

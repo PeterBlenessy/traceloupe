@@ -620,6 +620,8 @@ pub struct MediaItem {
     pub mime_type: Option<String>,
     pub filename: Option<String>,
     pub taken_at: Option<i64>,
+    /// Comma-separated names of people detected in the photo, or None.
+    pub persons: Option<String>,
 }
 
 /// Media items that have materialized bytes, newest first. Only items with a
@@ -627,7 +629,7 @@ pub struct MediaItem {
 pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, kind, source, mime_type, relative_path, taken_at
+        "SELECT id, kind, source, mime_type, relative_path, taken_at, persons
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -647,6 +649,7 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         // Show just the basename as the filename.
         filename: rel.map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
         taken_at: r.get(5)?,
+        persons: r.get(6)?,
     })
 }
 
@@ -676,7 +679,8 @@ pub fn count_media(
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
-           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\')",
+           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
+                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\')",
         rusqlite::params![source, range.lo, range.hi, search],
         |r| r.get(0),
     )?;
@@ -699,7 +703,8 @@ pub fn count_media_ranges(
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
-           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\')",
+           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
+                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\')",
     )?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
@@ -725,13 +730,14 @@ pub fn get_media_window(
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, kind, source, mime_type, relative_path, taken_at
+        "SELECT id, kind, source, mime_type, relative_path, taken_at, persons
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?4 IS NULL OR taken_at >= ?4)
            AND (?5 IS NULL OR taken_at < ?5)
-           AND (?6 IS NULL OR relative_path LIKE '%' || ?6 || '%' ESCAPE '\\')
+           AND (?6 IS NULL OR relative_path LIKE '%' || ?6 || '%' ESCAPE '\\'
+                          OR persons LIKE '%' || ?6 || '%' ESCAPE '\\')
          ORDER BY {} {dir} {nulls}, id {dir}
          LIMIT ?2 OFFSET ?3",
         sort.column(),

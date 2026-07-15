@@ -32,9 +32,11 @@ import {
   EmptyView,
   ErrorState,
   ListDetail,
+  ListSearch,
   ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
+import { useDebounced } from "@/lib/use-debounced";
 import { client, type Note, type TimeRange } from "@/lib/ipc";
 
 /** A flattened list row: either a section header or a note (so the virtualized
@@ -142,6 +144,9 @@ export function NotesView() {
   // Filters — all derived client-side from the note metadata we already hold.
   const [folder, setFolder] = useState<string>("all");
   const [lockState, setLockState] = useState<string>("all");
+  // Free-text search over title / snippet / folder.
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim().toLowerCase());
   // Time filter — same presets + custom range as Timeline/Photos, over the
   // note's modified date (replaces the old year dropdown).
   const { presets } = useTimePresets();
@@ -178,9 +183,16 @@ export function NotesView() {
       if (folder !== "all" && n.folder !== folder) return false;
       if (lockState === "locked" && !n.locked) return false;
       if (lockState === "unlocked" && n.locked) return false;
+      if (search) {
+        const hay = [n.title, n.snippet, n.folder]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
       return true;
     });
-  }, [notes, folder, lockState]);
+  }, [notes, folder, lockState, search]);
 
   const presetCounts = useMemo(
     () =>
@@ -271,7 +283,13 @@ export function NotesView() {
           </>
         )}
       </ViewHeader>
-      {/* Row 2 (full width): time filters + sort. */}
+      {/* Row 2 (full width): search. */}
+      {hasNotes && (
+        <div className="shrink-0 border-b px-3 py-1.5">
+          <ListSearch value={q} onChange={setQ} placeholder="Search notes" />
+        </div>
+      )}
+      {/* Row 3 (full width): time filters + sort. */}
       {hasNotes && (
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1.5">
           <TimeFilterBar
