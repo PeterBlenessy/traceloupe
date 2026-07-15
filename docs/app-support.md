@@ -10,7 +10,7 @@ Companion to `../CHANGELOG.md` (milestones) and
 coverage within each app — everything in its DB and what we surface — see
 [`app-data-coverage.md`](app-data-coverage.md).
 
-**Last updated:** 2026-07-15 · current release **0.6.0**
+**Last updated:** 2026-07-15 · current release **0.6.2**
 
 ## Status legend
 
@@ -156,6 +156,58 @@ teleguard.
 Regional messengers, banking/fintech, travel, fitness, productivity apps, and
 popular games. Enumerated per-app as they're scheduled; add rows here when a
 specific app is picked up.
+
+### Priority: apps in the reference backup (grounded triage)
+
+The apps actually installed on the test device (`00008101-…001E`), triaged
+against their **real** on-disk containers via the decrypted `Manifest.db` — not
+guessed. **Key finding: none are chat apps.** The WhatsApp/Telegram-style
+message-parser loop does not apply to any of them; the real recoverable value
+here is *creative media* plus a few thin web caches. Prioritise accordingly.
+
+**A. Real local personal content — worth building (feeds the Gallery, not Messages)**
+
+| App | Bundle | What's actually stored locally | Mechanism | Priority |
+|-----|--------|-------------------------------|-----------|----------|
+| PicCollage | `com.cardinalblue.PicCollage` | `Documents/PhotoCollage.sqlite` catalog + **486** project files (`collage_*/multi_page.json` layouts + embedded source photos) | New "creations" media path: read the sqlite catalog, surface each collage + its source images in the Gallery | **1 (richest)** |
+| ibisPaintX | `jp.ne.ibis.ibisPaintX` | **79** `Documents/` files — drawings + `.thumbs/list_*.png` thumbnails, `.settings/*.dat` | Same creations path: enumerate artworks + thumbnails into the Gallery | 2 |
+
+**B. Web-view apps — content is server-side, almost nothing cached (best-effort, low yield)**
+
+These are WKWebView shells: their screens are fetched live and rendered from the
+web, so there is no local message/store to parse. Confirmed thin: Edlevo's
+`iOS_WKWebView_app.sqlite` and IndexedDB are near-empty; StudyBee has only 16
+WebKit housekeeping files. Not worth a native parser until/unless a real backup
+shows substantial `Library/WebKit/WebsiteData` content to carve.
+
+| App | Bundle | Note |
+|-----|--------|------|
+| Edlevo (school↔guardian) | `com.tieto.se.edumobile` | Swedish school comms — but WKWebView; messages live server-side |
+| StudyBee | `se.studybee.student` | WKWebView; only Firebase + WebKit stats locally |
+| Mecenat (student ID) | `mecenat` | WKWebView + Safari extension; card/profile fetched live |
+| Skånetrafiken (transit) | `se.skanetrafiken.prod-washington-ios` | Tickets/journeys server-side; no local DB |
+
+**C. Public / low-value local data**
+
+| App | Bundle | Note |
+|-----|--------|------|
+| Skolmat (lunch menus) | `se.yostudios.skolmat` | `Documents/Index.db` caches *public* school-lunch menus — little personal value |
+
+**D. Nothing recoverable — encrypted, server-side, or no personal data** ⚪
+
+Recorded so we don't re-investigate: **Swish** (`se.bankgirot.swish`),
+**Mobilbanken/Sparbanken** (`se.sparbankerna.mobilbankenprivat`), **BankID**
+(`com.bankidapp.BankID`) — financial, encrypted key-store only. **Bitdefender
+iOSSecurity**, **Kaspersky SafeKids** — security agents. **WidgetSmith**
+(`com.crossforward.WidgetSmith`) — widget config in prefs, no comms. Games
+(2048, Magic Tiles, Roblox, Wow), **SoundHound**, and the Google suite
+(Gmail/Drive/Docs/Classroom/Calendar — Google-server-side; Gmail already tracked
+in Tier 1) carry nothing of forensic interest locally.
+
+**Takeaway:** the chat-parser loop has effectively exhausted this backup. The
+next high-value native work for *this device* is a **creations/media extractor**
+(PicCollage → ibisPaintX) surfacing user-made images in the Gallery — a new path,
+not another chat module.
 
 ## How to update this file
 
