@@ -316,9 +316,20 @@ export interface TraceLoupeClient {
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
   // huge lists a slice at a time.
-  countMedia(source: string | null): Promise<number>;
+  countMedia(
+    source: string | null,
+    lo?: number | null,
+    hi?: number | null,
+  ): Promise<number>;
+  /** Media counts for each [lo, hi) window in `source` — Photos time-filter chips. */
+  countMediaRanges(
+    source: string | null,
+    ranges: TimeRange[],
+  ): Promise<number[]>;
   getMediaWindow(
     source: string | null,
+    lo: number | null,
+    hi: number | null,
     offset: number,
     limit: number,
     sortBy: string,
@@ -432,10 +443,15 @@ const tauriClient: TraceLoupeClient = {
   unlockNote: (noteId, password) =>
     invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
-  countMedia: (source) => invoke<number>("count_media", { source }),
-  getMediaWindow: (source, offset, limit, sortBy, desc) =>
+  countMedia: (source, lo = null, hi = null) =>
+    invoke<number>("count_media", { source, lo, hi }),
+  countMediaRanges: (source, ranges) =>
+    invoke<number[]>("count_media_ranges", { source, ranges }),
+  getMediaWindow: (source, lo, hi, offset, limit, sortBy, desc) =>
     invoke<MediaItem[]>("get_media_window", {
       source,
+      lo,
+      hi,
       offset,
       limit,
       sortBy,
@@ -983,10 +999,17 @@ const mockImported = new Set<string>();
 
 // Mock-side filters mirroring the backend's windowed SQL, so the browser mock
 // behaves like the real windowed/filterable queries.
-function mockFilterMedia(source: string | null): MediaItem[] {
-  return source
+function mockFilterMedia(
+  source: string | null,
+  range?: TimeRange,
+): MediaItem[] {
+  let out = source
     ? mockMedia.filter((m) => (m.source ?? "Other") === source)
     : mockMedia;
+  if (range && (range.lo != null || range.hi != null)) {
+    out = out.filter((m) => inRange(m.takenAt ?? null, range));
+  }
+  return out;
 }
 function mockFilterCalls(search: string | null): Call[] {
   if (!search) return mockCalls;
@@ -1210,14 +1233,17 @@ export const mockClient: TraceLoupeClient = {
       ? "Bank PIN: 1234\nWiFi: hunter2"
       : Promise.reject(new Error("Wrong password.")),
   listRecordings: async () => (mockActive ? mockRecordings : []),
-  countMedia: async (source) =>
-    mockActive ? mockFilterMedia(source).length : 0,
-  getMediaWindow: async (source, offset, limit, sortBy, desc) =>
+  countMedia: async (source, lo = null, hi = null) =>
+    mockActive ? mockFilterMedia(source, { lo, hi }).length : 0,
+  countMediaRanges: async (source, ranges) =>
+    ranges.map((r) => (mockActive ? mockFilterMedia(source, r).length : 0)),
+  getMediaWindow: async (source, lo, hi, offset, limit, sortBy, desc) =>
     mockActive
-      ? mockSortBy(mockFilterMedia(source), mediaKey(sortBy), desc).slice(
-          offset,
-          offset + limit,
-        )
+      ? mockSortBy(
+          mockFilterMedia(source, { lo, hi }),
+          mediaKey(sortBy),
+          desc,
+        ).slice(offset, offset + limit)
       : [],
   countCalls: async (search) =>
     mockActive ? mockFilterCalls(search).length : 0,

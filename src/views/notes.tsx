@@ -19,6 +19,7 @@ import {
   sortItems,
   type SortState,
 } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Select,
@@ -34,7 +35,7 @@ import {
   ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
-import { client, type Note } from "@/lib/ipc";
+import { client, type Note, type TimeRange } from "@/lib/ipc";
 
 /** A flattened list row: either a section header or a note (so the virtualized
  *  list can render Apple Notes-style date groups inline). */
@@ -140,11 +141,13 @@ export function NotesView() {
   const [sort, setSort] = useState<SortState>({ by: "modified", desc: true });
   // Filters — all derived client-side from the note metadata we already hold.
   const [folder, setFolder] = useState<string>("all");
-  const [year, setYear] = useState<string>("all");
   const [lockState, setLockState] = useState<string>("all");
+  // Time filter — same presets + custom range as Timeline/Photos, over the
+  // note's modified date (replaces the old year dropdown).
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
 
-  // The distinct folders and years present, for the filter dropdowns. Years come
-  // from the modified date (the same field the default sort uses).
+  // The distinct folders present, for the folder dropdown.
   const folders = useMemo(
     () =>
       Array.from(
@@ -154,42 +157,51 @@ export function NotesView() {
       ).sort((a, b) => a.localeCompare(b)),
     [notes],
   );
-  const years = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (notes ?? [])
-            .map((n) =>
-              n.modifiedAt ? new Date(n.modifiedAt * 1000).getFullYear() : null,
-            )
-            .filter((y): y is number => y !== null),
-        ),
-      ).sort((a, b) => b - a),
-    [notes],
-  );
   const hasLocked = useMemo(() => (notes ?? []).some((n) => n.locked), [notes]);
 
-  const sortedNotes = useMemo(() => {
-    if (!notes) return notes;
-    const filtered = notes.filter((n) => {
+  // Whether a note's modified date falls in a [lo, hi) window (undated notes
+  // only pass the fully-open "All" window).
+  const inWindow = (
+    modifiedAt: number | null,
+    lo: number | null,
+    hi: number | null,
+  ) => {
+    if (lo == null && hi == null) return true;
+    if (modifiedAt == null) return false;
+    return (lo == null || modifiedAt >= lo) && (hi == null || modifiedAt < hi);
+  };
+
+  // Folder + lock filtered, before the time filter — the base for both the list
+  // and the time-chip counts.
+  const baseFiltered = useMemo(() => {
+    return (notes ?? []).filter((n) => {
       if (folder !== "all" && n.folder !== folder) return false;
       if (lockState === "locked" && !n.locked) return false;
       if (lockState === "unlocked" && n.locked) return false;
-      if (year !== "all") {
-        const y = n.modifiedAt
-          ? new Date(n.modifiedAt * 1000).getFullYear()
-          : null;
-        if (String(y) !== year) return false;
-      }
       return true;
     });
+  }, [notes, folder, lockState]);
+
+  const presetCounts = useMemo(
+    () =>
+      presets.map(
+        (p) => baseFiltered.filter((n) => inWindow(n.modifiedAt, p.lo, p.hi)).length,
+      ),
+    [presets, baseFiltered],
+  );
+
+  const sortedNotes = useMemo(() => {
+    if (!notes) return notes;
+    const filtered = baseFiltered.filter((n) =>
+      inWindow(n.modifiedAt, range.lo, range.hi),
+    );
     return sortItems(
       filtered,
       (n) =>
         sort.by === "title" ? (n.title ?? "").toLowerCase() : n.modifiedAt,
       sort.desc,
     );
-  }, [notes, sort, folder, year, lockState]);
+  }, [notes, baseFiltered, sort, range]);
 
   // Header/note rows for the list: Pinned + date sections when sorted by date.
   const rows = useMemo(
@@ -234,21 +246,12 @@ export function NotesView() {
                   </SelectContent>
                 </Select>
               )}
-              {years.length > 1 && (
-                <Select value={year} onValueChange={setYear}>
-                  <SelectTrigger size="sm" className="h-7 w-[6.5rem] text-xs">
-                    <SelectValue placeholder="Year" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All years</SelectItem>
-                    {years.map((y) => (
-                      <SelectItem key={y} value={String(y)}>
-                        {y}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
+              <TimeFilterBar
+                presets={presets}
+                value={range}
+                onChange={setRange}
+                counts={presetCounts}
+              />
               {hasLocked && (
                 <ToggleGroup
                   type="single"
