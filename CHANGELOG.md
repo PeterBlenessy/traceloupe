@@ -53,6 +53,11 @@ _Nothing yet._
 
 ### Added
 
+- **Native TikTok contacts / social graph** (`AwemeIM.db`), the last artifact
+  that had needed iLEAPP. A default import is now **fully native** — it launches
+  no iLEAPP subprocess and doesn't require the engine installed, cutting a full
+  import from minutes to ~35s. iLEAPP is kept only as a development reference for
+  schemas we can't inspect in our own backup; the engine code path stays dormant.
 - **Photo metadata from `Photos.sqlite`** — a native parser enriches each
   camera-roll photo with the **people** in it (face recognition), a precise
   **capture date**, **GPS location**, and its **favorite** flag. Photo search

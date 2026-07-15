@@ -239,18 +239,6 @@ pub const IMPORT_CATALOG: &[ImportModule] = &[
         keys: &[],
         default: true,
     },
-    ImportModule {
-        // The one artifact with no native parser yet — TikTok's contact/social
-        // graph. It's the *only* thing that needs iLEAPP, whose whole-backup scan
-        // adds minutes to an import, so it's OFF by default: a default import is
-        // fully native (no iLEAPP subprocess at all). Enable this to pull the
-        // TikTok social graph, accepting the slower iLEAPP pass.
-        id: "tiktok_contacts",
-        label: "TikTok contacts / social graph (slow — runs iLEAPP)",
-        category: "Apps",
-        keys: &["tiktok_contacts"],
-        default: false,
-    },
 ];
 
 /// The iLEAPP artifact keys to run for the selected module ids. An empty

@@ -26,9 +26,11 @@ facts from its module, write fresh Rust (provenance: reference, architecture §1
 Never paste iLEAPP code.
 
 **Correctness matters more than breadth.** This is a forensics tool — a wrong
-sender, timestamp, or direction is a serious defect. A wrong parser is worse than
-no parser (iLEAPP is the fallback). If a schema fact can't be resolved from the
-reference, validate against real data (step 3) before trusting it.
+sender, timestamp, or direction is a serious defect. There is **no runtime iLEAPP
+fallback** (the app never runs iLEAPP — it's a dev reference only; see the
+`ileapp-dev-reference-only` memory), so a wrong parser silently ships wrong data.
+If a schema fact can't be resolved from the reference, validate against real data
+(step 3) before trusting it.
 
 ---
 
@@ -68,9 +70,9 @@ findings historically were the SAME few mistakes — design them out.
   `parsers/apps/mod.rs` (`pub mod` + `APP_CHAT_MODULES`).
 - Reuse the framework: `col_string`/`col_i64` (tolerant reads),
   `insert_app_conversation` (grouping, group detection, per-thread counters).
-- If the app has an iLEAPP normalize stage in `normalize.rs`, it's already skipped
-  when the native path succeeds (`NativeSkips.app_services`); otherwise it's
-  purely additive.
+- No runtime iLEAPP coupling: the native parser writes straight to the cache. (A
+  legacy `NativeSkips` path in `normalize.rs` exists only for the dormant engine,
+  which is never run.)
 - Write a synthetic unit test (1:1 **and** a group, incl. per-author attribution).
 - `cargo test -p traceloupe-core --lib <app>` + `cargo clippy` + `cargo fmt`.
 
