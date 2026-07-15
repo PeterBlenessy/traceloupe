@@ -239,6 +239,8 @@ export interface Message {
   deliveredAt: number | null;
   /** Tapback summary folded onto this message, e.g. "❤️×2 👍", or null. */
   reactions: string | null;
+  /** Preview of the message this one replies to, or null. */
+  replyToSnippet: string | null;
   attachments: Attachment[];
 }
 
@@ -755,6 +757,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
     {
@@ -766,6 +769,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
     {
@@ -777,6 +781,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
     {
@@ -788,6 +793,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
     {
@@ -799,6 +805,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [
         {
           id: 2,
@@ -817,6 +824,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [
         {
           id: 1,
@@ -837,6 +845,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
     {
@@ -848,6 +857,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
   ],
@@ -861,6 +871,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
     {
@@ -872,6 +883,7 @@ const mockMessages: Record<number, Message[]> = {
       readAt: null,
       deliveredAt: null,
       reactions: null,
+      replyToSnippet: null,
       attachments: [],
     },
   ],
@@ -898,6 +910,7 @@ mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
   readAt: null,
   deliveredAt: null,
   reactions: null,
+  replyToSnippet: null,
   attachments: [],
 }));
 mockMessages[4] = [
@@ -910,6 +923,7 @@ mockMessages[4] = [
     readAt: null,
     deliveredAt: null,
     reactions: null,
+    replyToSnippet: null,
     attachments: [],
   },
   {
@@ -921,6 +935,7 @@ mockMessages[4] = [
     readAt: null,
     deliveredAt: null,
     reactions: null,
+    replyToSnippet: null,
     attachments: [],
   },
   {
@@ -932,6 +947,7 @@ mockMessages[4] = [
     readAt: null,
     deliveredAt: null,
     reactions: null,
+    replyToSnippet: null,
     attachments: [],
   },
 ];

@@ -44,7 +44,7 @@ iMessage is unsurfaced.
 | Group name + participants | ✅ 84/85 | ✅ | `display_name`, `chat_handle_join` |
 | Group actions (rename/join/leave) | ✅ 544 | ⬜ | **Dropped** — parser requires text or attachment, so action rows are skipped |
 | Tapbacks / reactions (+ custom emoji) | ✅ 7,600 / 478 | ✅ | `associated_message_type`/`_guid`/`_emoji` folded (add/remove, per reactor) into a per-message "❤️×2 👍" badge; the tapback rows are no longer shown as messages |
-| Replies (inline threads) | ✅ 6,560 | ⬜ | `thread_originator_guid` — shown flat |
+| Replies (inline threads) | ✅ 6,560 | ✅ | `thread_originator_guid` resolved (via the GUID map) to a quoted preview above the reply bubble |
 | Expressive effects | ✅ 217 | ⬜ | `expressive_send_style_id` |
 | App/bubble messages (Apple Cash, polls…) | ✅ 589 | ⬜ | `balloon_bundle_id` / `payload_data` not decoded |
 | Filtered (unknown sender) / archived | ✅ 11 | ⬜ | `chat.is_filtered` — no Unknown/Filtered separation |

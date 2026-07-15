@@ -75,6 +75,17 @@ fn associated_target_guid(raw: &str) -> &str {
     raw.rsplit(['/', ':']).next().unwrap_or(raw)
 }
 
+/// A single-line preview of a message body, capped at `max` chars (char-safe).
+fn truncate_snippet(body: &str, max: usize) -> String {
+    let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() > max {
+        let truncated: String = one_line.chars().take(max).collect();
+        format!("{truncated}…")
+    } else {
+        one_line
+    }
+}
+
 /// Classify an attachment as gallery media by MIME, falling back to the filename
 /// extension (sms.db often stores a NULL mime for image attachments). Returns the
 /// `media_items.kind` ("photo"/"video"), or None for non-media (docs, vCards, …).
@@ -225,7 +236,8 @@ pub fn parse_messages(
     let mut mstmt = src.prepare(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
-                m.associated_message_guid, m.associated_message_type, m.associated_message_emoji
+                m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
+                m.thread_originator_guid
          FROM message m
          JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
@@ -243,6 +255,9 @@ pub fn parse_messages(
     // target). Event = (target_guid, reactor_key, assoc_type, custom_emoji).
     let mut guid_to_id: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut reaction_events: Vec<(String, String, i64, Option<String>)> = Vec::new();
+    // Inline replies: (this message's cache id, the replied-to message's GUID),
+    // resolved to a snippet after the pass (the target may come later).
+    let mut reply_links: Vec<(i64, String)> = Vec::new();
     while let Some(r) = rows.next()? {
         let chat_id: i64 = r.get(0)?;
         let text: Option<String> = r.get(1)?;
@@ -257,6 +272,7 @@ pub fn parse_messages(
         let assoc_guid: Option<String> = r.get(10)?;
         let assoc_type = r.get::<_, Option<i64>>(11)?.unwrap_or(0);
         let assoc_emoji: Option<String> = r.get(12)?;
+        let reply_guid: Option<String> = r.get(13)?;
 
         // A tapback row: record the event and skip it — it is not a chat message.
         if assoc_type >= 2000 {
@@ -348,6 +364,10 @@ pub fn parse_messages(
         // Remember this message's GUID so tapbacks can be mapped onto it below.
         if let Some(g) = guid {
             guid_to_id.insert(g, message_id);
+        }
+        // If this message is an inline reply, note its target for later resolution.
+        if let Some(target) = reply_guid.as_deref() {
+            reply_links.push((message_id, associated_target_guid(target).to_string()));
         }
 
         // Attachment rows: resolve each to its backup file so the UI can serve it.
@@ -447,6 +467,28 @@ pub fn parse_messages(
             tx.execute(
                 "UPDATE messages SET reactions = ?1 WHERE id = ?2",
                 rusqlite::params![summary, mid],
+            )?;
+        }
+    }
+
+    // Resolve inline replies to a short preview of the message they reply to.
+    for (reply_id, target_guid) in reply_links {
+        let Some(&target_id) = guid_to_id.get(&target_guid) else {
+            continue;
+        };
+        let snippet: Option<String> = tx
+            .query_row(
+                "SELECT body FROM messages WHERE id = ?1",
+                [target_id],
+                |r| r.get(0),
+            )
+            .ok()
+            .flatten();
+        if let Some(snippet) = snippet {
+            let snippet = truncate_snippet(&snippet, 80);
+            tx.execute(
+                "UPDATE messages SET reply_to_snippet = ?1 WHERE id = ?2",
+                rusqlite::params![snippet, reply_id],
             )?;
         }
     }
@@ -562,7 +604,7 @@ mod tests {
             "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
              CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
              CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
-             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT);
              CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
              INSERT INTO handle VALUES (1,'+15550001111'), (2,'+15550002222');
              -- A 1:1 chat with one peer, and a group chat with a name + two peers.
@@ -570,17 +612,19 @@ mod tests {
              INSERT INTO chat VALUES (20,'chat99','Hiking Crew','iMessage');
              INSERT INTO chat_handle_join VALUES (10,1),(20,1),(20,2);
              -- date is Apple-absolute nanoseconds; unix 1_700_000_000 = 721692800000000000.
-             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0,0,0,'GUID-100',NULL,0,NULL);
+             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0,0,0,'GUID-100',NULL,0,NULL,NULL);
              -- outgoing, delivered + read (date_delivered / date_read set).
-             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0,721692900000000000,721692880000000000,'GUID-101',NULL,0,NULL);
-             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0,0,0,'GUID-200',NULL,0,NULL);
+             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0,721692900000000000,721692880000000000,'GUID-101',NULL,0,NULL,NULL);
+             -- an inline reply to message 100 ('hey there').
+             INSERT INTO message VALUES (102,'reply body',1,721692920000000000,0,0,0,0,'GUID-102',NULL,0,NULL,'p:0/GUID-100');
+             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0,0,0,'GUID-200',NULL,0,NULL,NULL);
              -- an attachment-only message (NULL text) is kept.
-             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1,0,0,'GUID-201',NULL,0,NULL);
+             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1,0,0,'GUID-201',NULL,0,NULL,NULL);
              -- a pure action item (NULL text, no attachment) is skipped.
-             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0,0,0,'GUID-202',NULL,0,NULL);
+             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0,0,0,'GUID-202',NULL,0,NULL,NULL);
              -- a tapback (Loved) on message 100 from the device owner; not a message.
-             INSERT INTO message VALUES (300,NULL,1,721692900000000000,0,0,0,0,'GUID-300','p:0/GUID-100',2000,NULL);
-             INSERT INTO chat_message_join VALUES (10,100),(10,101),(20,200),(20,201),(20,202),(10,300);",
+             INSERT INTO message VALUES (300,NULL,1,721692900000000000,0,0,0,0,'GUID-300','p:0/GUID-100',2000,NULL,NULL);
+             INSERT INTO chat_message_join VALUES (10,100),(10,101),(10,102),(20,200),(20,201),(20,202),(10,300);",
         )
         .unwrap();
         db
@@ -596,7 +640,7 @@ mod tests {
         parse_messages(&db, &cache, &mut report, false, None).unwrap();
 
         assert_eq!(report.threads, 2);
-        assert_eq!(report.messages, 4); // action item (202) skipped
+        assert_eq!(report.messages, 5); // action item (202) skipped; reply (102) kept
 
         let c = cache.conn();
         // Group thread named, 1:1 thread shows the peer identifier.
@@ -654,7 +698,17 @@ mod tests {
         let msg_count: i64 = c
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(msg_count, 4, "tapback row is not a message");
+        assert_eq!(msg_count, 5, "tapback row is not a message; reply is kept");
+
+        // The reply carries a preview of the message it replies to.
+        let reply_snippet: Option<String> = c
+            .query_row(
+                "SELECT reply_to_snippet FROM messages WHERE body = 'reply body'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(reply_snippet.as_deref(), Some("hey there"));
 
         // Attachment-only message kept, flagged, outgoing.
         let (has_att, from_me): (i64, i64) = c
