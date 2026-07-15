@@ -171,6 +171,9 @@ export interface MediaItem {
   takenAt: number | null;
   /** Comma-separated names of people detected in the photo, or null. */
   persons: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  favorite: boolean;
 }
 
 /** A media source and how many items came from it, for the gallery filter. */
@@ -1102,6 +1105,9 @@ const mockMedia: MediaItem[] = [
     filename: "traceloupe-test.png",
     takenAt: 1717841460,
     persons: null,
+    latitude: null,
+    longitude: null,
+    favorite: false,
   },
   {
     id: 2,
@@ -1111,6 +1117,9 @@ const mockMedia: MediaItem[] = [
     filename: "sunset.png",
     takenAt: 1717841520,
     persons: null,
+    latitude: null,
+    longitude: null,
+    favorite: false,
   },
   {
     id: 3,
@@ -1120,6 +1129,9 @@ const mockMedia: MediaItem[] = [
     filename: "forest.png",
     takenAt: 1717841580,
     persons: "Alice, Bob",
+    latitude: null,
+    longitude: null,
+    favorite: false,
   },
   {
     id: 4,
@@ -1129,6 +1141,9 @@ const mockMedia: MediaItem[] = [
     filename: "IMG_0421.heic",
     takenAt: 1717841640,
     persons: null,
+    latitude: null,
+    longitude: null,
+    favorite: false,
   },
 ];
 

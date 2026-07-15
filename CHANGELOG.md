@@ -53,10 +53,11 @@ _Nothing yet._
 
 ### Added
 
-- **Photo people (face-recognition person tags).** A native `Photos.sqlite`
-  parser reads the camera roll's detected faces and writes the recognised
-  people onto each photo. Photo search now matches person names, the lightbox
-  shows who's in a photo, and tagged thumbnails carry a small people badge.
+- **Photo metadata from `Photos.sqlite`** — a native parser enriches each
+  camera-roll photo with the **people** in it (face recognition), a precise
+  **capture date**, **GPS location**, and its **favorite** flag. Photo search
+  matches person names; the lightbox shows who's in a photo, its coordinates, and
+  a favorite heart; tagged/favorited thumbnails carry small badges.
 - **Search in Notes** — a full-width search row over title / snippet / folder,
   alongside the folder, lock, time, and sort filters.
 - **Search rows for Photos, Messages, and Safari.** Photos gets a full-width

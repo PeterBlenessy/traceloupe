@@ -609,7 +609,7 @@ pub fn contact_image(cache: &CacheDb, contact_id: i64) -> Result<Option<Vec<u8>>
 
 /// A media item for the gallery grid. Bytes are served separately via the
 /// media protocol (by id), never inlined here.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaItem {
     pub id: i64,
@@ -622,6 +622,9 @@ pub struct MediaItem {
     pub taken_at: Option<i64>,
     /// Comma-separated names of people detected in the photo, or None.
     pub persons: Option<String>,
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
+    pub favorite: bool,
 }
 
 /// Media items that have materialized bytes, newest first. Only items with a
@@ -629,7 +632,8 @@ pub struct MediaItem {
 pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, kind, source, mime_type, relative_path, taken_at, persons
+        "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
+                latitude, longitude, is_favorite
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -650,6 +654,9 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         filename: rel.map(|p| p.rsplit(['/', '\\']).next().unwrap_or(&p).to_string()),
         taken_at: r.get(5)?,
         persons: r.get(6)?,
+        latitude: r.get(7)?,
+        longitude: r.get(8)?,
+        favorite: r.get::<_, i64>(9)? != 0,
     })
 }
 
@@ -730,7 +737,8 @@ pub fn get_media_window(
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, kind, source, mime_type, relative_path, taken_at, persons
+        "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
+                latitude, longitude, is_favorite
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
