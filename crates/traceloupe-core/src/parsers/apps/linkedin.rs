@@ -237,4 +237,79 @@ mod tests {
             .unwrap();
         assert_eq!(name, "Dana Ng");
     }
+
+    /// Edge cases the review flagged: a malformed-JSON row must not abort the
+    /// parse; a message with no `conversations` row still parses (peer derived
+    /// from the sender); a 3-party group attributes each author per-message.
+    #[test]
+    fn tolerates_bad_json_and_handles_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("msg_database.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversations (conversationUrn TEXT, serializedConversation TEXT);
+             CREATE TABLE messages (conversationUrn TEXT, deliveredAt INTEGER, serializedMessage TEXT);",
+        )
+        .unwrap();
+        // A group conversation (urn:g) with no `conversations` row → chat_name None.
+        conn.execute(
+            "INSERT INTO messages (conversationUrn, deliveredAt, serializedMessage) VALUES ('urn:g', 1700000000000, ?1)",
+            [msg_json("Alex", "R", "DISTANCE_1", "kickoff at 10")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (conversationUrn, deliveredAt, serializedMessage) VALUES ('urn:g', 1700000100000, ?1)",
+            [msg_json("Bina", "S", "DISTANCE_2", "works for me")],
+        )
+        .unwrap();
+        // A malformed-JSON row must not abort the whole parse.
+        conn.execute(
+            "INSERT INTO messages (conversationUrn, deliveredAt, serializedMessage) VALUES ('urn:g', 1700000200000, '{not valid json')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+
+        let msgs = parse(&db, "").unwrap();
+        assert_eq!(
+            msgs.len(),
+            3,
+            "the bad-JSON row is still emitted, not aborted"
+        );
+        // Per-author attribution in the group.
+        assert_eq!(
+            msgs.iter()
+                .find(|m| m.body.as_deref() == Some("kickoff at 10"))
+                .unwrap()
+                .sender_name
+                .as_deref(),
+            Some("Alex R")
+        );
+        assert_eq!(
+            msgs.iter()
+                .find(|m| m.body.as_deref() == Some("works for me"))
+                .unwrap()
+                .sender_name
+                .as_deref(),
+            Some("Bina S")
+        );
+        // The malformed row has no body but didn't break anything.
+        assert!(msgs.iter().any(|m| m.body.is_none()));
+
+        // With no conversations row, the framework labels the group by its two
+        // distinct senders.
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        super::super::insert_app_conversation(&cache, "LinkedIn", false, msgs, &mut report)
+            .unwrap();
+        let title: String = cache
+            .conn()
+            .query_row(
+                "SELECT display_name FROM threads WHERE identifier = 'urn:g'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(title.starts_with("Group chat"), "got: {title}");
+    }
 }
