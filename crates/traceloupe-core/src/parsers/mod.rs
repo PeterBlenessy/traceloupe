@@ -21,3 +21,4 @@ pub mod photos_meta;
 pub mod recordings;
 pub mod safari;
 pub mod safari_bookmarks;
+pub mod tiktok_contacts;

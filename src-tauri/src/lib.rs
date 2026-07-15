@@ -382,9 +382,10 @@ async fn import_backup(
     // Serialize against re-imports and any other import: only one writer touches a
     // backup's cache/temp at a time (held for the whole run).
     let _gate = gate.0.lock().await;
-    let cfg = resolve_engine(&app).ok_or_else(|| {
-        "iLEAPP engine is not installed. Set TRACELOUPE_ILEAPP or install the engine.".to_string()
-    })?;
+    // The engine is optional: TraceLoupe parses everything it surfaces natively,
+    // so a missing iLEAPP is fine (import runs fully native). It's only used if a
+    // future module reintroduces an iLEAPP key.
+    let cfg = resolve_engine(&app);
 
     let data_dir = app
         .path()
@@ -413,7 +414,7 @@ async fn import_backup(
         let mut step_start = import_start;
         let mut current_step: Option<String> = None;
         import::import_backup(
-            &cfg,
+            cfg.as_ref(),
             &backup_path,
             &password,
             &cache_path,

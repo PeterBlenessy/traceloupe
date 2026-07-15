@@ -1,10 +1,12 @@
 # Native app parser — the process
 
-How we add native support for one more app's chat data (replacing the iLEAPP
-fallback). The runnable version is the `create-native-app-parser` skill (do one
-app; wrap with the built-in `/loop` to work through many); this doc is the
-contributor-facing summary. **iLEAPP is the reference, not the source** (learn
-schema facts, write fresh Rust — provenance: reference, architecture §10).
+How we add native support for one more app's data. The runnable version is the
+`create-native-app-parser` skill (do one app; wrap with the built-in `/loop` to
+work through many); this doc is the contributor-facing summary. **iLEAPP is a
+development-time reference, not a runtime dependency and not the source** — the
+app never runs iLEAPP (see the [[ileapp-dev-reference-only]] decision); we read
+its module to learn schema facts and run it standalone to diff against, then write
+fresh Rust (provenance: reference, architecture §10).
 
 ## Steps
 
@@ -63,4 +65,6 @@ schema facts, write fresh Rust — provenance: reference, architecture §10).
 `AppMessage`, `AppChatModule`, `APP_CHAT_MODULES`, `insert_app_conversation`,
 `col_string`/`col_i64` — see `parsers/apps/mod.rs`. `chat_name = Some` titles the
 thread and skips group inference; `None` derives from the peer / distinct senders.
-iLEAPP fallback is automatic (empty parse ⇒ iLEAPP runs).
+There is **no runtime iLEAPP fallback** — an empty native parse just means no data
+(the module isn't in this backup). iLEAPP is only run by *us* at dev time to diff
+against.

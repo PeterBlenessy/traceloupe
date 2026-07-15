@@ -41,9 +41,14 @@ coverage within each app — everything in its DB and what we surface — see
 | Contacts | `AddressBook.sqlitedb` | ✅ Native | 0.3.0 |
 | Installed apps | `Info.plist` (Installed Applications) | ✅ Native | 0.1.0 |
 
-**All first-party views are now native** — iLEAPP is no longer required for any
-built-in view. It's still invoked only for the third-party chats below (until
-those go native), after which it becomes optional (Batch 2).
+**iLEAPP is no longer run at all.** Every artifact TraceLoupe surfaces —
+first-party *and* third-party (TikTok/WhatsApp/Telegram messages, TikTok
+contacts, …) — is parsed natively, so a default import launches no iLEAPP
+subprocess and doesn't even require the engine to be installed (import ~35s vs.
+minutes). iLEAPP is kept only as a **development-time reference** — a source
+checkout to read how it extracts artifacts we can't inspect in our own backup.
+The sidecar/normalize code path remains but dormant (no catalog module carries an
+iLEAPP key); it would only re-activate if a future long-tail module opted in.
 
 ## Third-party apps
 
@@ -60,15 +65,14 @@ writes the threads/messages. Adding an app is one module file + a registry entry
 what's actually in the backup (confirmed by whether iLEAPP even has a module):
 
 > ✅ done: **WhatsApp**, **Facebook Messenger** (clean SQLite), **Instagram** (DMs
-> via a native NSKeyedArchiver decoder), **TikTok** (JSON `content`; messages only —
-> its contact social-graph still comes from iLEAPP). Instagram & TikTok are
-> *unvalidated* against a real backup — kept behind the iLEAPP fallback.
+> via a native NSKeyedArchiver decoder), **TikTok** — messages (JSON `content`)
+> AND contacts/social-graph (`AwemeIM.db` `TTKIMContactBaseUser*`/`AwemeContacts*`,
+> validated at 145 contacts). Instagram is *unvalidated* against a real backup.
 > Investigate (data exists but not open-source-documented — see Research notes):
 > **Snapchat**, **X/Twitter**, **Facebook** (main app).
 
 **Telegram** — ✅ native as of 0.4.0 (dev): a native reader for its binary
-"postbox" format (`t7` messages, `t2` peers). Messages only; unvalidated, behind
-the iLEAPP fallback.
+"postbox" format (`t7` messages, `t2` peers). Messages only; unvalidated.
 
 **Research notes — apps with no iLEAPP module** (web research, July 2026; "no
 iLEAPP module" ≠ "no data"). These need a real backup to pin exact schemas before

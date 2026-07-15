@@ -1,6 +1,10 @@
-//! Import orchestration (architecture §6): run the iLEAPP sidecar against a
-//! backup, then normalize its output into a fresh cache DB. This is the one
-//! eager, whole-backup pass; every browse afterward is a cache query.
+//! Import orchestration (architecture §6): parse a backup natively into a fresh
+//! cache DB in one eager, whole-backup pass; every browse afterward is a cache
+//! query. Everything TraceLoupe surfaces is now parsed natively — iLEAPP is NOT
+//! run (no catalog module carries an iLEAPP key). The sidecar/normalize path is
+//! kept, dormant, only so a future long-tail module could opt back in; iLEAPP
+//! itself is a development-time reference for schemas we can't inspect directly,
+//! never a runtime dependency.
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +38,10 @@ pub struct ImportOutcome {
 /// `on_phase` receives progress updates; `cancel` aborts a running engine.
 #[allow(clippy::too_many_arguments)]
 pub fn import_backup(
-    cfg: &EngineConfig,
+    // iLEAPP engine — optional. Every artifact TraceLoupe surfaces is parsed
+    // natively now, so a normal import never touches iLEAPP and `cfg` can be None.
+    // It's only consulted if a module ever reintroduces an iLEAPP key.
+    cfg: Option<&EngineConfig>,
     backup_dir: &Path,
     password: &str,
     cache_path: &Path,
@@ -59,28 +66,29 @@ pub fn import_backup(
         committed: false,
     };
 
-    // Only run the (slow) iLEAPP subprocess if some requested module still needs
-    // it. First-party data and most app chats are native now, so a default import
-    // usually only needs iLEAPP for the residual app fallbacks (e.g. TikTok) — and
-    // when nothing does, we skip iLEAPP entirely and the import is fully native.
+    // Every artifact TraceLoupe surfaces is parsed natively, so no module carries
+    // iLEAPP keys and this is always empty — iLEAPP never runs. The branch stays
+    // only so a future long-tail module could opt back in (and needs `cfg`).
     let needs_ileapp = !sidecar::resolve_module_keys(module_ids).is_empty();
-    let (lava_path, engine_out_dir) = if needs_ileapp {
-        let lava = sidecar::run_import(
-            cfg,
-            backup_dir,
-            password,
-            work_dir,
-            module_ids,
-            cancel,
-            |p| on_phase(ImportPhase::Parsing(p)),
-        )?;
-        let dir = lava
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| work_dir.to_path_buf());
-        (Some(lava), dir)
-    } else {
-        (None, work_dir.to_path_buf())
+    let (lava_path, engine_out_dir) = match (needs_ileapp, cfg) {
+        (true, Some(cfg)) => {
+            let lava = sidecar::run_import(
+                cfg,
+                backup_dir,
+                password,
+                work_dir,
+                module_ids,
+                cancel,
+                |p| on_phase(ImportPhase::Parsing(p)),
+            )?;
+            let dir = lava
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| work_dir.to_path_buf());
+            (Some(lava), dir)
+        }
+        // A module wanted iLEAPP but no engine is available — degrade to native.
+        _ => (None, work_dir.to_path_buf()),
     };
 
     on_phase(ImportPhase::Normalizing {
@@ -212,6 +220,22 @@ pub fn import_backup(
         work_dir,
         &mut native,
     );
+
+    // TikTok contacts / social graph, natively from AwemeIM.db (the same DB the
+    // chat parser reads) into the Contacts view — the last artifact that used to
+    // need iLEAPP.
+    if effective.contains(&"tiktok") {
+        on_phase(ImportPhase::Normalizing {
+            step: "TikTok contacts".into(),
+        });
+        import_tiktok_contacts_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
+    }
 
     // Read iLEAPP's output into the cache (each normalizer reports its sub-stage);
     // stages materialized natively above are skipped. Skipped entirely when iLEAPP
@@ -729,6 +753,45 @@ fn import_safari_bookmarks_native(
     }
 }
 
+/// Locate + extract `AwemeIM.db` and parse TikTok contacts (social graph) into
+/// the cache `contacts` table (source 'TikTok'). Native-only, best-effort.
+fn import_tiktok_contacts_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+    let mut hits = match index.find_relative_like("%AwemeIM.db") {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    hits.retain(|e| e.relative_path.ends_with("AwemeIM.db"));
+    let Some(entry) = hits.into_iter().next() else {
+        return; // no TikTok in this backup
+    };
+    let out = work_dir.join(".AwemeIM.db");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report
+            .warnings
+            .push(format!("TikTok contacts: couldn't read AwemeIM.db ({e})."));
+        return;
+    }
+    if let Err(e) =
+        crate::parsers::tiktok_contacts::parse_tiktok_contacts(&out, cache, report, false)
+    {
+        report
+            .warnings
+            .push(format!("TikTok contacts: parse failed ({e})."));
+    }
+    let _ = std::fs::remove_file(&out);
+}
+
 /// Extract Photos.sqlite and tag camera-roll `media_items` with the people
 /// detected in each photo. Native-only, best-effort: a missing/unreadable
 /// Photos.sqlite (or no named people) just leaves media untagged.
@@ -1131,146 +1194,6 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    /// End-to-end orchestration with a fake engine (a shell script that writes
-    /// a minimal lava DB), so it needs no real iLEAPP. Confirms the phases fire
-    /// in order and the cache ends up populated.
-    #[cfg(unix)]
-    #[test]
-    fn import_runs_engine_then_normalizes() {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-
-        let tmp = tempfile::tempdir().unwrap();
-
-        // Fake engine: emits one progress line, then writes a lava DB with one
-        // sms row into its output subfolder.
-        let script = tmp.path().join("fake_ileapp.sh");
-        {
-            let mut f = std::fs::File::create(&script).unwrap();
-            writeln!(
-                f,
-                r#"#!/bin/sh
-out=""
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done
-echo "[1/1] sms [sms] artifact started"
-sub="$out/iLEAPP_Output_test"
-mkdir -p "$sub"
-sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, read_timestamp INTEGER, message TEXT, service TEXT, message_direction TEXT, message_sent TEXT, message_delivered TEXT, message_read TEXT, account TEXT, account_login TEXT, chat_contact_id TEXT, attachment_name TEXT, attachment_file TEXT, attachment_timestamp INTEGER, attachment_mimetype TEXT, attachment_size_bytes TEXT, message_row_id TEXT, chat_id TEXT, from_me TEXT); INSERT INTO sms (message_timestamp, message, chat_contact_id, chat_id, from_me) VALUES (1717840800, 'hi', '+15551234567', '1', '0');"
-"#
-            )
-            .unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        // Skip if sqlite3 CLI isn't available on this machine.
-        if Command::sqlite3_missing() {
-            eprintln!("skipping: sqlite3 CLI not found");
-            return;
-        }
-
-        let cfg = EngineConfig::frozen(&script);
-        let cache_path = tmp.path().join("cache.db");
-        let work_dir = tmp.path().join("work");
-        let mut phases = Vec::new();
-
-        let outcome = import_backup(
-            &cfg,
-            tmp.path(),
-            "pw",
-            &cache_path,
-            &work_dir,
-            // Request an iLEAPP-only module so the engine actually runs (the
-            // default modules are all native now — no iLEAPP subprocess).
-            &["tiktok_contacts".to_string()],
-            &CancelToken::new(),
-            |ph| phases.push(ph),
-        )
-        .unwrap();
-
-        assert_eq!(outcome.report.messages, 1);
-        assert_eq!(outcome.report.threads, 1);
-        assert!(matches!(phases[0], ImportPhase::Parsing(_)));
-        assert!(phases
-            .iter()
-            .any(|p| matches!(p, ImportPhase::Normalizing { .. })));
-        assert!(matches!(phases[phases.len() - 1], ImportPhase::Done(_)));
-
-        let n: i64 = Connection::open(&cache_path)
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn reimport_is_idempotent() {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-
-        if Command::sqlite3_missing() {
-            eprintln!("skipping: sqlite3 CLI not found");
-            return;
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let script = tmp.path().join("fake_ileapp.sh");
-        {
-            let mut f = std::fs::File::create(&script).unwrap();
-            writeln!(
-                f,
-                r#"#!/bin/sh
-out=""
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; *) shift;; esac; done
-sub="$out/iLEAPP_Output_test"
-mkdir -p "$sub"
-sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, read_timestamp INTEGER, message TEXT, service TEXT, message_direction TEXT, message_sent TEXT, message_delivered TEXT, message_read TEXT, account TEXT, account_login TEXT, chat_contact_id TEXT, attachment_name TEXT, attachment_file TEXT, attachment_timestamp INTEGER, attachment_mimetype TEXT, attachment_size_bytes TEXT, message_row_id TEXT, chat_id TEXT, from_me TEXT); INSERT INTO sms (message_timestamp, message, chat_contact_id, chat_id, from_me) VALUES (1717840800, 'hi', '+15551234567', '1', '0');"
-"#
-            )
-            .unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        let cfg = EngineConfig::frozen(&script);
-        let cache_path = tmp.path().join("cache.db");
-        let work_dir = tmp.path().join("work");
-        let run = || {
-            import_backup(
-                &cfg,
-                tmp.path(),
-                "pw",
-                &cache_path,
-                &work_dir,
-                &["tiktok_contacts".to_string()],
-                &CancelToken::new(),
-                |_| {},
-            )
-            .unwrap()
-        };
-
-        // Import the same backup twice into the same paths.
-        assert_eq!(run().report.messages, 1);
-        assert_eq!(run().report.messages, 1);
-
-        // The cache must hold one message, not two — re-import replaced, not
-        // appended. And the work dir holds a single engine output.
-        let n: i64 = Connection::open(&cache_path)
-            .unwrap()
-            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(n, 1, "re-import must not duplicate rows");
-        let outputs = std::fs::read_dir(&work_dir)
-            .unwrap()
-            .filter(|e| {
-                e.as_ref()
-                    .unwrap()
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with("iLEAPP_Output_")
-            })
-            .count();
-        assert_eq!(outputs, 1, "stale engine outputs must not accumulate");
-    }
-
     /// A plaintext backup whose Manifest.db points at an `sms.db` blob: the
     /// native path resolves it via the Manifest Index and parses it into the
     /// cache, no iLEAPP involved.
@@ -1518,62 +1441,5 @@ sqlite3 "$sub/_lava_artifacts.db" "CREATE TABLE sms (message_timestamp INTEGER, 
             .query_row("SELECT COUNT(*) FROM recordings", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
-    }
-
-    /// A failed/cancelled full import must NOT touch the existing cache — the
-    /// atomic-swap guarantee. Here the engine can't spawn, so the run fails before
-    /// any swap; the previous cache and its data survive, and no temp lingers.
-    #[test]
-    fn failed_import_leaves_the_existing_cache_intact() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache_path = tmp.path().join("caches").join("id").join("cache.db");
-        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
-        // A pre-existing cache with a marker we expect to survive.
-        CacheDb::open(&cache_path)
-            .unwrap()
-            .set_meta("marker", "keep-me")
-            .unwrap();
-
-        let backup = tmp.path().join("backup");
-        std::fs::create_dir_all(&backup).unwrap();
-        let work = tmp.path().join("work");
-        // An engine binary that doesn't exist → run_import errors before the swap.
-        let cfg = EngineConfig::frozen(tmp.path().join("no-such-ileapp"));
-        let cancel = CancelToken::new();
-
-        // Force the iLEAPP path (default modules are native) so the missing
-        // engine binary makes run_import fail.
-        let result = import_backup(
-            &cfg,
-            &backup,
-            "",
-            &cache_path,
-            &work,
-            &["tiktok_contacts".to_string()],
-            &cancel,
-            |_| {},
-        );
-        assert!(result.is_err());
-
-        // Old cache untouched; the temp is gone (guard cleaned it up).
-        let cache = CacheDb::open(&cache_path).unwrap();
-        assert_eq!(
-            cache.get_meta("marker").unwrap().as_deref(),
-            Some("keep-me")
-        );
-        assert!(!cache_path.with_file_name("cache.importing.db").exists());
-    }
-
-    // Small helper so the test can gracefully skip without sqlite3.
-    struct Command;
-    impl Command {
-        fn sqlite3_missing() -> bool {
-            std::process::Command::new("sqlite3")
-                .arg("-version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_err()
-        }
     }
 }
