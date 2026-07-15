@@ -37,6 +37,60 @@ struct AssetMeta {
     location: Option<String>,
     /// User-created album names this photo belongs to, comma-joined.
     albums: Option<String>,
+    /// Pixel dimensions and (for video) duration in seconds.
+    width: Option<i64>,
+    height: Option<i64>,
+    duration_s: Option<f64>,
+    /// Original file size in bytes (`ZADDITIONALASSETATTRIBUTES.ZORIGINALFILESIZE`).
+    file_size: Option<i64>,
+    /// Camera "<make> <model>" and lens model (`ZEXTENDEDATTRIBUTES`).
+    camera: Option<String>,
+    lens: Option<String>,
+    /// Formatted exposure summary, e.g. "ISO 100 · ƒ/1.8 · 1/120s · 26 mm".
+    exif: Option<String>,
+}
+
+/// Combine a camera make + model into one label, avoiding "Apple Apple …".
+fn camera_label(make: Option<&str>, model: Option<&str>) -> Option<String> {
+    let make = make.map(str::trim).filter(|s| !s.is_empty());
+    let model = model.map(str::trim).filter(|s| !s.is_empty());
+    match (make, model) {
+        (Some(mk), Some(md)) if !md.to_lowercase().starts_with(&mk.to_lowercase()) => {
+            Some(format!("{mk} {md}"))
+        }
+        (_, Some(md)) => Some(md.to_string()),
+        (Some(mk), None) => Some(mk.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// Format the EXIF exposure fields into a compact, human-readable summary. The
+/// values are already in friendly units: ISO integer, aperture as an f-number,
+/// shutter as seconds, focal length in mm.
+fn exif_summary(
+    iso: Option<i64>,
+    aperture: Option<f64>,
+    shutter: Option<f64>,
+    focal: Option<f64>,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(iso) = iso.filter(|v| *v > 0) {
+        parts.push(format!("ISO {iso}"));
+    }
+    if let Some(a) = aperture.filter(|v| *v > 0.0) {
+        parts.push(format!("ƒ/{a:.1}"));
+    }
+    if let Some(s) = shutter.filter(|v| *v > 0.0) {
+        parts.push(if s < 1.0 {
+            format!("1/{}s", (1.0 / s).round() as i64)
+        } else {
+            format!("{s:.0}s")
+        });
+    }
+    if let Some(f) = focal.filter(|v| *v > 0.0) {
+        parts.push(format!("{f:.0} mm"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// Find the album↔asset join table (`Z_<n>ASSETS` with a `Z_<n>ALBUMS` column) —
@@ -94,7 +148,8 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
     {
         let mut stmt = src.prepare(
             "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
-                    a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE
+                    a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE,
+                    a.ZWIDTH, a.ZHEIGHT, a.ZDURATION
              FROM ZASSET a
              LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
              WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
@@ -124,6 +179,9 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 .get::<_, Option<String>>(7)?
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty());
+            let width = r.get::<_, Option<i64>>(8)?.filter(|v| *v > 0);
+            let height = r.get::<_, Option<i64>>(9)?.filter(|v| *v > 0);
+            let duration_s = r.get::<_, Option<f64>>(10)?.filter(|v| *v > 0.0);
             let suffix = format!("{dir}/{file}");
             pk_to_suffix.insert(pk, suffix.clone());
             by_suffix.insert(
@@ -134,6 +192,9 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                     longitude,
                     favorite,
                     location,
+                    width,
+                    height,
+                    duration_s,
                     ..Default::default()
                 },
             );
@@ -202,6 +263,53 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         return Ok(0);
     }
 
+    // EXIF (camera/lens/exposure), keyed by asset PK → suffix. Guarded because
+    // ZEXTENDEDATTRIBUTES is absent on some iOS versions.
+    if table_exists(&src, "ZEXTENDEDATTRIBUTES")? {
+        let mut stmt = src.prepare(
+            "SELECT ZASSET, ZCAMERAMAKE, ZCAMERAMODEL, ZLENSMODEL,
+                    ZISO, ZAPERTURE, ZSHUTTERSPEED, ZFOCALLENGTH
+             FROM ZEXTENDEDATTRIBUTES WHERE ZASSET IS NOT NULL",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let pk: i64 = r.get(0)?;
+            let camera = camera_label(
+                r.get::<_, Option<String>>(1)?.as_deref(),
+                r.get::<_, Option<String>>(2)?.as_deref(),
+            );
+            let lens = r
+                .get::<_, Option<String>>(3)?
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let exif = exif_summary(r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
+            if camera.is_none() && lens.is_none() && exif.is_none() {
+                continue;
+            }
+            if let Some(meta) = pk_to_suffix.get(&pk).and_then(|s| by_suffix.get_mut(s)) {
+                meta.camera = camera;
+                meta.lens = lens;
+                meta.exif = exif;
+            }
+        }
+    }
+
+    // Original file size, from ZADDITIONALASSETATTRIBUTES (separate table, guarded).
+    if table_exists(&src, "ZADDITIONALASSETATTRIBUTES")? {
+        let mut stmt = src.prepare(
+            "SELECT ZASSET, ZORIGINALFILESIZE FROM ZADDITIONALASSETATTRIBUTES
+             WHERE ZASSET IS NOT NULL AND ZORIGINALFILESIZE IS NOT NULL",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let pk: i64 = r.get(0)?;
+            let size = r.get::<_, Option<i64>>(1)?.filter(|v| *v > 0);
+            if let Some(meta) = pk_to_suffix.get(&pk).and_then(|s| by_suffix.get_mut(s)) {
+                meta.file_size = size;
+            }
+        }
+    }
+
     // Match against media rows by their path suffix (drop the leading "Media/").
     let conn = cache.conn();
     let updates: Vec<(i64, &AssetMeta)> = {
@@ -231,8 +339,15 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                  is_favorite = ?4,
                  taken_at = COALESCE(?5, taken_at),
                  location = ?6,
-                 albums = ?7
-             WHERE id = ?8",
+                 albums = ?7,
+                 width = COALESCE(?8, width),
+                 height = COALESCE(?9, height),
+                 duration_s = COALESCE(?10, duration_s),
+                 file_size = ?11,
+                 camera = ?12,
+                 lens = ?13,
+                 exif = ?14
+             WHERE id = ?15",
             rusqlite::params![
                 meta.persons,
                 meta.latitude,
@@ -241,6 +356,13 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 meta.taken_at,
                 meta.location,
                 meta.albums,
+                meta.width,
+                meta.height,
+                meta.duration_s,
+                meta.file_size,
+                meta.camera,
+                meta.lens,
+                meta.exif,
                 id
             ],
         )?;
@@ -258,18 +380,27 @@ mod tests {
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(
             "CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZDIRECTORY TEXT, ZFILENAME TEXT,
-                 ZDATECREATED REAL, ZLATITUDE REAL, ZLONGITUDE REAL, ZFAVORITE INTEGER, ZMOMENT INTEGER);
+                 ZDATECREATED REAL, ZLATITUDE REAL, ZLONGITUDE REAL, ZFAVORITE INTEGER, ZMOMENT INTEGER,
+                 ZWIDTH INTEGER, ZHEIGHT INTEGER, ZDURATION REAL);
              CREATE TABLE ZPERSON (Z_PK INTEGER PRIMARY KEY, ZFULLNAME TEXT, ZDISPLAYNAME TEXT);
              CREATE TABLE ZDETECTEDFACE (Z_PK INTEGER PRIMARY KEY, ZASSETFORFACE INTEGER, ZPERSONFORFACE INTEGER);
              CREATE TABLE ZMOMENT (Z_PK INTEGER PRIMARY KEY, ZTITLE TEXT);
              CREATE TABLE ZGENERICALBUM (Z_PK INTEGER PRIMARY KEY, ZKIND INTEGER, ZTITLE TEXT);
              CREATE TABLE Z_33ASSETS (Z_33ALBUMS INTEGER, Z_3ASSETS INTEGER);
+             CREATE TABLE ZEXTENDEDATTRIBUTES (Z_PK INTEGER PRIMARY KEY, ZASSET INTEGER,
+                 ZCAMERAMAKE TEXT, ZCAMERAMODEL TEXT, ZLENSMODEL TEXT,
+                 ZISO INTEGER, ZAPERTURE REAL, ZSHUTTERSPEED REAL, ZFOCALLENGTH REAL);
+             CREATE TABLE ZADDITIONALASSETATTRIBUTES (Z_PK INTEGER PRIMARY KEY, ZASSET INTEGER,
+                 ZORIGINALFILESIZE INTEGER);
              INSERT INTO ZMOMENT VALUES (500, 'Florida');
              -- Asset 1: named people, a real date (721692800 Mac = 1_700_000_000 unix),
-             -- a GPS fix, favorited, in the 'Florida' moment.
-             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500);
+             -- a GPS fix, favorited, in the 'Florida' moment, 4032x3024 photo.
+             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0);
              -- Asset 2: no named people, no location (-180 sentinel), not favorited, no moment.
-             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL);
+             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL);
+             -- EXIF + file size for asset 1 (make 'Apple' + model 'iPhone 14 Pro').
+             INSERT INTO ZEXTENDEDATTRIBUTES VALUES (1, 1, 'Apple', 'iPhone 14 Pro', 'iPhone 14 Pro back camera', 100, 1.8, 0.008, 26.0);
+             INSERT INTO ZADDITIONALASSETATTRIBUTES VALUES (1, 1, 2097152);
              INSERT INTO ZPERSON VALUES (10, 'Alice', NULL);
              INSERT INTO ZPERSON VALUES (11, NULL, 'Bob');
              INSERT INTO ZPERSON VALUES (12, '', '');  -- unnamed cluster, ignored
@@ -334,6 +465,30 @@ mod tests {
             .unwrap();
         assert_eq!(location.as_deref(), Some("Florida"));
         assert_eq!(albums.as_deref(), Some("Vacation"), "smart album excluded");
+
+        // EXIF + dimensions + file size for asset 1.
+        let dims: (Option<i64>, Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT width, height, file_size
+                 FROM media_items WHERE relative_path LIKE '%IMG_0001%'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(dims, (Some(4032), Some(3024), Some(2_097_152)));
+
+        let (camera, lens, exif): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT camera, lens, exif
+                 FROM media_items WHERE relative_path LIKE '%IMG_0001%'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(camera.as_deref(), Some("Apple iPhone 14 Pro"));
+        assert_eq!(lens.as_deref(), Some("iPhone 14 Pro back camera"));
+        // ISO 100 · ƒ/1.8 · 1/125s (0.008 = 1/125) · 26 mm.
+        assert_eq!(exif.as_deref(), Some("ISO 100 · ƒ/1.8 · 1/125s · 26 mm"));
 
         // Asset 2: no people, no location (sentinel dropped), not favorite.
         let (persons2, lat2, fav2): (Option<String>, Option<f64>, i64) = conn

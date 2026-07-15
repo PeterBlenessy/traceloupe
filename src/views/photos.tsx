@@ -11,6 +11,7 @@ import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  Camera,
   ChevronLeft,
   ChevronRight,
   Heart,
@@ -391,6 +392,19 @@ function MediaGrid({
   );
 }
 
+/** Human-readable byte size, e.g. "2.0 MB". */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let v = bytes / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+
 /** The photo's location as a clickable Apple Maps link — the moment place name
  *  when known, else the coordinates. */
 function LocationTag({ item }: { item: MediaItem }) {
@@ -638,6 +652,27 @@ function Lightbox({
             {item?.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
           </div>
         </div>
+        {item &&
+          (item.camera || item.lens || item.exif || item.width || item.fileSize) && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2 pb-1.5 text-[11px] text-white/55">
+              {item.camera && (
+                <span className="inline-flex items-center gap-1">
+                  <Camera className="size-3 shrink-0" />
+                  <span className="select-text">{item.camera}</span>
+                </span>
+              )}
+              {item.lens && <span className="select-text">{item.lens}</span>}
+              {item.exif && <span className="select-text">{item.exif}</span>}
+              {item.width && item.height && (
+                <span className="tabular-nums">
+                  {item.width} × {item.height}
+                </span>
+              )}
+              {item.fileSize && (
+                <span className="tabular-nums">{formatBytes(item.fileSize)}</span>
+              )}
+            </div>
+          )}
       </DialogContent>
     </Dialog>
   );

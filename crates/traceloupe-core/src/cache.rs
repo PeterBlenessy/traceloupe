@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -347,6 +347,11 @@ impl CacheDb {
             // v12: FaceTime audio-vs-video type + carrier/geo location on calls.
             ensure_column(&conn, "calls", "call_type", "TEXT")?;
             ensure_column(&conn, "calls", "location", "TEXT")?;
+            // v13: camera-roll EXIF (camera/lens/exposure) + original file size.
+            ensure_column(&conn, "media_items", "camera", "TEXT")?;
+            ensure_column(&conn, "media_items", "lens", "TEXT")?;
+            ensure_column(&conn, "media_items", "exif", "TEXT")?;
+            ensure_column(&conn, "media_items", "file_size", "INTEGER")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

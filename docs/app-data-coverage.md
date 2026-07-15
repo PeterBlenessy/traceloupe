@@ -164,8 +164,9 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Added / modified dates | ✅ | ⬜ | `ZADDEDDATE`/`ZMODIFICATIONDATE` unread |
 | GPS lat/long | ✅ 24k | ✅ | lightbox Maps link (no map/grid pin) |
 | Reverse-geocoded place | ◑ | ◑ | moment/event title only; per-asset reverse-geocode blob ignored |
-| **EXIF** (camera, lens, ISO, exposure, focal length) | ⬜ 22–25k | ⬜ | `ZEXTENDEDATTRIBUTES` **never queried** — biggest single gap |
-| Dimensions / orientation / file size | ⬜ 95k | ⬜ | `media_items.width/height` columns exist but left NULL for camera roll |
+| **EXIF** (camera, lens, ISO, exposure, focal length) | ✅ 22–25k | ✅ | `ZEXTENDEDATTRIBUTES` → camera + lens + "ISO · ƒ · shutter · mm" in the lightbox |
+| Dimensions / file size | ✅ 95k | ✅ | `ZWIDTH`/`ZHEIGHT` + `ZORIGINALFILESIZE`; shown in the lightbox |
+| Orientation | ⬜ 95k | ⬜ | `ZORIENTATION` unread |
 | Albums — user | ✅ 482 | ✅ | lightbox chip + search |
 | Albums — smart/system | ⬜ 235 | ⬜ | excluded (`ZKIND=2` only) |
 | Favorite | ✅ 17k | ✅ | heart badge + search |
@@ -174,7 +175,7 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Faces / people (named) | ✅ 69 named / 72k faces | ✅ | badge + lightbox + search (named only) |
 | Live Photo / burst | 381 / 53 | ⬜ | not paired/grouped |
 | Subtype (screenshot ~62k, HDR ~18k, portrait, pano, slo-mo) | ⬜ | ⬜ | no badge/filter |
-| Video duration | ⬜ 7.1k | ⬜ | `duration_s` column exists but left NULL |
+| Video duration | ✅ 7.1k | ✅ | `ZDURATION` → `media_items.duration_s` |
 | Description | ⬜ 1,253 | ⬜ | `ZASSETDESCRIPTION` unread |
 | Edited-vs-original / import session / cloud state | ⬜ 17k edited | ⬜ | provenance + edit state unread |
 

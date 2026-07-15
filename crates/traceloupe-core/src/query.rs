@@ -685,6 +685,16 @@ pub struct MediaItem {
     pub location: Option<String>,
     /// User album names this photo is in, comma-separated, or None.
     pub albums: Option<String>,
+    /// Pixel dimensions and (video) duration.
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration_s: Option<f64>,
+    /// Original file size in bytes.
+    pub file_size: Option<i64>,
+    /// Camera "<make> <model>", lens model, and a formatted EXIF exposure summary.
+    pub camera: Option<String>,
+    pub lens: Option<String>,
+    pub exif: Option<String>,
 }
 
 /// Media items that have materialized bytes, newest first. Only items with a
@@ -693,7 +703,8 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
-                latitude, longitude, is_favorite, location, albums
+                latitude, longitude, is_favorite, location, albums,
+                width, height, duration_s, file_size, camera, lens, exif
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -719,6 +730,13 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         favorite: r.get::<_, i64>(9)? != 0,
         location: r.get(10)?,
         albums: r.get(11)?,
+        width: r.get(12)?,
+        height: r.get(13)?,
+        duration_s: r.get(14)?,
+        file_size: r.get(15)?,
+        camera: r.get(16)?,
+        lens: r.get(17)?,
+        exif: r.get(18)?,
     })
 }
 
@@ -804,7 +822,8 @@ pub fn get_media_window(
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
-                latitude, longitude, is_favorite, location, albums
+                latitude, longitude, is_favorite, location, albums,
+                width, height, duration_s, file_size, camera, lens, exif
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
