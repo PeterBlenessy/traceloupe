@@ -90,13 +90,13 @@ pub fn parse_health(
         let end_at = to_unix(r.get::<_, Option<f64>>(1)?);
         let activity = r.get::<_, Option<i64>>(2)?.map(activity_name);
         // Duration is stored in seconds; fall back to end − start.
-        let duration_s = r
-            .get::<_, Option<f64>>(3)?
-            .map(|d| d as i64)
-            .or_else(|| match (start_at, end_at) {
-                (Some(s), Some(e)) if e > s => Some(e - s),
-                _ => None,
-            });
+        let duration_s =
+            r.get::<_, Option<f64>>(3)?
+                .map(|d| d as i64)
+                .or_else(|| match (start_at, end_at) {
+                    (Some(s), Some(e)) if e > s => Some(e - s),
+                    _ => None,
+                });
         let distance_m: Option<f64> = r.get(4)?;
         tx.execute(
             "INSERT INTO workouts (activity, start_at, end_at, duration_s, distance_m)
@@ -179,7 +179,10 @@ mod tests {
         assert_eq!(dist, 5000.0);
 
         // Sample summary stored in meta.
-        assert_eq!(cache.get_meta("health_sample_count").unwrap().as_deref(), Some("2"));
+        assert_eq!(
+            cache.get_meta("health_sample_count").unwrap().as_deref(),
+            Some("2")
+        );
         assert!(cache.get_meta("health_first_at").unwrap().is_some());
     }
 }

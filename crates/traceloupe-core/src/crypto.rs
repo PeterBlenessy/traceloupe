@@ -456,29 +456,81 @@ pub fn decrypt_note(
     iv: &[u8],
     tag: &[u8],
     ciphertext: &[u8],
+    wrapped_key: &[u8],
 ) -> Result<Vec<u8>> {
-    use aes_gcm::aead::Aead;
-    use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
-
-    if iterations == 0 {
-        return Err(err("locked note has no PBKDF2 iteration count"));
-    }
-    if iv.len() != 12 {
-        return Err(err("locked note has an unexpected IV length"));
-    }
-    let key = Zeroizing::new(pbkdf2_hmac_array::<Sha256, 16>(
+    // Apple stores a 0 iteration count for the fixed default (20000).
+    let iters = if iterations == 0 { 20_000 } else { iterations };
+    let kek = Zeroizing::new(pbkdf2_hmac_array::<Sha256, 16>(
         password.as_bytes(),
         salt,
-        iterations,
+        iters,
     ));
-    let cipher = Aes128Gcm::new_from_slice(&*key).map_err(|_| err("bad note key"))?;
-    // The aes-gcm crate expects `ciphertext || tag` as one buffer.
+
+    // The per-note content key comes wrapped in one of two shapes across iOS
+    // builds — an RFC 3394 AES key-wrap (24-byte payload) or a raw single 16-byte
+    // AES block — and some builds encrypt the body directly under the KEK. Derive
+    // every candidate and let the GCM tag authenticate the correct one (a wrong key
+    // fails the tag, so accepting the first that decrypts is sound).
+    let mut candidates: Vec<Zeroizing<[u8; 16]>> = Vec::new();
+    if wrapped_key.len() >= 24 {
+        if let Some(k) = aes_kw_unwrap_128(&kek, wrapped_key) {
+            candidates.push(k);
+        }
+    }
+    if wrapped_key.len() == 16 {
+        candidates.push(aes_ecb_decrypt_block(&kek, wrapped_key));
+    }
+    candidates.push(Zeroizing::new(*kek));
+
+    for key in &candidates {
+        if let Some(pt) = note_gcm_decrypt(key, iv, tag, ciphertext) {
+            return Ok(pt);
+        }
+    }
+    Err(err("wrong password or corrupt note"))
+}
+
+/// AES-128-GCM decrypt with a 12- or 16-byte IV (Notes uses 16). The tag is passed
+/// separately, so we append it to the ciphertext. None on a failed tag.
+fn note_gcm_decrypt(key: &[u8; 16], iv: &[u8], tag: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+    use aes_gcm::aead::consts::{U12, U16};
+    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::aes::Aes128;
+    use aes_gcm::{AesGcm, Nonce};
     let mut buf = Vec::with_capacity(ciphertext.len() + tag.len());
     buf.extend_from_slice(ciphertext);
     buf.extend_from_slice(tag);
-    cipher
-        .decrypt(Nonce::from_slice(iv), buf.as_ref())
-        .map_err(|_| err("wrong password or corrupt note"))
+    match iv.len() {
+        12 => AesGcm::<Aes128, U12>::new_from_slice(key)
+            .ok()?
+            .decrypt(Nonce::<U12>::from_slice(iv), buf.as_ref())
+            .ok(),
+        16 => AesGcm::<Aes128, U16>::new_from_slice(key)
+            .ok()?
+            .decrypt(Nonce::<U16>::from_slice(iv), buf.as_ref())
+            .ok(),
+        _ => None,
+    }
+}
+
+/// RFC 3394 AES key unwrap of a 16-byte content key with a 16-byte KEK.
+fn aes_kw_unwrap_128(kek: &[u8; 16], wrapped: &[u8]) -> Option<Zeroizing<[u8; 16]>> {
+    let unwrapper = aes_kw::KekAes128::from(*kek);
+    let mut out = Zeroizing::new([0u8; 16]);
+    unwrapper.unwrap(wrapped, &mut *out).ok()?;
+    Some(out)
+}
+
+/// Raw AES-128 single-block decrypt — the alternative 16-byte content-key wrap.
+fn aes_ecb_decrypt_block(kek: &[u8; 16], data: &[u8]) -> Zeroizing<[u8; 16]> {
+    use aes::cipher::generic_array::GenericArray;
+    use aes::cipher::{BlockDecrypt, KeyInit};
+    let cipher = aes::Aes128::new(GenericArray::from_slice(kek));
+    let mut block = *GenericArray::from_slice(&data[..16]);
+    cipher.decrypt_block(&mut block);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&block);
+    Zeroizing::new(out)
 }
 
 /// A plist integer that may be encoded signed or unsigned. Rejects negatives: a
@@ -511,29 +563,44 @@ mod tests {
     use cbc::cipher::BlockEncryptMut;
 
     #[test]
-    fn note_gcm_round_trips_and_rejects_wrong_password() {
-        use aes_gcm::aead::Aead;
-        use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
+    fn note_ladder_round_trips_and_rejects_wrong_password() {
+        use aes::cipher::generic_array::GenericArray;
+        use aes::cipher::BlockEncrypt;
+        use aes_gcm::aead::consts::U16;
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::aes::Aes128;
+        use aes_gcm::{AesGcm, Nonce};
+        type Gcm16 = AesGcm<Aes128, U16>;
 
         let password = "hunter2";
         let salt = b"sixteen-byte-slt";
-        let iters = 1000u32;
-        let iv = [7u8; 12];
+        let iv = [7u8; 16]; // Notes uses a 16-byte GCM IV.
         let body = b"gzip-protobuf-would-go-here";
 
-        // Encrypt exactly the way Notes does, to produce (ciphertext, tag).
-        let key = pbkdf2_hmac_array::<Sha256, 16>(password.as_bytes(), salt, iters);
-        let cipher = Aes128Gcm::new_from_slice(&key).unwrap();
-        let sealed = cipher
-            .encrypt(Nonce::from_slice(&iv), body.as_ref())
+        // Reproduce this backup's variant: KEK from the password (iterations 0 in
+        // the DB → the 20000 default), a per-note key wrapped as a single AES-128
+        // block, and the body GCM-sealed under the note key with a 16-byte IV.
+        let kek = pbkdf2_hmac_array::<Sha256, 16>(password.as_bytes(), salt, 20_000);
+        let note_key = [0x42u8; 16];
+        let wrapped = {
+            let c = aes::Aes128::new(GenericArray::from_slice(&kek));
+            let mut b = *GenericArray::from_slice(&note_key);
+            c.encrypt_block(&mut b);
+            let mut w = [0u8; 16];
+            w.copy_from_slice(&b);
+            w
+        };
+        let sealed = Gcm16::new_from_slice(&note_key)
+            .unwrap()
+            .encrypt(Nonce::<U16>::from_slice(&iv), body.as_ref())
             .unwrap();
         let (ct, tag) = sealed.split_at(sealed.len() - 16);
 
-        // Right password recovers the body; wrong password fails the GCM tag.
-        let out = decrypt_note(password, salt, iters, &iv, tag, ct).unwrap();
+        // iterations 0 → decrypt_note applies the 20000 default; the wrapped key is
+        // unwrapped and the GCM tag authenticates it. Wrong password fails the tag.
+        let out = decrypt_note(password, salt, 0, &iv, tag, ct, &wrapped).unwrap();
         assert_eq!(out, body);
-        assert!(decrypt_note("wrong", salt, iters, &iv, tag, ct).is_err());
-        assert!(decrypt_note(password, salt, iters, &[0u8; 8], tag, ct).is_err());
+        assert!(decrypt_note("wrong", salt, 0, &iv, tag, ct, &wrapped).is_err());
     }
 
     const PW: &str = "traceloupe-test";

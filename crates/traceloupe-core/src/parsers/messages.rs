@@ -463,9 +463,10 @@ pub fn parse_messages(
                 // 'Messages') so they also appear in the Photos gallery — restoring
                 // the pre-iLEAPP behavior (message photos were a gallery source).
                 // Only materialized media (has a local_path); docs/vCards stay out.
-                if let (Some(kind), Some(lp)) =
-                    (media_kind(a.mime.as_deref(), filename.as_deref()), &local_path)
-                {
+                if let (Some(kind), Some(lp)) = (
+                    media_kind(a.mime.as_deref(), filename.as_deref()),
+                    &local_path,
+                ) {
                     tx.execute(
                         "INSERT INTO media_items
                             (domain, relative_path, kind, source, mime_type, taken_at,

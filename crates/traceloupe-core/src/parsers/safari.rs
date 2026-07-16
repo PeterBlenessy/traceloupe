@@ -86,9 +86,8 @@ pub fn parse_safari(
     // Surface them flagged (deleted = 1), keyed by their deletion time, so an
     // analyst sees what was browsed-then-cleared. Guarded — the table is optional.
     if table_exists(&src, "history_tombstones")? {
-        let mut tstmt = src.prepare(
-            "SELECT url, end_time FROM history_tombstones WHERE url IS NOT NULL",
-        )?;
+        let mut tstmt =
+            src.prepare("SELECT url, end_time FROM history_tombstones WHERE url IS NOT NULL")?;
         let mut trows = tstmt.query([])?;
         while let Some(r) = trows.next()? {
             let url: String = r.get(0)?;

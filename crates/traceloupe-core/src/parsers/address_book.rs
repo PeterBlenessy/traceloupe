@@ -146,9 +146,7 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
 /// Each address's components live in `ABMultiValueEntry(parent_id, key, value)`
 /// with `key` → `ABMultiValueEntryKey` ("Street"/"City"/"State"/"ZIP"/"Country"…).
 /// Returns an empty map if the entry tables are absent (older schema).
-fn parse_addresses(
-    conn: &Connection,
-) -> Result<std::collections::HashMap<i64, Vec<LabeledValue>>> {
+fn parse_addresses(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<LabeledValue>>> {
     use std::collections::{BTreeMap, HashMap};
 
     let mut out: HashMap<i64, Vec<LabeledValue>> = HashMap::new();
@@ -184,7 +182,9 @@ fn parse_addresses(
         let label: Option<String> = r.get(2)?;
         let key: Option<String> = r.get(3)?;
         let value: Option<String> = r.get(4)?;
-        let entry = groups.entry((rec, uid)).or_insert_with(|| (label, HashMap::new()));
+        let entry = groups
+            .entry((rec, uid))
+            .or_insert_with(|| (label, HashMap::new()));
         if let (Some(k), Some(v)) = (key, value) {
             if !v.trim().is_empty() {
                 entry.1.insert(k, v);

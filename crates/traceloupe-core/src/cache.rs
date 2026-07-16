@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -144,7 +144,9 @@ CREATE TABLE IF NOT EXISTS notes (
     crypto_iter    INTEGER,
     crypto_iv      BLOB,
     crypto_tag     BLOB,
-    encrypted_data BLOB
+    encrypted_data BLOB,
+    -- The per-note key, wrapped (RFC 3394) by the PBKDF2 key from the password.
+    crypto_wrapped_key BLOB
 );
 
 CREATE TABLE IF NOT EXISTS media_items (
@@ -437,9 +439,21 @@ impl CacheDb {
             // v21: camera-roll media subtype ("screenshot" | "panorama").
             ensure_column(&conn, "media_items", "subtype", "TEXT")?;
             // v22: notes rich-content indicators (checklist + attachment counts).
-            ensure_column(&conn, "notes", "has_checklist", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                &conn,
+                "notes",
+                "has_checklist",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             ensure_column(&conn, "notes", "image_count", "INTEGER NOT NULL DEFAULT 0")?;
-            ensure_column(&conn, "notes", "attachment_count", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                &conn,
+                "notes",
+                "attachment_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            // v24: per-note wrapped key for locked-note decryption.
+            ensure_column(&conn, "notes", "crypto_wrapped_key", "BLOB")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

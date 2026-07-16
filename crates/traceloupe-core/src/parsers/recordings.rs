@@ -208,7 +208,10 @@ fn read_recording_rows(db: &Path) -> Result<HashMap<String, RecordingMeta>> {
     // every row. ZCUSTOMLABEL is only a raw timestamp auto-label, so fall back to it
     // (and older ZTITLE/ZLABEL) only when a real title is absent. Empty strings are
     // skipped so a blank title doesn't shadow a populated fallback.
-    let title = coalesce_nonempty(&cols, &["ZENCRYPTEDTITLE", "ZCUSTOMLABEL", "ZTITLE", "ZLABEL"]);
+    let title = coalesce_nonempty(
+        &cols,
+        &["ZENCRYPTEDTITLE", "ZCUSTOMLABEL", "ZTITLE", "ZLABEL"],
+    );
     let date = pick(&cols, &["ZDATE", "ZRECORDINGDATE", "ZCREATIONDATE"]);
     let duration = pick(&cols, &["ZDURATION"]);
     // ZPATH is required to join to audio; without it there's nothing to key on.

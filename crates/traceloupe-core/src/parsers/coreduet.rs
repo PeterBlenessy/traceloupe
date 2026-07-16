@@ -81,7 +81,14 @@ pub fn parse_interactions(
             "INSERT INTO interactions
                 (display_name, identifier, incoming, outgoing, first_at, last_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![display_name, identifier, incoming, outgoing, first_at, last_at],
+            rusqlite::params![
+                display_name,
+                identifier,
+                incoming,
+                outgoing,
+                first_at,
+                last_at
+            ],
         )?;
         inserted += 1;
     }

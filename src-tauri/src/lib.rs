@@ -927,8 +927,13 @@ async fn count_timeline_messages(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_all_messages(&cache, service.as_deref(), search.as_deref(), kind.as_deref())
-            .map_err(|e| e.to_string())
+        query::count_all_messages(
+            &cache,
+            service.as_deref(),
+            search.as_deref(),
+            kind.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1107,14 +1112,14 @@ async fn unlock_note(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        let (salt, iter, iv, tag, enc) = query::note_crypto(&cache, note_id)
+        let (salt, iter, iv, tag, enc, wrapped) = query::note_crypto(&cache, note_id)
             .map_err(|e| e.to_string())?
             .ok_or_else(|| {
                 "This note isn't locked, or its encrypted data is missing.".to_string()
             })?;
         let iterations = u32::try_from(iter).unwrap_or(0);
         traceloupe_core::parsers::notes::decrypt_locked_note(
-            &password, &salt, iterations, &iv, &tag, &enc,
+            &password, &salt, iterations, &iv, &tag, &enc, &wrapped,
         )
         .ok_or_else(|| "Wrong password.".to_string())
     })
@@ -1171,9 +1176,7 @@ async fn health_summary(active: State<'_, ActiveBackup>) -> Result<query::Health
 }
 
 #[tauri::command]
-async fn list_reminders(
-    active: State<'_, ActiveBackup>,
-) -> Result<Vec<query::Reminder>, String> {
+async fn list_reminders(active: State<'_, ActiveBackup>) -> Result<Vec<query::Reminder>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
