@@ -5,6 +5,7 @@ import {
   HeartPulse,
   ListTodo,
   Smartphone,
+  Waypoints,
   Globe,
   HardDrive,
   Image,
@@ -77,6 +78,7 @@ const nav = [
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/reminders", label: "Reminders", icon: ListTodo },
   { to: "/health", label: "Health", icon: HeartPulse },
+  { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
   { to: "/device", label: "Device", icon: Smartphone },
 ] as const;

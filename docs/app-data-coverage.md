@@ -231,7 +231,7 @@ backup but has no parser. Ranked by value × feasibility.
 | Domain | Present here? | Rough scale | Value | Notes |
 |--------|:---:|-------|:---:|-------|
 | **Health** | ✅ **workouts surfaced (0.10.0-dev)** | 344,063 quantity samples, 13 workouts | ★★★ | New **Health** view: a workout log (`workouts` ⋈ `samples` ⋈ `workout_activities` → activity/date/duration/distance) + a sample-count/date-range summary. Raw samples (steps/HR/sleep) + GPS routes not surfaced yet |
-| **CoreDuet interactions** | ✅ real | `interactionC.db` 15,055 interactions, 66 contacts | ★★★ | cross-app who-talked-to-whom graph w/ direction + timestamps |
+| **CoreDuet interactions** | ✅ **surfaced (0.10.0-dev)** | 15,055 interactions, 66 contacts | ★★★ | New **Interactions** view: pre-aggregated `ZCONTACTS` per-person graph (name/handle · incoming/outgoing counts · first–last span), most-contacted first. Per-app breakdown not yet surfaced |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
 | **Reminders** | ✅ **surfaced (0.10.0-dev)** | 124 reminders | ★★ | New **Reminders** view: title/notes/due/completion/flag + list name (`ZREMCDREMINDER` joined to `ZREMCDBASELIST`; trashed excluded) |

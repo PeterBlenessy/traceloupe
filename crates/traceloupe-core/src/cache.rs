@@ -242,6 +242,19 @@ CREATE TABLE IF NOT EXISTS workouts (
 );
 CREATE INDEX IF NOT EXISTS idx_workouts_start ON workouts(start_at DESC);
 
+-- CoreDuet cross-app communication graph: one row per contact interacted with.
+CREATE TABLE IF NOT EXISTS interactions (
+    id           INTEGER PRIMARY KEY,
+    display_name TEXT,
+    identifier   TEXT,                          -- phone / email / handle
+    incoming     INTEGER NOT NULL DEFAULT 0,     -- messages/calls they sent you
+    outgoing     INTEGER NOT NULL DEFAULT 0,     -- you sent them
+    first_at     INTEGER,                        -- unix seconds
+    last_at      INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_interactions_total
+    ON interactions((incoming + outgoing) DESC);
+
 -- Cross-artifact full-text search. ref_kind/ref_id point back at the source row.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     ref_kind UNINDEXED,
