@@ -1075,20 +1075,27 @@ function MessageBody({ text }: { text: string }) {
   return text.split(URL_RE).map((part, i) => {
     if (!part) return null;
     if (/^(https?:\/\/|www\.)/i.test(part)) {
-      const href = /^www\./i.test(part) ? `https://${part}` : part;
+      // Trailing sentence punctuation isn't part of the URL — keep it as text.
+      const m = part.match(/^(.*?)([.,!?;:]+)$/);
+      const urlText = m ? m[1] : part;
+      const trailing = m ? m[2] : "";
+      const href = /^www\./i.test(urlText) ? `https://${urlText}` : urlText;
       return (
-        <a
-          key={i}
-          onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            client.openExternal(href);
-          }}
-          className="cursor-pointer break-all text-primary underline underline-offset-2"
-          title={href}
-        >
-          {part}
-        </a>
+        <span key={i}>
+          <a
+            href={href}
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              client.openExternal(href);
+            }}
+            className="cursor-pointer break-all text-primary underline underline-offset-2"
+            title={href}
+          >
+            {urlText}
+          </a>
+          {trailing}
+        </span>
       );
     }
     return <span key={i}>{part}</span>;
@@ -1120,11 +1127,12 @@ function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
   );
 }
 
-/** The first URL in `text` (normalized to https), or null. */
+/** The first URL in `text` (normalized to https, trailing punctuation trimmed). */
 function firstUrl(text: string): string | null {
   const m = text.match(/(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/i);
   if (!m) return null;
-  return /^www\./i.test(m[0]) ? `https://${m[0]}` : m[0];
+  const raw = m[0].replace(/[.,!?;:]+$/, "");
+  return /^www\./i.test(raw) ? `https://${raw}` : raw;
 }
 
 /** An opt-in OpenGraph preview card for a link (only mounted when the setting is

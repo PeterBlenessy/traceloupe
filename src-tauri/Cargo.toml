@@ -31,8 +31,10 @@ robius-authentication = "0.1"
 zeroize = { workspace = true }
 # Opt-in link previews (fetch a URL's OpenGraph metadata). Off by default; only
 # ever runs when the user turns the setting on. Same HTTP client the engine
-# download uses.
+# download uses. base64 lets us proxy the preview image server-side (as a data:
+# URL) so the webview never contacts the image host directly.
 ureq = { workspace = true }
+base64 = "0.22"
 
 [dev-dependencies]
 tempfile = "3"

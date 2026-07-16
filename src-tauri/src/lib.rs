@@ -196,12 +196,17 @@ fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecr
 /// executor. Returns None only for a plaintext backup or a genuine key failure.
 fn ensure_session_decryptor(app: &AppHandle, active_path: &Path) -> Option<Arc<BackupDecryptor>> {
     let session = app.state::<SessionKeys>();
-    if let Some(d) = session.get() {
-        return Some(d);
+    // Hold the lock across the (possibly Touch-ID-prompting) rebuild so two
+    // concurrent opens don't each prompt / re-derive — the first sets it, the rest
+    // block briefly then reuse. Safe: this runs on a blocking worker, not across
+    // an await.
+    let mut guard = session.0.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(d) = guard.as_ref() {
+        return Some(d.clone());
     }
     let backup_id = active_path.parent()?.file_name()?.to_str()?.to_owned();
     let d = reopen_decryptor(active_path, &backup_id)?;
-    session.set(Some(d.clone()));
+    *guard = Some(d.clone());
     Some(d)
 }
 
@@ -1179,10 +1184,25 @@ async fn open_attachment(
         let dest = dir.join(format!("{attachment_id}-{base}"));
         write_private(&dest, &plain).map_err(|e| e.to_string())?;
 
-        std::process::Command::new("/usr/bin/open")
-            .arg(&dest)
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        // The filename (hence extension) comes from the backup, so a sender could
+        // pick a type whose default handler runs the file's contents (.html/.webloc
+        // from a file:// origin, scripts, etc.). Reveal those in Finder instead of
+        // launching their handler; open ordinary media/documents directly.
+        let ext = base
+            .rsplit('.')
+            .next()
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        const REVEAL_ONLY: &[&str] = &[
+            "html", "htm", "xhtml", "shtml", "svg", "webloc", "fileloc", "url", "desktop",
+            "command", "sh", "bash", "zsh", "csh", "terminal", "scpt", "app", "pkg", "mpkg", "dmg",
+            "action", "workflow", "shortcut", "jar",
+        ];
+        let mut cmd = std::process::Command::new("/usr/bin/open");
+        if REVEAL_ONLY.contains(&ext.as_str()) {
+            cmd.arg("-R"); // reveal in Finder; let the user decide
+        }
+        cmd.arg(&dest).spawn().map_err(|e| e.to_string())?;
         Ok(())
     })
     .await
@@ -2160,44 +2180,180 @@ struct LinkPreview {
 
 /// Fetch a URL's OpenGraph/title metadata for a link preview. **Opt-in**: the UI
 /// only calls this when the user enables link previews — it makes an outbound
-/// request to the linked site. http/https only, short timeout, HTML capped.
+/// request to the linked site. http/https only, short timeout, HTML capped, and
+/// private/loopback/link-local hosts are refused (SSRF guard). The preview image
+/// is fetched here and returned as a `data:` URL so the webview never contacts
+/// the image host directly (no IP leak beyond this backend request).
 #[tauri::command]
 async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
-    let lower = url.to_ascii_lowercase();
-    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-        return Err("unsupported URL scheme".into());
-    }
     tauri::async_runtime::spawn_blocking(move || {
-        let resp = ureq::get(&url)
-            .timeout(std::time::Duration::from_secs(8))
-            .set("User-Agent", "Mozilla/5.0 TraceLoupe/link-preview")
-            .call()
-            .map_err(|e| e.to_string())?;
-        let ct = resp
-            .header("Content-Type")
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if !ct.is_empty() && !ct.contains("text/html") && !ct.contains("xhtml") {
-            return Err("not an HTML page".into());
-        }
-        use std::io::Read;
-        let mut buf = Vec::new();
-        resp.into_reader()
-            .take(512 * 1024) // cap: a preview only needs the <head>
-            .read_to_end(&mut buf)
-            .map_err(|e| e.to_string())?;
-        let html = String::from_utf8_lossy(&buf);
-        let img = meta_content(&html, "og:image").map(|i| absolutize(&url, &i));
+        let (final_url, body) = safe_http_get(&url, 512 * 1024, Some("html"))?;
+        let html = String::from_utf8_lossy(&body);
+        let image = meta_content(&html, "og:image")
+            .map(|i| absolutize(&final_url, &i))
+            .and_then(|i| proxy_image(&i));
         Ok(LinkPreview {
             title: meta_content(&html, "og:title").or_else(|| html_title(&html)),
             description: meta_content(&html, "og:description"),
             site_name: meta_content(&html, "og:site_name"),
-            image: img,
+            image,
             url,
         })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// A hardened GET for opt-in previews: http/https only; refuses private/loopback/
+/// link-local hosts (resolving names, so a public-looking host that maps to a
+/// private IP is caught too — SSRF guard); follows at most a few redirects,
+/// re-validating each hop; caps the body; optionally requires an html/image
+/// content-type. Returns the final URL and the (capped) body bytes.
+fn safe_http_get(url: &str, cap: u64, want: Option<&str>) -> Result<(String, Vec<u8>), String> {
+    use std::io::Read;
+    let agent = ureq::builder()
+        .redirects(0)
+        .timeout(std::time::Duration::from_secs(8))
+        .build();
+    let mut current = url.to_string();
+    for _hop in 0..5 {
+        let lower = current.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            return Err("unsupported URL scheme".into());
+        }
+        let host = url_host(&current).ok_or("malformed URL")?;
+        if !host_is_public(&host) {
+            return Err("refusing to fetch a private or loopback host".into());
+        }
+        match agent
+            .get(&current)
+            .set("User-Agent", "Mozilla/5.0 TraceLoupe/link-preview")
+            .call()
+        {
+            Ok(resp) => {
+                if let Some(kind) = want {
+                    let ct = resp
+                        .header("Content-Type")
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    let ok = match kind {
+                        "html" => ct.is_empty() || ct.contains("text/html") || ct.contains("xhtml"),
+                        "image" => ct.starts_with("image/"),
+                        _ => true,
+                    };
+                    if !ok {
+                        return Err(format!("unexpected content-type: {ct}"));
+                    }
+                }
+                let mut buf = Vec::new();
+                resp.into_reader()
+                    .take(cap)
+                    .read_to_end(&mut buf)
+                    .map_err(|e| e.to_string())?;
+                return Ok((current, buf));
+            }
+            // Redirect: resolve the target and re-validate its host next hop.
+            Err(ureq::Error::Status(code, resp)) if (300..400).contains(&code) => {
+                let loc = resp.header("Location").ok_or("redirect without Location")?;
+                current = absolutize(&current, loc);
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("too many redirects".into())
+}
+
+/// The host of an http(s) URL (no port, no userinfo; IPv6 literal unwrapped).
+fn url_host(url: &str) -> Option<String> {
+    let after = url.split_once("://")?.1;
+    let authority = after.split(['/', '?', '#']).next()?;
+    let authority = authority.rsplit('@').next()?; // strip userinfo
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next()?.to_string() // IPv6 literal
+    } else {
+        authority.split(':').next()?.to_string()
+    };
+    (!host.is_empty()).then_some(host)
+}
+
+/// Whether a host is safe to fetch for a preview — not loopback/private/link-local.
+/// Resolves the name so a public-looking host that maps to a private IP is caught.
+fn host_is_public(host: &str) -> bool {
+    let h = host.trim().trim_end_matches('.').to_ascii_lowercase();
+    if h.is_empty()
+        || h == "localhost"
+        || h.ends_with(".localhost")
+        || h.ends_with(".local")
+        || h.ends_with(".internal")
+    {
+        return false;
+    }
+    use std::net::ToSocketAddrs;
+    match (h.as_str(), 80u16).to_socket_addrs() {
+        Ok(addrs) => {
+            let mut resolved = false;
+            for a in addrs {
+                resolved = true;
+                if !ip_is_global(a.ip()) {
+                    return false;
+                }
+            }
+            resolved
+        }
+        Err(_) => false, // can't resolve → don't fetch
+    }
+}
+
+/// A conservative "is this a globally-routable IP" check (`IpAddr::is_global` is
+/// still unstable, so hand-roll the non-global ranges we care about).
+fn ip_is_global(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xC0) == 64)) // 100.64/10 CGNAT
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || (s[0] & 0xfe00) == 0xfc00 // fc00::/7 unique-local
+                || (s[0] & 0xffc0) == 0xfe80) // fe80::/10 link-local
+        }
+    }
+}
+
+/// Fetch an image via the SSRF-safe GET and return it as a `data:` URL, so the
+/// webview never contacts the image host. None on any failure (never falls back
+/// to the raw URL, which would leak the user's IP).
+fn proxy_image(url: &str) -> Option<String> {
+    let (_final, bytes) = safe_http_get(url, 2 * 1024 * 1024, Some("image")).ok()?;
+    let mime = sniff_image_mime(&bytes)?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Some(format!("data:{mime};base64,{b64}"))
+}
+
+/// Recognize a preview image by magic bytes (only these are embedded).
+fn sniff_image_mime(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 /// The `content` of the first `<meta property|name="key">` tag (either attribute
