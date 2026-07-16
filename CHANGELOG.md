@@ -17,7 +17,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.7.0` | **Native-first complete** — native TikTok contacts (the last iLEAPP-only artifact); default import fully native (~35s, no engine subprocess); `Photos.sqlite` metadata (people/date/GPS/favorite); native Safari bookmarks, reading list & tabs. |
 | `0.8.0` | **Native TikTok DMs + UI overhaul** — TikTok direct messages (validated) with a message content-kind filter, friendlier voice-memo titles, and message media in the gallery; a shared `PanelHeader`, badge filters, a UI density setting, and persisted per-view state. |
 | `0.9.0` | **Data-coverage pass** — a field-level audit against a real backup, then filling the high-value gaps: Calls FaceTime/location, Photos EXIF/hidden/subtypes, Contacts detail (birthday/note/addresses), Messages receipts/reactions/replies, Safari deleted-history. |
-| `0.10.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), the untapped stores (Health, Calendar, Device Info), then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.10.0` | **Untapped stores surfaced** — five new views (Device, Calendar, Reminders, Health, Interactions), Messages `attributedBody` decode + edited flag, Notes rich-content indicators, and the app-chat attachment-media framework. |
+| `0.11.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), locked-note decryption, then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -25,6 +26,42 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.10.0] — 2026-07-16
+
+Follows the 0.9.0 coverage audit by **surfacing the untapped stores** it flagged —
+five new views plus deeper decoding of Messages and Notes. See
+[`docs/app-data-coverage.md`](docs/app-data-coverage.md) for the field-level
+inventory.
+
+### Added
+
+- **Device view** — the active backup's device/backup metadata (name, model
+  mapped to a marketing name, iOS version, serial, last-backup date, encryption).
+- **Calendar view** — events from `Calendar.sqlitedb` (title · when · location ·
+  notes · calendar).
+- **Reminders view** — from the reminders store (title/notes · completion · flag ·
+  list · due date).
+- **Health view** — a workout log (activity, date, duration, distance) plus a
+  sample-count + date-range summary, without materializing the raw samples.
+- **Interactions view** — CoreDuet's pre-aggregated cross-app communication graph:
+  who you've talked to, incoming/outgoing counts, and the span, most-contacted
+  first.
+- **Messages: `attributedBody` decoded** — recovers the body of modern text-less
+  messages (streamtyped NSString extractor, validated 3000/3000 against the `text`
+  column), and flags **edited** messages (`date_edited`) with an "Edited" tag.
+- **Notes: rich-content indicators** — checklist badge (`ZHASCHECKLIST`) and
+  per-note embedded image / attachment counts.
+- **App-chat attachment media framework** — the shared inserter now resolves an
+  `AppMessage`'s attachments to backup files (`attachments` table + gallery
+  mirror), closing the audit's cross-cutting gap. Per-app emission lands when a
+  backup with app media is available to validate against.
+
+### Notes
+
+- **Locked-note decryption** remains unfixed and is a **known defect** — iLEAPP
+  doesn't decode encrypted notes and the on-disk crypto is ambiguous, so a correct
+  fix needs a validated reference/known-answer vector.
 
 ## [0.9.0] — 2026-07-15
 
