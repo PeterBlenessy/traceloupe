@@ -285,7 +285,9 @@ pub fn parse_notes(
                     image_count,
                     attachment_count,
                     crypto_wrapped,
-                    tags,
+                    // Withhold tags too: a locked note's hashtag alt-text is stored
+                    // in cleartext, so surfacing it would leak protected content.
+                    None::<String>,
                 ],
             )?;
             report.notes += 1;
@@ -393,9 +395,13 @@ fn load_note_tags(
            AND ZNOTE1 IS NOT NULL AND ZALTTEXT IS NOT NULL",
     )?;
     let mut rows = stmt.query([])?;
-    while let Some(r) = rows.next()? {
-        let note_pk: i64 = r.get(0)?;
-        let tag = r.get::<_, String>(1)?.trim().to_string();
+    // Best-effort per row: a wrongly-typed cell (SQLite is dynamically typed)
+    // skips that tag rather than aborting the whole Notes import.
+    while let Ok(Some(r)) = rows.next() {
+        let (Ok(note_pk), Ok(tag)) = (r.get::<_, i64>(0), r.get::<_, String>(1)) else {
+            continue;
+        };
+        let tag = tag.trim().to_string();
         if tag.is_empty() {
             continue;
         }

@@ -108,13 +108,16 @@ export function RemindersView() {
     () => (reminders ?? []).some((r) => r.flagged),
     [reminders],
   );
+  // Clamp a stale "flagged" status when this backup has no flagged reminders
+  // (the chip is hidden), so the list can't silently empty with no way to reset.
+  const effStatus = status === "flagged" && !hasFlagged ? "all" : status;
 
   // Status + list + search filtered (base for the created-date chip counts).
   const baseFiltered = useMemo(() => {
     return (reminders ?? []).filter((r) => {
-      if (status === "open" && r.completed) return false;
-      if (status === "completed" && !r.completed) return false;
-      if (status === "flagged" && !r.flagged) return false;
+      if (effStatus === "open" && r.completed) return false;
+      if (effStatus === "completed" && !r.completed) return false;
+      if (effStatus === "flagged" && !r.flagged) return false;
       if (effList !== "all" && r.listName !== effList) return false;
       if (search) {
         const hay = [r.title, r.notes, r.listName]
@@ -125,7 +128,7 @@ export function RemindersView() {
       }
       return true;
     });
-  }, [reminders, status, effList, search]);
+  }, [reminders, effStatus, effList, search]);
 
   const presetCounts = useMemo(
     () => presets.map((p) => baseFiltered.filter((r) => inWindow(r.createdAt, p.lo, p.hi)).length),
@@ -210,7 +213,7 @@ export function RemindersView() {
               onChange={setRange}
               counts={presetCounts}
             />
-            <BadgeFilter options={statusOptions} value={status} onChange={setStatus} />
+            <BadgeFilter options={statusOptions} value={effStatus} onChange={setStatus} />
             {lists.length > 1 && (
               <BadgeFilter options={listOptions} value={effList} onChange={setList} />
             )}
