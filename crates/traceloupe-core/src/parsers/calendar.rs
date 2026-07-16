@@ -44,15 +44,30 @@ pub fn parse_calendar(
         return Ok(());
     }
 
-    let mut stmt = src.prepare(
+    // These columns aren't on every iOS version; fall back to NULL/absent so the
+    // query still parses. `availability` (0=busy 1=free 2=tentative 3=unavailable)
+    // and `has_recurrences` drive the Calendar facets.
+    let cols = table_columns(&src, "CalendarItem")?;
+    let avail = if cols.contains("availability") {
+        "i.availability"
+    } else {
+        "NULL"
+    };
+    let recur = if cols.contains("has_recurrences") {
+        "i.has_recurrences"
+    } else {
+        "NULL"
+    };
+
+    let mut stmt = src.prepare(&format!(
         "SELECT i.summary, i.description, i.start_date, i.end_date, i.all_day,
-                c.title, i.url, loc.title, loc.address
+                c.title, i.url, loc.title, loc.address, {avail}, {recur}
          FROM CalendarItem i
          LEFT JOIN Calendar c ON c.ROWID = i.calendar_id
          LEFT JOIN Location loc ON loc.ROWID = i.location_id
          WHERE i.entity_type = 2 AND i.start_date IS NOT NULL
          ORDER BY i.start_date DESC",
-    )?;
+    ))?;
 
     let conn = cache.conn();
     let tx = conn.unchecked_transaction()?;
@@ -79,10 +94,13 @@ pub fn parse_calendar(
                     .flatten()
                     .filter(|s| !s.trim().is_empty())
             });
+        let availability: Option<i64> = r.get(9)?;
+        let has_recurrences = r.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0;
         tx.execute(
             "INSERT INTO calendar_events
-                (title, notes, location, start_at, end_at, all_day, calendar_name, url)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (title, notes, location, start_at, end_at, all_day, calendar_name, url,
+                 availability, has_recurrences)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 title,
                 notes,
@@ -91,7 +109,9 @@ pub fn parse_calendar(
                 end_at,
                 all_day as i64,
                 calendar_name,
-                url
+                url,
+                availability,
+                has_recurrences as i64,
             ],
         )?;
         inserted += 1;
@@ -99,6 +119,17 @@ pub fn parse_calendar(
     tx.commit()?;
     report.calendar_events += inserted;
     Ok(())
+}
+
+/// Column names of `table`, upper-/original-case preserved. Empty if absent.
+fn table_columns(conn: &Connection, table: &str) -> Result<std::collections::HashSet<String>> {
+    let mut set = std::collections::HashSet::new();
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for c in rows {
+        set.insert(c?);
+    }
+    Ok(set)
 }
 
 #[cfg(test)]

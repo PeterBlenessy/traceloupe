@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { ArrowDownLeft, ArrowUpRight, Waypoints } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Users, Waypoints } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
@@ -45,6 +45,15 @@ function InteractionRow({ interaction }: { interaction: Interaction }) {
           {formatCount(interaction.incoming)}
           <ArrowUpRight className="ml-1 size-3" />
           {formatCount(interaction.outgoing)}
+          {interaction.incomingRecipient > 0 && (
+            <span
+              className="ml-1 inline-flex items-center gap-1"
+              title="Sent to a group you were in"
+            >
+              <Users className="size-3" />
+              {formatCount(interaction.incomingRecipient)}
+            </span>
+          )}
         </span>
       </div>
     </div>

@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -216,7 +216,9 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     end_at        INTEGER,
     all_day       INTEGER NOT NULL DEFAULT 0,
     calendar_name TEXT,                         -- the containing calendar's title
-    url           TEXT
+    url           TEXT,
+    availability  INTEGER,                       -- 0=busy 1=free 2=tentative 3=unavailable
+    has_recurrences INTEGER NOT NULL DEFAULT 0   -- part of a repeating series
 );
 CREATE INDEX IF NOT EXISTS idx_calendar_start ON calendar_events(start_at DESC);
 
@@ -249,8 +251,9 @@ CREATE TABLE IF NOT EXISTS interactions (
     id           INTEGER PRIMARY KEY,
     display_name TEXT,
     identifier   TEXT,                          -- phone / email / handle
-    incoming     INTEGER NOT NULL DEFAULT 0,     -- messages/calls they sent you
+    incoming     INTEGER NOT NULL DEFAULT 0,     -- messages/calls they sent you (as sender)
     outgoing     INTEGER NOT NULL DEFAULT 0,     -- you sent them
+    incoming_recipient INTEGER NOT NULL DEFAULT 0, -- they sent to a group you were in
     first_at     INTEGER,                        -- unix seconds
     last_at      INTEGER
 );
@@ -454,6 +457,20 @@ impl CacheDb {
             )?;
             // v24: per-note wrapped key for locked-note decryption.
             ensure_column(&conn, "notes", "crypto_wrapped_key", "BLOB")?;
+            // v25: calendar availability/recurrence facets + interaction 3rd count.
+            ensure_column(&conn, "calendar_events", "availability", "INTEGER")?;
+            ensure_column(
+                &conn,
+                "calendar_events",
+                "has_recurrences",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            ensure_column(
+                &conn,
+                "interactions",
+                "incoming_recipient",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
