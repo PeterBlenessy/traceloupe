@@ -1475,18 +1475,22 @@ pub fn note_crypto(cache: &CacheDb, id: i64) -> Result<Option<NoteCrypto>> {
     Ok(cache
         .conn()
         .query_row(
+            // `crypto_iter` is intentionally NOT required: decrypt_note treats a 0/
+            // absent iteration count as the 20000 default, so a schema that omits
+            // ZCRYPTOITERATIONCOUNT should still get a password prompt, not a
+            // "data missing" error. Read it optionally and default to 0.
             "SELECT crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data,
                     crypto_wrapped_key
              FROM notes
              WHERE id = ?1 AND locked = 1
-               AND crypto_salt IS NOT NULL AND crypto_iter IS NOT NULL
+               AND crypto_salt IS NOT NULL
                AND crypto_iv IS NOT NULL AND crypto_tag IS NOT NULL
                AND encrypted_data IS NOT NULL",
             [id],
             |r| {
                 Ok((
                     r.get(0)?,
-                    r.get(1)?,
+                    r.get::<_, Option<i64>>(1)?.unwrap_or(0),
                     r.get(2)?,
                     r.get(3)?,
                     r.get(4)?,

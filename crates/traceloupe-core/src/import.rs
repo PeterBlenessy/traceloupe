@@ -99,9 +99,9 @@ pub fn import_backup(
     let effective = sidecar::effective_module_ids(module_ids);
 
     // Total number of indexing steps we'll emit, so the UI can fill the bar
-    // `index/total`. Three always run (Preparing, App Chats, Installed Apps);
-    // Safari and the camera roll each contribute two. KEEP IN SYNC with the
-    // `step!(…)` calls below.
+    // `index/total`. Seven always run (Preparing, Calendar, Reminders, Health,
+    // Interactions, App Chats, Installed Apps); Safari, TikTok and the camera roll
+    // each contribute two. KEEP IN SYNC with the `step!(…)` calls below.
     let index_total: u32 = 7
         + effective.contains(&"messages") as u32
         + effective.contains(&"notes") as u32

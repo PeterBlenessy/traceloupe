@@ -302,7 +302,9 @@ pub fn parse_messages(
         let chat_id: i64 = r.get(0)?;
         let text: Option<String> = r.get(1)?;
         let is_from_me = r.get::<_, i64>(2)? != 0;
-        let date: i64 = r.get(3)?;
+        // `date` is `INTEGER DEFAULT 0` (not NOT NULL); read it optionally so one
+        // NULL-dated row can't abort the whole import. 0 → mac_to_unix yields None.
+        let date = r.get::<_, Option<i64>>(3)?.unwrap_or(0);
         let handle_id: i64 = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
         let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
         let msg_rowid: i64 = r.get(6)?;
