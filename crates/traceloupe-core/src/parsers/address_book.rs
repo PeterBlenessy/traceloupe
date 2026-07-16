@@ -76,7 +76,7 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
         let birthday_at = r
             .get::<_, Option<String>>(11)?
             .and_then(|s| s.trim().parse::<f64>().ok())
-            .map(|t| t as i64 + MAC_EPOCH);
+            .map(|t| (t + MAC_EPOCH as f64) as i64);
         Ok(Row {
             id: r.get(0)?,
             first: r.get(1)?,

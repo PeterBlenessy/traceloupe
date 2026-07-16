@@ -20,7 +20,8 @@ use crate::Result;
 const MAC_EPOCH: i64 = 978_307_200;
 
 fn to_unix(d: Option<f64>) -> Option<i64> {
-    d.filter(|v| *v > 0.0).map(|v| v as i64 + MAC_EPOCH)
+    d.filter(|v| *v > 0.0)
+        .map(|v| (v + MAC_EPOCH as f64) as i64)
 }
 
 /// `HKWorkoutActivityType` code → friendly name (the common subset; others fall
@@ -146,6 +147,22 @@ pub fn parse_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_unix_saturates_on_absurd_date_without_overflow() {
+        // A corrupt/adversarial Core Data date (~1e19) must not panic (dev builds
+        // keep overflow checks) nor wrap to a negative garbage time. Adding in f64
+        // before the cast makes the i64 conversion saturate cleanly. This guards
+        // the shared timestamp-conversion pattern used across every parser.
+        let huge = to_unix(Some(1e19)).unwrap();
+        assert!(
+            huge > 0,
+            "saturates to a large positive i64, not a wrapped negative"
+        );
+        assert_eq!(to_unix(Some(f64::MAX)), Some(i64::MAX));
+        assert_eq!(to_unix(Some(0.0)), None);
+        assert_eq!(to_unix(Some(-5.0)), None);
+    }
 
     #[test]
     fn parses_workouts_with_type_and_summary() {

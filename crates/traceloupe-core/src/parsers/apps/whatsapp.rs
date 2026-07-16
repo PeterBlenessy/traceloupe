@@ -82,9 +82,9 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let timestamp = r
             .get::<_, Option<f64>>(2)?
             .filter(|d| *d > 0.0)
-            .map(|d| d as i64 + MAC_EPOCH);
+            .map(|d| (d + MAC_EPOCH as f64) as i64);
         let is_from_me = r.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0;
-        let body: Option<String> = r.get(4)?;
+        let body: Option<String> = super::col_string(r, 4)?;
         let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
 
         out.push(AppMessage {

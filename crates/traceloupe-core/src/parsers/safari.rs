@@ -72,7 +72,7 @@ pub fn parse_safari(
         let visited_at = r
             .get::<_, Option<f64>>(2)?
             .filter(|t| *t > 0.0)
-            .map(|t| t as i64 + MAC_EPOCH);
+            .map(|t| (t + MAC_EPOCH as f64) as i64);
         let visit_count: Option<i64> = r.get(3)?;
         tx.execute(
             "INSERT INTO safari_history (url, title, visited_at, visit_count, deleted)
@@ -94,7 +94,7 @@ pub fn parse_safari(
             let deleted_at = r
                 .get::<_, Option<f64>>(1)?
                 .filter(|t| *t > 0.0)
-                .map(|t| t as i64 + MAC_EPOCH);
+                .map(|t| (t + MAC_EPOCH as f64) as i64);
             tx.execute(
                 "INSERT INTO safari_history (url, title, visited_at, visit_count, deleted)
                  VALUES (?1, NULL, ?2, NULL, 1)",
