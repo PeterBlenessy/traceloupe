@@ -150,7 +150,7 @@ export function VirtualListView<T>({
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
-        <div className="mx-auto w-full max-w-3xl p-2">
+        <div className="w-full p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="mb-1 h-14 w-full" />
           ))}
@@ -163,7 +163,7 @@ export function VirtualListView<T>({
           estimateSize={estimateSize}
           getKey={getKey}
           renderItem={(item) => (
-            <div className="mx-auto max-w-3xl px-2 pb-1">{renderItem(item)}</div>
+            <div className="px-2 pb-1">{renderItem(item)}</div>
           )}
         />
       )}
@@ -220,7 +220,7 @@ export function LazyListView<T>({
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (
-        <div className="mx-auto w-full max-w-3xl p-2">
+        <div className="w-full p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="mb-1 h-14 w-full" />
           ))}
@@ -236,7 +236,7 @@ export function LazyListView<T>({
           windowKey={windowKey}
           fetchWindow={fetchWindow}
           renderItem={(item) => (
-            <div className="mx-auto max-w-3xl px-2 pb-1">{renderItem(item)}</div>
+            <div className="px-2 pb-1">{renderItem(item)}</div>
           )}
         />
       )}

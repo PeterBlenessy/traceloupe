@@ -1,11 +1,16 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Activity, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
+import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { usePersistedState } from "@/lib/use-persisted-state";
+import { EmptyView, ErrorState, PanelHeader } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
-import { client, type Workout } from "@/lib/ipc";
+import { client, type Workout, type TimeRange } from "@/lib/ipc";
 
 /** Metres → a compact "5.2 km" / "820 m". */
 function formatDistance(m: number | null): string | null {
@@ -36,6 +41,13 @@ function WorkoutRow({ workout }: { workout: Workout }) {
   );
 }
 
+/** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
+function inWindow(at: number | null, lo: number | null, hi: number | null) {
+  if (lo == null && hi == null) return true;
+  if (at == null) return false;
+  return (lo == null || at >= lo) && (hi == null || at < hi);
+}
+
 export function HealthView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
@@ -57,6 +69,51 @@ export function HealthView() {
     enabled: active === true,
   });
 
+  const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
+  const [sort, setSort] = usePersistedState<SortState>("health:sort", {
+    by: "date",
+    desc: true,
+  });
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+
+  const activities = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (workouts ?? []).map((w) => w.activity).filter((a): a is string => !!a),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [workouts],
+  );
+  const effActivity =
+    activity !== "all" && activities.includes(activity) ? activity : "all";
+
+  const baseFiltered = useMemo(
+    () =>
+      (workouts ?? []).filter(
+        (w) => effActivity === "all" || w.activity === effActivity,
+      ),
+    [workouts, effActivity],
+  );
+  const presetCounts = useMemo(
+    () => presets.map((p) => baseFiltered.filter((w) => inWindow(w.startAt, p.lo, p.hi)).length),
+    [presets, baseFiltered],
+  );
+  const filtered = useMemo(() => {
+    const inRange = baseFiltered.filter((w) => inWindow(w.startAt, range.lo, range.hi));
+    return sortItems(
+      inRange,
+      (w) =>
+        sort.by === "duration"
+          ? (w.durationS ?? 0)
+          : sort.by === "distance"
+            ? (w.distanceM ?? 0)
+            : w.startAt,
+      sort.desc,
+    );
+  }, [baseFiltered, range, sort]);
+
   if (active === false) {
     return (
       <EmptyView
@@ -69,24 +126,60 @@ export function HealthView() {
     );
   }
 
-  const hasHealth =
-    (summary?.sampleCount ?? 0) > 0 || (workouts?.length ?? 0) > 0;
+  const hasWorkouts = (workouts?.length ?? 0) > 0;
+  const activityOptions: BadgeFilterOption[] = [
+    { value: "all", label: "All", count: workouts?.length },
+    ...activities.map((a) => ({
+      value: a,
+      label: a,
+      count: (workouts ?? []).filter((w) => w.activity === a).length,
+    })),
+  ];
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Health" count={workouts?.length} />
+      <PanelHeader
+        title="Health"
+        count={hasWorkouts ? filtered.length : undefined}
+        actions={
+          hasWorkouts && activities.length > 1 ? (
+            <BadgeFilter options={activityOptions} value={activity} onChange={setActivity} />
+          ) : undefined
+        }
+        toolbar={
+          hasWorkouts ? (
+            <>
+              <TimeFilterBar
+                className="flex-1"
+                presets={presets}
+                value={range}
+                onChange={setRange}
+                counts={presetCounts}
+              />
+              <SortControl
+                fields={[
+                  { value: "date", label: "Date" },
+                  { value: "duration", label: "Duration" },
+                  { value: "distance", label: "Distance" },
+                ]}
+                value={sort}
+                onChange={setSort}
+              />
+            </>
+          ) : undefined
+        }
+      />
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
-        <div className="mx-auto w-full max-w-2xl p-2">
+        <div className="w-full p-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="mb-1 h-14 w-full" />
           ))}
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
-          <div className="mx-auto max-w-2xl">
-            {summary && summary.sampleCount > 0 && (
+          {summary && summary.sampleCount > 0 && (
             <div className="border-b px-4 py-3 text-sm text-muted-foreground">
               <span className="font-medium text-foreground">
                 {formatCount(summary.sampleCount)}
@@ -102,25 +195,24 @@ export function HealthView() {
                 ` · ${formatCount(summary.workoutCount)} workouts`}
             </div>
           )}
-          {!hasHealth ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
+          {!hasWorkouts ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
               No health data in this backup.
             </p>
+          ) : filtered.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              No workouts match these filters.
+            </p>
           ) : (
-            <div className="h-full">
-              {(workouts?.length ?? 0) > 0 && (
-                <>
-                  <h3 className="px-4 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Workouts
-                  </h3>
-                  {workouts!.map((w) => (
-                    <WorkoutRow key={w.id} workout={w} />
-                  ))}
-                </>
-              )}
+            <div className="w-full">
+              <h3 className="px-4 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Workouts
+              </h3>
+              {filtered.map((w) => (
+                <WorkoutRow key={w.id} workout={w} />
+              ))}
             </div>
           )}
-          </div>
         </div>
       )}
     </div>
