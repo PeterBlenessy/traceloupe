@@ -330,6 +330,8 @@ export interface TraceLoupeClient {
   /** Ids of backups already parsed (open instantly, no first-time read). */
   importedBackupIds(): Promise<string[]>;
   listThreads(): Promise<ThreadSummary[]>;
+  /** Device + backup metadata for the active backup, or null if unknown. */
+  deviceInfo(): Promise<BackupInfo | null>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -535,6 +537,7 @@ const tauriClient: TraceLoupeClient = {
   forgetBackup: (backupId) => invoke<void>("forget_backup", { backupId }),
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
+  deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -1663,6 +1666,19 @@ export const mockClient: TraceLoupeClient = {
   },
   importedBackupIds: async () => [...mockImported],
   listThreads: async () => (mockActive ? mockThreads : []),
+  deviceInfo: async () =>
+    mockActive
+      ? {
+          id: "mock-device",
+          path: "/mock/backup",
+          deviceName: "Peter's iPhone",
+          productType: "iPhone15,2",
+          productVersion: "17.5.1",
+          serialNumber: "F2LW00XYZ123",
+          lastBackupDate: 1717800000,
+          isEncrypted: true,
+        }
+      : null,
   // The mock messages carry no `kind`, so no content-kinds are advertised and the
   // filter is a no-op here.
   messageKinds: async () => [],

@@ -227,7 +227,7 @@ backup but has no parser. Ranked by value × feasibility.
 |--------|:---:|-------|:---:|-------|
 | **Health** | ✅ real | `healthdb_secure.sqlite` 87 MB; 344,063 quantity samples, 13 workouts | ★★★ | steps/HR/sleep/workouts + GPS routes (`location_series`). Richest untouched store |
 | **CoreDuet interactions** | ✅ real | `interactionC.db` 15,055 interactions, 66 contacts | ★★★ | cross-app who-talked-to-whom graph w/ direction + timestamps |
-| **Device / backup metadata** | ✅ parsed, not shown | name, model, iOS version, serial, last-backup, encryption | ★★★ | `read_backup_info` already extracts it — only flashed in the import banner, then discarded. A "Device Info" view is nearly free |
+| **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ real | `Calendar.sqlitedb` 217 items, 15 calendars | ★★ | events/invitees/recurrence; plain SQLite |
 | **Reminders** | ✅ real | 124 reminders | ★★ | to-dos + due dates |
 | **Apps view metadata** | ✅ available | Info.plist `Applications` → version, install/purchase date, seller | ★★ | cache stores only `bundle_id`; no version/date/size/name shown |

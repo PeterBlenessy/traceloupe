@@ -846,6 +846,23 @@ async fn list_threads(active: State<'_, ActiveBackup>) -> Result<Vec<ThreadSumma
     .map_err(|e| e.to_string())?
 }
 
+/// Device + backup metadata for the active backup (name, model, iOS version,
+/// serial, last-backup date, encryption). Re-reads the source backup's Info.plist
+/// via the `source_dir` stored in the cache; None if that isn't recorded.
+#[tauri::command]
+async fn device_info(active: State<'_, ActiveBackup>) -> Result<Option<BackupInfo>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        let Some(source_dir) = cache.get_meta("source_dir").map_err(|e| e.to_string())? else {
+            return Ok(None);
+        };
+        Ok(Some(discovery::read_backup_info(Path::new(&source_dir))))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Distinct content kinds present (with counts) for the message content filter.
 /// `thread_id` scopes to a conversation; otherwise all messages in `service`.
 #[tauri::command]
@@ -1964,6 +1981,7 @@ pub fn run() {
             forget_backup,
             imported_backup_ids,
             list_threads,
+            device_info,
             message_kinds,
             count_thread_messages,
             get_thread_message_window,
