@@ -294,6 +294,10 @@ function SettingsMenu() {
     setShowAvatars,
     linkPreviews,
     setLinkPreviews,
+    lightboxStyle,
+    setLightboxStyle,
+    showMediaMetadata,
+    setShowMediaMetadata,
     importModules,
     setImportModules,
     logLevel,
@@ -449,6 +453,32 @@ function SettingsMenu() {
                   <option value="cozy">Cozy</option>
                   <option value="compact">Compact</option>
                 </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Photo & video viewer"
+                description="How images open from Photos and Messages: a windowed panel, or fullscreen."
+              >
+                <select
+                  value={lightboxStyle}
+                  onChange={(e) =>
+                    setLightboxStyle(e.target.value as "windowed" | "fullscreen")
+                  }
+                  aria-label="Photo & video viewer"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="fullscreen">Fullscreen</option>
+                  <option value="windowed">Windowed</option>
+                </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Show media details"
+                description="Show file, date, EXIF and location metadata in the photo/video viewer."
+              >
+                <Switch
+                  aria-label="Show media details"
+                  checked={showMediaMetadata}
+                  onCheckedChange={setShowMediaMetadata}
+                />
               </SettingsRow>
             </SettingsGroup>
 

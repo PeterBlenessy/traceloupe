@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import type { LightboxStyle } from "@/components/media-lightbox";
 import { client, type LogLevel, type LogRecord } from "@/lib/ipc";
 import { CLOCK_KEY, readClockFormat, setClockFormat, type ClockFormat } from "@/lib/format";
 
@@ -23,6 +24,12 @@ type SettingsProviderState = {
    *  sites). Off by default. */
   linkPreviews: boolean;
   setLinkPreviews: (v: boolean) => void;
+  /** How the image/video lightbox opens: a windowed modal, or fullscreen. */
+  lightboxStyle: LightboxStyle;
+  setLightboxStyle: (v: LightboxStyle) => void;
+  /** Show file/EXIF/location metadata in the lightbox. */
+  showMediaMetadata: boolean;
+  setShowMediaMetadata: (v: boolean) => void;
   /** Import module ids the user chose, or null to use the catalog defaults. */
   importModules: string[] | null;
   setImportModules: (ids: string[]) => void;
@@ -45,6 +52,8 @@ type SettingsProviderState = {
 const NAMES_KEY = "traceloupe-show-names";
 const AVATARS_KEY = "traceloupe-show-avatars";
 const LINK_PREVIEWS_KEY = "traceloupe-link-previews";
+const LIGHTBOX_STYLE_KEY = "traceloupe-lightbox-style";
+const MEDIA_META_KEY = "traceloupe-media-metadata";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
@@ -106,6 +115,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   // Opt-in: default OFF (readBool defaults true, so check explicitly).
   const [linkPreviews, setLinkPreviewsState] = useState<boolean>(
     () => localStorage.getItem(LINK_PREVIEWS_KEY) === "true",
+  );
+  const [lightboxStyle, setLightboxStyleState] = useState<LightboxStyle>(() =>
+    localStorage.getItem(LIGHTBOX_STYLE_KEY) === "windowed"
+      ? "windowed"
+      : "fullscreen",
+  );
+  const [showMediaMetadata, setShowMediaMetadataState] = useState<boolean>(() =>
+    readBool(MEDIA_META_KEY),
   );
   const [importModules, setImportModulesState] = useState<string[] | null>(() =>
     readStringArray(IMPORT_MODULES_KEY),
@@ -198,6 +215,14 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(LINK_PREVIEWS_KEY, String(v));
     setLinkPreviewsState(v);
   };
+  const setLightboxStyle = (v: LightboxStyle) => {
+    localStorage.setItem(LIGHTBOX_STYLE_KEY, v);
+    setLightboxStyleState(v);
+  };
+  const setShowMediaMetadata = (v: boolean) => {
+    localStorage.setItem(MEDIA_META_KEY, String(v));
+    setShowMediaMetadataState(v);
+  };
 
   const setImportModules = (ids: string[]) => {
     localStorage.setItem(IMPORT_MODULES_KEY, JSON.stringify(ids));
@@ -229,6 +254,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setShowAvatars,
         linkPreviews,
         setLinkPreviews,
+        lightboxStyle,
+        setLightboxStyle,
+        showMediaMetadata,
+        setShowMediaMetadata,
         importModules,
         setImportModules,
         logLevel,

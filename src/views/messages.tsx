@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpNarrowWide,
+  ExternalLink,
   FileText,
   GalleryVerticalEnd,
   ImageIcon,
@@ -19,6 +20,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { BadgeFilter } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { MediaLightbox } from "@/components/media-lightbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
@@ -46,6 +48,7 @@ import { cn } from "@/lib/utils";
 import {
   formatCount,
   formatDateHeader,
+  formatDateTime,
   formatListTime,
   formatMessageTime,
 } from "@/lib/format";
@@ -992,6 +995,15 @@ function MessageBubble({
   const align = message.isFromMe ? "end" : "start";
   const { linkPreviews } = useSettings();
   const previewUrl = linkPreviews && message.body ? firstUrl(message.body) : null;
+  // Available image attachments open in an in-app lightbox (with prev/next).
+  const imageAtts = useMemo(
+    () =>
+      message.attachments.filter(
+        (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
+      ),
+    [message.attachments],
+  );
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   return (
     <div>
       {showTime && message.sentAt && (
@@ -1014,12 +1026,28 @@ function MessageBubble({
                   <MessageBody text={message.body} />
                 </p>
               )}
-              {message.attachments.map((a) => (
-                <div key={a.id} className={cn(message.body && "mt-1.5")}>
-                  <AttachmentView att={a} />
-                </div>
-              ))}
+              {message.attachments.map((a) => {
+                const imgIdx = imageAtts.indexOf(a);
+                return (
+                  <div key={a.id} className={cn(message.body && "mt-1.5")}>
+                    <AttachmentView
+                      att={a}
+                      onOpenImage={
+                        imgIdx >= 0 ? () => setLightboxIndex(imgIdx) : undefined
+                      }
+                    />
+                  </div>
+                );
+              })}
               {previewUrl && <LinkPreviewCard url={previewUrl} />}
+              <MessageImageLightbox
+                images={imageAtts}
+                index={lightboxIndex}
+                onClose={() => setLightboxIndex(null)}
+                onIndex={setLightboxIndex}
+                sentAt={message.sentAt}
+                from={message.isFromMe ? "You" : (senderLabel ?? message.sender ?? null)}
+              />
               {message.edited && (
                 <span className="mt-0.5 block text-[10px] italic opacity-60">
                   Edited
@@ -1184,14 +1212,97 @@ function LinkPreviewCard({ url }: { url: string }) {
   );
 }
 
-function AttachmentView({ att }: { att: Attachment }) {
+/** In-app viewer for a message's image attachments, via the shared MediaLightbox
+ *  (windowed/fullscreen per settings), with prev/next among the same message's
+ *  images, all available metadata, and an "open externally" escape hatch. */
+function MessageImageLightbox({
+  images,
+  index,
+  onClose,
+  onIndex,
+  sentAt,
+  from,
+}: {
+  images: Attachment[];
+  index: number | null;
+  onClose: () => void;
+  onIndex: (i: number) => void;
+  sentAt: number | null;
+  from: string | null;
+}) {
+  const { lightboxStyle, showMediaMetadata } = useSettings();
+  const att = index != null ? images[index] : null;
+  const meta =
+    att && showMediaMetadata ? (
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="select-text truncate">{att.filename ?? "image"}</span>
+          {att.mimeType && <span className="text-neutral-400">{att.mimeType}</span>}
+          {from && <span className="truncate text-neutral-400">{from}</span>}
+          {sentAt != null && (
+            <span className="shrink-0 text-neutral-400">{formatDateTime(sentAt)}</span>
+          )}
+        </div>
+        <div className="flex shrink-0 items-center gap-3">
+          {images.length > 1 && index != null && (
+            <span className="tabular-nums">
+              {index + 1} / {images.length}
+            </span>
+          )}
+          <button
+            onClick={() => openAttachmentFile(att.id)}
+            className="inline-flex items-center gap-1 hover:text-white"
+            title="Open in the default app"
+          >
+            <ExternalLink className="size-3.5" />
+            Open externally
+          </button>
+        </div>
+      </div>
+    ) : undefined;
+
+  return (
+    <MediaLightbox
+      open={index != null}
+      onClose={onClose}
+      style={lightboxStyle}
+      title={att?.filename ?? "Image"}
+      hasPrev={index != null && index > 0}
+      hasNext={index != null && index < images.length - 1}
+      onPrev={() => index != null && index > 0 && onIndex(index - 1)}
+      onNext={() =>
+        index != null && index < images.length - 1 && onIndex(index + 1)
+      }
+      media={
+        att ? (
+          <img
+            key={att.id}
+            src={client.attachmentUrl(att.id)}
+            alt={att.filename ?? ""}
+            className="max-h-full max-w-full object-contain"
+          />
+        ) : null
+      }
+      meta={meta}
+    />
+  );
+}
+
+function AttachmentView({
+  att,
+  onOpenImage,
+}: {
+  att: Attachment;
+  /** Open an available image in the in-app lightbox instead of externally. */
+  onOpenImage?: () => void;
+}) {
   const mime = att.mimeType ?? "";
   const available = !!att.localPath;
 
   if (available && isImageAttachment(mime, att.filename)) {
     return (
       <button
-        onClick={() => openAttachmentFile(att.id)}
+        onClick={() => (onOpenImage ? onOpenImage() : openAttachmentFile(att.id))}
         className="block max-w-[240px] overflow-hidden rounded-lg"
         title={att.filename ?? "image"}
       >
