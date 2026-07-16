@@ -1123,39 +1123,43 @@ async fn open_attachment(
     // main thread (it would freeze the UI); do it on a blocking worker.
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&active_path).map_err(|e| e.to_string())?;
-        let (local_path, _filename, _mime, decrypt_key, plain_size) =
+        let (local_path, filename, _mime, decrypt_key, plain_size) =
             query::attachment_blob(&cache, attachment_id)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "attachment file is not available".to_string())?;
 
-        // Encrypted backup: decrypt to a persistent temp (0600) beside the cache
-        // and open that (the external app reads it after this returns, so it isn't
-        // auto-deleted — a re-import/forget clears the dir). Plaintext: open direct.
-        let to_open = if let Some(key) = decrypt_key {
+        // Materialize to a temp named with the attachment's REAL filename (so its
+        // extension is present) and open THAT — the `local_path` is the backup's
+        // content-addressed blob (a hex file-id with no extension), so opening it
+        // directly makes macOS fall back to TextEdit and show binary garbage.
+        // Encrypted → decrypt first; plaintext → copy. The temp lives under the
+        // cache dir (0600), cleared on re-import/forget/backup-switch.
+        let plain = if let Some(key) = decrypt_key {
             let dec = decryptor.ok_or_else(|| "backup keys are not loaded".to_string())?;
             let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
             let size = plain_size.and_then(|s| usize::try_from(s).ok());
-            let plain = dec
-                .decrypt_bytes(&key, &ciphertext, size)
-                .map_err(|e| e.to_string())?;
-            let dir = active_path
-                .parent()
-                .map(|p| p.join("att-open"))
-                .ok_or_else(|| "unexpected cache layout".to_string())?;
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let name = std::path::Path::new(&local_path)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| format!("attachment-{attachment_id}"));
-            let dest = dir.join(format!("{attachment_id}-{name}"));
-            write_private(&dest, &plain).map_err(|e| e.to_string())?;
-            dest
+            dec.decrypt_bytes(&key, &ciphertext, size)
+                .map_err(|e| e.to_string())?
         } else {
-            PathBuf::from(&local_path)
+            std::fs::read(&local_path).map_err(|e| e.to_string())?
         };
+        let dir = active_path
+            .parent()
+            .map(|p| p.join("att-open"))
+            .ok_or_else(|| "unexpected cache layout".to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // Sanitize the display name to a bare filename so it can't escape att-open.
+        let base = filename
+            .as_deref()
+            .map(|f| f.rsplit(['/', '\\']).next().unwrap_or(f).replace('\0', ""))
+            .map(|f| f.trim().to_string())
+            .filter(|f| !f.is_empty() && f != "." && f != "..")
+            .unwrap_or_else(|| format!("attachment-{attachment_id}"));
+        let dest = dir.join(format!("{attachment_id}-{base}"));
+        write_private(&dest, &plain).map_err(|e| e.to_string())?;
 
         std::process::Command::new("/usr/bin/open")
-            .arg(&to_open)
+            .arg(&dest)
             .spawn()
             .map_err(|e| e.to_string())?;
         Ok(())
