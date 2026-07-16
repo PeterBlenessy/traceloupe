@@ -189,6 +189,23 @@ pub fn parse_messages(
         (HashMap::new(), HashMap::new())
     };
 
+    // Message IDs that have any attachment-join row — loaded regardless of whether
+    // a caller can resolve the files, so an attachment-only message is kept and
+    // flagged even when `cache_has_attachments` is stale (pairs with the SELECT's
+    // EXISTS clause below, which is what lets such a row reach this loop at all).
+    let att_msg_ids: std::collections::HashSet<i64> =
+        if table_exists(&src, "message_attachment_join") {
+            let mut stmt =
+                src.prepare("SELECT DISTINCT message_id FROM message_attachment_join")?;
+            let ids = stmt
+                .query_map([], |r| r.get::<_, i64>(0))?
+                .filter_map(std::result::Result::ok)
+                .collect();
+            ids
+        } else {
+            std::collections::HashSet::new()
+        };
+
     // handle.ROWID → phone/email.
     let handles: HashMap<i64, String> = {
         let mut stmt = src.prepare("SELECT ROWID, id FROM handle")?;
@@ -272,7 +289,17 @@ pub fn parse_messages(
 
     // Messages in chat order (grouped), then time. Skip pure "action" items
     // (group renames, joins) which carry no text and no attachment.
-    let mut mstmt = src.prepare(
+    //
+    // `cache_has_attachments` is a denormalized flag that is occasionally stale
+    // (0 despite real `message_attachment_join` rows), which would drop an
+    // attachment-only message. Also admit any row that actually has a join row,
+    // guarding the EXISTS on the table's presence (old/partial DBs may omit it).
+    let att_exists = if table_exists(&src, "message_attachment_join") {
+        "OR EXISTS (SELECT 1 FROM message_attachment_join maj WHERE maj.message_id = m.ROWID)"
+    } else {
+        ""
+    };
+    let mut mstmt = src.prepare(&format!(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
                 m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
@@ -282,8 +309,9 @@ pub fn parse_messages(
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
                OR COALESCE(m.associated_message_type, 0) <> 0
                OR m.attributedBody IS NOT NULL
+               {att_exists}
          ORDER BY cmj.chat_id, m.date, m.ROWID",
-    )?;
+    ))?;
     let mut rows = mstmt.query([])?;
 
     let mut current_chat: Option<i64> = None;
@@ -306,8 +334,11 @@ pub fn parse_messages(
         // NULL-dated row can't abort the whole import. 0 → mac_to_unix yields None.
         let date = r.get::<_, Option<i64>>(3)?.unwrap_or(0);
         let handle_id: i64 = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
-        let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
         let msg_rowid: i64 = r.get(6)?;
+        // Trust the actual join rows over the sometimes-stale cache flag, so an
+        // attachment-only message isn't mis-flagged (or skipped by the guard below).
+        let has_attachment =
+            r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0 || att_msg_ids.contains(&msg_rowid);
         let read_at = mac_to_unix(r.get::<_, Option<i64>>(7)?.unwrap_or(0));
         let delivered_at = mac_to_unix(r.get::<_, Option<i64>>(8)?.unwrap_or(0));
         let guid: Option<String> = r.get(9)?;
@@ -689,6 +720,46 @@ mod tests {
         )
         .unwrap();
         db
+    }
+
+    #[test]
+    fn attachment_only_message_kept_despite_stale_cache_flag() {
+        // A message with NULL text and cache_has_attachments = 0 (stale) but a real
+        // message_attachment_join row must still be kept and flagged — the flag is
+        // denormalized and occasionally lags the join table.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             -- NULL text, STALE cache_has_attachments = 0, but a real join row.
+             INSERT INTO message VALUES (500,NULL,1,721700060000000000,0,0,0,0,'GUID-500',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,500);
+             INSERT INTO message_attachment_join VALUES (500,1);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        // Even without an attachment source (msg_atts empty), the message survives.
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+        assert_eq!(report.messages, 1, "stale-flag attachment message kept");
+        let (body, has_att): (Option<String>, i64) = cache
+            .conn()
+            .query_row("SELECT body, has_attachments FROM messages", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(body, None);
+        assert_eq!(has_att, 1, "flagged as having an attachment");
     }
 
     #[test]

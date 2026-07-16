@@ -65,17 +65,27 @@ pub fn parse_health(
         return Ok(());
     }
 
-    // One row per workout: its dates (from `samples`) + activity type/duration
-    // (from the primary `workout_activities` row) + total distance.
+    // One row per workout: its dates (aggregated from `samples`) + activity
+    // type/duration + total distance. A workout can have several
+    // `workout_activities` rows (multi-sport, or all with a NULL primary flag), so
+    // pick ONE deterministically — the explicitly-primary activity, else the
+    // longest, else the lowest ROWID — via a correlated subquery. Joining on that
+    // single row (rather than filtering `is_primary`) keeps the type/duration
+    // stable instead of letting GROUP BY grab an arbitrary matching row. Sample
+    // dates use MIN/MAX so multiple samples collapse to the true span.
     let mut stmt = src.prepare(
-        "SELECT s.start_date, s.end_date, wa.activity_type, wa.duration, w.total_distance
+        "SELECT MIN(s.start_date), MAX(s.end_date), wa.activity_type, wa.duration, w.total_distance
          FROM workouts w
          JOIN samples s ON s.data_id = w.data_id
-         LEFT JOIN workout_activities wa
-                ON wa.owner_id = w.data_id
-               AND COALESCE(wa.is_primary_activity, 1) = 1
+         LEFT JOIN workout_activities wa ON wa.ROWID = (
+             SELECT wa2.ROWID FROM workout_activities wa2
+             WHERE wa2.owner_id = w.data_id
+             ORDER BY COALESCE(wa2.is_primary_activity, 0) DESC,
+                      wa2.duration DESC, wa2.ROWID ASC
+             LIMIT 1
+         )
          GROUP BY w.data_id
-         ORDER BY s.start_date DESC",
+         ORDER BY MIN(s.start_date) DESC",
     )?;
 
     let conn = cache.conn();
@@ -184,5 +194,49 @@ mod tests {
             Some("2")
         );
         assert!(cache.get_meta("health_first_at").unwrap().is_some());
+    }
+
+    #[test]
+    fn multi_activity_workout_picks_deterministically() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE workouts (data_id INTEGER PRIMARY KEY, total_distance REAL);
+             CREATE TABLE workout_activities (ROWID INTEGER PRIMARY KEY, owner_id INTEGER,
+                 is_primary_activity INTEGER, activity_type INTEGER, duration REAL);
+             CREATE TABLE quantity_samples (data_id INTEGER, quantity REAL);
+             -- Workout 1: two activities, both with a NULL primary flag → the
+             -- longest one (Running, 1800s) must win, not an arbitrary row.
+             INSERT INTO workouts VALUES (1, 0.0);
+             INSERT INTO samples VALUES (1, 721692800.0, 721694600.0, 80);
+             INSERT INTO workout_activities VALUES (10, 1, NULL, 52, 600.0);
+             INSERT INTO workout_activities VALUES (11, 1, NULL, 37, 1800.0);
+             -- Workout 2: an explicit primary (Walking, 300s) must win over a
+             -- longer non-primary activity (Running, 5000s).
+             INSERT INTO workouts VALUES (2, 0.0);
+             INSERT INTO samples VALUES (2, 721600000.0, 721601000.0, 80);
+             INSERT INTO workout_activities VALUES (20, 2, 1, 52, 300.0);
+             INSERT INTO workout_activities VALUES (21, 2, 0, 37, 5000.0);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+        assert_eq!(report.workouts, 2);
+
+        let c = cache.conn();
+        // Newest first (workout 1 starts later).
+        let rows: Vec<(String, i64)> = c
+            .prepare("SELECT activity, duration_s FROM workouts ORDER BY start_at DESC")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows[0], ("Running".to_string(), 1800)); // longest, NULL flags
+        assert_eq!(rows[1], ("Walking".to_string(), 300)); // explicit primary wins
     }
 }
