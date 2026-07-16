@@ -292,6 +292,8 @@ function SettingsMenu() {
     setShowContactNames,
     showAvatars,
     setShowAvatars,
+    linkPreviews,
+    setLinkPreviews,
     importModules,
     setImportModules,
     logLevel,
@@ -404,6 +406,16 @@ function SettingsMenu() {
                   aria-label="Show contact photos"
                   checked={showAvatars}
                   onCheckedChange={setShowAvatars}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Load link previews"
+                description="Fetch a title & image for links in messages. Off by default — this contacts the linked websites."
+              >
+                <Switch
+                  aria-label="Load link previews"
+                  checked={linkPreviews}
+                  onCheckedChange={setLinkPreviews}
                 />
               </SettingsRow>
               <SettingsRow

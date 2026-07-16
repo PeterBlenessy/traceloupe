@@ -19,6 +19,10 @@ type SettingsProviderState = {
   setShowContactNames: (v: boolean) => void;
   showAvatars: boolean;
   setShowAvatars: (v: boolean) => void;
+  /** Load OpenGraph link previews for URLs in messages (opt-in; contacts external
+   *  sites). Off by default. */
+  linkPreviews: boolean;
+  setLinkPreviews: (v: boolean) => void;
   /** Import module ids the user chose, or null to use the catalog defaults. */
   importModules: string[] | null;
   setImportModules: (ids: string[]) => void;
@@ -40,6 +44,7 @@ type SettingsProviderState = {
 
 const NAMES_KEY = "traceloupe-show-names";
 const AVATARS_KEY = "traceloupe-show-avatars";
+const LINK_PREVIEWS_KEY = "traceloupe-link-previews";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
@@ -97,6 +102,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   );
   const [showAvatars, setShowAvatarsState] = useState<boolean>(() =>
     readBool(AVATARS_KEY),
+  );
+  // Opt-in: default OFF (readBool defaults true, so check explicitly).
+  const [linkPreviews, setLinkPreviewsState] = useState<boolean>(
+    () => localStorage.getItem(LINK_PREVIEWS_KEY) === "true",
   );
   const [importModules, setImportModulesState] = useState<string[] | null>(() =>
     readStringArray(IMPORT_MODULES_KEY),
@@ -185,6 +194,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(AVATARS_KEY, String(v));
     setShowAvatarsState(v);
   };
+  const setLinkPreviews = (v: boolean) => {
+    localStorage.setItem(LINK_PREVIEWS_KEY, String(v));
+    setLinkPreviewsState(v);
+  };
 
   const setImportModules = (ids: string[]) => {
     localStorage.setItem(IMPORT_MODULES_KEY, JSON.stringify(ids));
@@ -214,6 +227,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setShowContactNames,
         showAvatars,
         setShowAvatars,
+        linkPreviews,
+        setLinkPreviews,
         importModules,
         setImportModules,
         logLevel,

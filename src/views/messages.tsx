@@ -62,6 +62,7 @@ import {
 import {
   client,
   type Attachment,
+  type LinkPreview,
   type Message,
   type ThreadSummary,
   type TimeRange,
@@ -989,6 +990,8 @@ function MessageBubble({
   senderLabel?: string | null;
 }) {
   const align = message.isFromMe ? "end" : "start";
+  const { linkPreviews } = useSettings();
+  const previewUrl = linkPreviews && message.body ? firstUrl(message.body) : null;
   return (
     <div>
       {showTime && message.sentAt && (
@@ -1016,6 +1019,7 @@ function MessageBubble({
                   <AttachmentView att={a} />
                 </div>
               ))}
+              {previewUrl && <LinkPreviewCard url={previewUrl} />}
               {message.edited && (
                 <span className="mt-0.5 block text-[10px] italic opacity-60">
                   Edited
@@ -1113,6 +1117,62 @@ function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
         />
       ))}
     </span>
+  );
+}
+
+/** The first URL in `text` (normalized to https), or null. */
+function firstUrl(text: string): string | null {
+  const m = text.match(/(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/i);
+  if (!m) return null;
+  return /^www\./i.test(m[0]) ? `https://${m[0]}` : m[0];
+}
+
+/** An opt-in OpenGraph preview card for a link (only mounted when the setting is
+ *  on). Fetches title/image from the linked site and opens it externally. */
+function LinkPreviewCard({ url }: { url: string }) {
+  const { data } = useQuery<LinkPreview>({
+    queryKey: ["linkPreview", url],
+    queryFn: () => client.fetchLinkPreview(url),
+    staleTime: Infinity,
+    retry: false,
+  });
+  if (!data || (!data.title && !data.image)) return null;
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        client.openExternal(url);
+      }}
+      className="mt-1.5 flex w-full max-w-[280px] overflow-hidden rounded-lg border text-left transition-colors hover:bg-accent/50"
+      title={url}
+    >
+      {data.image && (
+        <img
+          src={data.image}
+          alt=""
+          loading="lazy"
+          className="size-16 shrink-0 bg-muted object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
+      )}
+      <div className="min-w-0 flex-1 p-2">
+        {data.siteName && (
+          <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+            {data.siteName}
+          </div>
+        )}
+        {data.title && (
+          <div className="truncate text-xs font-medium">{data.title}</div>
+        )}
+        {data.description && (
+          <div className="line-clamp-2 text-[11px] text-muted-foreground">
+            {data.description}
+          </div>
+        )}
+      </div>
+    </button>
   );
 }
 
