@@ -234,7 +234,7 @@ backup but has no parser. Ranked by value × feasibility.
 | **CoreDuet interactions** | ✅ real | `interactionC.db` 15,055 interactions, 66 contacts | ★★★ | cross-app who-talked-to-whom graph w/ direction + timestamps |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
-| **Reminders** | ✅ real | 124 reminders | ★★ | to-dos + due dates |
+| **Reminders** | ✅ **surfaced (0.10.0-dev)** | 124 reminders | ★★ | New **Reminders** view: title/notes/due/completion/flag + list name (`ZREMCDREMINDER` joined to `ZREMCDBASELIST`; trashed excluded) |
 | **Apps view metadata** | ✅ available | Info.plist `Applications` → version, install/purchase date, seller | ★★ | cache stores only `bundle_id`; no version/date/size/name shown |
 | **Keychain** | ✅ (sensitive) | passwords / Wi-Fi / certs | ★★ | surface presence + counts only, never values |
 | **Instagram time-in-app** | ✅ partial | 7 usage DBs | ★ | usage telemetry only, no messages |

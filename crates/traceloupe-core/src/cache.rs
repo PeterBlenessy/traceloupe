@@ -218,6 +218,20 @@ CREATE TABLE IF NOT EXISTS calendar_events (
 );
 CREATE INDEX IF NOT EXISTS idx_calendar_start ON calendar_events(start_at DESC);
 
+CREATE TABLE IF NOT EXISTS reminders (
+    id           INTEGER PRIMARY KEY,
+    title        TEXT,
+    notes        TEXT,
+    list_name    TEXT,                          -- the containing reminders list
+    due_at       INTEGER,                       -- unix seconds
+    completed    INTEGER NOT NULL DEFAULT 0,
+    completed_at INTEGER,
+    flagged      INTEGER NOT NULL DEFAULT 0,
+    priority     INTEGER,
+    created_at   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at DESC);
+
 -- Cross-artifact full-text search. ref_kind/ref_id point back at the source row.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     ref_kind UNINDEXED,
