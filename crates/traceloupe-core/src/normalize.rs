@@ -34,6 +34,7 @@ pub struct ImportReport {
     pub calendar_events: usize,
     pub reminders: usize,
     pub workouts: usize,
+    pub interactions: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
 }

@@ -102,7 +102,7 @@ pub fn import_backup(
     // `index/total`. Three always run (Preparing, App Chats, Installed Apps);
     // Safari and the camera roll each contribute two. KEEP IN SYNC with the
     // `step!(…)` calls below.
-    let index_total: u32 = 6
+    let index_total: u32 = 7
         + effective.contains(&"messages") as u32
         + effective.contains(&"notes") as u32
         + effective.contains(&"calls") as u32
@@ -228,6 +228,11 @@ pub fn import_backup(
         step!("Indexing Health");
         import_health_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
     }
+    // CoreDuet cross-app interaction graph (native-only; best-effort).
+    {
+        step!("Indexing Interactions");
+        import_interactions_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+    }
 
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
@@ -313,6 +318,7 @@ pub fn import_backup(
     report.calendar_events += native.calendar_events;
     report.reminders += native.reminders;
     report.workouts += native.workouts;
+    report.interactions += native.interactions;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -635,6 +641,50 @@ fn import_notes_native(
     };
     let _ = std::fs::remove_file(&note_store);
     ok
+}
+
+/// Materialize the CoreDuet cross-app interaction graph from `interactionC.db`.
+/// Native-only and best-effort.
+fn import_interactions_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Interactions unavailable ({e})."));
+            return;
+        }
+    };
+    let entry = match index.find("HomeDomain", "Library/CoreDuet/People/interactionC.db") {
+        Ok(Some(e)) => e,
+        Ok(None) => return,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Interactions: Manifest read failed ({e})."));
+            return;
+        }
+    };
+    let out = work_dir.join(".interactionC.db");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report
+            .warnings
+            .push(format!("Native Interactions: couldn't read interactionC.db ({e})."));
+        return;
+    }
+    if let Err(e) = crate::parsers::coreduet::parse_interactions(&out, cache, report, false) {
+        report
+            .warnings
+            .push(format!("Native Interactions: parse failed ({e})."));
+    }
+    let _ = std::fs::remove_file(&out);
 }
 
 /// Materialize Apple Health workouts + a sample summary from

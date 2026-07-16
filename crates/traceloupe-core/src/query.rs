@@ -688,6 +688,42 @@ pub fn list_calendar_events(cache: &CacheDb) -> Result<Vec<CalendarEvent>> {
         .map_err(Into::into)
 }
 
+/// One row of the CoreDuet interaction graph: a contact + how much you've
+/// communicated with them (across apps) and over what span.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Interaction {
+    pub id: i64,
+    pub display_name: Option<String>,
+    pub identifier: Option<String>,
+    pub incoming: i64,
+    pub outgoing: i64,
+    pub first_at: Option<i64>,
+    pub last_at: Option<i64>,
+}
+
+/// The interaction graph, most-contacted first.
+pub fn list_interactions(cache: &CacheDb) -> Result<Vec<Interaction>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, display_name, identifier, incoming, outgoing, first_at, last_at
+         FROM interactions ORDER BY (incoming + outgoing) DESC, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Interaction {
+            id: r.get(0)?,
+            display_name: r.get(1)?,
+            identifier: r.get(2)?,
+            incoming: r.get(3)?,
+            outgoing: r.get(4)?,
+            first_at: r.get(5)?,
+            last_at: r.get(6)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// One Health workout.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

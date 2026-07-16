@@ -150,6 +150,16 @@ export interface CalendarEvent {
   url: string | null;
 }
 
+export interface Interaction {
+  id: number;
+  displayName: string | null;
+  identifier: string | null;
+  incoming: number;
+  outgoing: number;
+  firstAt: number | null;
+  lastAt: number | null;
+}
+
 export interface Workout {
   id: number;
   activity: string | null;
@@ -376,6 +386,7 @@ export interface TraceLoupeClient {
   listReminders(): Promise<Reminder[]>;
   listWorkouts(): Promise<Workout[]>;
   healthSummary(): Promise<HealthSummary>;
+  listInteractions(): Promise<Interaction[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -586,6 +597,7 @@ const tauriClient: TraceLoupeClient = {
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
+  listInteractions: () => invoke<Interaction[]>("list_interactions"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -1784,6 +1796,29 @@ export const mockClient: TraceLoupeClient = {
           workoutCount: 2,
         }
       : { sampleCount: 0, firstAt: null, lastAt: null, workoutCount: 0 },
+  listInteractions: async () =>
+    mockActive
+      ? [
+          {
+            id: 1,
+            displayName: "Robin Chen",
+            identifier: "+15551234567",
+            incoming: 842,
+            outgoing: 1203,
+            firstAt: 1500000000,
+            lastAt: 1717900000,
+          },
+          {
+            id: 2,
+            displayName: null,
+            identifier: "team@work.example",
+            incoming: 210,
+            outgoing: 55,
+            firstAt: 1600000000,
+            lastAt: 1717800000,
+          },
+        ]
+      : [],
   listReminders: async () =>
     mockActive
       ? [
