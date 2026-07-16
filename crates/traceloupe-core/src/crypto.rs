@@ -440,10 +440,12 @@ fn be_u32(val: &[u8]) -> Result<u32> {
 }
 
 /// Decrypt an Apple Notes **password-protected** note body. Locked notes store
-/// their body as AES-128-GCM ciphertext (`ZENCRYPTEDDATA`) over the same gzip
-/// protobuf an unlocked note uses; the key is derived from the note password via
-/// PBKDF2-HMAC-SHA256(salt, iterations) → 16 bytes. `iv` is the 12-byte GCM nonce
-/// and `tag` the 16-byte auth tag Notes stores separately. Returns the gzip
+/// their body as AES-128-GCM ciphertext in `ZICNOTEDATA.ZDATA` — the same column
+/// (and, once decrypted, the same gzip protobuf) an unlocked note uses. The KEK is
+/// derived from the note password via PBKDF2-HMAC-SHA256(salt, iterations) → 16
+/// bytes; the per-note key is then unwrapped from `wrapped_key` (or the KEK is used
+/// directly). `iv` (16 bytes on real data, sometimes 12) and `tag` (16 bytes) are
+/// the GCM nonce/auth-tag Notes stores on the `ZICNOTEDATA` row. Returns the gzip
 /// plaintext (feed it to the note-body decoder). A wrong password fails the GCM
 /// tag check, so this doubles as the password verifier.
 ///
@@ -478,7 +480,9 @@ pub fn decrypt_note(
         }
     }
     if wrapped_key.len() == 16 {
-        candidates.push(aes_ecb_decrypt_block(&kek, wrapped_key));
+        if let Some(k) = aes_ecb_decrypt_block(&kek, wrapped_key) {
+            candidates.push(k);
+        }
     }
     candidates.push(Zeroizing::new(*kek));
 
@@ -522,15 +526,17 @@ fn aes_kw_unwrap_128(kek: &[u8; 16], wrapped: &[u8]) -> Option<Zeroizing<[u8; 16
 }
 
 /// Raw AES-128 single-block decrypt — the alternative 16-byte content-key wrap.
-fn aes_ecb_decrypt_block(kek: &[u8; 16], data: &[u8]) -> Zeroizing<[u8; 16]> {
+/// None if `data` isn't at least one block, so it's panic-safe on any blob length.
+fn aes_ecb_decrypt_block(kek: &[u8; 16], data: &[u8]) -> Option<Zeroizing<[u8; 16]>> {
     use aes::cipher::generic_array::GenericArray;
     use aes::cipher::{BlockDecrypt, KeyInit};
+    let first = data.get(..16)?;
     let cipher = aes::Aes128::new(GenericArray::from_slice(kek));
-    let mut block = *GenericArray::from_slice(&data[..16]);
+    let mut block = *GenericArray::from_slice(first);
     cipher.decrypt_block(&mut block);
     let mut out = [0u8; 16];
     out.copy_from_slice(&block);
-    Zeroizing::new(out)
+    Some(Zeroizing::new(out))
 }
 
 /// A plist integer that may be encoded signed or unsigned. Rejects negatives: a
