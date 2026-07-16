@@ -688,6 +688,65 @@ pub fn list_calendar_events(cache: &CacheDb) -> Result<Vec<CalendarEvent>> {
         .map_err(Into::into)
 }
 
+/// One Health workout.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Workout {
+    pub id: i64,
+    pub activity: Option<String>,
+    pub start_at: Option<i64>,
+    pub end_at: Option<i64>,
+    pub duration_s: Option<i64>,
+    pub distance_m: Option<f64>,
+}
+
+/// A digest of the Health store's raw-sample volume (from the `meta` table).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthSummary {
+    pub sample_count: i64,
+    pub first_at: Option<i64>,
+    pub last_at: Option<i64>,
+    pub workout_count: i64,
+}
+
+/// Workouts, most recent first.
+pub fn list_workouts(cache: &CacheDb) -> Result<Vec<Workout>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, activity, start_at, end_at, duration_s, distance_m
+         FROM workouts ORDER BY start_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Workout {
+            id: r.get(0)?,
+            activity: r.get(1)?,
+            start_at: r.get(2)?,
+            end_at: r.get(3)?,
+            duration_s: r.get(4)?,
+            distance_m: r.get(5)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// The Health summary (sample count + date range + workout count), or a zeroed
+/// summary when no Health data was imported.
+pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
+    let meta_i = |k: &str| -> Option<i64> { cache.get_meta(k).ok().flatten()?.parse().ok() };
+    let workout_count: i64 =
+        cache
+            .conn()
+            .query_row("SELECT COUNT(*) FROM workouts", [], |r| r.get(0))?;
+    Ok(HealthSummary {
+        sample_count: meta_i("health_sample_count").unwrap_or(0),
+        first_at: meta_i("health_first_at"),
+        last_at: meta_i("health_last_at"),
+        workout_count,
+    })
+}
+
 /// One reminder.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

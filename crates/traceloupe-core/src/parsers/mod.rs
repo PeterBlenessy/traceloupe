@@ -14,6 +14,7 @@ pub mod address_book;
 pub mod apps;
 pub mod calendar;
 pub mod calls;
+pub mod health;
 pub mod camera_roll;
 pub mod chats;
 pub mod messages;

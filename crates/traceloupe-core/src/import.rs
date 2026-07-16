@@ -102,7 +102,7 @@ pub fn import_backup(
     // `index/total`. Three always run (Preparing, App Chats, Installed Apps);
     // Safari and the camera roll each contribute two. KEEP IN SYNC with the
     // `step!(…)` calls below.
-    let index_total: u32 = 5
+    let index_total: u32 = 6
         + effective.contains(&"messages") as u32
         + effective.contains(&"notes") as u32
         + effective.contains(&"calls") as u32
@@ -223,6 +223,11 @@ pub fn import_backup(
         step!("Indexing Reminders");
         import_reminders_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
     }
+    // Health workouts + summary (native-only; best-effort).
+    {
+        step!("Indexing Health");
+        import_health_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+    }
 
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
@@ -307,6 +312,7 @@ pub fn import_backup(
     report.contacts += native.contacts;
     report.calendar_events += native.calendar_events;
     report.reminders += native.reminders;
+    report.workouts += native.workouts;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -629,6 +635,50 @@ fn import_notes_native(
     };
     let _ = std::fs::remove_file(&note_store);
     ok
+}
+
+/// Materialize Apple Health workouts + a sample summary from
+/// `healthdb_secure.sqlite`. Native-only and best-effort.
+fn import_health_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Health unavailable ({e})."));
+            return;
+        }
+    };
+    let entry = match index.find("HealthDomain", "Health/healthdb_secure.sqlite") {
+        Ok(Some(e)) => e,
+        Ok(None) => return,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Health: Manifest read failed ({e})."));
+            return;
+        }
+    };
+    let out = work_dir.join(".healthdb_secure.sqlite");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report
+            .warnings
+            .push(format!("Native Health: couldn't read healthdb ({e})."));
+        return;
+    }
+    if let Err(e) = crate::parsers::health::parse_health(&out, cache, report, false) {
+        report
+            .warnings
+            .push(format!("Native Health: parse failed ({e})."));
+    }
+    let _ = std::fs::remove_file(&out);
 }
 
 /// Materialize Reminders natively from the reminders container. Its Core Data
