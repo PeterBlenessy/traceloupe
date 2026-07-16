@@ -93,7 +93,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let timestamp = r
             .get::<_, Option<f64>>(4)?
             .filter(|d| *d > 0.0)
-            .map(|d| d as i64 + MAC_EPOCH);
+            .map(|d| (d + MAC_EPOCH as f64) as i64);
         let sender_id: Option<String> = super::col_string(r, 5)?;
         let sender_name: Option<String> = super::col_string(r, 6)?.filter(|s| !s.trim().is_empty());
         let has_attachment = r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;

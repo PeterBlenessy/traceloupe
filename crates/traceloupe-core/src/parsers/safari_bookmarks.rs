@@ -62,12 +62,16 @@ fn load_nodes(conn: &Connection) -> Result<HashMap<i64, Node>> {
     let mut map = HashMap::new();
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        let id: i64 = r.get(0)?;
+        // `id` keys the tree; a row with a NULL id can't be linked, so skip it
+        // rather than abort the whole load. A NULL `type` is simply not a folder.
+        let Some(id) = r.get::<_, Option<i64>>(0)? else {
+            continue;
+        };
         map.insert(
             id,
             Node {
                 parent: r.get(1)?,
-                is_folder: r.get::<_, i64>(2)? == 1,
+                is_folder: r.get::<_, Option<i64>>(2)?.unwrap_or(0) == 1,
                 special_id: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 title: r.get::<_, Option<String>>(4)?.filter(|s| !s.is_empty()),
                 url: r.get::<_, Option<String>>(5)?.filter(|s| !s.is_empty()),

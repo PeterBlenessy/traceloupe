@@ -112,7 +112,7 @@ pub fn parse_calls(
         let occurred_at = r
             .get::<_, Option<f64>>(1)?
             .filter(|d| *d > 0.0)
-            .map(|d| d as i64 + MAC_EPOCH);
+            .map(|d| (d + MAC_EPOCH as f64) as i64);
         let duration_s = r
             .get::<_, Option<f64>>(2)?
             .map(|d| d.max(0.0) as i64)

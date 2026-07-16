@@ -87,7 +87,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let timestamp = r
             .get::<_, Option<f64>>(3)?
             .filter(|d| *d > 0.0)
-            .map(|d| d as i64 + MAC_EPOCH);
+            .map(|d| (d + MAC_EPOCH as f64) as i64);
         let ztype = r.get::<_, Option<i64>>(4)?.unwrap_or(0);
         // Read body type-tolerantly — one BLOB-typed ZBODY must not abort the parse.
         let body: Option<String> = super::col_string(r, 5)?;

@@ -29,7 +29,7 @@ pub const MODULE: super::AppChatModule = super::AppChatModule {
     parse,
 };
 
-use super::col_string;
+use super::{col_i64, col_string};
 
 /// Every `lightspeed-userDatabases/*.db` in the backup (Messenger's per-user
 /// message stores). The driver parses each; non-message DBs return empty.
@@ -88,11 +88,8 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let chat_key: String = col_string(r, 0)?
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "unknown".into());
-        let timestamp = r
-            .get::<_, Option<i64>>(1)?
-            .filter(|ms| *ms > 0)
-            .map(|ms| ms / 1000);
-        let body: Option<String> = r.get(2)?;
+        let timestamp = col_i64(r, 1)?.filter(|ms| *ms > 0).map(|ms| ms / 1000);
+        let body: Option<String> = col_string(r, 2)?;
         let sender_name: Option<String> = col_string(r, 3)?.filter(|s| !s.trim().is_empty());
         let sender_id: Option<String> = col_string(r, 4)?;
         let is_from_me = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;

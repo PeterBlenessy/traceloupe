@@ -167,7 +167,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
             let taken_at = r
                 .get::<_, Option<f64>>(3)?
                 .filter(|t| *t > 0.0)
-                .map(|t| t as i64 + MAC_EPOCH);
+                .map(|t| (t + MAC_EPOCH as f64) as i64);
             let lat: Option<f64> = r.get(4)?;
             let lon: Option<f64> = r.get(5)?;
             // iOS stores -180.0 (or an out-of-range value) when there's no fix.

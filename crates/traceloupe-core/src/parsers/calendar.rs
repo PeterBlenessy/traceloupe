@@ -21,7 +21,8 @@ use crate::Result;
 const MAC_EPOCH: i64 = 978_307_200;
 
 fn to_unix(d: Option<f64>) -> Option<i64> {
-    d.filter(|v| *v > 0.0).map(|v| v as i64 + MAC_EPOCH)
+    d.filter(|v| *v > 0.0)
+        .map(|v| (v + MAC_EPOCH as f64) as i64)
 }
 
 /// Parse Calendar events into the cache `calendar_events` table. With `replace`,
