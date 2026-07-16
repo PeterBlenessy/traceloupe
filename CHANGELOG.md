@@ -28,6 +28,32 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.11.2] — 2026-07-16
+
+A broad whole-crate review of `traceloupe-core`. The security-critical surface —
+keybag/AES decryption, the Manifest path guards, and all dynamic SQL — verified
+clean (no reachable panics from adversarial keybag/plist/typedstream/postbox
+bytes, no SQL injection, no path traversal). This releases the data-integrity
+hardening it surfaced.
+
+### Fixed
+
+- **Timestamp overflow across 13 parsers** — converting a Core Data date did
+  `d as i64 + MAC_EPOCH`, which saturates the float→int cast and then overflows
+  the integer add on a corrupt/absurd date (~1e19): a panic in debug builds, a
+  wrapped-negative time in release. Now the epoch is added in floating point
+  before the cast, so it saturates cleanly. (safari, calls, address book, photos,
+  reminders, health, interactions, calendar, and the WhatsApp/Viber/Kik/Threema
+  chat parsers.)
+- **Safari bookmarks: one bad row no longer wipes the whole import** — a NULL
+  `type` or `id` was read strictly and aborted the entire bookmarks/reading-list/
+  tabs load; such rows are now tolerated (NULL type → not a folder) or skipped.
+- **WhatsApp / Facebook Messenger: a mistyped cell no longer drops all messages**
+  — message body/timestamp now go through the same tolerant column readers the
+  other app-chat parsers use.
+- **Recordings re-import keeps the folder name** — a recordings-only re-import
+  hardcoded the Voice-Memos folder to NULL; it now matches the full import.
+
 ## [0.11.1] — 2026-07-16
 
 A code-review pass over the 0.9.0→0.11.0 work. The reviewed surface (Notes
