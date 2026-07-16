@@ -698,8 +698,10 @@ function TimelineRow({
             </span>
           )}
           {m.body ? (
-            m.body
-          ) : m.attachments.length ? (
+            <MessageBody text={m.body} />
+          ) : m.attachments.some(
+              (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
+            ) ? null : m.attachments.length ? (
             <span className="inline-flex items-center gap-1 text-muted-foreground">
               <Paperclip className="size-3.5" />
               {m.attachments[0].filename ?? "attachment"}
@@ -707,6 +709,7 @@ function TimelineRow({
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
+          <TimelineThumbs attachments={m.attachments} />
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           {slug && hasBrandIcon(slug) && (
@@ -1005,7 +1008,7 @@ function MessageBubble({
               )}
               {message.body && (
                 <p className="whitespace-pre-wrap break-words">
-                  {message.body}
+                  <MessageBody text={message.body} />
                 </p>
               )}
               {message.attachments.map((a) => (
@@ -1059,6 +1062,58 @@ function isImageAttachment(mime: string, filename: string | null): boolean {
   if (mime.startsWith("image/")) return true;
   const f = (filename ?? "").toLowerCase();
   return /\.(jpe?g|png|gif|heic|heif|webp|tiff?|bmp)$/.test(f);
+}
+
+/** Message text with URLs rendered as clickable links that open in the default
+ *  browser (user-initiated; the app never loads remote content itself). */
+const URL_RE = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
+function MessageBody({ text }: { text: string }) {
+  return text.split(URL_RE).map((part, i) => {
+    if (!part) return null;
+    if (/^(https?:\/\/|www\.)/i.test(part)) {
+      const href = /^www\./i.test(part) ? `https://${part}` : part;
+      return (
+        <a
+          key={i}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            client.openExternal(href);
+          }}
+          className="cursor-pointer break-all text-primary underline underline-offset-2"
+          title={href}
+        >
+          {part}
+        </a>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
+}
+
+/** Compact inline thumbnails of a message's available image attachments, for the
+ *  Timeline (clicking the row navigates to the conversation). */
+function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
+  const imgs = attachments.filter(
+    (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
+  );
+  if (!imgs.length) return null;
+  return (
+    <span className="ml-2 inline-flex shrink-0 gap-1 align-middle">
+      {imgs.slice(0, 3).map((a) => (
+        <img
+          key={a.id}
+          src={client.attachmentUrl(a.id, { thumb: true })}
+          alt=""
+          loading="lazy"
+          className="size-9 rounded object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
+      ))}
+    </span>
+  );
 }
 
 function AttachmentView({ att }: { att: Attachment }) {
@@ -1116,10 +1171,15 @@ function AttachmentView({ att }: { att: Attachment }) {
         "flex items-center gap-1.5 rounded-md text-xs",
         available ? "underline-offset-2 hover:underline" : "opacity-60",
       )}
-      title={available ? "Open attachment" : "File not available"}
+      title={available ? "Open attachment" : "This attachment isn't in the backup"}
     >
       <Icon className="size-4 shrink-0" />
       <span className="truncate">{att.filename ?? "attachment"}</span>
+      {!available && (
+        <span className="shrink-0 text-[10px] italic opacity-70">
+          · not in backup
+        </span>
+      )}
     </button>
   );
 }
