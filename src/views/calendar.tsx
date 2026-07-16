@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarDays, Clock, MapPin } from "lucide-react";
+import { CalendarDays, Clock, MapPin, Repeat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
@@ -41,8 +41,14 @@ function EventRow({ event }: { event: CalendarEvent }) {
   return (
     <div className="rounded-md border px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-2">
-        <span className="truncate font-medium">
-          {event.title ?? "(untitled event)"}
+        <span className="flex min-w-0 items-center gap-1.5 font-medium">
+          {event.recurring && (
+            <Repeat
+              className="size-3.5 shrink-0 text-muted-foreground"
+              aria-label="Repeating event"
+            />
+          )}
+          <span className="truncate">{event.title ?? "(untitled event)"}</span>
         </span>
         {event.calendarName && (
           <Badge variant="secondary" className="shrink-0">
@@ -93,6 +99,7 @@ export function CalendarView() {
   });
 
   const [cal, setCal] = usePersistedState<string>("calendar:cal", "all");
+  const [avail, setAvail] = usePersistedState<string>("calendar:avail", "all");
   const [sort, setSort] = usePersistedState<SortState>("calendar:sort", {
     by: "start",
     desc: true,
@@ -116,11 +123,25 @@ export function CalendarView() {
   );
   // Clamp a stale persisted calendar to what this backup has.
   const effCal = cal !== "all" && calendars.includes(cal) ? cal : "all";
+  // Distinct free/busy availabilities present, for that facet.
+  const avails = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (events ?? [])
+            .map((e) => e.availability)
+            .filter((a): a is string => !!a),
+        ),
+      ).sort(),
+    [events],
+  );
+  const effAvail = avail !== "all" && avails.includes(avail) ? avail : "all";
 
-  // Calendar + search filtered (base for the time-chip counts).
+  // Calendar + availability + search filtered (base for the time-chip counts).
   const baseFiltered = useMemo(() => {
     return (events ?? []).filter((e) => {
       if (effCal !== "all" && e.calendarName !== effCal) return false;
+      if (effAvail !== "all" && e.availability !== effAvail) return false;
       if (search) {
         const hay = [e.title, e.notes, e.location]
           .filter(Boolean)
@@ -130,7 +151,7 @@ export function CalendarView() {
       }
       return true;
     });
-  }, [events, effCal, search]);
+  }, [events, effCal, effAvail, search]);
 
   const presetCounts = useMemo(
     () => presets.map((p) => baseFiltered.filter((e) => inWindow(e.startAt, p.lo, p.hi)).length),
@@ -167,6 +188,14 @@ export function CalendarView() {
       count: (events ?? []).filter((e) => e.calendarName === c).length,
     })),
   ];
+  const availOptions: BadgeFilterOption[] = [
+    { value: "all", label: "Any" },
+    ...avails.map((a) => ({
+      value: a,
+      label: a.charAt(0).toUpperCase() + a.slice(1),
+      count: (events ?? []).filter((e) => e.availability === a).length,
+    })),
+  ];
 
   return (
     <VirtualListView<CalendarEvent>
@@ -191,6 +220,9 @@ export function CalendarView() {
       toolbar={
         hasEvents ? (
           <>
+            {avails.length > 1 && (
+              <BadgeFilter options={availOptions} value={effAvail} onChange={setAvail} />
+            )}
             <TimeFilterBar
               className="flex-1"
               presets={presets}

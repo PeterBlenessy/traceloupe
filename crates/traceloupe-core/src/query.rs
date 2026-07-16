@@ -667,13 +667,32 @@ pub struct CalendarEvent {
     pub all_day: bool,
     pub calendar_name: Option<String>,
     pub url: Option<String>,
+    /// Free/busy status: "busy" | "free" | "tentative" | "unavailable" | None.
+    pub availability: Option<String>,
+    /// Part of a repeating series.
+    pub recurring: bool,
+}
+
+/// Map Calendar's `availability` code to a label (0=busy…3=unavailable).
+fn availability_label(code: Option<i64>) -> Option<String> {
+    Some(
+        match code? {
+            0 => "busy",
+            1 => "free",
+            2 => "tentative",
+            3 => "unavailable",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// Calendar events, most recent first (undated last).
 pub fn list_calendar_events(cache: &CacheDb) -> Result<Vec<CalendarEvent>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, title, notes, location, start_at, end_at, all_day, calendar_name, url
+        "SELECT id, title, notes, location, start_at, end_at, all_day, calendar_name, url,
+                availability, has_recurrences
          FROM calendar_events
          ORDER BY start_at DESC NULLS LAST, id DESC",
     )?;
@@ -688,6 +707,8 @@ pub fn list_calendar_events(cache: &CacheDb) -> Result<Vec<CalendarEvent>> {
             all_day: r.get::<_, i64>(6)? != 0,
             calendar_name: r.get(7)?,
             url: r.get(8)?,
+            availability: availability_label(r.get(9)?),
+            recurring: r.get::<_, i64>(10)? != 0,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -704,6 +725,8 @@ pub struct Interaction {
     pub identifier: Option<String>,
     pub incoming: i64,
     pub outgoing: i64,
+    /// Messages they sent to a group you were in (recipient, not direct sender).
+    pub incoming_recipient: i64,
     pub first_at: Option<i64>,
     pub last_at: Option<i64>,
 }
@@ -712,7 +735,8 @@ pub struct Interaction {
 pub fn list_interactions(cache: &CacheDb) -> Result<Vec<Interaction>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, display_name, identifier, incoming, outgoing, first_at, last_at
+        "SELECT id, display_name, identifier, incoming, outgoing, incoming_recipient,
+                first_at, last_at
          FROM interactions ORDER BY (incoming + outgoing) DESC, id",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -722,8 +746,9 @@ pub fn list_interactions(cache: &CacheDb) -> Result<Vec<Interaction>> {
             identifier: r.get(2)?,
             incoming: r.get(3)?,
             outgoing: r.get(4)?,
-            first_at: r.get(5)?,
-            last_at: r.get(6)?,
+            incoming_recipient: r.get(5)?,
+            first_at: r.get(6)?,
+            last_at: r.get(7)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -801,13 +826,15 @@ pub struct Reminder {
     pub completed_at: Option<i64>,
     pub flagged: bool,
     pub priority: Option<i64>,
+    pub created_at: Option<i64>,
 }
 
 /// Reminders: open first (by due date), then completed.
 pub fn list_reminders(cache: &CacheDb) -> Result<Vec<Reminder>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, title, notes, list_name, due_at, completed, completed_at, flagged, priority
+        "SELECT id, title, notes, list_name, due_at, completed, completed_at, flagged, priority,
+                created_at
          FROM reminders
          ORDER BY completed, due_at IS NULL, due_at, id",
     )?;
@@ -822,6 +849,7 @@ pub fn list_reminders(cache: &CacheDb) -> Result<Vec<Reminder>> {
             completed_at: r.get(6)?,
             flagged: r.get::<_, i64>(7)? != 0,
             priority: r.get(8)?,
+            created_at: r.get(9)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

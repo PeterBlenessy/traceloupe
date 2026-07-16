@@ -6,12 +6,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { client, type Reminder } from "@/lib/ipc";
+import { client, type Reminder, type TimeRange } from "@/lib/ipc";
+
+/** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
+function inWindow(at: number | null, lo: number | null, hi: number | null) {
+  if (lo == null && hi == null) return true;
+  if (at == null) return false;
+  return (lo == null || at >= lo) && (hi == null || at < hi);
+}
 
 function ReminderRow({ reminder }: { reminder: Reminder }) {
   return (
@@ -83,6 +91,8 @@ export function RemindersView() {
   });
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim().toLowerCase());
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
 
   const lists = useMemo(
     () =>
@@ -99,8 +109,9 @@ export function RemindersView() {
     [reminders],
   );
 
-  const filtered = useMemo(() => {
-    const matched = (reminders ?? []).filter((r) => {
+  // Status + list + search filtered (base for the created-date chip counts).
+  const baseFiltered = useMemo(() => {
+    return (reminders ?? []).filter((r) => {
       if (status === "open" && r.completed) return false;
       if (status === "completed" && !r.completed) return false;
       if (status === "flagged" && !r.flagged) return false;
@@ -114,12 +125,26 @@ export function RemindersView() {
       }
       return true;
     });
+  }, [reminders, status, effList, search]);
+
+  const presetCounts = useMemo(
+    () => presets.map((p) => baseFiltered.filter((r) => inWindow(r.createdAt, p.lo, p.hi)).length),
+    [presets, baseFiltered],
+  );
+
+  const filtered = useMemo(() => {
+    const inRange = baseFiltered.filter((r) => inWindow(r.createdAt, range.lo, range.hi));
     return sortItems(
-      matched,
-      (r) => (sort.by === "due" ? r.dueAt : (r.title ?? "").toLowerCase()),
+      inRange,
+      (r) =>
+        sort.by === "due"
+          ? r.dueAt
+          : sort.by === "created"
+            ? r.createdAt
+            : (r.title ?? "").toLowerCase(),
       sort.desc,
     );
-  }, [reminders, status, effList, search, sort]);
+  }, [baseFiltered, range, sort]);
 
   if (active === false) {
     return (
@@ -183,16 +208,19 @@ export function RemindersView() {
         hasReminders ? (
           <>
             {lists.length > 1 && (
-              <BadgeFilter
-                className="flex-1"
-                options={listOptions}
-                value={effList}
-                onChange={setList}
-              />
+              <BadgeFilter options={listOptions} value={effList} onChange={setList} />
             )}
+            <TimeFilterBar
+              className="flex-1"
+              presets={presets}
+              value={range}
+              onChange={setRange}
+              counts={presetCounts}
+            />
             <SortControl
               fields={[
                 { value: "title", label: "Title" },
+                { value: "created", label: "Created" },
                 { value: "due", label: "Due" },
               ]}
               value={sort}

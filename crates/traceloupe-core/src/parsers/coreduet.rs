@@ -47,7 +47,8 @@ pub fn parse_interactions(
         "SELECT ZDISPLAYNAME, ZIDENTIFIER,
                 COALESCE(ZINCOMINGSENDERCOUNT, 0), COALESCE(ZOUTGOINGRECIPIENTCOUNT, 0),
                 ZFIRSTINCOMINGSENDERDATE, ZFIRSTOUTGOINGRECIPIENTDATE, ZFIRSTINCOMINGRECIPIENTDATE,
-                ZLASTINCOMINGSENDERDATE, ZLASTOUTGOINGRECIPIENTDATE, ZLASTINCOMINGRECIPIENTDATE
+                ZLASTINCOMINGSENDERDATE, ZLASTOUTGOINGRECIPIENTDATE, ZLASTINCOMINGRECIPIENTDATE,
+                COALESCE(ZINCOMINGRECIPIENTCOUNT, 0)
          FROM ZCONTACTS
          WHERE ZIDENTIFIER IS NOT NULL
          ORDER BY (COALESCE(ZINCOMINGSENDERCOUNT,0) + COALESCE(ZOUTGOINGRECIPIENTCOUNT,0)) DESC",
@@ -65,6 +66,7 @@ pub fn parse_interactions(
         let identifier: Option<String> = r.get(1)?;
         let incoming: i64 = r.get(2)?;
         let outgoing: i64 = r.get(3)?;
+        let incoming_recipient: i64 = r.get(10)?;
         // Earliest of the three first-interaction dates; latest of the last three.
         let first_at = [4, 5, 6]
             .into_iter()
@@ -80,13 +82,14 @@ pub fn parse_interactions(
         }
         tx.execute(
             "INSERT INTO interactions
-                (display_name, identifier, incoming, outgoing, first_at, last_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                (display_name, identifier, incoming, outgoing, incoming_recipient, first_at, last_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 display_name,
                 identifier,
                 incoming,
                 outgoing,
+                incoming_recipient,
                 first_at,
                 last_at
             ],
@@ -112,13 +115,14 @@ mod tests {
                  ZINCOMINGSENDERCOUNT INTEGER, ZOUTGOINGRECIPIENTCOUNT INTEGER,
                  ZFIRSTINCOMINGSENDERDATE REAL, ZFIRSTOUTGOINGRECIPIENTDATE REAL,
                  ZFIRSTINCOMINGRECIPIENTDATE REAL, ZLASTINCOMINGSENDERDATE REAL,
-                 ZLASTOUTGOINGRECIPIENTDATE REAL, ZLASTINCOMINGRECIPIENTDATE REAL);
+                 ZLASTOUTGOINGRECIPIENTDATE REAL, ZLASTINCOMINGRECIPIENTDATE REAL,
+                 ZINCOMINGRECIPIENTCOUNT INTEGER);
              -- first 721692800 Mac = 1_700_000_000 unix.
-             INSERT INTO ZCONTACTS VALUES (1,'Robin','+15551234567',10,25,721692800.0,721692900.0,NULL,721700000.0,721710000.0,NULL);
+             INSERT INTO ZCONTACTS VALUES (1,'Robin','+15551234567',10,25,721692800.0,721692900.0,NULL,721700000.0,721710000.0,NULL,7);
              -- an identifier-only contact with interactions.
-             INSERT INTO ZCONTACTS VALUES (2,NULL,'a@b.com',3,0,721695000.0,NULL,NULL,721696000.0,NULL,NULL);
+             INSERT INTO ZCONTACTS VALUES (2,NULL,'a@b.com',3,0,721695000.0,NULL,NULL,721696000.0,NULL,NULL,0);
              -- zero interactions → excluded.
-             INSERT INTO ZCONTACTS VALUES (3,'Ghost','x@y.com',0,0,NULL,NULL,NULL,NULL,NULL,NULL);",
+             INSERT INTO ZCONTACTS VALUES (3,'Ghost','x@y.com',0,0,NULL,NULL,NULL,NULL,NULL,NULL,0);",
         )
         .unwrap();
 

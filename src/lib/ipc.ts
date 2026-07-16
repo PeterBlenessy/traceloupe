@@ -152,6 +152,9 @@ export interface CalendarEvent {
   allDay: boolean;
   calendarName: string | null;
   url: string | null;
+  /** "busy" | "free" | "tentative" | "unavailable" | null. */
+  availability: string | null;
+  recurring: boolean;
 }
 
 export interface Interaction {
@@ -160,6 +163,7 @@ export interface Interaction {
   identifier: string | null;
   incoming: number;
   outgoing: number;
+  incomingRecipient: number;
   firstAt: number | null;
   lastAt: number | null;
 }
@@ -190,6 +194,7 @@ export interface Reminder {
   completedAt: number | null;
   flagged: boolean;
   priority: number | null;
+  createdAt: number | null;
 }
 
 /** Counts refreshed by a partial re-import (only the relevant field is set). */
@@ -1784,6 +1789,8 @@ export const mockClient: TraceLoupeClient = {
             allDay: false,
             calendarName: "Work",
             url: null,
+            availability: "busy",
+            recurring: true,
           },
           {
             id: 2,
@@ -1795,6 +1802,8 @@ export const mockClient: TraceLoupeClient = {
             allDay: true,
             calendarName: "Family",
             url: null,
+            availability: "free",
+            recurring: false,
           },
         ]
       : [],
@@ -1837,6 +1846,7 @@ export const mockClient: TraceLoupeClient = {
             identifier: "+15551234567",
             incoming: 842,
             outgoing: 1203,
+            incomingRecipient: 96,
             firstAt: 1500000000,
             lastAt: 1717900000,
           },
@@ -1846,6 +1856,7 @@ export const mockClient: TraceLoupeClient = {
             identifier: "team@work.example",
             incoming: 210,
             outgoing: 55,
+            incomingRecipient: 12,
             firstAt: 1600000000,
             lastAt: 1717800000,
           },
@@ -1864,6 +1875,7 @@ export const mockClient: TraceLoupeClient = {
             completedAt: null,
             flagged: true,
             priority: 1,
+            createdAt: 1717000000,
           },
           {
             id: 2,
@@ -1875,6 +1887,7 @@ export const mockClient: TraceLoupeClient = {
             completedAt: 1717700000,
             flagged: false,
             priority: null,
+            createdAt: 1716000000,
           },
         ]
       : [],
