@@ -25,6 +25,66 @@ impl Drop for TempPath {
     }
 }
 
+/// Decrypt an encrypted backup blob to a stable cached plaintext file (0600),
+/// reused across requests (e.g. `<video>`/`<audio>` Range seeks) instead of
+/// re-decrypting the whole file — and re-writing a whole temp — on every request.
+///
+/// The write goes to a unique temp then atomically renames into `out`, so
+/// concurrent callers for the same id can never observe a half-written file. An
+/// existing `out` whose size matches the expected plaintext size is reused as-is.
+/// The plaintext lives under the cache dir, so `forget_backup` (and a backup
+/// switch) clear it; it never outlives the backup being open.
+fn decrypt_to_cache(
+    dec: &BackupDecryptor,
+    key: &[u8],
+    ciphertext_path: &Path,
+    plain_size: Option<i64>,
+    out: &Path,
+) -> Option<PathBuf> {
+    let want = plain_size.and_then(|s| u64::try_from(s).ok());
+    if let Ok(meta) = std::fs::metadata(out) {
+        // Reuse only when the size matches (guards a truncated/partial leftover).
+        if want.is_none_or(|w| meta.len() == w) {
+            return Some(out.to_path_buf());
+        }
+    }
+    let ciphertext = std::fs::read(ciphertext_path).ok()?;
+    let size = plain_size.and_then(|s| usize::try_from(s).ok());
+    let plain = dec.decrypt_bytes(key, &ciphertext, size).ok()?;
+    if let Some(parent) = out.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = out.with_extension(format!("{seq}.partial"));
+    if write_private(&tmp, &plain).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    if std::fs::rename(&tmp, out).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return None;
+    }
+    Some(out.to_path_buf())
+}
+
+/// Remove a backup's decrypted-plaintext temp files — the on-demand decrypted
+/// originals (`*.decrypted`) and the externally-opened attachments (`att-open/`)
+/// — without touching the parsed cache DB or the (already-decrypted-by-design)
+/// rendered thumbnails. Called when a backup is closed/switched so full-plaintext
+/// originals don't linger past the session that produced them.
+fn clear_decrypted_temps(cache_dir: &Path) {
+    let _ = std::fs::remove_dir_all(cache_dir.join("att-open"));
+    for sub in ["att-thumbs", "thumbs"] {
+        if let Ok(entries) = std::fs::read_dir(cache_dir.join(sub)) {
+            for e in entries.flatten() {
+                if e.path().extension().is_some_and(|x| x == "decrypted") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+    }
+}
+
 /// Write bytes to a fresh file with owner-only (0600) permissions on Unix, so a
 /// decrypted plaintext isn't briefly world-readable at rest.
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -406,7 +466,10 @@ async fn import_backup(
     let backup_path = PathBuf::from(backup_path);
     // Kept for post-import key setup (the originals are moved into the worker).
     let source_dir = backup_path.clone();
-    let key_password = password.clone();
+    // Hold the password only in zeroized buffers, so every copy is wiped from
+    // memory on drop rather than lingering in a freed String allocation.
+    let password = zeroize::Zeroizing::new(password);
+    let key_password = zeroize::Zeroizing::new(password.to_string());
 
     // Blocking pipeline on a worker thread; progress is emitted as it runs.
     let result = tauri::async_runtime::spawn_blocking(move || {
@@ -553,12 +616,26 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     if !valid_backup_id(&backup_id) {
         return false;
     }
+    // Serialize against an in-flight import's atomic cache swap, so we never point
+    // ActiveBackup at a cache mid-write. Fetched from `app` (not a `State` param)
+    // so this command can keep its plain `bool` return.
+    let gate = app.state::<ImportGate>();
+    let _gate = gate.0.lock().await;
     let Ok(data_dir) = app.path().app_data_dir() else {
         return false;
     };
     let cache_path = data_dir.join("caches").join(&backup_id).join("cache.db");
     if !cache_path.exists() {
         return false;
+    }
+    // Switching away from another backup: drop its decrypted-plaintext temps so
+    // full-plaintext originals don't linger once it's no longer the open one.
+    if let Ok(prev) = app.state::<ActiveBackup>().path() {
+        if !prev.starts_with(data_dir.join("caches").join(&backup_id)) {
+            if let Some(prev_dir) = prev.parent() {
+                clear_decrypted_temps(prev_dir);
+            }
+        }
     }
     // Rebuilding the decryptor reads the Keychain, opens the cache and runs
     // PBKDF2 — all blocking. Keep it off the main thread so selecting a backup
@@ -791,10 +868,18 @@ fn reimport_count(module_id: &str, r: &traceloupe_core::normalize::ImportReport)
 /// (media/thumbs), its work dir, and its stored password. Does not touch the
 /// original backup on disk. Re-importing recreates everything.
 #[tauri::command]
-async fn forget_backup(app: AppHandle, backup_id: String) -> Result<(), String> {
+async fn forget_backup(
+    app: AppHandle,
+    gate: State<'_, ImportGate>,
+    backup_id: String,
+) -> Result<(), String> {
     if !valid_backup_id(&backup_id) {
         return Err("invalid backup id".to_string());
     }
+    // Serialize against imports/re-imports so we don't delete a cache dir while an
+    // import is writing it (which could resurrect a half-written cache or fail the
+    // import mid-write).
+    let _gate = gate.0.lock().await;
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     let cache_dir = data_dir.join("caches").join(&backup_id);
     // If this backup is currently open, close it first so we don't delete under a
@@ -1762,27 +1847,21 @@ fn attachment_protocol_response(
         .unwrap_or_else(|| PathBuf::from("att-thumbs"));
 
     // Resolve to a plaintext source: the backup file directly, or (encrypted
-    // backup) a short-lived decrypted temp removed when `_tmp` drops.
-    let (source_path, _tmp): (PathBuf, Option<TempPath>) = if let Some(key) = decrypt_key {
+    // backup) a decrypted temp cached by id. Caching matters for media: the
+    // webview issues many `Range` requests while scrubbing a video, and
+    // re-decrypting the whole file (and re-writing a whole temp) per request is an
+    // OOM/disk-thrash path. `clear_decrypted_temps` removes these on close/forget.
+    let source_path: PathBuf = if let Some(key) = decrypt_key {
         let Some(dec) = app.state::<SessionKeys>().get() else {
             return not_found(); // encrypted attachment but no keys this session
         };
-        let Ok(ciphertext) = std::fs::read(&local_path) else {
+        let out = att_dir.join(format!("att-{id}.decrypted"));
+        let Some(p) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out) else {
             return not_found();
         };
-        let size = plain_size.and_then(|s| usize::try_from(s).ok());
-        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, size) else {
-            return not_found();
-        };
-        let _ = std::fs::create_dir_all(&att_dir);
-        let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = att_dir.join(format!("att-{id}.{seq}.decrypted"));
-        if write_private(&tmp, &plain).is_err() {
-            return not_found();
-        }
-        (tmp.clone(), Some(TempPath(tmp)))
+        p
     } else {
-        (PathBuf::from(&local_path), None)
+        PathBuf::from(&local_path)
     };
 
     // Detect an image by MIME, else by the ORIGINAL filename's extension — an
@@ -1886,42 +1965,57 @@ fn audio_protocol_response(
         return not_found();
     };
 
-    // Materialize the plaintext bytes: decrypt an encrypted original with the
-    // session keys, or read a plaintext one straight off disk.
-    let bytes = if let Some(key) = decrypt_key {
+    // Resolve to a plaintext source path: the file directly, or (encrypted) a
+    // decrypt-once temp cached by id — so a memo's Range seeks don't re-decrypt the
+    // whole `.m4a` each time. Cleared on close/forget by `clear_decrypted_temps`.
+    let cache_dir = cache_path
+        .parent()
+        .map(|p| p.join("att-thumbs"))
+        .unwrap_or_else(|| PathBuf::from("att-thumbs"));
+    let source_path: PathBuf = if let Some(key) = decrypt_key {
         let Some(dec) = app.state::<SessionKeys>().get() else {
             return not_found(); // encrypted item but no keys this session
         };
-        let Ok(ciphertext) = std::fs::read(&local_path) else {
+        let out = cache_dir.join(format!("audio-{id}.decrypted"));
+        let Some(p) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out) else {
             return not_found();
         };
-        let size = plain_size.and_then(|s| usize::try_from(s).ok());
-        let Ok(plain) = dec.decrypt_bytes(&key, &ciphertext, size) else {
-            return not_found();
-        };
-        plain
+        p
     } else {
-        let Ok(raw) = std::fs::read(&local_path) else {
-            return not_found();
-        };
-        raw
+        PathBuf::from(&local_path)
     };
 
     let content_type = media::safe_content_type(mime.as_deref());
-    let total = bytes.len() as u64;
+    let Ok(meta) = std::fs::metadata(&source_path) else {
+        return not_found();
+    };
+    let total = meta.len();
 
     if let Some((start, end)) = range.and_then(|r| parse_byte_range(r, total)) {
-        let slice = bytes[start as usize..=end as usize].to_vec();
+        use std::io::{Read, Seek, SeekFrom};
+        let Ok(mut file) = std::fs::File::open(&source_path) else {
+            return not_found();
+        };
+        if file.seek(SeekFrom::Start(start)).is_err() {
+            return not_found();
+        }
+        let mut buf = vec![0u8; (end - start + 1) as usize];
+        if file.read_exact(&mut buf).is_err() {
+            return not_found();
+        }
         return Response::builder()
             .status(StatusCode::PARTIAL_CONTENT)
             .header("Content-Type", content_type)
             .header("Accept-Ranges", "bytes")
             .header("Content-Range", format!("bytes {start}-{end}/{total}"))
             .header("Cache-Control", "no-cache")
-            .body(slice)
+            .body(buf)
             .unwrap();
     }
 
+    let Ok(bytes) = std::fs::read(&source_path) else {
+        return not_found();
+    };
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", content_type)

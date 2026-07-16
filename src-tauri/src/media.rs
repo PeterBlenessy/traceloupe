@@ -9,9 +9,14 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Longest edge (px) for a grid thumbnail.
 const THUMB_MAX_EDGE: u32 = 512;
+
+/// Monotonic counter for unique per-render temp filenames (so concurrent `sips`
+/// renders of the same id write to distinct temps and rename atomically).
+static SIPS_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Rendered bytes plus the Content-Type to serve them with.
 pub struct Rendered {
@@ -114,22 +119,36 @@ pub fn render(
     let suffix = if want_thumb { "thumb" } else { "full" };
     let out: PathBuf = cache_dir.join(format!("{id}.{suffix}.jpg"));
 
-    if !out.exists() && !run_sips(src, &out, want_thumb) {
-        // Conversion failed (corrupt file, unknown format): fall back to the
-        // original bytes so at least something is served.
-        let bytes = std::fs::read(src).ok()?;
-        return Some(Rendered {
-            bytes,
-            content_type: safe_content_type(src_mime),
-        });
-    }
-    // The cached JPEG can be decrypted plaintext of an encrypted photo — restrict
-    // it to the owner (sips writes it world-readable by default), matching the
-    // rest of the decrypt-at-rest handling.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600));
+    if !out.exists() {
+        // Render to a unique temp, then atomically rename into place — so two
+        // concurrent requests for the same id (grid + lightbox, strict-mode
+        // double-invoke) can't read a half-written JPEG from `out`.
+        let seq = SIPS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = cache_dir.join(format!("{id}.{suffix}.{seq}.partial.jpg"));
+        if !run_sips(src, &tmp, want_thumb) {
+            let _ = std::fs::remove_file(&tmp);
+            // Conversion failed (corrupt file, unknown format): fall back to the
+            // original bytes so at least something is served.
+            let bytes = std::fs::read(src).ok()?;
+            return Some(Rendered {
+                bytes,
+                content_type: safe_content_type(src_mime),
+            });
+        }
+        // The cached JPEG can be decrypted plaintext of an encrypted photo —
+        // restrict it to the owner (sips writes it world-readable by default)
+        // BEFORE it's visible at `out`, matching the decrypt-at-rest handling.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        // Atomic on the same filesystem. If a concurrent request won the race, the
+        // rename overwrites `out` with byte-identical content (harmless); on any
+        // rename error, drop our temp and read whatever `out` the winner produced.
+        if std::fs::rename(&tmp, &out).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
     }
     let bytes = std::fs::read(&out).ok()?;
     Some(Rendered {
