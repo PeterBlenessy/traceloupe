@@ -2,6 +2,7 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   Boxes,
   CalendarDays,
+  HeartPulse,
   ListTodo,
   Smartphone,
   Globe,
@@ -75,6 +76,7 @@ const nav = [
   { to: "/recordings", label: "Recordings", icon: Mic, module: "recordings" },
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/reminders", label: "Reminders", icon: ListTodo },
+  { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/apps", label: "Apps", icon: Boxes },
   { to: "/device", label: "Device", icon: Smartphone },
 ] as const;

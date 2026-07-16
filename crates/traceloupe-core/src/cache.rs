@@ -232,6 +232,16 @@ CREATE TABLE IF NOT EXISTS reminders (
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(due_at DESC);
 
+CREATE TABLE IF NOT EXISTS workouts (
+    id            INTEGER PRIMARY KEY,
+    activity      TEXT,                          -- friendly activity name
+    start_at      INTEGER,                       -- unix seconds
+    end_at        INTEGER,
+    duration_s    INTEGER,
+    distance_m    REAL                           -- total distance in metres
+);
+CREATE INDEX IF NOT EXISTS idx_workouts_start ON workouts(start_at DESC);
+
 -- Cross-artifact full-text search. ref_kind/ref_id point back at the source row.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     ref_kind UNINDEXED,

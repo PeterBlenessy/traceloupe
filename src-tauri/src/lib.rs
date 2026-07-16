@@ -1136,6 +1136,28 @@ async fn list_calendar_events(
 }
 
 #[tauri::command]
+async fn list_workouts(active: State<'_, ActiveBackup>) -> Result<Vec<query::Workout>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_workouts(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn health_summary(active: State<'_, ActiveBackup>) -> Result<query::HealthSummary, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::health_summary(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn list_reminders(
     active: State<'_, ActiveBackup>,
 ) -> Result<Vec<query::Reminder>, String> {
@@ -2010,6 +2032,8 @@ pub fn run() {
             device_info,
             list_calendar_events,
             list_reminders,
+            list_workouts,
+            health_summary,
             message_kinds,
             count_thread_messages,
             get_thread_message_window,

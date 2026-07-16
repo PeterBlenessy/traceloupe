@@ -150,6 +150,22 @@ export interface CalendarEvent {
   url: string | null;
 }
 
+export interface Workout {
+  id: number;
+  activity: string | null;
+  startAt: number | null;
+  endAt: number | null;
+  durationS: number | null;
+  distanceM: number | null;
+}
+
+export interface HealthSummary {
+  sampleCount: number;
+  firstAt: number | null;
+  lastAt: number | null;
+  workoutCount: number;
+}
+
 export interface Reminder {
   id: number;
   title: string | null;
@@ -358,6 +374,8 @@ export interface TraceLoupeClient {
   deviceInfo(): Promise<BackupInfo | null>;
   listCalendarEvents(): Promise<CalendarEvent[]>;
   listReminders(): Promise<Reminder[]>;
+  listWorkouts(): Promise<Workout[]>;
+  healthSummary(): Promise<HealthSummary>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -566,6 +584,8 @@ const tauriClient: TraceLoupeClient = {
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
+  listWorkouts: () => invoke<Workout[]>("list_workouts"),
+  healthSummary: () => invoke<HealthSummary>("health_summary"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -1734,6 +1754,36 @@ export const mockClient: TraceLoupeClient = {
           },
         ]
       : [],
+  listWorkouts: async () =>
+    mockActive
+      ? [
+          {
+            id: 1,
+            activity: "Running",
+            startAt: 1717840800,
+            endAt: 1717842600,
+            durationS: 1800,
+            distanceM: 5200,
+          },
+          {
+            id: 2,
+            activity: "Walking",
+            startAt: 1717754400,
+            endAt: 1717756200,
+            durationS: 1800,
+            distanceM: 2100,
+          },
+        ]
+      : [],
+  healthSummary: async () =>
+    mockActive
+      ? {
+          sampleCount: 344063,
+          firstAt: 1500000000,
+          lastAt: 1717900000,
+          workoutCount: 2,
+        }
+      : { sampleCount: 0, firstAt: null, lastAt: null, workoutCount: 0 },
   listReminders: async () =>
     mockActive
       ? [
