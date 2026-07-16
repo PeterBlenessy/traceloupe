@@ -140,6 +140,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .and_then(conversation_name);
 
         out.push(AppMessage {
+            attachments: Vec::new(),
             chat_key,
             chat_name,
             timestamp,

@@ -936,8 +936,9 @@ fn import_tiktok_messages_native(
             &uid_map,
         ) {
             Ok(msgs) if !msgs.is_empty() => {
-                if let Err(e) = crate::parsers::apps::insert_app_conversation(
-                    cache, "TikTok", true, msgs, report,
+                let resolve = app_media_resolver(&index, decryptor);
+                if let Err(e) = crate::parsers::apps::insert_app_conversation_with_media(
+                    cache, "TikTok", true, msgs, report, &resolve,
                 ) {
                     report
                         .warnings
@@ -1077,6 +1078,37 @@ fn import_contacts_native(
 /// shared inserter writes the threads/messages. Returns the service labels handled
 /// natively (so the equivalent iLEAPP stages are skipped). An app whose DB isn't in
 /// the backup, or that fails to parse, is silently left to the iLEAPP path.
+/// Build a resolver that maps an app attachment to its backup blob. App media
+/// files have unique (usually UUID) names, so a Manifest `LIKE '%<basename>'`
+/// lookup finds them regardless of the app-specific directory layout. Returns
+/// `None` when the file isn't in the backup (evicted / not backed up).
+fn app_media_resolver<'a>(
+    index: &'a crate::manifest::ManifestIndex,
+    decryptor: Option<&'a crate::crypto::BackupDecryptor>,
+) -> impl Fn(&crate::parsers::apps::AppAttachment) -> Option<crate::parsers::apps::ResolvedMedia> + 'a
+{
+    move |att| {
+        let basename = att
+            .path
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())?;
+        let entry = index
+            .find_relative_like(&format!("%{basename}"))
+            .ok()?
+            .into_iter()
+            .next()?;
+        let path = index.blob_path(&entry.file_id).to_string_lossy().into_owned();
+        let (key, size) = match decryptor {
+            Some(_) => crate::crypto::file_key_field(&entry.file_blob)
+                .map(|(k, s)| (Some(k), s))
+                .unwrap_or((None, None)),
+            None => (None, None),
+        };
+        Some((path, key, size))
+    }
+}
+
 fn import_app_chats_native(
     backup_dir: &Path,
     decryptor: Option<&crate::crypto::BackupDecryptor>,
@@ -1145,12 +1177,14 @@ fn import_app_chats_native(
         if msgs.is_empty() {
             continue; // recognized nothing / empty — leave the service to iLEAPP
         }
-        match crate::parsers::apps::insert_app_conversation(
+        let resolve = app_media_resolver(&index, decryptor);
+        match crate::parsers::apps::insert_app_conversation_with_media(
             cache,
             m.service,
             m.numeric_id_groups,
             msgs,
             report,
+            &resolve,
         ) {
             Ok(()) => handled.push(m.service),
             Err(e) => report.warnings.push(format!(

@@ -194,6 +194,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let sender_name = sender_pk.as_ref().and_then(|pk| users.get(pk).cloned());
 
         out.push(AppMessage {
+            attachments: Vec::new(),
             chat_key: thread_id,
             chat_name: None, // derived from the peer
             timestamp,
