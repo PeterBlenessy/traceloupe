@@ -18,7 +18,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.8.0` | **Native TikTok DMs + UI overhaul** — TikTok direct messages (validated) with a message content-kind filter, friendlier voice-memo titles, and message media in the gallery; a shared `PanelHeader`, badge filters, a UI density setting, and persisted per-view state. |
 | `0.9.0` | **Data-coverage pass** — a field-level audit against a real backup, then filling the high-value gaps: Calls FaceTime/location, Photos EXIF/hidden/subtypes, Contacts detail (birthday/note/addresses), Messages receipts/reactions/replies, Safari deleted-history. |
 | `0.10.0` | **Untapped stores surfaced** — five new views (Device, Calendar, Reminders, Health, Interactions), Messages `attributedBody` decode + edited flag, Notes rich-content indicators, and the app-chat attachment-media framework. |
-| `0.11.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), locked-note decryption, then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.11.0` | **Locked-note decryption** — password-protected Apple Notes unlock on demand (PBKDF2 → RFC-3394 key-unwrap → AES-128-GCM), the note password entered in-app and nothing decrypted at rest. Closes the last coverage-audit gap. |
+| `0.12.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -26,6 +27,35 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.11.0] — 2026-07-16
+
+Closes the last gap from the 0.9.0/0.10.0 coverage audit: **password-protected
+(locked) Apple Notes can now be unlocked**. The note password is entered in the
+app and never leaves it; nothing is decrypted at rest — only the crypto
+parameters are cached, and the plaintext is derived on demand and discarded.
+
+### Added
+
+- **Locked-note decryption** — unlocking a protected note runs Apple's crypto
+  ladder: `PBKDF2-HMAC-SHA256(password, salt)` → AES key-unwrap (RFC 3394) of the
+  per-note key → `AES-128-GCM` over the note body (IV/tag/ciphertext from
+  `ZICNOTEDATA`) → gunzip → protobuf → text. Salt/iterations/wrapped-key are read
+  from the note object, matching Apple's real table layout.
+
+### Fixed
+
+- **Locked-note decryption was broken** — the parser read the ciphertext from a
+  nonexistent `ZENCRYPTEDDATA` column, took the GCM IV/tag from the wrong table,
+  and ignored `ZCRYPTOWRAPPEDKEY` (skipping the key-unwrap step), so `unlockNote`
+  always failed. All three are corrected. The decryptor is also resilient to an
+  anomalous on-device variant (iteration count `0` → 20000 default; a 16-byte
+  wrapped key) by trying multiple key candidates and letting the GCM tag select
+  the right one.
+
+### Internal
+
+- Cache schema **v23 → v24** (adds `notes.crypto_wrapped_key`).
 
 ## [0.10.0] — 2026-07-16
 
