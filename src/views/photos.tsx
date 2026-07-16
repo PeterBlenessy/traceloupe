@@ -444,7 +444,8 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   return (
     <button
       onClick={onOpen}
-      className="group relative aspect-square w-full overflow-hidden rounded-sm bg-muted"
+      aria-label={item.filename ?? (isVideo ? "Open video" : "Open photo")}
+      className="group relative aspect-square w-full overflow-hidden rounded-sm bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <img
         src={client.mediaUrl(item.id, { thumb: true })}

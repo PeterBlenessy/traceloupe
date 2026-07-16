@@ -13,13 +13,13 @@ const INVALIDATE_KEYS: Record<string, string[]> = {
   notes: ["notes"],
   calls: ["callsCount", "callsWindow"],
   safari: ["safariCount", "safariWindow"],
-  camera_roll: ["mediaCount", "mediaSources", "mediaWindow"],
+  camera_roll: ["mediaCount", "mediaSources", "mediaWindow", "mediaRanges"],
   messages: [
     "threads",
     "messageCount",
     "messageWindow",
     "messageRanges",
-    "timelineCount",
+    "timelineRangeCount",
     "timelineWindow",
   ],
 };
