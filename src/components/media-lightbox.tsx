@@ -1,6 +1,6 @@
 /**
  * Shared image/video lightbox shell for Photos and Messages. Two styles (chosen
- * in Settings ▸ Media): a windowed modal card, or a maximized fullscreen view.
+ * in Settings ▸ Media ▸ Viewer style): a windowed modal card, or a fullscreen view.
  * In both, clicking anywhere outside the media closes it, and the metadata sits
  * on a solid (opaque) bar so it's always readable — never over transparency.
  */
@@ -69,35 +69,30 @@ export function MediaLightbox({
         >
           <X className="size-5" />
         </button>
-        {/* Clicking the surround (anything but the media/controls) closes. */}
+        {/* The media is a DIRECT child so its `max-h-full` resolves against this
+            flex area (an intermediate wrapper breaks the chain and lets a tall/
+            portrait image overflow onto the metadata bar). Clicking the surround
+            (this element itself, not the media or a control) closes; overflow is
+            hidden as a belt-and-suspenders against any overflow. */}
         <div
-          className="relative flex min-h-0 flex-1 items-center justify-center"
-          onClick={onClose}
+          className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
         >
           {hasPrev && (
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onPrev?.();
-              }}
+              onClick={onPrev}
               aria-label="Previous"
               className="absolute left-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
             >
               <ChevronLeft className="size-6" />
             </button>
           )}
-          <div
-            className="flex max-h-full max-w-full items-center justify-center"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {media}
-          </div>
+          {media}
           {hasNext && (
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onNext?.();
-              }}
+              onClick={onNext}
               aria-label="Next"
               className="absolute right-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
             >
