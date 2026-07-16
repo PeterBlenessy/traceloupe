@@ -19,14 +19,37 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use flate2::read::GzDecoder;
 use rusqlite::{Connection, OpenFlags};
 
 use crate::cache::CacheDb;
+use crate::crypto::{self, BackupDecryptor};
+use crate::manifest::ManifestIndex;
 use crate::normalize::ImportReport;
 use crate::Result;
+
+/// The Notes backup domain — where a note's Media/Previews images live.
+const NOTES_DOMAIN: &str = "AppDomainGroup-group.com.apple.notes";
+
+/// Lets the parser resolve a note's embedded image to its backup file (for a list
+/// thumbnail). `None` when no Manifest is available (e.g. tests) — notes still
+/// parse, just without image thumbnails.
+pub struct NoteImageSource<'a> {
+    pub index: &'a ManifestIndex,
+    /// `Some` for an encrypted backup — the image blob is then ciphertext and its
+    /// wrapped key is stored for on-demand decryption at view time.
+    pub decryptor: Option<&'a BackupDecryptor>,
+}
+
+/// A note's first embedded image, resolved to a servable backup blob.
+struct NoteImage {
+    local_path: String,
+    decrypt_key: Option<Vec<u8>>,
+    plain_size: Option<i64>,
+    mime: Option<String>,
+}
 
 /// Core Data counts time in seconds since 2001-01-01 UTC. Convert to Unix epoch
 /// seconds; a 0/absent timestamp → None.
@@ -76,6 +99,7 @@ pub fn parse_notes(
     cache: &CacheDb,
     report: &mut ImportReport,
     replace: bool,
+    images: Option<&NoteImageSource>,
 ) -> Result<()> {
     let src = Connection::open_with_flags(note_store, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
 
@@ -174,6 +198,10 @@ pub fn parse_notes(
     // in ZALTTEXT and whose note is ZNOTE1 (distinct from the media columns
     // ZTYPEUTI/ZNOTE). Pre-load note_pk → [tags]; empty when the columns are absent.
     let note_tags = load_note_tags(&src, &cols)?;
+
+    // First embedded image per note, resolved to a backup blob for a thumbnail.
+    // Empty when there's no Manifest (tests) or the schema lacks the columns.
+    let note_images = load_note_images(&src, &cols, images);
 
     // One row per note: its columns + its folder's title + its body blob `d.ZDATA`
     // (gzip protobuf when unlocked, AES-GCM ciphertext when locked) + crypto params +
@@ -284,10 +312,13 @@ pub fn parse_notes(
             .filter(|s| !s.trim().is_empty())
             .or_else(|| derive_snippet(&body_text));
 
+        // Its first embedded image (for a list thumbnail), if resolved.
+        let img = note_images.get(&note_pk);
         tx.execute(
             "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked, pinned,
-                                has_checklist, image_count, attachment_count, tags)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11)",
+                                has_checklist, image_count, attachment_count, tags,
+                                image_local_path, image_decrypt_key, image_plain_size, image_mime)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
                 folder,
                 title,
@@ -300,6 +331,10 @@ pub fn parse_notes(
                 image_count,
                 attachment_count,
                 tags,
+                img.map(|i| i.local_path.as_str()),
+                img.and_then(|i| i.decrypt_key.as_deref()),
+                img.and_then(|i| i.plain_size),
+                img.and_then(|i| i.mime.as_deref()),
             ],
         )?;
         report.notes += 1;
@@ -365,6 +400,138 @@ fn load_note_tags(
         }
     }
     Ok(map)
+}
+
+/// Image UTIs we resolve for a note thumbnail (matches the `image_count` set).
+const NOTE_IMAGE_UTIS: &str =
+    "'public.jpeg','public.png','public.heic','public.avif','org.webmproject.webp'";
+
+/// Resolve each note's FIRST embedded image (lowest attachment Z_PK) to a servable
+/// backup blob for a list thumbnail. Empty when there's no Manifest or the schema
+/// lacks the object columns. Best-effort per note (unresolved images are skipped).
+fn load_note_images(
+    conn: &Connection,
+    cols: &HashSet<String>,
+    images: Option<&NoteImageSource>,
+) -> std::collections::HashMap<i64, NoteImage> {
+    let mut map = std::collections::HashMap::new();
+    let Some(src) = images else {
+        return map;
+    };
+    if !(cols.contains("ZMEDIA")
+        && cols.contains("ZACCOUNT1")
+        && cols.contains("ZTYPEUTI")
+        && cols.contains("ZNOTE"))
+    {
+        return map;
+    }
+    // First image attachment per note, joined to its media file record, its
+    // account (for the on-disk Accounts/<uuid>/… path), and an optional
+    // pre-rendered preview (Z_ENT 6, linked by ZATTACHMENT).
+    let sql = format!(
+        "SELECT a.ZNOTE, m.ZIDENTIFIER, m.ZFILENAME, acc.ZIDENTIFIER, p.ZIDENTIFIER
+         FROM ZICCLOUDSYNCINGOBJECT a
+         JOIN ZICCLOUDSYNCINGOBJECT m ON m.Z_PK = a.ZMEDIA
+         JOIN ZICCLOUDSYNCINGOBJECT acc ON acc.Z_PK = a.ZACCOUNT1
+         LEFT JOIN ZICCLOUDSYNCINGOBJECT p ON p.ZATTACHMENT = a.Z_PK AND p.Z_ENT = 6
+         WHERE a.ZNOTE IS NOT NULL AND a.ZTYPEUTI IN ({NOTE_IMAGE_UTIS})
+         ORDER BY a.ZNOTE, a.Z_PK"
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return map;
+    };
+    let Ok(mut rows) = stmt.query([]) else {
+        return map;
+    };
+    while let Ok(Some(r)) = rows.next() {
+        let Ok(note_pk) = r.get::<_, i64>(0) else {
+            continue;
+        };
+        if map.contains_key(&note_pk) {
+            continue; // keep the first image per note
+        }
+        let media_uuid = r.get::<_, Option<String>>(1).ok().flatten();
+        let filename = r.get::<_, Option<String>>(2).ok().flatten();
+        let Some(account) = r.get::<_, Option<String>>(3).ok().flatten() else {
+            continue;
+        };
+        let preview_stem = r.get::<_, Option<String>>(4).ok().flatten();
+        if let Some(img) = resolve_note_image(
+            src,
+            &account,
+            media_uuid.as_deref(),
+            filename.as_deref(),
+            preview_stem.as_deref(),
+        ) {
+            map.insert(note_pk, img);
+        }
+    }
+    map
+}
+
+/// Resolve a note image's candidate on-disk paths (pre-rendered preview first,
+/// then the full-res original) against the Manifest; the first that exists wins.
+fn resolve_note_image(
+    src: &NoteImageSource,
+    account: &str,
+    media_uuid: Option<&str>,
+    filename: Option<&str>,
+    preview_stem: Option<&str>,
+) -> Option<NoteImage> {
+    let mut candidates: Vec<(String, Option<String>)> = Vec::new();
+    if let Some(stem) = preview_stem {
+        candidates.push((
+            format!("Accounts/{account}/Previews/{stem}.png"),
+            Some("image/png".to_string()),
+        ));
+        candidates.push((
+            format!("Accounts/{account}/Previews/{stem}.jpg"),
+            Some("image/jpeg".to_string()),
+        ));
+    }
+    if let (Some(media), Some(file)) = (media_uuid, filename) {
+        candidates.push((
+            format!("Accounts/{account}/Media/{media}/{file}"),
+            mime_from_name(file),
+        ));
+    }
+    for (rel, mime) in candidates {
+        if let Ok(Some(entry)) = src.index.find(NOTES_DOMAIN, &rel) {
+            let path: PathBuf = src.index.blob_path(&entry.file_id);
+            let (decrypt_key, plain_size) = if src.decryptor.is_some() {
+                match crypto::file_key_field(&entry.file_blob) {
+                    Ok((k, s)) => (Some(k), s.and_then(|v| i64::try_from(v).ok())),
+                    Err(_) => (None, None),
+                }
+            } else {
+                (None, None)
+            };
+            return Some(NoteImage {
+                local_path: path.to_string_lossy().into_owned(),
+                decrypt_key,
+                plain_size,
+                mime,
+            });
+        }
+    }
+    None
+}
+
+/// Best-effort image MIME from a filename extension (the protocol still renders
+/// via sips regardless; this just labels the type / drives HEIC handling).
+fn mime_from_name(name: &str) -> Option<String> {
+    let ext = name.rsplit('.').next()?.to_ascii_lowercase();
+    Some(
+        match ext.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "heic" | "heif" => "image/heic",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 /// Column names of `table`, upper-cased. Empty if the table doesn't exist.
@@ -598,7 +765,7 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
 
-        parse_notes(&db, &cache, &mut report, false).unwrap();
+        parse_notes(&db, &cache, &mut report, false, None).unwrap();
         assert_eq!(report.notes, 1);
 
         let c = cache.conn();
@@ -701,7 +868,7 @@ mod tests {
 
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
-        parse_notes(&db, &cache, &mut report, false).unwrap();
+        parse_notes(&db, &cache, &mut report, false, None).unwrap();
         assert_eq!(report.notes, 1);
 
         // Stored locked, with the hint, and NO plaintext body at rest.
@@ -738,7 +905,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE foo (a INTEGER);").unwrap();
         let cache = CacheDb::open_in_memory().unwrap();
         let mut report = ImportReport::default();
-        assert!(parse_notes(&db, &cache, &mut report, false).is_err());
+        assert!(parse_notes(&db, &cache, &mut report, false, None).is_err());
         assert_eq!(report.notes, 0);
     }
 }

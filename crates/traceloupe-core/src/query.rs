@@ -1463,6 +1463,8 @@ pub struct Note {
     pub attachment_count: i64,
     /// Hashtag tags on the note (iOS 15+); empty when none.
     pub tags: Vec<String>,
+    /// Whether the note has a resolved first image (served as a list thumbnail).
+    pub has_image: bool,
 }
 
 /// Notes, most-recently-modified first.
@@ -1470,7 +1472,7 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned,
-                has_checklist, image_count, attachment_count, tags
+                has_checklist, image_count, attachment_count, tags, image_local_path IS NOT NULL
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -1493,10 +1495,35 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
                 .get::<_, Option<String>>(13)?
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
+            has_image: r.get::<_, i64>(14)? != 0,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// A note's first-image blob for the thumbnail protocol: `(local_path, mime,
+/// decrypt_key, plain_size)` — same shape as [`media_blob`]. None if the note has
+/// no resolved image.
+pub fn note_image_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT image_local_path, image_mime, NULL, image_decrypt_key, image_plain_size
+             FROM notes
+             WHERE id = ?1 AND image_local_path IS NOT NULL",
+            [id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                ))
+            },
+        )
+        .optional()?)
 }
 
 /// A locked note's crypto params: `(salt, iterations, iv, tag, encrypted_data,
