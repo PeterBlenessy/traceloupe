@@ -21,6 +21,7 @@ import { SafariView } from "@/views/safari";
 import { NotesView } from "@/views/notes";
 import { RecordingsView } from "@/views/recordings";
 import { AppsView } from "@/views/apps";
+import { DeviceView } from "@/views/device";
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -51,6 +52,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/notes", component: NotesView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/apps", component: AppsView }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/device", component: DeviceView }),
 ];
 
 const router = createRouter({ routeTree: rootRoute.addChildren(routes) });
