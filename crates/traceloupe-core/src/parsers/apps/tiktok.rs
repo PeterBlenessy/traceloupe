@@ -88,8 +88,19 @@ fn describe_message(content: Option<&str>) -> Option<(String, &'static str)> {
     // A shared TikTok post (video) carries an `aweme_id` (+ cover thumbnail). Test
     // for a *non-null* value: the envelope may serialize `"aweme_id": null` on a
     // sticker/other message, and `get(..).is_some()` is true for an explicit null.
-    if j.get("aweme_id").is_some_and(|v| !v.is_null()) {
-        return Some(("📹 Shared a video".to_string(), "shared"));
+    if let Some(v) = j.get("aweme_id").filter(|v| !v.is_null()) {
+        // Build a clickable link from the post id so the video can be opened.
+        // aweme_id may be a JSON string or a (19-digit, i64-safe) number.
+        let id = v
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+            .or_else(|| v.as_i64().map(|n| n.to_string()));
+        let body = match id {
+            Some(id) => format!("📹 Shared a video\nhttps://www.tiktok.com/@_/video/{id}"),
+            None => "📹 Shared a video".to_string(),
+        };
+        return Some((body, "shared"));
     }
     // A shared profile card. `aweType` may be stored INTEGER, REAL, or a string.
     let awe_type = j.get("aweType").and_then(|v| {
@@ -234,7 +245,7 @@ mod tests {
             vec![
                 "hi from tiktok",
                 "sent by me",
-                "📹 Shared a video",
+                "📹 Shared a video\nhttps://www.tiktok.com/@_/video/7243968354254425387",
                 "🖼 Sticker",
                 "Streak ended",
             ]
