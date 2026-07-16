@@ -15,8 +15,8 @@ not present / N/A in this backup.
 > **95,334** camera-roll assets · **71** contacts · **3,101** calls · **691**
 > Safari history items (2,046 visits) · **3,842** notes · **606** voice
 > recordings · TikTok the only third-party chat installed. "In backup" reflects
-> the observed schema and can vary by iOS version. Two parser defects were found
-> and fixed in this pass; one (locked-note decryption) remains — see
+> the observed schema and can vary by iOS version. All parser defects found in
+> this pass, including locked-note decryption, have been fixed — see
 > [Known parser defects](#known-parser-defects).
 
 ---
@@ -66,7 +66,7 @@ plain-text protobuf body layer is decoded.
 | Modified date | ✅ | ✅ | Drives all recency grouping/sort/time-filter |
 | Pinned | ✅ 349 | ✅ | |
 | Locked (flag + withhold body) | ✅ 9 | ✅ | Lock icon, filter, password prompt |
-| **Locked-note unlock (decrypt body)** | ✅ | ⬜ | **Broken** — ciphertext read from a nonexistent column; unlock always fails. See [defects](#known-parser-defects) |
+| **Locked-note unlock (decrypt body)** | ✅ | ✅ | On-demand: user enters the note password in-app → PBKDF2 → AES-key-unwrap → AES-128-GCM. Never decrypted at rest |
 | Password hint | ✅ | ✅ | none present on the 9 locked notes here |
 | Embedded images / scans / drawings | ✅ 505 notes | ◑ | Per-note **counts** surfaced (image + total-attachment badges via `ZTYPEUTI`/`ZNOTE`); inline rendering of the blobs is still future work |
 | Checklists (structured) | ✅ 46 | ◑ | `ZHASCHECKLIST` → a checklist badge on the note; item text/checked-state (protobuf attribute runs) not decoded |
@@ -257,13 +257,17 @@ schema but render empty on this particular device.
 
 Found while auditing against the real backup (2026-07-15):
 
-1. **Notes — locked-note decryption is broken** ⬜ *(open)*. The parser reads the
+1. **Notes — locked-note decryption** ✅ *(fixed this pass)*. The parser read the
    note ciphertext from a nonexistent `ZENCRYPTEDDATA` column (real ciphertext is
-   `ZICNOTEDATA.ZDATA`) and takes the AES-GCM IV/tag from the object row instead
-   of `ZICNOTEDATA`; it also ignores `ZCRYPTOWRAPPEDKEY`, so the decrypt ladder is
-   missing the AES-key-unwrap step. Net: all locked notes are un-decryptable and
-   `unlockNote` always fails. Fixing it needs corrected columns + a wrapped-key
-   unwrap + a cache-schema change, then validation with a real note password.
+   `ZICNOTEDATA.ZDATA`) and took the AES-GCM IV/tag from the object row instead of
+   `ZICNOTEDATA`; it also ignored `ZCRYPTOWRAPPEDKEY`, so the ladder was missing
+   the AES-key-unwrap step. Now: ciphertext + IV/tag from `ZICNOTEDATA`,
+   salt/iterations/wrapped-key from the object row, cached alongside the note
+   (schema v24), and `unlockNote` runs the full ladder (PBKDF2 → RFC-3394 unwrap →
+   AES-128-GCM) on demand when the user enters the note password in-app. Handles
+   this device's anomalous variant (iterations 0 → 20000 default; 16-byte wrapped
+   key) by trying multiple key candidates and letting the GCM tag authenticate the
+   right one. Pending: end-to-end confirmation with a real note password.
 2. **Notes — creation date lost** ✅ *(fixed this pass)*. `col_or_null` picked the
    first *existing* date column; on a modern NoteStore `ZCREATIONDATE1` exists but
    is all-NULL while the value is in `ZCREATIONDATE3`. Now COALESCEs across all
