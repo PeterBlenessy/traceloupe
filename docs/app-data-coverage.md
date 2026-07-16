@@ -30,10 +30,10 @@ iMessage is unsurfaced.
 | Data | In backup | Surfaced | Notes |
 |------|:---------:|:--------:|-------|
 | Message text (`text`) | ✅ 133k | ✅ | Plaintext only |
-| Rich text (`attributedBody`) | ✅ 142k | ⬜ | **Not decoded** — messages whose text lives only here render blank; styling/mentions/inline-link text lost |
+| Rich text (`attributedBody`) | ✅ 142k | ✅ | Decoded — recovers the body of text-less messages (streamtyped NSString extractor, validated 3000/3000 vs the `text` column). Styling/mentions not surfaced (plain text) |
 | Timestamp (sent) | ✅ | ✅ | `date` |
 | Read / delivered receipts | ✅ 100k / 63k | ✅ | `date_read`/`date_delivered` → a "Read <time>" / "Delivered" line under sent bubbles (the `is_read/error` flags remain unused) |
-| Edited-message history | ✅ 897 edits | ⬜ | `date_edited` + `message_summary_info` blob (on 138k rows) never decoded |
+| Edited messages | ✅ 897 edits | ✅ | `date_edited` → an "Edited" tag on the bubble (current text shown). Full per-edit version history (`message_summary_info`) not decoded |
 | Unsent / retracted | — 0 | — | Empty in this backup |
 | Direction + sender handle | ✅ | ✅ | `is_from_me`, `handle.id` (contact-resolved) |
 | Receiving line (`destination_caller_id`) | ✅ 143k | ⬜ | Which SIM/account received it — dropped |

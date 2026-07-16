@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -423,6 +423,8 @@ impl CacheDb {
             ensure_column(&conn, "messages", "delivered_at", "INTEGER")?;
             // v18: tapback/reaction summary on the target message (e.g. "❤️×2 👍").
             ensure_column(&conn, "messages", "reactions", "TEXT")?;
+            // v23: message was edited (iOS 16+).
+            ensure_column(&conn, "messages", "edited", "INTEGER NOT NULL DEFAULT 0")?;
             // v19: inline-reply preview (snippet of the message this one replies to).
             ensure_column(&conn, "messages", "reply_to_snippet", "TEXT")?;
             // v20: Safari deleted-history tombstones, flagged in the history list.

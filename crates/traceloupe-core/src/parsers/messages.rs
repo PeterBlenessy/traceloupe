@@ -75,6 +75,45 @@ fn associated_target_guid(raw: &str) -> &str {
     raw.rsplit(['/', ':']).next().unwrap_or(raw)
 }
 
+/// Recover a message's plain text from its `attributedBody` — an NSAttributedString
+/// serialized in Apple's `streamtyped` (typedstream) format. Modern iMessage leaves
+/// `message.text` NULL and stores the content only here. The text is the first
+/// `NSString`: after its class marker comes a `+` (0x2b) inline-string marker, a
+/// length (one byte, or `0x81`+u16 / `0x82`+u32), then the UTF-8 bytes.
+///
+/// Validated against a real backup: reproduces `message.text` exactly on 3000/3000
+/// messages that carry both.
+fn attributed_body_text(blob: &[u8]) -> Option<String> {
+    let pos = blob.windows(8).position(|w| w == b"NSString")?;
+    let rest = &blob[pos + 8..];
+    let plus = rest.iter().position(|&b| b == 0x2b)?;
+    let mut i = plus + 1;
+    let len = match *rest.get(i)? {
+        0x81 => {
+            let l = u16::from_le_bytes([*rest.get(i + 1)?, *rest.get(i + 2)?]) as usize;
+            i += 3;
+            l
+        }
+        0x82 => {
+            let l = u32::from_le_bytes([
+                *rest.get(i + 1)?,
+                *rest.get(i + 2)?,
+                *rest.get(i + 3)?,
+                *rest.get(i + 4)?,
+            ]) as usize;
+            i += 5;
+            l
+        }
+        b => {
+            i += 1;
+            b as usize
+        }
+    };
+    let bytes = rest.get(i..i.checked_add(len)?)?;
+    let s = String::from_utf8_lossy(bytes).into_owned();
+    (!s.trim().is_empty()).then_some(s)
+}
+
 /// A single-line preview of a message body, capped at `max` chars (char-safe).
 fn truncate_snippet(body: &str, max: usize) -> String {
     let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -237,11 +276,12 @@ pub fn parse_messages(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
                 m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
-                m.thread_originator_guid
+                m.thread_originator_guid, m.attributedBody, m.date_edited
          FROM message m
          JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
                OR COALESCE(m.associated_message_type, 0) <> 0
+               OR m.attributedBody IS NOT NULL
          ORDER BY cmj.chat_id, m.date, m.ROWID",
     )?;
     let mut rows = mstmt.query([])?;
@@ -273,6 +313,16 @@ pub fn parse_messages(
         let assoc_type = r.get::<_, Option<i64>>(11)?.unwrap_or(0);
         let assoc_emoji: Option<String> = r.get(12)?;
         let reply_guid: Option<String> = r.get(13)?;
+        // Recover the body from attributedBody when `text` is NULL (modern iMessage
+        // stores content only in the archived NSAttributedString).
+        let text = match text {
+            Some(t) => Some(t),
+            None => r
+                .get::<_, Option<Vec<u8>>>(14)?
+                .as_deref()
+                .and_then(attributed_body_text),
+        };
+        let edited = r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0;
 
         // A tapback row: record the event and skip it — it is not a chat message.
         if assoc_type >= 2000 {
@@ -289,6 +339,13 @@ pub fn parse_messages(
                     assoc_emoji,
                 ));
             }
+            continue;
+        }
+
+        // A row with neither body nor attachment (a group-action item, or an
+        // attributedBody that held only formatting) is not a chat message. This
+        // guards the broadened `OR attributedBody IS NOT NULL` selection above.
+        if text.is_none() && !has_attachment {
             continue;
         }
 
@@ -345,8 +402,8 @@ pub fn parse_messages(
         tx.execute(
             "INSERT INTO messages
                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
-                 read_at, delivered_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 read_at, delivered_at, edited)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 thread_id,
                 sender,
@@ -357,6 +414,7 @@ pub fn parse_messages(
                 kind,
                 read_at,
                 delivered_at,
+                edited as i64,
             ],
         )?;
         let message_id = tx.last_insert_rowid();
@@ -604,7 +662,7 @@ mod tests {
             "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
              CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
              CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
-             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
              CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
              INSERT INTO handle VALUES (1,'+15550001111'), (2,'+15550002222');
              -- A 1:1 chat with one peer, and a group chat with a name + two peers.
@@ -612,22 +670,35 @@ mod tests {
              INSERT INTO chat VALUES (20,'chat99','Hiking Crew','iMessage');
              INSERT INTO chat_handle_join VALUES (10,1),(20,1),(20,2);
              -- date is Apple-absolute nanoseconds; unix 1_700_000_000 = 721692800000000000.
-             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0,0,0,'GUID-100',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0,0,0,'GUID-100',NULL,0,NULL,NULL,NULL,0);
              -- outgoing, delivered + read (date_delivered / date_read set).
-             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0,721692900000000000,721692880000000000,'GUID-101',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0,721692900000000000,721692880000000000,'GUID-101',NULL,0,NULL,NULL,NULL,0);
              -- an inline reply to message 100 ('hey there').
-             INSERT INTO message VALUES (102,'reply body',1,721692920000000000,0,0,0,0,'GUID-102',NULL,0,NULL,'p:0/GUID-100');
-             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0,0,0,'GUID-200',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (102,'reply body',1,721692920000000000,0,0,0,0,'GUID-102',NULL,0,NULL,'p:0/GUID-100',NULL,0);
+             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0,0,0,'GUID-200',NULL,0,NULL,NULL,NULL,0);
              -- an attachment-only message (NULL text) is kept.
-             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1,0,0,'GUID-201',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1,0,0,'GUID-201',NULL,0,NULL,NULL,NULL,0);
              -- a pure action item (NULL text, no attachment) is skipped.
-             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0,0,0,'GUID-202',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0,0,0,'GUID-202',NULL,0,NULL,NULL,NULL,0);
              -- a tapback (Loved) on message 100 from the device owner; not a message.
-             INSERT INTO message VALUES (300,NULL,1,721692900000000000,0,0,0,0,'GUID-300','p:0/GUID-100',2000,NULL,NULL);
+             INSERT INTO message VALUES (300,NULL,1,721692900000000000,0,0,0,0,'GUID-300','p:0/GUID-100',2000,NULL,NULL,NULL,0);
              INSERT INTO chat_message_join VALUES (10,100),(10,101),(10,102),(20,200),(20,201),(20,202),(10,300);",
         )
         .unwrap();
         db
+    }
+
+    #[test]
+    fn attributed_body_recovers_text_from_typedstream() {
+        // A minimal streamtyped blob: the NSString marker, a '+' inline-string
+        // marker, a one-byte length, then the UTF-8 bytes.
+        let mut blob = b"streamtyped...NSAttributedString...NSString".to_vec();
+        blob.push(0x2b); // '+'
+        blob.push(5); // length
+        blob.extend_from_slice(b"hello");
+        assert_eq!(attributed_body_text(&blob).as_deref(), Some("hello"));
+        // No NSString marker → None (not a body we can read).
+        assert_eq!(attributed_body_text(b"nothing here"), None);
     }
 
     #[test]

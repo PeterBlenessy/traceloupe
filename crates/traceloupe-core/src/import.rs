@@ -1617,12 +1617,12 @@ mod tests {
             "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
              CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
              CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
-             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
              CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
              INSERT INTO handle VALUES (1,'+15550001111');
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
-             INSERT INTO message VALUES (100,'hi',0,721692800000000000,1,0,0,0,'G100',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (100,'hi',0,721692800000000000,1,0,0,0,'G100',NULL,0,NULL,NULL,NULL,0);
              INSERT INTO chat_message_join VALUES (10,100);",
         )
         .unwrap();
@@ -1679,7 +1679,7 @@ mod tests {
             "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
              CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
              CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
-             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
              CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
              CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, transfer_name TEXT, mime_type TEXT);
              CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
@@ -1687,7 +1687,7 @@ mod tests {
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
              -- an attachment-only message (NULL text, has_attachments=1).
-             INSERT INTO message VALUES (100,NULL,0,721692800000000000,1,1,0,0,'G100',NULL,0,NULL,NULL);
+             INSERT INTO message VALUES (100,NULL,0,721692800000000000,1,1,0,0,'G100',NULL,0,NULL,NULL,NULL,0);
              INSERT INTO chat_message_join VALUES (10,100);
              INSERT INTO attachment VALUES (5,'~/Library/SMS/Attachments/ab/00/GUID/pic.jpg','pic.jpg','image/jpeg');
              INSERT INTO message_attachment_join VALUES (100,5);",

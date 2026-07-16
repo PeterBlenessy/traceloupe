@@ -299,6 +299,8 @@ export interface Message {
   reactions: string | null;
   /** Preview of the message this one replies to, or null. */
   replyToSnippet: string | null;
+  /** The message was edited (iOS 16+). */
+  edited: boolean;
   attachments: Attachment[];
 }
 
@@ -829,6 +831,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
     {
@@ -841,6 +844,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
     {
@@ -853,6 +857,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
     {
@@ -865,6 +870,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
     {
@@ -877,6 +883,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [
         {
           id: 2,
@@ -896,6 +903,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [
         {
           id: 1,
@@ -917,6 +925,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
     {
@@ -929,6 +938,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
   ],
@@ -943,6 +953,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
     {
@@ -955,6 +966,7 @@ const mockMessages: Record<number, Message[]> = {
       deliveredAt: null,
       reactions: null,
       replyToSnippet: null,
+      edited: false,
       attachments: [],
     },
   ],
@@ -982,6 +994,7 @@ mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
   deliveredAt: null,
   reactions: null,
   replyToSnippet: null,
+  edited: false,
   attachments: [],
 }));
 mockMessages[4] = [
@@ -995,6 +1008,7 @@ mockMessages[4] = [
     deliveredAt: null,
     reactions: null,
     replyToSnippet: null,
+    edited: false,
     attachments: [],
   },
   {
@@ -1007,6 +1021,7 @@ mockMessages[4] = [
     deliveredAt: null,
     reactions: null,
     replyToSnippet: null,
+    edited: false,
     attachments: [],
   },
   {
@@ -1019,6 +1034,7 @@ mockMessages[4] = [
     deliveredAt: null,
     reactions: null,
     replyToSnippet: null,
+    edited: false,
     attachments: [],
   },
 ];
