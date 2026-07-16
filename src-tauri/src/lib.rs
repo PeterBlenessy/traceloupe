@@ -1739,7 +1739,7 @@ fn media_protocol_response(
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "image/jpeg")
-                    .header("Cache-Control", "no-cache")
+                    .header("Cache-Control", "private, max-age=3600")
                     .body(bytes)
                     .unwrap();
             }
@@ -1796,7 +1796,7 @@ fn media_protocol_response(
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", rendered.content_type)
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "private, max-age=3600")
         .body(rendered.bytes)
         .unwrap()
 }
@@ -1833,7 +1833,7 @@ fn avatar_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Respons
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "private, max-age=3600")
         .body(bytes)
         .unwrap()
 }
@@ -1900,7 +1900,7 @@ fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Res
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", rendered.content_type)
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "private, max-age=3600")
         .body(rendered.bytes)
         .unwrap()
 }
@@ -1991,7 +1991,7 @@ fn attachment_protocol_response(
         return Response::builder()
             .status(StatusCode::OK)
             .header("Content-Type", rendered.content_type)
-            .header("Cache-Control", "no-cache")
+            .header("Cache-Control", "private, max-age=3600")
             .body(rendered.bytes)
             .unwrap();
     }
@@ -2023,7 +2023,7 @@ fn attachment_protocol_response(
             .header("Content-Type", content_type)
             .header("Accept-Ranges", "bytes")
             .header("Content-Range", format!("bytes {start}-{end}/{total}"))
-            .header("Cache-Control", "no-cache")
+            .header("Cache-Control", "private, max-age=3600")
             .body(buf)
             .unwrap();
     }
@@ -2035,7 +2035,7 @@ fn attachment_protocol_response(
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
         .header("Accept-Ranges", "bytes")
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "private, max-age=3600")
         .body(bytes)
         .unwrap()
 }
@@ -2120,7 +2120,7 @@ fn audio_protocol_response(
             .header("Content-Type", content_type)
             .header("Accept-Ranges", "bytes")
             .header("Content-Range", format!("bytes {start}-{end}/{total}"))
-            .header("Cache-Control", "no-cache")
+            .header("Cache-Control", "private, max-age=3600")
             .body(buf)
             .unwrap();
     }
@@ -2132,7 +2132,7 @@ fn audio_protocol_response(
         .status(StatusCode::OK)
         .header("Content-Type", content_type)
         .header("Accept-Ranges", "bytes")
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", "private, max-age=3600")
         .body(bytes)
         .unwrap()
 }

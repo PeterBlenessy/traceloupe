@@ -352,6 +352,7 @@ function SettingsMenu() {
             {(
               [
                 ["general", "General", SlidersHorizontal],
+                ["media", "Media", Image],
                 ["apps", "Apps", Boxes],
                 ["developer", "Developer", Terminal],
               ] as const
@@ -454,32 +455,6 @@ function SettingsMenu() {
                   <option value="compact">Compact</option>
                 </select>
               </SettingsRow>
-              <SettingsRow
-                label="Photo & video viewer"
-                description="How images open from Photos and Messages: a windowed panel, or fullscreen."
-              >
-                <select
-                  value={lightboxStyle}
-                  onChange={(e) =>
-                    setLightboxStyle(e.target.value as "windowed" | "fullscreen")
-                  }
-                  aria-label="Photo & video viewer"
-                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                >
-                  <option value="fullscreen">Fullscreen</option>
-                  <option value="windowed">Windowed</option>
-                </select>
-              </SettingsRow>
-              <SettingsRow
-                label="Show media details"
-                description="Show file, date, EXIF and location metadata in the photo/video viewer."
-              >
-                <Switch
-                  aria-label="Show media details"
-                  checked={showMediaMetadata}
-                  onCheckedChange={setShowMediaMetadata}
-                />
-              </SettingsRow>
             </SettingsGroup>
 
             <SettingsGroup
@@ -499,6 +474,43 @@ function SettingsMenu() {
                   checked={biometricUnlock}
                   disabled={!biometricAvailable}
                   onCheckedChange={setBiometricUnlock}
+                />
+              </SettingsRow>
+            </SettingsGroup>
+          </TabsContent>
+
+          <TabsContent
+            value="media"
+            className="mt-0 flex flex-col gap-6"
+          >
+            <SettingsGroup
+              title="Photo & video viewer"
+              description="How images and videos open from Photos and Messages."
+            >
+              <SettingsRow
+                label="Viewer style"
+                description="Open media in a windowed panel, or fill the screen."
+              >
+                <select
+                  value={lightboxStyle}
+                  onChange={(e) =>
+                    setLightboxStyle(e.target.value as "windowed" | "fullscreen")
+                  }
+                  aria-label="Viewer style"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="fullscreen">Fullscreen</option>
+                  <option value="windowed">Windowed</option>
+                </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Show media details"
+                description="Show file, date, EXIF and location metadata in the viewer."
+              >
+                <Switch
+                  aria-label="Show media details"
+                  checked={showMediaMetadata}
+                  onCheckedChange={setShowMediaMetadata}
                 />
               </SettingsRow>
             </SettingsGroup>
