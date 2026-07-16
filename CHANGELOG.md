@@ -28,6 +28,33 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.11.3] — 2026-07-16
+
+A broad frontend + UI/UX review. Fixes real interaction bugs and tightens
+consistency across the newer views.
+
+### Fixed
+
+- **Calendar / Reminders / Interactions were unscrollable and un-virtualized** —
+  they wrapped the virtual list in a plain block, so it had no bounded height:
+  the list couldn't scroll and every row mounted at once (rows past the fold were
+  clipped and unreachable). They now use the shared `VirtualListView`, which also
+  gives them a loading skeleton, an error state, and the same row width as every
+  other list.
+- **Health** gains loading and error states.
+- **Device** shows an error state instead of a blank panel when its query fails.
+- **Re-import didn't refresh some counts** — the Messages Timeline total (a
+  query-key typo) and the Photos time-chip counts stayed stale after a re-import;
+  both now invalidate correctly.
+- **Contacts weren't requested before a backup was open** — the shared contact
+  resolver now gates on an active backup.
+
+### Changed
+
+- Calendar/Reminders list-name pills use the shadcn `Badge`; the Reminders header
+  count is now the total (matching every other view); Photos grid thumbnails have
+  an accessible label and a keyboard focus ring.
+
 ## [0.11.2] — 2026-07-16
 
 A broad whole-crate review of `traceloupe-core`. The security-critical surface —
