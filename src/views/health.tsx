@@ -141,14 +141,10 @@ export function HealthView() {
       <PanelHeader
         title="Health"
         count={hasWorkouts ? filtered.length : undefined}
-        actions={
-          hasWorkouts && activities.length > 1 ? (
-            <BadgeFilter options={activityOptions} value={activity} onChange={setActivity} />
-          ) : undefined
-        }
         toolbar={
           hasWorkouts ? (
             <>
+              {/* Time range fills the left; the facet + sort sit at the right. */}
               <TimeFilterBar
                 className="flex-1"
                 presets={presets}
@@ -156,6 +152,9 @@ export function HealthView() {
                 onChange={setRange}
                 counts={presetCounts}
               />
+              {activities.length > 1 && (
+                <BadgeFilter options={activityOptions} value={activity} onChange={setActivity} />
+              )}
               <SortControl
                 fields={[
                   { value: "date", label: "Date" },
