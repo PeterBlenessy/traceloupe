@@ -188,6 +188,23 @@ fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecr
         .map(Arc::new)
 }
 
+/// The session decryptor for the currently-open encrypted backup, lazily rebuilt
+/// from the Keychain password (prompting Touch ID if enabled) when it isn't
+/// already loaded — so an on-demand decrypt (opening an attachment, serving media)
+/// recovers when the keys didn't auto-load this session, instead of dead-ending on
+/// "backup keys are not loaded". Blocks on Touch ID, so call off the async
+/// executor. Returns None only for a plaintext backup or a genuine key failure.
+fn ensure_session_decryptor(app: &AppHandle, active_path: &Path) -> Option<Arc<BackupDecryptor>> {
+    let session = app.state::<SessionKeys>();
+    if let Some(d) = session.get() {
+        return Some(d);
+    }
+    let backup_id = active_path.parent()?.file_name()?.to_str()?.to_owned();
+    let d = reopen_decryptor(active_path, &backup_id)?;
+    session.set(Some(d.clone()));
+    Some(d)
+}
+
 /// A backup id is joined into cache/work paths and used as a Keychain account,
 /// so it must be a plain identifier — this rejects path separators, `..`, and
 /// other tampering. Discovery only ever yields device UDIDs / UUIDs.
@@ -1113,14 +1130,14 @@ async fn get_range_window(
 /// anything not rendered inline).
 #[tauri::command]
 async fn open_attachment(
+    app: AppHandle,
     active: State<'_, ActiveBackup>,
-    session: State<'_, SessionKeys>,
     attachment_id: i64,
 ) -> Result<(), String> {
     let active_path = active.path()?;
-    let decryptor = session.get();
-    // Reading + full-file AES-decrypting a large attachment must not run on the
-    // main thread (it would freeze the UI); do it on a blocking worker.
+    // Reading + full-file AES-decrypting a large attachment (and possibly a Touch
+    // ID prompt to reload keys) must not run on the main thread; do it on a
+    // blocking worker.
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&active_path).map_err(|e| e.to_string())?;
         let (local_path, filename, _mime, decrypt_key, plain_size) =
@@ -1135,7 +1152,11 @@ async fn open_attachment(
         // Encrypted → decrypt first; plaintext → copy. The temp lives under the
         // cache dir (0600), cleared on re-import/forget/backup-switch.
         let plain = if let Some(key) = decrypt_key {
-            let dec = decryptor.ok_or_else(|| "backup keys are not loaded".to_string())?;
+            let dec = ensure_session_decryptor(&app, &active_path).ok_or_else(|| {
+                "backup keys are not loaded (unlock the backup, or re-import if this \
+                 is a rebuilt dev binary)"
+                    .to_string()
+            })?;
             let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
             let size = plain_size.and_then(|s| usize::try_from(s).ok());
             dec.decrypt_bytes(&key, &ciphertext, size)
