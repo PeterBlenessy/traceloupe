@@ -1013,6 +1013,11 @@ function MessageBubble({
                   <AttachmentView att={a} />
                 </div>
               ))}
+              {message.edited && (
+                <span className="mt-0.5 block text-[10px] italic opacity-60">
+                  Edited
+                </span>
+              )}
             </BubbleContent>
           </Bubble>
           {message.reactions && (

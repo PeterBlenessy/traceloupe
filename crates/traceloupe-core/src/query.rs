@@ -41,6 +41,8 @@ pub struct Message {
     pub reactions: Option<String>,
     /// Preview of the message this one is an inline reply to, or None.
     pub reply_to_snippet: Option<String>,
+    /// The message was edited (iOS 16+).
+    pub edited: bool,
     pub attachments: Vec<Attachment>,
 }
 
@@ -135,7 +137,7 @@ pub fn get_message_window(
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited
          FROM messages
          WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
          ORDER BY sent_at {dir}, id {dir}
@@ -161,7 +163,7 @@ pub fn get_message_window(
 pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited
          FROM messages
          WHERE thread_id = ?1
          ORDER BY sent_at ASC, id ASC",
@@ -184,6 +186,7 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         delivered_at: r.get(6)?,
         reactions: r.get(7)?,
         reply_to_snippet: r.get(8)?,
+        edited: r.get::<_, i64>(9)? != 0,
         attachments: Vec::new(),
     })
 }
@@ -491,6 +494,7 @@ fn range_window(
                         delivered_at: None,
                         reactions: None,
                         reply_to_snippet: None,
+                        edited: false,
                         attachments: Vec::new(),
                     },
                 })
