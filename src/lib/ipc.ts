@@ -290,6 +290,15 @@ export interface ThreadSummary {
   participants: string[];
 }
 
+/** OpenGraph link preview (all fields best-effort). */
+export interface LinkPreview {
+  url: string;
+  title: string | null;
+  description: string | null;
+  image: string | null;
+  siteName: string | null;
+}
+
 export interface Attachment {
   id: number;
   filename: string | null;
@@ -360,6 +369,9 @@ export interface TraceLoupeClient {
   openFullDiskAccessSettings(): Promise<void>;
   /** Open a URL in the user's default browser (e.g. an Apple Maps link). */
   openExternal(url: string): Promise<void>;
+  /** Fetch a URL's OpenGraph metadata for a link preview. Opt-in — this makes an
+   *  outbound request to the linked site; only call it when the setting is on. */
+  fetchLinkPreview(url: string): Promise<LinkPreview>;
   engineStatus(): Promise<boolean>;
   engineInfo(): Promise<EngineInfo>;
   /** Download + verify + install the pinned engine. */
@@ -591,6 +603,7 @@ const tauriClient: TraceLoupeClient = {
   openFullDiskAccessSettings: () =>
     invoke<void>("open_full_disk_access_settings"),
   openExternal: (url) => openUrl(url),
+  fetchLinkPreview: (url) => invoke<LinkPreview>("fetch_link_preview", { url }),
   engineStatus: () => invoke<boolean>("engine_status"),
   engineInfo: () => invoke<EngineInfo>("engine_info"),
   installEngine: () => invoke<void>("install_engine"),
@@ -1658,6 +1671,13 @@ export const mockClient: TraceLoupeClient = {
   openExternal: async (url) => {
     window.open(url, "_blank");
   },
+  fetchLinkPreview: async (url) => ({
+    url,
+    title: "Example page title",
+    description: "A mock OpenGraph description for the link preview.",
+    image: null,
+    siteName: new URL(url).hostname,
+  }),
   engineStatus: async () => true,
   engineInfo: async () => ({
     installed: true,

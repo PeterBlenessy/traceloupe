@@ -2147,6 +2147,155 @@ fn parse_byte_range(header: &str, total: u64) -> Option<(u64, u64)> {
     Some((start, end))
 }
 
+/// An OpenGraph link preview. All fields best-effort.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LinkPreview {
+    url: String,
+    title: Option<String>,
+    description: Option<String>,
+    image: Option<String>,
+    site_name: Option<String>,
+}
+
+/// Fetch a URL's OpenGraph/title metadata for a link preview. **Opt-in**: the UI
+/// only calls this when the user enables link previews — it makes an outbound
+/// request to the linked site. http/https only, short timeout, HTML capped.
+#[tauri::command]
+async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("unsupported URL scheme".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let resp = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(8))
+            .set("User-Agent", "Mozilla/5.0 TraceLoupe/link-preview")
+            .call()
+            .map_err(|e| e.to_string())?;
+        let ct = resp
+            .header("Content-Type")
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if !ct.is_empty() && !ct.contains("text/html") && !ct.contains("xhtml") {
+            return Err("not an HTML page".into());
+        }
+        use std::io::Read;
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .take(512 * 1024) // cap: a preview only needs the <head>
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        let html = String::from_utf8_lossy(&buf);
+        let img = meta_content(&html, "og:image").map(|i| absolutize(&url, &i));
+        Ok(LinkPreview {
+            title: meta_content(&html, "og:title").or_else(|| html_title(&html)),
+            description: meta_content(&html, "og:description"),
+            site_name: meta_content(&html, "og:site_name"),
+            image: img,
+            url,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The `content` of the first `<meta property|name="key">` tag (either attribute
+/// order), HTML-unescaped. Best-effort string scan (no HTML parser dependency).
+fn meta_content(html: &str, key: &str) -> Option<String> {
+    for tag in html.split("<meta").skip(1) {
+        let end = match tag.find('>') {
+            Some(e) => e,
+            None => continue,
+        };
+        let attrs = &tag[..end];
+        let key_matches = attr_val(attrs, "property").as_deref() == Some(key)
+            || attr_val(attrs, "name").as_deref() == Some(key);
+        if key_matches {
+            if let Some(c) = attr_val(attrs, "content") {
+                let c = html_unescape(c.trim());
+                if !c.is_empty() {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// The value of attribute `name` in a tag's attribute string (case-insensitive
+/// name, single- or double-quoted value).
+fn attr_val(attrs: &str, name: &str) -> Option<String> {
+    let lower = attrs.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find(name) {
+        let i = from + rel;
+        let boundary = i == 0 || !lower.as_bytes()[i - 1].is_ascii_alphanumeric();
+        let after = &attrs[i + name.len()..];
+        let after_eq = after.trim_start();
+        if boundary {
+            if let Some(rest) = after_eq.strip_prefix('=') {
+                let rest = rest.trim_start();
+                let quote = rest.chars().next()?;
+                if quote == '"' || quote == '\'' {
+                    let body = &rest[1..];
+                    if let Some(endq) = body.find(quote) {
+                        return Some(body[..endq].to_string());
+                    }
+                }
+            }
+        }
+        from = i + name.len();
+    }
+    None
+}
+
+/// `<title>…</title>` text, if present.
+fn html_title(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let start = lower.find("<title")?;
+    let gt = lower[start..].find('>')? + start + 1;
+    let end = lower[gt..].find("</title>")? + gt;
+    let t = html_unescape(html[gt..end].trim());
+    (!t.is_empty()).then_some(t)
+}
+
+/// Minimal HTML entity unescaping for preview text.
+fn html_unescape(s: &str) -> String {
+    s.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&nbsp;", " ")
+}
+
+/// Resolve a possibly-relative image URL against the page URL.
+fn absolutize(base: &str, img: &str) -> String {
+    if img.starts_with("http://") || img.starts_with("https://") {
+        return img.to_string();
+    }
+    if let Some(rest) = img.strip_prefix("//") {
+        let scheme = base.split(':').next().unwrap_or("https");
+        return format!("{scheme}://{rest}");
+    }
+    // Origin = scheme://host (up to the third '/').
+    let origin: String = {
+        let after_scheme = base.find("://").map(|i| i + 3).unwrap_or(0);
+        let host_end = base[after_scheme..]
+            .find('/')
+            .map(|i| after_scheme + i)
+            .unwrap_or(base.len());
+        base[..host_end].to_string()
+    };
+    if let Some(path) = img.strip_prefix('/') {
+        format!("{origin}/{path}")
+    } else {
+        format!("{origin}/{img}")
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2226,6 +2375,7 @@ pub fn run() {
             list_backups,
             default_backup_root,
             open_full_disk_access_settings,
+            fetch_link_preview,
             engine_status,
             engine_info,
             install_engine,

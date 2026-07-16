@@ -4492,6 +4492,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "traceloupe-core",
+ "ureq",
  "zeroize",
 ]
 

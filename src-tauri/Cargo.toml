@@ -29,6 +29,10 @@ robius-authentication = "0.1"
 # Zero the backup password in memory once it's been used (defence-in-depth for
 # a tool whose whole job is handling secrets).
 zeroize = { workspace = true }
+# Opt-in link previews (fetch a URL's OpenGraph metadata). Off by default; only
+# ever runs when the user turns the setting on. Same HTTP client the engine
+# download uses.
+ureq = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
