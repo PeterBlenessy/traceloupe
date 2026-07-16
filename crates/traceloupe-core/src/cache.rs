@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 25;
+const SCHEMA_VERSION: i64 = 26;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -146,7 +146,9 @@ CREATE TABLE IF NOT EXISTS notes (
     crypto_tag     BLOB,
     encrypted_data BLOB,
     -- The per-note key, wrapped (RFC 3394) by the PBKDF2 key from the password.
-    crypto_wrapped_key BLOB
+    crypto_wrapped_key BLOB,
+    -- Hashtag tags (iOS 15+) as a JSON array of tag strings, hash included.
+    tags TEXT
 );
 
 CREATE TABLE IF NOT EXISTS media_items (
@@ -471,6 +473,8 @@ impl CacheDb {
                 "incoming_recipient",
                 "INTEGER NOT NULL DEFAULT 0",
             )?;
+            // v26: Apple Notes hashtag tags (JSON array).
+            ensure_column(&conn, "notes", "tags", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

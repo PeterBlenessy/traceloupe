@@ -130,6 +130,8 @@ export interface Note {
   hasChecklist: boolean;
   imageCount: number;
   attachmentCount: number;
+  /** Hashtag tags on the note (iOS 15+); empty when none. */
+  tags: string[];
 }
 
 export interface Recording {
@@ -1229,6 +1231,7 @@ const mockNotes: Note[] = [
     hasChecklist: false,
     imageCount: 0,
     attachmentCount: 0,
+    tags: [],
   },
   {
     id: 1,
@@ -1244,6 +1247,7 @@ const mockNotes: Note[] = [
     hasChecklist: false,
     imageCount: 0,
     attachmentCount: 0,
+    tags: [],
   },
   {
     id: 3,
@@ -1259,6 +1263,7 @@ const mockNotes: Note[] = [
     hasChecklist: false,
     imageCount: 0,
     attachmentCount: 0,
+    tags: [],
   },
   {
     id: 4,
@@ -1274,6 +1279,7 @@ const mockNotes: Note[] = [
     hasChecklist: false,
     imageCount: 0,
     attachmentCount: 0,
+    tags: [],
   },
 ];
 

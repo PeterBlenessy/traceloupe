@@ -1461,6 +1461,8 @@ pub struct Note {
     pub has_checklist: bool,
     pub image_count: i64,
     pub attachment_count: i64,
+    /// Hashtag tags on the note (iOS 15+); empty when none.
+    pub tags: Vec<String>,
 }
 
 /// Notes, most-recently-modified first.
@@ -1468,7 +1470,7 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned,
-                has_checklist, image_count, attachment_count
+                has_checklist, image_count, attachment_count, tags
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -1487,6 +1489,10 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
             has_checklist: r.get::<_, i64>(10)? != 0,
             image_count: r.get(11)?,
             attachment_count: r.get(12)?,
+            tags: r
+                .get::<_, Option<String>>(13)?
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

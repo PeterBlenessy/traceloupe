@@ -170,13 +170,19 @@ pub fn parse_notes(
         } else {
             ("0", "0")
         };
+    // Hashtag tags (iOS 15+): each tag is an inline-attachment token whose text is
+    // in ZALTTEXT and whose note is ZNOTE1 (distinct from the media columns
+    // ZTYPEUTI/ZNOTE). Pre-load note_pk → [tags]; empty when the columns are absent.
+    let note_tags = load_note_tags(&src, &cols)?;
+
     // One row per note: its columns + its folder's title + its body blob `d.ZDATA`
-    // (gzip protobuf when unlocked, AES-GCM ciphertext when locked) + crypto params.
+    // (gzip protobuf when unlocked, AES-GCM ciphertext when locked) + crypto params +
+    // the note's own Z_PK (last), used to attach its tags.
     // `WHERE ZNOTEDATA IS NOT NULL` selects note objects (folders/accounts have none).
     let sql = format!(
         "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA,
                 {protected}, {wrapped}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned},
-                {checklist}, {image_count_expr}, {attach_count_expr}
+                {checklist}, {image_count_expr}, {attach_count_expr}, n.Z_PK
          FROM ZICCLOUDSYNCINGOBJECT n
          LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = {folder_fk}
          LEFT JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
@@ -211,6 +217,12 @@ pub fn parse_notes(
         let has_checklist = r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0;
         let image_count: i64 = r.get::<_, Option<i64>>(16)?.unwrap_or(0);
         let attachment_count: i64 = r.get::<_, Option<i64>>(17)?.unwrap_or(0);
+        let note_pk: i64 = r.get(18)?;
+        // Tags as a JSON array (None when the note has none), for the tag filter.
+        let tags = note_tags
+            .get(&note_pk)
+            .filter(|v| !v.is_empty())
+            .and_then(|v| serde_json::to_string(v).ok());
 
         // Notes in "Recently Deleted" have no folder row of their own; label them
         // so they're distinguishable rather than showing an empty folder.
@@ -227,8 +239,8 @@ pub fn parse_notes(
                 "INSERT INTO notes
                     (folder, title, snippet, body_html, created_at, modified_at,
                      locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data, pinned,
-                     has_checklist, image_count, attachment_count, crypto_wrapped_key)
-                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                     has_checklist, image_count, attachment_count, crypto_wrapped_key, tags)
+                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 rusqlite::params![
                     folder,
                     title,
@@ -245,6 +257,7 @@ pub fn parse_notes(
                     image_count,
                     attachment_count,
                     crypto_wrapped,
+                    tags,
                 ],
             )?;
             report.notes += 1;
@@ -273,8 +286,8 @@ pub fn parse_notes(
 
         tx.execute(
             "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked, pinned,
-                                has_checklist, image_count, attachment_count)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10)",
+                                has_checklist, image_count, attachment_count, tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 folder,
                 title,
@@ -285,7 +298,8 @@ pub fn parse_notes(
                 pinned,
                 has_checklist as i64,
                 image_count,
-                attachment_count
+                attachment_count,
+                tags,
             ],
         )?;
         report.notes += 1;
@@ -321,6 +335,36 @@ pub fn decrypt_locked_note(
     .ok()?;
     let text = decode_note_body(&gz)?;
     Some(clean_note_text(&text))
+}
+
+/// Load `note_pk → [hashtag tags]` from the inline hashtag-attachment tokens.
+/// Empty when the schema predates tags (iOS &lt; 15) or lacks the columns.
+fn load_note_tags(
+    conn: &Connection,
+    cols: &HashSet<String>,
+) -> Result<std::collections::HashMap<i64, Vec<String>>> {
+    let mut map: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    if !(cols.contains("ZTYPEUTI1") && cols.contains("ZNOTE1") && cols.contains("ZALTTEXT")) {
+        return Ok(map);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT ZNOTE1, ZALTTEXT FROM ZICCLOUDSYNCINGOBJECT
+         WHERE ZTYPEUTI1 = 'com.apple.notes.inlinetextattachment.hashtag'
+           AND ZNOTE1 IS NOT NULL AND ZALTTEXT IS NOT NULL",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let note_pk: i64 = r.get(0)?;
+        let tag = r.get::<_, String>(1)?.trim().to_string();
+        if tag.is_empty() {
+            continue;
+        }
+        let entry = map.entry(note_pk).or_default();
+        if !entry.contains(&tag) {
+            entry.push(tag);
+        }
+    }
+    Ok(map)
 }
 
 /// Column names of `table`, upper-cased. Empty if the table doesn't exist.
@@ -518,9 +562,15 @@ mod tests {
              CREATE TABLE ZICCLOUDSYNCINGOBJECT (
                 Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT, ZSNIPPET TEXT,
                 ZFOLDER INTEGER, ZNOTEDATA INTEGER, ZISPINNED INTEGER,
-                ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL, ZMARKEDFORDELETION INTEGER);
+                ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL, ZMARKEDFORDELETION INTEGER,
+                ZTYPEUTI1 TEXT, ZNOTE1 INTEGER, ZALTTEXT TEXT);
              -- A folder object (ZTITLE2 set, no note data).
-             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTITLE2) VALUES (1, 'Groceries');",
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTITLE2) VALUES (1, 'Groceries');
+             -- Two hashtag inline-attachment tokens on note 10 (one repeated).
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTYPEUTI1, ZNOTE1, ZALTTEXT)
+                VALUES (20, 'com.apple.notes.inlinetextattachment.hashtag', 10, '#shopping'),
+                       (21, 'com.apple.notes.inlinetextattachment.hashtag', 10, '#errands'),
+                       (22, 'com.apple.notes.inlinetextattachment.hashtag', 10, '#shopping');",
         )
         .unwrap();
         // A note in the Groceries folder. Core Data time: unix 1_700_000_000 =
@@ -577,6 +627,11 @@ mod tests {
             .unwrap();
         assert_eq!(folder.as_deref(), Some("Groceries"));
         assert_eq!(title.as_deref(), Some("Shopping"));
+        // Hashtag tags: deduped, in first-seen order.
+        let tags: Option<String> = c
+            .query_row("SELECT tags FROM notes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(tags.as_deref(), Some(r##"["#shopping","#errands"]"##));
         // Title stripped from the body; plain text with newlines preserved.
         assert_eq!(body.as_deref(), Some("Milk\nEggs"));
         assert_eq!(snippet.as_deref(), Some("Milk"));
