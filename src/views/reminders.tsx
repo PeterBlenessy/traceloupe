@@ -1,9 +1,14 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Circle, CircleCheck, Flag, ListTodo } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyView, VirtualListView } from "@/components/view";
+import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import { usePersistedState } from "@/lib/use-persisted-state";
+import { useDebounced } from "@/lib/use-debounced";
+import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { client, type Reminder } from "@/lib/ipc";
@@ -70,6 +75,52 @@ export function RemindersView() {
     enabled: active === true,
   });
 
+  const [status, setStatus] = usePersistedState<string>("reminders:status", "all");
+  const [list, setList] = usePersistedState<string>("reminders:list", "all");
+  const [sort, setSort] = usePersistedState<SortState>("reminders:sort", {
+    by: "title",
+    desc: false,
+  });
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim().toLowerCase());
+
+  const lists = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (reminders ?? []).map((r) => r.listName).filter((l): l is string => !!l),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [reminders],
+  );
+  const effList = list !== "all" && lists.includes(list) ? list : "all";
+  const hasFlagged = useMemo(
+    () => (reminders ?? []).some((r) => r.flagged),
+    [reminders],
+  );
+
+  const filtered = useMemo(() => {
+    const matched = (reminders ?? []).filter((r) => {
+      if (status === "open" && r.completed) return false;
+      if (status === "completed" && !r.completed) return false;
+      if (status === "flagged" && !r.flagged) return false;
+      if (effList !== "all" && r.listName !== effList) return false;
+      if (search) {
+        const hay = [r.title, r.notes, r.listName]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+    return sortItems(
+      matched,
+      (r) => (sort.by === "due" ? r.dueAt : (r.title ?? "").toLowerCase()),
+      sort.desc,
+    );
+  }, [reminders, status, effList, search, sort]);
+
   if (active === false) {
     return (
       <EmptyView
@@ -82,16 +133,76 @@ export function RemindersView() {
     );
   }
 
+  const hasReminders = (reminders?.length ?? 0) > 0;
+  const openCount = (reminders ?? []).filter((r) => !r.completed).length;
+  const doneCount = (reminders?.length ?? 0) - openCount;
+  const statusOptions: BadgeFilterOption[] = [
+    { value: "all", label: "All", count: reminders?.length },
+    { value: "open", label: "Open", count: openCount },
+    { value: "completed", label: "Completed", count: doneCount },
+    ...(hasFlagged
+      ? [
+          {
+            value: "flagged",
+            label: "Flagged",
+            count: (reminders ?? []).filter((r) => r.flagged).length,
+          },
+        ]
+      : []),
+  ];
+  const listOptions: BadgeFilterOption[] = [
+    { value: "all", label: "All lists" },
+    ...lists.map((l) => ({
+      value: l,
+      label: l,
+      count: (reminders ?? []).filter((r) => r.listName === l).length,
+    })),
+  ];
+
   return (
     <VirtualListView<Reminder>
       title="Reminders"
-      count={reminders?.length}
-      items={reminders ?? []}
-      getKey={(r) => r.id}
+      count={filtered.length}
       estimateSize={64}
       isPending={isPending}
       error={error}
-      emptyMessage="No reminders in this backup."
+      emptyMessage={
+        hasReminders ? "No reminders match these filters." : "No reminders in this backup."
+      }
+      header={
+        hasReminders ? (
+          <BadgeFilter options={statusOptions} value={status} onChange={setStatus} />
+        ) : undefined
+      }
+      search={
+        hasReminders ? (
+          <ListSearch value={q} onChange={setQ} placeholder="Search reminders" />
+        ) : undefined
+      }
+      toolbar={
+        hasReminders ? (
+          <>
+            {lists.length > 1 && (
+              <BadgeFilter
+                className="flex-1"
+                options={listOptions}
+                value={effList}
+                onChange={setList}
+              />
+            )}
+            <SortControl
+              fields={[
+                { value: "title", label: "Title" },
+                { value: "due", label: "Due" },
+              ]}
+              value={sort}
+              onChange={setSort}
+            />
+          </>
+        ) : undefined
+      }
+      items={filtered}
+      getKey={(r) => r.id}
       renderItem={(r) => <ReminderRow reminder={r} />}
     />
   );

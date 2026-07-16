@@ -1,11 +1,21 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { CalendarDays, Clock, MapPin } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyView, VirtualListView } from "@/components/view";
+import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { usePersistedState } from "@/lib/use-persisted-state";
+import { useDebounced } from "@/lib/use-debounced";
+import {
+  EmptyView,
+  ListSearch,
+  VirtualListView,
+} from "@/components/view";
 import { formatDate, formatDateTime } from "@/lib/format";
-import { client, type CalendarEvent } from "@/lib/ipc";
+import { client, type CalendarEvent, type TimeRange } from "@/lib/ipc";
 
 const timeFmt = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",
@@ -59,6 +69,13 @@ function EventRow({ event }: { event: CalendarEvent }) {
   );
 }
 
+/** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
+function inWindow(at: number | null, lo: number | null, hi: number | null) {
+  if (lo == null && hi == null) return true;
+  if (at == null) return false;
+  return (lo == null || at >= lo) && (hi == null || at < hi);
+}
+
 export function CalendarView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
@@ -75,6 +92,60 @@ export function CalendarView() {
     enabled: active === true,
   });
 
+  const [cal, setCal] = usePersistedState<string>("calendar:cal", "all");
+  const [sort, setSort] = usePersistedState<SortState>("calendar:sort", {
+    by: "start",
+    desc: true,
+  });
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim().toLowerCase());
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+
+  // The distinct calendars present, for the calendar facet.
+  const calendars = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (events ?? [])
+            .map((e) => e.calendarName)
+            .filter((c): c is string => !!c),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [events],
+  );
+  // Clamp a stale persisted calendar to what this backup has.
+  const effCal = cal !== "all" && calendars.includes(cal) ? cal : "all";
+
+  // Calendar + search filtered (base for the time-chip counts).
+  const baseFiltered = useMemo(() => {
+    return (events ?? []).filter((e) => {
+      if (effCal !== "all" && e.calendarName !== effCal) return false;
+      if (search) {
+        const hay = [e.title, e.notes, e.location]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(search)) return false;
+      }
+      return true;
+    });
+  }, [events, effCal, search]);
+
+  const presetCounts = useMemo(
+    () => presets.map((p) => baseFiltered.filter((e) => inWindow(e.startAt, p.lo, p.hi)).length),
+    [presets, baseFiltered],
+  );
+
+  const filtered = useMemo(() => {
+    const inRange = baseFiltered.filter((e) => inWindow(e.startAt, range.lo, range.hi));
+    return sortItems(
+      inRange,
+      (e) => (sort.by === "title" ? (e.title ?? "").toLowerCase() : e.startAt),
+      sort.desc,
+    );
+  }, [baseFiltered, sort, range]);
+
   if (active === false) {
     return (
       <EmptyView
@@ -87,16 +158,59 @@ export function CalendarView() {
     );
   }
 
+  const hasEvents = (events?.length ?? 0) > 0;
+  const calOptions: BadgeFilterOption[] = [
+    { value: "all", label: "All", count: events?.length },
+    ...calendars.map((c) => ({
+      value: c,
+      label: c,
+      count: (events ?? []).filter((e) => e.calendarName === c).length,
+    })),
+  ];
+
   return (
     <VirtualListView<CalendarEvent>
       title="Calendar"
-      count={events?.length}
-      items={events ?? []}
-      getKey={(e) => e.id}
+      count={filtered.length}
       estimateSize={76}
       isPending={isPending}
       error={error}
-      emptyMessage="No calendar events in this backup."
+      emptyMessage={
+        hasEvents ? "No events match these filters." : "No calendar events in this backup."
+      }
+      header={
+        hasEvents && calendars.length > 1 ? (
+          <BadgeFilter options={calOptions} value={effCal} onChange={setCal} />
+        ) : undefined
+      }
+      search={
+        hasEvents ? (
+          <ListSearch value={q} onChange={setQ} placeholder="Search events" />
+        ) : undefined
+      }
+      toolbar={
+        hasEvents ? (
+          <>
+            <TimeFilterBar
+              className="flex-1"
+              presets={presets}
+              value={range}
+              onChange={setRange}
+              counts={presetCounts}
+            />
+            <SortControl
+              fields={[
+                { value: "start", label: "Date" },
+                { value: "title", label: "Title" },
+              ]}
+              value={sort}
+              onChange={setSort}
+            />
+          </>
+        ) : undefined
+      }
+      items={filtered}
+      getKey={(e) => e.id}
       renderItem={(e) => <EventRow event={e} />}
     />
   );

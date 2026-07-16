@@ -1,12 +1,17 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowDownLeft, ArrowUpRight, Waypoints } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { EmptyView, VirtualListView } from "@/components/view";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { usePersistedState } from "@/lib/use-persisted-state";
+import { useDebounced } from "@/lib/use-debounced";
+import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { initials } from "@/lib/contact";
 import { formatCount, formatDate } from "@/lib/format";
-import { client, type Interaction } from "@/lib/ipc";
+import { client, type Interaction, type TimeRange } from "@/lib/ipc";
 
 function label(i: Interaction): string {
   return i.displayName ?? i.identifier ?? "Unknown";
@@ -46,6 +51,13 @@ function InteractionRow({ interaction }: { interaction: Interaction }) {
   );
 }
 
+/** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
+function inWindow(at: number | null, lo: number | null, hi: number | null) {
+  if (lo == null && hi == null) return true;
+  if (at == null) return false;
+  return (lo == null || at >= lo) && (hi == null || at < hi);
+}
+
 export function InteractionsView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
@@ -62,6 +74,48 @@ export function InteractionsView() {
     enabled: active === true,
   });
 
+  const [sort, setSort] = usePersistedState<SortState>("interactions:sort", {
+    by: "total",
+    desc: true,
+  });
+  const [q, setQ] = useState("");
+  const search = useDebounced(q.trim().toLowerCase());
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+
+  const baseFiltered = useMemo(() => {
+    return (interactions ?? []).filter((i) => {
+      if (!search) return true;
+      return [i.displayName, i.identifier]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(search);
+    });
+  }, [interactions, search]);
+
+  // Time filter is on the most-recent interaction date.
+  const presetCounts = useMemo(
+    () => presets.map((p) => baseFiltered.filter((i) => inWindow(i.lastAt, p.lo, p.hi)).length),
+    [presets, baseFiltered],
+  );
+
+  const filtered = useMemo(() => {
+    const inRange = baseFiltered.filter((i) => inWindow(i.lastAt, range.lo, range.hi));
+    return sortItems(
+      inRange,
+      (i) =>
+        sort.by === "incoming"
+          ? i.incoming
+          : sort.by === "outgoing"
+            ? i.outgoing
+            : sort.by === "recent"
+              ? i.lastAt
+              : i.incoming + i.outgoing,
+      sort.desc,
+    );
+  }, [baseFiltered, range, sort]);
+
   if (active === false) {
     return (
       <EmptyView
@@ -74,16 +128,48 @@ export function InteractionsView() {
     );
   }
 
+  const hasData = (interactions?.length ?? 0) > 0;
+
   return (
     <VirtualListView<Interaction>
       title="Interactions"
-      count={interactions?.length}
-      items={interactions ?? []}
-      getKey={(i) => i.id}
+      count={filtered.length}
       estimateSize={68}
       isPending={isPending}
       error={error}
-      emptyMessage="No interaction data in this backup."
+      emptyMessage={
+        hasData ? "No contacts match these filters." : "No interaction data in this backup."
+      }
+      search={
+        hasData ? (
+          <ListSearch value={q} onChange={setQ} placeholder="Search people" />
+        ) : undefined
+      }
+      toolbar={
+        hasData ? (
+          <>
+            <TimeFilterBar
+              className="flex-1"
+              presets={presets}
+              value={range}
+              onChange={setRange}
+              counts={presetCounts}
+            />
+            <SortControl
+              fields={[
+                { value: "total", label: "Total" },
+                { value: "incoming", label: "In" },
+                { value: "outgoing", label: "Out" },
+                { value: "recent", label: "Recent" },
+              ]}
+              value={sort}
+              onChange={setSort}
+            />
+          </>
+        ) : undefined
+      }
+      items={filtered}
+      getKey={(i) => i.id}
       renderItem={(i) => <InteractionRow interaction={i} />}
     />
   );

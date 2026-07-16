@@ -481,8 +481,10 @@ function NoteDetail({ note }: { note: Note }) {
           <span className="text-xs text-muted-foreground">{note.folder}</span>
         )}
       </ViewHeader>
-      <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-2xl p-6">
+      {/* min-h-0 lets this flex child shrink to the pane height so the ScrollArea
+          actually clips + scrolls, instead of growing with the note body. */}
+      <ScrollArea className="min-h-0 flex-1">
+        <div className="max-w-2xl p-6">
           {note.modifiedAt && (
             <p className="mb-4 text-xs text-muted-foreground">
               {formatDateTime(note.modifiedAt)}
