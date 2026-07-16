@@ -102,7 +102,7 @@ pub fn import_backup(
     // `index/total`. Three always run (Preparing, App Chats, Installed Apps);
     // Safari and the camera roll each contribute two. KEEP IN SYNC with the
     // `step!(…)` calls below.
-    let index_total: u32 = 3
+    let index_total: u32 = 4
         + effective.contains(&"messages") as u32
         + effective.contains(&"notes") as u32
         + effective.contains(&"calls") as u32
@@ -212,6 +212,12 @@ pub fn import_backup(
             false,
         );
     }
+    // Calendar events (native-only; no iLEAPP path). Always attempted — cheap and
+    // best-effort, so a missing/unreadable Calendar.sqlitedb is just a warning.
+    {
+        step!("Indexing Calendar");
+        import_calendar_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+    }
 
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
@@ -294,6 +300,7 @@ pub fn import_backup(
     report.calls += native.calls;
     report.safari_visits += native.safari_visits;
     report.contacts += native.contacts;
+    report.calendar_events += native.calendar_events;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -616,6 +623,50 @@ fn import_notes_native(
     };
     let _ = std::fs::remove_file(&note_store);
     ok
+}
+
+/// Materialize Calendar events natively from `Calendar.sqlitedb`. Native-only and
+/// best-effort: a missing/unreadable DB just logs a warning.
+fn import_calendar_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Calendar unavailable ({e})."));
+            return;
+        }
+    };
+    let entry = match index.find("HomeDomain", "Library/Calendar/Calendar.sqlitedb") {
+        Ok(Some(e)) => e,
+        Ok(None) => return, // not in this backup
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Calendar: Manifest read failed ({e})."));
+            return;
+        }
+    };
+    let out = work_dir.join(".Calendar.sqlitedb");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report
+            .warnings
+            .push(format!("Native Calendar: couldn't read Calendar.sqlitedb ({e})."));
+        return;
+    }
+    if let Err(e) = crate::parsers::calendar::parse_calendar(&out, cache, report, false) {
+        report
+            .warnings
+            .push(format!("Native Calendar: parse failed ({e})."));
+    }
+    let _ = std::fs::remove_file(&out);
 }
 
 /// Materialize Calls natively from `CallHistory.storedata`. Returns true when the

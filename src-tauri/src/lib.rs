@@ -1123,6 +1123,19 @@ async fn unlock_note(
 }
 
 #[tauri::command]
+async fn list_calendar_events(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<query::CalendarEvent>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_calendar_events(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn list_recordings(active: State<'_, ActiveBackup>) -> Result<Vec<Recording>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1982,6 +1995,7 @@ pub fn run() {
             imported_backup_ids,
             list_threads,
             device_info,
+            list_calendar_events,
             message_kinds,
             count_thread_messages,
             get_thread_message_window,

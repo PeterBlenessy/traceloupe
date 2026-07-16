@@ -205,6 +205,19 @@ CREATE TABLE IF NOT EXISTS recordings (
 );
 CREATE INDEX IF NOT EXISTS idx_recordings_at ON recordings(recorded_at DESC);
 
+CREATE TABLE IF NOT EXISTS calendar_events (
+    id            INTEGER PRIMARY KEY,
+    title         TEXT,
+    notes         TEXT,
+    location      TEXT,                        -- resolved place name / address
+    start_at      INTEGER,                     -- unix seconds
+    end_at        INTEGER,
+    all_day       INTEGER NOT NULL DEFAULT 0,
+    calendar_name TEXT,                         -- the containing calendar's title
+    url           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_calendar_start ON calendar_events(start_at DESC);
+
 -- Cross-artifact full-text search. ref_kind/ref_id point back at the source row.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     ref_kind UNINDEXED,

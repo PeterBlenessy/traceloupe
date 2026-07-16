@@ -138,6 +138,18 @@ export interface Recording {
   fileName: string | null;
 }
 
+export interface CalendarEvent {
+  id: number;
+  title: string | null;
+  notes: string | null;
+  location: string | null;
+  startAt: number | null;
+  endAt: number | null;
+  allDay: boolean;
+  calendarName: string | null;
+  url: string | null;
+}
+
 /** Counts refreshed by a partial re-import (only the relevant field is set). */
 export interface ReimportResult {
   module: string;
@@ -332,6 +344,7 @@ export interface TraceLoupeClient {
   listThreads(): Promise<ThreadSummary[]>;
   /** Device + backup metadata for the active backup, or null if unknown. */
   deviceInfo(): Promise<BackupInfo | null>;
+  listCalendarEvents(): Promise<CalendarEvent[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -538,6 +551,7 @@ const tauriClient: TraceLoupeClient = {
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
+  listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -1679,6 +1693,33 @@ export const mockClient: TraceLoupeClient = {
           isEncrypted: true,
         }
       : null,
+  listCalendarEvents: async () =>
+    mockActive
+      ? [
+          {
+            id: 1,
+            title: "Team standup",
+            notes: "daily sync",
+            location: "HQ · Room 4",
+            startAt: 1717840800,
+            endAt: 1717842600,
+            allDay: false,
+            calendarName: "Work",
+            url: null,
+          },
+          {
+            id: 2,
+            title: "Anna's birthday",
+            notes: null,
+            location: null,
+            startAt: 1717804800,
+            endAt: null,
+            allDay: true,
+            calendarName: "Family",
+            url: null,
+          },
+        ]
+      : [],
   // The mock messages carry no `kind`, so no content-kinds are advertised and the
   // filter is a no-op here.
   messageKinds: async () => [],
