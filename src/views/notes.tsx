@@ -493,6 +493,19 @@ function NoteRow({
               : (note.snippet ?? note.folder ?? "")}
           </ItemDescription>
         </ItemContent>
+        {note.hasImage && (
+          // A thumbnail of the note's first image (like Apple Notes). Hidden if
+          // the image can't be served (resolution is best-effort).
+          <img
+            src={client.noteImageUrl(note.id)}
+            alt=""
+            loading="lazy"
+            className="ml-2 size-11 shrink-0 self-center rounded-md bg-muted object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        )}
       </button>
     </Item>
   );

@@ -654,15 +654,21 @@ fn import_notes_native(
         ));
         return false;
     }
-    let ok = match crate::parsers::notes::parse_notes(&note_store, cache, report, false) {
-        Ok(()) => true,
-        Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Notes: parse failed ({e}); using iLEAPP."));
-            false
-        }
+    let img_src = crate::parsers::notes::NoteImageSource {
+        index: &index,
+        decryptor,
     };
+    let ok =
+        match crate::parsers::notes::parse_notes(&note_store, cache, report, false, Some(&img_src))
+        {
+            Ok(()) => true,
+            Err(e) => {
+                report
+                    .warnings
+                    .push(format!("Native Notes: parse failed ({e}); using iLEAPP."));
+                false
+            }
+        };
     let _ = std::fs::remove_file(&note_store);
     ok
 }
@@ -1574,7 +1580,17 @@ pub fn reimport_module(
                 return Err(e);
             }
             // replace=true clears + re-inserts atomically (see parse_notes).
-            let r = crate::parsers::notes::parse_notes(&note_db, &cache, &mut report, true);
+            let img_src = crate::parsers::notes::NoteImageSource {
+                index: &index,
+                decryptor,
+            };
+            let r = crate::parsers::notes::parse_notes(
+                &note_db,
+                &cache,
+                &mut report,
+                true,
+                Some(&img_src),
+            );
             let _ = std::fs::remove_file(&note_db);
             r?;
         }

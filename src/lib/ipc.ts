@@ -132,6 +132,8 @@ export interface Note {
   attachmentCount: number;
   /** Hashtag tags on the note (iOS 15+); empty when none. */
   tags: string[];
+  /** Whether the note has a first image (served as a list thumbnail). */
+  hasImage: boolean;
 }
 
 export interface Recording {
@@ -558,6 +560,8 @@ export interface TraceLoupeClient {
   attachmentUrl(id: number, opts?: { thumb?: boolean }): string;
   /** URL the webview can load for a voice recording's audio bytes. */
   audioUrl(id: number): string;
+  /** URL for a note's first-image thumbnail (see `Note.hasImage`). */
+  noteImageUrl(id: number): string;
   /** Open an attachment's file with the OS default app (documents, etc.). */
   openAttachment(id: number): Promise<void>;
   /**
@@ -750,6 +754,7 @@ const tauriClient: TraceLoupeClient = {
   attachmentUrl: (id, opts) =>
     `traceloupe-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
   audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
+  noteImageUrl: (id) => `traceloupe-note-image://localhost/${id}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
   reimportModule: (moduleId) =>
     invoke<ReimportResult>("reimport_module", { moduleId }),
@@ -1232,6 +1237,7 @@ const mockNotes: Note[] = [
     imageCount: 0,
     attachmentCount: 0,
     tags: [],
+    hasImage: false,
   },
   {
     id: 1,
@@ -1248,6 +1254,7 @@ const mockNotes: Note[] = [
     imageCount: 0,
     attachmentCount: 0,
     tags: [],
+    hasImage: false,
   },
   {
     id: 3,
@@ -1264,6 +1271,7 @@ const mockNotes: Note[] = [
     imageCount: 0,
     attachmentCount: 0,
     tags: [],
+    hasImage: false,
   },
   {
     id: 4,
@@ -1280,6 +1288,7 @@ const mockNotes: Note[] = [
     imageCount: 0,
     attachmentCount: 0,
     tags: [],
+    hasImage: false,
   },
 ];
 
@@ -2035,6 +2044,7 @@ export const mockClient: TraceLoupeClient = {
   // A short silent WAV so the browser mock renders a working <audio> control
   // (the real bytes come from the traceloupe-audio scheme under Tauri).
   audioUrl: () => SILENT_WAV_DATA_URL,
+  noteImageUrl: () => "",
   openAttachment: async () => {},
   reimportModule: async (moduleId) => ({
     module: moduleId,

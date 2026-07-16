@@ -74,7 +74,7 @@ fn decrypt_to_cache(
 /// originals don't linger past the session that produced them.
 fn clear_decrypted_temps(cache_dir: &Path) {
     let _ = std::fs::remove_dir_all(cache_dir.join("att-open"));
-    for sub in ["att-thumbs", "thumbs"] {
+    for sub in ["att-thumbs", "thumbs", "note-thumbs"] {
         if let Ok(entries) = std::fs::read_dir(cache_dir.join(sub)) {
             for e in entries.flatten() {
                 if e.path().extension().is_some_and(|x| x == "decrypted") {
@@ -1793,6 +1793,73 @@ fn avatar_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Respons
         .unwrap()
 }
 
+/// Serve a note's first-image thumbnail over `traceloupe-note-image://localhost/<noteId>`.
+///
+/// Takes only a numeric note id and resolves the image's backup blob from the
+/// active cache — never a path from the request. The blob is decrypted on demand
+/// (encrypted backups) and rendered to a downscaled JPEG thumbnail via `sips`.
+fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{Response, StatusCode};
+
+    let not_found = || {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Vec::new())
+            .unwrap()
+    };
+
+    let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
+        return not_found();
+    };
+    let active = app.state::<ActiveBackup>();
+    let Ok(cache_path) = active.path() else {
+        return not_found();
+    };
+    let Ok(cache) = CacheDb::open(&cache_path) else {
+        return not_found();
+    };
+    let Ok(Some((local_path, mime, _thumb, decrypt_key, plain_size))) =
+        query::note_image_blob(&cache, id)
+    else {
+        return not_found();
+    };
+
+    let thumbs_dir = cache_path
+        .parent()
+        .map(|p| p.join("note-thumbs"))
+        .unwrap_or_else(|| PathBuf::from("note-thumbs"));
+
+    let rendered = if let Some(key) = decrypt_key {
+        let Some(dec) = app.state::<SessionKeys>().get() else {
+            return not_found(); // encrypted image but no keys this session
+        };
+        let out = thumbs_dir.join(format!("note-{id}.decrypted"));
+        let Some(src) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out)
+        else {
+            return not_found();
+        };
+        media::render(&src, &thumbs_dir, id, true, mime.as_deref())
+    } else {
+        media::render(
+            Path::new(&local_path),
+            &thumbs_dir,
+            id,
+            true,
+            mime.as_deref(),
+        )
+    };
+
+    let Some(rendered) = rendered else {
+        return not_found();
+    };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", rendered.content_type)
+        .header("Cache-Control", "no-cache")
+        .body(rendered.bytes)
+        .unwrap()
+}
+
 /// Sniff a bitmap's magic bytes; contact thumbnails are usually JPEG/PNG.
 fn guess_image_mime(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
@@ -2120,6 +2187,16 @@ pub fn run() {
                 responder.respond(audio_protocol_response(&app, &path, range.as_deref()));
             });
         })
+        .register_asynchronous_uri_scheme_protocol(
+            "traceloupe-note-image",
+            |ctx, request, responder| {
+                let app = ctx.app_handle().clone();
+                let path = request.uri().path().to_string();
+                tauri::async_runtime::spawn_blocking(move || {
+                    responder.respond(note_image_protocol_response(&app, &path));
+                });
+            },
+        )
         .invoke_handler(tauri::generate_handler![
             list_backups,
             default_backup_root,

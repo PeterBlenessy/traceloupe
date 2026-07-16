@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 26;
+const SCHEMA_VERSION: i64 = 27;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -148,7 +148,14 @@ CREATE TABLE IF NOT EXISTS notes (
     -- The per-note key, wrapped (RFC 3394) by the PBKDF2 key from the password.
     crypto_wrapped_key BLOB,
     -- Hashtag tags (iOS 15+) as a JSON array of tag strings, hash included.
-    tags TEXT
+    tags TEXT,
+    -- First embedded image of the note (for a list thumbnail): the backup blob
+    -- path + on-demand decrypt fields, resolved via the Manifest at import. NULL
+    -- when the note has no image. Served by the note-image protocol.
+    image_local_path  TEXT,
+    image_decrypt_key BLOB,
+    image_plain_size  INTEGER,
+    image_mime        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS media_items (
@@ -475,6 +482,11 @@ impl CacheDb {
             )?;
             // v26: Apple Notes hashtag tags (JSON array).
             ensure_column(&conn, "notes", "tags", "TEXT")?;
+            // v27: a note's first embedded image (for a list thumbnail).
+            ensure_column(&conn, "notes", "image_local_path", "TEXT")?;
+            ensure_column(&conn, "notes", "image_decrypt_key", "BLOB")?;
+            ensure_column(&conn, "notes", "image_plain_size", "INTEGER")?;
+            ensure_column(&conn, "notes", "image_mime", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
