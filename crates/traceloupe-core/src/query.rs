@@ -1448,6 +1448,9 @@ pub struct Note {
     pub snippet: Option<String>,
     /// The note body (plain text). `None` for a locked note until it's unlocked.
     pub body: Option<String>,
+    /// Rich HTML rendering of the body (headings/lists/checklists); `None` to fall
+    /// back to `body`. Withheld for a locked note.
+    pub body_rich: Option<String>,
     pub created_at: Option<i64>,
     pub modified_at: Option<i64>,
     /// Pinned to the top of the Notes app.
@@ -1472,7 +1475,7 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned,
-                has_checklist, image_count, attachment_count, tags, image_local_path IS NOT NULL
+                has_checklist, image_count, attachment_count, tags, image_local_path IS NOT NULL, body_rich
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -1483,6 +1486,7 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
             title: r.get(2)?,
             snippet: r.get(3)?,
             body: r.get(4)?,
+            body_rich: r.get(15)?,
             created_at: r.get(5)?,
             modified_at: r.get(6)?,
             locked: r.get::<_, i64>(7)? != 0,

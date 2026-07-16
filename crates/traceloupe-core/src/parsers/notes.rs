@@ -312,18 +312,23 @@ pub fn parse_notes(
             .filter(|s| !s.trim().is_empty())
             .or_else(|| derive_snippet(&body_text));
 
+        // Rich HTML (formatting, lists, checklists) from the same protobuf; the UI
+        // renders it when present, falling back to the plain body otherwise.
+        let body_rich = zdata.as_deref().and_then(decode_note_rich);
+
         // Its first embedded image (for a list thumbnail), if resolved.
         let img = note_images.get(&note_pk);
         tx.execute(
-            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked, pinned,
+            "INSERT INTO notes (folder, title, snippet, body_html, body_rich, created_at, modified_at, locked, pinned,
                                 has_checklist, image_count, attachment_count, tags,
                                 image_local_path, image_decrypt_key, image_plain_size, image_mime)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 folder,
                 title,
                 snippet,
                 body,
+                body_rich,
                 created_at,
                 modified_at,
                 pinned,
@@ -559,6 +564,18 @@ fn decode_note_body(zdata: &[u8]) -> Option<String> {
     note_text_from_protobuf(&buf)
 }
 
+/// Like [`decode_note_body`] but returns rich HTML (formatting, lists,
+/// checklists) from the note's attribute runs. None if it can't be decoded.
+fn decode_note_rich(zdata: &[u8]) -> Option<String> {
+    const MAX_NOTE_BYTES: u64 = 64 * 1024 * 1024;
+    let mut buf = Vec::new();
+    GzDecoder::new(zdata)
+        .take(MAX_NOTE_BYTES)
+        .read_to_end(&mut buf)
+        .ok()?;
+    note_html_from_protobuf(&buf)
+}
+
 /// Walk the `NoteStoreProto` wire format to the note text: top-level field 2
 /// (Document) → field 3 (Note) → field 2 (note_text, a UTF-8 string).
 fn note_text_from_protobuf(buf: &[u8]) -> Option<String> {
@@ -566,6 +583,262 @@ fn note_text_from_protobuf(buf: &[u8]) -> Option<String> {
     let note = first_len_delimited(document, 3)?;
     let text = first_len_delimited(note, 2)?;
     Some(String::from_utf8_lossy(text).into_owned())
+}
+
+/// A paragraph's block style (AttributeRun.paragraph_style.style_type).
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Block {
+    #[default]
+    Body,
+    Title,
+    Heading,
+    Subheading,
+    Monospace,
+    Bulleted,
+    Numbered,
+    /// Checklist item; the bool is its done/checked state.
+    Checklist(bool),
+}
+
+/// Which HTML list a block belongs in (checklists render as a `<ul>` variant).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListKind {
+    Ul,
+    Ol,
+    Check,
+}
+
+impl Block {
+    fn list_kind(self) -> Option<ListKind> {
+        match self {
+            Block::Bulleted => Some(ListKind::Ul),
+            Block::Numbered => Some(ListKind::Ol),
+            Block::Checklist(_) => Some(ListKind::Check),
+            _ => None,
+        }
+    }
+}
+
+/// Inline character styling of a run.
+#[derive(Default, Clone)]
+struct Inline {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+    link: Option<String>,
+}
+
+/// Render the note body protobuf to sanitized rich HTML (headings, bold/italic/
+/// underline/strike, bulleted/numbered lists, and checklists as checkboxes).
+/// Returns None when there are no attribute runs (caller keeps the plain text).
+fn note_html_from_protobuf(buf: &[u8]) -> Option<String> {
+    let document = first_len_delimited(buf, 2)?;
+    let note = first_len_delimited(document, 3)?;
+    let text = String::from_utf8_lossy(first_len_delimited(note, 2)?).into_owned();
+    let runs = all_len_delimited(note, 5);
+    if runs.is_empty() {
+        return None;
+    }
+    // Run `length` fields count UTF-16 code units, so slice the text in UTF-16.
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+
+    let mut b = HtmlBuilder::default();
+    let mut pos = 0usize;
+    for run in runs {
+        let len = first_varint(run, 1).unwrap_or(0) as usize;
+        let end = pos.saturating_add(len).min(utf16.len());
+        let slice = String::from_utf16_lossy(&utf16[pos..end]);
+        pos = end;
+        b.push_run(&slice, run_block(run), &run_inline(run));
+    }
+    b.finish();
+    (!b.out.trim().is_empty()).then_some(b.out)
+}
+
+/// The block style of a run, from its `paragraph_style` (field 2): `style_type`
+/// (field 1) and, for a checklist (100+3), the `checklist.done` flag.
+fn run_block(run: &[u8]) -> Block {
+    let Some(ps) = first_len_delimited(run, 2) else {
+        return Block::Body;
+    };
+    // style_type is an int32; -1 (body) encodes as a 10-byte varint → cast down.
+    let style_type = first_varint(ps, 1).map(|v| v as i64 as i32).unwrap_or(-1);
+    match style_type {
+        0 => Block::Title,
+        1 => Block::Heading,
+        2 => Block::Subheading,
+        4 => Block::Monospace,
+        100 | 101 => Block::Bulleted, // dotted / dashed both render as a bullet list
+        102 => Block::Numbered,
+        103 => {
+            let done = first_len_delimited(ps, 5)
+                .and_then(|cl| first_varint(cl, 2))
+                .unwrap_or(0)
+                != 0;
+            Block::Checklist(done)
+        }
+        _ => Block::Body,
+    }
+}
+
+/// The inline styling of a run: bold (font_weight f.5 or emphasis f.14 = 1/3),
+/// italic (emphasis 2/3), underline (f.6), strikethrough (f.7), link (f.9).
+fn run_inline(run: &[u8]) -> Inline {
+    let emphasis = first_varint(run, 14);
+    Inline {
+        bold: first_varint(run, 5).is_some_and(|v| v != 0) || matches!(emphasis, Some(1) | Some(3)),
+        italic: matches!(emphasis, Some(2) | Some(3)),
+        underline: first_varint(run, 6).is_some_and(|v| v != 0),
+        strike: first_varint(run, 7).is_some_and(|v| v != 0),
+        link: first_len_delimited(run, 9)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .filter(|s| !s.is_empty()),
+    }
+}
+
+/// Accumulates styled runs into HTML, reconstructing paragraphs at newlines and
+/// grouping consecutive list items into `<ul>`/`<ol>`.
+#[derive(Default)]
+struct HtmlBuilder {
+    out: String,
+    line: String,
+    line_block: Block,
+    open_list: Option<ListKind>,
+    /// Lines flushed so far — used to drop the note's leading Title line, which
+    /// Apple stores as line 1 and the UI already shows as the note's heading.
+    flushed: usize,
+}
+
+impl HtmlBuilder {
+    /// Append a run: its text (which may contain newlines) with inline styling,
+    /// flushing a paragraph at each newline.
+    fn push_run(&mut self, text: &str, block: Block, inline: &Inline) {
+        let segments: Vec<&str> = text.split('\n').collect();
+        let last = segments.len() - 1;
+        for (i, seg) in segments.into_iter().enumerate() {
+            self.line_block = block;
+            self.line.push_str(&inline_html(seg, inline));
+            if i != last {
+                self.flush_line();
+            }
+        }
+    }
+
+    fn flush_line(&mut self) {
+        let block = self.line_block;
+        let content = std::mem::take(&mut self.line);
+        self.line_block = Block::default();
+        let is_first = self.flushed == 0;
+        self.flushed += 1;
+        // Drop the leading title line (shown separately as the note heading).
+        if is_first && block == Block::Title {
+            return;
+        }
+
+        match block.list_kind() {
+            Some(kind) => {
+                if self.open_list != Some(kind) {
+                    self.close_list();
+                    self.out.push_str(match kind {
+                        ListKind::Ul => "<ul>",
+                        ListKind::Ol => "<ol>",
+                        ListKind::Check => "<ul class=\"note-checklist\">",
+                    });
+                    self.open_list = Some(kind);
+                }
+                if let Block::Checklist(done) = block {
+                    let checked = if done { " checked" } else { "" };
+                    let cls = if done { " class=\"checked\"" } else { "" };
+                    self.out.push_str(&format!(
+                        "<li{cls}><input type=\"checkbox\" disabled{checked}> {content}</li>"
+                    ));
+                } else {
+                    self.out.push_str(&format!("<li>{content}</li>"));
+                }
+            }
+            None => {
+                self.close_list();
+                let (open, close) = match block {
+                    Block::Title => ("<h1>", "</h1>"),
+                    Block::Heading => ("<h2>", "</h2>"),
+                    Block::Subheading => ("<h3>", "</h3>"),
+                    Block::Monospace => ("<pre>", "</pre>"),
+                    _ => ("<p>", "</p>"),
+                };
+                // Keep blank body lines as spacing rather than empty tags.
+                if content.is_empty() && matches!(block, Block::Body) {
+                    self.out.push_str("<p><br></p>");
+                } else {
+                    self.out.push_str(open);
+                    self.out.push_str(&content);
+                    self.out.push_str(close);
+                }
+            }
+        }
+    }
+
+    fn close_list(&mut self) {
+        if self.open_list.take().is_some() {
+            self.out.push_str("</ul>");
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.line.is_empty() || self.line_block != Block::default() {
+            self.flush_line();
+        }
+        self.close_list();
+    }
+}
+
+/// Escape a text segment and wrap it in the run's inline tags. A link href is
+/// only honored for http/https/mailto (else rendered as plain text), so note
+/// content can't inject `javascript:` URLs into the rendered HTML.
+fn inline_html(text: &str, style: &Inline) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let mut s = escape_html(text);
+    if style.bold {
+        s = format!("<strong>{s}</strong>");
+    }
+    if style.italic {
+        s = format!("<em>{s}</em>");
+    }
+    if style.underline {
+        s = format!("<u>{s}</u>");
+    }
+    if style.strike {
+        s = format!("<s>{s}</s>");
+    }
+    if let Some(href) = style.link.as_deref() {
+        let lower = href.to_ascii_lowercase();
+        if lower.starts_with("http://")
+            || lower.starts_with("https://")
+            || lower.starts_with("mailto:")
+        {
+            s = format!("<a href=\"{}\">{s}</a>", escape_html(href));
+        }
+    }
+    s
+}
+
+/// Minimal HTML-text escaping (the tag set we emit is fixed and trusted).
+fn escape_html(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            // The object-replacement char marks attachments/tables in the stream.
+            '\u{fffc}' | '\r' => {}
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 /// Scan a protobuf message for the first length-delimited (wire type 2) field
@@ -602,6 +875,85 @@ fn first_len_delimited(buf: &[u8], field: u64) -> Option<&[u8]> {
         }
         if i > buf.len() {
             return None;
+        }
+    }
+    None
+}
+
+/// All length-delimited (wire type 2) fields numbered `field`, in order — for
+/// repeated messages like `attribute_run`. Bounds-checked against malformed input.
+fn all_len_delimited(buf: &[u8], field: u64) -> Vec<&[u8]> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < buf.len() {
+        let Some((tag, n)) = read_varint(&buf[i..]) else {
+            break;
+        };
+        i += n;
+        let field_number = tag >> 3;
+        match tag & 0b111 {
+            0 => {
+                let Some((_, n)) = read_varint(&buf[i..]) else {
+                    break;
+                };
+                i += n;
+            }
+            1 => match i.checked_add(8) {
+                Some(x) => i = x,
+                None => break,
+            },
+            5 => match i.checked_add(4) {
+                Some(x) => i = x,
+                None => break,
+            },
+            2 => {
+                let Some((len, n)) = read_varint(&buf[i..]) else {
+                    break;
+                };
+                i += n;
+                let Some(end) = i.checked_add(len as usize) else {
+                    break;
+                };
+                if end > buf.len() {
+                    break;
+                }
+                if field_number == field {
+                    out.push(&buf[i..end]);
+                }
+                i = end;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// The first varint (wire type 0) field numbered `field`. Bounds-checked.
+fn first_varint(buf: &[u8], field: u64) -> Option<u64> {
+    let mut i = 0;
+    while i < buf.len() {
+        let (tag, n) = read_varint(&buf[i..])?;
+        i += n;
+        let field_number = tag >> 3;
+        match tag & 0b111 {
+            0 => {
+                let (v, n) = read_varint(&buf[i..])?;
+                if field_number == field {
+                    return Some(v);
+                }
+                i += n;
+            }
+            1 => i = i.checked_add(8)?,
+            5 => i = i.checked_add(4)?,
+            2 => {
+                let (len, n) = read_varint(&buf[i..])?;
+                i += n;
+                i = i.checked_add(len as usize)?;
+                if i > buf.len() {
+                    return None;
+                }
+            }
+            _ => return None,
         }
     }
     None
@@ -696,6 +1048,73 @@ mod tests {
         let mut enc = GzEncoder::new(Vec::new(), Compression::default());
         enc.write_all(&store).unwrap();
         enc.finish().unwrap()
+    }
+
+    /// Encode a varint (wire type 0) field.
+    fn field_varint(field: u64, v: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        put_varint(&mut out, field << 3);
+        put_varint(&mut out, v);
+        out
+    }
+
+    /// Build one AttributeRun: text length + paragraph style_type (+ checklist done)
+    /// (+ bold).
+    fn make_run(length: u64, style_type: u64, checklist_done: Option<bool>, bold: bool) -> Vec<u8> {
+        let mut ps = field_varint(1, style_type);
+        if let Some(done) = checklist_done {
+            let cl = field_varint(2, done as u64);
+            ps.extend(field_bytes(5, &cl));
+        }
+        let mut r = field_varint(1, length); // run length (UTF-16 units)
+        r.extend(field_bytes(2, &ps)); // paragraph_style
+        if bold {
+            r.extend(field_varint(5, 1)); // font_weight → bold
+        }
+        r
+    }
+
+    #[test]
+    fn renders_rich_html_headings_checklist_and_escapes() {
+        // "Title\nHeading\n<b> & bold\nMilk\nEggs" with per-line runs.
+        let text = "Title\nHeading\n<b> & bold\nMilk\nEggs";
+        let mut note = field_bytes(2, text.as_bytes());
+        // Each AttributeRun is field 5 (repeated) on the Note.
+        for run in [
+            make_run(6, 0, None, false),          // "Title\n"      (title, dropped)
+            make_run(8, 1, None, false),          // "Heading\n"    (heading)
+            make_run(11, 4294967295, None, true), // "<b> & bold\n" bold body (-1)
+            make_run(5, 103, Some(true), false),  // "Milk\n"       checklist done
+            make_run(4, 103, Some(false), false), // "Eggs"        checklist
+        ] {
+            note.extend(field_bytes(5, &run));
+        }
+        let document = field_bytes(3, &note);
+        let store = field_bytes(2, &document);
+        let html = note_html_from_protobuf(&store).unwrap();
+
+        assert!(!html.contains("Title"), "leading title line dropped");
+        assert!(
+            html.contains("<h2>Heading</h2>"),
+            "heading rendered: {html}"
+        );
+        assert!(
+            html.contains("<ul class=\"note-checklist\">"),
+            "checklist list: {html}"
+        );
+        assert!(
+            html.contains("<input type=\"checkbox\" disabled checked> Milk"),
+            "checked item: {html}"
+        );
+        assert!(
+            html.contains("<input type=\"checkbox\" disabled> Eggs"),
+            "unchecked item: {html}"
+        );
+        // Bold run's text is HTML-escaped inside <strong>.
+        assert!(
+            html.contains("<strong>&lt;b&gt; &amp; bold</strong>"),
+            "escaped bold: {html}"
+        );
     }
 
     #[test]

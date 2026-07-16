@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 27;
+const SCHEMA_VERSION: i64 = 28;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -131,6 +131,9 @@ CREATE TABLE IF NOT EXISTS notes (
     title       TEXT,
     snippet     TEXT,
     body_html   TEXT,
+    -- Rich rendering of the body (sanitized HTML: headings, lists, checklists).
+    -- NULL when unavailable; the UI falls back to the plain body_html.
+    body_rich   TEXT,
     created_at  INTEGER,
     modified_at INTEGER,
     -- Pinned to the top of the Notes app (ZISPINNED).
@@ -487,6 +490,8 @@ impl CacheDb {
             ensure_column(&conn, "notes", "image_decrypt_key", "BLOB")?;
             ensure_column(&conn, "notes", "image_plain_size", "INTEGER")?;
             ensure_column(&conn, "notes", "image_mime", "TEXT")?;
+            // v28: rich-text HTML rendering of the note body.
+            ensure_column(&conn, "notes", "body_rich", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

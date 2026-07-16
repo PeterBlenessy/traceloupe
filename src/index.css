@@ -188,3 +188,24 @@
     background: transparent;
   }
 }
+
+/* Rendered rich-text note bodies (see src/views/notes.tsx). The generated HTML
+   uses a fixed, escaped tag set; these styles restore structure that Tailwind's
+   preflight reset strips. */
+.note-rich h1 { font-size: 1.25rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+.note-rich h2 { font-size: 1.1rem; font-weight: 600; margin: 0.5rem 0 0.25rem; }
+.note-rich h3 { font-size: 1rem; font-weight: 600; margin: 0.4rem 0 0.2rem; color: var(--muted-foreground); }
+.note-rich p { margin: 0.2rem 0; min-height: 1em; }
+.note-rich strong { font-weight: 600; }
+.note-rich em { font-style: italic; }
+.note-rich u { text-decoration: underline; }
+.note-rich s { text-decoration: line-through; }
+.note-rich a { color: var(--primary); text-decoration: underline; }
+.note-rich pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--muted); border-radius: 0.375rem; padding: 0.5rem 0.75rem; margin: 0.35rem 0; white-space: pre-wrap; }
+.note-rich ul, .note-rich ol { margin: 0.25rem 0; padding-left: 1.5rem; }
+.note-rich ul { list-style: disc; }
+.note-rich ol { list-style: decimal; }
+.note-rich ul.note-checklist { list-style: none; padding-left: 0.25rem; }
+.note-rich ul.note-checklist li { display: flex; align-items: baseline; gap: 0.5rem; }
+.note-rich ul.note-checklist li.checked { color: var(--muted-foreground); text-decoration: line-through; }
+.note-rich ul.note-checklist input[type="checkbox"] { position: relative; top: 0.1em; }
