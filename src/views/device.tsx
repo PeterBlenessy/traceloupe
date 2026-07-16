@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, LockOpen, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EmptyView, ViewHeader } from "@/components/view";
+import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type BackupInfo } from "@/lib/ipc";
 
@@ -42,7 +42,7 @@ export function DeviceView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: info } = useQuery<BackupInfo | null>({
+  const { data: info, error } = useQuery<BackupInfo | null>({
     queryKey: ["deviceInfo"],
     queryFn: () => client.deviceInfo(),
     enabled: active === true,
@@ -61,6 +61,15 @@ export function DeviceView() {
   }
 
   const model = modelName(info?.productType ?? null);
+
+  if (error) {
+    return (
+      <div className="flex h-full flex-col">
+        <ViewHeader title="Device" />
+        <ErrorState error={error} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">

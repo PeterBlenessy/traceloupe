@@ -40,9 +40,17 @@ export function phoneOrEmailKey(value: string): string {
  * loaded once (shared React Query cache) and indexed by normalized phone/email.
  */
 export function useContactResolver(): (handle: string | null | undefined) => ResolvedContact | null {
+  // Gate on an open backup so this doesn't fire `list_contacts` before/without
+  // one (it's called by Calls/Messages, which may mount pre-backup). The
+  // hasActiveBackup query is shared + cached, so this adds no extra round-trip.
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   const { data: contacts } = useQuery({
     queryKey: ["contacts"],
     queryFn: () => client.listContacts(),
+    enabled: active === true,
   });
 
   return useMemo(() => {

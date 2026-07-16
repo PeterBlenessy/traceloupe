@@ -2,7 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Activity, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EmptyView, ViewHeader } from "@/components/view";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { client, type Workout } from "@/lib/ipc";
 
@@ -41,7 +42,11 @@ export function HealthView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: workouts } = useQuery({
+  const {
+    data: workouts,
+    isPending,
+    error,
+  } = useQuery({
     queryKey: ["workouts"],
     queryFn: () => client.listWorkouts(),
     enabled: active === true,
@@ -70,9 +75,18 @@ export function HealthView() {
   return (
     <div className="flex h-full flex-col">
       <ViewHeader title="Health" count={workouts?.length} />
-      <div className="min-h-0 flex-1 overflow-auto">
-        <div className="mx-auto max-w-2xl">
-          {summary && summary.sampleCount > 0 && (
+      {error ? (
+        <ErrorState error={error} />
+      ) : isPending ? (
+        <div className="mx-auto w-full max-w-2xl p-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="mb-1 h-14 w-full" />
+          ))}
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto">
+          <div className="mx-auto max-w-2xl">
+            {summary && summary.sampleCount > 0 && (
             <div className="border-b px-4 py-3 text-sm text-muted-foreground">
               <span className="font-medium text-foreground">
                 {formatCount(summary.sampleCount)}
@@ -106,8 +120,9 @@ export function HealthView() {
               )}
             </div>
           )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
