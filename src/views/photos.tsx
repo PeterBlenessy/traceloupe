@@ -448,7 +448,6 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
       <img
         src={client.mediaUrl(item.id, { thumb: true })}
         alt={item.filename ?? ""}
-        loading="lazy"
         className="size-full object-cover transition-transform group-hover:scale-105"
       />
       {item.source && (
