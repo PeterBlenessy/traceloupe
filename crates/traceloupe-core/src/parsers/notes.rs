@@ -130,15 +130,27 @@ pub fn parse_notes(
         "NULL"
     };
 
-    // Password-protected (locked) notes: the body is AES-GCM in ZENCRYPTEDDATA
-    // instead of ZDATA, with the key derived from the note password + these params.
+    // Password-protected (locked) notes: the body ciphertext is `ZICNOTEDATA.ZDATA`
+    // (same column an unlocked note's gzip body uses), AES-GCM'd under a per-note key
+    // that's wrapped by a PBKDF2 key from the note password. The salt/iterations/
+    // wrapped-key are on the note *object* (n); the IV/tag are on the ZICNOTEDATA
+    // row (d) — a common source of "unlock always fails" bugs.
     let protected = col_or_null(&cols, &["ZISPASSWORDPROTECTED"]);
-    let enc_data = col_or_null(&cols, &["ZENCRYPTEDDATA"]);
     let salt = col_or_null(&cols, &["ZCRYPTOSALT"]);
     let iter = col_or_null(&cols, &["ZCRYPTOITERATIONCOUNT"]);
-    let iv = col_or_null(&cols, &["ZCRYPTOINITIALIZATIONVECTOR"]);
-    let tag = col_or_null(&cols, &["ZCRYPTOTAG"]);
+    let wrapped = col_or_null(&cols, &["ZCRYPTOWRAPPEDKEY"]);
     let hint = col_or_null(&cols, &["ZPASSWORDHINT"]);
+    let ndata_cols = table_columns(&src, "ZICNOTEDATA")?;
+    let iv = if ndata_cols.contains("ZCRYPTOINITIALIZATIONVECTOR") {
+        "d.ZCRYPTOINITIALIZATIONVECTOR"
+    } else {
+        "NULL"
+    };
+    let tag = if ndata_cols.contains("ZCRYPTOTAG") {
+        "d.ZCRYPTOTAG"
+    } else {
+        "NULL"
+    };
     // Pinned-to-top flag (independent of lock state).
     let pinned = col_or_null(&cols, &["ZISPINNED"]);
     // Rich-content indicators: the checklist flag, and per-note counts of embedded
@@ -146,36 +158,29 @@ pub fn parse_notes(
     // Filter on ZTYPEUTI (only attachments carry it) rather than the version-specific
     // entity number. Absent-column schemas fall back to 0.
     let checklist = col_or_null(&cols, &["ZHASCHECKLIST"]);
-    let (image_count_expr, attach_count_expr) = if cols.contains("ZTYPEUTI") && cols.contains("ZNOTE")
-    {
-        (
-            "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
+    let (image_count_expr, attach_count_expr) =
+        if cols.contains("ZTYPEUTI") && cols.contains("ZNOTE") {
+            (
+                "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
               AND a.ZTYPEUTI IN ('public.png','public.jpeg','public.heic','public.avif',\
               'org.webmproject.webp','public.mpeg-4','com.apple.quicktime-movie'))",
-            "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
+                "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
               AND a.ZTYPEUTI IS NOT NULL)",
-        )
-    } else {
-        ("0", "0")
-    };
-    // Include locked notes even though their ZNOTEDATA is often NULL.
-    let or_encrypted = if cols.contains("ZENCRYPTEDDATA") {
-        "OR n.ZENCRYPTEDDATA IS NOT NULL"
-    } else {
-        ""
-    };
-
-    // One row per note: its columns + its folder's title + its (gzipped) body blob
-    // (unlocked) or encrypted body + crypto params (locked). `WHERE ZNOTEDATA IS
-    // NOT NULL` selects note objects (folders/accounts have no body data).
+            )
+        } else {
+            ("0", "0")
+        };
+    // One row per note: its columns + its folder's title + its body blob `d.ZDATA`
+    // (gzip protobuf when unlocked, AES-GCM ciphertext when locked) + crypto params.
+    // `WHERE ZNOTEDATA IS NOT NULL` selects note objects (folders/accounts have none).
     let sql = format!(
         "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA,
-                {protected}, {enc_data}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned},
+                {protected}, {wrapped}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned},
                 {checklist}, {image_count_expr}, {attach_count_expr}
          FROM ZICCLOUDSYNCINGOBJECT n
          LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = {folder_fk}
          LEFT JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
-         WHERE n.ZNOTEDATA IS NOT NULL {or_encrypted}"
+         WHERE n.ZNOTEDATA IS NOT NULL"
     );
 
     let conn = cache.conn();
@@ -194,7 +199,7 @@ pub fn parse_notes(
         let folder_name: Option<String> = r.get(5)?;
         let zdata: Option<Vec<u8>> = r.get(6)?;
         let protected = r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
-        let encrypted_data: Option<Vec<u8>> = r.get(8)?;
+        let crypto_wrapped: Option<Vec<u8>> = r.get(8)?;
         let crypto_salt: Option<Vec<u8>> = r.get(9)?;
         let crypto_iter: Option<i64> = r.get(10)?;
         let crypto_iv: Option<Vec<u8>> = r.get(11)?;
@@ -214,15 +219,16 @@ pub fn parse_notes(
             .or_else(|| marked_deleted.then(|| "Recently Deleted".to_string()));
 
         // A locked note has its body encrypted — withhold body/snippet and store
-        // the crypto params so it can be unlocked on demand (never plaintext here).
-        let locked = protected || encrypted_data.is_some();
+        // the crypto params (ciphertext = ZDATA, wrapped key + salt/iter, IV/tag) so
+        // it can be unlocked on demand (never plaintext here).
+        let locked = protected;
         if locked {
             tx.execute(
                 "INSERT INTO notes
                     (folder, title, snippet, body_html, created_at, modified_at,
                      locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data, pinned,
-                     has_checklist, image_count, attachment_count)
-                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                     has_checklist, image_count, attachment_count, crypto_wrapped_key)
+                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     folder,
                     title,
@@ -233,11 +239,12 @@ pub fn parse_notes(
                     crypto_iter,
                     crypto_iv,
                     crypto_tag,
-                    encrypted_data,
+                    zdata,
                     pinned,
                     has_checklist as i64,
                     image_count,
                     attachment_count,
+                    crypto_wrapped,
                 ],
             )?;
             report.notes += 1;
@@ -299,10 +306,19 @@ pub fn decrypt_locked_note(
     iv: &[u8],
     tag: &[u8],
     encrypted_data: &[u8],
+    wrapped_key: &[u8],
 ) -> Option<String> {
     // The decrypted blob is the same gzip-protobuf an unlocked note stores.
-    let gz =
-        crate::crypto::decrypt_note(password, salt, iterations, iv, tag, encrypted_data).ok()?;
+    let gz = crate::crypto::decrypt_note(
+        password,
+        salt,
+        iterations,
+        iv,
+        tag,
+        encrypted_data,
+        wrapped_key,
+    )
+    .ok()?;
     let text = decode_note_body(&gz)?;
     Some(clean_note_text(&text))
 }
@@ -571,42 +587,60 @@ mod tests {
     #[test]
     fn parses_and_decrypts_a_password_protected_note() {
         use aes_gcm::aead::Aead;
-        use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
+        use aes_gcm::aes::Aes128;
+        use aes_gcm::{aead::consts::U16, AesGcm, KeyInit, Nonce};
 
         let password = "letmein";
         let salt = b"sixteen-byte-slt";
         let iters = 1000u32;
-        let iv = [3u8; 12];
+        // Real locked notes use a 16-byte IV; exercise that GCM path.
+        let iv = [3u8; 16];
         // The plaintext body is the same gzip-protobuf an unlocked note stores.
         let body_gz = make_zdata("Secret\ntop secret");
-        let key = pbkdf2::pbkdf2_hmac_array::<sha2::Sha256, 16>(password.as_bytes(), salt, iters);
-        let sealed = Aes128Gcm::new_from_slice(&key)
+        // A random per-note key encrypts the body; the KEK (from the password)
+        // wraps that key (RFC 3394), mirroring Apple's real ladder.
+        let note_key = [0x5au8; 16];
+        let sealed = AesGcm::<Aes128, U16>::new_from_slice(&note_key)
             .unwrap()
-            .encrypt(Nonce::from_slice(&iv), body_gz.as_slice())
+            .encrypt(Nonce::<U16>::from_slice(&iv), body_gz.as_slice())
             .unwrap();
         let (ct, tag) = sealed.split_at(sealed.len() - 16);
+        let kek = pbkdf2::pbkdf2_hmac_array::<sha2::Sha256, 16>(password.as_bytes(), salt, iters);
+        let mut wrapped = [0u8; 24];
+        aes_kw::KekAes128::from(kek)
+            .wrap(&note_key, &mut wrapped)
+            .unwrap();
 
         let tmp = tempfile::tempdir().unwrap();
         let db = tmp.path().join("NoteStore.sqlite");
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(
-            "CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZNOTE INTEGER, ZDATA BLOB);
+            "CREATE TABLE ZICNOTEDATA (
+                Z_PK INTEGER PRIMARY KEY, ZNOTE INTEGER, ZDATA BLOB,
+                ZCRYPTOINITIALIZATIONVECTOR BLOB, ZCRYPTOTAG BLOB);
              CREATE TABLE ZICCLOUDSYNCINGOBJECT (
                 Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT, ZSNIPPET TEXT,
                 ZFOLDER INTEGER, ZNOTEDATA INTEGER, ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL,
-                ZMARKEDFORDELETION INTEGER, ZISPASSWORDPROTECTED INTEGER, ZENCRYPTEDDATA BLOB,
-                ZCRYPTOSALT BLOB, ZCRYPTOITERATIONCOUNT INTEGER,
-                ZCRYPTOINITIALIZATIONVECTOR BLOB, ZCRYPTOTAG BLOB, ZPASSWORDHINT TEXT);",
+                ZMARKEDFORDELETION INTEGER, ZISPASSWORDPROTECTED INTEGER,
+                ZCRYPTOSALT BLOB, ZCRYPTOITERATIONCOUNT INTEGER, ZCRYPTOWRAPPEDKEY BLOB,
+                ZPASSWORDHINT TEXT);",
         )
         .unwrap();
-        // A locked note: ZNOTEDATA is NULL, the body is in ZENCRYPTEDDATA.
+        // A locked note: body ciphertext + IV/tag live on the ZICNOTEDATA row;
+        // salt/iterations/wrapped-key live on the note object (real layout).
+        conn.execute(
+            "INSERT INTO ZICNOTEDATA (Z_PK, ZNOTE, ZDATA, ZCRYPTOINITIALIZATIONVECTOR, ZCRYPTOTAG)
+             VALUES (1, 10, ?1, ?2, ?3)",
+            rusqlite::params![ct, iv.as_slice(), tag],
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO ZICCLOUDSYNCINGOBJECT
-                (Z_PK, ZTITLE1, ZISPASSWORDPROTECTED, ZENCRYPTEDDATA, ZCRYPTOSALT,
-                 ZCRYPTOITERATIONCOUNT, ZCRYPTOINITIALIZATIONVECTOR, ZCRYPTOTAG, ZPASSWORDHINT,
+                (Z_PK, ZTITLE1, ZNOTEDATA, ZISPASSWORDPROTECTED, ZCRYPTOSALT,
+                 ZCRYPTOITERATIONCOUNT, ZCRYPTOWRAPPEDKEY, ZPASSWORDHINT,
                  ZCREATIONDATE1, ZMODIFICATIONDATE1)
-             VALUES (10, 'Locked', 1, ?1, ?2, ?3, ?4, ?5, 'my hint', 721692800.0, 721692900.0)",
-            rusqlite::params![ct, salt.as_slice(), iters, iv.as_slice(), tag],
+             VALUES (10, 'Locked', 1, 1, ?1, ?2, ?3, 'my hint', 721692800.0, 721692900.0)",
+            rusqlite::params![salt.as_slice(), iters, wrapped.as_slice()],
         )
         .unwrap();
 
@@ -629,13 +663,16 @@ mod tests {
         assert_eq!(hint.as_deref(), Some("my hint"));
 
         // The unlock path recovers the body with the right password, and only it.
-        let (salt, iter, iv, tag, enc) = crate::query::note_crypto(&cache, id).unwrap().unwrap();
+        let (salt, iter, iv, tag, enc, wrapped) =
+            crate::query::note_crypto(&cache, id).unwrap().unwrap();
         let iterations = u32::try_from(iter).unwrap();
         assert_eq!(
-            decrypt_locked_note(password, &salt, iterations, &iv, &tag, &enc).as_deref(),
+            decrypt_locked_note(password, &salt, iterations, &iv, &tag, &enc, &wrapped).as_deref(),
             Some("Secret\ntop secret"),
         );
-        assert!(decrypt_locked_note("nope", &salt, iterations, &iv, &tag, &enc).is_none());
+        assert!(
+            decrypt_locked_note("nope", &salt, iterations, &iv, &tag, &enc, &wrapped).is_none()
+        );
     }
 
     #[test]

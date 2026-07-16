@@ -144,7 +144,10 @@ pub fn get_message_window(
          LIMIT ?2 OFFSET ?3",
     ))?;
     let mut messages = stmt
-        .query_map(rusqlite::params![thread_id, limit, offset, kind], row_to_message)?
+        .query_map(
+            rusqlite::params![thread_id, limit, offset, kind],
+            row_to_message,
+        )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     // Load attachments only for this window's messages, not the whole thread —
     // otherwise every window fetch rescans all of a large thread's attachments.
@@ -408,11 +411,10 @@ pub fn count_message_ranges(
                               OR t.identifier LIKE '%' || ?4 || '%' ESCAPE '\\')",
         )?;
         for r in ranges {
-            out.push(
-                stmt.query_row(rusqlite::params![r.lo, r.hi, service, search, kind], |row| {
-                    row.get(0)
-                })?,
-            );
+            out.push(stmt.query_row(
+                rusqlite::params![r.lo, r.hi, service, search, kind],
+                |row| row.get(0),
+            )?);
         }
     }
     Ok(out)
@@ -775,10 +777,9 @@ pub fn list_workouts(cache: &CacheDb) -> Result<Vec<Workout>> {
 /// summary when no Health data was imported.
 pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
     let meta_i = |k: &str| -> Option<i64> { cache.get_meta(k).ok().flatten()?.parse().ok() };
-    let workout_count: i64 =
-        cache
-            .conn()
-            .query_row("SELECT COUNT(*) FROM workouts", [], |r| r.get(0))?;
+    let workout_count: i64 = cache
+        .conn()
+        .query_row("SELECT COUNT(*) FROM workouts", [], |r| r.get(0))?;
     Ok(HealthSummary {
         sample_count: meta_i("health_sample_count").unwrap_or(0),
         first_at: meta_i("health_first_at"),
@@ -1464,8 +1465,9 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
         .map_err(Into::into)
 }
 
-/// A locked note's crypto params: `(salt, iterations, iv, tag, encrypted_data)`.
-pub type NoteCrypto = (Vec<u8>, i64, Vec<u8>, Vec<u8>, Vec<u8>);
+/// A locked note's crypto params: `(salt, iterations, iv, tag, encrypted_data,
+/// wrapped_key)`. `wrapped_key` is empty when the note key is derived directly.
+pub type NoteCrypto = (Vec<u8>, i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
 
 /// The crypto params needed to unlock note `id`, if it's a locked note with all
 /// params present. Used by the unlock command to decrypt on demand.
@@ -1473,14 +1475,24 @@ pub fn note_crypto(cache: &CacheDb, id: i64) -> Result<Option<NoteCrypto>> {
     Ok(cache
         .conn()
         .query_row(
-            "SELECT crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data
+            "SELECT crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data,
+                    crypto_wrapped_key
              FROM notes
              WHERE id = ?1 AND locked = 1
                AND crypto_salt IS NOT NULL AND crypto_iter IS NOT NULL
                AND crypto_iv IS NOT NULL AND crypto_tag IS NOT NULL
                AND encrypted_data IS NOT NULL",
             [id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get::<_, Option<Vec<u8>>>(5)?.unwrap_or_default(),
+                ))
+            },
         )
         .optional()?)
 }

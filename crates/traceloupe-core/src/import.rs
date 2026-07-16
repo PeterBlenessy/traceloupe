@@ -216,22 +216,46 @@ pub fn import_backup(
     // best-effort, so a missing/unreadable Calendar.sqlitedb is just a warning.
     {
         step!("Indexing Calendar");
-        import_calendar_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+        import_calendar_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
     }
     // Reminders (native-only; best-effort).
     {
         step!("Indexing Reminders");
-        import_reminders_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+        import_reminders_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
     }
     // Health workouts + summary (native-only; best-effort).
     {
         step!("Indexing Health");
-        import_health_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+        import_health_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
     }
     // CoreDuet cross-app interaction graph (native-only; best-effort).
     {
         step!("Indexing Interactions");
-        import_interactions_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+        import_interactions_native(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
     }
 
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
@@ -674,9 +698,9 @@ fn import_interactions_native(
     let out = work_dir.join(".interactionC.db");
     if let Err(e) = index.extract_to(&entry, decryptor, &out) {
         let _ = std::fs::remove_file(&out);
-        report
-            .warnings
-            .push(format!("Native Interactions: couldn't read interactionC.db ({e})."));
+        report.warnings.push(format!(
+            "Native Interactions: couldn't read interactionC.db ({e})."
+        ));
         return;
     }
     if let Err(e) = crate::parsers::coreduet::parse_interactions(&out, cache, report, false) {
@@ -813,9 +837,9 @@ fn import_calendar_native(
     let out = work_dir.join(".Calendar.sqlitedb");
     if let Err(e) = index.extract_to(&entry, decryptor, &out) {
         let _ = std::fs::remove_file(&out);
-        report
-            .warnings
-            .push(format!("Native Calendar: couldn't read Calendar.sqlitedb ({e})."));
+        report.warnings.push(format!(
+            "Native Calendar: couldn't read Calendar.sqlitedb ({e})."
+        ));
         return;
     }
     if let Err(e) = crate::parsers::calendar::parse_calendar(&out, cache, report, false) {
@@ -1061,7 +1085,11 @@ fn extract_aweme_dbs(
     let mut mains = Vec::new();
     let mut all_temps = Vec::new();
     let is_main = |e: &crate::manifest::FileEntry| {
-        let base = e.relative_path.rsplit('/').next().unwrap_or(&e.relative_path);
+        let base = e
+            .relative_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&e.relative_path);
         base.starts_with("AwemeIM") && base.ends_with(".db")
     };
     let main_entries: Vec<_> = hits.iter().filter(|e| is_main(e)).collect();
@@ -1306,7 +1334,10 @@ fn app_media_resolver<'a>(
             .ok()?
             .into_iter()
             .next()?;
-        let path = index.blob_path(&entry.file_id).to_string_lossy().into_owned();
+        let path = index
+            .blob_path(&entry.file_id)
+            .to_string_lossy()
+            .into_owned();
         let (key, size) = match decryptor {
             Some(_) => crate::crypto::file_key_field(&entry.file_blob)
                 .map(|(k, s)| (Some(k), s))
