@@ -3,7 +3,12 @@ import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
+  ChevronDown,
+  ChevronRight,
+  Folder,
+  FolderTree,
   Image as ImageIcon,
+  List,
   ListChecks,
   Lock,
   LockOpen,
@@ -11,7 +16,9 @@ import {
   Paperclip,
   Pin,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,13 +54,47 @@ import {
 } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
+import { cn } from "@/lib/utils";
 import { client, type Note, type TimeRange } from "@/lib/ipc";
 
-/** A flattened list row: either a section header or a note (so the virtualized
- *  list can render Apple Notes-style date groups inline). */
+/** A flattened list row for the virtualized master: a date/section header (flat
+ *  view), a folder node (tree view), or a note. */
 type NoteRowItem =
   | { kind: "header"; key: string; label: string }
-  | { kind: "note"; key: number; note: Note };
+  | { kind: "folder"; key: string; folder: string; count: number; collapsed: boolean }
+  | { kind: "note"; key: number; note: Note; indent?: boolean };
+
+/** Label for notes with no folder (e.g. "Recently Deleted" items were labelled
+ *  in the parser; a genuine null falls back here). */
+const NO_FOLDER = "Notes";
+
+/** Flatten notes into a folder tree: each folder node followed by its notes (when
+ *  expanded). Notes keep their incoming (sorted) order within a folder. */
+function buildTreeRows(notes: Note[], collapsed: Set<string>): NoteRowItem[] {
+  const groups = new Map<string, Note[]>();
+  for (const n of notes) {
+    const f = n.folder ?? NO_FOLDER;
+    const list = groups.get(f);
+    if (list) list.push(n);
+    else groups.set(f, [n]);
+  }
+  const rows: NoteRowItem[] = [];
+  for (const folder of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
+    const items = groups.get(folder)!;
+    const isCollapsed = collapsed.has(folder);
+    rows.push({
+      kind: "folder",
+      key: `folder-${folder}`,
+      folder,
+      count: items.length,
+      collapsed: isCollapsed,
+    });
+    if (!isCollapsed) {
+      for (const n of items) rows.push({ kind: "note", key: n.id, note: n, indent: true });
+    }
+  }
+  return rows;
+}
 
 const MS_DAY = 86_400_000;
 
@@ -150,6 +191,16 @@ export function NotesView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Flat list (date sections) vs a folder tree of the notes.
+  const [viewMode, setViewMode] = usePersistedState<"flat" | "tree">("notes:view", "flat");
+  // Collapsed folders in tree view (a folder is expanded unless listed here).
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggleFolder = (f: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(f)) next.add(f);
+      return next;
+    });
   const [sort, setSort] = usePersistedState<SortState>("notes:sort", { by: "modified", desc: true });
   // Filters — all derived client-side from the note metadata we already hold.
   const [folder, setFolder] = usePersistedState<string>("notes:folder", "all");
@@ -241,11 +292,14 @@ export function NotesView() {
     );
   }, [notes, baseFiltered, sort, range]);
 
-  // Header/note rows for the list: Pinned + date sections when sorted by date.
-  const rows = useMemo(
-    () => (sortedNotes ? groupNotes(sortedNotes, sort, new Date()) : []),
-    [sortedNotes, sort],
-  );
+  // The virtualized master rows: a folder tree in "tree" view, else Pinned +
+  // date sections (flat view).
+  const rows = useMemo(() => {
+    if (!sortedNotes) return [];
+    return viewMode === "tree"
+      ? buildTreeRows(sortedNotes, collapsed)
+      : groupNotes(sortedNotes, sort, new Date());
+  }, [sortedNotes, sort, viewMode, collapsed]);
 
   if (active === false) {
     return (
@@ -272,7 +326,23 @@ export function NotesView() {
         actions={
           hasNotes ? (
             <>
-              {folders.length > 1 && (
+              <ToggleGroup
+                type="single"
+                value={viewMode}
+                onValueChange={(v) => v && setViewMode(v as "flat" | "tree")}
+                variant="outline"
+                size="sm"
+              >
+                <ToggleGroupItem value="flat" aria-label="Flat list" title="Flat list">
+                  <List className="size-4" />
+                </ToggleGroupItem>
+                <ToggleGroupItem value="tree" aria-label="Folder tree" title="Folder tree">
+                  <FolderTree className="size-4" />
+                </ToggleGroupItem>
+              </ToggleGroup>
+              {/* The folder dropdown is redundant in tree view (the tree groups by
+                  folder), so only offer it in flat view. */}
+              {viewMode === "flat" && folders.length > 1 && (
                 <Select value={effFolder} onValueChange={setFolder}>
                   <SelectTrigger size="sm" className="h-7 w-[9rem] text-xs">
                     <SelectValue placeholder="Folder" />
@@ -381,11 +451,19 @@ export function NotesView() {
                 renderItem={(r) =>
                   r.kind === "header" ? (
                     <SectionHeader label={r.label} />
+                  ) : r.kind === "folder" ? (
+                    <FolderRow
+                      folder={r.folder}
+                      count={r.count}
+                      collapsed={r.collapsed}
+                      onToggle={() => toggleFolder(r.folder)}
+                    />
                   ) : (
-                    <div className="px-2 py-0.5">
+                    <div className={cn("py-0.5", r.indent ? "pl-6 pr-2" : "px-2")}>
                       <NoteRow
                         note={r.note}
                         active={selected?.id === r.note.id}
+                        showFolder={viewMode === "flat"}
                         onClick={() => setSelectedId(r.note.id)}
                       />
                     </div>
@@ -432,14 +510,50 @@ function SectionHeader({ label }: { label: string }) {
   );
 }
 
+/** An expandable folder node in tree view, with its child-note count as a chip. */
+function FolderRow({
+  folder,
+  count,
+  collapsed,
+  onToggle,
+}: {
+  folder: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-sm font-medium hover:bg-accent/50"
+    >
+      {collapsed ? (
+        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+      ) : (
+        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+      )}
+      <Folder className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate">{folder}</span>
+      <Badge variant="secondary" className="shrink-0 tabular-nums">
+        {count}
+      </Badge>
+    </button>
+  );
+}
+
 function NoteRow({
   note,
   active,
   onClick,
+  showFolder = false,
 }: {
   note: Note;
   active: boolean;
   onClick: () => void;
+  /** Show the note's folder as a chip (flat view; redundant under a folder node). */
+  showFolder?: boolean;
 }) {
   return (
     <Item
@@ -487,10 +601,19 @@ function NoteRow({
               {formatListTime(note.modifiedAt)}
             </span>
           </div>
-          <ItemDescription className="truncate">
-            {note.locked
-              ? "Password protected"
-              : (note.snippet ?? note.folder ?? "")}
+          <ItemDescription className="flex items-center gap-1.5 truncate">
+            {showFolder && note.folder && (
+              <Badge
+                variant="outline"
+                className="shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal"
+              >
+                <Folder className="size-2.5" />
+                {note.folder}
+              </Badge>
+            )}
+            <span className="truncate">
+              {note.locked ? "Password protected" : (note.snippet ?? "")}
+            </span>
           </ItemDescription>
         </ItemContent>
         {note.hasImage && (
