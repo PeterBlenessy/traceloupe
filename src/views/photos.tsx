@@ -12,8 +12,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Camera,
-  ChevronLeft,
-  ChevronRight,
   EyeOff,
   Frame,
   Heart,
@@ -23,16 +21,16 @@ import {
   Play,
   Smartphone,
   Users,
-  X,
 } from "lucide-react";
 
 /** Media items fetched per lazy window (shared by the grid and the lightbox's
  *  neighbour lookup so their cache keys line up). */
 const PAGE = 100;
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BadgeFilter } from "@/components/badge-filter";
+import { MediaLightbox } from "@/components/media-lightbox";
+import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, ErrorState, ListSearch, PanelHeader } from "@/components/view";
@@ -524,6 +522,7 @@ function Lightbox({
   onClose: () => void;
 }) {
   const open = index != null;
+  const { lightboxStyle, showMediaMetadata } = useSettings();
   // Subscribe to the current item's window (same key the grid fills) so the view
   // re-renders when a not-yet-loaded window resolves — a non-reactive cache read
   // would leave the spinner stuck until the next interaction.
@@ -570,97 +569,31 @@ function Lightbox({
     }
   }, [index, count, ensurePage]);
 
-  // Arrow keys page prev/next (Dialog already handles Escape).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") go(-1);
-      else if (e.key === "ArrowRight") go(1);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, index, count]);
-
   const isVideo = item?.kind === "video";
-  return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent
-        showCloseButton={false}
-        className="flex h-[95vh] max-w-[95vw] flex-col border-none bg-transparent p-0 shadow-none sm:max-w-[95vw]"
-      >
-        <DialogTitle className="sr-only">
-          {item?.filename ?? "Media"}
-        </DialogTitle>
-        {/* Close */}
-        <button
-          onClick={onClose}
-          aria-label="Close"
-          className="absolute right-2 top-2 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-        >
-          <X className="size-5" />
-        </button>
-        <div className="relative flex min-h-0 flex-1 items-center justify-center">
-          {hasPrev && (
-            <button
-              onClick={() => go(-1)}
-              aria-label="Previous"
-              className="absolute left-2 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-            >
-              <ChevronLeft className="size-6" />
-            </button>
-          )}
-          {item ? (
-            isVideo ? (
-              <video
-                key={item.id}
-                src={client.mediaUrl(item.id)}
-                controls
-                autoPlay
-                className="max-h-full max-w-full object-contain"
-              />
-            ) : (
-              <img
-                key={item.id}
-                src={client.mediaUrl(item.id)}
-                alt={item.filename ?? ""}
-                className="max-h-full max-w-full object-contain"
-              />
-            )
-          ) : (
-            <div className="size-16 animate-pulse rounded-full bg-white/20" />
-          )}
-          {hasNext && (
-            <button
-              onClick={() => go(1)}
-              aria-label="Next"
-              className="absolute right-2 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
-            >
-              <ChevronRight className="size-6" />
-            </button>
-          )}
-        </div>
-        <div className="flex items-center justify-between gap-2 px-2 py-1.5 text-xs text-white/80">
+  const meta =
+    item && showMediaMetadata ? (
+      <div className="space-y-1">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-3">
-            {item?.hidden && (
+            {item.hidden && (
               <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />
             )}
-            {item?.favorite && (
+            {item.favorite && (
               <Heart className="size-3.5 shrink-0 fill-red-500 text-red-500" />
             )}
-            <span className="select-text truncate">{item?.filename ?? "—"}</span>
-            {item?.persons && (
+            <span className="select-text truncate">{item.filename ?? "—"}</span>
+            {item.persons && (
               <span
-                className="inline-flex min-w-0 shrink items-center gap-1 text-white/70"
+                className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400"
                 title={item.persons}
               >
                 <Users className="size-3.5 shrink-0" />
                 <span className="select-text truncate">{item.persons}</span>
               </span>
             )}
-            {item?.albums && (
+            {item.albums && (
               <span
-                className="inline-flex min-w-0 shrink items-center gap-1 text-white/70"
+                className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400"
                 title={`Albums: ${item.albums}`}
               >
                 <Images className="size-3.5 shrink-0" />
@@ -669,38 +602,72 @@ function Lightbox({
             )}
           </div>
           <div className="flex shrink-0 items-center gap-3">
-            {item && <LocationTag item={item} />}
+            <LocationTag item={item} />
             {index != null && (
               <span className="tabular-nums">
                 {formatCount(index + 1)} / {formatCount(count)}
               </span>
             )}
-            {item?.source && <span>{item.source}</span>}
-            {item?.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
+            {item.source && <span>{item.source}</span>}
+            {item.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
           </div>
         </div>
-        {item &&
-          (item.camera || item.lens || item.exif || item.width || item.fileSize) && (
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-2 pb-1.5 text-[11px] text-white/55">
-              {item.camera && (
-                <span className="inline-flex items-center gap-1">
-                  <Camera className="size-3 shrink-0" />
-                  <span className="select-text">{item.camera}</span>
-                </span>
-              )}
-              {item.lens && <span className="select-text">{item.lens}</span>}
-              {item.exif && <span className="select-text">{item.exif}</span>}
-              {item.width && item.height && (
-                <span className="tabular-nums">
-                  {item.width} × {item.height}
-                </span>
-              )}
-              {item.fileSize && (
-                <span className="tabular-nums">{formatBytes(item.fileSize)}</span>
-              )}
-            </div>
-          )}
-      </DialogContent>
-    </Dialog>
+        {(item.camera || item.lens || item.exif || item.width || item.fileSize) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-neutral-400">
+            {item.camera && (
+              <span className="inline-flex items-center gap-1">
+                <Camera className="size-3 shrink-0" />
+                <span className="select-text">{item.camera}</span>
+              </span>
+            )}
+            {item.lens && <span className="select-text">{item.lens}</span>}
+            {item.exif && <span className="select-text">{item.exif}</span>}
+            {item.width && item.height && (
+              <span className="tabular-nums">
+                {item.width} × {item.height}
+              </span>
+            )}
+            {item.fileSize && (
+              <span className="tabular-nums">{formatBytes(item.fileSize)}</span>
+            )}
+          </div>
+        )}
+      </div>
+    ) : undefined;
+
+  return (
+    <MediaLightbox
+      open={open}
+      onClose={onClose}
+      style={lightboxStyle}
+      title={item?.filename ?? "Media"}
+      hasPrev={hasPrev}
+      hasNext={hasNext}
+      onPrev={() => go(-1)}
+      onNext={() => go(1)}
+      media={
+        item ? (
+          isVideo ? (
+            <video
+              key={item.id}
+              src={client.mediaUrl(item.id)}
+              controls
+              autoPlay
+              className="max-h-full max-w-full object-contain"
+            />
+          ) : (
+            <img
+              key={item.id}
+              src={client.mediaUrl(item.id)}
+              alt={item.filename ?? ""}
+              className="max-h-full max-w-full object-contain"
+            />
+          )
+        ) : (
+          <div className="size-16 animate-pulse rounded-full bg-white/20" />
+        )
+      }
+      meta={meta}
+    />
   );
 }
