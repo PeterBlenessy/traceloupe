@@ -31,6 +31,7 @@ pub struct ImportReport {
     pub contacts: usize,
     pub notes: usize,
     pub recordings: usize,
+    pub calendar_events: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
 }

@@ -648,6 +648,46 @@ pub struct Contact {
     pub source: String,
 }
 
+/// One calendar event.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarEvent {
+    pub id: i64,
+    pub title: Option<String>,
+    pub notes: Option<String>,
+    pub location: Option<String>,
+    pub start_at: Option<i64>,
+    pub end_at: Option<i64>,
+    pub all_day: bool,
+    pub calendar_name: Option<String>,
+    pub url: Option<String>,
+}
+
+/// Calendar events, most recent first (undated last).
+pub fn list_calendar_events(cache: &CacheDb) -> Result<Vec<CalendarEvent>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, title, notes, location, start_at, end_at, all_day, calendar_name, url
+         FROM calendar_events
+         ORDER BY start_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(CalendarEvent {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            notes: r.get(2)?,
+            location: r.get(3)?,
+            start_at: r.get(4)?,
+            end_at: r.get(5)?,
+            all_day: r.get::<_, i64>(6)? != 0,
+            calendar_name: r.get(7)?,
+            url: r.get(8)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// Contacts, ordered by name (people first, then organization-only entries).
 pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let conn = cache.conn();

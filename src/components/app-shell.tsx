@@ -1,6 +1,7 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import {
   Boxes,
+  CalendarDays,
   Smartphone,
   Globe,
   HardDrive,
@@ -71,6 +72,7 @@ const nav = [
   { to: "/safari", label: "Safari", icon: Globe, module: "safari" },
   { to: "/notes", label: "Notes", icon: NotebookText, module: "notes" },
   { to: "/recordings", label: "Recordings", icon: Mic, module: "recordings" },
+  { to: "/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/apps", label: "Apps", icon: Boxes },
   { to: "/device", label: "Device", icon: Smartphone },
 ] as const;

@@ -233,7 +233,7 @@ backup but has no parser. Ranked by value × feasibility.
 | **Health** | ✅ real | `healthdb_secure.sqlite` 87 MB; 344,063 quantity samples, 13 workouts | ★★★ | steps/HR/sleep/workouts + GPS routes (`location_series`). Richest untouched store |
 | **CoreDuet interactions** | ✅ real | `interactionC.db` 15,055 interactions, 66 contacts | ★★★ | cross-app who-talked-to-whom graph w/ direction + timestamps |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
-| **Calendar** | ✅ real | `Calendar.sqlitedb` 217 items, 15 calendars | ★★ | events/invitees/recurrence; plain SQLite |
+| **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
 | **Reminders** | ✅ real | 124 reminders | ★★ | to-dos + due dates |
 | **Apps view metadata** | ✅ available | Info.plist `Applications` → version, install/purchase date, seller | ★★ | cache stores only `bundle_id`; no version/date/size/name shown |
 | **Keychain** | ✅ (sensitive) | passwords / Wi-Fi / certs | ★★ | surface presence + counts only, never values |

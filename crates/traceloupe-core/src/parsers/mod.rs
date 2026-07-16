@@ -12,6 +12,7 @@
 
 pub mod address_book;
 pub mod apps;
+pub mod calendar;
 pub mod calls;
 pub mod camera_roll;
 pub mod chats;
