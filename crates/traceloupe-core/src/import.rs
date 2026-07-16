@@ -590,7 +590,7 @@ fn import_messages_native(
         }
     };
     let sms_db = work_dir.join(".sms.db");
-    if let Err(e) = index.extract_to(&entry, decryptor, &sms_db) {
+    if let Err(e) = index.extract_db(&entry, decryptor, &sms_db) {
         let _ = std::fs::remove_file(&sms_db);
         report.warnings.push(format!(
             "Native Messages: couldn't read sms.db ({e}); using iLEAPP."
@@ -647,7 +647,7 @@ fn import_notes_native(
         }
     };
     let note_store = work_dir.join(".NoteStore.sqlite");
-    if let Err(e) = index.extract_to(&entry, decryptor, &note_store) {
+    if let Err(e) = index.extract_db(&entry, decryptor, &note_store) {
         let _ = std::fs::remove_file(&note_store);
         report.warnings.push(format!(
             "Native Notes: couldn't read NoteStore.sqlite ({e}); using iLEAPP."
@@ -935,7 +935,8 @@ fn import_safari_native(
         }
     };
     let out = work_dir.join(".History.db");
-    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+    // WAL-aware: History.db keeps most/all visits in its `-wal` sidecar.
+    if let Err(e) = index.extract_db(&entry, decryptor, &out) {
         let _ = std::fs::remove_file(&out);
         report.warnings.push(format!(
             "Native Safari: couldn't read History.db ({e}); using iLEAPP."
@@ -1548,7 +1549,7 @@ pub fn reimport_module(
                 .find("HomeDomain", "Library/SMS/sms.db")?
                 .ok_or_else(|| crate::Error::Parse("sms.db is not in this backup".into()))?;
             let sms_db = work_dir.join(".reimport-sms.db");
-            if let Err(e) = index.extract_to(&entry, decryptor, &sms_db) {
+            if let Err(e) = index.extract_db(&entry, decryptor, &sms_db) {
                 let _ = std::fs::remove_file(&sms_db);
                 return Err(e);
             }
@@ -1575,7 +1576,7 @@ pub fn reimport_module(
                     crate::Error::Parse("NoteStore.sqlite is not in this backup".into())
                 })?;
             let note_db = work_dir.join(".reimport-notes.db");
-            if let Err(e) = index.extract_to(&entry, decryptor, &note_db) {
+            if let Err(e) = index.extract_db(&entry, decryptor, &note_db) {
                 let _ = std::fs::remove_file(&note_db);
                 return Err(e);
             }
@@ -1616,7 +1617,7 @@ pub fn reimport_module(
                 .find("HomeDomain", "Library/Safari/History.db")?
                 .ok_or_else(|| crate::Error::Parse("History.db is not in this backup".into()))?;
             let out = work_dir.join(".reimport-History.db");
-            if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+            if let Err(e) = index.extract_db(&entry, decryptor, &out) {
                 let _ = std::fs::remove_file(&out);
                 return Err(e);
             }

@@ -159,6 +159,34 @@ impl ManifestIndex {
         // 0600: `dest` is decrypted plaintext (sms.db, NoteStore.sqlite, …).
         crate::write_private(dest, &bytes).map_err(|e| Error::io(dest, e))
     }
+
+    /// Like [`extract_to`], but for a **WAL-mode SQLite database**: also extract
+    /// the `-wal`/`-shm` sidecars (iOS backs them up as separate Manifest entries)
+    /// and fold the WAL into the main file, so a read-only open sees every
+    /// committed row. Without this, data still in the WAL at backup time is
+    /// silently dropped — e.g. all of Safari `History.db`'s visits lived in its WAL.
+    /// Sidecars are best-effort; the checkpoint leaves a self-contained DB.
+    pub fn extract_db(
+        &self,
+        entry: &FileEntry,
+        decryptor: Option<&BackupDecryptor>,
+        dest: &Path,
+    ) -> Result<()> {
+        self.extract_to(entry, decryptor, dest)?;
+        for suffix in ["-wal", "-shm"] {
+            let rel = format!("{}{suffix}", entry.relative_path);
+            if let Ok(Some(side)) = self.find(&entry.domain, &rel) {
+                let side_dest = std::path::PathBuf::from(format!("{}{suffix}", dest.display()));
+                let _ = self.extract_to(&side, decryptor, &side_dest);
+            }
+        }
+        // Checkpoint: switching journal_mode folds the WAL into the main DB and
+        // removes the sidecars, leaving a plain file for the read-only parser.
+        if let Ok(conn) = Connection::open(dest) {
+            let _ = conn.pragma_update(None, "journal_mode", "DELETE");
+        }
+        Ok(())
+    }
 }
 
 impl Drop for ManifestIndex {
