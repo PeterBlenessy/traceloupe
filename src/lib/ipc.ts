@@ -118,6 +118,8 @@ export interface Note {
   snippet: string | null;
   /** Plain-text body. `null` for a locked note until unlocked with the password. */
   body: string | null;
+  /** Rich HTML rendering of the body (headings/lists/checklists); null → use `body`. */
+  bodyRich: string | null;
   createdAt: number | null;
   modifiedAt: number | null;
   /** Pinned to the top of the Notes app. */
@@ -1238,6 +1240,7 @@ const mockNotes: Note[] = [
     attachmentCount: 0,
     tags: [],
     hasImage: false,
+    bodyRich: null,
   },
   {
     id: 1,
@@ -1255,6 +1258,7 @@ const mockNotes: Note[] = [
     attachmentCount: 0,
     tags: [],
     hasImage: false,
+    bodyRich: null,
   },
   {
     id: 3,
@@ -1272,6 +1276,7 @@ const mockNotes: Note[] = [
     attachmentCount: 0,
     tags: [],
     hasImage: false,
+    bodyRich: null,
   },
   {
     id: 4,
@@ -1289,6 +1294,7 @@ const mockNotes: Note[] = [
     attachmentCount: 0,
     tags: [],
     hasImage: false,
+    bodyRich: null,
   },
 ];
 
