@@ -68,9 +68,9 @@ plain-text protobuf body layer is decoded.
 | Locked (flag + withhold body) | ✅ 9 | ✅ | Lock icon, filter, password prompt |
 | **Locked-note unlock (decrypt body)** | ✅ | ⬜ | **Broken** — ciphertext read from a nonexistent column; unlock always fails. See [defects](#known-parser-defects) |
 | Password hint | ✅ | ✅ | none present on the 9 locked notes here |
-| Embedded images / scans / drawings | ✅ 505 notes | ⬜ | `ICAttachment`/`ICMedia` never walked |
-| Checklists (structured) | ✅ 46 | ⬜ | Flag + checked-state unread |
-| Tables | ✅ 18 notes | ⬜ | Cells not decoded |
+| Embedded images / scans / drawings | ✅ 505 notes | ◑ | Per-note **counts** surfaced (image + total-attachment badges via `ZTYPEUTI`/`ZNOTE`); inline rendering of the blobs is still future work |
+| Checklists (structured) | ✅ 46 | ◑ | `ZHASCHECKLIST` → a checklist badge on the note; item text/checked-state (protobuf attribute runs) not decoded |
+| Tables | ✅ 18 notes | ◑ | Counted in the attachment badge (`com.apple.notes.table`); cells not decoded |
 | Hashtags / mentions | ✅ 273 | ⬜ | Inline attribute runs |
 | Shared / collaboration | ✅ 24 shared / 70 participants | ⬜ | Share state + participants dropped |
 | Account / source | ✅ (1 iCloud) | ⬜ | |

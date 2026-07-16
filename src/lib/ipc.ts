@@ -126,6 +126,10 @@ export interface Note {
   locked: boolean;
   /** The user's password hint, if the note stored one. */
   passwordHint: string | null;
+  /** Rich-content indicators: a checklist, and embedded image/attachment counts. */
+  hasChecklist: boolean;
+  imageCount: number;
+  attachmentCount: number;
 }
 
 export interface Recording {
@@ -1201,6 +1205,9 @@ const mockNotes: Note[] = [
     pinned: true,
     locked: false,
     passwordHint: null,
+    hasChecklist: false,
+    imageCount: 0,
+    attachmentCount: 0,
   },
   {
     id: 1,
@@ -1213,6 +1220,9 @@ const mockNotes: Note[] = [
     pinned: false,
     locked: false,
     passwordHint: null,
+    hasChecklist: false,
+    imageCount: 0,
+    attachmentCount: 0,
   },
   {
     id: 3,
@@ -1225,6 +1235,9 @@ const mockNotes: Note[] = [
     pinned: false,
     locked: false,
     passwordHint: null,
+    hasChecklist: false,
+    imageCount: 0,
+    attachmentCount: 0,
   },
   {
     id: 4,
@@ -1237,6 +1250,9 @@ const mockNotes: Note[] = [
     pinned: false,
     locked: true,
     passwordHint: "the usual",
+    hasChecklist: false,
+    imageCount: 0,
+    attachmentCount: 0,
   },
 ];
 
