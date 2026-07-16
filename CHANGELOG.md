@@ -28,6 +28,31 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.11.1] — 2026-07-16
+
+A code-review pass over the 0.9.0→0.11.0 work. The reviewed surface (Notes
+decryption/crypto ladder, the five new parsers/views, the import/IPC/frontend
+wiring) verified correct; this releases the handful of real fixes it found.
+
+### Fixed
+
+- **Messages import no longer aborts on a NULL-dated row** — `message.date` was
+  read as a required integer, so one NULL date (the column is `INTEGER DEFAULT 0`,
+  not `NOT NULL`) would fail the entire Messages parse. Now read optionally.
+- **Attachment-only messages no longer dropped on a stale flag** — a message with
+  no text was skipped whenever the denormalized `cache_has_attachments` flag was
+  stale (0 despite real `message_attachment_join` rows). Selection and the
+  has-attachment flag now consult the actual join table.
+- **Health workouts pick their activity deterministically** — a multi-activity
+  (multi-sport / all-NULL-primary) workout previously showed an arbitrary
+  activity's type/duration; now it deterministically prefers the explicit primary,
+  else the longest, and aggregates sample dates for the true span.
+- **Locked notes are unlockable even without an iteration count** — `note_crypto`
+  no longer requires `ZCRYPTOITERATIONCOUNT` (decryption already defaults 0/absent
+  to 20000), so a schema that omits it still gets a password prompt.
+- Hardening: `aes_ecb_decrypt_block` is panic-safe in isolation; corrected stale
+  doc/comments (Notes ciphertext column, import step count).
+
 ## [0.11.0] — 2026-07-16
 
 Closes the last gap from the 0.9.0/0.10.0 coverage audit: **password-protected
