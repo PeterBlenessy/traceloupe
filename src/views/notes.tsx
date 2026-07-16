@@ -2,7 +2,15 @@ import { useMemo, useState, type FormEvent } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Lock, LockOpen, NotebookText, Pin } from "lucide-react";
+import {
+  Image as ImageIcon,
+  ListChecks,
+  Lock,
+  LockOpen,
+  NotebookText,
+  Paperclip,
+  Pin,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -425,6 +433,30 @@ function NoteRow({
                 <Lock className="size-3.5 shrink-0 text-muted-foreground" />
               )}
               <span className="truncate">{noteTitle(note)}</span>
+              {note.hasChecklist && (
+                <ListChecks
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                  aria-label="Checklist"
+                />
+              )}
+              {note.imageCount > 0 && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
+                  title={`${note.imageCount} image${note.imageCount > 1 ? "s" : ""}`}
+                >
+                  <ImageIcon className="size-3.5" />
+                  {note.imageCount}
+                </span>
+              )}
+              {note.attachmentCount > note.imageCount && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
+                  title="Other attachments (tables, drawings, files)"
+                >
+                  <Paperclip className="size-3.5" />
+                  {note.attachmentCount - note.imageCount}
+                </span>
+              )}
             </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatListTime(note.modifiedAt)}

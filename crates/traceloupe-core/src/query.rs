@@ -1423,13 +1423,19 @@ pub struct Note {
     pub locked: bool,
     /// The user's password hint, if the note stored one.
     pub password_hint: Option<String>,
+    /// Rich-content indicators: has a checklist, and counts of embedded
+    /// image/video attachments vs total attachments (tables, drawings, files…).
+    pub has_checklist: bool,
+    pub image_count: i64,
+    pub attachment_count: i64,
 }
 
 /// Notes, most-recently-modified first.
 pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned
+        "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned,
+                has_checklist, image_count, attachment_count
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -1445,6 +1451,9 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
             locked: r.get::<_, i64>(7)? != 0,
             password_hint: r.get(8)?,
             pinned: r.get::<_, i64>(9)? != 0,
+            has_checklist: r.get::<_, i64>(10)? != 0,
+            image_count: r.get(11)?,
+            attachment_count: r.get(12)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

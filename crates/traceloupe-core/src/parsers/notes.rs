@@ -141,6 +141,23 @@ pub fn parse_notes(
     let hint = col_or_null(&cols, &["ZPASSWORDHINT"]);
     // Pinned-to-top flag (independent of lock state).
     let pinned = col_or_null(&cols, &["ZISPINNED"]);
+    // Rich-content indicators: the checklist flag, and per-note counts of embedded
+    // attachments (image/video vs total) via the attachment objects' ZNOTE back-ref.
+    // Filter on ZTYPEUTI (only attachments carry it) rather than the version-specific
+    // entity number. Absent-column schemas fall back to 0.
+    let checklist = col_or_null(&cols, &["ZHASCHECKLIST"]);
+    let (image_count_expr, attach_count_expr) = if cols.contains("ZTYPEUTI") && cols.contains("ZNOTE")
+    {
+        (
+            "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
+              AND a.ZTYPEUTI IN ('public.png','public.jpeg','public.heic','public.avif',\
+              'org.webmproject.webp','public.mpeg-4','com.apple.quicktime-movie'))",
+            "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
+              AND a.ZTYPEUTI IS NOT NULL)",
+        )
+    } else {
+        ("0", "0")
+    };
     // Include locked notes even though their ZNOTEDATA is often NULL.
     let or_encrypted = if cols.contains("ZENCRYPTEDDATA") {
         "OR n.ZENCRYPTEDDATA IS NOT NULL"
@@ -153,7 +170,8 @@ pub fn parse_notes(
     // NOT NULL` selects note objects (folders/accounts have no body data).
     let sql = format!(
         "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA,
-                {protected}, {enc_data}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned}
+                {protected}, {enc_data}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned},
+                {checklist}, {image_count_expr}, {attach_count_expr}
          FROM ZICCLOUDSYNCINGOBJECT n
          LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = {folder_fk}
          LEFT JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
@@ -185,6 +203,9 @@ pub fn parse_notes(
             .get::<_, Option<String>>(13)?
             .filter(|s| !s.trim().is_empty());
         let pinned = r.get::<_, Option<i64>>(14)?.unwrap_or(0) != 0;
+        let has_checklist = r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0;
+        let image_count: i64 = r.get::<_, Option<i64>>(16)?.unwrap_or(0);
+        let attachment_count: i64 = r.get::<_, Option<i64>>(17)?.unwrap_or(0);
 
         // Notes in "Recently Deleted" have no folder row of their own; label them
         // so they're distinguishable rather than showing an empty folder.
@@ -199,8 +220,9 @@ pub fn parse_notes(
             tx.execute(
                 "INSERT INTO notes
                     (folder, title, snippet, body_html, created_at, modified_at,
-                     locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data, pinned)
-                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                     locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data, pinned,
+                     has_checklist, image_count, attachment_count)
+                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 rusqlite::params![
                     folder,
                     title,
@@ -213,6 +235,9 @@ pub fn parse_notes(
                     crypto_tag,
                     encrypted_data,
                     pinned,
+                    has_checklist as i64,
+                    image_count,
+                    attachment_count,
                 ],
             )?;
             report.notes += 1;
@@ -240,9 +265,21 @@ pub fn parse_notes(
             .or_else(|| derive_snippet(&body_text));
 
         tx.execute(
-            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked, pinned)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)",
-            rusqlite::params![folder, title, snippet, body, created_at, modified_at, pinned],
+            "INSERT INTO notes (folder, title, snippet, body_html, created_at, modified_at, locked, pinned,
+                                has_checklist, image_count, attachment_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10)",
+            rusqlite::params![
+                folder,
+                title,
+                snippet,
+                body,
+                created_at,
+                modified_at,
+                pinned,
+                has_checklist as i64,
+                image_count,
+                attachment_count
+            ],
         )?;
         report.notes += 1;
     }
