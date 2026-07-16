@@ -1144,7 +1144,6 @@ function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
           key={a.id}
           src={client.attachmentUrl(a.id, { thumb: true })}
           alt=""
-          loading="lazy"
           className="size-9 rounded object-cover"
           onError={(e) => {
             e.currentTarget.style.display = "none";
@@ -1186,7 +1185,6 @@ function LinkPreviewCard({ url }: { url: string }) {
         <img
           src={data.image}
           alt=""
-          loading="lazy"
           className="size-16 shrink-0 bg-muted object-cover"
           onError={(e) => {
             e.currentTarget.style.display = "none";
@@ -1309,7 +1307,6 @@ function AttachmentView({
         <img
           src={client.attachmentUrl(att.id, { thumb: true })}
           alt={att.filename ?? ""}
-          loading="lazy"
           className="max-h-64 w-full object-cover"
         />
       </button>
