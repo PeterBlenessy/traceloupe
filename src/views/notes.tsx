@@ -154,6 +154,7 @@ export function NotesView() {
   // Filters — all derived client-side from the note metadata we already hold.
   const [folder, setFolder] = usePersistedState<string>("notes:folder", "all");
   const [lockState, setLockState] = usePersistedState<string>("notes:lock", "all");
+  const [tag, setTag] = usePersistedState<string>("notes:tag", "all");
   // Free-text search over title / snippet / folder.
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim().toLowerCase());
@@ -173,11 +174,20 @@ export function NotesView() {
     [notes],
   );
   const hasLocked = useMemo(() => (notes ?? []).some((n) => n.locked), [notes]);
+  // The distinct hashtag tags present, for the tag facet.
+  const tags = useMemo(
+    () =>
+      Array.from(new Set((notes ?? []).flatMap((n) => n.tags))).sort((a, b) =>
+        a.localeCompare(b),
+      ),
+    [notes],
+  );
   // Clamp persisted filters to what THIS backup actually has, so a stale
   // `notes:folder`/`notes:lock` from another backup can't silently empty the list
   // (its control may be hidden, leaving no way to reset).
   const effFolder = folder !== "all" && folders.includes(folder) ? folder : "all";
   const effLock = hasLocked ? lockState : "all";
+  const effTag = tag !== "all" && tags.includes(tag) ? tag : "all";
 
   // Whether a note's modified date falls in a [lo, hi) window (undated notes
   // only pass the fully-open "All" window).
@@ -198,6 +208,7 @@ export function NotesView() {
       if (effFolder !== "all" && n.folder !== effFolder) return false;
       if (effLock === "locked" && !n.locked) return false;
       if (effLock === "unlocked" && n.locked) return false;
+      if (effTag !== "all" && !n.tags.includes(effTag)) return false;
       if (search) {
         const hay = [n.title, n.snippet, n.folder]
           .filter(Boolean)
@@ -207,7 +218,7 @@ export function NotesView() {
       }
       return true;
     });
-  }, [notes, effFolder, effLock, search]);
+  }, [notes, effFolder, effLock, effTag, search]);
 
   const presetCounts = useMemo(
     () =>
@@ -306,6 +317,20 @@ export function NotesView() {
         toolbar={
           hasNotes ? (
             <>
+              {tags.length > 0 && (
+                <BadgeFilter
+                  value={effTag}
+                  onChange={setTag}
+                  options={[
+                    { value: "all", label: "All tags" },
+                    ...tags.map((t) => ({
+                      value: t,
+                      label: t,
+                      count: (notes ?? []).filter((n) => n.tags.includes(t)).length,
+                    })),
+                  ]}
+                />
+              )}
               <TimeFilterBar
                 className="flex-1"
                 presets={presets}
@@ -489,6 +514,18 @@ function NoteDetail({ note }: { note: Note }) {
             <p className="mb-4 text-xs text-muted-foreground">
               {formatDateTime(note.modifiedAt)}
             </p>
+          )}
+          {note.tags.length > 0 && (
+            <div className="mb-4 flex flex-wrap gap-1.5">
+              {note.tags.map((t) => (
+                <span
+                  key={t}
+                  className="rounded-full bg-accent px-2 py-0.5 text-xs text-muted-foreground"
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
           )}
           {note.locked ? (
             // Keyed by id so the password field / unlocked body reset per note.
