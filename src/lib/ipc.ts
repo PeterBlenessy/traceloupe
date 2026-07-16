@@ -150,6 +150,18 @@ export interface CalendarEvent {
   url: string | null;
 }
 
+export interface Reminder {
+  id: number;
+  title: string | null;
+  notes: string | null;
+  listName: string | null;
+  dueAt: number | null;
+  completed: boolean;
+  completedAt: number | null;
+  flagged: boolean;
+  priority: number | null;
+}
+
 /** Counts refreshed by a partial re-import (only the relevant field is set). */
 export interface ReimportResult {
   module: string;
@@ -345,6 +357,7 @@ export interface TraceLoupeClient {
   /** Device + backup metadata for the active backup, or null if unknown. */
   deviceInfo(): Promise<BackupInfo | null>;
   listCalendarEvents(): Promise<CalendarEvent[]>;
+  listReminders(): Promise<Reminder[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -552,6 +565,7 @@ const tauriClient: TraceLoupeClient = {
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
+  listReminders: () => invoke<Reminder[]>("list_reminders"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -1717,6 +1731,33 @@ export const mockClient: TraceLoupeClient = {
             allDay: true,
             calendarName: "Family",
             url: null,
+          },
+        ]
+      : [],
+  listReminders: async () =>
+    mockActive
+      ? [
+          {
+            id: 1,
+            title: "Buy milk",
+            notes: "2% please",
+            listName: "Groceries",
+            dueAt: 1717840800,
+            completed: false,
+            completedAt: null,
+            flagged: true,
+            priority: 1,
+          },
+          {
+            id: 2,
+            title: "Call the bank",
+            notes: null,
+            listName: "Reminders",
+            dueAt: null,
+            completed: true,
+            completedAt: 1717700000,
+            flagged: false,
+            priority: null,
           },
         ]
       : [],

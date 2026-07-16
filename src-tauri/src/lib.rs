@@ -1136,6 +1136,19 @@ async fn list_calendar_events(
 }
 
 #[tauri::command]
+async fn list_reminders(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<query::Reminder>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_reminders(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn list_recordings(active: State<'_, ActiveBackup>) -> Result<Vec<Recording>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -1996,6 +2009,7 @@ pub fn run() {
             list_threads,
             device_info,
             list_calendar_events,
+            list_reminders,
             message_kinds,
             count_thread_messages,
             get_thread_message_window,

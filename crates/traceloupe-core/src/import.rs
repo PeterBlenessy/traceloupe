@@ -102,7 +102,7 @@ pub fn import_backup(
     // `index/total`. Three always run (Preparing, App Chats, Installed Apps);
     // Safari and the camera roll each contribute two. KEEP IN SYNC with the
     // `step!(…)` calls below.
-    let index_total: u32 = 4
+    let index_total: u32 = 5
         + effective.contains(&"messages") as u32
         + effective.contains(&"notes") as u32
         + effective.contains(&"calls") as u32
@@ -218,6 +218,11 @@ pub fn import_backup(
         step!("Indexing Calendar");
         import_calendar_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
     }
+    // Reminders (native-only; best-effort).
+    {
+        step!("Indexing Reminders");
+        import_reminders_native(backup_dir, decryptor.as_ref(), &cache, work_dir, &mut native);
+    }
 
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
@@ -301,6 +306,7 @@ pub fn import_backup(
     report.safari_visits += native.safari_visits;
     report.contacts += native.contacts;
     report.calendar_events += native.calendar_events;
+    report.reminders += native.reminders;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
 
@@ -623,6 +629,57 @@ fn import_notes_native(
     };
     let _ = std::fs::remove_file(&note_store);
     ok
+}
+
+/// Materialize Reminders natively from the reminders container. Its Core Data
+/// store is `Container_v1/Stores/Data-<UUID>.sqlite` under the reminders domain,
+/// and the container has several stores (only one holds the data) — so we try
+/// every candidate in that domain and the parser no-ops on the empty ones.
+fn import_reminders_native(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    const DOMAIN: &str = "AppDomainGroup-group.com.apple.reminders";
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Reminders unavailable ({e})."));
+            return;
+        }
+    };
+    let candidates = match index.find_relative_like("%Stores/Data-%.sqlite") {
+        Ok(v) => v,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Native Reminders: Manifest read failed ({e})."));
+            return;
+        }
+    };
+    for (i, entry) in candidates
+        .into_iter()
+        .filter(|e| e.domain == DOMAIN)
+        .enumerate()
+    {
+        let out = work_dir.join(format!(".reminders-{i}.sqlite"));
+        if index.extract_to(&entry, decryptor, &out).is_err() {
+            let _ = std::fs::remove_file(&out);
+            continue;
+        }
+        // Append (the import runs against a fresh cache). The empty container
+        // stores no-op; only the one holding ZREMCDREMINDER contributes rows.
+        if let Err(e) = crate::parsers::reminders::parse_reminders(&out, cache, report, false) {
+            report
+                .warnings
+                .push(format!("Native Reminders: parse failed ({e})."));
+        }
+        let _ = std::fs::remove_file(&out);
+    }
 }
 
 /// Materialize Calendar events natively from `Calendar.sqlitedb`. Native-only and

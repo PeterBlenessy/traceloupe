@@ -688,6 +688,46 @@ pub fn list_calendar_events(cache: &CacheDb) -> Result<Vec<CalendarEvent>> {
         .map_err(Into::into)
 }
 
+/// One reminder.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Reminder {
+    pub id: i64,
+    pub title: Option<String>,
+    pub notes: Option<String>,
+    pub list_name: Option<String>,
+    pub due_at: Option<i64>,
+    pub completed: bool,
+    pub completed_at: Option<i64>,
+    pub flagged: bool,
+    pub priority: Option<i64>,
+}
+
+/// Reminders: open first (by due date), then completed.
+pub fn list_reminders(cache: &CacheDb) -> Result<Vec<Reminder>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, title, notes, list_name, due_at, completed, completed_at, flagged, priority
+         FROM reminders
+         ORDER BY completed, due_at IS NULL, due_at, id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Reminder {
+            id: r.get(0)?,
+            title: r.get(1)?,
+            notes: r.get(2)?,
+            list_name: r.get(3)?,
+            due_at: r.get(4)?,
+            completed: r.get::<_, i64>(5)? != 0,
+            completed_at: r.get(6)?,
+            flagged: r.get::<_, i64>(7)? != 0,
+            priority: r.get(8)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// Contacts, ordered by name (people first, then organization-only entries).
 pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
     let conn = cache.conn();

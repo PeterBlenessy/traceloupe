@@ -23,6 +23,7 @@ import { RecordingsView } from "@/views/recordings";
 import { AppsView } from "@/views/apps";
 import { DeviceView } from "@/views/device";
 import { CalendarView } from "@/views/calendar";
+import { RemindersView } from "@/views/reminders";
 
 const rootRoute = createRootRoute({ component: AppShell });
 
@@ -54,6 +55,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/apps", component: AppsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calendar", component: CalendarView }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/reminders", component: RemindersView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/device", component: DeviceView }),
 ];
 
