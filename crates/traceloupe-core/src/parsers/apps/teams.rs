@@ -133,6 +133,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let sender_id: Option<String> = super::col_string(r, 6)?;
 
         out.push(AppMessage {
+            attachments: Vec::new(),
             chat_key,
             chat_name,
             timestamp,

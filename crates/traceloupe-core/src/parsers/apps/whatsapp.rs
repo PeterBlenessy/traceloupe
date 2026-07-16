@@ -88,6 +88,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
 
         out.push(AppMessage {
+            attachments: Vec::new(),
             chat_key,
             chat_name: name.clone(),
             timestamp,

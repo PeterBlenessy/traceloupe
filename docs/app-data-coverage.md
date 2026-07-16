@@ -188,12 +188,17 @@ Native modules under `parsers/apps/` feed a shared pipeline. **In this backup on
 TikTok is installed**; the other ten rows reflect the parser's SELECT + the
 iLEAPP-derived schema in code comments (unvalidated).
 
-**The headline cross-cutting gap:** `insert_app_conversation` writes only the
-`messages.has_attachments` flag and **never inserts into the `attachments`
-table** — attachment rows come only from the iMessage/SMS path. So no app-chat
-media (path or bytes) ever reaches the cache or the Messages view, even when the
-parser knows the local file (WhatsApp `ZMEDIALOCALPATH`, Kik `ZKIKATTACHMENT`,
-Threema `ZFILENAME`, TikTok `TIMFileORM.localRelativePath`/`remoteURL`).
+**App-chat attachment media — framework landed (0.10.0-dev).** The shared inserter
+now has `insert_app_conversation_with_media`: an `AppMessage` carries
+`AppAttachment`s, and the import driver passes a resolver that maps each to a
+backup blob (by basename, via the Manifest) — inserting an `attachments` row and
+mirroring image/video into `media_items` (source = the app), exactly like
+iMessage. A message whose media isn't in the backup still records the attachment
+metadata. **Remaining:** individual parsers must *emit* `AppAttachment`s from
+their media tables (WhatsApp `ZMEDIALOCALPATH`, Kik `ZKIKATTACHMENT`, Threema
+`ZFILENAME`, TikTok `TIMFileORM`) — deferred until a backup with that app's media
+is available to validate against (this backup has none: TikTok's media files
+aren't backed up, and no other chat app is installed).
 
 | App | DB present here? | Surfaced | Notable available-but-unsurfaced | Media |
 |-----|:---:|------|------|:---:|

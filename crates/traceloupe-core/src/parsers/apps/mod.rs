@@ -58,7 +58,29 @@ pub struct AppMessage {
     /// 'system', …) when the app knows it (TikTok). `None` → derived from
     /// body/attachment by the inserter.
     pub kind: Option<&'static str>,
+    /// Media attachments carried by this message. The inserter resolves each to a
+    /// backup file (via the caller's resolver) and records it in `attachments`
+    /// (and, for image/video, mirrors it into the gallery). Empty for text-only.
+    pub attachments: Vec<AppAttachment>,
 }
+
+/// A media file referenced by an app message. `path` is the media path as the app
+/// stores it — the inserter's resolver maps it (by basename) to a backup blob.
+#[derive(Debug, Clone)]
+pub struct AppAttachment {
+    pub path: String,
+    pub mime: Option<String>,
+    pub filename: Option<String>,
+}
+
+/// A resolved backup location for an app attachment: `(local blob path, wrapped
+/// decrypt key, plaintext size)`.
+pub type ResolvedMedia = (String, Option<Vec<u8>>, Option<u64>);
+
+/// Resolves an [`AppAttachment`] to its backup file, or `None` when the media
+/// isn't in the backup. Built by the import driver, which holds the
+/// `ManifestIndex` + decryptor.
+pub type AppMediaResolver<'a> = dyn Fn(&AppAttachment) -> Option<ResolvedMedia> + 'a;
 
 /// A native chat parser for one third-party app.
 pub struct AppChatModule {
@@ -134,8 +156,26 @@ pub fn insert_app_conversation(
     cache: &CacheDb,
     service: &str,
     numeric_id_groups: bool,
+    messages: Vec<AppMessage>,
+    report: &mut ImportReport,
+) -> Result<()> {
+    // No media resolver → attachment file bytes aren't linked (still records the
+    // attachment metadata). The import driver uses the `_with_media` variant.
+    insert_app_conversation_with_media(cache, service, numeric_id_groups, messages, report, &|_| {
+        None
+    })
+}
+
+/// Like [`insert_app_conversation`] but resolves each message's [`AppAttachment`]s
+/// to backup files via `resolve`, recording them in `attachments` (and mirroring
+/// image/video into `media_items` so app-chat media also shows in the gallery).
+pub fn insert_app_conversation_with_media(
+    cache: &CacheDb,
+    service: &str,
+    numeric_id_groups: bool,
     mut messages: Vec<AppMessage>,
     report: &mut ImportReport,
+    resolve: &AppMediaResolver,
 ) -> Result<()> {
     if messages.is_empty() {
         return Ok(());
@@ -254,10 +294,11 @@ pub fn insert_app_conversation(
                 });
             }
         }
+        let has_att = m.has_attachment || !m.attachments.is_empty();
         // App-provided content class (TikTok markers) or derived from body/media.
         let kind = m
             .kind
-            .unwrap_or_else(|| crate::normalize::message_kind(m.body.as_deref(), m.has_attachment));
+            .unwrap_or_else(|| crate::normalize::message_kind(m.body.as_deref(), has_att));
         tx.execute(
             "INSERT INTO messages
                  (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind)
@@ -268,11 +309,54 @@ pub fn insert_app_conversation(
                 m.is_from_me as i64,
                 m.body,
                 m.timestamp,
-                m.has_attachment as i64,
+                has_att as i64,
                 kind,
             ],
         )?;
+        let message_id = tx.last_insert_rowid();
         n_messages += 1;
+
+        // Attachment rows: resolve each to a backup file so the UI can serve it.
+        // An unresolved attachment (media not in the backup) still records its
+        // metadata so the message shows it carried media.
+        for att in &m.attachments {
+            let (local_path, key, size) = match resolve(att) {
+                Some((p, k, s)) => (Some(p), k, s),
+                None => (None, None, None),
+            };
+            let filename = att.filename.clone().or_else(|| {
+                att.path
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            });
+            tx.execute(
+                "INSERT INTO attachments
+                     (message_id, filename, mime_type, local_path, decrypt_key, plain_size)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![message_id, filename, att.mime, local_path, key, size],
+            )?;
+            // Mirror image/video into the gallery (source = the app), like iMessage.
+            if let (Some(lp), Some(mime)) = (&local_path, att.mime.as_deref()) {
+                let media_kind = if mime.starts_with("video/") {
+                    Some("video")
+                } else if mime.starts_with("image/") {
+                    Some("photo")
+                } else {
+                    None
+                };
+                if let Some(mk) = media_kind {
+                    tx.execute(
+                        "INSERT INTO media_items
+                             (domain, relative_path, kind, source, mime_type, taken_at,
+                              thumb_path, local_path, decrypt_key, plain_size)
+                         VALUES ('AppDomain', ?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
+                        rusqlite::params![att.path, mk, service, mime, m.timestamp, lp, key, size],
+                    )?;
+                }
+            }
+        }
     }
     if let Some(prev) = current_key.as_deref() {
         finalize(
@@ -299,4 +383,112 @@ pub fn insert_app_conversation(
     report.threads += n_threads;
     report.messages += n_messages;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::CacheDb;
+
+    #[test]
+    fn media_attachments_resolve_and_mirror_to_gallery() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+
+        // One incoming message carrying an image attachment.
+        let msg = AppMessage {
+            chat_key: "chat1".into(),
+            timestamp: Some(1_700_000_000),
+            body: Some("look at this".into()),
+            sender_name: Some("Robin".into()),
+            attachments: vec![AppAttachment {
+                path: "Media/MediaFiles/abc-123.jpg".into(),
+                mime: Some("image/jpeg".into()),
+                filename: None,
+            }],
+            ..Default::default()
+        };
+
+        // A resolver that "finds" the media in the backup.
+        let resolve = |_a: &AppAttachment| Some(("blob/xyz".to_string(), None, Some(4096)));
+        insert_app_conversation_with_media(
+            &cache,
+            "WhatsApp",
+            false,
+            vec![msg],
+            &mut report,
+            &resolve,
+        )
+        .unwrap();
+
+        let conn = cache.conn();
+        // The message is flagged as having an attachment, and an attachments row
+        // was inserted with the resolved backup path + basename filename.
+        let (has_att, mid): (i64, i64) = conn
+            .query_row(
+                "SELECT has_attachments, id FROM messages WHERE body = 'look at this'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(has_att, 1);
+        let (fname, local, mime): (Option<String>, Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT filename, local_path, mime_type FROM attachments WHERE message_id = ?1",
+                [mid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(fname.as_deref(), Some("abc-123.jpg"));
+        assert_eq!(local.as_deref(), Some("blob/xyz"));
+        assert_eq!(mime.as_deref(), Some("image/jpeg"));
+
+        // The image is mirrored into the gallery, tagged with the app as its source.
+        let (src, kind, gpath): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT source, kind, local_path FROM media_items WHERE source = 'WhatsApp'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(src, "WhatsApp");
+        assert_eq!(kind, "photo");
+        assert_eq!(gpath.as_deref(), Some("blob/xyz"));
+    }
+
+    #[test]
+    fn unresolved_attachment_still_records_metadata() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        let msg = AppMessage {
+            chat_key: "c".into(),
+            body: Some("gone".into()),
+            attachments: vec![AppAttachment {
+                path: "x/evicted.mov".into(),
+                mime: Some("video/quicktime".into()),
+                filename: None,
+            }],
+            ..Default::default()
+        };
+        // Resolver finds nothing (media not in the backup).
+        insert_app_conversation_with_media(&cache, "Kik", false, vec![msg], &mut report, &|_| None)
+            .unwrap();
+
+        let conn = cache.conn();
+        // Attachment metadata is recorded (filename/mime) with no servable path,
+        // and nothing is mirrored to the gallery.
+        let (fname, local): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT filename, local_path FROM attachments LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(fname.as_deref(), Some("evicted.mov"));
+        assert_eq!(local, None);
+        let media: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_items", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(media, 0);
+    }
 }

@@ -408,6 +408,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .or_else(|| chat_name.clone());
 
         out.push(AppMessage {
+            attachments: Vec::new(),
             chat_key: peer_id.to_string(),
             chat_name,
             timestamp: Some(timestamp),

@@ -165,6 +165,7 @@ pub fn parse_tiktok_messages(
             .unwrap_or((None, None));
 
         out.push(AppMessage {
+            attachments: Vec::new(),
             chat_key,
             chat_name: None, // derived from the peer
             timestamp,
