@@ -28,6 +28,33 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.11.4] — 2026-07-16
+
+A review of the Tauri media-serving/backend layer. No security hole (path
+traversal is closed, the frontend can only ever supply a numeric id, secrets stay
+out of logs); these fix the resource and secret-at-rest items it surfaced.
+
+### Fixed
+
+- **Scrubbing an encrypted video/audio no longer re-decrypts the whole file per
+  request** — Range requests reused to decrypt the entire attachment into memory
+  and a fresh temp on every seek (an OOM/disk-thrash path on a large video). The
+  plaintext is now decrypted once to a temp cached by id (unique-temp + atomic
+  rename, so concurrent requests can't read a half-written file) and reused across
+  seeks.
+- **Concurrent thumbnail renders can't serve a half-written JPEG** — `sips` now
+  writes to a unique temp and atomically renames into the cache (owner-only before
+  it's visible), fixing a race between two requests for the same image.
+- **Decrypted-plaintext temps are cleared when a backup is closed or switched**,
+  not only on forget — full-plaintext originals and externally-opened attachments
+  no longer linger past the session.
+- **Forgetting or switching a backup can't race an in-flight import** — both now
+  take the import lock before touching cache files.
+
+### Security
+
+- The backup password is now held in zeroized buffers, wiped from memory on drop.
+
 ## [0.11.3] — 2026-07-16
 
 A broad frontend + UI/UX review. Fixes real interaction bugs and tightens
