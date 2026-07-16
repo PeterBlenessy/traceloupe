@@ -207,11 +207,6 @@ export function CalendarView() {
       emptyMessage={
         hasEvents ? "No events match these filters." : "No calendar events in this backup."
       }
-      header={
-        hasEvents && calendars.length > 1 ? (
-          <BadgeFilter options={calOptions} value={effCal} onChange={setCal} />
-        ) : undefined
-      }
       search={
         hasEvents ? (
           <ListSearch value={q} onChange={setQ} placeholder="Search events" />
@@ -220,9 +215,7 @@ export function CalendarView() {
       toolbar={
         hasEvents ? (
           <>
-            {avails.length > 1 && (
-              <BadgeFilter options={availOptions} value={effAvail} onChange={setAvail} />
-            )}
+            {/* Time range fills the left; the facets + sort sit at the right. */}
             <TimeFilterBar
               className="flex-1"
               presets={presets}
@@ -230,6 +223,12 @@ export function CalendarView() {
               onChange={setRange}
               counts={presetCounts}
             />
+            {calendars.length > 1 && (
+              <BadgeFilter options={calOptions} value={effCal} onChange={setCal} />
+            )}
+            {avails.length > 1 && (
+              <BadgeFilter options={availOptions} value={effAvail} onChange={setAvail} />
+            )}
             <SortControl
               fields={[
                 { value: "start", label: "Date" },

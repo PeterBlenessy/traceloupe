@@ -194,11 +194,6 @@ export function RemindersView() {
       emptyMessage={
         hasReminders ? "No reminders match these filters." : "No reminders in this backup."
       }
-      header={
-        hasReminders ? (
-          <BadgeFilter options={statusOptions} value={status} onChange={setStatus} />
-        ) : undefined
-      }
       search={
         hasReminders ? (
           <ListSearch value={q} onChange={setQ} placeholder="Search reminders" />
@@ -207,9 +202,7 @@ export function RemindersView() {
       toolbar={
         hasReminders ? (
           <>
-            {lists.length > 1 && (
-              <BadgeFilter options={listOptions} value={effList} onChange={setList} />
-            )}
+            {/* Time range fills the left; the facets + sort sit at the right. */}
             <TimeFilterBar
               className="flex-1"
               presets={presets}
@@ -217,6 +210,10 @@ export function RemindersView() {
               onChange={setRange}
               counts={presetCounts}
             />
+            <BadgeFilter options={statusOptions} value={status} onChange={setStatus} />
+            {lists.length > 1 && (
+              <BadgeFilter options={listOptions} value={effList} onChange={setList} />
+            )}
             <SortControl
               fields={[
                 { value: "title", label: "Title" },
