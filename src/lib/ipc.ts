@@ -566,12 +566,15 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<SafariBookmark[]>;
-  /** URL the webview can load for a media item. `thumb` requests a thumbnail. */
-  mediaUrl(id: number, opts?: { thumb?: boolean }): string;
+  /** URL the webview can load for a media item. `thumb` requests a thumbnail;
+   *  `cacheKey` (see `useMediaCacheKey`) makes each mount request a fresh URL to
+   *  dodge WebKit's cached-failed-task quirk on remount. */
+  mediaUrl(id: number, opts?: { thumb?: boolean; cacheKey?: number }): string;
   /** URL the webview can load for a contact's photo. */
   contactAvatarUrl(id: number): string;
-  /** URL for a message attachment's bytes (`thumb` for an image thumbnail). */
-  attachmentUrl(id: number, opts?: { thumb?: boolean }): string;
+  /** URL for a message attachment's bytes (`thumb` for an image thumbnail;
+   *  `cacheKey` as in `mediaUrl`). */
+  attachmentUrl(id: number, opts?: { thumb?: boolean; cacheKey?: number }): string;
   /** URL the webview can load for a voice recording's audio bytes. */
   audioUrl(id: number): string;
   /** URL for a note's first-image thumbnail (see `Note.hasImage`). */
@@ -584,6 +587,14 @@ export interface TraceLoupeClient {
    * "camera_roll", "messages", "notes", "calls", "safari".
    */
   reimportModule(moduleId: string): Promise<ReimportResult>;
+}
+
+/** Build the `?thumb=1&k=…` query suffix shared by media/attachment URLs. */
+function mediaQuery(opts?: { thumb?: boolean; cacheKey?: number }): string {
+  const parts: string[] = [];
+  if (opts?.thumb) parts.push("thumb=1");
+  if (opts?.cacheKey != null) parts.push(`k=${opts.cacheKey}`);
+  return parts.length ? `?${parts.join("&")}` : "";
 }
 
 const tauriClient: TraceLoupeClient = {
@@ -763,11 +774,12 @@ const tauriClient: TraceLoupeClient = {
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
+  // (mediaQuery below builds the `?thumb=1&k=…` suffix.)
   mediaUrl: (id, opts) =>
-    `traceloupe-media://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+    `traceloupe-media://localhost/${id}${mediaQuery(opts)}`,
   contactAvatarUrl: (id) => `traceloupe-avatar://localhost/${id}`,
   attachmentUrl: (id, opts) =>
-    `traceloupe-attachment://localhost/${id}${opts?.thumb ? "?thumb=1" : ""}`,
+    `traceloupe-attachment://localhost/${id}${mediaQuery(opts)}`,
   audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
   noteImageUrl: (id) => `traceloupe-note-image://localhost/${id}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),

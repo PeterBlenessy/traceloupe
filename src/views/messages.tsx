@@ -53,6 +53,7 @@ import {
   formatMessageTime,
 } from "@/lib/format";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { useMediaCacheKey } from "@/lib/use-media-cache-key";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
 import { useDebounced } from "@/lib/use-debounced";
@@ -143,8 +144,13 @@ export function MessagesView() {
     "conversations",
   );
   // Which conversation is open in the master-detail view. Lifted here so that
-  // clicking a row in the Timeline view can jump to its conversation.
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  // clicking a row in the Timeline view can jump to its conversation. Persisted
+  // so leaving Messages (e.g. to Photos) and returning keeps the same
+  // conversation selected instead of snapping back to the top one.
+  const [selectedId, setSelectedId] = usePersistedState<number | null>(
+    "messages:selected",
+    null,
+  );
   // Where a jump into a conversation came from, so the conversation view can
   // offer a "back" button to return to that overview (null = opened normally
   // from the conversation list, so no back button).
@@ -1133,6 +1139,7 @@ function MessageBody({ text }: { text: string }) {
 /** Compact inline thumbnails of a message's available image attachments, for the
  *  Timeline (clicking the row navigates to the conversation). */
 function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
+  const cacheKey = useMediaCacheKey();
   const imgs = attachments.filter(
     (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
   );
@@ -1142,7 +1149,7 @@ function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
       {imgs.slice(0, 3).map((a) => (
         <img
           key={a.id}
-          src={client.attachmentUrl(a.id, { thumb: true })}
+          src={client.attachmentUrl(a.id, { thumb: true, cacheKey })}
           alt=""
           className="size-9 rounded object-cover"
           onError={(e) => {
@@ -1229,6 +1236,7 @@ function MessageImageLightbox({
   from: string | null;
 }) {
   const { lightboxStyle, showMediaMetadata } = useSettings();
+  const cacheKey = useMediaCacheKey();
   const att = index != null ? images[index] : null;
   const meta =
     att && showMediaMetadata ? (
@@ -1275,7 +1283,7 @@ function MessageImageLightbox({
         att ? (
           <img
             key={att.id}
-            src={client.attachmentUrl(att.id)}
+            src={client.attachmentUrl(att.id, { cacheKey })}
             alt={att.filename ?? ""}
             className="max-h-full max-w-full object-contain"
           />
@@ -1296,6 +1304,7 @@ function AttachmentView({
 }) {
   const mime = att.mimeType ?? "";
   const available = !!att.localPath;
+  const cacheKey = useMediaCacheKey();
 
   if (available && isImageAttachment(mime, att.filename)) {
     return (
@@ -1305,7 +1314,7 @@ function AttachmentView({
         title={att.filename ?? "image"}
       >
         <img
-          src={client.attachmentUrl(att.id, { thumb: true })}
+          src={client.attachmentUrl(att.id, { thumb: true, cacheKey })}
           alt={att.filename ?? ""}
           className="max-h-64 w-full object-cover"
         />
@@ -1317,7 +1326,7 @@ function AttachmentView({
       <video
         controls
         preload="metadata"
-        src={client.attachmentUrl(att.id)}
+        src={client.attachmentUrl(att.id, { cacheKey })}
         className="max-h-64 max-w-[240px] rounded-lg"
       />
     );
@@ -1327,7 +1336,7 @@ function AttachmentView({
       <audio
         controls
         preload="none"
-        src={client.attachmentUrl(att.id)}
+        src={client.attachmentUrl(att.id, { cacheKey })}
         className="max-w-[240px]"
       />
     );

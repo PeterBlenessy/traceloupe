@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { useMediaCacheKey } from "@/lib/use-media-cache-key";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -439,6 +440,7 @@ function LocationTag({ item }: { item: MediaItem }) {
 
 function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   const isVideo = item.kind === "video";
+  const cacheKey = useMediaCacheKey();
   return (
     <button
       onClick={onOpen}
@@ -446,7 +448,7 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
       className="group relative aspect-square w-full overflow-hidden rounded-sm bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
       <img
-        src={client.mediaUrl(item.id, { thumb: true })}
+        src={client.mediaUrl(item.id, { thumb: true, cacheKey })}
         alt={item.filename ?? ""}
         className="size-full object-cover transition-transform group-hover:scale-105"
       />
@@ -522,6 +524,7 @@ function Lightbox({
 }) {
   const open = index != null;
   const { lightboxStyle, showMediaMetadata } = useSettings();
+  const cacheKey = useMediaCacheKey();
   // Subscribe to the current item's window (same key the grid fills) so the view
   // re-renders when a not-yet-loaded window resolves — a non-reactive cache read
   // would leave the spinner stuck until the next interaction.
@@ -649,7 +652,7 @@ function Lightbox({
           isVideo ? (
             <video
               key={item.id}
-              src={client.mediaUrl(item.id)}
+              src={client.mediaUrl(item.id, { cacheKey })}
               controls
               autoPlay
               className="max-h-full max-w-full object-contain"
@@ -657,7 +660,7 @@ function Lightbox({
           ) : (
             <img
               key={item.id}
-              src={client.mediaUrl(item.id)}
+              src={client.mediaUrl(item.id, { cacheKey })}
               alt={item.filename ?? ""}
               className="max-h-full max-w-full object-contain"
             />
