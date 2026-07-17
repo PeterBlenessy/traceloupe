@@ -540,7 +540,11 @@ function Timeline({
   // Anchor "now" once so preset bounds and query keys stay stable.
   const { now, presets } = useTimePresets();
   // Oldest-first by default (newest at the bottom); toggle flips to newest-first.
-  const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
+  // Persisted so it survives leaving Messages and returning.
+  const [order, setOrder] = usePersistedState<SortState>("messages:timeline-order", {
+    by: "time",
+    desc: false,
+  });
   // The active time filter as a half-open [lo, hi) range; {null,null} = all time.
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   // Free-text search over message body / sender / conversation (debounced).
@@ -869,7 +873,11 @@ function Conversation({
   const group = isGroup(thread);
   // Message order: oldest-first by default (chat-like, newest at the bottom).
   // Toggling to newest-first flips the query and pins the list to the top.
-  const [order, setOrder] = useState<SortState>({ by: "time", desc: false });
+  // Persisted so it survives leaving Messages and returning.
+  const [order, setOrder] = usePersistedState<SortState>("messages:conversation-order", {
+    by: "time",
+    desc: false,
+  });
   // Content kinds present in THIS conversation (drives the pills below).
   const { data: kindsData } = useQuery({
     queryKey: ["messageKinds", thread.id, null],
