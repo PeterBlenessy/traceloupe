@@ -436,6 +436,14 @@ export interface TraceLoupeClient {
     desc?: boolean,
     kind?: string | null,
   ): Promise<Message[]>;
+  /** The 0-based row index of a message within its thread under the given order
+   *  and `kind` filter, or null if absent. Used to scroll to a message. */
+  threadMessageIndex(
+    threadId: number,
+    messageId: number,
+    kind?: string | null,
+    desc?: boolean,
+  ): Promise<number | null>;
   /** Total messages across all conversations (filtered by `service`, null=all);
    * drives the timeline scroller. `kind` filters by content class. */
   countTimelineMessages(
@@ -655,6 +663,13 @@ const tauriClient: TraceLoupeClient = {
       limit,
       desc,
       kind: kind ?? null,
+    }),
+  threadMessageIndex: (threadId, messageId, kind = null, desc = false) =>
+    invoke<number | null>("thread_message_index", {
+      threadId,
+      messageId,
+      kind: kind ?? null,
+      desc,
     }),
   countTimelineMessages: (service, search = null, kind = null) =>
     invoke<number>("count_timeline_messages", {
@@ -1960,6 +1975,13 @@ export const mockClient: TraceLoupeClient = {
     const all = mockMessages[threadId] ?? [];
     const ordered = desc ? [...all].reverse() : all;
     return ordered.slice(offset, offset + limit);
+  },
+  threadMessageIndex: async (threadId, messageId, _kind = null, desc = false) => {
+    if (!mockActive) return null;
+    const all = mockMessages[threadId] ?? [];
+    const ordered = desc ? [...all].reverse() : all;
+    const i = ordered.findIndex((m) => m.id === messageId);
+    return i < 0 ? null : i;
   },
   countTimelineMessages: async (service, search = null, _kind = null) =>
     mockActive ? mockFilterTimeline(service, undefined, search).length : 0,

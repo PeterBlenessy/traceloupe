@@ -1025,6 +1025,24 @@ async fn get_thread_message_window(
 }
 
 #[tauri::command]
+async fn thread_message_index(
+    active: State<'_, ActiveBackup>,
+    thread_id: i64,
+    message_id: i64,
+    kind: Option<String>,
+    desc: bool,
+) -> Result<Option<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::message_row_index(&cache, thread_id, message_id, kind.as_deref(), desc)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn count_timeline_messages(
     active: State<'_, ActiveBackup>,
     service: Option<String>,
@@ -2556,6 +2574,7 @@ pub fn run() {
             message_kinds,
             count_thread_messages,
             get_thread_message_window,
+            thread_message_index,
             count_timeline_messages,
             get_timeline_window,
             count_message_ranges,

@@ -161,6 +161,46 @@ pub fn get_message_window(
     Ok(messages)
 }
 
+/// The 0-based position of `message_id` within a thread under the same ordering
+/// as [`get_message_window`] (`ORDER BY sent_at, id`, ascending or descending)
+/// and the same optional `kind` filter. Returns `None` if the message isn't in
+/// the thread (or is excluded by the filter's ordering key). Used to scroll a
+/// conversation to a specific message (e.g. a Timeline row the user tapped).
+pub fn message_row_index(
+    cache: &CacheDb,
+    thread_id: i64,
+    message_id: i64,
+    kind: Option<&str>,
+    desc: bool,
+) -> Result<Option<i64>> {
+    let conn = cache.conn();
+    // The target's sort key (sent_at, id). Scoped to the thread so a stray id
+    // from another conversation can't match.
+    let Some((sent_at, id)) = conn
+        .query_row(
+            "SELECT sent_at, id FROM messages WHERE id = ?1 AND thread_id = ?2",
+            rusqlite::params![message_id, thread_id],
+            |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, i64>(1)?)),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    // Count rows that sort before the target. The row-value comparison mirrors
+    // the `ORDER BY sent_at DIR, id DIR` tuple ordering; `>` for descending.
+    let cmp = if desc { ">" } else { "<" };
+    let idx: i64 = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM messages
+             WHERE thread_id = ?1 AND (?2 IS NULL OR kind = ?2)
+               AND (sent_at, id) {cmp} (?3, ?4)",
+        ),
+        rusqlite::params![thread_id, kind, sent_at, id],
+        |r| r.get(0),
+    )?;
+    Ok(Some(idx))
+}
+
 /// All messages in a thread, oldest first, each with its attachments. Used by
 /// tests and small callers; large threads should use [`get_message_window`].
 pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
@@ -1723,6 +1763,24 @@ mod tests {
         let cache = CacheDb::open_in_memory().unwrap();
         seed(&cache);
         assert!(get_messages(&cache, 999).unwrap().is_empty());
+    }
+
+    #[test]
+    fn message_row_index_matches_window_order() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        seed(&cache); // ids 1,2,3 with ascending sent_at
+        let idx = |id, desc| message_row_index(&cache, 1, id, None, desc).unwrap();
+        // Ascending (oldest-first): 1,2,3.
+        assert_eq!(idx(1, false), Some(0));
+        assert_eq!(idx(2, false), Some(1));
+        assert_eq!(idx(3, false), Some(2));
+        // Descending (newest-first): 3,2,1.
+        assert_eq!(idx(3, true), Some(0));
+        assert_eq!(idx(2, true), Some(1));
+        assert_eq!(idx(1, true), Some(2));
+        // Unknown message id, or a real id in the wrong thread → None.
+        assert_eq!(idx(999, false), None);
+        assert_eq!(message_row_index(&cache, 2, 1, None, false).unwrap(), None);
     }
 
     #[test]

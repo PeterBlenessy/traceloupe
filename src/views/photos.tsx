@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
-import { useMediaCacheKey } from "@/lib/use-media-cache-key";
+import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-key";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -42,6 +42,17 @@ import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { client, type MediaItem, type TimeRange } from "@/lib/ipc";
 
 export function PhotosView() {
+  // One media cache key per mount, shared by every image below (see
+  // use-media-cache-key): view-switch remounts bust WebKit's cached-failed
+  // scheme tasks while scrolling reuses URLs.
+  return (
+    <MediaCacheKeyBoundary>
+      <PhotosViewInner />
+    </MediaCacheKeyBoundary>
+  );
+}
+
+function PhotosViewInner() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],

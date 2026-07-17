@@ -53,7 +53,7 @@ import {
   formatMessageTime,
 } from "@/lib/format";
 import { usePersistedState } from "@/lib/use-persisted-state";
-import { useMediaCacheKey } from "@/lib/use-media-cache-key";
+import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-key";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
 import { useDebounced } from "@/lib/use-debounced";
@@ -134,6 +134,17 @@ function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }
 }
 
 export function MessagesView() {
+  // One media cache key per mount of this view, shared by every image below —
+  // so a view-switch remount busts WebKit's cached-failed scheme tasks while
+  // scrolling reuses URLs. See use-media-cache-key.
+  return (
+    <MediaCacheKeyBoundary>
+      <MessagesViewInner />
+    </MediaCacheKeyBoundary>
+  );
+}
+
+function MessagesViewInner() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
@@ -155,9 +166,17 @@ export function MessagesView() {
   // offer a "back" button to return to that overview (null = opened normally
   // from the conversation list, so no back button).
   const [openedFrom, setOpenedFrom] = useState<Mode | null>(null);
-  const openThread = (threadId: number, from: Mode | null = null) => {
+  // A message to scroll to after opening a conversation (e.g. the Timeline row
+  // that was clicked). Cleared once the conversation has scrolled to it.
+  const [scrollToMessage, setScrollToMessage] = useState<number | null>(null);
+  const openThread = (
+    threadId: number,
+    from: Mode | null = null,
+    messageId: number | null = null,
+  ) => {
     setOpenedFrom(from);
     setSelectedId(threadId);
+    setScrollToMessage(messageId);
     setMode("conversations");
   };
   // Switching mode via the top toggle is a fresh navigation — drop any "back".
@@ -301,10 +320,14 @@ export function MessagesView() {
             onKindChange={setContentKind}
             onBack={openedFrom ? () => setMode(openedFrom) : undefined}
             backLabel="Timeline"
+            scrollToMessage={scrollToMessage}
+            onScrolledToMessage={() => setScrollToMessage(null)}
           />
         ) : (
           <Timeline
-            onOpenThread={(id) => openThread(id, "timeline")}
+            onOpenThread={(id, messageId) =>
+              openThread(id, "timeline", messageId ?? null)
+            }
             service={service}
             kindValue={contentKind}
             onKindChange={setContentKind}
@@ -324,6 +347,8 @@ function Conversations({
   onKindChange,
   onBack,
   backLabel,
+  scrollToMessage,
+  onScrolledToMessage,
 }: {
   selectedId: number | null;
   onSelect: (id: number) => void;
@@ -332,6 +357,9 @@ function Conversations({
   onKindChange: (v: string) => void;
   onBack?: () => void;
   backLabel?: string;
+  /** A message id to scroll the open conversation to (from a Timeline jump). */
+  scrollToMessage?: number | null;
+  onScrolledToMessage?: () => void;
 }) {
   // Gate on an open backup (React Query dedups this with the parent's copy), so
   // list_threads isn't fired while `hasActiveBackup` is still resolving.
@@ -450,6 +478,10 @@ function Conversations({
             onKindChange={onKindChange}
             onBack={onBack}
             backLabel={backLabel}
+            scrollToMessage={
+              selected.id === selectedId ? scrollToMessage : null
+            }
+            onScrolledToMessage={onScrolledToMessage}
           />
         ) : (
           !isPending && (
@@ -517,7 +549,7 @@ function Timeline({
   kindValue,
   onKindChange,
 }: {
-  onOpenThread: (threadId: number) => void;
+  onOpenThread: (threadId: number, messageId?: number) => void;
   service: string | null;
   kindValue: string;
   onKindChange: (v: string) => void;
@@ -550,6 +582,14 @@ function Timeline({
   // Free-text search over message body / sender / conversation (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
+  // Image lightbox opened by tapping a thumbnail in a row (kept here so it
+  // survives row virtualization). Holds the tapped message's image set.
+  const [lb, setLb] = useState<{
+    images: Attachment[];
+    index: number;
+    sentAt: number | null;
+    from: string | null;
+  } | null>(null);
 
   // Per-preset message counts for the chip labels (e.g. "7d · 812").
   const { data: presetCounts } = useQuery({
@@ -629,12 +669,23 @@ function Timeline({
           <TimelineRow
             item={item}
             showDate={dayChanged(prev, item)}
-            onOpen={() => onOpenThread(item.threadId)}
+            onOpen={() => onOpenThread(item.threadId, item.message.id)}
+            onOpenImage={(images, index, sentAt, from) =>
+              setLb({ images, index, sentAt, from })
+            }
             resolve={resolve}
             showContactNames={showContactNames}
             showAvatars={showAvatars}
           />
         )}
+      />
+      <MessageImageLightbox
+        images={lb?.images ?? []}
+        index={lb?.index ?? null}
+        onClose={() => setLb(null)}
+        onIndex={(i) => setLb((v) => (v ? { ...v, index: i } : v))}
+        sentAt={lb?.sentAt ?? null}
+        from={lb?.from ?? null}
       />
     </div>
   );
@@ -644,6 +695,7 @@ function TimelineRow({
   item,
   showDate,
   onOpen,
+  onOpenImage,
   resolve,
   showContactNames,
   showAvatars,
@@ -651,6 +703,13 @@ function TimelineRow({
   item: TimelineMessage;
   showDate: boolean;
   onOpen: () => void;
+  /** Open one of this row's images in a lightbox (with metadata context). */
+  onOpenImage: (
+    images: Attachment[],
+    index: number,
+    sentAt: number | null,
+    from: string | null,
+  ) => void;
   resolve: Resolver;
   showContactNames: boolean;
   showAvatars: boolean;
@@ -677,11 +736,22 @@ function TimelineRow({
       {/* One flat row — avatar | ↔ | message | app icon | time. The avatar is the
           conversation partner; the arrow marks direction (your own messages are
           also tinted). The message wraps; the icon and time stay top-right. */}
-      <button
+      {/* A div (not a button) so the image thumbnails below can be real nested
+          buttons — a button inside a button is invalid HTML. role/tabIndex/key
+          handling keep it keyboard-accessible like the original button row. */}
+      <div
+        role="button"
+        tabIndex={0}
         onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
         data-slot="list-row"
         className={cn(
-          "flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/50",
+          "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/50",
           m.isFromMe && "bg-primary/5 hover:bg-primary/10",
         )}
       >
@@ -723,7 +793,17 @@ function TimelineRow({
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
-          <TimelineThumbs attachments={m.attachments} />
+          <TimelineThumbs
+            attachments={m.attachments}
+            onOpenImage={(images, index) =>
+              onOpenImage(
+                images,
+                index,
+                m.sentAt,
+                m.isFromMe ? "You" : partnerName,
+              )
+            }
+          />
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           {slug && hasBrandIcon(slug) && (
@@ -735,7 +815,7 @@ function TimelineRow({
           )}
           <span className="tabular-nums">{formatMessageTime(m.sentAt)}</span>
         </div>
-      </button>
+      </div>
     </div>
   );
 }
@@ -860,6 +940,8 @@ function Conversation({
   onKindChange,
   onBack,
   backLabel,
+  scrollToMessage,
+  onScrolledToMessage,
 }: {
   thread: ThreadSummary;
   resolve: Resolver;
@@ -868,6 +950,8 @@ function Conversation({
   onKindChange: (v: string) => void;
   onBack?: () => void;
   backLabel?: string;
+  scrollToMessage?: number | null;
+  onScrolledToMessage?: () => void;
 }) {
   const name = threadLabel(thread, resolve, showContactNames);
   const group = isGroup(thread);
@@ -898,6 +982,25 @@ function Conversation({
     queryKey: ["messageCount", thread.id, kind],
     queryFn: () => client.countThreadMessages(thread.id, kind),
   });
+
+  // Scroll-to-message (from a Timeline jump): resolve the target's row index in
+  // the current order/filter, then hand the virtual list a one-shot jump token.
+  const { data: jumpIndex } = useQuery({
+    queryKey: ["messageIndex", thread.id, scrollToMessage, kind, order.desc],
+    queryFn: () =>
+      client.threadMessageIndex(thread.id, scrollToMessage!, kind, order.desc),
+    enabled: scrollToMessage != null,
+  });
+  const [jumpTo, setJumpTo] = useState<{ index: number; token: number } | undefined>();
+  const jumpToken = useRef(0);
+  useEffect(() => {
+    if (scrollToMessage == null || jumpIndex === undefined) return;
+    if (jumpIndex != null && jumpIndex >= 0) {
+      jumpToken.current += 1;
+      setJumpTo({ index: jumpIndex, token: jumpToken.current });
+    }
+    onScrolledToMessage?.(); // consume the request (found or not) so it fires once
+  }, [scrollToMessage, jumpIndex, onScrolledToMessage]);
 
   const brandIcon = hasBrandIcon(serviceSlug(thread.service)) ? (
     <BrandIcon
@@ -961,6 +1064,7 @@ function Conversation({
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}`}
+        jumpTo={jumpTo}
         windowKey={(page) => ["messageWindow", thread.id, kind, order.desc, page]}
         fetchWindow={(offset, limit) =>
           client.getThreadMessageWindow(thread.id, offset, limit, order.desc, kind)
@@ -1146,7 +1250,14 @@ function MessageBody({ text }: { text: string }) {
 
 /** Compact inline thumbnails of a message's available image attachments, for the
  *  Timeline (clicking the row navigates to the conversation). */
-function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
+function TimelineThumbs({
+  attachments,
+  onOpenImage,
+}: {
+  attachments: Attachment[];
+  /** Open image `index` (into the filtered image list) in a lightbox. */
+  onOpenImage?: (images: Attachment[], index: number) => void;
+}) {
   const cacheKey = useMediaCacheKey();
   const imgs = attachments.filter(
     (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
@@ -1154,16 +1265,28 @@ function TimelineThumbs({ attachments }: { attachments: Attachment[] }) {
   if (!imgs.length) return null;
   return (
     <span className="ml-2 inline-flex shrink-0 gap-1 align-middle">
-      {imgs.slice(0, 3).map((a) => (
-        <img
+      {imgs.slice(0, 3).map((a, i) => (
+        <button
           key={a.id}
-          src={client.attachmentUrl(a.id, { thumb: true, cacheKey })}
-          alt=""
-          className="size-9 rounded object-cover"
-          onError={(e) => {
-            e.currentTarget.style.display = "none";
+          type="button"
+          // Stop the row's click (which opens the conversation) so tapping a
+          // thumbnail opens the image in the lightbox instead.
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenImage?.(imgs, i);
           }}
-        />
+          className="block overflow-hidden rounded"
+          title={a.filename ?? "image"}
+        >
+          <img
+            src={client.attachmentUrl(a.id, { thumb: true, cacheKey })}
+            alt=""
+            className="size-9 rounded object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        </button>
       ))}
     </span>
   );
