@@ -14,13 +14,9 @@ import {
   ListSearch,
   VirtualListView,
 } from "@/components/view";
-import { formatDate, formatDateTime } from "@/lib/format";
+import { useSettings } from "@/components/settings-provider";
+import { formatDate, formatDateTime, formatTime } from "@/lib/format";
 import { client, type CalendarEvent, type TimeRange } from "@/lib/ipc";
-
-const timeFmt = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-});
 
 /** The event's when-line: "All day" or a start (→ end) date/time. */
 function whenLabel(e: CalendarEvent): string {
@@ -32,7 +28,7 @@ function whenLabel(e: CalendarEvent): string {
     const sameDay =
       new Date(e.startAt * 1000).toDateString() ===
       new Date(e.endAt * 1000).toDateString();
-    return `${start} – ${sameDay ? timeFmt.format(new Date(e.endAt * 1000)) : formatDateTime(e.endAt)}`;
+    return `${start} – ${sameDay ? formatTime(e.endAt) : formatDateTime(e.endAt)}`;
   }
   return start;
 }
@@ -108,6 +104,9 @@ export function CalendarView() {
   const search = useDebounced(q.trim().toLowerCase());
   const { presets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // Re-render (and remount the list) when the clock preference changes so the
+  // shared time formatters are re-read for every visible row.
+  const { clockFormat } = useSettings();
 
   // The distinct calendars present, for the calendar facet.
   const calendars = useMemo(
@@ -199,6 +198,7 @@ export function CalendarView() {
 
   return (
     <VirtualListView<CalendarEvent>
+      key={clockFormat}
       title="Calendar"
       count={filtered.length}
       estimateSize={76}

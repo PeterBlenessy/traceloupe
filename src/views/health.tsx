@@ -8,6 +8,7 @@ import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { useSettings } from "@/components/settings-provider";
 import { EmptyView, ErrorState, ListSkeleton, PanelHeader } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { client, type Workout, type TimeRange } from "@/lib/ipc";
@@ -78,6 +79,8 @@ export function HealthView() {
   });
   const { presets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // Re-render when the clock preference changes so workout times re-format.
+  const { clockFormat } = useSettings();
 
   const activities = useMemo(
     () =>
@@ -201,7 +204,7 @@ export function HealthView() {
               No workouts match these filters.
             </p>
           ) : (
-            <div className="w-full">
+            <div key={clockFormat} className="w-full">
               <h3 className="px-4 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Workouts
               </h3>
