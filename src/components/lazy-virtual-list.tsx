@@ -117,6 +117,9 @@ export function LazyVirtualList<T>({
   // own position.
   const anchorKey = persistKey ?? resetKey;
   const scrolledFor = useRef<unknown>(undefined);
+  // The restore re-applies over several frames; a jumpTo (scroll-to-message)
+  // cancels it so the jump wins instead of being stomped by the re-apply.
+  const restoreRaf = useRef<number>(0);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (
@@ -137,13 +140,12 @@ export function LazyVirtualList<T>({
     // "stick" on the first assignment alone. Ascending (oldest-first) pins the
     // newest row at the bottom; descending pins it at the top.
     let frames = 0;
-    let raf = 0;
     const apply = () => {
       el.scrollTop = toSaved ? saved : startAtBottom ? el.scrollHeight : 0;
-      if (++frames < 5) raf = requestAnimationFrame(apply);
+      if (++frames < 5) restoreRaf.current = requestAnimationFrame(apply);
     };
     apply();
-    return () => cancelAnimationFrame(raf);
+    return () => cancelAnimationFrame(restoreRaf.current);
   }, [count, anchorKey, startAtBottom, persistKey]);
 
   // Persist the scroll position (debounced, and flushed on unmount / key change
@@ -176,9 +178,13 @@ export function LazyVirtualList<T>({
   useLayoutEffect(() => {
     if (jumpTo && scrollRef.current && jumpedFor.current !== jumpTo.token) {
       jumpedFor.current = jumpTo.token;
+      // Stop the restore's frame loop and mark the anchor as handled so a jump
+      // to a message isn't overwritten by a persisted-position restore.
+      cancelAnimationFrame(restoreRaf.current);
+      scrolledFor.current = anchorKey;
       virtualizer.scrollToIndex(jumpTo.index, { align: "start" });
     }
-  }, [jumpTo, virtualizer]);
+  }, [jumpTo, virtualizer, anchorKey]);
 
   // Imperative scroll to the very top/bottom via a direct scrollTop — reliable on
   // a tall variable-height list (unlike scrollToIndex to the far end).
