@@ -664,6 +664,9 @@ function Lightbox({
             <video
               key={item.id}
               src={client.mediaUrl(item.id, { cacheKey })}
+              // iOS's pre-rendered thumbnail as the poster, so a still shows
+              // instantly (and if autoplay is blocked, it isn't a black frame).
+              poster={client.mediaUrl(item.id, { thumb: true, cacheKey })}
               controls
               autoPlay
               className="max-h-full max-w-full object-contain"

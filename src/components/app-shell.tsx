@@ -415,7 +415,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Load link previews"
-                description="Fetch a title & image for links in messages. Off by default — this contacts the linked websites."
+                description="Show a preview card when you hover a link in messages. Off by default — this contacts the linked websites to fetch a title & image."
               >
                 <Switch
                   aria-label="Load link previews"
@@ -636,7 +636,7 @@ function SettingsRow({
       <div className="min-w-0">
         <div className="text-sm">{label}</div>
         {description && (
-          <div className="truncate text-xs text-muted-foreground">
+          <div className="text-xs text-balance text-muted-foreground">
             {description}
           </div>
         )}
