@@ -15,16 +15,11 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { useImport } from "@/components/import-provider";
-import { EngineSetup } from "@/views/engine-setup";
 
 export function BackupPicker() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const imp = useImport();
-  const { data: engineReady } = useQuery({
-    queryKey: ["engineStatus"],
-    queryFn: () => client.engineStatus(),
-  });
   const { data: importedIds } = useQuery({
     queryKey: ["importedBackupIds"],
     queryFn: () => client.importedBackupIds(),
@@ -119,11 +114,6 @@ export function BackupPicker() {
         <p className="mt-3 text-xs text-muted-foreground">
           Looking in <code className="select-text">{root}</code>
         </p>
-      )}
-      {engineReady === false && (
-        <div className="mt-6">
-          <EngineSetup />
-        </div>
       )}
       <div className="mt-6 flex flex-col gap-3">
         {isPending && (
