@@ -107,44 +107,28 @@ export function AppShell() {
     // navigation between views.
     <ImportProvider>
       <ReimportProvider>
-        {/* h-svh pins the app to a FIXED viewport height (see the flex note below);
-        flex-col stacks the unified macOS title bar over the sidebar+content. */}
-        <div className="flex h-svh flex-col overflow-hidden">
-          {/* The single, unified title bar (titleBarStyle: Overlay hides the native
-          one): the macOS traffic lights overlay the reserved left gutter (pl-20),
-          the app controls sit at the right, and the whole strip is the window drag
-          region. This replaces the old separate "native titlebar + app bar" stack. */}
-          <header
-            data-tauri-drag-region
-            className="flex h-10 shrink-0 items-center gap-2 border-b pl-20 pr-2"
-          >
-            <SidebarTrigger />
-            <div className="ml-auto flex items-center gap-1">
-              <ImportIndicator />
-              <DensityToggle />
-              <ModeToggle />
-              <SettingsMenu />
-            </div>
-          </header>
-          {/* min-h-0 flex-1 gives the sidebar layout a FIXED remaining height.
-          shadcn's SidebarProvider only sets `min-h-svh`, which lets the layout grow
-          with its content — so a virtualized list's tall spacer would inflate the
-          document and its scroll container would never actually scroll (it just
-          grows), defeating every `min-h-0`/`overflow-auto` below. A fixed height
-          gives the flex chain something to constrain against so overflow scrolls
-          instead of expanding. `relative` anchors the sidebar resize handle. */}
-          <SidebarProvider
-            open={sidebarOpen}
-            onOpenChange={setSidebarOpen}
-            className="relative min-h-0 flex-1 overflow-hidden"
-            style={
-              { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
-            }
-          >
+        {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
+        only sets `min-h-svh`, which lets the layout grow with its content — so a
+        virtualized list's tall spacer would inflate the whole document and its
+        scroll container would never actually scroll (it just grows), defeating
+        every `min-h-0`/`overflow-auto` below. A fixed height gives the flex chain
+        something to constrain against so overflow scrolls instead of expanding.
+        `relative` anchors the sidebar resize handle. */}
+        <SidebarProvider
+          open={sidebarOpen}
+          onOpenChange={setSidebarOpen}
+          className="relative h-svh overflow-hidden"
+          style={
+            { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
+          }
+        >
           {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
           rather than sliding it off-canvas. */}
           <Sidebar collapsible="icon">
-            <SidebarHeader>
+            {/* pt-8 clears the macOS traffic lights, which float over the top-left
+            of the window (titleBarStyle: Overlay); data-tauri-drag-region makes
+            that band draggable like a real title bar. */}
+            <SidebarHeader className="pt-8" data-tauri-drag-region>
               <Link
                 to="/"
                 className="flex items-center gap-2 px-2 py-1.5 font-semibold"
@@ -186,12 +170,28 @@ export function AppShell() {
           </Sidebar>
           <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
           <SidebarInset>
+            {/* The app control bar. With titleBarStyle: Overlay the native title
+            bar is gone and the macOS traffic lights float over the top-left (the
+            sidebar). Controls are right-aligned so that corner stays clear in
+            both expanded and collapsed states, and the whole strip is the window
+            drag region. Views render their own header below it. */}
+            <div
+              data-tauri-drag-region
+              className="flex h-11 shrink-0 items-center gap-2 border-b px-2"
+            >
+              <div className="ml-auto flex items-center gap-1">
+                <ImportIndicator />
+                <SidebarTrigger />
+                <DensityToggle />
+                <ModeToggle />
+                <SettingsMenu />
+              </div>
+            </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <Outlet />
             </div>
           </SidebarInset>
-          </SidebarProvider>
-        </div>
+        </SidebarProvider>
       </ReimportProvider>
     </ImportProvider>
   );
