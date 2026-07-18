@@ -146,13 +146,27 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
       sans-serif;
     /* Native-app feel: no text cursor or selection on chrome, no rubber-band. */
     user-select: none;
     cursor: default;
     overscroll-behavior: none;
+  }
+  /* macOS vibrancy: the window has a native NSVisualEffectView backing (see
+     src-tauri/src/lib.rs). Keep the window transparent so the chrome — the
+     unified title bar and the sidebar — shows the vibrant material through it,
+     while all real content stays opaque (SidebarInset is bg-background). macOS
+     substitutes a solid fill under "Reduce transparency", so this degrades
+     cleanly. The sidebar keeps a partial tint of its own colour so text on it
+     stays legible over the desktop behind. */
+  html,
+  body {
+    background: transparent;
+  }
+  [data-slot="sidebar-inner"] {
+    background-color: color-mix(in oklab, var(--sidebar) 60%, transparent);
   }
   /* Every clickable control shows the same pointer cursor, so buttons, list
      rows, nav items and links all read as interactive. Disabled controls keep
@@ -186,6 +200,18 @@
   }
   ::-webkit-scrollbar-corner {
     background: transparent;
+  }
+  /* Respect the system "Reduce motion" accessibility setting: near-instant
+     transitions/animations instead of movement. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
