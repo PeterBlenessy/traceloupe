@@ -41,7 +41,12 @@ export function ViewHeader({
         </span>
       )}
       {children && (
-        <div className="ml-auto flex min-w-0 items-center gap-2">{children}</div>
+        // flex-1 (not ml-auto content-width) so a child can actually claim the
+        // free header width — an OverflowRow filter needs it to measure how many
+        // chips fit; justify-end keeps plain metadata right-aligned as before.
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+          {children}
+        </div>
       )}
     </header>
   );
@@ -111,7 +116,14 @@ export function PanelHeader({
   return (
     <>
       <ViewHeader title={title} count={count} icon={icon}>
-        {actions}
+        {actions && (
+          // Give the filter actions the free width (and make the actions element
+          // itself fill it) so an OverflowRow measures the real available space
+          // and shows every chip that fits instead of collapsing into "⋮".
+          <div className="flex min-w-0 flex-1 items-center gap-1 [&>*]:min-w-0 [&>*]:flex-1">
+            {actions}
+          </div>
+        )}
         {toolbar && (
           <button
             type="button"
