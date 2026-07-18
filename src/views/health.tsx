@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Activity, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
@@ -25,18 +26,20 @@ function WorkoutRow({ workout }: { workout: Workout }) {
   ].filter(Boolean);
   return (
     <div className="px-2 py-0.5">
-      <div className="flex items-center gap-3 rounded-md border px-3 py-2.5">
-        <Activity className="size-4 shrink-0 text-muted-foreground" />
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-medium">
+      <Item>
+        <ItemMedia>
+          <Activity className="size-4 text-muted-foreground" />
+        </ItemMedia>
+        <ItemContent>
+          <ItemTitle className="truncate">
             {workout.activity ?? "Workout"}
-          </div>
+          </ItemTitle>
           <div className="text-xs text-muted-foreground">
             {workout.startAt != null ? formatDateTime(workout.startAt) : "—"}
             {bits.length > 0 && ` · ${bits.join(" · ")}`}
           </div>
-        </div>
-      </div>
+        </ItemContent>
+      </Item>
     </div>
   );
 }

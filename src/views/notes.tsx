@@ -527,6 +527,7 @@ function FolderRow({
       type="button"
       onClick={onToggle}
       aria-expanded={!collapsed}
+      data-slot="list-row"
       className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-sm font-medium hover:bg-accent/50"
     >
       {collapsed ? (
