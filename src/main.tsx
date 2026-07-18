@@ -50,7 +50,16 @@ const routes = [
     },
     component: MessagesView,
   }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/contacts", component: ContactsView }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/contacts",
+    // `?id=<contactId>` deep-links to a contact (e.g. from a message avatar).
+    validateSearch: (search: Record<string, unknown>): { id?: number } => {
+      const id = Number(search.id);
+      return Number.isFinite(id) ? { id } : {};
+    },
+    component: ContactsView,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calls", component: CallsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/safari", component: SafariView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/notes", component: NotesView }),

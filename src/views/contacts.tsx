@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   Briefcase,
   Building2,
@@ -49,6 +49,17 @@ export function ContactsView() {
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [q, setQ] = useState("");
+  // Deep link from a message avatar: `?id=<contactId>` selects that contact and
+  // switches the source filter to the one it belongs to, so it's visible.
+  const search = useSearch({ strict: false }) as { id?: number };
+  useEffect(() => {
+    if (search.id == null || !contacts) return;
+    const c = contacts.find((x) => x.id === search.id);
+    if (c) {
+      setSource(c.source);
+      setSelectedId(c.id);
+    }
+  }, [search.id, contacts]);
   // Source filter: the device address book vs a third-party app's social graph
   // (e.g. TikTok). Default to the address book so app contacts don't bury it.
   const [source, setSource] = usePersistedState("contacts:source", "Address Book");
