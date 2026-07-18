@@ -2205,7 +2205,10 @@ struct LinkPreview {
 #[tauri::command]
 async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (final_url, body) = safe_http_get(&url, 512 * 1024, Some("html"))?;
+        // 2 MB cap: big pages (e.g. YouTube ~1.2 MB) put their OpenGraph tags
+        // well past 512 KB — byte ~662 KB on a watch page — so a smaller cap
+        // truncates before the meta tags and yields no preview.
+        let (final_url, body) = safe_http_get(&url, 2 * 1024 * 1024, Some("html"))?;
         let html = String::from_utf8_lossy(&body);
         let image = meta_content(&html, "og:image")
             .map(|i| absolutize(&final_url, &i))
