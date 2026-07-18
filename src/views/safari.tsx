@@ -16,7 +16,7 @@ import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
-import { formatDateTime } from "@/lib/format";
+import { formatCount, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
 import {
@@ -217,7 +217,9 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
         </ItemContent>
         <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
           <span>{visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}</span>
-          {visit.visitCount != null && <span>{visit.visitCount} visits</span>}
+          {visit.visitCount != null && (
+            <span>{formatCount(visit.visitCount)} visits</span>
+          )}
         </div>
       </button>
     </Item>

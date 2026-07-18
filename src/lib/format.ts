@@ -76,6 +76,13 @@ export function formatListTime(epochSeconds: number | null): string {
   return dateYear.format(d);
 }
 
+/** Time of day only, e.g. "3:00 PM" / "15:00" — respects the clock preference
+ *  (unlike a locale-default formatter, which would ignore the 12/24h setting). */
+export function formatTime(epochSeconds: number | null): string {
+  if (epochSeconds == null) return "";
+  return time.format(new Date(epochSeconds * 1000));
+}
+
 /** Full timestamp for a message separator. */
 export function formatMessageTime(epochSeconds: number | null): string {
   if (epochSeconds == null) return "";
