@@ -19,10 +19,9 @@
         "minHeight": 550,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "transparent": true
+        "trafficLightPosition": { "x": 14, "y": 18 }
       }
     ],
-    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }

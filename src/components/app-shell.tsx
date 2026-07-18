@@ -125,10 +125,10 @@ export function AppShell() {
           {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
           rather than sliding it off-canvas. */}
           <Sidebar collapsible="icon">
-            {/* pt-8 clears the macOS traffic lights, which float over the top-left
+            {/* pt-10 clears the macOS traffic lights, which float over the top-left
             of the window (titleBarStyle: Overlay); data-tauri-drag-region makes
             that band draggable like a real title bar. */}
-            <SidebarHeader className="pt-8" data-tauri-drag-region>
+            <SidebarHeader className="pt-10" data-tauri-drag-region>
               <Link
                 to="/"
                 className="flex items-center gap-2 px-2 py-1.5 font-semibold"
