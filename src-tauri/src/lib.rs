@@ -2203,26 +2203,44 @@ struct LinkPreview {
 /// is fetched here and returned as a `data:` URL so the webview never contacts
 /// the image host directly (no IP leak beyond this backend request).
 #[tauri::command]
-async fn fetch_link_preview(url: String) -> Result<LinkPreview, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        // 2 MB cap: big pages (e.g. YouTube ~1.2 MB) put their OpenGraph tags
-        // well past 512 KB — byte ~662 KB on a watch page — so a smaller cap
-        // truncates before the meta tags and yields no preview.
-        let (final_url, body) = safe_http_get(&url, 2 * 1024 * 1024, Some("html"))?;
-        let html = String::from_utf8_lossy(&body);
-        let image = meta_content(&html, "og:image")
-            .map(|i| absolutize(&final_url, &i))
-            .and_then(|i| proxy_image(&i));
-        Ok(LinkPreview {
-            title: meta_content(&html, "og:title").or_else(|| html_title(&html)),
-            description: meta_content(&html, "og:description"),
-            site_name: meta_content(&html, "og:site_name"),
-            image,
-            url,
-        })
+async fn fetch_link_preview(app: AppHandle, url: String) -> Result<LinkPreview, String> {
+    let result = tauri::async_runtime::spawn_blocking({
+        let url = url.clone();
+        move || {
+            // 2 MB cap: big pages (e.g. YouTube ~1.2 MB) put their OpenGraph tags
+            // well past 512 KB — byte ~662 KB on a watch page — so a smaller cap
+            // truncates before the meta tags and yields no preview.
+            let (final_url, body) = safe_http_get(&url, 2 * 1024 * 1024, Some("html"))?;
+            let html = String::from_utf8_lossy(&body);
+            let image = meta_content(&html, "og:image")
+                .map(|i| absolutize(&final_url, &i))
+                .and_then(|i| proxy_image(&i));
+            Ok::<LinkPreview, String>(LinkPreview {
+                title: meta_content(&html, "og:title").or_else(|| html_title(&html)),
+                description: meta_content(&html, "og:description"),
+                site_name: meta_content(&html, "og:site_name"),
+                image,
+                url,
+            })
+        }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    // Structural diagnostic (no content): whether each field came back, or why not.
+    match &result {
+        Ok(p) => logging::debug(
+            &app,
+            format!(
+                "link-preview {}: title={} image={} desc={}",
+                url,
+                p.title.is_some(),
+                p.image.is_some(),
+                p.description.is_some()
+            ),
+        ),
+        Err(e) => logging::debug(&app, format!("link-preview {url}: failed: {e}")),
+    }
+    result
 }
 
 /// A hardened GET for opt-in previews: http/https only; refuses private/loopback/

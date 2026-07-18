@@ -739,10 +739,11 @@ function TimelineRow({
   // unfurls the first link into a card (replacing a URL-only row's text);
   // "hover" mode is handled inside MessageBody.
   const inlinePreviews = useSettings().linkPreviewMode === "inline";
-  const previewUrl = inlinePreviews && m.body ? firstUrl(m.body) : null;
+  const previewUrls =
+    inlinePreviews && m.body ? allUrls(m.body).slice(0, MAX_PREVIEW_CARDS) : [];
   const trimmedBody = (m.body ?? "").trim();
   const replaceUrlWithCard =
-    !!previewUrl && !!trimmedBody && !/\s/.test(trimmedBody) && !!firstUrl(trimmedBody);
+    previewUrls.length === 1 && !/\s/.test(trimmedBody);
   return (
     <div className="px-2 py-0.5">
       {showDate && m.sentAt && (
@@ -770,7 +771,7 @@ function TimelineRow({
         className={cn(
           "flex w-full cursor-pointer gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/50",
           // Top-align when a preview card makes the row tall; otherwise center.
-          previewUrl ? "items-start" : "items-center",
+          previewUrls.length ? "items-start" : "items-center",
           m.isFromMe && "bg-primary/5 hover:bg-primary/10",
         )}
       >
@@ -823,9 +824,9 @@ function TimelineRow({
               )
             }
           />
-          {previewUrl && (
-            <LinkPreviewCard url={previewUrl} placeholder={replaceUrlWithCard} />
-          )}
+          {previewUrls.map((u) => (
+            <LinkPreviewCard key={u} url={u} placeholder={replaceUrlWithCard} />
+          ))}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           {slug && hasBrandIcon(slug) && (
@@ -1133,16 +1134,20 @@ function MessageBubble({
   senderLabel?: string | null;
 }) {
   const align = message.isFromMe ? "end" : "start";
-  // In "inline" mode the first link unfurls into a card in the bubble.
+  // In "inline" mode every link in the message unfurls into a card (capped).
   const inlinePreviews = useSettings().linkPreviewMode === "inline";
-  const previewUrl =
-    inlinePreviews && message.body ? firstUrl(message.body) : null;
-  // When the whole message is just a link and previews are on, the card stands
-  // in for the raw URL (like iMessage) — cleaner than a giant URL over a card.
+  const previewUrls = useMemo(
+    () =>
+      inlinePreviews && message.body
+        ? allUrls(message.body).slice(0, MAX_PREVIEW_CARDS)
+        : [],
+    [inlinePreviews, message.body],
+  );
+  // When the whole message is just one link, the card stands in for the raw URL
+  // (like iMessage) — cleaner than a giant URL over a card.
   const trimmedBody = (message.body ?? "").trim();
-  const bodyIsUrlOnly =
-    !!trimmedBody && !/\s/.test(trimmedBody) && !!firstUrl(trimmedBody);
-  const replaceUrlWithCard = bodyIsUrlOnly && !!previewUrl;
+  const replaceUrlWithCard =
+    previewUrls.length === 1 && !/\s/.test(trimmedBody);
   // Drop iMessage app/plugin payloads (`.pluginPayloadAttachment`) — binary
   // typedstream blobs behind rich links/app messages, not openable user files.
   const attachments = useMemo(
@@ -1193,12 +1198,13 @@ function MessageBubble({
                   </div>
                 );
               })}
-              {previewUrl && (
+              {previewUrls.map((u) => (
                 <LinkPreviewCard
-                  url={previewUrl}
+                  key={u}
+                  url={u}
                   placeholder={replaceUrlWithCard}
                 />
-              )}
+              ))}
               <MessageImageLightbox
                 images={imageAtts}
                 index={lightboxIndex}
@@ -1381,12 +1387,21 @@ function TimelineThumbs({
   );
 }
 
-/** The first URL in `text` (normalized to https, trailing punctuation trimmed). */
-function firstUrl(text: string): string | null {
-  const m = text.match(/(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/i);
-  if (!m) return null;
-  const raw = m[0].replace(/[.,!?;:]+$/, "");
-  return /^www\./i.test(raw) ? `https://${raw}` : raw;
+/** Up to this many preview cards per message, so a link-heavy message (e.g. a
+ *  shopping list) doesn't unfurl into a wall of cards. */
+const MAX_PREVIEW_CARDS = 4;
+
+/** Every distinct URL in `text` (normalized to https, trailing punctuation
+ *  trimmed, de-duplicated in order) — so a message with several links previews
+ *  each of them, not just the first. */
+function allUrls(text: string): string[] {
+  const re = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
+  const out: string[] = [];
+  for (const m of text.matchAll(re)) {
+    const raw = m[0].replace(/[.,!?;:]+$/, "");
+    out.push(/^www\./i.test(raw) ? `https://${raw}` : raw);
+  }
+  return [...new Set(out)];
 }
 
 /** The host of a URL without a leading `www.`, for a compact domain label. */
