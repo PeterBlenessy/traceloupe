@@ -109,8 +109,12 @@ export function TimeFilterBar({
   );
 
   return (
+    // Keep the preset chips and the custom-range button together as one time
+    // filter unit: the chips size to content (shrinking into the "⋮" overflow
+    // only when the row is narrow) so Range sits right after them, instead of a
+    // flex-1 that would stretch the chips and shove Range over next to the sort.
     <div className={cn("flex min-w-0 items-center gap-1", className)}>
-      <OverflowRow items={items} gapPx={4} className="flex-1" title="More time filters" />
+      <OverflowRow items={items} gapPx={4} className="min-w-0 shrink" title="More time filters" />
       <DateRangeFilter
         value={value}
         active={activeKey === null}
