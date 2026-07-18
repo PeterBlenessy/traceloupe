@@ -892,16 +892,9 @@ function TimelineRow({
           )}
           {m.body ? (
             showBodyText && <MessageBody text={m.body} omit={omitUrls} />
-          ) : atts.some(
-              (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
-            ) ? null : atts.length ? (
-            <span className="inline-flex items-center gap-1 text-muted-foreground">
-              <Paperclip className="size-3.5" />
-              {atts[0].filename ?? "attachment"}
-            </span>
-          ) : (
+          ) : atts.length === 0 ? (
             <span className="text-muted-foreground">—</span>
-          )}
+          ) : null}
           <TimelineThumbs
             attachments={atts}
             onOpenImage={(images, index) =>
@@ -913,6 +906,35 @@ function TimelineRow({
               )
             }
           />
+          {/* Non-thumbnail attachments (documents, videos, and anything the
+              backup doesn't contain) — keep the reference + a "not in backup"
+              note, mirroring the conversation view. */}
+          {atts
+            .filter(
+              (a) => !(a.localPath && isImageAttachment(a.mimeType ?? "", a.filename)),
+            )
+            .map((a) => {
+              const Icon = isImageAttachment(a.mimeType ?? "", a.filename)
+                ? ImageIcon
+                : a.mimeType
+                  ? FileText
+                  : Paperclip;
+              return (
+                <span
+                  key={a.id}
+                  className="ml-2 inline-flex max-w-[16rem] items-center gap-1 align-middle text-xs text-muted-foreground"
+                  title={a.localPath ? undefined : "This attachment isn't in the backup"}
+                >
+                  <Icon className="size-3.5 shrink-0" />
+                  <span className="truncate">{a.filename ?? "attachment"}</span>
+                  {!a.localPath && (
+                    <span className="shrink-0 text-[10px] italic opacity-70">
+                      · not in backup
+                    </span>
+                  )}
+                </span>
+              );
+            })}
           {previewUrls.map((u) => (
             <LinkPreviewCard key={u} url={u} placeholder={replaceUrlWithCard} />
           ))}
