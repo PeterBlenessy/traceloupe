@@ -18,6 +18,11 @@ import {
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { BadgeFilter } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -715,6 +720,9 @@ function TimelineRow({
   showAvatars: boolean;
 }) {
   const m = item.message;
+  // Hide iMessage plugin/app payloads (see isInternalAttachment) from the row's
+  // attachment fallback and thumbnails.
+  const atts = m.attachments.filter((a) => !isInternalAttachment(a));
   // The avatar ALWAYS shows the conversation partner (the other party), so a row
   // makes clear which chat it belongs to regardless of who sent it: for incoming
   // that's the actual sender; for your own outgoing messages it's the thread's
@@ -783,18 +791,18 @@ function TimelineRow({
           )}
           {m.body ? (
             <MessageBody text={m.body} />
-          ) : m.attachments.some(
+          ) : atts.some(
               (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
-            ) ? null : m.attachments.length ? (
+            ) ? null : atts.length ? (
             <span className="inline-flex items-center gap-1 text-muted-foreground">
               <Paperclip className="size-3.5" />
-              {m.attachments[0].filename ?? "attachment"}
+              {atts[0].filename ?? "attachment"}
             </span>
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
           <TimelineThumbs
-            attachments={m.attachments}
+            attachments={atts}
             onOpenImage={(images, index) =>
               onOpenImage(
                 images,
@@ -1111,15 +1119,19 @@ function MessageBubble({
   senderLabel?: string | null;
 }) {
   const align = message.isFromMe ? "end" : "start";
-  const { linkPreviews } = useSettings();
-  const previewUrl = linkPreviews && message.body ? firstUrl(message.body) : null;
+  // Drop iMessage app/plugin payloads (`.pluginPayloadAttachment`) — binary
+  // plists behind rich links/app messages, not openable user files.
+  const attachments = useMemo(
+    () => message.attachments.filter((a) => !isInternalAttachment(a)),
+    [message.attachments],
+  );
   // Available image attachments open in an in-app lightbox (with prev/next).
   const imageAtts = useMemo(
     () =>
-      message.attachments.filter(
+      attachments.filter(
         (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
       ),
-    [message.attachments],
+    [attachments],
   );
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   return (
@@ -1144,7 +1156,7 @@ function MessageBubble({
                   <MessageBody text={message.body} />
                 </p>
               )}
-              {message.attachments.map((a) => {
+              {attachments.map((a) => {
                 const imgIdx = imageAtts.indexOf(a);
                 return (
                   <div key={a.id} className={cn(message.body && "mt-1.5")}>
@@ -1157,7 +1169,6 @@ function MessageBubble({
                   </div>
                 );
               })}
-              {previewUrl && <LinkPreviewCard url={previewUrl} />}
               <MessageImageLightbox
                 images={imageAtts}
                 index={lightboxIndex}
@@ -1214,10 +1225,22 @@ function isImageAttachment(mime: string, filename: string | null): boolean {
   return /\.(jpe?g|png|gif|heic|heif|webp|tiff?|bmp)$/.test(f);
 }
 
+/** iMessage app/plugin payloads (`.pluginPayloadAttachment`) are binary plists
+ *  behind rich links, stickers and app messages — internal data, not user files.
+ *  They can't be opened, so they're hidden rather than shown as dead rows. */
+function isInternalAttachment(att: Attachment): boolean {
+  return (att.filename ?? "")
+    .toLowerCase()
+    .endsWith(".pluginpayloadattachment");
+}
+
 /** Message text with URLs rendered as clickable links that open in the default
  *  browser (user-initiated; the app never loads remote content itself). */
 const URL_RE = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
 function MessageBody({ text }: { text: string }) {
+  // Link previews are opt-in (they contact the linked site); when off, links are
+  // plain. When on, each link gets a hover-card preview.
+  const { linkPreviews } = useSettings();
   return text.split(URL_RE).map((part, i) => {
     if (!part) return null;
     if (/^(https?:\/\/|www\.)/i.test(part)) {
@@ -1226,26 +1249,58 @@ function MessageBody({ text }: { text: string }) {
       const urlText = m ? m[1] : part;
       const trailing = m ? m[2] : "";
       const href = /^www\./i.test(urlText) ? `https://${urlText}` : urlText;
+      const link = (
+        <a
+          href={href}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            client.openExternal(href);
+          }}
+          className="cursor-pointer break-all text-primary underline underline-offset-2"
+          title={href}
+        >
+          {urlText}
+        </a>
+      );
       return (
         <span key={i}>
-          <a
-            href={href}
-            onClick={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              client.openExternal(href);
-            }}
-            className="cursor-pointer break-all text-primary underline underline-offset-2"
-            title={href}
-          >
-            {urlText}
-          </a>
+          {linkPreviews ? (
+            <LinkHoverPreview href={href}>{link}</LinkHoverPreview>
+          ) : (
+            link
+          )}
           {trailing}
         </span>
       );
     }
     return <span key={i}>{part}</span>;
   });
+}
+
+/** Wraps a link so hovering it reveals an OpenGraph preview card. The preview is
+ *  fetched lazily — the hover-card content only mounts (and so only fires the
+ *  query) once the pointer rests on the link. */
+function LinkHoverPreview({
+  href,
+  children,
+}: {
+  href: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <HoverCard openDelay={300} closeDelay={120}>
+      <HoverCardTrigger asChild>{children}</HoverCardTrigger>
+      <HoverCardContent
+        side="top"
+        className="w-72 overflow-hidden p-0"
+        // Keep clicks inside the card from bubbling to the row/bubble.
+        onClick={(e) => e.stopPropagation()}
+      >
+        <LinkPreviewContent url={href} />
+      </HoverCardContent>
+    </HoverCard>
+  );
 }
 
 /** Compact inline thumbnails of a message's available image attachments, for the
@@ -1292,57 +1347,66 @@ function TimelineThumbs({
   );
 }
 
-/** The first URL in `text` (normalized to https, trailing punctuation trimmed). */
-function firstUrl(text: string): string | null {
-  const m = text.match(/(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/i);
-  if (!m) return null;
-  const raw = m[0].replace(/[.,!?;:]+$/, "");
-  return /^www\./i.test(raw) ? `https://${raw}` : raw;
-}
-
-/** An opt-in OpenGraph preview card for a link (only mounted when the setting is
- *  on). Fetches title/image from the linked site and opens it externally. */
-function LinkPreviewCard({ url }: { url: string }) {
-  const { data } = useQuery<LinkPreview>({
+/** The OpenGraph preview shown inside a link's hover card. Fetches title/image/
+ *  description from the linked site (cached forever by URL); clicking opens it
+ *  externally. Renders a loading line first, and falls back to the bare URL when
+ *  the site offers no preview or the fetch fails. */
+function LinkPreviewContent({ url }: { url: string }) {
+  const { data, isLoading, isError } = useQuery<LinkPreview>({
     queryKey: ["linkPreview", url],
     queryFn: () => client.fetchLinkPreview(url),
     staleTime: Infinity,
     retry: false,
   });
-  if (!data || (!data.title && !data.image)) return null;
+  if (isLoading) {
+    return (
+      <div className="p-3 text-xs text-muted-foreground">Loading preview…</div>
+    );
+  }
+  const empty = !data || (!data.title && !data.image && !data.description);
+  if (isError || empty) {
+    return (
+      <div className="break-all p-3 text-xs text-muted-foreground">{url}</div>
+    );
+  }
   return (
     <button
       onClick={(e) => {
         e.stopPropagation();
         client.openExternal(url);
       }}
-      className="mt-1.5 flex w-full max-w-[280px] overflow-hidden rounded-lg border text-left transition-colors hover:bg-accent/50"
+      className="flex w-full flex-col text-left transition-colors hover:bg-accent/50"
       title={url}
     >
       {data.image && (
         <img
           src={data.image}
           alt=""
-          className="size-16 shrink-0 bg-muted object-cover"
+          className="h-32 w-full bg-muted object-cover"
           onError={(e) => {
             e.currentTarget.style.display = "none";
           }}
         />
       )}
-      <div className="min-w-0 flex-1 p-2">
+      <div className="min-w-0 p-2.5">
         {data.siteName && (
           <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
             {data.siteName}
           </div>
         )}
         {data.title && (
-          <div className="truncate text-xs font-medium">{data.title}</div>
+          <div className="line-clamp-2 text-sm font-medium leading-snug">
+            {data.title}
+          </div>
         )}
         {data.description && (
-          <div className="line-clamp-2 text-[11px] text-muted-foreground">
+          <div className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">
             {data.description}
           </div>
         )}
+        <div className="mt-1 truncate text-[10px] text-muted-foreground/70">
+          {url}
+        </div>
       </div>
     </button>
   );
@@ -1457,7 +1521,10 @@ function AttachmentView({
       <video
         controls
         preload="metadata"
-        src={client.attachmentUrl(att.id, { cacheKey })}
+        // The `#t=0.1` media fragment makes WebKit seek to and paint the first
+        // frame, so the player shows a still instead of a black rectangle before
+        // playback (no server-side frame extraction needed).
+        src={`${client.attachmentUrl(att.id, { cacheKey })}#t=0.1`}
         className="max-h-64 max-w-[240px] rounded-lg"
       />
     );
