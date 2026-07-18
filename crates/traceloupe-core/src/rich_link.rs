@@ -36,19 +36,87 @@ impl RichLink {
 /// error) when the bytes aren't a recognizable archive or carry none of the
 /// fields, so callers can treat "no preview" uniformly.
 pub fn decode(bytes: &[u8]) -> Result<RichLink> {
-    let resolved = nska::resolve(bytes)?;
-    // The LPLinkMetadata is usually the resolved root, but the balloon payload can
-    // wrap it — so search the whole tree for the dict that carries the link URL
-    // rather than assuming a fixed shape. The thumbnail is found tree-wide too.
-    let meta = find_link_dict(&resolved, 0);
+    // Path 1 — a keyed archive (binary plist): resolve the object graph and read
+    // the LPLinkMetadata fields. Search the whole tree for the dict that carries
+    // the link URL rather than assuming a fixed root shape.
+    if let Ok(resolved) = nska::resolve(bytes) {
+        let meta = find_link_dict(&resolved, 0);
+        let rl = RichLink {
+            title: meta.and_then(|d| string_field(d, "title")),
+            summary: meta.and_then(|d| string_field(d, "summary")),
+            // `originalURL` is the URL the user shared; `URL` is the post-redirect
+            // canonical one — prefer the former, fall back to the latter.
+            url: meta.and_then(|d| url_field(d, "originalURL").or_else(|| url_field(d, "URL"))),
+            image: largest_image(&resolved),
+        };
+        if !rl.is_empty() {
+            return Ok(rl);
+        }
+    }
+    // Path 2 — Apple's `streamtyped` (typedstream) format, which iMessage uses for
+    // these balloon payloads and which isn't a plist. We don't decode the whole
+    // object stream; instead we byte-scan for the embedded thumbnail (stored as
+    // raw NSData) and the shared URL. The title isn't reliably locatable this way,
+    // and the caller already has the link text from the message body.
     Ok(RichLink {
-        title: meta.and_then(|d| string_field(d, "title")),
-        summary: meta.and_then(|d| string_field(d, "summary")),
-        // `originalURL` is the URL the user shared; `URL` is the post-redirect
-        // canonical one — prefer the former, fall back to the latter.
-        url: meta.and_then(|d| url_field(d, "originalURL").or_else(|| url_field(d, "URL"))),
-        image: largest_image(&resolved),
+        url: scan_url(bytes),
+        image: scan_embedded_image(bytes),
+        ..RichLink::default()
     })
+}
+
+/// Find the first `http(s)://…` URL embedded as an ASCII run in the payload.
+fn scan_url(bytes: &[u8]) -> Option<String> {
+    for scheme in [b"https://".as_slice(), b"http://".as_slice()] {
+        if let Some(start) = bytes.windows(scheme.len()).position(|w| w == scheme) {
+            let end = bytes[start..]
+                .iter()
+                .position(|&b| !(0x21..0x7f).contains(&b) || b == b'"')
+                .map_or(bytes.len(), |o| start + o);
+            if end - start > scheme.len() {
+                return std::str::from_utf8(&bytes[start..end]).ok().map(str::to_string);
+            }
+        }
+    }
+    None
+}
+
+/// Byte-scan for the largest embedded PNG or JPEG (a typedstream stores images as
+/// raw NSData, so they appear verbatim in the blob).
+fn scan_embedded_image(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
+    let mut best: Option<(String, Vec<u8>)> = None;
+    let consider = |best: &mut Option<(String, Vec<u8>)>, mime: &str, blob: &[u8]| {
+        if best.as_ref().is_none_or(|(_, b)| blob.len() > b.len()) {
+            *best = Some((mime.to_string(), blob.to_vec()));
+        }
+    };
+    // PNG: 8-byte signature … IEND chunk (`IEND` + 4-byte CRC).
+    const PNG_SIG: &[u8] = b"\x89PNG\r\n\x1a\n";
+    const PNG_END: &[u8] = b"IEND\xae\x42\x60\x82";
+    let mut i = 0;
+    while let Some(rel) = bytes[i..].windows(PNG_SIG.len()).position(|w| w == PNG_SIG) {
+        let start = i + rel;
+        if let Some(erel) = bytes[start..].windows(PNG_END.len()).position(|w| w == PNG_END) {
+            let end = start + erel + PNG_END.len();
+            consider(&mut best, "image/png", &bytes[start..end]);
+            i = end;
+        } else {
+            break;
+        }
+    }
+    // JPEG: SOI (FF D8 FF) … EOI (FF D9).
+    let mut i = 0;
+    while let Some(rel) = bytes[i..].windows(3).position(|w| w == [0xFF, 0xD8, 0xFF]) {
+        let start = i + rel;
+        if let Some(erel) = bytes[start + 2..].windows(2).position(|w| w == [0xFF, 0xD9]) {
+            let end = start + 2 + erel + 2;
+            consider(&mut best, "image/jpeg", &bytes[start..end]);
+            i = end;
+        } else {
+            break;
+        }
+    }
+    best
 }
 
 /// Find the LPLinkMetadata-like dict anywhere in the resolved tree: the first one
@@ -200,10 +268,25 @@ mod tests {
         assert_eq!(bytes, png);
     }
 
-    /// Non-archive bytes decode to an empty RichLink, not an error.
+    /// Non-archive, non-image bytes decode to an empty RichLink, not an error.
     #[test]
     fn non_archive_is_empty() {
         let rl = decode(b"not a plist at all").unwrap_or_default();
         assert!(rl.is_empty());
+    }
+
+    /// A `streamtyped` (typedstream) payload — not a plist — still yields the URL
+    /// and the embedded PNG via the byte-scan fallback.
+    #[test]
+    fn scans_typedstream_url_and_image() {
+        let png: Vec<u8> = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x00IEND\xae\x42\x60\x82".to_vec();
+        let mut blob = b"\x04\x0bstreamtyped\x81\xe8\x03NSObject".to_vec();
+        blob.extend_from_slice(b"https://maps.example/place\x00");
+        blob.extend_from_slice(&png);
+        let rl = decode(&blob).unwrap();
+        assert_eq!(rl.url.as_deref(), Some("https://maps.example/place"));
+        let (mime, bytes) = rl.image.expect("embedded image");
+        assert_eq!(mime, "image/png");
+        assert_eq!(bytes, png);
     }
 }

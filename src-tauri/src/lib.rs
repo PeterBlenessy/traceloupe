@@ -1079,7 +1079,7 @@ async fn message_link_metadata(
         None
     };
     let outcome = tauri::async_runtime::spawn_blocking(
-        move || -> Result<(usize, rich_link::RichLink), String> {
+        move || -> Result<(usize, String, rich_link::RichLink), String> {
             let bytes = match (decrypt_key, dec) {
                 (Some(key), Some(dec)) => {
                     let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
@@ -1089,36 +1089,34 @@ async fn message_link_metadata(
                 }
                 _ => std::fs::read(&local_path).map_err(|e| e.to_string())?,
             };
-            let n = bytes.len();
-            rich_link::decode(&bytes).map(|rl| (n, rl)).map_err(|e| {
-                // Include the leading bytes (container magic) so an unexpected
-                // payload format can be identified from the log.
-                let head: String = bytes
-                    .iter()
-                    .take(16)
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("{e}; {n} bytes; head=[{head}]")
-            })
+            // Leading bytes (container magic) for diagnostics — a format, not content.
+            let head: String = bytes
+                .iter()
+                .take(12)
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let rl = rich_link::decode(&bytes).map_err(|e| e.to_string())?;
+            Ok((bytes.len(), head, rl))
         },
     )
     .await
     .map_err(|e| e.to_string())?;
 
     // A bad payload shouldn't error the query — log the reason and show nothing.
-    let (n, rl) = match outcome {
+    let (n, head, rl) = match outcome {
         Ok(v) => v,
         Err(e) => {
             logging::debug(&app, format!("rich-link decode failed: {e}"));
             return Ok(None);
         }
     };
-    // Structural only (no content): whether each field was recovered, and size.
+    // Structural only (no content): the size, leading magic, and which fields
+    // were recovered.
     logging::debug(
         &app,
         format!(
-            "rich-link: {n} bytes → title={} url={} image={}",
+            "rich-link: {n} bytes head=[{head}] → title={} url={} image={}",
             rl.title.is_some(),
             rl.url.is_some(),
             rl.image.is_some()
