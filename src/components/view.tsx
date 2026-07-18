@@ -45,6 +45,18 @@ export function ViewHeader({
   );
 }
 
+/** The one list loading state — a stack of row-height skeletons. Shared by every
+ *  list primitive so "loading" looks identical everywhere (no ad-hoc pulses). */
+export function ListSkeleton({ rows = 8 }: { rows?: number }) {
+  return (
+    <div className="w-full p-2">
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} className="mb-1 h-14 w-full" />
+      ))}
+    </div>
+  );
+}
+
 /** A load-failure state, so a failed query surfaces the error instead of quietly
  *  looking like an empty list. */
 export function ErrorState({ error }: { error: unknown }) {
@@ -124,6 +136,7 @@ export function VirtualListView<T>({
   isPending,
   error,
   emptyMessage = "Nothing here.",
+  emptyIcon,
 }: {
   title: string;
   count?: number;
@@ -137,6 +150,7 @@ export function VirtualListView<T>({
   isPending?: boolean;
   error?: unknown;
   emptyMessage?: string;
+  emptyIcon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -150,13 +164,9 @@ export function VirtualListView<T>({
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
-        <div className="w-full p-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="mb-1 h-14 w-full" />
-          ))}
-        </div>
+        <ListSkeleton />
       ) : items.length === 0 ? (
-        <p className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+        <EmptyView icon={emptyIcon} title={emptyMessage} />
       ) : (
         <VirtualList
           items={items}
@@ -191,6 +201,7 @@ export function LazyListView<T>({
   estimateSize = 64,
   error,
   emptyMessage = "Nothing here.",
+  emptyIcon,
 }: {
   title: string;
   header?: React.ReactNode;
@@ -207,6 +218,7 @@ export function LazyListView<T>({
   estimateSize?: number;
   error?: unknown;
   emptyMessage?: string;
+  emptyIcon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -220,13 +232,9 @@ export function LazyListView<T>({
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (
-        <div className="w-full p-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="mb-1 h-14 w-full" />
-          ))}
-        </div>
+        <ListSkeleton />
       ) : count === 0 ? (
-        <p className="p-6 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+        <EmptyView icon={emptyIcon} title={emptyMessage} />
       ) : (
         <LazyVirtualList<T>
           // Remount when the filter changes so scroll/measurement reset cleanly.

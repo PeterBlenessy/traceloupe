@@ -30,7 +30,6 @@ import {
 import { BadgeFilter } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
-import { Skeleton } from "@/components/ui/skeleton";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Message as MessageRow,
@@ -43,6 +42,7 @@ import {
   ErrorState,
   ListDetail,
   ListSearch,
+  ListSkeleton,
   ViewHeader,
 } from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
@@ -497,19 +497,15 @@ function Conversations({
           {error ? (
             <ErrorState error={error} />
           ) : isPending ? (
-            <div className="min-h-0 flex-1 overflow-auto">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="px-3 py-2">
-                  <Skeleton className="h-12 w-full" />
-                </div>
-              ))}
-            </div>
+            <ListSkeleton rows={6} />
           ) : (visibleThreads?.length ?? 0) === 0 ? (
-            <p className="px-4 py-6 text-sm text-muted-foreground">
-              {(threads?.length ?? 0) === 0
-                ? "No messages in this backup."
-                : "No conversations for this app."}
-            </p>
+            <EmptyView
+              title={
+                (threads?.length ?? 0) === 0
+                  ? "No messages in this backup."
+                  : "No conversations for this app."
+              }
+            />
           ) : (
             <VirtualList
               items={visibleThreads!}

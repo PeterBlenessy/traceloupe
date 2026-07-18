@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Item,
   ItemContent,
@@ -49,6 +48,7 @@ import {
   ErrorState,
   ListDetail,
   ListSearch,
+  ListSkeleton,
   PanelHeader,
   ViewHeader,
 } from "@/components/view";
@@ -427,21 +427,11 @@ export function NotesView() {
             error ? (
               <ErrorState error={error} />
             ) : isPending ? (
-              <div className="min-h-0 flex-1 overflow-auto">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="px-3 py-2">
-                    <Skeleton className="h-12 w-full" />
-                  </div>
-                ))}
-              </div>
+              <ListSkeleton rows={6} />
             ) : (notes?.length ?? 0) === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                No notes in this backup.
-              </p>
+              <EmptyView title="No notes in this backup." />
             ) : (sortedNotes?.length ?? 0) === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                No notes match these filters.
-              </p>
+              <EmptyView title="No notes match these filters." />
             ) : (
               <VirtualList
                 key={clockFormat}

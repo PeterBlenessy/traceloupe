@@ -17,7 +17,6 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
 import { BadgeFilter } from "@/components/badge-filter";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
@@ -27,6 +26,7 @@ import {
   ErrorState,
   ListDetail,
   ListSearch,
+  ListSkeleton,
   PanelHeader,
 } from "@/components/view";
 import { usePersistedState } from "@/lib/use-persisted-state";
@@ -159,19 +159,15 @@ export function ContactsView() {
             error ? (
               <ErrorState error={error} />
             ) : isPending ? (
-              <div className="min-h-0 flex-1 overflow-auto">
-                {Array.from({ length: 8 }).map((_, i) => (
-                  <div key={i} className="px-3 py-2">
-                    <Skeleton className="h-9 w-full" />
-                  </div>
-                ))}
-              </div>
+              <ListSkeleton />
             ) : filtered.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                {(contacts?.length ?? 0) === 0
-                  ? "No contacts in this backup."
-                  : "No matching contacts."}
-              </p>
+              <EmptyView
+                title={
+                  (contacts?.length ?? 0) === 0
+                    ? "No contacts in this backup."
+                    : "No matching contacts."
+                }
+              />
             ) : (
               <VirtualList
                 items={sorted}
