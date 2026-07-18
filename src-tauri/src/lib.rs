@@ -2207,6 +2207,18 @@ async fn fetch_link_preview(app: AppHandle, url: String) -> Result<LinkPreview, 
     let result = tauri::async_runtime::spawn_blocking({
         let url = url.clone();
         move || {
+            // TikTok serves no OpenGraph to server-side fetchers (a JS shell), so
+            // scraping yields only a bare <title>. Its oEmbed endpoint returns the
+            // caption, author and a thumbnail — use it (it also resolves
+            // vm.tiktok.com short links itself). Fall through to scraping if it
+            // comes back empty.
+            if url_host(&url).is_some_and(|h| h == "tiktok.com" || h.ends_with(".tiktok.com")) {
+                if let Ok(p) = tiktok_oembed(&url) {
+                    if p.title.is_some() || p.image.is_some() {
+                        return Ok(p);
+                    }
+                }
+            }
             // 2 MB cap: big pages (e.g. YouTube ~1.2 MB) put their OpenGraph tags
             // well past 512 KB — byte ~662 KB on a watch page — so a smaller cap
             // truncates before the meta tags and yields no preview.
@@ -2241,6 +2253,46 @@ async fn fetch_link_preview(app: AppHandle, url: String) -> Result<LinkPreview, 
         Err(e) => logging::debug(&app, format!("link-preview {url}: failed: {e}")),
     }
     result
+}
+
+/// A link preview for a TikTok URL via its public oEmbed endpoint (TikTok serves
+/// no OpenGraph to bots). Returns the caption as the title, the creator as the
+/// description, and the video thumbnail (proxied to a `data:` URL). oEmbed
+/// resolves `vm.tiktok.com` short links itself, so any TikTok URL works.
+fn tiktok_oembed(url: &str) -> Result<LinkPreview, String> {
+    let endpoint = format!("https://www.tiktok.com/oembed?url={}", percent_encode(url));
+    let (_final, body) = safe_http_get(&endpoint, 256 * 1024, None)?;
+    let v: serde_json::Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let image = field("thumbnail_url").and_then(|t| proxy_image(&t));
+    Ok(LinkPreview {
+        title: field("title"),
+        description: field("author_name"),
+        site_name: Some("TikTok".into()),
+        image,
+        url: url.to_string(),
+    })
+}
+
+/// Percent-encode a string for use as a URL query value (encode everything but
+/// the RFC 3986 unreserved set).
+fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// A hardened GET for opt-in previews: http/https only; refuses private/loopback/
