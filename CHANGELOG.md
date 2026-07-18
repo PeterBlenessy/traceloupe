@@ -28,6 +28,44 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.12.1] — 2026-07-18
+
+A UX consistency-and-polish pass, verified against Apple's apps via a new
+screenshot harness (headless Chromium + real-window `screencapture`).
+
+### Added
+
+- **Native macOS title bar** — the window now uses `titleBarStyle: Overlay` with
+  a hidden title and positioned traffic lights, so the app content runs to the
+  top as one unified bar instead of a native titlebar stacked over a separate app
+  bar. The sidebar reads as its own panel beneath the lights.
+- **Notes-style toolbar button group** — the top-bar controls (sidebar toggle,
+  density, theme, settings) are grouped into one subtly bordered segmented
+  cluster (`ToolbarGroup`).
+- **Dynamic, minimal view toolbars** — a macOS-style **expanding search** (an
+  icon that opens into an inline input, with a clear button) replaces the
+  full-width search row, and a **Filter toggle** reveals the filter/sort row on
+  demand (state persisted per view). Three header rows collapse to one.
+- **Reduced-motion** support (`prefers-reduced-motion`).
+
+### Changed
+
+- **Density now applies to every list view** — Calendar/Reminders/Health/
+  Interactions rows moved onto the shared `Item`/`list-row` slots, so the
+  Comfortable/Cozy/Compact setting affects them (and they share one borderless
+  row style instead of bordered "cards").
+- **One filter-chip language** — badge filters and time-preset chips share a
+  single tinted-pill treatment (`filterPillClass`).
+- **One empty & loading system** — zero-result states use the richer `EmptyView`
+  (icon + title) and loading uses a single shared `ListSkeleton` everywhere.
+- All date/number formatting routes through `lib/format.ts` (fixes a Calendar
+  12/24-hour bug; Safari visit counts get thousands separators).
+
+### Removed
+
+- The dead "Parsing engine needed" card (leaked iLEAPP / `pnpm setup:engine`
+  developer text) and the unused `engine-setup`/`placeholder` views.
+
 ## [0.12.0] — 2026-07-18
 
 A large Messages- and media-focused UX release, capped by a pre-release code
