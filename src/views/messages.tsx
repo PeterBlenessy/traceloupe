@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
@@ -736,14 +736,15 @@ function TimelineRow({
     (showContactNames && resolved?.name) || partnerHandle || item.threadTitle;
   const slug = item.service ? serviceSlug(item.service) : null;
   // Same link-preview behaviour as the conversation bubble: "inline" mode
-  // unfurls the first link into a card (replacing a URL-only row's text);
-  // "hover" mode is handled inside MessageBody.
-  const inlinePreviews = useSettings().linkPreviewMode === "inline";
-  const previewUrls =
-    inlinePreviews && m.body ? allUrls(m.body).slice(0, MAX_PREVIEW_CARDS) : [];
+  // unfurls links into cards and strips a previewed link from the row text (a
+  // URL-only row collapses to the card); "hover" mode is handled in MessageBody.
+  const { urls: previewUrls, rich: richUrls } = useInlinePreviews(m.body);
   const trimmedBody = (m.body ?? "").trim();
   const replaceUrlWithCard =
     previewUrls.length === 1 && !/\s/.test(trimmedBody);
+  const omitUrls = replaceUrlWithCard ? [] : richUrls;
+  const showBodyText =
+    !!m.body && !replaceUrlWithCard && hasNonUrlText(m.body, new Set(omitUrls));
   return (
     <div className="px-2 py-0.5">
       {showDate && m.sentAt && (
@@ -802,7 +803,7 @@ function TimelineRow({
             </span>
           )}
           {m.body ? (
-            !replaceUrlWithCard && <MessageBody text={m.body} />
+            showBodyText && <MessageBody text={m.body} omit={omitUrls} />
           ) : atts.some(
               (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
             ) ? null : atts.length ? (
@@ -1134,20 +1135,18 @@ function MessageBubble({
   senderLabel?: string | null;
 }) {
   const align = message.isFromMe ? "end" : "start";
-  // In "inline" mode every link in the message unfurls into a card (capped).
-  const inlinePreviews = useSettings().linkPreviewMode === "inline";
-  const previewUrls = useMemo(
-    () =>
-      inlinePreviews && message.body
-        ? allUrls(message.body).slice(0, MAX_PREVIEW_CARDS)
-        : [],
-    [inlinePreviews, message.body],
-  );
-  // When the whole message is just one link, the card stands in for the raw URL
-  // (like iMessage) — cleaner than a giant URL over a card.
+  // In "inline" mode every link unfurls into a card (capped). A link whose
+  // preview loads is dropped from the text; a message that is *only* one link
+  // collapses to the card entirely (iMessage-style).
+  const { urls: previewUrls, rich: richUrls } = useInlinePreviews(message.body);
   const trimmedBody = (message.body ?? "").trim();
   const replaceUrlWithCard =
     previewUrls.length === 1 && !/\s/.test(trimmedBody);
+  const omitUrls = replaceUrlWithCard ? [] : richUrls;
+  const showBodyText =
+    !!message.body &&
+    !replaceUrlWithCard &&
+    hasNonUrlText(message.body, new Set(omitUrls));
   // Drop iMessage app/plugin payloads (`.pluginPayloadAttachment`) — binary
   // typedstream blobs behind rich links/app messages, not openable user files.
   const attachments = useMemo(
@@ -1180,9 +1179,9 @@ function MessageBubble({
                   {message.replyToSnippet}
                 </p>
               )}
-              {message.body && !replaceUrlWithCard && (
+              {showBodyText && (
                 <p className="whitespace-pre-wrap break-words">
-                  <MessageBody text={message.body} />
+                  <MessageBody text={message.body!} omit={omitUrls} />
                 </p>
               )}
               {attachments.map((a) => {
@@ -1273,10 +1272,31 @@ function isInternalAttachment(att: Attachment): boolean {
 /** Message text with URLs rendered as clickable links that open in the default
  *  browser (user-initiated; the app never loads remote content itself). */
 const URL_RE = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
-function MessageBody({ text }: { text: string }) {
+
+/** Normalize a URL token the same way `allUrls` does, for matching against the
+ *  omit set. */
+function normalizeUrlToken(part: string): string {
+  const raw = part.replace(/[.,!?;:]+$/, "");
+  return /^www\./i.test(raw) ? `https://${raw}` : raw;
+}
+
+/** Whether `text` has any content besides the URLs in `omit` — used to decide
+ *  whether a bubble/row still needs its text line once previewed links are
+ *  stripped. */
+function hasNonUrlText(text: string, omit: Set<string>): boolean {
+  return text.split(URL_RE).some((part) => {
+    if (!part) return false;
+    if (/^(https?:\/\/|www\.)/i.test(part)) return !omit.has(normalizeUrlToken(part));
+    return part.trim().length > 0;
+  });
+}
+
+function MessageBody({ text, omit }: { text: string; omit?: string[] }) {
   // In "hover" mode each link gets an on-demand preview card; "off"/"inline"
   // leave the link plain (inline mode shows a card in the bubble instead).
   const hover = useSettings().linkPreviewMode === "hover";
+  // Links whose preview card is shown are dropped from the text (iMessage-style).
+  const omitSet = omit && omit.length ? new Set(omit) : null;
   return text.split(URL_RE).map((part, i) => {
     if (!part) return null;
     if (/^(https?:\/\/|www\.)/i.test(part)) {
@@ -1285,6 +1305,10 @@ function MessageBody({ text }: { text: string }) {
       const urlText = m ? m[1] : part;
       const trailing = m ? m[2] : "";
       const href = /^www\./i.test(urlText) ? `https://${urlText}` : urlText;
+      // Dropped because it's shown as a card — keep only trailing punctuation.
+      if (omitSet?.has(href)) {
+        return trailing ? <span key={i}>{trailing}</span> : null;
+      }
       const link = (
         <a
           href={href}
@@ -1402,6 +1426,32 @@ function allUrls(text: string): string[] {
     out.push(/^www\./i.test(raw) ? `https://${raw}` : raw);
   }
   return [...new Set(out)];
+}
+
+/** Inline link previews for a message body: the links to unfurl (`urls`, capped)
+ *  and the subset that resolved to a real preview (`rich`) — used both to render
+ *  cards and to strip previewed links from the shown text. Empty unless the
+ *  user picked "inline" mode. The queries share the card's cache by URL, so a
+ *  link is fetched once. */
+function useInlinePreviews(body: string | null): { urls: string[]; rich: string[] } {
+  const inline = useSettings().linkPreviewMode === "inline";
+  const urls = useMemo(
+    () => (inline && body ? allUrls(body).slice(0, MAX_PREVIEW_CARDS) : []),
+    [inline, body],
+  );
+  const results = useQueries({
+    queries: urls.map((u) => ({
+      queryKey: ["linkPreview", u],
+      queryFn: () => client.fetchLinkPreview(u),
+      staleTime: Infinity,
+      retry: false,
+    })),
+  });
+  const rich = urls.filter((_, i) => {
+    const d = results[i]?.data;
+    return !!d && (!!d.title || !!d.image);
+  });
+  return { urls, rich };
 }
 
 /** The host of a URL without a leading `www.`, for a compact domain label. */
