@@ -145,14 +145,31 @@ impl ActiveBackup {
 /// photos can be decrypted on demand by the media protocol. `None` for
 /// unencrypted backups. Keys live only in memory for the session.
 #[derive(Default)]
-struct SessionKeys(Mutex<Option<Arc<BackupDecryptor>>>);
+struct SessionState {
+    decryptor: Option<Arc<BackupDecryptor>>,
+    /// Set once a biometric / Keychain unlock was cancelled or failed this session,
+    /// so on-demand media loads stop re-prompting Touch ID for every single item
+    /// (a photo grid would otherwise fire one prompt per tile). Cleared whenever
+    /// keys are (re)set — a fresh import or an explicit reload — which is the user
+    /// signalling they want to unlock again.
+    auth_failed: bool,
+}
+
+#[derive(Default)]
+struct SessionKeys(Mutex<SessionState>);
 
 impl SessionKeys {
     fn set(&self, decryptor: Option<Arc<BackupDecryptor>>) {
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = decryptor;
+        let mut g = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.decryptor = decryptor;
+        g.auth_failed = false;
     }
     fn get(&self) -> Option<Arc<BackupDecryptor>> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .decryptor
+            .clone()
     }
 }
 
@@ -201,13 +218,26 @@ fn ensure_session_decryptor(app: &AppHandle, active_path: &Path) -> Option<Arc<B
     // block briefly then reuse. Safe: this runs on a blocking worker, not across
     // an await.
     let mut guard = session.0.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(d) = guard.as_ref() {
+    if let Some(d) = guard.decryptor.as_ref() {
         return Some(d.clone());
     }
+    // A prior unlock this session was cancelled/failed — stay locked rather than
+    // firing a fresh Touch ID prompt for every on-demand media load. Cleared by an
+    // explicit re-set (import / reload) via SessionKeys::set.
+    if guard.auth_failed {
+        return None;
+    }
     let backup_id = active_path.parent()?.file_name()?.to_str()?.to_owned();
-    let d = reopen_decryptor(active_path, &backup_id)?;
-    *guard = Some(d.clone());
-    Some(d)
+    match reopen_decryptor(active_path, &backup_id) {
+        Some(d) => {
+            guard.decryptor = Some(d.clone());
+            Some(d)
+        }
+        None => {
+            guard.auth_failed = true;
+            None
+        }
+    }
 }
 
 /// A backup id is joined into cache/work paths and used as a Keychain account,
@@ -2341,10 +2371,44 @@ fn percent_encode(s: &str) -> String {
 /// private IP is caught too — SSRF guard); follows at most a few redirects,
 /// re-validating each hop; caps the body; optionally requires an html/image
 /// content-type. Returns the final URL and the (capped) body bytes.
+/// A ureq resolver that only ever yields globally-routable addresses. ureq
+/// connects to exactly the addresses its resolver returns, and re-runs the
+/// resolver on every redirect hop (each is a fresh connection) — so validating
+/// *here*, rather than in a separate pre-check, is what closes the DNS-rebind
+/// TOCTOU: the address we vet is the address ureq dials, with no second lookup in
+/// between. An all-private (or empty) result becomes a connection error, so the
+/// fetch fails closed. This matters because preview URLs come from third-party
+/// messages in a backup that may be of a compromised phone — i.e. attacker-
+/// controlled input that a naive resolve-then-connect check can be rebound past.
+/// TLS still validates the certificate against the original hostname (SNI is set
+/// from the URL, not the pinned IP), so pinning the IP doesn't weaken cert checks.
+struct PublicOnlyResolver;
+
+impl ureq::Resolver for PublicOnlyResolver {
+    fn resolve(&self, netloc: &str) -> std::io::Result<Vec<std::net::SocketAddr>> {
+        use std::net::ToSocketAddrs;
+        let addrs: Vec<std::net::SocketAddr> = netloc
+            .to_socket_addrs()?
+            .filter(|a| ip_is_global(a.ip()))
+            .collect();
+        if addrs.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "refusing to connect to a private or non-global address",
+            ));
+        }
+        Ok(addrs)
+    }
+}
+
 fn safe_http_get(url: &str, cap: u64, want: Option<&str>) -> Result<(String, Vec<u8>), String> {
     use std::io::Read;
     let agent = ureq::builder()
         .redirects(0)
+        // The authoritative SSRF guard: every address ureq connects to is vetted
+        // by this resolver, closing the rebind window the host_is_public pre-check
+        // below can't (it resolves separately, then ureq resolves again).
+        .resolver(PublicOnlyResolver)
         .timeout(std::time::Duration::from_secs(8))
         .build();
     let mut current = url.to_string();
@@ -2353,6 +2417,12 @@ fn safe_http_get(url: &str, cap: u64, want: Option<&str>) -> Result<(String, Vec
         if !(lower.starts_with("http://") || lower.starts_with("https://")) {
             return Err("unsupported URL scheme".into());
         }
+        // Cheap first-line reject: hostname literals (localhost/.local/.internal)
+        // and hosts that statically resolve to a private/non-global address. This
+        // is NOT the TOCTOU-safe layer on its own — it resolves separately from the
+        // connect — but it gives a clear error and short-circuits the obvious cases.
+        // The real rebind-proof guard is PublicOnlyResolver on the agent above,
+        // which vets the exact address ureq connects to.
         let host = url_host(&current).ok_or("malformed URL")?;
         if !host_is_public(&host) {
             return Err("refusing to fetch a private or loopback host".into());
@@ -2739,4 +2809,43 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ureq::Resolver;
+
+    #[test]
+    fn ip_is_global_rejects_private_and_special_ranges() {
+        let g = |s: &str| ip_is_global(s.parse().unwrap());
+        // Non-global: loopback, RFC1918, link-local, CGNAT, metadata, unspecified.
+        assert!(!g("127.0.0.1"));
+        assert!(!g("10.0.0.1"));
+        assert!(!g("192.168.1.1"));
+        assert!(!g("172.16.0.1"));
+        assert!(!g("169.254.169.254")); // link-local / cloud metadata
+        assert!(!g("100.64.0.1")); // CGNAT
+        assert!(!g("0.0.0.0"));
+        assert!(!g("::1"));
+        assert!(!g("fe80::1")); // link-local
+        assert!(!g("fc00::1")); // unique-local
+                                // Global: public v4/v6.
+        assert!(g("8.8.8.8"));
+        assert!(g("1.1.1.1"));
+        assert!(g("2606:4700:4700::1111"));
+    }
+
+    #[test]
+    fn resolver_rejects_private_literal_and_accepts_public() {
+        // Literal IPs need no DNS, so this is hermetic. The resolver is the
+        // rebind-proof layer: it must drop private addresses even when handed
+        // one directly (the exact address ureq would otherwise dial).
+        assert!(PublicOnlyResolver.resolve("127.0.0.1:80").is_err());
+        assert!(PublicOnlyResolver.resolve("169.254.169.254:80").is_err());
+        assert!(PublicOnlyResolver.resolve("192.168.0.1:443").is_err());
+
+        let ok = PublicOnlyResolver.resolve("8.8.8.8:80").unwrap();
+        assert_eq!(ok, vec!["8.8.8.8:80".parse().unwrap()]);
+    }
 }
