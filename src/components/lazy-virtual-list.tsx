@@ -120,40 +120,49 @@ export function LazyVirtualList<T>({
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (
-      el &&
-      count > 0 &&
-      anchorKey !== undefined &&
-      scrolledFor.current !== anchorKey
+      !el ||
+      count <= 0 ||
+      anchorKey === undefined ||
+      scrolledFor.current === anchorKey
     ) {
-      scrolledFor.current = anchorKey;
-      const saved = persistKey
-        ? Number(localStorage.getItem(`lvl:${persistKey}`))
-        : NaN;
-      if (Number.isFinite(saved) && saved > 0) {
-        el.scrollTop = saved;
-      } else {
-        // Ascending (oldest-first) pins the newest row at the bottom; descending
-        // (newest-first) pins the newest row at the top.
-        el.scrollTop = startAtBottom ? el.scrollHeight : 0;
-      }
+      return;
     }
+    scrolledFor.current = anchorKey;
+    const saved = persistKey
+      ? Number(localStorage.getItem(`lvl:${persistKey}`))
+      : NaN;
+    const toSaved = Number.isFinite(saved) && saved > 0;
+    // Re-apply over a few frames: the virtualizer's total height (and thus the
+    // max scrollTop) settles across the next paints, so a far target doesn't
+    // "stick" on the first assignment alone. Ascending (oldest-first) pins the
+    // newest row at the bottom; descending pins it at the top.
+    let frames = 0;
+    let raf = 0;
+    const apply = () => {
+      el.scrollTop = toSaved ? saved : startAtBottom ? el.scrollHeight : 0;
+      if (++frames < 5) raf = requestAnimationFrame(apply);
+    };
+    apply();
+    return () => cancelAnimationFrame(raf);
   }, [count, anchorKey, startAtBottom, persistKey]);
 
-  // Persist the scroll position (debounced) so it can be restored above.
+  // Persist the scroll position (debounced, and flushed on unmount / key change
+  // so navigating away always records the latest spot) for restore above.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !persistKey) return;
+    const save = () =>
+      localStorage.setItem(`lvl:${persistKey}`, String(el.scrollTop));
     let t: ReturnType<typeof setTimeout>;
     const onScroll = () => {
       clearTimeout(t);
-      t = setTimeout(() => {
-        localStorage.setItem(`lvl:${persistKey}`, String(el.scrollTop));
-      }, 200);
+      t = setTimeout(save, 200);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       el.removeEventListener("scroll", onScroll);
       clearTimeout(t);
+      save();
     };
   }, [persistKey]);
 
