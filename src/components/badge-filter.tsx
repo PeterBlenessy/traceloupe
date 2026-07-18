@@ -1,8 +1,7 @@
 import { useMemo } from "react";
-import { Badge } from "@/components/ui/badge";
 import { OverflowRow, type OverflowItem } from "@/components/overflow-row";
+import { filterPillClass, filterPillCount } from "@/components/filter-pill";
 import { formatCount } from "@/lib/format";
-import { cn } from "@/lib/utils";
 
 export interface BadgeFilterOption {
   value: string;
@@ -14,10 +13,10 @@ export interface BadgeFilterOption {
 }
 
 /**
- * A single-select filter rendered as clickable badges (the same `Badge` pill used
- * for the Apps "Native"/"Coming soon" tags): the selected option is filled, the
- * rest are muted. Used for every list filter (service, source, type, content…) so
- * they all look the same.
+ * A single-select filter rendered as clickable pills sharing the app-wide filter
+ * chip language (see {@link filterPillClass}): the selected option tints toward
+ * `primary`, the rest are muted outlines. Used for every list filter (service,
+ * source, type, content…) so they match the time-preset chips exactly.
  *
  * The row never wraps — when it's too narrow it keeps as many badges inline as
  * fit and moves the rest into a "⋮" overflow menu (see {@link OverflowRow}), so a
@@ -43,29 +42,17 @@ export function BadgeFilter({
           key: o.value,
           active,
           render: (inMenu: boolean) => (
-            <Badge
-              asChild
-              variant={active ? "default" : "secondary"}
-              className={cn(
-                "shrink-0 cursor-pointer gap-1 transition-colors hover:opacity-90",
-                inMenu && "w-full justify-start",
-              )}
+            <button
+              type="button"
+              onClick={() => onChange(o.value)}
+              className={filterPillClass(active, inMenu ? "w-full justify-start" : undefined)}
             >
-              <button type="button" onClick={() => onChange(o.value)}>
-                {o.icon}
-                {o.label}
-                {o.count != null && (
-                  <span
-                    className={cn(
-                      "tabular-nums",
-                      active ? "opacity-70" : "text-muted-foreground/70",
-                    )}
-                  >
-                    {formatCount(o.count)}
-                  </span>
-                )}
-              </button>
-            </Badge>
+              {o.icon}
+              {o.label}
+              {o.count != null && (
+                <span className={filterPillCount}>{formatCount(o.count)}</span>
+              )}
+            </button>
           ),
         };
       }),

@@ -13,6 +13,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { OverflowRow, type OverflowItem } from "@/components/overflow-row";
+import { filterPillClass, filterPillCount } from "@/components/filter-pill";
 import { formatCount } from "@/lib/format";
 import type { TimeRange } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -134,20 +135,10 @@ function FilterChip({
   className?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      data-active={active}
-      className={cn(
-        "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground",
-        className,
-      )}
-    >
+    <button type="button" onClick={onClick} className={filterPillClass(active, className)}>
       {label}
       {count !== undefined && (
-        <span className="text-[10px] tabular-nums opacity-50">
-          {formatCount(count)}
-        </span>
+        <span className={filterPillCount}>{formatCount(count)}</span>
       )}
     </button>
   );
@@ -191,11 +182,7 @@ function DateRangeFilter({
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-active={active}
-          className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
-        >
+        <button type="button" className={filterPillClass(active)}>
           <CalendarRange className="size-3.5" />
           {active ? `${fromStr || "…"} – ${toStr || "…"}` : "Range"}
         </button>
