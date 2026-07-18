@@ -25,31 +25,48 @@ const ctx = await browser.newContext({
   colorScheme: THEME === "light" ? "light" : "dark",
 });
 const page = await ctx.newPage();
-
-// Optionally open a backup first (the mock client flips to "active" after an
-// open), so artifact views render populated instead of the no-backup state.
-if (process.env.ACTIVATE) {
-  await page.goto(BASE + "/", { waitUntil: "networkidle" }).catch(() => {});
-  await page.waitForTimeout(400);
-  // Click the first backup card's open affordance.
-  const opener = page.getByText(/Read & open|^Open$/).first();
-  await opener.click({ timeout: 4000 }).catch(() => {});
-  await page.waitForTimeout(1200);
-}
-
-for (const route of routes) {
-  const url = BASE + route;
-  await page.goto(url, { waitUntil: "networkidle" }).catch(() => {});
-  // Force the theme class the app toggles on <html>.
-  await page.evaluate((t) => {
+const setTheme = () =>
+  page.evaluate((t) => {
     document.documentElement.classList.remove("light", "dark");
     document.documentElement.classList.add(t);
   }, THEME);
-  await page.waitForTimeout(600);
-  const name = (route === "/" ? "root" : route.replace(/\//g, "_").replace(/^_/, "")) + `.${THEME}.png`;
-  const file = path.join(OUT, name);
-  await page.screenshot({ path: file });
-  console.log("[shot]", route, "->", file);
+
+// Route -> sidebar nav label, so ACTIVATE mode can navigate CLIENT-SIDE (a full
+// page.goto would reload the SPA and reset the mock's in-memory "active" flag).
+const NAV = {
+  "/photos": "Photos", "/messages": "Messages", "/contacts": "Contacts",
+  "/calls": "Calls", "/safari": "Safari", "/notes": "Notes",
+  "/recordings": "Recordings", "/calendar": "Calendar", "/reminders": "Reminders",
+  "/health": "Health", "/interactions": "Interactions", "/apps": "Apps", "/device": "Device",
+};
+
+if (process.env.ACTIVATE) {
+  // Open a backup once (mock flips to "active"), then stay in the SPA.
+  await page.goto(BASE + "/", { waitUntil: "networkidle" }).catch(() => {});
+  await page.waitForTimeout(400);
+  // Open the UNENCRYPTED backup (last "Read & open") so no password dialog blocks
+  // activation; the mock flips to "active" on open.
+  const openers = page.getByText(/Read & open/);
+  const n = await openers.count();
+  await openers.nth(n > 1 ? n - 1 : 0).click({ timeout: 4000 }).catch(() => {});
+  await page.waitForTimeout(1400);
+  for (const route of routes) {
+    if (NAV[route]) await page.getByRole("link", { name: NAV[route], exact: true }).click().catch(() => {});
+    await setTheme();
+    await page.waitForTimeout(700);
+    const name = route.replace(/\//g, "_").replace(/^_/, "") + `.${THEME}.png`;
+    await page.screenshot({ path: path.join(OUT, name) });
+    console.log("[shot]", route, "->", path.join(OUT, name));
+  }
+} else {
+  for (const route of routes) {
+    await page.goto(BASE + route, { waitUntil: "networkidle" }).catch(() => {});
+    await setTheme();
+    await page.waitForTimeout(600);
+    const name = (route === "/" ? "root" : route.replace(/\//g, "_").replace(/^_/, "")) + `.${THEME}.png`;
+    await page.screenshot({ path: path.join(OUT, name) });
+    console.log("[shot]", route, "->", path.join(OUT, name));
+  }
 }
 
 await browser.close();
