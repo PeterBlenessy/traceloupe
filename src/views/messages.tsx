@@ -657,7 +657,11 @@ function Timeline({
     desc: false,
   });
   // The active time filter as a half-open [lo, hi) range; {null,null} = all time.
-  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // Persisted so leaving Messages and returning keeps the same period in view.
+  const [range, setRange] = usePersistedState<TimeRange>(
+    "messages:timeline-range",
+    { lo: null, hi: null },
+  );
   // Free-text search over message body / sender / conversation (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
@@ -725,6 +729,7 @@ function Timeline({
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
+        persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
         scrollEnd={scrollEnd}
         estimateSize={56}
         windowKey={(page) => [
@@ -1252,6 +1257,7 @@ function Conversation({
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}`}
+        persistKey={`conv:${thread.id}:${kind ?? "all"}:${order.desc}`}
         jumpTo={jumpTo}
         scrollEnd={scrollEnd}
         windowKey={(page) => ["messageWindow", thread.id, kind, order.desc, page]}

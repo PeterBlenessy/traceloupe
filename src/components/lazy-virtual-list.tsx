@@ -39,6 +39,7 @@ export function LazyVirtualList<T>({
   estimateSize = 56,
   startAtBottom = false,
   resetKey,
+  persistKey,
   jumpTo,
   scrollEnd,
   onTopIndexChange,
@@ -56,6 +57,9 @@ export function LazyVirtualList<T>({
   startAtBottom?: boolean;
   /** Re-scroll to the bottom whenever this value changes (e.g. a thread id). */
   resetKey?: unknown;
+  /** Persist & restore the scroll position under this key (localStorage). Also
+   *  acts as the anchor key, so each distinct key remembers its own position. */
+  persistKey?: string;
   /** Imperatively jump to a row: scroll `index` to the top when `token` changes. */
   jumpTo?: { index: number; token: number };
   /** Imperatively scroll to the very top/bottom when `token` changes. Uses a
@@ -101,26 +105,57 @@ export function LazyVirtualList<T>({
   const itemAt = (index: number): T | undefined =>
     loaded.get(Math.floor(index / PAGE))?.[index % PAGE];
 
-  // One-shot scroll to the bottom. We set scrollTop directly rather than via
+  // One-shot initial scroll. We set scrollTop directly rather than via
   // virtualizer.scrollToIndex(): scrolling to a far index in a dynamically
   // measured list makes react-virtual retry across frames as measurements shift
   // the target, which never converges and freezes the app.
+  //
+  // With `persistKey`, a previously-saved scrollTop for that key is restored
+  // instead of anchoring to top/bottom — so returning to a view (or restarting
+  // the app) lands where you left off. `persistKey` also drives the anchor, so
+  // changing it (a different filter/thread) re-anchors or restores that key's
+  // own position.
+  const anchorKey = persistKey ?? resetKey;
   const scrolledFor = useRef<unknown>(undefined);
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    // Only lists that define a resetKey get an anchored initial/reset position.
     if (
       el &&
       count > 0 &&
-      resetKey !== undefined &&
-      scrolledFor.current !== resetKey
+      anchorKey !== undefined &&
+      scrolledFor.current !== anchorKey
     ) {
-      scrolledFor.current = resetKey;
-      // Ascending (oldest-first) pins the newest row at the bottom; descending
-      // (newest-first) pins the newest row at the top.
-      el.scrollTop = startAtBottom ? el.scrollHeight : 0;
+      scrolledFor.current = anchorKey;
+      const saved = persistKey
+        ? Number(localStorage.getItem(`lvl:${persistKey}`))
+        : NaN;
+      if (Number.isFinite(saved) && saved > 0) {
+        el.scrollTop = saved;
+      } else {
+        // Ascending (oldest-first) pins the newest row at the bottom; descending
+        // (newest-first) pins the newest row at the top.
+        el.scrollTop = startAtBottom ? el.scrollHeight : 0;
+      }
     }
-  }, [count, resetKey, startAtBottom]);
+  }, [count, anchorKey, startAtBottom, persistKey]);
+
+  // Persist the scroll position (debounced) so it can be restored above.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !persistKey) return;
+    let t: ReturnType<typeof setTimeout>;
+    const onScroll = () => {
+      clearTimeout(t);
+      t = setTimeout(() => {
+        localStorage.setItem(`lvl:${persistKey}`, String(el.scrollTop));
+      }, 200);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      clearTimeout(t);
+    };
+  }, [persistKey]);
 
   // Imperative jump: align `index` to the top. scrollToIndex accounts for
   // already-measured row heights (e.g. the timeline's occasional date headers),
