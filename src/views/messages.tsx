@@ -1263,7 +1263,10 @@ function MessageBody({ text }: { text: string }) {
             e.preventDefault();
             client.openExternal(href);
           }}
-          className="cursor-pointer break-all text-primary underline underline-offset-2"
+          // Inherit the bubble's text colour (never `text-primary`): the
+          // outgoing bubble is `bg-primary`, so a primary-coloured link there is
+          // invisible. `underline` keeps it recognizable as a link.
+          className="cursor-pointer break-all font-medium underline underline-offset-2"
           title={href}
         >
           {urlText}
