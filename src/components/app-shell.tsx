@@ -177,7 +177,7 @@ export function AppShell() {
             drag region. Views render their own header below it. */}
             <div
               data-tauri-drag-region
-              className="flex h-11 shrink-0 items-center gap-2 border-b px-2"
+              className="flex h-11 shrink-0 items-center gap-2 px-2"
             >
               <div className="ml-auto flex items-center gap-1">
                 <ImportIndicator />
