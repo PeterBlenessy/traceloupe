@@ -306,6 +306,12 @@ export interface Attachment {
   localPath: string | null;
 }
 
+/** A camera-roll item matched (by filename) to a missing message attachment. */
+export interface RecoveredMedia {
+  id: number;
+  kind: string;
+}
+
 export interface Message {
   id: number;
   isFromMe: boolean;
@@ -444,6 +450,9 @@ export interface TraceLoupeClient {
     kind?: string | null,
     desc?: boolean,
   ): Promise<number | null>;
+  /** A same-named camera-roll item for a missing message attachment (best-effort;
+   *  null if none). Lets an offloaded attachment show from Photos. */
+  recoverAttachmentMedia(attachmentId: number): Promise<RecoveredMedia | null>;
   /** Total messages across all conversations (filtered by `service`, null=all);
    * drives the timeline scroller. `kind` filters by content class. */
   countTimelineMessages(
@@ -673,6 +682,8 @@ const tauriClient: TraceLoupeClient = {
       kind: kind ?? null,
       desc,
     }),
+  recoverAttachmentMedia: (attachmentId) =>
+    invoke<RecoveredMedia | null>("recover_attachment_media", { attachmentId }),
   countTimelineMessages: (service, search = null, kind = null) =>
     invoke<number>("count_timeline_messages", {
       service: service ?? null,
@@ -1987,6 +1998,7 @@ export const mockClient: TraceLoupeClient = {
     const i = ordered.findIndex((m) => m.id === messageId);
     return i < 0 ? null : i;
   },
+  recoverAttachmentMedia: async () => null,
   countTimelineMessages: async (service, search = null, _kind = null) =>
     mockActive ? mockFilterTimeline(service, undefined, search).length : 0,
   getTimelineWindow: async (

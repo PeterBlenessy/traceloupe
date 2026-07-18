@@ -17,6 +17,7 @@ import {
   MessageSquare,
   MessagesSquare,
   Paperclip,
+  Sparkles,
   Users,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -1882,6 +1883,86 @@ function MessageImageLightbox({
   );
 }
 
+/** For a message attachment missing from the backup, show a same-named
+ *  camera-roll item from Photos (opt-in; matched by name so it's labelled and
+ *  can be inexact). Renders `fallback` when the setting is off or no match. */
+function RecoveredAttachment({
+  att,
+  fallback,
+}: {
+  att: Attachment;
+  fallback: React.ReactNode;
+}) {
+  const { recoverFromPhotos, lightboxStyle, showMediaMetadata } = useSettings();
+  const cacheKey = useMediaCacheKey();
+  const { data } = useQuery({
+    queryKey: ["recoverAtt", att.id],
+    queryFn: () => client.recoverAttachmentMedia(att.id),
+    enabled: recoverFromPhotos,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const [open, setOpen] = useState(false);
+  if (!data) return <>{fallback}</>;
+  const isVideo = data.kind === "video";
+  const meta = showMediaMetadata ? (
+    <div className="flex items-center gap-2">
+      <Sparkles className="size-3.5 shrink-0 text-amber-400" />
+      <span>
+        Recovered from Photos — a camera-roll item named “{att.filename}”. Matched
+        by file name, so it may not be the exact attachment.
+      </span>
+    </div>
+  ) : undefined;
+  return (
+    <>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(true);
+        }}
+        className="relative block max-w-[240px] overflow-hidden rounded-lg"
+        title={`${att.filename ?? "attachment"} — recovered from Photos (matched by name)`}
+      >
+        <img
+          src={client.mediaUrl(data.id, { thumb: true, cacheKey })}
+          alt=""
+          className="max-h-64 w-full object-cover"
+        />
+        <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
+          <Sparkles className="size-3" /> Photos
+        </span>
+      </button>
+      <MediaLightbox
+        open={open}
+        onClose={() => setOpen(false)}
+        style={lightboxStyle}
+        title={att.filename ?? "Recovered media"}
+        media={
+          isVideo ? (
+            <video
+              key={data.id}
+              src={client.mediaUrl(data.id, { cacheKey })}
+              poster={client.mediaUrl(data.id, { thumb: true, cacheKey })}
+              controls
+              autoPlay
+              className="max-h-full max-w-full object-contain"
+            />
+          ) : (
+            <img
+              key={data.id}
+              src={client.mediaUrl(data.id, { cacheKey })}
+              alt=""
+              className="max-h-full max-w-full object-contain"
+            />
+          )
+        }
+        meta={meta}
+      />
+    </>
+  );
+}
+
 function AttachmentView({
   att,
   onOpenImage,
@@ -1939,7 +2020,7 @@ function AttachmentView({
     : mime
       ? FileText
       : Paperclip;
-  return (
+  const chip = (
     <button
       onClick={() => available && openAttachmentFile(att.id)}
       disabled={!available}
@@ -1958,4 +2039,14 @@ function AttachmentView({
       )}
     </button>
   );
+  // A missing photo/video may still be in the camera roll — try to recover it
+  // from Photos (opt-in; falls back to the chip when off or unmatched).
+  const looksLikeMedia =
+    isImageAttachment(mime, att.filename) ||
+    mime.startsWith("video/") ||
+    /\.(mov|mp4|m4v|avi|3gp|webm)$/i.test(att.filename ?? "");
+  if (!available && looksLikeMedia) {
+    return <RecoveredAttachment att={att} fallback={chip} />;
+  }
+  return chip;
 }
