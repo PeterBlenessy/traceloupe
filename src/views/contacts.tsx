@@ -346,6 +346,7 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
                 <button
                   key={t.id}
                   onClick={() => navigate({ to: "/messages", search: { thread: t.id } })}
+                  data-slot="list-row"
                   className={cn(
                     "flex w-full items-center gap-3 border-b px-3 py-2.5 text-left last:border-b-0",
                     "transition-colors hover:bg-accent/50",

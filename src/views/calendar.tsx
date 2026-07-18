@@ -39,7 +39,7 @@ function whenLabel(e: CalendarEvent): string {
 
 function EventRow({ event }: { event: CalendarEvent }) {
   return (
-    <div className="rounded-md border px-3 py-2.5">
+    <div data-slot="list-row" className="rounded-md px-3 py-2.5">
       <div className="flex items-baseline justify-between gap-2">
         <span className="flex min-w-0 items-center gap-1.5 font-medium">
           {event.recurring && (

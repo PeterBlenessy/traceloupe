@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { ArrowDownLeft, ArrowUpRight, Users, Waypoints } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { usePersistedState } from "@/lib/use-persisted-state";
@@ -21,12 +22,14 @@ function InteractionRow({ interaction }: { interaction: Interaction }) {
   const name = label(interaction);
   const total = interaction.incoming + interaction.outgoing;
   return (
-    <div className="flex items-center gap-3 rounded-md border px-3 py-2.5">
-      <Avatar className="size-9 shrink-0">
-        <AvatarFallback>{initials(name)}</AvatarFallback>
-      </Avatar>
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">{name}</div>
+    <Item>
+      <ItemMedia>
+        <Avatar className="size-9">
+          <AvatarFallback>{initials(name)}</AvatarFallback>
+        </Avatar>
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">{name}</ItemTitle>
         {interaction.displayName && interaction.identifier && (
           <div className="truncate text-xs text-muted-foreground">
             {interaction.identifier}
@@ -37,7 +40,7 @@ function InteractionRow({ interaction }: { interaction: Interaction }) {
             {formatDate(interaction.firstAt)} – {formatDate(interaction.lastAt)}
           </div>
         )}
-      </div>
+      </ItemContent>
       <div className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground">
         <span className="font-medium text-foreground">{formatCount(total)}</span>
         <span className="inline-flex items-center gap-1.5 tabular-nums">
@@ -56,7 +59,7 @@ function InteractionRow({ interaction }: { interaction: Interaction }) {
           )}
         </span>
       </div>
-    </div>
+    </Item>
   );
 }
 

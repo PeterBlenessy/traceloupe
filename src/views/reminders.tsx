@@ -23,7 +23,10 @@ function inWindow(at: number | null, lo: number | null, hi: number | null) {
 
 function ReminderRow({ reminder }: { reminder: Reminder }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-md border px-3 py-2.5">
+    <div
+      data-slot="list-row"
+      className="flex items-start gap-2.5 rounded-md px-3 py-2.5"
+    >
       {reminder.completed ? (
         <CircleCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       ) : (
