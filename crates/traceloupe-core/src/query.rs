@@ -412,6 +412,17 @@ pub fn get_timeline_window(
 /// Message counts for each of the given time windows. Powers the periods view's
 /// bucket list (e.g. "Last 7 days: 812"). One row per range, order preserved.
 /// `service` filters by source app (None = all).
+/// The earliest and latest dated message (Unix seconds), or `None` when there are
+/// no dated messages. Drives the Timeline's per-year quick filters.
+pub fn message_date_bounds(cache: &CacheDb) -> Result<Option<(i64, i64)>> {
+    let (lo, hi): (Option<i64>, Option<i64>) = cache.conn().query_row(
+        "SELECT MIN(sent_at), MAX(sent_at) FROM messages WHERE sent_at IS NOT NULL",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(lo.zip(hi))
+}
+
 pub fn count_message_ranges(
     cache: &CacheDb,
     ranges: &[TimeRange],

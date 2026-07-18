@@ -21,12 +21,23 @@ export function readClockFormat(): ClockFormat {
 let hour12 = hour12For(readClockFormat());
 let time = buildTime();
 let dayTime = buildDayTime();
+let dayTimeYear = buildDayTimeYear();
 
 function buildTime() {
   return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", hour12 });
 }
 function buildDayTime() {
   return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12,
+  });
+}
+function buildDayTimeYear() {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -44,6 +55,7 @@ export function setClockFormat(pref: ClockFormat) {
   hour12 = hour12For(pref);
   time = buildTime();
   dayTime = buildDayTime();
+  dayTimeYear = buildDayTimeYear();
 }
 
 const dateOnly = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
@@ -68,6 +80,16 @@ export function formatListTime(epochSeconds: number | null): string {
 export function formatMessageTime(epochSeconds: number | null): string {
   if (epochSeconds == null) return "";
   return dayTime.format(new Date(epochSeconds * 1000));
+}
+
+/** Like {@link formatMessageTime} but includes the year for dates outside the
+ *  current year — used in the Timeline, where rows span many years and the day
+ *  separators alone don't tell you which year a given row is in. */
+export function formatTimelineTime(epochSeconds: number | null): string {
+  if (epochSeconds == null) return "";
+  const d = new Date(epochSeconds * 1000);
+  const fmt = d.getFullYear() === new Date().getFullYear() ? dayTime : dayTimeYear;
+  return fmt.format(d);
 }
 
 /** Full date + time for a row (calls, history). */

@@ -3,10 +3,12 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  ArrowDownToLine,
   ArrowDownWideNarrow,
   ArrowLeft,
   ArrowRight,
   ArrowUpNarrowWide,
+  ArrowUpToLine,
   Copy,
   ExternalLink,
   FileText,
@@ -54,13 +56,18 @@ import { cn } from "@/lib/utils";
 import {
   formatCount,
   formatDateHeader,
+  formatTimelineTime,
   formatDateTime,
   formatListTime,
   formatMessageTime,
 } from "@/lib/format";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-key";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import {
+  TimeFilterBar,
+  makeYearPresets,
+  useTimePresets,
+} from "@/components/time-filter";
 import { initials } from "@/lib/contact";
 import { useDebounced } from "@/lib/use-debounced";
 import { serviceSlug } from "@/lib/apps";
@@ -576,7 +583,24 @@ function Timeline({
   // A selection that isn't present in this scope filters nothing.
   const kind = kindValue !== "all" && available.includes(kindValue) ? kindValue : null;
   // Anchor "now" once so preset bounds and query keys stay stable.
-  const { now, presets } = useTimePresets();
+  const { now, presets: basePresets } = useTimePresets();
+  // The message date range → per-year quick-filter chips (so you can jump to a
+  // specific year without fiddling the custom range). Replaces the cumulative
+  // "this year" chip with disjoint year chips when the backup spans years.
+  const { data: dateBounds } = useQuery({
+    queryKey: ["messageDateBounds"],
+    queryFn: () => client.messageDateBounds(),
+    enabled: active === true,
+  });
+  const presets = useMemo(() => {
+    if (!dateBounds) return basePresets;
+    const minYear = new Date(dateBounds[0] * 1000).getFullYear();
+    const maxYear = new Date(now * 1000).getFullYear();
+    return [
+      ...basePresets.filter((p) => p.key !== "year"),
+      ...makeYearPresets(minYear, maxYear),
+    ];
+  }, [basePresets, dateBounds, now]);
   // Oldest-first by default (newest at the bottom); toggle flips to newest-first.
   // Persisted so it survives leaving Messages and returning.
   const [order, setOrder] = usePersistedState<SortState>("messages:timeline-order", {
@@ -599,7 +623,7 @@ function Timeline({
 
   // Per-preset message counts for the chip labels (e.g. "7d · 812").
   const { data: presetCounts } = useQuery({
-    queryKey: ["messageRanges", now, service, search, kind, "presets"],
+    queryKey: ["messageRanges", now, service, search, kind, presets.length],
     queryFn: () =>
       client.countMessageRanges(
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
@@ -616,6 +640,12 @@ function Timeline({
       (await client.countMessageRanges([range], service, search, kind))[0] ?? 0,
     enabled: active === true,
   });
+  // Imperative jump-to-top/bottom (the list is fixed-height, so scrollToIndex is
+  // reliable here). A bumped token re-fires the jump each click.
+  const [jumpTo, setJumpTo] = useState<{ index: number; token: number }>();
+  const jumpToken = useRef(0);
+  const jump = (index: number) =>
+    setJumpTo({ index, token: (jumpToken.current += 1) });
 
   return (
     <div className="flex h-full flex-col">
@@ -639,15 +669,38 @@ function Timeline({
           value={kindValue}
           onChange={onKindChange}
         />
-        <OrderToggle
-          desc={order.desc}
-          onToggle={() => setOrder({ by: "time", desc: !order.desc })}
-        />
+        <div className="flex shrink-0 items-center">
+          <OrderToggle
+            desc={order.desc}
+            onToggle={() => setOrder({ by: "time", desc: !order.desc })}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="size-8 px-0 text-muted-foreground"
+            title="Jump to top"
+            disabled={!total}
+            onClick={() => jump(0)}
+          >
+            <ArrowUpToLine className="size-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="size-8 px-0 text-muted-foreground"
+            title="Jump to bottom"
+            disabled={!total}
+            onClick={() => jump((total ?? 1) - 1)}
+          >
+            <ArrowDownToLine className="size-4" />
+          </Button>
+        </div>
       </div>
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
+        jumpTo={jumpTo}
         estimateSize={56}
         windowKey={(page) => [
           "timelineWindow",
@@ -837,7 +890,7 @@ function TimelineRow({
               className="size-3.5"
             />
           )}
-          <span className="tabular-nums">{formatMessageTime(m.sentAt)}</span>
+          <span className="tabular-nums">{formatTimelineTime(m.sentAt)}</span>
         </div>
       </div>
     </div>
