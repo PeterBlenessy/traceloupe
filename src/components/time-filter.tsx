@@ -4,14 +4,15 @@
  * half-open [lo, hi) epoch-second `TimeRange`. Shared by Timeline, Photos, and
  * Notes so they all filter by time the same way.
  */
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { CalendarRange, MoreVertical } from "lucide-react";
+import { useMemo, useState } from "react";
+import { CalendarRange } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { OverflowRow, type OverflowItem } from "@/components/overflow-row";
 import { formatCount } from "@/lib/format";
 import type { TimeRange } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -86,106 +87,29 @@ export function TimeFilterBar({
   const activeKey =
     presets.find((p) => p.lo === value.lo && p.hi === value.hi)?.key ?? null;
 
-  // Overflow handling: rather than scroll, keep as many chips inline as fit and
-  // tuck the rest behind a "⋮" menu. We measure natural chip widths from a
-  // hidden copy of the full row (so hidden chips are still measurable) and
-  // recompute on container resize.
-  const areaRef = useRef<HTMLDivElement>(null);
-  const measureRefs = useRef<(HTMLSpanElement | null)[]>([]);
-  const [visible, setVisible] = useState(presets.length);
-
-  useLayoutEffect(() => {
-    const area = areaRef.current;
-    if (!area) return;
-    const GAP = 4; // matches gap-1
-    const MORE = 34; // reserved width for the "⋮" trigger + its gap
-    const compute = () => {
-      const avail = area.clientWidth;
-      const widths = presets.map((_, i) => measureRefs.current[i]?.offsetWidth ?? 0);
-      const total = widths.reduce((a, w, i) => a + w + (i > 0 ? GAP : 0), 0);
-      if (total <= avail) {
-        setVisible(presets.length);
-        return;
-      }
-      let used = 0;
-      let count = 0;
-      for (let i = 0; i < widths.length; i++) {
-        const add = widths[i] + (count > 0 ? GAP : 0);
-        if (used + add + GAP + MORE <= avail) {
-          used += add;
-          count += 1;
-        } else break;
-      }
-      setVisible(count);
-    };
-    compute();
-    const ro = new ResizeObserver(compute);
-    ro.observe(area);
-    return () => ro.disconnect();
-  }, [presets, counts]);
-
-  const hidden = presets.slice(visible);
-  const hiddenActive = hidden.some((p) => p.key === activeKey);
+  // The preset chips overflow into a "⋮" menu when they don't fit (rather than
+  // scrolling). The custom-range button always stays visible after them.
+  const items = useMemo<OverflowItem[]>(
+    () =>
+      presets.map((p, i) => ({
+        key: p.key,
+        active: activeKey === p.key,
+        render: (inMenu: boolean) => (
+          <FilterChip
+            label={p.label}
+            count={counts?.[i]}
+            active={activeKey === p.key}
+            onClick={() => onChange({ lo: p.lo, hi: p.hi })}
+            className={inMenu ? "w-full justify-between" : undefined}
+          />
+        ),
+      })),
+    [presets, counts, activeKey, onChange],
+  );
 
   return (
     <div className={cn("flex min-w-0 items-center gap-1", className)}>
-      {/* The chip area flexes to fill the space left of the range button. */}
-      <div ref={areaRef} className="relative min-w-0 flex-1">
-        {/* Hidden full row, only for measuring natural chip widths. */}
-        <div
-          aria-hidden
-          className="pointer-events-none invisible absolute left-0 top-0 flex flex-nowrap gap-1"
-        >
-          {presets.map((p, i) => (
-            <span
-              key={p.key}
-              ref={(el) => {
-                measureRefs.current[i] = el;
-              }}
-            >
-              <FilterChip label={p.label} count={counts?.[i]} active={false} onClick={() => {}} />
-            </span>
-          ))}
-        </div>
-        {/* Visible row: the chips that fit, then a "⋮" menu for the rest. */}
-        <div className="flex flex-nowrap items-center gap-1 overflow-hidden">
-          {presets.slice(0, visible).map((p, i) => (
-            <FilterChip
-              key={p.key}
-              label={p.label}
-              count={counts?.[i]}
-              active={activeKey === p.key}
-              onClick={() => onChange({ lo: p.lo, hi: p.hi })}
-            />
-          ))}
-          {hidden.length > 0 && (
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  data-active={hiddenActive}
-                  title="More time filters"
-                  className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
-                >
-                  <MoreVertical className="size-4" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent align="start" className="grid max-h-72 w-40 gap-1 overflow-y-auto">
-                {hidden.map((p, i) => (
-                  <FilterChip
-                    key={p.key}
-                    label={p.label}
-                    count={counts?.[visible + i]}
-                    active={activeKey === p.key}
-                    onClick={() => onChange({ lo: p.lo, hi: p.hi })}
-                    className="w-full justify-between"
-                  />
-                ))}
-              </PopoverContent>
-            </Popover>
-          )}
-        </div>
-      </div>
+      <OverflowRow items={items} gapPx={4} className="flex-1" title="More time filters" />
       <DateRangeFilter
         value={value}
         active={activeKey === null}

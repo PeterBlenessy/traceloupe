@@ -677,7 +677,7 @@ function Timeline({
           <Button
             variant="ghost"
             size="sm"
-            className="size-8 px-0 text-muted-foreground"
+            className="size-7 -ml-1 px-0 text-muted-foreground"
             title="Jump to top"
             disabled={!total}
             onClick={() => jump(0)}
@@ -687,7 +687,7 @@ function Timeline({
           <Button
             variant="ghost"
             size="sm"
-            className="size-8 px-0 text-muted-foreground"
+            className="size-7 -ml-1 px-0 text-muted-foreground"
             title="Jump to bottom"
             disabled={!total}
             onClick={() => jump((total ?? 1) - 1)}
