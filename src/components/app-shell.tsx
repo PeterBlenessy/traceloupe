@@ -643,17 +643,21 @@ function SettingsRow({
   description?: string;
   children: React.ReactNode;
 }) {
+  // Stacked layout (macOS System Settings pattern): the label and control sit
+  // together on the first row; the description flows full-width beneath them. A
+  // side-by-side layout squeezes the description into whatever width the control
+  // leaves, wrapping long help text one word per line.
   return (
-    <div className="flex items-center justify-between gap-4 px-3.5 py-2.5">
-      <div className="min-w-0">
-        <div className="text-sm">{label}</div>
-        {description && (
-          <div className="text-xs text-balance text-muted-foreground">
-            {description}
-          </div>
-        )}
+    <div className="px-3.5 py-2.5">
+      <div className="flex min-h-7 items-center gap-4">
+        <div className="min-w-0 flex-1 text-sm">{label}</div>
+        <div className="shrink-0">{children}</div>
       </div>
-      <div className="shrink-0">{children}</div>
+      {description && (
+        <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+          {description}
+        </div>
+      )}
     </div>
   );
 }
