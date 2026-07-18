@@ -307,6 +307,8 @@ function SettingsMenu() {
     setLightboxStyle,
     showMediaMetadata,
     setShowMediaMetadata,
+    recoverFromPhotos,
+    setRecoverFromPhotos,
     importModules,
     setImportModules,
     logLevel,
@@ -527,6 +529,16 @@ function SettingsMenu() {
                   aria-label="Show media details"
                   checked={showMediaMetadata}
                   onCheckedChange={setShowMediaMetadata}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Recover attachments from Photos"
+                description="When a message photo/video isn't in the backup, show a camera-roll item with the same file name instead. Best-effort — it matches by name and can occasionally show the wrong photo, so recovered media is labelled. Off by default."
+              >
+                <Switch
+                  aria-label="Recover attachments from Photos"
+                  checked={recoverFromPhotos}
+                  onCheckedChange={setRecoverFromPhotos}
                 />
               </SettingsRow>
             </SettingsGroup>

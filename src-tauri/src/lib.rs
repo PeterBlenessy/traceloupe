@@ -1042,6 +1042,32 @@ async fn thread_message_index(
     .map_err(|e| e.to_string())?
 }
 
+/// A camera-roll item matched to a missing message attachment by file name.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveredMedia {
+    id: i64,
+    kind: String,
+}
+
+/// Find a Photos (camera-roll) item that matches a missing message attachment by
+/// file name, so the offloaded-to-iCloud attachment can be shown from Photos
+/// instead. Best-effort — the UI gates it behind a setting and labels it.
+#[tauri::command]
+async fn recover_attachment_media(
+    active: State<'_, ActiveBackup>,
+    attachment_id: i64,
+) -> Result<Option<RecoveredMedia>, String> {
+    let path = active.path()?;
+    let found = tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::recover_attachment_media(&cache, attachment_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(found.map(|(id, kind)| RecoveredMedia { id, kind }))
+}
+
 #[tauri::command]
 async fn count_timeline_messages(
     active: State<'_, ActiveBackup>,
@@ -2682,6 +2708,7 @@ pub fn run() {
             count_thread_messages,
             get_thread_message_window,
             thread_message_index,
+            recover_attachment_media,
             count_timeline_messages,
             get_timeline_window,
             count_message_ranges,

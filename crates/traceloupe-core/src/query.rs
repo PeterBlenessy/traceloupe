@@ -289,6 +289,37 @@ pub type AttachmentBlob = (
     Option<i64>,
 );
 
+/// Best-effort recovery of a message attachment that's missing from the backup:
+/// a camera-roll item with the same file name (the Messages copy was offloaded to
+/// iCloud, but the original is still in Photos). Returns `(media_id, kind)`, or
+/// `None`. Ambiguous same-name matches are broken by the closest capture time to
+/// the message. Name matching can be wrong — especially for *received* files,
+/// whose `IMG_####` counter can collide with one of your own photos — so callers
+/// gate this behind a user setting and label the result as recovered.
+pub fn recover_attachment_media(
+    cache: &CacheDb,
+    attachment_id: i64,
+) -> Result<Option<(i64, String)>> {
+    cache
+        .conn()
+        .query_row(
+            "SELECT mi.id, mi.kind
+             FROM attachments a
+             JOIN messages m ON m.id = a.message_id
+             JOIN media_items mi
+               ON mi.local_path IS NOT NULL
+              AND (mi.relative_path = a.filename
+                   OR mi.relative_path LIKE '%/' || a.filename)
+             WHERE a.id = ?1 AND a.filename IS NOT NULL AND a.local_path IS NULL
+             ORDER BY ABS(COALESCE(mi.taken_at, 0) - COALESCE(m.sent_at, 0))
+             LIMIT 1",
+            [attachment_id],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
 pub fn attachment_blob(cache: &CacheDb, attachment_id: i64) -> Result<Option<AttachmentBlob>> {
     let row = cache
         .conn()

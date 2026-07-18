@@ -36,6 +36,10 @@ type SettingsProviderState = {
   /** Show file/EXIF/location metadata in the lightbox. */
   showMediaMetadata: boolean;
   setShowMediaMetadata: (v: boolean) => void;
+  /** For a message attachment missing from the backup, show a same-named
+   *  camera-roll photo instead. Best-effort (can mismatch); off by default. */
+  recoverFromPhotos: boolean;
+  setRecoverFromPhotos: (v: boolean) => void;
   /** Import module ids the user chose, or null to use the catalog defaults. */
   importModules: string[] | null;
   setImportModules: (ids: string[]) => void;
@@ -63,6 +67,7 @@ const LEGACY_LINK_PREVIEWS_KEY = "traceloupe-link-previews";
 const LEGACY_LINK_PREVIEWS_HOVER_KEY = "traceloupe-link-previews-hover";
 const LIGHTBOX_STYLE_KEY = "traceloupe-lightbox-style";
 const MEDIA_META_KEY = "traceloupe-media-metadata";
+const RECOVER_PHOTOS_KEY = "traceloupe-recover-from-photos";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
@@ -143,6 +148,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   );
   const [showMediaMetadata, setShowMediaMetadataState] = useState<boolean>(() =>
     readBool(MEDIA_META_KEY),
+  );
+  // Off by default (opt-in): filename matching can be wrong.
+  const [recoverFromPhotos, setRecoverFromPhotosState] = useState<boolean>(
+    () => localStorage.getItem(RECOVER_PHOTOS_KEY) === "true",
   );
   const [importModules, setImportModulesState] = useState<string[] | null>(() =>
     readStringArray(IMPORT_MODULES_KEY),
@@ -239,6 +248,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(LIGHTBOX_STYLE_KEY, v);
     setLightboxStyleState(v);
   };
+  const setRecoverFromPhotos = (v: boolean) => {
+    localStorage.setItem(RECOVER_PHOTOS_KEY, String(v));
+    setRecoverFromPhotosState(v);
+  };
   const setShowMediaMetadata = (v: boolean) => {
     localStorage.setItem(MEDIA_META_KEY, String(v));
     setShowMediaMetadataState(v);
@@ -278,6 +291,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setLightboxStyle,
         showMediaMetadata,
         setShowMediaMetadata,
+        recoverFromPhotos,
+        setRecoverFromPhotos,
         importModules,
         setImportModules,
         logLevel,
