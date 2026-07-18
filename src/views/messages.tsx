@@ -126,6 +126,55 @@ function MessageKindFilter({
   );
 }
 
+/** Imperative top/bottom scrolling for a LazyVirtualList: the `scrollEnd` value
+ *  to pass to it, plus handlers that bump its token. */
+function useScrollEnds() {
+  const [scrollEnd, setScrollEnd] =
+    useState<{ dir: "top" | "bottom"; token: number }>();
+  const token = useRef(0);
+  return {
+    scrollEnd,
+    toTop: () => setScrollEnd({ dir: "top", token: (token.current += 1) }),
+    toBottom: () => setScrollEnd({ dir: "bottom", token: (token.current += 1) }),
+  };
+}
+
+/** Jump-to-top / jump-to-bottom icon pair (grouped tight). */
+function JumpButtons({
+  onTop,
+  onBottom,
+  disabled,
+}: {
+  onTop: () => void;
+  onBottom: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex shrink-0 items-center">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="size-7 px-0 text-muted-foreground"
+        title="Jump to top"
+        disabled={disabled}
+        onClick={onTop}
+      >
+        <ArrowUpToLine className="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="-ml-1 size-7 px-0 text-muted-foreground"
+        title="Jump to bottom"
+        disabled={disabled}
+        onClick={onBottom}
+      >
+        <ArrowDownToLine className="size-4" />
+      </Button>
+    </div>
+  );
+}
+
 /** A compact oldest/newest toggle — replaces the single-field "Time" sort picker. */
 function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }) {
   return (
@@ -640,12 +689,7 @@ function Timeline({
       (await client.countMessageRanges([range], service, search, kind))[0] ?? 0,
     enabled: active === true,
   });
-  // Imperative jump-to-top/bottom (the list is fixed-height, so scrollToIndex is
-  // reliable here). A bumped token re-fires the jump each click.
-  const [jumpTo, setJumpTo] = useState<{ index: number; token: number }>();
-  const jumpToken = useRef(0);
-  const jump = (index: number) =>
-    setJumpTo({ index, token: (jumpToken.current += 1) });
+  const { scrollEnd, toTop, toBottom } = useScrollEnds();
 
   return (
     <div className="flex h-full flex-col">
@@ -674,33 +718,14 @@ function Timeline({
             desc={order.desc}
             onToggle={() => setOrder({ by: "time", desc: !order.desc })}
           />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="size-7 -ml-1 px-0 text-muted-foreground"
-            title="Jump to top"
-            disabled={!total}
-            onClick={() => jump(0)}
-          >
-            <ArrowUpToLine className="size-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="size-7 -ml-1 px-0 text-muted-foreground"
-            title="Jump to bottom"
-            disabled={!total}
-            onClick={() => jump((total ?? 1) - 1)}
-          >
-            <ArrowDownToLine className="size-4" />
-          </Button>
+          <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
         </div>
       </div>
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
-        jumpTo={jumpTo}
+        scrollEnd={scrollEnd}
         estimateSize={56}
         windowKey={(page) => [
           "timelineWindow",
@@ -1070,6 +1095,7 @@ function Conversation({
   });
   const [jumpTo, setJumpTo] = useState<{ index: number; token: number } | undefined>();
   const jumpToken = useRef(0);
+  const { scrollEnd, toTop, toBottom } = useScrollEnds();
   useEffect(() => {
     if (scrollToMessage == null || jumpIndex === undefined) return;
     if (jumpIndex != null && jumpIndex >= 0) {
@@ -1136,12 +1162,14 @@ function Conversation({
           desc={order.desc}
           onToggle={() => setOrder({ by: "time", desc: !order.desc })}
         />
+        <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
       </ViewHeader>
       <LazyVirtualList<Message>
         count={total ?? 0}
         startAtBottom={!order.desc}
         resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}`}
         jumpTo={jumpTo}
+        scrollEnd={scrollEnd}
         windowKey={(page) => ["messageWindow", thread.id, kind, order.desc, page]}
         fetchWindow={(offset, limit) =>
           client.getThreadMessageWindow(thread.id, offset, limit, order.desc, kind)

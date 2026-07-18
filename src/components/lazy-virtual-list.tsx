@@ -40,6 +40,7 @@ export function LazyVirtualList<T>({
   startAtBottom = false,
   resetKey,
   jumpTo,
+  scrollEnd,
   onTopIndexChange,
 }: {
   /** Total number of rows (from a cheap COUNT query). */
@@ -57,6 +58,10 @@ export function LazyVirtualList<T>({
   resetKey?: unknown;
   /** Imperatively jump to a row: scroll `index` to the top when `token` changes. */
   jumpTo?: { index: number; token: number };
+  /** Imperatively scroll to the very top/bottom when `token` changes. Uses a
+   *  direct scrollTop (0 / scrollHeight), so it's reliable even on a tall
+   *  variable-height list where scrollToIndex would thrash. */
+  scrollEnd?: { dir: "top" | "bottom"; token: number };
   /** Reports the top-most visible row index as the user scrolls. */
   onTopIndexChange?: (index: number) => void;
 }) {
@@ -130,6 +135,17 @@ export function LazyVirtualList<T>({
       virtualizer.scrollToIndex(jumpTo.index, { align: "start" });
     }
   }, [jumpTo, virtualizer]);
+
+  // Imperative scroll to the very top/bottom via a direct scrollTop — reliable on
+  // a tall variable-height list (unlike scrollToIndex to the far end).
+  const scrolledEndFor = useRef<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (scrollEnd && el && scrolledEndFor.current !== scrollEnd.token) {
+      scrolledEndFor.current = scrollEnd.token;
+      el.scrollTop = scrollEnd.dir === "bottom" ? el.scrollHeight : 0;
+    }
+  }, [scrollEnd]);
 
   // Report the top visible row so a caller can highlight where we are.
   const topIndex = virtualItems[0]?.index ?? 0;
