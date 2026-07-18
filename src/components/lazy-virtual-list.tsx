@@ -171,22 +171,37 @@ export function LazyVirtualList<T>({
     };
   }, [persistKey, virtualizer]);
 
-  // Imperative jump: align `index` to the top. scrollToIndex accounts for
-  // already-measured row heights (e.g. the timeline's occasional date headers),
-  // so it lands on the target far more accurately than a flat index × estimate —
-  // safe here because the rows that use this (the fixed-height timeline) don't
-  // trigger the multi-frame re-measure that made scrollToIndex thrash on
-  // variable-height lists.
+  // Imperative jump to a row. scrollToIndex accounts for measured row heights and
+  // keeps retrying as they settle, so it lands on the target even before the
+  // target's window has loaded (rows above stay at the estimate, so the offset
+  // is stable). Robustness details:
+  //   - It waits until `count` actually includes the index (the jump token can
+  //     resolve before the thread's message count has loaded); until then the
+  //     virtualizer has nothing to scroll to. `count` is in the deps and we only
+  //     mark the token done once we've issued the scroll, so an early jump isn't
+  //     silently dropped.
+  //   - It re-issues on the next frame so a jump that arrives during the initial
+  //     mount (while heights are settling) still lands.
   const jumpedFor = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
-    if (jumpTo && scrollRef.current && jumpedFor.current !== jumpTo.token) {
-      jumpedFor.current = jumpTo.token;
-      // Mark the anchor handled so a jump to a message isn't overwritten by a
-      // persisted-position restore (whichever ran; both use scrollToIndex).
-      scrolledFor.current = anchorKey;
-      virtualizer.scrollToIndex(jumpTo.index, { align: "start" });
+    if (
+      !jumpTo ||
+      !scrollRef.current ||
+      jumpedFor.current === jumpTo.token ||
+      jumpTo.index >= count
+    ) {
+      return;
     }
-  }, [jumpTo, virtualizer, anchorKey]);
+    jumpedFor.current = jumpTo.token;
+    // Mark the anchor handled so a jump to a message isn't overwritten by a
+    // persisted-position restore (whichever ran; both use scrollToIndex).
+    scrolledFor.current = anchorKey;
+    virtualizer.scrollToIndex(jumpTo.index, { align: "center" });
+    const raf = requestAnimationFrame(() =>
+      virtualizer.scrollToIndex(jumpTo.index, { align: "center" }),
+    );
+    return () => cancelAnimationFrame(raf);
+  }, [jumpTo, virtualizer, anchorKey, count]);
 
   // Imperative scroll to the very top/bottom via a direct scrollTop — reliable on
   // a tall variable-height list (unlike scrollToIndex to the far end).
