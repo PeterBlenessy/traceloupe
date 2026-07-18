@@ -16,6 +16,7 @@ pub mod normalize;
 pub mod nska;
 pub mod parsers;
 pub mod query;
+pub mod rich_link;
 pub mod sidecar;
 
 pub use error::{Error, Result};

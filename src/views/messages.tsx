@@ -72,6 +72,7 @@ import {
   client,
   type Attachment,
   type LinkPreview,
+  type RichLinkPreview,
   type Message,
   type ThreadSummary,
   type TimeRange,
@@ -1125,7 +1126,9 @@ function MessageBubble({
   const previewUrl =
     linkPreviews && message.body ? firstUrl(message.body) : null;
   // Drop iMessage app/plugin payloads (`.pluginPayloadAttachment`) — binary
-  // plists behind rich links/app messages, not openable user files.
+  // plists behind rich links/app messages, not openable user files. The first
+  // one, if any, is decoded into an offline rich-link card below.
+  const pluginPayload = message.attachments.find(isInternalAttachment) ?? null;
   const attachments = useMemo(
     () => message.attachments.filter((a) => !isInternalAttachment(a)),
     [message.attachments],
@@ -1174,7 +1177,13 @@ function MessageBubble({
                   </div>
                 );
               })}
-              {previewUrl && <LinkPreviewCard url={previewUrl} />}
+              {/* iMessage's own cached preview (offline) when present; else the
+                  opt-in OpenGraph card for the first link. */}
+              {pluginPayload ? (
+                <PluginLinkPreview attachmentId={pluginPayload.id} />
+              ) : (
+                previewUrl && <LinkPreviewCard url={previewUrl} />
+              )}
               <MessageImageLightbox
                 images={imageAtts}
                 index={lightboxIndex}
@@ -1407,6 +1416,57 @@ function LinkPreviewCard({ url }: { url: string }) {
         {data.description && (
           <div className="line-clamp-2 text-[11px] text-muted-foreground">
             {data.description}
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
+
+/** An offline rich-link card decoded from an iMessage plugin payload — the
+ *  preview iMessage itself cached (title + thumbnail). Shown for shared links
+ *  whose live page has no OpenGraph tags (e.g. Maps). Local only: no network. */
+function PluginLinkPreview({ attachmentId }: { attachmentId: number }) {
+  const { data } = useQuery<RichLinkPreview | null>({
+    queryKey: ["pluginLink", attachmentId],
+    queryFn: () => client.messageLinkMetadata(attachmentId),
+    staleTime: Infinity,
+    retry: false,
+  });
+  if (!data || (!data.title && !data.image)) return null;
+  const url = data.url;
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        if (url) client.openExternal(url);
+      }}
+      disabled={!url}
+      className="mt-1.5 flex w-full max-w-[280px] flex-col overflow-hidden rounded-lg border text-left transition-colors enabled:hover:bg-accent/50"
+      title={url ?? undefined}
+    >
+      {data.image && (
+        <img
+          src={data.image}
+          alt=""
+          className="h-32 w-full bg-muted object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
+      )}
+      <div className="min-w-0 p-2">
+        {data.title && (
+          <div className="line-clamp-2 text-xs font-medium">{data.title}</div>
+        )}
+        {data.summary && (
+          <div className="line-clamp-2 text-[11px] text-muted-foreground">
+            {data.summary}
+          </div>
+        )}
+        {url && (
+          <div className="mt-0.5 truncate text-[10px] text-muted-foreground/70">
+            {url}
           </div>
         )}
       </div>
