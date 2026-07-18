@@ -19,7 +19,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.9.0` | **Data-coverage pass** — a field-level audit against a real backup, then filling the high-value gaps: Calls FaceTime/location, Photos EXIF/hidden/subtypes, Contacts detail (birthday/note/addresses), Messages receipts/reactions/replies, Safari deleted-history. |
 | `0.10.0` | **Untapped stores surfaced** — five new views (Device, Calendar, Reminders, Health, Interactions), Messages `attributedBody` decode + edited flag, Notes rich-content indicators, and the app-chat attachment-media framework. |
 | `0.11.0` | **Locked-note decryption** — password-protected Apple Notes unlock on demand (PBKDF2 → RFC-3394 key-unwrap → AES-128-GCM), the note password entered in-app and nothing decrypted at rest. Closes the last coverage-audit gap. |
-| `0.12.0`+ | **Native-first, continued** — remaining apps (need heavier machinery), then make iLEAPP an optional on-demand engine. See "Planned" below. |
+| `0.12.0` | **Messages & media UX overhaul + hardening** — inline/hover link previews (OpenGraph, single 3-way mode), an in-app image/video lightbox, opt-in recovery of missing attachments from the camera roll, Notes rich-text rendering, persisted scroll/sidebar/window state, and a pre-release review pass that closed a DNS-rebind SSRF hole in link fetching. See "Planned" below for what's next. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -27,6 +27,74 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.12.0] — 2026-07-18
+
+A large Messages- and media-focused UX release, capped by a pre-release code
+review that hardened the new link-fetching and scroll-persistence code.
+
+### Added
+
+- **Link previews for URLs in messages.** OpenGraph "unfurl" cards behind a
+  single **3-way setting — Off · Hover · Inline**: *Inline* renders the card in
+  the bubble (iMessage-style, replacing the raw URL when the message is only a
+  link); *Hover* shows it in a popover. Every link in a message is unfurled (up
+  to a cap), in both the conversation and the Timeline. Rich links from iMessage
+  plugin payloads (e.g. Apple Maps) are decoded offline from the typedstream;
+  TikTok uses its oEmbed endpoint (it serves no OpenGraph to bots). Preview
+  images are proxied to `data:` URLs so the webview never contacts the host, and
+  a crawler-style User-Agent is used (a browser UA regresses Spotify/Instagram).
+- **In-app image & video viewer.** Message images/videos open in a shared,
+  full-viewport lightbox with selectable styles, an opaque metadata overlay, and
+  a dedicated **Media** settings tab. Videos show a first-frame poster instead of
+  a black rectangle.
+- **Recover missing attachments from the camera roll** (opt-in). When a
+  message's image/video isn't in the backup, TraceLoupe can match it to a
+  `Photos.sqlite` asset and display it, badged as *recovered*; the Timeline flags
+  genuinely-missing attachments with a "not in backup" note.
+- **Notes rich text** — formatting, lists, and checklists are now *rendered*
+  (not just counted), first-image thumbnails appear in the Notes list, a
+  hashtag-tag filter (iOS 15+) is available, and a flat/folder-tree view toggle.
+- **Contact-aware Timeline avatars** — hover shows the contact; clicking opens
+  them in Contacts. Added year quick-filters, jump-to-top/bottom, and the year in
+  row times.
+- **Persisted UI state** — Timeline & conversation scroll position (index-based),
+  the Timeline time range, message time-order toggles, sidebar open/closed state,
+  and window size/position all survive navigation and app restarts.
+- **Overflow "⋮" menus** for the time-range and badge filters, so filters never
+  wrap or push the header taller; jump-to-top/bottom added to conversations too.
+
+### Changed
+
+- Settings rows stack their (now full-width) description below the label + control.
+- Timeline direction arrows read relative to the shown party, and outgoing rows
+  resolve the contact (fixing the "#" placeholder avatar).
+- Toolbar layout unified — time range on the left, facets + sort on the right;
+  the new Calendar/Reminders/Health/Interactions views gained filters and
+  surfaced metadata; list content left-aligned.
+
+### Fixed
+
+- **WAL-mode databases dropped data** (Safari history came up empty) — each DB's
+  `-wal` sidecar is now replayed so unflushed rows are read.
+- **Encrypted media no longer 404s** in a fresh session — the custom-scheme
+  protocol handlers lazily reload the backup keys, and a *cancelled* Touch ID
+  unlock no longer re-prompts once per media item (a photo grid could storm).
+- Media no longer vanishes when switching views (per-mount cache key); opening an
+  attachment no longer launches TextEdit on binary garbage.
+- Jump-to-message and scroll restore reworked to be index-based and reliable —
+  wait for the row count, re-issue across frames, and let an explicit jump win
+  over position restore.
+
+### Security
+
+- **Closed a DNS-rebind SSRF in link-preview fetching.** URLs come from
+  third-party messages in a backup (potentially of a compromised phone), i.e.
+  attacker-controllable input, and the static private-host pre-check was
+  bypassable by rebinding the domain between the check and ureq's connect. Fetches
+  now pin the vetted address via a resolver that yields only globally-routable
+  IPs, re-checked on every redirect hop and failing closed. Also folded in
+  earlier link-preview/locked-note review hardening.
 
 ## [0.11.4] — 2026-07-16
 
@@ -402,6 +470,23 @@ and the remaining (large-feature / password-blocked) gaps.
   *list* could be sorted. Newest-first pins the newest message to the top;
   oldest-first keeps the chat-like newest-at-bottom layout.
 
+## [0.6.1] — 2026-07-15
+
+A review-and-hardening point release after LinkedIn (0.6.0).
+
+### Changed
+
+- **Faster imports** — iLEAPP no longer re-parses first-party data the native
+  parsers already read.
+- **Settings dialog split into tabs**, instead of one overloaded pane.
+
+### Fixed
+
+- The **"Extract" action is gated** for apps already parsed natively, and app /
+  service rows show brand icons.
+- Message-attachment images render correctly when the attachment has a **NULL
+  mime type** or comes from an **encrypted backup**.
+
 ## [0.6.0] — 2026-07-15
 
 ### Added
@@ -538,26 +623,34 @@ the batched 0.3.0+ migration under "Planned" below.
 - Locked-note AES-GCM decryption and `ZISPINNED` parsing are unit-tested but
   pending validation against a real backup that contains such notes.
 
-## Planned — 0.3.0+ (native-first migration, in batches)
-- **Batch 1 (0.3.0) — first-party parity + first native third-party wave.**
-  - *Apple apps, no iLEAPP:* native parsers for Calls (`CallHistory.storedata`),
-    Safari (`History.db`), Apps (app-state plist), and self-extracted Contacts
-    (`AddressBook.sqlitedb`) via the Manifest Index. Every built-in view then
-    materializes natively, and the redundant iLEAPP sms/notes passes are dropped
-    so import time actually falls.
-  - *Third-party, native:* TikTok (moved off iLEAPP), plus Instagram, Facebook,
-    Facebook Messenger, X/Twitter, and Snapchat. Snapchat stores little locally
-    (ephemeral by design), so its native parser surfaces only what persists.
-    WhatsApp and Telegram are deferred to 0.4.0 — they already read via iLEAPP, so
-    there's no urgency to convert them first.
-- **Batch 2 (0.3.x) — iLEAPP optional.** Default install fully offline (no first-
-  import download, no bundled ~222 MB engine); iLEAPP fetched on demand only when
-  the user opts into deeper third-party coverage.
-- **Batch 3+ (0.4.0+) — remaining native third-party modules** per the app-tier
-  roadmap, replacing iLEAPP coverage incrementally — starting with WhatsApp and
-  Telegram (deferred from Batch 1, still read via iLEAPP until then). Per-app
-  status and the version each gains native support are tracked in
-  `docs/app-support.md`.
+## Planned
+
+The **native-first migration is complete** — every surfaced artifact, first- and
+third-party, is parsed by an in-house Rust parser, and iLEAPP is no longer run at
+all (kept only as a development-time schema reference; the sidecar path is
+dormant). The earlier "make iLEAPP optional, in batches" plan has therefore been
+fully delivered and superseded; the remaining backlog is about *depth*, not
+removing iLEAPP. Tracked in detail in [`docs/app-data-coverage.md`](docs/app-data-coverage.md)
+(field-level) and [`docs/app-support.md`](docs/app-support.md) (per-app).
+
+- **Field-level coverage gaps** — the highest-value unsurfaced fields: Messages
+  full per-edit history (`message_summary_info`) and group-action rows; Notes
+  inline image/drawing rendering; Photos Live/burst grouping; the Contacts
+  relationship graph and groups.
+- **Untapped stores** — Keychain (presence + counts only, never values), the
+  Apps-view install metadata (version / install date / seller), and Health raw
+  samples + GPS routes (only workouts are surfaced today).
+- **More third-party apps** — the ⬜ Planned tiers in `app-support.md` (YouTube,
+  Gmail, WeChat, Discord, Reddit, Spotify, …), plus two that need a real backup to
+  pin their schema (Snapchat, X/Twitter). A single generic **`Cache.db`** module
+  could surface cached network content across many apps at once — a strong future
+  addition.
+- **App-chat attachment media** — the framework has landed; individual parsers
+  must still *emit* their attachments (WhatsApp/Kik/Threema/TikTok media),
+  deferred until a backup containing that media exists to validate against.
+- **Validation debt** — several app parsers (Instagram, Telegram, Kik, imo,
+  Threema, Viber, Teams, LinkedIn) are marked *unvalidated* pending a real backup
+  with those apps installed.
 
 ## [0.1.0] — 2026-07-13
 
