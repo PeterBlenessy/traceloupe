@@ -20,10 +20,14 @@ type SettingsProviderState = {
   setShowContactNames: (v: boolean) => void;
   showAvatars: boolean;
   setShowAvatars: (v: boolean) => void;
-  /** Load OpenGraph link previews for URLs in messages (opt-in; contacts external
-   *  sites). Off by default. */
+  /** Also render link previews inline in the message bubble. Off by default;
+   *  contacts external sites. */
   linkPreviews: boolean;
   setLinkPreviews: (v: boolean) => void;
+  /** Show a link's preview in a hover card when the pointer rests on it. On by
+   *  default (the fetch is user-initiated per hover); contacts external sites. */
+  linkPreviewsHover: boolean;
+  setLinkPreviewsHover: (v: boolean) => void;
   /** How the image/video lightbox opens: a windowed modal, or fullscreen. */
   lightboxStyle: LightboxStyle;
   setLightboxStyle: (v: LightboxStyle) => void;
@@ -52,6 +56,7 @@ type SettingsProviderState = {
 const NAMES_KEY = "traceloupe-show-names";
 const AVATARS_KEY = "traceloupe-show-avatars";
 const LINK_PREVIEWS_KEY = "traceloupe-link-previews";
+const LINK_PREVIEWS_HOVER_KEY = "traceloupe-link-previews-hover";
 const LIGHTBOX_STYLE_KEY = "traceloupe-lightbox-style";
 const MEDIA_META_KEY = "traceloupe-media-metadata";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
@@ -115,6 +120,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   // Opt-in: default OFF (readBool defaults true, so check explicitly).
   const [linkPreviews, setLinkPreviewsState] = useState<boolean>(
     () => localStorage.getItem(LINK_PREVIEWS_KEY) === "true",
+  );
+  // On by default (hover is a deliberate, per-link action).
+  const [linkPreviewsHover, setLinkPreviewsHoverState] = useState<boolean>(() =>
+    readBool(LINK_PREVIEWS_HOVER_KEY),
   );
   const [lightboxStyle, setLightboxStyleState] = useState<LightboxStyle>(() =>
     localStorage.getItem(LIGHTBOX_STYLE_KEY) === "windowed"
@@ -215,6 +224,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(LINK_PREVIEWS_KEY, String(v));
     setLinkPreviewsState(v);
   };
+  const setLinkPreviewsHover = (v: boolean) => {
+    localStorage.setItem(LINK_PREVIEWS_HOVER_KEY, String(v));
+    setLinkPreviewsHoverState(v);
+  };
   const setLightboxStyle = (v: LightboxStyle) => {
     localStorage.setItem(LIGHTBOX_STYLE_KEY, v);
     setLightboxStyleState(v);
@@ -254,6 +267,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setShowAvatars,
         linkPreviews,
         setLinkPreviews,
+        linkPreviewsHover,
+        setLinkPreviewsHover,
         lightboxStyle,
         setLightboxStyle,
         showMediaMetadata,

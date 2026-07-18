@@ -1119,6 +1119,11 @@ function MessageBubble({
   senderLabel?: string | null;
 }) {
   const align = message.isFromMe ? "end" : "start";
+  // Hover previews always work; the setting additionally renders the first
+  // link's preview inline in the bubble.
+  const { linkPreviews } = useSettings();
+  const previewUrl =
+    linkPreviews && message.body ? firstUrl(message.body) : null;
   // Drop iMessage app/plugin payloads (`.pluginPayloadAttachment`) — binary
   // plists behind rich links/app messages, not openable user files.
   const attachments = useMemo(
@@ -1169,6 +1174,7 @@ function MessageBubble({
                   </div>
                 );
               })}
+              {previewUrl && <LinkPreviewCard url={previewUrl} />}
               <MessageImageLightbox
                 images={imageAtts}
                 index={lightboxIndex}
@@ -1238,9 +1244,9 @@ function isInternalAttachment(att: Attachment): boolean {
  *  browser (user-initiated; the app never loads remote content itself). */
 const URL_RE = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
 function MessageBody({ text }: { text: string }) {
-  // Link previews are opt-in (they contact the linked site); when off, links are
-  // plain. When on, each link gets a hover-card preview.
-  const { linkPreviews } = useSettings();
+  // Hover previews are on by default (the fetch is user-initiated per hover);
+  // the setting lets the privacy-conscious turn them off.
+  const { linkPreviewsHover } = useSettings();
   return text.split(URL_RE).map((part, i) => {
     if (!part) return null;
     if (/^(https?:\/\/|www\.)/i.test(part)) {
@@ -1265,7 +1271,7 @@ function MessageBody({ text }: { text: string }) {
       );
       return (
         <span key={i}>
-          {linkPreviews ? (
+          {linkPreviewsHover ? (
             <LinkHoverPreview href={href}>{link}</LinkHoverPreview>
           ) : (
             link
@@ -1344,6 +1350,63 @@ function TimelineThumbs({
         </button>
       ))}
     </span>
+  );
+}
+
+/** The first URL in `text` (normalized to https, trailing punctuation trimmed). */
+function firstUrl(text: string): string | null {
+  const m = text.match(/(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/i);
+  if (!m) return null;
+  const raw = m[0].replace(/[.,!?;:]+$/, "");
+  return /^www\./i.test(raw) ? `https://${raw}` : raw;
+}
+
+/** A compact inline OpenGraph card shown in the bubble for the first link (only
+ *  when "Load link previews" is on). Shares the hover card's query cache by URL,
+ *  so the two never double-fetch. */
+function LinkPreviewCard({ url }: { url: string }) {
+  const { data } = useQuery<LinkPreview>({
+    queryKey: ["linkPreview", url],
+    queryFn: () => client.fetchLinkPreview(url),
+    staleTime: Infinity,
+    retry: false,
+  });
+  if (!data || (!data.title && !data.image)) return null;
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        client.openExternal(url);
+      }}
+      className="mt-1.5 flex w-full max-w-[280px] overflow-hidden rounded-lg border text-left transition-colors hover:bg-accent/50"
+      title={url}
+    >
+      {data.image && (
+        <img
+          src={data.image}
+          alt=""
+          className="size-16 shrink-0 bg-muted object-cover"
+          onError={(e) => {
+            e.currentTarget.style.display = "none";
+          }}
+        />
+      )}
+      <div className="min-w-0 flex-1 p-2">
+        {data.siteName && (
+          <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+            {data.siteName}
+          </div>
+        )}
+        {data.title && (
+          <div className="truncate text-xs font-medium">{data.title}</div>
+        )}
+        {data.description && (
+          <div className="line-clamp-2 text-[11px] text-muted-foreground">
+            {data.description}
+          </div>
+        )}
+      </div>
+    </button>
   );
 }
 
