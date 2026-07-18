@@ -294,6 +294,8 @@ function SettingsMenu() {
     setShowAvatars,
     linkPreviews,
     setLinkPreviews,
+    linkPreviewsHover,
+    setLinkPreviewsHover,
     lightboxStyle,
     setLightboxStyle,
     showMediaMetadata,
@@ -414,11 +416,21 @@ function SettingsMenu() {
                 />
               </SettingsRow>
               <SettingsRow
-                label="Load link previews"
-                description="Show a preview card when you hover a link in messages. Off by default — this contacts the linked websites to fetch a title & image."
+                label="Link previews on hover"
+                description="Show a preview card when you hover a link in a message. On by default — hovering contacts the linked website to fetch a title & image."
               >
                 <Switch
-                  aria-label="Load link previews"
+                  aria-label="Link previews on hover"
+                  checked={linkPreviewsHover}
+                  onCheckedChange={setLinkPreviewsHover}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Inline link previews"
+                description="Also show the first link's preview inline in the message. Off by default — this contacts the linked websites."
+              >
+                <Switch
+                  aria-label="Inline link previews"
                   checked={linkPreviews}
                   onCheckedChange={setLinkPreviews}
                 />
