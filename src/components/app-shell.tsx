@@ -55,6 +55,7 @@ import {
   useSettings,
   DENSITIES,
   type Density,
+  type LinkPreviewMode,
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
@@ -292,10 +293,8 @@ function SettingsMenu() {
     setShowContactNames,
     showAvatars,
     setShowAvatars,
-    linkPreviews,
-    setLinkPreviews,
-    linkPreviewsHover,
-    setLinkPreviewsHover,
+    linkPreviewMode,
+    setLinkPreviewMode,
     lightboxStyle,
     setLightboxStyle,
     showMediaMetadata,
@@ -416,24 +415,21 @@ function SettingsMenu() {
                 />
               </SettingsRow>
               <SettingsRow
-                label="Link previews on hover"
-                description="Show a preview card when you hover a link in a message. On by default — hovering contacts the linked website to fetch a title & image."
+                label="Link previews"
+                description="How links in messages preview. Off keeps raw URLs (no network). On hover fetches a preview only when you hover a link. Inline unfurls every link in the bubble — both hover and inline contact the linked websites."
               >
-                <Switch
-                  aria-label="Link previews on hover"
-                  checked={linkPreviewsHover}
-                  onCheckedChange={setLinkPreviewsHover}
-                />
-              </SettingsRow>
-              <SettingsRow
-                label="Inline link previews"
-                description="Also show the first link's preview inline in the message. Off by default — this contacts the linked websites."
-              >
-                <Switch
-                  aria-label="Inline link previews"
-                  checked={linkPreviews}
-                  onCheckedChange={setLinkPreviews}
-                />
+                <select
+                  value={linkPreviewMode}
+                  onChange={(e) =>
+                    setLinkPreviewMode(e.target.value as LinkPreviewMode)
+                  }
+                  aria-label="Link previews"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="off">Off</option>
+                  <option value="hover">On hover</option>
+                  <option value="inline">Inline</option>
+                </select>
               </SettingsRow>
               <SettingsRow
                 label="Time format"

@@ -1120,11 +1120,10 @@ function MessageBubble({
   senderLabel?: string | null;
 }) {
   const align = message.isFromMe ? "end" : "start";
-  // Hover previews always work; the setting additionally renders the first
-  // link's preview inline in the bubble.
-  const { linkPreviews } = useSettings();
+  // In "inline" mode the first link unfurls into a card in the bubble.
+  const inlinePreviews = useSettings().linkPreviewMode === "inline";
   const previewUrl =
-    linkPreviews && message.body ? firstUrl(message.body) : null;
+    inlinePreviews && message.body ? firstUrl(message.body) : null;
   // When the whole message is just a link and previews are on, the card stands
   // in for the raw URL (like iMessage) — cleaner than a giant URL over a card.
   const trimmedBody = (message.body ?? "").trim();
@@ -1256,9 +1255,9 @@ function isInternalAttachment(att: Attachment): boolean {
  *  browser (user-initiated; the app never loads remote content itself). */
 const URL_RE = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
 function MessageBody({ text }: { text: string }) {
-  // Hover previews are on by default (the fetch is user-initiated per hover);
-  // the setting lets the privacy-conscious turn them off.
-  const { linkPreviewsHover } = useSettings();
+  // In "hover" mode each link gets an on-demand preview card; "off"/"inline"
+  // leave the link plain (inline mode shows a card in the bubble instead).
+  const hover = useSettings().linkPreviewMode === "hover";
   return text.split(URL_RE).map((part, i) => {
     if (!part) return null;
     if (/^(https?:\/\/|www\.)/i.test(part)) {
@@ -1287,7 +1286,7 @@ function MessageBody({ text }: { text: string }) {
       );
       return (
         <span key={i}>
-          {linkPreviewsHover ? (
+          {hover ? (
             <LinkHoverPreview href={href}>{link}</LinkHoverPreview>
           ) : (
             link
