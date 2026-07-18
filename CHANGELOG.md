@@ -28,6 +28,28 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 _Nothing yet._
 
+## [0.12.2] — 2026-07-18
+
+Toolbar polish follow-ups (verified against Apple's apps via the native-window
+screenshot harness).
+
+### Changed
+
+- **Custom date-range button rejoined the time-preset chips** — it was being
+  stretched over next to the sort control; now `All / 24h / 7d / 30d / <year> /
+  Range` read as one time-filter unit, with sort on its own at the right.
+- **Header filter chips no longer collapse into "⋮" when there's room** — the
+  source/type filter (Safari's History/Bookmarks/Reading List/Tabs, Photos'
+  source chips) now claims the free header width and shows every chip that fits,
+  overflowing only when the row is genuinely narrow.
+
+### Added
+
+- Onboarding polish: the primary **"Read & open" / "Open"** actions are real
+  buttons; the encrypted-backup password step shows a **Keychain trust line**;
+  and a wrong password keeps the field with an inline "That password didn't work"
+  instead of a dead-end error card.
+
 ## [0.12.1] — 2026-07-18
 
 A UX consistency-and-polish pass, verified against Apple's apps via a new
