@@ -863,14 +863,19 @@ function TimelineRow({
           />
         )}
         {/* Direction: → you sent it, ← you received it. */}
+        {/* The arrow reads relative to the party on the left (the avatar): it
+            points away from them (→) when they SENT the message, and toward them
+            (←) when they RECEIVED it. So an incoming message is "sender → text"
+            and one you sent is "recipient ← text". Works for groups too: incoming
+            shows the sending member (→), outgoing shows the group (←). */}
         <span
           className="shrink-0"
-          title={m.isFromMe ? "You sent this" : "Received"}
+          title={m.isFromMe ? "You sent this" : "They sent this"}
         >
           {m.isFromMe ? (
-            <ArrowRight className="size-3.5 text-primary" />
+            <ArrowLeft className="size-3.5 text-primary" />
           ) : (
-            <ArrowLeft className="size-3.5 text-muted-foreground" />
+            <ArrowRight className="size-3.5 text-muted-foreground" />
           )}
         </span>
         <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
