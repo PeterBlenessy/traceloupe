@@ -2578,6 +2578,8 @@ fn absolutize(base: &str, img: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Restore/save the window's size & position across launches.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ActiveBackup::default())
