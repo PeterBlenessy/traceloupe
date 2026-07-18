@@ -468,6 +468,8 @@ export interface TraceLoupeClient {
     search?: string | null,
     kind?: string | null,
   ): Promise<number[]>;
+  /** The earliest and latest dated message (Unix seconds), or null if none. */
+  messageDateBounds(): Promise<[number, number] | null>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
   getRangeWindow(
     lo: number | null,
@@ -700,6 +702,8 @@ const tauriClient: TraceLoupeClient = {
       search: search ?? null,
       kind: kind ?? null,
     }),
+  messageDateBounds: () =>
+    invoke<[number, number] | null>("message_date_bounds"),
   getRangeWindow: (
     lo,
     hi,
@@ -2002,6 +2006,14 @@ export const mockClient: TraceLoupeClient = {
     ranges.map((r) =>
       mockActive ? mockFilterTimeline(service, r, search).length : 0,
     ),
+  messageDateBounds: async () => {
+    if (!mockActive) return null;
+    const ts = Object.values(mockMessages)
+      .flat()
+      .map((m) => m.sentAt)
+      .filter((t): t is number => t != null);
+    return ts.length ? [Math.min(...ts), Math.max(...ts)] : null;
+  },
   getRangeWindow: async (
     lo,
     hi,

@@ -1093,6 +1093,21 @@ async fn get_timeline_window(
     .map_err(|e| e.to_string())?
 }
 
+/// The earliest/latest dated message (Unix seconds), for the Timeline's per-year
+/// quick filters. `None` when there are no dated messages.
+#[tauri::command]
+async fn message_date_bounds(
+    active: State<'_, ActiveBackup>,
+) -> Result<Option<(i64, i64)>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::message_date_bounds(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn count_message_ranges(
     active: State<'_, ActiveBackup>,
@@ -2668,6 +2683,7 @@ pub fn run() {
             count_timeline_messages,
             get_timeline_window,
             count_message_ranges,
+            message_date_bounds,
             get_range_window,
             open_attachment,
             list_calls,

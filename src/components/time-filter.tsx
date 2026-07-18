@@ -42,6 +42,21 @@ export function makeTimePresets(now: number): TimePreset[] {
   ];
 }
 
+/** Disjoint per-calendar-year presets, newest year first, for the inclusive
+ *  span `[minYear, maxYear]`. Each is `[Jan 1, next Jan 1)` in local time. */
+export function makeYearPresets(minYear: number, maxYear: number): TimePreset[] {
+  const out: TimePreset[] = [];
+  for (let y = maxYear; y >= minYear; y--) {
+    out.push({
+      key: `y${y}`,
+      label: String(y),
+      lo: Math.floor(new Date(y, 0, 1).getTime() / 1000),
+      hi: Math.floor(new Date(y + 1, 0, 1).getTime() / 1000),
+    });
+  }
+  return out;
+}
+
 /**
  * Anchor "now" once (stable across renders) and derive the presets from it, so
  * preset bounds and any count query keyed on them stay stable.
