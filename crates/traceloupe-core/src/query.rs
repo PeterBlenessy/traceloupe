@@ -188,6 +188,11 @@ pub fn message_row_index(
     };
     // Count rows that sort before the target. The row-value comparison mirrors
     // the `ORDER BY sent_at DIR, id DIR` tuple ordering; `>` for descending.
+    // NOTE: SQLite yields NULL (not true) for `(sent_at, id) < (…)` when either
+    // side's sent_at is NULL, whereas ORDER BY sorts NULLs first — so a thread
+    // containing NULL-dated messages could return an index off by the NULL count.
+    // Benign in practice: every imported message has a sent_at, and jump targets
+    // are always dated timeline rows. Revisit if a source ever yields NULL dates.
     let cmp = if desc { ">" } else { "<" };
     let idx: i64 = conn.query_row(
         &format!(
@@ -309,7 +314,12 @@ pub fn recover_attachment_media(
              JOIN media_items mi
                ON mi.local_path IS NOT NULL
               AND (mi.relative_path = a.filename
-                   OR mi.relative_path LIKE '%/' || a.filename)
+                   -- exact trailing slash+filename match. LIKE is wrong here:
+                   -- filenames like IMG_0001.HEIC contain an underscore, a LIKE
+                   -- wildcard, so IMG_0001 would also match e.g. IMGX0001. substr
+                   -- on the last length(filename)+1 chars compares literally.
+                   OR substr('/' || mi.relative_path, -(length(a.filename) + 1))
+                        = '/' || a.filename)
              WHERE a.id = ?1 AND a.filename IS NOT NULL AND a.local_path IS NULL
              ORDER BY ABS(COALESCE(mi.taken_at, 0) - COALESCE(m.sent_at, 0))
              LIMIT 1",

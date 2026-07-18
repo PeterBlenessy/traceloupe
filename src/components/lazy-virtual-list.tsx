@@ -11,6 +11,24 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 /** Rows fetched per lazy window. Small keeps each IPC round-trip cheap. */
 const PAGE = 100;
 
+/** Cap on persisted scroll-position keys (`lvl:*`). Each distinct filter/search/
+ *  range/thread mints one; without a bound they'd accumulate forever. */
+const MAX_SCROLL_KEYS = 200;
+
+/** Trim `lvl:*` keys back under the cap (never evicting the one just written).
+ *  No LRU metadata, so eviction order is arbitrary — a dropped key just means
+ *  that view re-anchors next time, which is harmless. */
+function pruneScrollKeys(keep: string): void {
+  const keys: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("lvl:") && k !== keep) keys.push(k);
+  }
+  for (let i = 0; i < keys.length - MAX_SCROLL_KEYS; i++) {
+    localStorage.removeItem(keys[i]);
+  }
+}
+
 /**
  * A virtualized list over a very large, lazily-fetched dataset. Only the rows in
  * view (plus overscan) are mounted, and only the ~100-row windows they fall in
@@ -132,11 +150,11 @@ export function LazyVirtualList<T>({
     // scrollToIndex accounts for measured row heights and retries until the
     // target settles, so it lands right even before windows have loaded. Near
     // the very end we fall back to a direct bottom scroll — scrollToIndex to the
-    // far end of a tall variable-height list can thrash.
-    const saved = persistKey
-      ? Number(localStorage.getItem(`lvl:${persistKey}`))
-      : NaN;
-    if (Number.isFinite(saved) && saved > 0 && saved < count - 2) {
+    // far end of a tall variable-height list can thrash. A missing key reads as
+    // null (not 0), so a genuinely-saved index 0 still restores to the top.
+    const raw = persistKey ? localStorage.getItem(`lvl:${persistKey}`) : null;
+    const saved = raw != null ? Number(raw) : NaN;
+    if (Number.isFinite(saved) && saved >= 0 && saved < count - 2) {
       virtualizer.scrollToIndex(saved, { align: "start" });
     } else {
       // Ascending (oldest-first) pins the newest row at the bottom; descending
@@ -147,7 +165,10 @@ export function LazyVirtualList<T>({
 
   // Persist the top visible row's INDEX (debounced, and flushed on unmount / key
   // change so navigating away always records the exact spot) for restore above.
-  useEffect(() => {
+  // MUST be a layout effect: on an in-view key change (K1→K2) its cleanup then
+  // runs in the mutation phase — BEFORE the restore layout effect's setup mutates
+  // scrollTop for K2 — so it records K1's real position instead of K2's.
+  useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el || !persistKey) return;
     const key = `lvl:${persistKey}`;
@@ -156,7 +177,10 @@ export function LazyVirtualList<T>({
       // The first row whose top is at/below the scroll position is the top
       // visible one (earlier items are overscan above the viewport).
       const top = items.find((vi) => vi.start >= el.scrollTop) ?? items[0];
-      if (top) localStorage.setItem(key, String(top.index));
+      if (top) {
+        localStorage.setItem(key, String(top.index));
+        pruneScrollKeys(key);
+      }
     };
     let t: ReturnType<typeof setTimeout>;
     const onScroll = () => {
