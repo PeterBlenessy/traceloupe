@@ -9,6 +9,12 @@ export type Density = "comfortable" | "cozy" | "compact";
 /** Ordered least-dense → most-dense; drives the density stepper in the header. */
 export const DENSITIES: Density[] = ["comfortable", "cozy", "compact"];
 
+/** How message links preview. Escalating levels of contacting external sites:
+ *  `off` (raw URLs, no network), `hover` (fetch on deliberate hover, default),
+ *  `inline` (auto-unfurl every visible link in the bubble). */
+export type LinkPreviewMode = "off" | "hover" | "inline";
+export const LINK_PREVIEW_MODES: LinkPreviewMode[] = ["off", "hover", "inline"];
+
 /**
  * Settings provider — holds app-wide display preferences, reads their initial
  * values from localStorage, and persists on change. Mirrors the theme-provider
@@ -20,14 +26,10 @@ type SettingsProviderState = {
   setShowContactNames: (v: boolean) => void;
   showAvatars: boolean;
   setShowAvatars: (v: boolean) => void;
-  /** Also render link previews inline in the message bubble. Off by default;
-   *  contacts external sites. */
-  linkPreviews: boolean;
-  setLinkPreviews: (v: boolean) => void;
-  /** Show a link's preview in a hover card when the pointer rests on it. On by
-   *  default (the fetch is user-initiated per hover); contacts external sites. */
-  linkPreviewsHover: boolean;
-  setLinkPreviewsHover: (v: boolean) => void;
+  /** How message links preview (off / on hover / inline). Contacts external
+   *  sites for hover & inline. Defaults to hover. */
+  linkPreviewMode: LinkPreviewMode;
+  setLinkPreviewMode: (v: LinkPreviewMode) => void;
   /** How the image/video lightbox opens: a windowed modal, or fullscreen. */
   lightboxStyle: LightboxStyle;
   setLightboxStyle: (v: LightboxStyle) => void;
@@ -55,8 +57,10 @@ type SettingsProviderState = {
 
 const NAMES_KEY = "traceloupe-show-names";
 const AVATARS_KEY = "traceloupe-show-avatars";
-const LINK_PREVIEWS_KEY = "traceloupe-link-previews";
-const LINK_PREVIEWS_HOVER_KEY = "traceloupe-link-previews-hover";
+const LINK_PREVIEW_MODE_KEY = "traceloupe-link-preview-mode";
+// Legacy per-behaviour toggles, migrated into the mode on first read.
+const LEGACY_LINK_PREVIEWS_KEY = "traceloupe-link-previews";
+const LEGACY_LINK_PREVIEWS_HOVER_KEY = "traceloupe-link-previews-hover";
 const LIGHTBOX_STYLE_KEY = "traceloupe-lightbox-style";
 const MEDIA_META_KEY = "traceloupe-media-metadata";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
@@ -68,6 +72,18 @@ const DENSITY_KEY = "traceloupe-density";
 function readDensity(): Density {
   const raw = localStorage.getItem(DENSITY_KEY);
   return DENSITIES.includes(raw as Density) ? (raw as Density) : "comfortable";
+}
+
+/** Read the link-preview mode, defaulting to "hover". Migrates the two legacy
+ *  boolean toggles: inline wins if it was on, else off if hover was disabled. */
+function readLinkPreviewMode(): LinkPreviewMode {
+  const raw = localStorage.getItem(LINK_PREVIEW_MODE_KEY);
+  if (LINK_PREVIEW_MODES.includes(raw as LinkPreviewMode)) {
+    return raw as LinkPreviewMode;
+  }
+  if (localStorage.getItem(LEGACY_LINK_PREVIEWS_KEY) === "true") return "inline";
+  if (localStorage.getItem(LEGACY_LINK_PREVIEWS_HOVER_KEY) === "false") return "off";
+  return "hover";
 }
 
 const LOG_LEVELS: LogLevel[] = ["off", "error", "warn", "info", "debug", "trace"];
@@ -117,13 +133,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [showAvatars, setShowAvatarsState] = useState<boolean>(() =>
     readBool(AVATARS_KEY),
   );
-  // Opt-in: default OFF (readBool defaults true, so check explicitly).
-  const [linkPreviews, setLinkPreviewsState] = useState<boolean>(
-    () => localStorage.getItem(LINK_PREVIEWS_KEY) === "true",
-  );
-  // On by default (hover is a deliberate, per-link action).
-  const [linkPreviewsHover, setLinkPreviewsHoverState] = useState<boolean>(() =>
-    readBool(LINK_PREVIEWS_HOVER_KEY),
+  const [linkPreviewMode, setLinkPreviewModeState] = useState<LinkPreviewMode>(
+    () => readLinkPreviewMode(),
   );
   const [lightboxStyle, setLightboxStyleState] = useState<LightboxStyle>(() =>
     localStorage.getItem(LIGHTBOX_STYLE_KEY) === "windowed"
@@ -220,13 +231,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(AVATARS_KEY, String(v));
     setShowAvatarsState(v);
   };
-  const setLinkPreviews = (v: boolean) => {
-    localStorage.setItem(LINK_PREVIEWS_KEY, String(v));
-    setLinkPreviewsState(v);
-  };
-  const setLinkPreviewsHover = (v: boolean) => {
-    localStorage.setItem(LINK_PREVIEWS_HOVER_KEY, String(v));
-    setLinkPreviewsHoverState(v);
+  const setLinkPreviewMode = (v: LinkPreviewMode) => {
+    localStorage.setItem(LINK_PREVIEW_MODE_KEY, v);
+    setLinkPreviewModeState(v);
   };
   const setLightboxStyle = (v: LightboxStyle) => {
     localStorage.setItem(LIGHTBOX_STYLE_KEY, v);
@@ -265,10 +272,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setShowContactNames,
         showAvatars,
         setShowAvatars,
-        linkPreviews,
-        setLinkPreviews,
-        linkPreviewsHover,
-        setLinkPreviewsHover,
+        linkPreviewMode,
+        setLinkPreviewMode,
         lightboxStyle,
         setLightboxStyle,
         showMediaMetadata,
