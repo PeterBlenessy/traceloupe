@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useSettings } from "@/components/settings-provider";
 import { useImport } from "@/components/import-provider";
-import { Lock, Loader2, TriangleAlert } from "lucide-react";
+import { KeyRound, Lock, Loader2, TriangleAlert } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -73,6 +73,13 @@ export function ImportDialog({
       ? "This backup isn't encrypted."
       : "Enter the backup password if it's encrypted."; // encryption unknown
 
+  // A wrong backup password is the common first-run failure and deserves the
+  // field back (with the entered value kept) rather than a dead-end error card.
+  const wrongPassword =
+    encrypted &&
+    errorMessage != null &&
+    /password|decrypt|incorrect|wrong key|hmac|mac check|bad key/i.test(errorMessage);
+
   return (
     <Dialog
       open
@@ -103,7 +110,7 @@ export function ImportDialog({
             onStop={stop}
             onRunInBackground={runInBackground}
           />
-        ) : errorMessage ? (
+        ) : errorMessage && !wrongPassword ? (
           <div className="space-y-4">
             <Alert variant="destructive">
               <TriangleAlert className="size-4" />
@@ -127,6 +134,11 @@ export function ImportDialog({
             }}
             className="space-y-4"
           >
+            {wrongPassword && (
+              <p className="text-sm text-destructive">
+                That password didn't work. Check it and try again.
+              </p>
+            )}
             {showPasswordField && (
               <div className="relative">
                 <Lock className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
@@ -139,6 +151,15 @@ export function ImportDialog({
                   className="pl-8 select-text"
                 />
               </div>
+            )}
+            {showPasswordField && encrypted && (
+              <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                <KeyRound className="mt-0.5 size-3.5 shrink-0" />
+                <span>
+                  Saved to your macOS Keychain so this backup reopens without
+                  re-entering it. It never leaves this Mac.
+                </span>
+              </p>
             )}
             <DialogFooter>
               <Button type="button" variant="ghost" onClick={close}>

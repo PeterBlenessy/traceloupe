@@ -291,12 +291,26 @@ function BackupCard({
               >
                 <Trash2 className="size-4" />
               </Button>
-              <span className="inline-flex items-center gap-1 text-foreground">
+              <Button
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect();
+                }}
+              >
                 <Check className="size-4" /> Open
-              </span>
+              </Button>
             </>
           ) : (
-            "Read & open"
+            <Button
+              size="sm"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect();
+              }}
+            >
+              <FolderOpen className="size-4" /> Read &amp; open
+            </Button>
           )}
         </div>
       </CardContent>
