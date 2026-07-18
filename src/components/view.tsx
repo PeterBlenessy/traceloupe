@@ -7,13 +7,15 @@
  * not new styling systems. If a view needs something bespoke, prefer adding a
  * primitive here over inlining it in the view.
  */
-import { Search, TriangleAlert } from "lucide-react";
+import { useRef, useState } from "react";
+import { Search, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -95,18 +97,39 @@ export function PanelHeader({
   icon?: React.ReactNode;
   /** Inline controls on the title row (e.g. source/type filter chips). */
   actions?: React.ReactNode;
-  /** A full-width search row directly below the title. */
+  /** The search control — rendered inline in the title row (expanding icon). */
   search?: React.ReactNode;
-  /** A full-width filter/sort toolbar row below the search. */
+  /** Filter/sort controls, revealed in a row below the title by the Filter
+   *  toggle so the header stays minimal until the user wants them. */
   toolbar?: React.ReactNode;
 }) {
+  // Remember per view whether the filter row is revealed.
+  const [filtersOpen, setFiltersOpen] = usePersistedState(
+    `panel-filters:${title}`,
+    false,
+  );
   return (
     <>
       <ViewHeader title={title} count={count} icon={icon}>
         {actions}
+        {toolbar && (
+          <button
+            type="button"
+            aria-label="Filters and sort"
+            aria-pressed={filtersOpen}
+            title="Filters & sort"
+            onClick={() => setFiltersOpen((o) => !o)}
+            className={cn(
+              "inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              filtersOpen && "bg-accent text-foreground",
+            )}
+          >
+            <SlidersHorizontal className="size-4" />
+          </button>
+        )}
+        {search}
       </ViewHeader>
-      {search && <div className="shrink-0 border-b px-3 py-1.5">{search}</div>}
-      {toolbar && (
+      {toolbar && filtersOpen && (
         // No wrap: a wide toolbar (time chips + sort) scrolls its own content
         // rather than pushing the sort onto a second row.
         <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-3 py-1.5">
@@ -275,7 +298,11 @@ export function ListDetail({
   );
 }
 
-/** A search box for filtering a list. Controlled. */
+/**
+ * A macOS-toolbar-style search that collapses to a single icon and expands into
+ * an input on click (and stays open while it has text) — so it lives inline in
+ * the header toolbar instead of taking a whole row. Controlled value.
+ */
 export function ListSearch({
   value,
   onChange,
@@ -285,15 +312,48 @@ export function ListSearch({
   onChange: (v: string) => void;
   placeholder: string;
 }) {
+  const [focused, setFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const open = focused || value.length > 0;
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        aria-label={placeholder}
+        title={placeholder}
+        onClick={() => {
+          setFocused(true);
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }}
+        className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      >
+        <Search className="size-4" />
+      </button>
+    );
+  }
   return (
-    <div className="relative">
-      <Search className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+    <div className="relative w-44 shrink-0 transition-[width] duration-200 sm:w-56">
+      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
+        ref={inputRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onBlur={() => setFocused(false)}
         placeholder={placeholder}
-        className="h-9 select-text pl-8"
+        className="h-8 select-text pl-8 pr-7"
       />
+      {value && (
+        <button
+          type="button"
+          aria-label="Clear search"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onChange("")}
+          className="absolute right-1.5 top-1/2 flex size-5 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }
