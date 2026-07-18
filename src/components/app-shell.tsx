@@ -39,6 +39,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useResizableWidth } from "@/components/resize";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Button } from "@/components/ui/button";
 import {
@@ -94,6 +95,11 @@ export function AppShell() {
     180,
     400,
   );
+  // Persist whether the sidebar is expanded or collapsed to the icon rail.
+  const [sidebarOpen, setSidebarOpen] = usePersistedState(
+    "traceloupe-sidebar-open",
+    true,
+  );
 
   return (
     // ImportProvider / ReimportProvider live above the routes so an import — and a
@@ -109,6 +115,8 @@ export function AppShell() {
         something to constrain against so overflow scrolls instead of expanding.
         `relative` anchors the sidebar resize handle. */}
         <SidebarProvider
+          open={sidebarOpen}
+          onOpenChange={setSidebarOpen}
           className="relative h-svh overflow-hidden"
           style={
             { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
