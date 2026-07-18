@@ -1078,21 +1078,42 @@ async fn message_link_metadata(
     } else {
         None
     };
-    let rl = tauri::async_runtime::spawn_blocking(move || -> Result<rich_link::RichLink, String> {
-        let bytes = match (decrypt_key, dec) {
-            (Some(key), Some(dec)) => {
-                let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
-                let size = plain_size.and_then(|s| usize::try_from(s).ok());
-                dec.decrypt_bytes(&key, &ciphertext, size)
-                    .map_err(|e| e.to_string())?
-            }
-            _ => std::fs::read(&local_path).map_err(|e| e.to_string())?,
-        };
-        rich_link::decode(&bytes).map_err(|e| e.to_string())
-    })
+    let outcome = tauri::async_runtime::spawn_blocking(
+        move || -> Result<(usize, rich_link::RichLink), String> {
+            let bytes = match (decrypt_key, dec) {
+                (Some(key), Some(dec)) => {
+                    let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
+                    let size = plain_size.and_then(|s| usize::try_from(s).ok());
+                    dec.decrypt_bytes(&key, &ciphertext, size)
+                        .map_err(|e| e.to_string())?
+                }
+                _ => std::fs::read(&local_path).map_err(|e| e.to_string())?,
+            };
+            let n = bytes.len();
+            rich_link::decode(&bytes).map(|rl| (n, rl)).map_err(|e| e.to_string())
+        },
+    )
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
 
+    // A bad payload shouldn't error the query — log the reason and show nothing.
+    let (n, rl) = match outcome {
+        Ok(v) => v,
+        Err(e) => {
+            logging::debug(&app, format!("rich-link decode failed: {e}"));
+            return Ok(None);
+        }
+    };
+    // Structural only (no content): whether each field was recovered, and size.
+    logging::debug(
+        &app,
+        format!(
+            "rich-link: {n} bytes → title={} url={} image={}",
+            rl.title.is_some(),
+            rl.url.is_some(),
+            rl.image.is_some()
+        ),
+    );
     if rl.is_empty() {
         return Ok(None);
     }

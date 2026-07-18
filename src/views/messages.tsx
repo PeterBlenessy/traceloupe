@@ -1133,6 +1133,16 @@ function MessageBubble({
     () => message.attachments.filter((a) => !isInternalAttachment(a)),
     [message.attachments],
   );
+  // Decode the plugin payload's cached rich-link preview (offline). If it yields
+  // a usable card we show it; otherwise we fall back to the opt-in OG card.
+  const { data: pluginMeta } = useQuery({
+    queryKey: ["pluginLink", pluginPayload?.id ?? -1],
+    queryFn: () => client.messageLinkMetadata(pluginPayload!.id),
+    enabled: !!pluginPayload,
+    staleTime: Infinity,
+    retry: false,
+  });
+  const hasPluginCard = !!pluginMeta && (!!pluginMeta.title || !!pluginMeta.image);
   // Available image attachments open in an in-app lightbox (with prev/next).
   const imageAtts = useMemo(
     () =>
@@ -1177,10 +1187,13 @@ function MessageBubble({
                   </div>
                 );
               })}
-              {/* iMessage's own cached preview (offline) when present; else the
-                  opt-in OpenGraph card for the first link. */}
-              {pluginPayload ? (
-                <PluginLinkPreview attachmentId={pluginPayload.id} />
+              {/* iMessage's own cached preview (offline) when it decoded to
+                  something; else the opt-in OpenGraph card for the first link. */}
+              {hasPluginCard ? (
+                <PluginLinkPreview
+                  data={pluginMeta!}
+                  fallbackUrl={message.body ? firstUrl(message.body) : null}
+                />
               ) : (
                 previewUrl && <LinkPreviewCard url={previewUrl} />
               )}
@@ -1425,16 +1438,17 @@ function LinkPreviewCard({ url }: { url: string }) {
 
 /** An offline rich-link card decoded from an iMessage plugin payload — the
  *  preview iMessage itself cached (title + thumbnail). Shown for shared links
- *  whose live page has no OpenGraph tags (e.g. Maps). Local only: no network. */
-function PluginLinkPreview({ attachmentId }: { attachmentId: number }) {
-  const { data } = useQuery<RichLinkPreview | null>({
-    queryKey: ["pluginLink", attachmentId],
-    queryFn: () => client.messageLinkMetadata(attachmentId),
-    staleTime: Infinity,
-    retry: false,
-  });
-  if (!data || (!data.title && !data.image)) return null;
-  const url = data.url;
+ *  whose live page has no OpenGraph tags (e.g. Maps). Local only: no network.
+ *  Presentational — the parent fetches so it can fall back to an OG card. */
+function PluginLinkPreview({
+  data,
+  fallbackUrl,
+}: {
+  data: RichLinkPreview;
+  /** The link from the message body, used if the payload omitted the URL. */
+  fallbackUrl?: string | null;
+}) {
+  const url = data.url ?? fallbackUrl ?? null;
   return (
     <button
       onClick={(e) => {
