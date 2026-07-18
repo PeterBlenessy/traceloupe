@@ -2266,6 +2266,11 @@ fn safe_http_get(url: &str, cap: u64, want: Option<&str>) -> Result<(String, Vec
         }
         match agent
             .get(&current)
+            // A crawler-style UA (not a full browser one): sites like Spotify and
+            // Instagram serve OpenGraph tags to crawlers but a JS app-shell or a
+            // login wall to browsers, so impersonating a browser would *lose*
+            // those previews. Some sites (e.g. newbalance.se) hard-block any
+            // server fetch regardless — those fall back to the domain card.
             .set("User-Agent", "Mozilla/5.0 TraceLoupe/link-preview")
             .call()
         {
