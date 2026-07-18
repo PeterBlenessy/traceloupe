@@ -2678,26 +2678,6 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        // Give the window a native vibrant (NSVisualEffectView) backing on macOS,
-        // so the translucent sidebar picks up the desktop behind it. Best-effort:
-        // a failure just leaves the solid background. macOS auto-substitutes a
-        // solid fill under "Reduce transparency", so accessibility is handled.
-        .setup(|app| {
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::Manager;
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
-                if let Some(win) = app.get_webview_window("main") {
-                    let _ = apply_vibrancy(
-                        &win,
-                        NSVisualEffectMaterial::Sidebar,
-                        None,
-                        None,
-                    );
-                }
-            }
-            Ok(())
-        })
         .manage(ActiveBackup::default())
         .manage(SessionKeys::default())
         .manage(ImportCancel::default())
