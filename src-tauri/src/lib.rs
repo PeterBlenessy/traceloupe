@@ -1090,7 +1090,17 @@ async fn message_link_metadata(
                 _ => std::fs::read(&local_path).map_err(|e| e.to_string())?,
             };
             let n = bytes.len();
-            rich_link::decode(&bytes).map(|rl| (n, rl)).map_err(|e| e.to_string())
+            rich_link::decode(&bytes).map(|rl| (n, rl)).map_err(|e| {
+                // Include the leading bytes (container magic) so an unexpected
+                // payload format can be identified from the log.
+                let head: String = bytes
+                    .iter()
+                    .take(16)
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{e}; {n} bytes; head=[{head}]")
+            })
         },
     )
     .await
