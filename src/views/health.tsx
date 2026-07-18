@@ -3,13 +3,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Activity, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { usePersistedState } from "@/lib/use-persisted-state";
-import { EmptyView, ErrorState, PanelHeader } from "@/components/view";
+import { EmptyView, ErrorState, ListSkeleton, PanelHeader } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { client, type Workout, type TimeRange } from "@/lib/ipc";
 
@@ -174,11 +173,7 @@ export function HealthView() {
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
-        <div className="w-full p-2">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <Skeleton key={i} className="mb-1 h-14 w-full" />
-          ))}
-        </div>
+        <ListSkeleton />
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
           {summary && summary.sampleCount > 0 && (

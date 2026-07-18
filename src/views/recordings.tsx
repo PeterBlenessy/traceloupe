@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   Item,
   ItemContent,
@@ -24,6 +23,7 @@ import {
   ErrorState,
   ListDetail,
   ListSearch,
+  ListSkeleton,
   PanelHeader,
   ViewHeader,
 } from "@/components/view";
@@ -157,21 +157,11 @@ export function RecordingsView() {
             error ? (
               <ErrorState error={error} />
             ) : isPending ? (
-              <div className="min-h-0 flex-1 overflow-auto">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="px-3 py-2">
-                    <Skeleton className="h-12 w-full" />
-                  </div>
-                ))}
-              </div>
+              <ListSkeleton rows={6} />
             ) : (recordings?.length ?? 0) === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                No voice recordings in this backup.
-              </p>
+              <EmptyView title="No voice recordings in this backup." />
             ) : (sortedRecordings?.length ?? 0) === 0 ? (
-              <p className="px-4 py-6 text-sm text-muted-foreground">
-                No recordings match the current search or time range.
-              </p>
+              <EmptyView title="No recordings match the current search or time range." />
             ) : (
               <VirtualList
                 key={clockFormat}

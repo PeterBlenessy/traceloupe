@@ -196,11 +196,14 @@ function PhotosViewInner() {
           ))}
         </div>
       ) : count === 0 ? (
-        <p className="p-6 text-center text-sm text-muted-foreground">
-          {source === "all"
-            ? "No photos or videos in this backup."
-            : "No media from this source."}
-        </p>
+        <EmptyView
+          icon={Images}
+          title={
+            source === "all"
+              ? "No photos or videos in this backup."
+              : "No media from this source."
+          }
+        />
       ) : (
         // key by source+range+search+sort so the grid remounts (scroll +
         // measurement reset) on any filter change.
