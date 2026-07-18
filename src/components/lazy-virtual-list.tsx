@@ -117,9 +117,6 @@ export function LazyVirtualList<T>({
   // own position.
   const anchorKey = persistKey ?? resetKey;
   const scrolledFor = useRef<unknown>(undefined);
-  // The restore re-applies over several frames; a jumpTo (scroll-to-message)
-  // cancels it so the jump wins instead of being stomped by the re-apply.
-  const restoreRaf = useRef<number>(0);
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (
@@ -131,34 +128,40 @@ export function LazyVirtualList<T>({
       return;
     }
     scrolledFor.current = anchorKey;
+    // Restore the exact row we left off at by INDEX (not a pixel offset):
+    // scrollToIndex accounts for measured row heights and retries until the
+    // target settles, so it lands right even before windows have loaded. Near
+    // the very end we fall back to a direct bottom scroll — scrollToIndex to the
+    // far end of a tall variable-height list can thrash.
     const saved = persistKey
       ? Number(localStorage.getItem(`lvl:${persistKey}`))
       : NaN;
-    const toSaved = Number.isFinite(saved) && saved > 0;
-    // Re-apply over a few frames: the virtualizer's total height (and thus the
-    // max scrollTop) settles across the next paints, so a far target doesn't
-    // "stick" on the first assignment alone. Ascending (oldest-first) pins the
-    // newest row at the bottom; descending pins it at the top.
-    let frames = 0;
-    const apply = () => {
-      el.scrollTop = toSaved ? saved : startAtBottom ? el.scrollHeight : 0;
-      if (++frames < 5) restoreRaf.current = requestAnimationFrame(apply);
-    };
-    apply();
-    return () => cancelAnimationFrame(restoreRaf.current);
-  }, [count, anchorKey, startAtBottom, persistKey]);
+    if (Number.isFinite(saved) && saved > 0 && saved < count - 2) {
+      virtualizer.scrollToIndex(saved, { align: "start" });
+    } else {
+      // Ascending (oldest-first) pins the newest row at the bottom; descending
+      // (newest-first) pins it at the top.
+      el.scrollTop = startAtBottom || saved >= count - 2 ? el.scrollHeight : 0;
+    }
+  }, [count, anchorKey, startAtBottom, persistKey, virtualizer]);
 
-  // Persist the scroll position (debounced, and flushed on unmount / key change
-  // so navigating away always records the latest spot) for restore above.
+  // Persist the top visible row's INDEX (debounced, and flushed on unmount / key
+  // change so navigating away always records the exact spot) for restore above.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !persistKey) return;
-    const save = () =>
-      localStorage.setItem(`lvl:${persistKey}`, String(el.scrollTop));
+    const key = `lvl:${persistKey}`;
+    const save = () => {
+      const items = virtualizer.getVirtualItems();
+      // The first row whose top is at/below the scroll position is the top
+      // visible one (earlier items are overscan above the viewport).
+      const top = items.find((vi) => vi.start >= el.scrollTop) ?? items[0];
+      if (top) localStorage.setItem(key, String(top.index));
+    };
     let t: ReturnType<typeof setTimeout>;
     const onScroll = () => {
       clearTimeout(t);
-      t = setTimeout(save, 200);
+      t = setTimeout(save, 150);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
@@ -166,7 +169,7 @@ export function LazyVirtualList<T>({
       clearTimeout(t);
       save();
     };
-  }, [persistKey]);
+  }, [persistKey, virtualizer]);
 
   // Imperative jump: align `index` to the top. scrollToIndex accounts for
   // already-measured row heights (e.g. the timeline's occasional date headers),
@@ -178,9 +181,8 @@ export function LazyVirtualList<T>({
   useLayoutEffect(() => {
     if (jumpTo && scrollRef.current && jumpedFor.current !== jumpTo.token) {
       jumpedFor.current = jumpTo.token;
-      // Stop the restore's frame loop and mark the anchor as handled so a jump
-      // to a message isn't overwritten by a persisted-position restore.
-      cancelAnimationFrame(restoreRaf.current);
+      // Mark the anchor handled so a jump to a message isn't overwritten by a
+      // persisted-position restore (whichever ran; both use scrollToIndex).
       scrolledFor.current = anchorKey;
       virtualizer.scrollToIndex(jumpTo.index, { align: "start" });
     }
