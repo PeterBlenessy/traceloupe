@@ -735,6 +735,14 @@ function TimelineRow({
   const partnerName =
     (showContactNames && resolved?.name) || partnerHandle || item.threadTitle;
   const slug = item.service ? serviceSlug(item.service) : null;
+  // Same link-preview behaviour as the conversation bubble: "inline" mode
+  // unfurls the first link into a card (replacing a URL-only row's text);
+  // "hover" mode is handled inside MessageBody.
+  const inlinePreviews = useSettings().linkPreviewMode === "inline";
+  const previewUrl = inlinePreviews && m.body ? firstUrl(m.body) : null;
+  const trimmedBody = (m.body ?? "").trim();
+  const replaceUrlWithCard =
+    !!previewUrl && !!trimmedBody && !/\s/.test(trimmedBody) && !!firstUrl(trimmedBody);
   return (
     <div className="px-2 py-0.5">
       {showDate && m.sentAt && (
@@ -760,7 +768,9 @@ function TimelineRow({
         }}
         data-slot="list-row"
         className={cn(
-          "flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/50",
+          "flex w-full cursor-pointer gap-2.5 rounded-md px-3 py-2 text-left transition-colors hover:bg-accent/50",
+          // Top-align when a preview card makes the row tall; otherwise center.
+          previewUrl ? "items-start" : "items-center",
           m.isFromMe && "bg-primary/5 hover:bg-primary/10",
         )}
       >
@@ -791,7 +801,7 @@ function TimelineRow({
             </span>
           )}
           {m.body ? (
-            <MessageBody text={m.body} />
+            !replaceUrlWithCard && <MessageBody text={m.body} />
           ) : atts.some(
               (a) => a.localPath && isImageAttachment(a.mimeType ?? "", a.filename),
             ) ? null : atts.length ? (
@@ -813,6 +823,9 @@ function TimelineRow({
               )
             }
           />
+          {previewUrl && (
+            <LinkPreviewCard url={previewUrl} placeholder={replaceUrlWithCard} />
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           {slug && hasBrandIcon(slug) && (
