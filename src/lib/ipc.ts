@@ -299,6 +299,15 @@ export interface LinkPreview {
   siteName: string | null;
 }
 
+/** A rich-link preview decoded from an iMessage plugin payload (offline; the
+ *  image is a self-contained data: URL). */
+export interface RichLinkPreview {
+  url: string | null;
+  title: string | null;
+  summary: string | null;
+  image: string | null;
+}
+
 export interface Attachment {
   id: number;
   filename: string | null;
@@ -372,6 +381,9 @@ export interface TraceLoupeClient {
   /** Fetch a URL's OpenGraph metadata for a link preview. Opt-in — this makes an
    *  outbound request to the linked site; only call it when the setting is on. */
   fetchLinkPreview(url: string): Promise<LinkPreview>;
+  /** Decode the cached rich-link preview from an iMessage plugin-payload
+   *  attachment (offline; null when it isn't a rich link). */
+  messageLinkMetadata(attachmentId: number): Promise<RichLinkPreview | null>;
   engineStatus(): Promise<boolean>;
   engineInfo(): Promise<EngineInfo>;
   /** Download + verify + install the pinned engine. */
@@ -623,6 +635,8 @@ const tauriClient: TraceLoupeClient = {
     invoke<void>("open_full_disk_access_settings"),
   openExternal: (url) => openUrl(url),
   fetchLinkPreview: (url) => invoke<LinkPreview>("fetch_link_preview", { url }),
+  messageLinkMetadata: (attachmentId) =>
+    invoke<RichLinkPreview | null>("message_link_metadata", { attachmentId }),
   engineStatus: () => invoke<boolean>("engine_status"),
   engineInfo: () => invoke<EngineInfo>("engine_info"),
   installEngine: () => invoke<void>("install_engine"),
@@ -1705,6 +1719,7 @@ export const mockClient: TraceLoupeClient = {
     image: null,
     siteName: new URL(url).hostname,
   }),
+  messageLinkMetadata: async () => null,
   engineStatus: async () => true,
   engineInfo: async () => ({
     installed: true,
