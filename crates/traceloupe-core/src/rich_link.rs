@@ -37,23 +37,37 @@ impl RichLink {
 /// fields, so callers can treat "no preview" uniformly.
 pub fn decode(bytes: &[u8]) -> Result<RichLink> {
     let resolved = nska::resolve(bytes)?;
-    // `nska::resolve` unwraps a lone `$top.root`, so the resolved value is the
-    // LPLinkMetadata dict itself; still tolerate a `root`-wrapped shape.
-    let Some(top) = resolved.as_dictionary() else {
-        return Ok(RichLink::default());
-    };
-    let root = top
-        .get("root")
-        .and_then(Value::as_dictionary)
-        .unwrap_or(top);
+    // The LPLinkMetadata is usually the resolved root, but the balloon payload can
+    // wrap it — so search the whole tree for the dict that carries the link URL
+    // rather than assuming a fixed shape. The thumbnail is found tree-wide too.
+    let meta = find_link_dict(&resolved, 0);
     Ok(RichLink {
-        title: string_field(root, "title"),
-        summary: string_field(root, "summary"),
+        title: meta.and_then(|d| string_field(d, "title")),
+        summary: meta.and_then(|d| string_field(d, "summary")),
         // `originalURL` is the URL the user shared; `URL` is the post-redirect
         // canonical one — prefer the former, fall back to the latter.
-        url: url_field(root, "originalURL").or_else(|| url_field(root, "URL")),
+        url: meta.and_then(|d| url_field(d, "originalURL").or_else(|| url_field(d, "URL"))),
         image: largest_image(&resolved),
     })
+}
+
+/// Find the LPLinkMetadata-like dict anywhere in the resolved tree: the first one
+/// carrying an `originalURL`/`URL` (depth-first). Tolerates the metadata being
+/// nested inside a balloon-payload wrapper rather than at the root.
+fn find_link_dict(v: &Value, depth: usize) -> Option<&plist::Dictionary> {
+    if depth > 64 {
+        return None;
+    }
+    match v {
+        Value::Dictionary(d) => {
+            if d.contains_key("originalURL") || d.contains_key("URL") {
+                return Some(d);
+            }
+            d.values().find_map(|val| find_link_dict(val, depth + 1))
+        }
+        Value::Array(a) => a.iter().find_map(|it| find_link_dict(it, depth + 1)),
+        _ => None,
+    }
 }
 
 /// A non-empty, trimmed string property.
