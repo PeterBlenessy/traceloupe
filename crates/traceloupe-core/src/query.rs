@@ -53,9 +53,9 @@ pub struct Message {
 pub struct TimelineMessage {
     pub thread_id: i64,
     pub thread_title: String,
-    /// The thread's identifier — for a 1:1 chat this is the other party's handle,
-    /// so the timeline can resolve/show the conversation partner even on your own
-    /// outgoing messages (where `message.sender` is you). Empty if unknown.
+    /// The other party's resolvable handle (the thread's `display_name`), so the
+    /// timeline shows the conversation partner even on your own outgoing messages
+    /// (where `message.sender` is you). Falls back to the identifier if unknown.
     pub thread_handle: String,
     pub service: Option<String>,
     pub message: Message,
@@ -528,13 +528,18 @@ fn range_window(
             |r| {
                 let display_name: Option<String> = r.get(6)?;
                 let identifier: String = r.get(7)?;
-                let thread_title = display_name
+                // iLEAPP stores the chat ROWID in `identifier` and the real
+                // contact handle in `display_name`, so both the label and the
+                // resolvable handle come from `display_name` (identifier is only
+                // a last resort). Using the ROWID as the handle left outgoing
+                // rows unresolvable — they fell back to a bare "#".
+                let handle = display_name
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| identifier.clone());
                 Ok(TimelineMessage {
                     thread_id: r.get(5)?,
-                    thread_title,
-                    thread_handle: identifier,
+                    thread_title: handle.clone(),
+                    thread_handle: handle,
                     service: r.get(8)?,
                     message: Message {
                         id: r.get(0)?,
