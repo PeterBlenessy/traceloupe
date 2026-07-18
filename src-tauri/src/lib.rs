@@ -1774,8 +1774,8 @@ fn media_protocol_response(
     // `media::render` / sips can read, then discard the plaintext. The rendered
     // JPEG is still cached by id, so repeat views don't re-decrypt via sips.
     let rendered = if let Some(key) = decrypt_key {
-        let Some(dec) = app.state::<SessionKeys>().get() else {
-            return not_found(); // encrypted item but no keys this session
+        let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
+            return not_found(); // encrypted item, and keys couldn't be loaded (no stored password)
         };
         let Ok(ciphertext) = std::fs::read(&local_path) else {
             return not_found();
@@ -1893,8 +1893,8 @@ fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Res
         .unwrap_or_else(|| PathBuf::from("note-thumbs"));
 
     let rendered = if let Some(key) = decrypt_key {
-        let Some(dec) = app.state::<SessionKeys>().get() else {
-            return not_found(); // encrypted image but no keys this session
+        let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
+            return not_found(); // encrypted image, and keys couldn't be loaded (no stored password)
         };
         let out = thumbs_dir.join(format!("note-{id}.decrypted"));
         let Some(src) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out)
@@ -1982,8 +1982,8 @@ fn attachment_protocol_response(
     // re-decrypting the whole file (and re-writing a whole temp) per request is an
     // OOM/disk-thrash path. `clear_decrypted_temps` removes these on close/forget.
     let source_path: PathBuf = if let Some(key) = decrypt_key {
-        let Some(dec) = app.state::<SessionKeys>().get() else {
-            return not_found(); // encrypted attachment but no keys this session
+        let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
+            return not_found(); // encrypted attachment, and keys couldn't be loaded (no stored password)
         };
         let out = att_dir.join(format!("att-{id}.decrypted"));
         let Some(p) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out) else {
@@ -2103,8 +2103,8 @@ fn audio_protocol_response(
         .map(|p| p.join("att-thumbs"))
         .unwrap_or_else(|| PathBuf::from("att-thumbs"));
     let source_path: PathBuf = if let Some(key) = decrypt_key {
-        let Some(dec) = app.state::<SessionKeys>().get() else {
-            return not_found(); // encrypted item but no keys this session
+        let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
+            return not_found(); // encrypted item, and keys couldn't be loaded (no stored password)
         };
         let out = cache_dir.join(format!("audio-{id}.decrypted"));
         let Some(p) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out) else {
