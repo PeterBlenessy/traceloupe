@@ -2249,6 +2249,17 @@ fn safe_http_get(url: &str, cap: u64, want: Option<&str>) -> Result<(String, Vec
             .call()
         {
             Ok(resp) => {
+                // With `redirects(0)`, ureq returns a 3xx as `Ok` (not `Err`), so
+                // we must follow the Location ourselves — otherwise the
+                // content-type check below runs against the redirect response
+                // (often `application/binary`, e.g. m.youtube.com) and wrongly
+                // rejects it. Each hop's host is re-validated on the next
+                // iteration (SSRF guard).
+                if (300..400).contains(&resp.status()) {
+                    let loc = resp.header("Location").ok_or("redirect without Location")?;
+                    current = absolutize(&current, loc);
+                    continue;
+                }
                 if let Some(kind) = want {
                     let ct = resp
                         .header("Content-Type")
@@ -2270,7 +2281,8 @@ fn safe_http_get(url: &str, cap: u64, want: Option<&str>) -> Result<(String, Vec
                     .map_err(|e| e.to_string())?;
                 return Ok((current, buf));
             }
-            // Redirect: resolve the target and re-validate its host next hop.
+            // Belt-and-suspenders: if a build of ureq surfaces a 3xx as an error
+            // instead, follow it the same way.
             Err(ureq::Error::Status(code, resp)) if (300..400).contains(&code) => {
                 let loc = resp.header("Location").ok_or("redirect without Location")?;
                 current = absolutize(&current, loc);

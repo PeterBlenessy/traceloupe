@@ -1265,9 +1265,10 @@ function MessageBody({ text }: { text: string }) {
           }}
           // Inherit the bubble's text colour (never `text-primary`): the
           // outgoing bubble is `bg-primary`, so a primary-coloured link there is
-          // invisible. `underline` keeps it recognizable as a link.
+          // invisible. `underline` keeps it recognizable as a link. No `title`
+          // (the hover card already shows the URL — a native tooltip would
+          // double up).
           className="cursor-pointer break-all font-medium underline underline-offset-2"
-          title={href}
         >
           {urlText}
         </a>
