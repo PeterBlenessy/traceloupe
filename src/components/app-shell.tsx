@@ -41,6 +41,7 @@ import {
 import { useResizableWidth } from "@/components/resize";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { ModeToggle } from "@/components/mode-toggle";
+import { ToolbarGroup } from "@/components/toolbar-group";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -179,12 +180,14 @@ export function AppShell() {
               data-tauri-drag-region
               className="flex h-11 shrink-0 items-center gap-2 px-2"
             >
-              <div className="ml-auto flex items-center gap-1">
+              <div className="ml-auto flex items-center gap-1.5">
                 <ImportIndicator />
-                <SidebarTrigger />
-                <DensityToggle />
-                <ModeToggle />
-                <SettingsMenu />
+                <ToolbarGroup>
+                  <SidebarTrigger />
+                  <DensityToggle />
+                  <ModeToggle />
+                  <SettingsMenu />
+                </ToolbarGroup>
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
@@ -348,7 +351,7 @@ function SettingsMenu() {
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Settings">
+        <Button variant="ghost" size="icon" className="size-7" aria-label="Settings">
           <Settings className="size-4" />
         </Button>
       </DialogTrigger>
