@@ -117,7 +117,6 @@ use traceloupe_core::query::{
     self, Call, Contact, HistoryVisit, MediaItem, Message, Note, Recording, SafariBookmark,
     ThreadSummary, TimelineMessage,
 };
-use traceloupe_core::rich_link;
 use traceloupe_core::sidecar::CancelToken;
 
 /// The cache DB currently being browsed. Set when an import finishes or a
@@ -1041,101 +1040,6 @@ async fn thread_message_index(
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-/// A rich-link preview decoded from an iMessage plugin payload attachment.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct RichLinkDto {
-    url: Option<String>,
-    title: Option<String>,
-    summary: Option<String>,
-    /// The embedded thumbnail as a self-contained `data:` URL (no host contact).
-    image: Option<String>,
-}
-
-/// Decode the cached rich-link preview (LPLinkMetadata) an iMessage `.pluginPayload
-/// Attachment` carries — title, URL and an embedded thumbnail — so shared links
-/// preview offline even when the live page has no OpenGraph tags (e.g. Maps).
-/// Returns `None` when the payload isn't a rich link or carries nothing useful.
-#[tauri::command]
-async fn message_link_metadata(
-    app: AppHandle,
-    active: State<'_, ActiveBackup>,
-    attachment_id: i64,
-) -> Result<Option<RichLinkDto>, String> {
-    let cache_path = active.path()?;
-    let Some((local_path, _filename, _mime, decrypt_key, plain_size)) = ({
-        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
-        query::attachment_blob(&cache, attachment_id).map_err(|e| e.to_string())?
-    }) else {
-        return Ok(None);
-    };
-    // Resolve the session decryptor up front (may lazily reload from the Keychain)
-    // so the blocking task below just does bytes → decode.
-    let dec = if decrypt_key.is_some() {
-        Some(ensure_session_decryptor(&app, &cache_path).ok_or("backup keys are not loaded")?)
-    } else {
-        None
-    };
-    let outcome = tauri::async_runtime::spawn_blocking(
-        move || -> Result<(usize, String, rich_link::RichLink), String> {
-            let bytes = match (decrypt_key, dec) {
-                (Some(key), Some(dec)) => {
-                    let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
-                    let size = plain_size.and_then(|s| usize::try_from(s).ok());
-                    dec.decrypt_bytes(&key, &ciphertext, size)
-                        .map_err(|e| e.to_string())?
-                }
-                _ => std::fs::read(&local_path).map_err(|e| e.to_string())?,
-            };
-            // Leading bytes (container magic) for diagnostics — a format, not content.
-            let head: String = bytes
-                .iter()
-                .take(12)
-                .map(|b| format!("{b:02x}"))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let rl = rich_link::decode(&bytes).map_err(|e| e.to_string())?;
-            Ok((bytes.len(), head, rl))
-        },
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    // A bad payload shouldn't error the query — log the reason and show nothing.
-    let (n, head, rl) = match outcome {
-        Ok(v) => v,
-        Err(e) => {
-            logging::debug(&app, format!("rich-link decode failed: {e}"));
-            return Ok(None);
-        }
-    };
-    // Structural only (no content): the size, leading magic, and which fields
-    // were recovered.
-    logging::debug(
-        &app,
-        format!(
-            "rich-link: {n} bytes head=[{head}] → title={} url={} image={}",
-            rl.title.is_some(),
-            rl.url.is_some(),
-            rl.image.is_some()
-        ),
-    );
-    if rl.is_empty() {
-        return Ok(None);
-    }
-    let image = rl.image.map(|(mime, bytes)| {
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-        format!("data:{mime};base64,{b64}")
-    });
-    Ok(Some(RichLinkDto {
-        url: rl.url,
-        title: rl.title,
-        summary: rl.summary,
-        image,
-    }))
 }
 
 #[tauri::command]
@@ -2686,7 +2590,6 @@ pub fn run() {
             count_thread_messages,
             get_thread_message_window,
             thread_message_index,
-            message_link_metadata,
             count_timeline_messages,
             get_timeline_window,
             count_message_ranges,
