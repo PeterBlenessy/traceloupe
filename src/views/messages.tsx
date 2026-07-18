@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ArrowRight,
   ArrowUpNarrowWide,
+  Copy,
   ExternalLink,
   FileText,
   GalleryVerticalEnd,
@@ -1124,6 +1125,12 @@ function MessageBubble({
   const { linkPreviews } = useSettings();
   const previewUrl =
     linkPreviews && message.body ? firstUrl(message.body) : null;
+  // When the whole message is just a link and previews are on, the card stands
+  // in for the raw URL (like iMessage) — cleaner than a giant URL over a card.
+  const trimmedBody = (message.body ?? "").trim();
+  const bodyIsUrlOnly =
+    !!trimmedBody && !/\s/.test(trimmedBody) && !!firstUrl(trimmedBody);
+  const replaceUrlWithCard = bodyIsUrlOnly && !!previewUrl;
   // Drop iMessage app/plugin payloads (`.pluginPayloadAttachment`) — binary
   // typedstream blobs behind rich links/app messages, not openable user files.
   const attachments = useMemo(
@@ -1156,7 +1163,7 @@ function MessageBubble({
                   {message.replyToSnippet}
                 </p>
               )}
-              {message.body && (
+              {message.body && !replaceUrlWithCard && (
                 <p className="whitespace-pre-wrap break-words">
                   <MessageBody text={message.body} />
                 </p>
@@ -1174,7 +1181,12 @@ function MessageBubble({
                   </div>
                 );
               })}
-              {previewUrl && <LinkPreviewCard url={previewUrl} />}
+              {previewUrl && (
+                <LinkPreviewCard
+                  url={previewUrl}
+                  placeholder={replaceUrlWithCard}
+                />
+              )}
               <MessageImageLightbox
                 images={imageAtts}
                 index={lightboxIndex}
@@ -1365,52 +1377,96 @@ function firstUrl(text: string): string | null {
   return /^www\./i.test(raw) ? `https://${raw}` : raw;
 }
 
-/** A compact inline OpenGraph card shown in the bubble for the first link (only
- *  when "Load link previews" is on). Shares the hover card's query cache by URL,
- *  so the two never double-fetch. */
-function LinkPreviewCard({ url }: { url: string }) {
+/** The host of a URL without a leading `www.`, for a compact domain label. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/** An inline OpenGraph card shown in the bubble for a link (image on top, then
+ *  site/title/description, then a footer with the domain and a copy button) —
+ *  the whole card opens the link. Shares the hover card's query cache by URL.
+ *
+ *  `placeholder`: when the message is only this link, the card replaces the raw
+ *  URL, so it always renders (falling back to the domain) rather than returning
+ *  null while loading or when the site offers no preview. */
+function LinkPreviewCard({
+  url,
+  placeholder = false,
+}: {
+  url: string;
+  placeholder?: boolean;
+}) {
   const { data } = useQuery<LinkPreview>({
     queryKey: ["linkPreview", url],
     queryFn: () => client.fetchLinkPreview(url),
     staleTime: Infinity,
     retry: false,
   });
-  if (!data || (!data.title && !data.image)) return null;
+  const rich = !!data && (!!data.title || !!data.image);
+  // For an inline card that sits beside message text, stay quiet until there's
+  // something worth showing; as a URL replacement, always render.
+  if (!rich && !placeholder) return null;
+
+  const host = hostOf(url);
+  const copy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard
+      ?.writeText(url)
+      .then(() => toast.success("Link copied"))
+      .catch(() => {});
+  };
   return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        client.openExternal(url);
-      }}
-      className="mt-1.5 flex w-full max-w-[280px] overflow-hidden rounded-lg border text-left transition-colors hover:bg-accent/50"
-      title={url}
-    >
-      {data.image && (
-        <img
-          src={data.image}
-          alt=""
-          className="size-16 shrink-0 bg-muted object-cover"
-          onError={(e) => {
-            e.currentTarget.style.display = "none";
-          }}
-        />
-      )}
-      <div className="min-w-0 flex-1 p-2">
-        {data.siteName && (
+    <div className="mt-1.5 w-full max-w-[280px] overflow-hidden rounded-xl border">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          client.openExternal(url);
+        }}
+        className="block w-full text-left transition-colors hover:bg-accent/50"
+        title={url}
+      >
+        {data?.image && (
+          <img
+            src={data.image}
+            alt=""
+            className="h-32 w-full bg-muted object-cover"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+        )}
+        <div className="min-w-0 px-2.5 py-2">
           <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
-            {data.siteName}
+            {data?.siteName ?? host}
           </div>
-        )}
-        {data.title && (
-          <div className="truncate text-xs font-medium">{data.title}</div>
-        )}
-        {data.description && (
-          <div className="line-clamp-2 text-[11px] text-muted-foreground">
-            {data.description}
+          <div className="line-clamp-2 text-xs font-medium leading-snug">
+            {data?.title ?? host}
           </div>
-        )}
+          {data?.description && (
+            <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+              {data.description}
+            </div>
+          )}
+        </div>
+      </button>
+      <div className="flex items-center gap-2 border-t px-2.5 py-1">
+        <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/70">
+          {host}
+        </span>
+        <button
+          onClick={copy}
+          className="-mr-1 inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+          title="Copy link"
+        >
+          <Copy className="size-3" />
+          Copy
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
 
