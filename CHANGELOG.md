@@ -30,6 +30,12 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.16.1] — 2026-07-20
+
+**Review-fix pass over 0.16.0** (multi-agent code review; 10 findings, 8 fixed).
+
 ### Fixed
 
 - **Health daily aggregates no longer double-count multi-device days** — samples
