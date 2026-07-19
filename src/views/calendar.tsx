@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarDays, CircleDot, Clock, MapPin, Repeat } from "lucide-react";
+import { CalendarDays, Clock, MapPin, Repeat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { type BadgeFilterOption } from "@/components/badge-filter";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import {
@@ -169,7 +169,7 @@ export function CalendarView() {
   }, [baseFiltered, sort, range]);
 
   const hasEvents = (events?.length ?? 0) > 0;
-  const islands = useMemo(() => {
+  const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasEvents) return [];
     const calOptions: BadgeFilterOption[] = [
       { value: "all", label: "All", count: events?.length },
@@ -187,22 +187,38 @@ export function CalendarView() {
         count: (events ?? []).filter((e) => e.availability === a).length,
       })),
     ];
-    const list = [];
+    const list: FilterGroup[] = [];
     if (calendars.length > 1)
-      list.push(badgeIsland({ key: "cal", label: "Calendar", icon: <CalendarDays className="size-4" />, options: calOptions, value: effCal, onChange: setCal }));
+      list.push(badgeGroup({ key: "cal", label: "Calendar", description: "Which calendar the event is on", options: calOptions, value: effCal, onChange: setCal }));
     if (avails.length > 1)
-      list.push(badgeIsland({ key: "avail", label: "Availability", icon: <CircleDot className="size-4" />, options: availOptions, value: effAvail, onChange: setAvail }));
-    list.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
-    list.push(sortIsland({ fields: [{ value: "start", label: "Date" }, { value: "title", label: "Title" }], value: sort, onChange: setSort }));
+      list.push(badgeGroup({ key: "avail", label: "Availability", description: "Free or busy", options: availOptions, value: effAvail, onChange: setAvail }));
+    list.push(timeGroup({ description: "When the event starts", presets, counts: presetCounts, value: range, onChange: setRange }));
     return list;
-  }, [hasEvents, events, calendars, avails, effCal, effAvail, presets, presetCounts, range, sort, setCal, setAvail, setRange, setSort]);
+  }, [hasEvents, events, calendars, avails, effCal, effAvail, presets, presetCounts, range, setCal, setAvail, setRange]);
+  const sortNode = useMemo(
+    () =>
+      hasEvents ? (
+        <SortControl
+          fields={[
+            { value: "start", label: "Date" },
+            { value: "title", label: "Title" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      ) : undefined,
+    [hasEvents, sort, setSort],
+  );
   const searchNode = useMemo(
     () => (hasEvents ? <ListSearch value={q} onChange={setQ} placeholder="Search events" /> : undefined),
     [hasEvents, q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Calendar", count: filtered.length, islands, search: searchNode } : null),
-    [active, filtered.length, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Calendar", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, filtered.length, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
