@@ -883,10 +883,11 @@ pub struct HealthSummary {
     pub first_at: Option<i64>,
     pub last_at: Option<i64>,
     pub workout_count: i64,
-    /// Days with activity aggregates / sleep sessions — lets the view show
-    /// section counts without materializing either list.
+    /// Days with activity aggregates / sleep sessions / recorded timezones —
+    /// lets the view show section counts without materializing the lists.
     pub day_count: i64,
     pub sleep_count: i64,
+    pub timezone_count: i64,
 }
 
 /// Workouts, most recent first.
@@ -1049,6 +1050,47 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
     Ok(out)
 }
 
+/// One timezone Health samples were recorded in — a travel-timeline entry.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthTimezone {
+    /// IANA name, e.g. "Europe/Stockholm".
+    pub tz_name: String,
+    /// Device product types that recorded there (e.g. "iPhone12,8").
+    pub devices: Vec<String>,
+    pub samples: i64,
+    pub first_at: Option<i64>,
+    pub last_at: Option<i64>,
+}
+
+/// Timezones Health data was recorded in, most samples first.
+pub fn list_health_timezones(cache: &CacheDb) -> Result<Vec<HealthTimezone>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT tz_name, GROUP_CONCAT(DISTINCT device), SUM(samples),
+                MIN(first_at), MAX(last_at)
+         FROM health_timezones
+         GROUP BY tz_name ORDER BY SUM(samples) DESC, tz_name",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let devices: Option<String> = r.get(1)?;
+        Ok(HealthTimezone {
+            tz_name: r.get(0)?,
+            devices: devices
+                .unwrap_or_default()
+                .split(',')
+                .filter(|d| !d.is_empty())
+                .map(str::to_string)
+                .collect(),
+            samples: r.get(2)?,
+            first_at: r.get(3)?,
+            last_at: r.get(4)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// One sleep-analysis session (a raw HealthKit category sample).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1092,6 +1134,7 @@ pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
         workout_count: count("SELECT COUNT(*) FROM workouts")?,
         day_count: count("SELECT COUNT(DISTINCT day) FROM health_daily")?,
         sleep_count: count("SELECT COUNT(*) FROM sleep_sessions")?,
+        timezone_count: count("SELECT COUNT(DISTINCT tz_name) FROM health_timezones")?,
     })
 }
 

@@ -8,26 +8,7 @@ import { EmptyView, ErrorState } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type BackupInfo } from "@/lib/ipc";
 
-/** A few common `ProductType` → marketing-name mappings; falls back to the raw id. */
-const MODEL_NAMES: Record<string, string> = {
-  "iPhone14,2": "iPhone 13 Pro",
-  "iPhone14,3": "iPhone 13 Pro Max",
-  "iPhone14,4": "iPhone 13 mini",
-  "iPhone14,5": "iPhone 13",
-  "iPhone14,7": "iPhone 14",
-  "iPhone14,8": "iPhone 14 Plus",
-  "iPhone15,2": "iPhone 14 Pro",
-  "iPhone15,3": "iPhone 14 Pro Max",
-  "iPhone15,4": "iPhone 15",
-  "iPhone15,5": "iPhone 15 Plus",
-  "iPhone16,1": "iPhone 15 Pro",
-  "iPhone16,2": "iPhone 15 Pro Max",
-};
-
-function modelName(productType: string | null): string | null {
-  if (!productType) return null;
-  return MODEL_NAMES[productType] ?? productType;
-}
+import { modelName } from "@/lib/device-names";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (

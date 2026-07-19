@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 34;
+const SCHEMA_VERSION: i64 = 35;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -582,6 +582,18 @@ impl CacheDb {
                     exercise_goal_min REAL,
                     stand_hours       REAL,
                     stand_goal_hours  REAL
+                );",
+            )?;
+            // v35: Health provenance timezones — the tz each sample was
+            // recorded in, per device model: a travel timeline.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS health_timezones (
+                    tz_name  TEXT NOT NULL,             -- e.g. 'Europe/Stockholm'
+                    device   TEXT NOT NULL DEFAULT '',  -- origin product type
+                    samples  INTEGER NOT NULL,
+                    first_at INTEGER,                   -- unix seconds
+                    last_at  INTEGER,
+                    PRIMARY KEY (tz_name, device)
                 );",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
