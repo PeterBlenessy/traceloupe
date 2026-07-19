@@ -1,4 +1,5 @@
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
+import { cn } from "@/lib/utils";
 import {
   Boxes,
   CalendarDays,
@@ -131,24 +132,18 @@ export function AppShell() {
             { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
           }
         >
-          {/* The unified HTML title bar spans the FULL window width above both the
-          sidebar and the content (z above the sidebar's z-10). The macOS traffic
-          lights sit in its left; the sidebar starts below it, so the sidebar's
-          right border stops at this bar's bottom instead of running up behind the
-          lights. The whole strip is the window drag region. */}
-          <header
-            data-tauri-drag-region
-            className="fixed inset-x-0 top-0 z-20 flex h-11 items-center border-b bg-background px-3"
-          >
-            <AppToolbar />
-          </header>
+          <AppTitleBar />
           {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
           rather than sliding it off-canvas. */}
           <Sidebar collapsible="icon">
-            {/* pt-10 clears the macOS traffic lights, which float over the top-left
-            of the window (titleBarStyle: Overlay); data-tauri-drag-region makes
-            that band draggable like a real title bar. */}
-            <SidebarHeader className="pt-14" data-tauri-drag-region>
+            {/* Clear the top chrome: when expanded the sidebar runs full height and
+            its header just clears the macOS traffic lights (pt-10); when collapsed
+            it sits UNDER the full-width title bar, so the icon clears the bar
+            (pt-14). data-tauri-drag-region makes the band draggable. */}
+            <SidebarHeader
+              className="pt-10 group-data-[collapsible=icon]:pt-14"
+              data-tauri-drag-region
+            >
               <SidebarMenu>
                 <SidebarMenuItem>
                   {/* The device/backup identity doubles as the Device-info entry:
@@ -219,14 +214,37 @@ export function AppShell() {
 
 /** The single unified toolbar: the current view's title + islands (published via
  *  the toolbar context) on the left, the app-wide controls + search on the right. */
-function AppToolbar() {
+/**
+ * The unified HTML title bar. When the sidebar is **collapsed** it spans the full
+ * window width (`left-0`) above the icon rail, with the macOS traffic lights in
+ * its left; when **expanded** the sidebar runs the full window height and the
+ * title bar only covers the content area to its right (`left: --sidebar-width`),
+ * so the sidebar's border/top isn't covered. The whole strip drags the window.
+ */
+function AppTitleBar() {
+  const { state } = useSidebar();
+  const collapsed = state === "collapsed";
+  return (
+    <header
+      data-tauri-drag-region
+      // Match the sidebar's own width transition so the two edges move together.
+      style={{ left: collapsed ? 0 : "var(--sidebar-width)" }}
+      className="fixed right-0 top-0 z-20 flex h-11 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
+    >
+      <AppToolbar collapsed={collapsed} />
+    </header>
+  );
+}
+
+function AppToolbar({ collapsed }: { collapsed: boolean }) {
   const tb = useToolbar();
   return (
     <AdaptiveToolbar
       leading={
-        // The full-width title bar starts at the window's left edge, so pad past
-        // the macOS traffic lights. The sidebar toggle is its own island.
-        <div className="flex items-center gap-2 pl-20">
+        // When collapsed the bar starts at the window's left edge, so pad past the
+        // traffic lights; when expanded the lights sit over the sidebar (left of
+        // this bar), so no extra padding is needed. The toggle is its own island.
+        <div className={cn("flex items-center gap-2", collapsed && "pl-20")}>
           <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
             <SidebarTrigger />
           </div>
