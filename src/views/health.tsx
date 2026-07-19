@@ -5,10 +5,10 @@ import { Activity, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
 import { EmptyView, ErrorState, ListSkeleton } from "@/components/view";
@@ -122,22 +122,39 @@ export function HealthView() {
   }, [baseFiltered, range, sort]);
 
   const hasWorkouts = (workouts?.length ?? 0) > 0;
-  const islands = useMemo(() => {
+  const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasWorkouts) return [];
     const activityOptions: BadgeFilterOption[] = [
       { value: "all", label: "All", count: workouts?.length },
       ...activities.map((a) => ({ value: a, label: a, count: (workouts ?? []).filter((w) => w.activity === a).length })),
     ];
-    const out = [];
+    const out: FilterGroup[] = [];
     if (activities.length > 1)
-      out.push(badgeIsland({ key: "activity", label: "Activity", icon: <Activity className="size-4" />, options: activityOptions, value: effActivity, onChange: setActivity }));
-    out.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
-    out.push(sortIsland({ fields: [{ value: "date", label: "Date" }, { value: "duration", label: "Duration" }, { value: "distance", label: "Distance" }], value: sort, onChange: setSort }));
+      out.push(badgeGroup({ key: "activity", label: "Activity", description: "Type of workout", options: activityOptions, value: effActivity, onChange: setActivity }));
+    out.push(timeGroup({ description: "When the workout took place", presets, counts: presetCounts, value: range, onChange: setRange }));
     return out;
-  }, [hasWorkouts, workouts, activities, effActivity, presets, presetCounts, range, sort, setActivity, setRange, setSort]);
+  }, [hasWorkouts, workouts, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
+  const sortNode = useMemo(
+    () =>
+      hasWorkouts ? (
+        <SortControl
+          fields={[
+            { value: "date", label: "Date" },
+            { value: "duration", label: "Duration" },
+            { value: "distance", label: "Distance" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      ) : undefined,
+    [hasWorkouts, sort, setSort],
+  );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Health", count: hasWorkouts ? filtered.length : undefined, islands, search: undefined } : null),
-    [active, hasWorkouts, filtered.length, islands],
+    () =>
+      active === true
+        ? { title: "Health", count: hasWorkouts ? filtered.length : undefined, islands: [], filter: filterGroups, sort: sortNode }
+        : null,
+    [active, hasWorkouts, filtered.length, filterGroups, sortNode],
   );
   useViewToolbar(toolbar);
 
