@@ -29,13 +29,7 @@ const PANEL_W = 416;
  * Only groups the view actually has are passed in, so an absent facet never
  * appears as an empty row.
  */
-export function FilterControl({
-  groups,
-  onOpenChange,
-}: {
-  groups: FilterGroup[];
-  onOpenChange?: (open: boolean) => void;
-}) {
+export function FilterControl({ groups }: { groups: FilterGroup[] }) {
   const [mounted, setMounted] = useState(false); // overlay is in the tree
   const [expanded, setExpanded] = useState(false); // morph target (full panel)
   const [rect, setRect] = useState({ top: 0, right: 0, w: 32, h: 32 });
@@ -44,15 +38,30 @@ export function FilterControl({
   // filter is actually cleared, so the island shrinks smoothly.
   const [removing, setRemoving] = useState<Set<string>>(() => new Set());
   const btnRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef(0);
+  // Every pending timer, cleared on unmount so late callbacks can't fire.
+  const timers = useRef<Set<number>>(new Set());
   const summaries: FilterSummary[] = groups.flatMap((g) => g.summary);
   const hasActive = summaries.length > 0;
 
+  const later = (fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timers.current.delete(id);
+      fn();
+    }, ms);
+    timers.current.add(id);
+    return id;
+  };
+
   // Collapse a chip, then clear its filter once the shrink animation is done.
+  // Guard re-entry: a second click on the same X within the window would fire a
+  // toggle-based clear twice (multi-select), toggling the value back on.
   const removeChip = (s: FilterSummary) => {
+    if (removing.has(s.key)) return;
     setRemoving((prev) => new Set(prev).add(s.key));
-    window.setTimeout(() => {
+    later(() => {
       s.onClear();
       setRemoving((prev) => {
         const next = new Set(prev);
@@ -71,13 +80,15 @@ export function FilterControl({
 
   const open = () => {
     window.clearTimeout(closeTimer.current);
+    timers.current.delete(closeTimer.current);
     measureButton();
     if (mounted) setExpanded(true); // re-open mid-close: grow straight back
     else setMounted(true); // first open: the effect below kicks the grow
   };
   const close = () => {
+    window.clearTimeout(closeTimer.current);
     setExpanded(false);
-    closeTimer.current = window.setTimeout(() => setMounted(false), 240);
+    closeTimer.current = later(() => setMounted(false), 240);
   };
 
   // On mount, measure the content's natural height, then (after the browser has
@@ -95,7 +106,21 @@ export function FilterControl({
     };
   }, [mounted]);
 
-  useEffect(() => onOpenChange?.(mounted && expanded), [mounted, expanded, onOpenChange]);
+  // Keep the box height matched to the content as it changes (e.g. a group's
+  // pills reflow), so nothing gets clipped while the panel is open.
+  useEffect(() => {
+    if (!mounted || !contentRef.current) return;
+    const el = contentRef.current;
+    const ro = new ResizeObserver(() => setContentH(el.scrollHeight));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [mounted]);
+
+  // Move focus into the panel on open; restore it to the funnel on close.
+  useEffect(() => {
+    if (expanded) panelRef.current?.focus();
+    else if (mounted) btnRef.current?.focus();
+  }, [expanded, mounted]);
 
   // Escape / outside-click close; keep aligned if the window resizes.
   useEffect(() => {
@@ -103,7 +128,7 @@ export function FilterControl({
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
-      if (contentRef.current?.parentElement?.contains(t) || btnRef.current?.contains(t)) return;
+      if (panelRef.current?.contains(t) || btnRef.current?.contains(t)) return;
       close();
     };
     window.addEventListener("keydown", onKey);
@@ -115,6 +140,12 @@ export function FilterControl({
       window.removeEventListener("resize", measureButton);
     };
   }, [mounted]);
+
+  // Cancel any pending timers if we unmount mid-animation.
+  useEffect(() => {
+    const pending = timers.current;
+    return () => pending.forEach((id) => window.clearTimeout(id));
+  }, []);
 
   return (
     <div className="relative flex shrink-0 items-center">
@@ -130,7 +161,8 @@ export function FilterControl({
           ref={btnRef}
           type="button"
           aria-label="Filter"
-          aria-expanded={mounted}
+          aria-haspopup="dialog"
+          aria-expanded={expanded}
           title="Filter"
           onClick={() => (mounted ? close() : open())}
           data-active={mounted || hasActive}
@@ -178,20 +210,23 @@ export function FilterControl({
       {mounted &&
         createPortal(
           <>
-            {/* Scrim: dims the content + catches outside clicks. Portalled to
-                <body> so no ancestor transform can clip it. */}
+            {/* Scrim: dims the content while open. Purely visual — outside
+                clicks are handled by the window pointerdown listener, so it stays
+                pointer-events-none (letting clicks reach the controls during the
+                close animation, e.g. to re-open). */}
             <div
               className={cn(
-                "fixed inset-0 z-[60] bg-black/30 transition-opacity duration-200 ease-out",
+                "pointer-events-none fixed inset-0 z-[60] bg-black/30 transition-opacity duration-200 ease-out",
                 expanded ? "opacity-100" : "opacity-0",
               )}
-              onClick={close}
             />
             {/* The morphing box. width/height/radius animate from the button's
                 footprint to the full panel via transition-all. */}
             <div
+              ref={panelRef}
               role="dialog"
               aria-label="Filters"
+              tabIndex={-1}
               style={{
                 top: rect.top,
                 right: rect.right,
@@ -199,7 +234,7 @@ export function FilterControl({
                 height: expanded ? contentH : rect.h,
               }}
               className={cn(
-                "fixed z-[61] overflow-hidden border bg-popover text-popover-foreground shadow-lg transition-all duration-200 ease-out",
+                "fixed z-[61] overflow-hidden border bg-popover text-popover-foreground shadow-lg outline-none transition-all duration-200 ease-out",
                 expanded ? "rounded-xl" : "rounded-lg",
               )}
             >
@@ -220,7 +255,11 @@ export function FilterControl({
                   {hasActive && (
                     <button
                       type="button"
-                      onClick={() => summaries.forEach((s) => s.onClear())}
+                      // Skip chips already mid-removal — their pending timer will
+                      // clear them (double-firing a toggle-based clear re-adds it).
+                      onClick={() =>
+                        summaries.forEach((s) => !removing.has(s.key) && s.onClear())
+                      }
                       className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
                     >
                       Clear all
