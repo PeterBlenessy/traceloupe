@@ -20,9 +20,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland } from "@/components/toolbar-islands";
+import { badgeGroup, type FilterGroup } from "@/components/filter-groups";
 import {
   EmptyView,
   ErrorState,
@@ -113,26 +113,40 @@ export function ContactsView() {
     [filtered, sort],
   );
 
-  const islands = useMemo(() => {
-    const out = [];
-    if (sources.length > 1) {
-      const sourceOptions: BadgeFilterOption[] = sources.map((s) => ({
-        value: s,
-        label: s,
-        count: (contacts ?? []).filter((c) => c.source === s).length,
-      }));
-      out.push(badgeIsland({ key: "source", label: "Source", icon: <Users className="size-4" />, options: sourceOptions, value: activeSource, onChange: setSource }));
-    }
-    out.push(sortIsland({ fields: [{ value: "name", label: "Name" }, { value: "organization", label: "Organization" }], value: sort, onChange: setSort }));
-    return out;
-  }, [sources, contacts, activeSource, sort, setSource, setSort]);
+  const filterGroups = useMemo<FilterGroup[]>(() => {
+    if (sources.length <= 1) return [];
+    const sourceOptions: BadgeFilterOption[] = sources.map((s) => ({
+      value: s,
+      label: s,
+      count: (contacts ?? []).filter((c) => c.source === s).length,
+    }));
+    return [
+      badgeGroup({ key: "source", label: "Source", description: "Address Book or a third-party app", options: sourceOptions, value: activeSource, onChange: setSource }),
+    ];
+  }, [sources, contacts, activeSource, setSource]);
+  const sortNode = useMemo(
+    () => (
+      <SortControl
+        fields={[
+          { value: "name", label: "Name" },
+          { value: "organization", label: "Organization" },
+        ]}
+        value={sort}
+        onChange={setSort}
+      />
+    ),
+    [sort, setSort],
+  );
   const searchNode = useMemo(
     () => <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />,
     [q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Contacts", count: filtered.length, islands, search: searchNode } : null),
-    [active, filtered.length, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Contacts", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, filtered.length, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
