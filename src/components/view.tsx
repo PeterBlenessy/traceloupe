@@ -237,6 +237,7 @@ export function LazyListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
+  headless,
 }: {
   title: string;
   header?: React.ReactNode;
@@ -254,16 +255,21 @@ export function LazyListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
+  /** Skip the internal PanelHeader — the view publishes to the unified app
+   *  toolbar (see useViewToolbar) and renders only the list body. */
+  headless?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title={title}
-        count={count}
-        actions={header}
-        search={search}
-        toolbar={toolbar}
-      />
+      {!headless && (
+        <PanelHeader
+          title={title}
+          count={count}
+          actions={header}
+          search={search}
+          toolbar={toolbar}
+        />
+      )}
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (

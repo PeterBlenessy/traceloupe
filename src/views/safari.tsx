@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -11,10 +11,11 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
-import { BadgeFilter } from "@/components/badge-filter";
 import { useSettings } from "@/components/settings-provider";
-import { SortControl, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatCount, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -78,10 +79,51 @@ export function SafariView() {
     enabled: active === true,
   });
 
-  const changeType = (next: SafariType) => {
-    setType(next);
-    setSort({ by: "date", desc: true }); // "visits" only applies to history
-  };
+  const changeType = useCallback(
+    (next: SafariType) => {
+      setType(next);
+      setSort({ by: "date", desc: true }); // "visits" only applies to history
+    },
+    [setType, setSort],
+  );
+
+  const islands = useMemo(
+    () => [
+      badgeIsland({
+        key: "type",
+        label: "Type",
+        icon: <Globe className="size-4" />,
+        options: TYPES.map((t) => ({ value: t.value, label: t.label })),
+        value: type,
+        onChange: (v) => changeType(v as SafariType),
+      }),
+      timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
+      sortIsland({
+        fields: isHistory
+          ? [
+              { value: "date", label: "Date" },
+              { value: "title", label: "Title" },
+              { value: "visits", label: "Visits" },
+            ]
+          : [
+              { value: "date", label: "Date" },
+              { value: "title", label: "Title" },
+            ],
+        value: sort,
+        onChange: setSort,
+      }),
+    ],
+    [type, isHistory, presets, presetCounts, range, sort, changeType, setRange, setSort],
+  );
+  const searchNode = useMemo(
+    () => <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />,
+    [q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Safari", count, islands, search: searchNode } : null),
+    [active, count, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
 
   if (active === false) {
     return (
@@ -97,48 +139,12 @@ export function SafariView() {
 
   return (
     <LazyListView<HistoryVisit | SafariBookmark>
+      headless
       title="Safari"
       count={count}
       error={error}
       resetKey={`${type}:${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matches." : EMPTY[type]}
-      header={
-        <BadgeFilter
-          value={type}
-          onChange={(v) => changeType(v as SafariType)}
-          options={TYPES.map((t) => ({ value: t.value, label: t.label }))}
-        />
-      }
-      search={
-        <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />
-      }
-      toolbar={
-        <>
-          <TimeFilterBar
-            className="flex-1"
-            presets={presets}
-            value={range}
-            onChange={setRange}
-            counts={presetCounts}
-          />
-          <SortControl
-            fields={
-              isHistory
-                ? [
-                    { value: "date", label: "Date" },
-                    { value: "title", label: "Title" },
-                    { value: "visits", label: "Visits" },
-                  ]
-                : [
-                    { value: "date", label: "Date" },
-                    { value: "title", label: "Title" },
-                  ]
-            }
-            value={sort}
-            onChange={setSort}
-          />
-        </>
-      }
       windowKey={(page) => [
         "safariWindow",
         type,
