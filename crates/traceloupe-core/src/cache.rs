@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 30;
+const SCHEMA_VERSION: i64 = 31;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -533,6 +533,16 @@ impl CacheDb {
                     samples    INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (day, metric)
                 );",
+            )?;
+            // v31: Health sleep-analysis sessions (one row per category sample).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS sleep_sessions (
+                    id       INTEGER PRIMARY KEY,
+                    start_at INTEGER,               -- unix seconds
+                    end_at   INTEGER,
+                    stage    TEXT NOT NULL          -- In Bed|Asleep|Awake|Core|Deep|REM
+                );
+                CREATE INDEX IF NOT EXISTS idx_sleep_start ON sleep_sessions(start_at DESC);",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }

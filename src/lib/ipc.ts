@@ -190,6 +190,14 @@ export interface HealthSummary {
   workoutCount: number;
 }
 
+/** One sleep-analysis session (a raw HealthKit category sample). */
+export interface SleepSession {
+  id: number;
+  startAt: number | null;
+  endAt: number | null;
+  stage: string;
+}
+
 /** One day of Health activity (aggregated per UTC day at import). */
 export interface HealthDay {
   dayAt: number;
@@ -438,6 +446,8 @@ export interface TraceLoupeClient {
   listWorkouts(): Promise<Workout[]>;
   /** Daily activity aggregates, most recent day first. */
   healthDaily(): Promise<HealthDay[]>;
+  /** Sleep-analysis sessions, most recent first. */
+  listSleep(): Promise<SleepSession[]>;
   healthSummary(): Promise<HealthSummary>;
   listInteractions(): Promise<Interaction[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
@@ -677,6 +687,7 @@ const tauriClient: TraceLoupeClient = {
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
   healthDaily: () => invoke<HealthDay[]>("health_daily"),
+  listSleep: () => invoke<SleepSession[]>("list_sleep"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
   listInteractions: () => invoke<Interaction[]>("list_interactions"),
   messageKinds: (threadId = null, service = null) =>
@@ -1955,6 +1966,14 @@ export const mockClient: TraceLoupeClient = {
             hrAvg: null,
             hrMax: null,
           },
+        ]
+      : [],
+  listSleep: async () =>
+    mockActive
+      ? [
+          { id: 1, startAt: 1717822800, endAt: 1717851600, stage: "In Bed" },
+          { id: 2, startAt: 1717824600, endAt: 1717837200, stage: "Deep" },
+          { id: 3, startAt: 1717737600, endAt: 1717763400, stage: "In Bed" },
         ]
       : [],
   healthSummary: async () =>

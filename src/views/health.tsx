@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, Footprints, HeartPulse } from "lucide-react";
+import { Activity, Footprints, HeartPulse, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
@@ -13,13 +13,20 @@ import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
 import { EmptyView, ErrorState, ListSkeleton, VirtualListView } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
-import { client, type HealthDay, type Workout, type TimeRange } from "@/lib/ipc";
+import {
+  client,
+  type HealthDay,
+  type SleepSession,
+  type Workout,
+  type TimeRange,
+} from "@/lib/ipc";
 
 /** The Health data sections, selectable via the Section filter. */
-type HealthSection = "workouts" | "daily";
+type HealthSection = "workouts" | "daily" | "sleep";
 const SECTIONS: { value: HealthSection; label: string }[] = [
   { value: "workouts", label: "Workouts" },
   { value: "daily", label: "Daily activity" },
+  { value: "sleep", label: "Sleep" },
 ];
 
 /** Metres → a compact "5.2 km" / "820 m". */
@@ -103,6 +110,32 @@ function DayRow({ day }: { day: HealthDay }) {
   );
 }
 
+function SleepRow({ session }: { session: SleepSession }) {
+  const duration =
+    session.startAt != null && session.endAt != null && session.endAt > session.startAt
+      ? formatDuration(session.endAt - session.startAt)
+      : null;
+  return (
+    <Item>
+      <ItemMedia>
+        <Moon className="size-4 text-muted-foreground" />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">{session.stage}</ItemTitle>
+        <div className="text-xs text-muted-foreground">
+          {session.startAt != null ? formatDateTime(session.startAt) : "—"}
+          {session.endAt != null && ` – ${formatDateTime(session.endAt)}`}
+        </div>
+      </ItemContent>
+      {duration && (
+        <div className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          {duration}
+        </div>
+      )}
+    </Item>
+  );
+}
+
 /** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
 function inWindow(at: number | null, lo: number | null, hi: number | null) {
   if (lo == null && hi == null) return true;
@@ -143,6 +176,15 @@ export function HealthView() {
     queryFn: () => client.healthDaily(),
     enabled: active === true,
   });
+  const {
+    data: sleep,
+    isPending: sleepPending,
+    error: sleepError,
+  } = useQuery({
+    queryKey: ["healthSleep"],
+    queryFn: () => client.listSleep(),
+    enabled: active === true,
+  });
 
   const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
   const [sort, setSort] = usePersistedState<SortState>("health:sort", {
@@ -150,6 +192,10 @@ export function HealthView() {
     desc: true,
   });
   const [daySort, setDaySort] = usePersistedState<SortState>("health:daySort", {
+    by: "date",
+    desc: true,
+  });
+  const [sleepSort, setSleepSort] = usePersistedState<SortState>("health:sleepSort", {
     by: "date",
     desc: true,
   });
@@ -172,7 +218,7 @@ export function HealthView() {
 
   const baseFiltered = useMemo(
     () =>
-      section === "daily"
+      section !== "workouts"
         ? []
         : (workouts ?? []).filter(
             (w) => effActivity === "all" || w.activity === effActivity,
@@ -183,8 +229,10 @@ export function HealthView() {
     () =>
       section === "daily"
         ? presets.map((p) => (days ?? []).filter((d) => inWindow(d.dayAt, p.lo, p.hi)).length)
-        : presets.map((p) => baseFiltered.filter((w) => inWindow(w.startAt, p.lo, p.hi)).length),
-    [section, presets, baseFiltered, days],
+        : section === "sleep"
+          ? presets.map((p) => (sleep ?? []).filter((s) => inWindow(s.startAt, p.lo, p.hi)).length)
+          : presets.map((p) => baseFiltered.filter((w) => inWindow(w.startAt, p.lo, p.hi)).length),
+    [section, presets, baseFiltered, days, sleep],
   );
   const filtered = useMemo(() => {
     const inRange = baseFiltered.filter((w) => inWindow(w.startAt, range.lo, range.hi));
@@ -213,10 +261,25 @@ export function HealthView() {
       daySort.desc,
     );
   }, [section, days, range, daySort]);
+  const filteredSleep = useMemo(() => {
+    if (section !== "sleep") return [];
+    const inRange = (sleep ?? []).filter((s) => inWindow(s.startAt, range.lo, range.hi));
+    return sortItems(
+      inRange,
+      (s) =>
+        sleepSort.by === "duration"
+          ? s.startAt != null && s.endAt != null
+            ? s.endAt - s.startAt
+            : 0
+          : s.startAt,
+      sleepSort.desc,
+    );
+  }, [section, sleep, range, sleepSort]);
 
   const hasWorkouts = (workouts?.length ?? 0) > 0;
   const hasDays = (days?.length ?? 0) > 0;
-  const hasAny = hasWorkouts || hasDays;
+  const hasSleep = (sleep?.length ?? 0) > 0;
+  const hasAny = hasWorkouts || hasDays || hasSleep;
   const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasAny) return [];
     const out: FilterGroup[] = [
@@ -227,7 +290,12 @@ export function HealthView() {
         options: SECTIONS.map((s) => ({
           value: s.value,
           label: s.label,
-          count: s.value === "workouts" ? workouts?.length : days?.length,
+          count:
+            s.value === "workouts"
+              ? workouts?.length
+              : s.value === "daily"
+                ? days?.length
+                : sleep?.length,
         })),
         value: section,
         onChange: (v) => setSection(v as HealthSection),
@@ -243,7 +311,11 @@ export function HealthView() {
     out.push(
       timeGroup({
         description:
-          section === "daily" ? "The day the activity was recorded" : "When the workout took place",
+          section === "daily"
+            ? "The day the activity was recorded"
+            : section === "sleep"
+              ? "When the sleep was recorded"
+              : "When the workout took place",
         presets,
         counts: presetCounts,
         value: range,
@@ -251,7 +323,7 @@ export function HealthView() {
       }),
     );
     return out;
-  }, [hasAny, workouts, days, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
+  }, [hasAny, workouts, days, sleep, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
   const sortNode = useMemo(() => {
     if (!hasAny) return undefined;
     return section === "daily" ? (
@@ -263,6 +335,15 @@ export function HealthView() {
         ]}
         value={daySort}
         onChange={setDaySort}
+      />
+    ) : section === "sleep" ? (
+      <SortControl
+        fields={[
+          { value: "date", label: "Date" },
+          { value: "duration", label: "Duration" },
+        ]}
+        value={sleepSort}
+        onChange={setSleepSort}
       />
     ) : (
       <SortControl
@@ -284,13 +365,15 @@ export function HealthView() {
             count: hasAny
               ? section === "daily"
                 ? filteredDays.length
-                : filtered.length
+                : section === "sleep"
+                  ? filteredSleep.length
+                  : filtered.length
               : undefined,
             filter: filterGroups,
             sort: sortNode,
           }
         : null,
-    [active, hasAny, section, filtered.length, filteredDays.length, filterGroups, sortNode],
+    [active, hasAny, section, filtered.length, filteredDays.length, filteredSleep.length, filterGroups, sortNode],
   );
   useViewToolbar(toolbar);
 
@@ -322,6 +405,30 @@ export function HealthView() {
         ` · ${formatCount(summary.workoutCount)} workouts`}
     </div>
   );
+
+  if (section === "sleep") {
+    return (
+      <div className="flex h-full flex-col">
+        {summaryStrip}
+        <div key={clockFormat} className="min-h-0 flex-1">
+          <VirtualListView<SleepSession>
+            items={filteredSleep}
+            getKey={(s) => s.id}
+            estimateSize={56}
+            isPending={sleepPending}
+            error={sleepError}
+            emptyIcon={Moon}
+            emptyMessage={
+              hasSleep
+                ? "No sleep sessions match these filters."
+                : "No sleep data indexed — re-import this backup to index it."
+            }
+            renderItem={(s) => <SleepRow session={s} />}
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (section === "daily") {
     return (

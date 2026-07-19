@@ -955,6 +955,35 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
     Ok(out)
 }
 
+/// One sleep-analysis session (a raw HealthKit category sample).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SleepSession {
+    pub id: i64,
+    pub start_at: Option<i64>,
+    pub end_at: Option<i64>,
+    pub stage: String,
+}
+
+/// Sleep sessions, most recent first.
+pub fn list_sleep(cache: &CacheDb) -> Result<Vec<SleepSession>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, start_at, end_at, stage
+         FROM sleep_sessions ORDER BY start_at DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(SleepSession {
+            id: r.get(0)?,
+            start_at: r.get(1)?,
+            end_at: r.get(2)?,
+            stage: r.get(3)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// The Health summary (sample count + date range + workout count), or a zeroed
 /// summary when no Health data was imported.
 pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
