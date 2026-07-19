@@ -192,7 +192,7 @@ function PhotosViewInner() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Photos", count, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Photos", count, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, count, filterGroups, sortNode, searchNode],
   );

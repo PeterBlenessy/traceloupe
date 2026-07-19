@@ -86,7 +86,7 @@ export function CallsView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Calls", count, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Calls", count, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, count, filterGroups, sortNode, searchNode],
   );

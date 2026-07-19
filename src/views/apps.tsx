@@ -77,7 +77,7 @@ export function AppsView() {
     [apps.length, q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Apps", count: filtered.length, islands: [], filter: [], search: searchNode } : null),
+    () => (active === true ? { title: "Apps", count: filtered.length, filter: [], search: searchNode } : null),
     [active, filtered.length, searchNode],
   );
   useViewToolbar(toolbar);

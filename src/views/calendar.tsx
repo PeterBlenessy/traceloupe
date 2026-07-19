@@ -216,7 +216,7 @@ export function CalendarView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Calendar", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Calendar", count: filtered.length, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, filtered.length, filterGroups, sortNode, searchNode],
   );

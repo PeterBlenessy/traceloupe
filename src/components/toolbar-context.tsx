@@ -5,7 +5,6 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { ToolbarIsland } from "@/components/adaptive-toolbar";
 import type { FilterGroup } from "@/components/filter-groups";
 
 /**
@@ -17,14 +16,13 @@ import type { FilterGroup } from "@/components/filter-groups";
 export interface ViewToolbar {
   title?: string;
   count?: number;
-  islands: ToolbarIsland[];
-  search?: ReactNode;
-  searchExpanded?: boolean;
-  /** Faceted filter groups for the single **Filter** control. When present, the
-   *  shell renders the new filter/sort/search cluster instead of `islands`. */
+  /** Faceted filter groups for the single **Filter** control (omit / empty for a
+   *  view with no facets). */
   filter?: FilterGroup[];
   /** Always-visible sort control, shown beside the Filter button. */
   sort?: ReactNode;
+  /** The expanding search box. */
+  search?: ReactNode;
   /** Always-visible view-mode toggle (e.g. Notes' List/Folders), left of Filter. */
   modes?: ReactNode;
 }

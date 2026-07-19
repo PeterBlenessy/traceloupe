@@ -144,7 +144,7 @@ export function ContactsView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Contacts", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Contacts", count: filtered.length, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, filtered.length, filterGroups, sortNode, searchNode],
   );

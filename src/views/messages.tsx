@@ -356,7 +356,7 @@ function MessagesViewInner() {
     ];
   }, [services, totalCount, serviceCounts, service, setServiceFilter]);
   const toolbar = useMemo(
-    () => (active === true ? { title: "Messages", islands: [], filter: filterGroups, modes: modesNode } : null),
+    () => (active === true ? { title: "Messages", filter: filterGroups, modes: modesNode } : null),
     [active, filterGroups, modesNode],
   );
   useViewToolbar(toolbar);
