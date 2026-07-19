@@ -1942,9 +1942,13 @@ fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Res
             .unwrap()
     };
 
-    let Some(id) = path.trim_start_matches('/').parse::<i64>().ok() else {
+    // "/<id>" serves the note's first image (list thumbnail); "/<id>/<index>"
+    // serves the index-th image from note_media (the detail gallery).
+    let mut parts = path.trim_start_matches('/').split('/');
+    let Some(id) = parts.next().and_then(|s| s.parse::<i64>().ok()) else {
         return not_found();
     };
+    let index = parts.next().and_then(|s| s.parse::<i64>().ok());
     let active = app.state::<ActiveBackup>();
     let Ok(cache_path) = active.path() else {
         return not_found();
@@ -1952,10 +1956,17 @@ fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Res
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime, _thumb, decrypt_key, plain_size))) =
-        query::note_image_blob(&cache, id)
-    else {
+    let blob = match index {
+        Some(i) => query::note_media_blob(&cache, id, i),
+        None => query::note_image_blob(&cache, id),
+    };
+    let Ok(Some((local_path, mime, _thumb, decrypt_key, plain_size))) = blob else {
         return not_found();
+    };
+    // A cache key unique per (note, index) so rendered/decrypted files don't clash.
+    let key = match index {
+        Some(i) => id.wrapping_mul(100_000).wrapping_add(i),
+        None => id,
     };
 
     let thumbs_dir = cache_path
@@ -1963,21 +1974,21 @@ fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Res
         .map(|p| p.join("note-thumbs"))
         .unwrap_or_else(|| PathBuf::from("note-thumbs"));
 
-    let rendered = if let Some(key) = decrypt_key {
+    let rendered = if let Some(wrapped) = decrypt_key {
         let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
             return not_found(); // encrypted image, and keys couldn't be loaded (no stored password)
         };
-        let out = thumbs_dir.join(format!("note-{id}.decrypted"));
-        let Some(src) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out)
+        let out = thumbs_dir.join(format!("note-{key}.decrypted"));
+        let Some(src) = decrypt_to_cache(&dec, &wrapped, Path::new(&local_path), plain_size, &out)
         else {
             return not_found();
         };
-        media::render(&src, &thumbs_dir, id, true, mime.as_deref())
+        media::render(&src, &thumbs_dir, key, true, mime.as_deref())
     } else {
         media::render(
             Path::new(&local_path),
             &thumbs_dir,
-            id,
+            key,
             true,
             mime.as_deref(),
         )

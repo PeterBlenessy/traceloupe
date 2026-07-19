@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 28;
+const SCHEMA_VERSION: i64 = 29;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -159,6 +159,20 @@ CREATE TABLE IF NOT EXISTS notes (
     image_decrypt_key BLOB,
     image_plain_size  INTEGER,
     image_mime        TEXT
+);
+
+-- Every embedded image of a note (position-ordered) for the detail gallery.
+-- notes.image_* keeps the first (list thumbnail); this holds all of them, each
+-- with its own on-demand decrypt fields. Served by the note-image protocol with
+-- an index. Repopulated per import (cleared alongside notes).
+CREATE TABLE IF NOT EXISTS note_media (
+    note_id     INTEGER NOT NULL,
+    position    INTEGER NOT NULL,
+    local_path  TEXT NOT NULL,
+    decrypt_key BLOB,
+    plain_size  INTEGER,
+    mime        TEXT,
+    PRIMARY KEY (note_id, position)
 );
 
 CREATE TABLE IF NOT EXISTS media_items (
@@ -492,6 +506,19 @@ impl CacheDb {
             ensure_column(&conn, "notes", "image_mime", "TEXT")?;
             // v28: rich-text HTML rendering of the note body.
             ensure_column(&conn, "notes", "body_rich", "TEXT")?;
+            // v29: all of a note's embedded images (detail gallery), not just the
+            // first. New table — created here for pre-existing caches.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS note_media (
+                    note_id     INTEGER NOT NULL,
+                    position    INTEGER NOT NULL,
+                    local_path  TEXT NOT NULL,
+                    decrypt_key BLOB,
+                    plain_size  INTEGER,
+                    mime        TEXT,
+                    PRIMARY KEY (note_id, position)
+                );",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

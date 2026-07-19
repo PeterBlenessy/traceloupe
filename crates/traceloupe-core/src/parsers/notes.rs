@@ -221,6 +221,7 @@ pub fn parse_notes(
     let tx = conn.unchecked_transaction()?;
     if replace {
         tx.execute("DELETE FROM notes", [])?;
+        tx.execute("DELETE FROM note_media", [])?;
     }
     let mut stmt = src.prepare(&sql)?;
     let mut rows = stmt.query([])?;
@@ -318,8 +319,10 @@ pub fn parse_notes(
         // renders it when present, falling back to the plain body otherwise.
         let body_rich = zdata.as_deref().and_then(decode_note_rich);
 
-        // Its first embedded image (for a list thumbnail), if resolved.
-        let img = note_images.get(&note_pk);
+        // All embedded images; the first is also stored on the note for the list
+        // thumbnail, the rest go to note_media for the detail gallery.
+        let imgs = note_images.get(&note_pk);
+        let first = imgs.and_then(|v| v.first());
         tx.execute(
             "INSERT INTO notes (folder, title, snippet, body_html, body_rich, created_at, modified_at, locked, pinned,
                                 has_checklist, image_count, attachment_count, tags,
@@ -338,12 +341,29 @@ pub fn parse_notes(
                 image_count,
                 attachment_count,
                 tags,
-                img.map(|i| i.local_path.as_str()),
-                img.and_then(|i| i.decrypt_key.as_deref()),
-                img.and_then(|i| i.plain_size),
-                img.and_then(|i| i.mime.as_deref()),
+                first.map(|i| i.local_path.as_str()),
+                first.and_then(|i| i.decrypt_key.as_deref()),
+                first.and_then(|i| i.plain_size),
+                first.and_then(|i| i.mime.as_deref()),
             ],
         )?;
+        let note_id = tx.last_insert_rowid();
+        if let Some(imgs) = imgs {
+            for (pos, img) in imgs.iter().enumerate() {
+                tx.execute(
+                    "INSERT INTO note_media (note_id, position, local_path, decrypt_key, plain_size, mime)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        note_id,
+                        pos as i64,
+                        img.local_path.as_str(),
+                        img.decrypt_key.as_deref(),
+                        img.plain_size,
+                        img.mime.as_deref(),
+                    ],
+                )?;
+            }
+        }
         report.notes += 1;
     }
     drop(rows);
@@ -424,8 +444,9 @@ fn load_note_images(
     conn: &Connection,
     cols: &HashSet<String>,
     images: Option<&NoteImageSource>,
-) -> std::collections::HashMap<i64, NoteImage> {
-    let mut map = std::collections::HashMap::new();
+) -> std::collections::HashMap<i64, Vec<NoteImage>> {
+    let mut map: std::collections::HashMap<i64, Vec<NoteImage>> =
+        std::collections::HashMap::new();
     let Some(src) = images else {
         return map;
     };
@@ -458,9 +479,6 @@ fn load_note_images(
         let Ok(note_pk) = r.get::<_, i64>(0) else {
             continue;
         };
-        if map.contains_key(&note_pk) {
-            continue; // keep the first image per note
-        }
         let media_uuid = r.get::<_, Option<String>>(1).ok().flatten();
         let filename = r.get::<_, Option<String>>(2).ok().flatten();
         let Some(account) = r.get::<_, Option<String>>(3).ok().flatten() else {
@@ -474,7 +492,7 @@ fn load_note_images(
             filename.as_deref(),
             preview_stem.as_deref(),
         ) {
-            map.insert(note_pk, img);
+            map.entry(note_pk).or_default().push(img);
         }
     }
     map

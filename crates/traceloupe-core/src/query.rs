@@ -1627,6 +1627,29 @@ pub fn note_image_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
         .optional()?)
 }
 
+/// The `index`-th embedded image of note `note_id` (0-based), for the detail
+/// gallery. Mirrors `note_image_blob` but reads the `note_media` table.
+pub fn note_media_blob(cache: &CacheDb, note_id: i64, index: i64) -> Result<Option<MediaBlob>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT local_path, mime, NULL, decrypt_key, plain_size
+             FROM note_media
+             WHERE note_id = ?1 AND position = ?2",
+            [note_id, index],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<Vec<u8>>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                ))
+            },
+        )
+        .optional()?)
+}
+
 /// A locked note's crypto params: `(salt, iterations, iv, tag, encrypted_data,
 /// wrapped_key)`. `wrapped_key` is empty when the note key is derived directly.
 pub type NoteCrypto = (Vec<u8>, i64, Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>);
