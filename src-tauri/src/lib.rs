@@ -1395,6 +1395,17 @@ async fn health_daily(active: State<'_, ActiveBackup>) -> Result<Vec<query::Heal
 }
 
 #[tauri::command]
+async fn list_sleep(active: State<'_, ActiveBackup>) -> Result<Vec<query::SleepSession>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_sleep(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn health_summary(active: State<'_, ActiveBackup>) -> Result<query::HealthSummary, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2795,6 +2806,7 @@ pub fn run() {
             list_reminders,
             list_workouts,
             health_daily,
+            list_sleep,
             health_summary,
             list_interactions,
             message_kinds,

@@ -91,6 +91,9 @@ pub fn parse_health(
         parse_daily(&src, cache, replace)?;
         summarize_samples(&src, cache)?;
     }
+    if has("category_samples")? {
+        parse_sleep(&src, cache, replace)?;
+    }
     Ok(())
 }
 
@@ -200,6 +203,49 @@ fn parse_daily(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
                 stat(5)?,
                 r.get::<_, i64>(6)?
             ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// `HKCategoryValueSleepAnalysis` → friendly stage name. Older iOS only writes
+/// 0/1; watch-tracked sleep adds the 2–5 stages.
+fn sleep_stage(value: i64) -> &'static str {
+    match value {
+        1 => "Asleep",
+        2 => "Awake",
+        3 => "Core",
+        4 => "Deep",
+        5 => "REM",
+        _ => "In Bed",
+    }
+}
+
+/// Sleep-analysis sessions: `category_samples` of data type 63, one cache row
+/// per sample with its stage name.
+fn parse_sleep(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let mut stmt = src.prepare(
+        "SELECT s.start_date, s.end_date, c.value
+         FROM samples s
+         JOIN category_samples c ON c.data_id = s.data_id
+         WHERE s.data_type = 63
+         ORDER BY s.start_date",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM sleep_sessions", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let start_at = to_unix(r.get::<_, Option<f64>>(0)?);
+        let end_at = to_unix(r.get::<_, Option<f64>>(1)?);
+        let stage = sleep_stage(r.get::<_, Option<i64>>(2)?.unwrap_or(0));
+        tx.execute(
+            "INSERT INTO sleep_sessions (start_at, end_at, stage) VALUES (?1, ?2, ?3)",
+            rusqlite::params![start_at, end_at, stage],
         )?;
     }
     tx.commit()?;
@@ -358,6 +404,46 @@ mod tests {
             )
             .unwrap();
         assert_eq!((min, max), (90.0, 120.0));
+    }
+
+    #[test]
+    fn parses_sleep_sessions_with_stage_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE category_samples (data_id INTEGER, value INTEGER);
+             -- An in-bed session (value 0) and a deep-sleep stage (value 4).
+             INSERT INTO samples VALUES (1, 721692800.0, 721721600.0, 63);
+             INSERT INTO samples VALUES (2, 721695000.0, 721698600.0, 63);
+             INSERT INTO category_samples VALUES (1, 0);
+             INSERT INTO category_samples VALUES (2, 4);
+             -- A non-sleep category sample must be ignored.
+             INSERT INTO samples VALUES (3, 721692800.0, 721692900.0, 95);
+             INSERT INTO category_samples VALUES (3, 1);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let rows: Vec<(i64, i64, String)> = c
+            .prepare("SELECT start_at, end_at, stage FROM sleep_sessions ORDER BY start_at, id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (1_700_000_000, 1_700_028_800, "In Bed".to_string()),
+                (1_700_002_200, 1_700_005_800, "Deep".to_string()),
+            ]
+        );
     }
 
     #[test]
