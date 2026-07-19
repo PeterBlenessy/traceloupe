@@ -20,6 +20,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.10.0` | **Untapped stores surfaced** — five new views (Device, Calendar, Reminders, Health, Interactions), Messages `attributedBody` decode + edited flag, Notes rich-content indicators, and the app-chat attachment-media framework. |
 | `0.11.0` | **Locked-note decryption** — password-protected Apple Notes unlock on demand (PBKDF2 → RFC-3394 key-unwrap → AES-128-GCM), the note password entered in-app and nothing decrypted at rest. Closes the last coverage-audit gap. |
 | `0.12.0` | **Messages & media UX overhaul + hardening** — inline/hover link previews (OpenGraph, single 3-way mode), an in-app image/video lightbox, opt-in recovery of missing attachments from the camera roll, Notes rich-text rendering, persisted scroll/sidebar/window state, and a pre-release review pass that closed a DNS-rebind SSRF hole in link fetching. See "Planned" below for what's next. |
+| `0.13.0` | **Adaptive "islands" toolbar** — every view's filters, sort, and search become segmented, bordered islands in one unified top bar that shares width evenly, reveals more chips as room allows, collapses to representative icons when tight, and expands one island on demand while the others fold. Rolled out across all thirteen views. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -27,6 +28,38 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.13.0] — 2026-07-19
+
+**Adaptive "islands" toolbar.** Every view's controls now live in one unified
+top bar as segmented, bordered **islands** of related actions — a facet, the
+time range, sort, an expanding search — verified across all views with the
+screenshot harness.
+
+### Added
+
+- **Adaptive islands toolbar** (`AdaptiveToolbar` + `toolbar-context` +
+  `toolbar-islands`). Islands share the available width evenly so none
+  dominates; each reveals as many chips as fit and tucks the rest behind a
+  single expand chevron. Clicking a chevron **expands** that island and collapses
+  the others — to their two-item minimum where there's room, otherwise to a
+  single representative icon. A greedy fit reveals more chips into any slack and
+  only collapses the widest island to an icon when the minimums don't fit, so
+  nothing overflows and the app-wide controls never clip.
+- **Data-aware time island** — presets whose range holds no items fold away
+  first, so the visible chips are the ranges that actually contain data.
+- **Expanding search island** — a magnifier that opens into an inline input,
+  bordered like the other collapsed islands.
+
+### Changed
+
+- **All thirteen views migrated** to publish their filters/sort/search as islands
+  via `useViewToolbar`, dropping their in-panel `PanelHeader`/toolbar rows:
+  Safari, Photos, Calls, Interactions, Calendar, Reminders, Health, Apps,
+  Contacts, Notes, Recordings, Messages, and Device. Master-detail views
+  (Contacts, Notes, Recordings, Messages) keep their detail sub-headers; Messages
+  lifts its top-level view (Chats/Timeline) and app-service controls into the
+  unified bar while its per-pane order/jump/kind controls stay contextual.
 
 ## [0.12.2] — 2026-07-18
 
