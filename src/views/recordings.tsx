@@ -13,9 +13,9 @@ import {
 import { VirtualList } from "@/components/virtual-list";
 import { useTimePresets } from "@/components/time-filter";
 import { useSettings } from "@/components/settings-provider";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { timeGroup, type FilterGroup } from "@/components/filter-groups";
 import {
   EmptyView,
   ErrorState,
@@ -94,31 +94,38 @@ export function RecordingsView() {
   }, [recordings, sort, baseFiltered, range]);
 
   const hasRecordings = (recordings?.length ?? 0) > 0;
-  const islands = useMemo(
+  const filterGroups = useMemo<FilterGroup[]>(
     () =>
       hasRecordings
-        ? [
-            timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
-            sortIsland({
-              fields: [
-                { value: "recorded", label: "Date" },
-                { value: "title", label: "Title" },
-                { value: "duration", label: "Duration" },
-              ],
-              value: sort,
-              onChange: setSort,
-            }),
-          ]
+        ? [timeGroup({ description: "When the recording was made", presets, counts: presetCounts, value: range, onChange: setRange })]
         : [],
-    [hasRecordings, presets, presetCounts, range, sort, setSort],
+    [hasRecordings, presets, presetCounts, range],
+  );
+  const sortNode = useMemo(
+    () =>
+      hasRecordings ? (
+        <SortControl
+          fields={[
+            { value: "recorded", label: "Date" },
+            { value: "title", label: "Title" },
+            { value: "duration", label: "Duration" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      ) : undefined,
+    [hasRecordings, sort, setSort],
   );
   const searchNode = useMemo(
     () => (hasRecordings ? <ListSearch value={q} onChange={setQ} placeholder="Search recordings" /> : undefined),
     [hasRecordings, q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Recordings", count: sortedRecordings?.length, islands, search: searchNode } : null),
-    [active, sortedRecordings?.length, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Recordings", count: sortedRecordings?.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, sortedRecordings?.length, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
