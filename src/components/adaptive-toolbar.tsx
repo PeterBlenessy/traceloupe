@@ -223,17 +223,16 @@ export function AdaptiveToolbar({
           );
         }
 
-        // Expanded island sizes to content; normal islands share width evenly.
+        // Islands size to their content so the arrow sits right after the last
+        // visible item. The even distribution is in the item-count fit (how many
+        // items each island reveals for its equal share), not in stretching.
         const visible = isl.items.slice(0, L.count);
         return (
           <div
             key={isl.key}
-            className={cn(
-              "flex min-w-0 items-center gap-0.5 rounded-lg border border-border/70 bg-muted/40 p-0.5",
-              isExpanded ? "shrink-0" : "flex-1",
-            )}
+            className="flex min-w-0 shrink-0 items-center gap-0.5 rounded-lg border border-border/70 bg-muted/40 p-0.5"
           >
-            <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+            <div className="flex min-w-0 items-center gap-0.5 overflow-hidden">
               {visible.map((it) => (
                 <span key={it.key} className="shrink-0">
                   {it.node}
