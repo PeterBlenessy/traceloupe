@@ -186,6 +186,20 @@ function WorkoutRow({ workout }: { workout: Workout }) {
   );
 }
 
+/** "412/500 kcal" — a ring's progress against its goal (goal optional). */
+function ringBit(
+  label: string,
+  value: number | null,
+  goal: number | null,
+  unit: string,
+): string | null {
+  if (value == null) return null;
+  const v = formatCount(Math.round(value));
+  return goal != null
+    ? `${label} ${v}/${formatCount(Math.round(goal))} ${unit}`
+    : `${label} ${v} ${unit}`;
+}
+
 function DayRow({ day }: { day: HealthDay }) {
   const bits = [
     day.steps != null ? `${formatCount(day.steps)} steps` : null,
@@ -198,6 +212,11 @@ function DayRow({ day }: { day: HealthDay }) {
       ? `${formatCount(Math.round(day.restingKcal))} kcal resting`
       : null,
   ].filter(Boolean);
+  const rings = [
+    ringBit("Move", day.moveKcal, day.moveGoalKcal, "kcal"),
+    ringBit("Exercise", day.exerciseMin, day.exerciseGoalMin, "min"),
+    ringBit("Stand", day.standHours, day.standGoalHours, "hr"),
+  ].filter(Boolean);
   return (
     <Item>
       <ItemMedia>
@@ -208,6 +227,11 @@ function DayRow({ day }: { day: HealthDay }) {
         <div className="text-xs text-muted-foreground">
           {bits.length > 0 ? bits.join(" · ") : "No activity recorded"}
         </div>
+        {rings.length > 0 && (
+          <div className="text-xs text-muted-foreground/70">
+            {rings.join(" · ")}
+          </div>
+        )}
       </ItemContent>
       {day.hrAvg != null && (
         <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">

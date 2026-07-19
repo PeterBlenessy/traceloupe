@@ -956,6 +956,13 @@ pub struct HealthDay {
     pub hr_min: Option<f64>,
     pub hr_avg: Option<f64>,
     pub hr_max: Option<f64>,
+    /// Activity rings (NULL when the device never tracked that ring).
+    pub move_kcal: Option<f64>,
+    pub move_goal_kcal: Option<f64>,
+    pub exercise_min: Option<f64>,
+    pub exercise_goal_min: Option<f64>,
+    pub stand_hours: Option<f64>,
+    pub stand_goal_hours: Option<f64>,
 }
 
 /// Daily activity aggregates, most recent day first.
@@ -994,6 +1001,39 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
             _ => {}
         }
     }
+
+    // Merge in the activity rings; a day tracked only by the rings (no
+    // quantity samples) still gets a row.
+    let mut stmt = conn.prepare(
+        "SELECT CAST(strftime('%s', day) AS INTEGER),
+                move_kcal, move_goal_kcal, exercise_min, exercise_goal_min,
+                stand_hours, stand_goal_hours
+         FROM activity_rings",
+    )?;
+    let mut idx: std::collections::HashMap<i64, usize> = out
+        .iter()
+        .enumerate()
+        .map(|(i, d)| (d.day_at, i))
+        .collect();
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let day_at: i64 = r.get(0)?;
+        let i = *idx.entry(day_at).or_insert_with(|| {
+            out.push(HealthDay {
+                day_at,
+                ..Default::default()
+            });
+            out.len() - 1
+        });
+        let d = &mut out[i];
+        d.move_kcal = r.get(1)?;
+        d.move_goal_kcal = r.get(2)?;
+        d.exercise_min = r.get(3)?;
+        d.exercise_goal_min = r.get(4)?;
+        d.stand_hours = r.get(5)?;
+        d.stand_goal_hours = r.get(6)?;
+    }
+    out.sort_by(|a, b| b.day_at.cmp(&a.day_at));
     Ok(out)
 }
 

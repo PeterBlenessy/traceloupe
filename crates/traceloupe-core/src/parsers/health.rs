@@ -108,6 +108,53 @@ pub fn parse_health(
     if has("category_samples")? {
         parse_sleep(&src, cache, replace)?;
     }
+    if has("activity_caches")? {
+        parse_rings(&src, cache, replace)?;
+    }
+    Ok(())
+}
+
+/// Apple activity rings: `activity_caches` holds one pre-aggregated row per
+/// day — Move energy (kcal), Exercise ("brisk") minutes and Stand ("active")
+/// hours, each with its goal. Joined to `samples` for the day. The rare
+/// duplicate day (device migration) resolves to the row with the most Move
+/// energy via the ascending ORDER BY + INSERT OR REPLACE (last one wins).
+fn parse_rings(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let mut stmt = src.prepare(
+        "SELECT date(s.start_date + 978307200, 'unixepoch') AS day,
+                a.energy_burned, a.energy_burned_goal,
+                a.brisk_minutes, a.brisk_minutes_goal,
+                a.active_hours, a.active_hours_goal
+         FROM activity_caches a
+         JOIN samples s ON s.data_id = a.data_id
+         WHERE s.start_date > 0
+         ORDER BY day, a.energy_burned ASC",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM activity_rings", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        tx.execute(
+            "INSERT OR REPLACE INTO activity_rings
+                 (day, move_kcal, move_goal_kcal, exercise_min, exercise_goal_min,
+                  stand_hours, stand_goal_hours)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<f64>>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, Option<f64>>(3)?,
+                r.get::<_, Option<f64>>(4)?,
+                r.get::<_, Option<f64>>(5)?,
+                r.get::<_, Option<f64>>(6)?,
+            ],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -796,6 +843,45 @@ mod tests {
             .unwrap();
         assert!(max_lat < 57.0, "deleted association leaked in: {max_lat}");
         assert!((last_lat - (56.0 + 2499.0 * 1e-5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_activity_rings_and_resolves_duplicate_days() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE quantity_samples (data_id INTEGER, quantity REAL);
+             CREATE TABLE activity_caches (data_id INTEGER PRIMARY KEY, energy_burned REAL,
+                 energy_burned_goal REAL, brisk_minutes REAL, brisk_minutes_goal REAL,
+                 active_hours REAL, active_hours_goal REAL);
+             -- Two ring rows the same UTC day (device migration): the one with
+             -- more Move energy must win. Exercise/Stand NULL (phone-only).
+             INSERT INTO samples VALUES (1, 721692800.0, 721692801.0, 76);
+             INSERT INTO samples VALUES (2, 721693000.0, 721693001.0, 76);
+             INSERT INTO activity_caches VALUES (1, 120.0, 500.0, NULL, NULL, NULL, NULL);
+             INSERT INTO activity_caches VALUES (2, 412.0, 500.0, 22.0, 30.0, 9.0, 12.0);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let (n, move_kcal, goal, ex, stand): (i64, f64, f64, f64, f64) = c
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM activity_rings),
+                        move_kcal, move_goal_kcal, exercise_min, stand_hours
+                 FROM activity_rings",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "duplicate day collapses to one row");
+        assert_eq!((move_kcal, goal), (412.0, 500.0), "highest Move energy wins");
+        assert_eq!((ex, stand), (22.0, 9.0));
     }
 
     #[test]

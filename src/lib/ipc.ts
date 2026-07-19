@@ -222,6 +222,13 @@ export interface HealthDay {
   hrMin: number | null;
   hrAvg: number | null;
   hrMax: number | null;
+  /** Activity rings (null when the device never tracked that ring). */
+  moveKcal: number | null;
+  moveGoalKcal: number | null;
+  exerciseMin: number | null;
+  exerciseGoalMin: number | null;
+  standHours: number | null;
+  standGoalHours: number | null;
 }
 
 export interface Reminder {
@@ -1996,6 +2003,12 @@ export const mockClient: TraceLoupeClient = {
             hrMin: 52,
             hrAvg: 71,
             hrMax: 142,
+            moveKcal: 412,
+            moveGoalKcal: 500,
+            exerciseMin: 22,
+            exerciseGoalMin: 30,
+            standHours: 9,
+            standGoalHours: 12,
           },
           {
             dayAt: 1717718400,
@@ -2007,6 +2020,12 @@ export const mockClient: TraceLoupeClient = {
             hrMin: null,
             hrAvg: null,
             hrMax: null,
+            moveKcal: 180,
+            moveGoalKcal: 500,
+            exerciseMin: null,
+            exerciseGoalMin: null,
+            standHours: null,
+            standGoalHours: null,
           },
         ]
       : [],
