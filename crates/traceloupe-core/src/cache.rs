@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 33;
+const SCHEMA_VERSION: i64 = 34;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -569,6 +569,20 @@ impl CacheDb {
                 "contacts",
                 "groups_json",
                 "TEXT NOT NULL DEFAULT '[]'",
+            )?;
+            // v34: Apple activity rings — one row per UTC day (Move kcal,
+            // Exercise minutes, Stand hours, each with its goal). Columns are
+            // NULL when the device never tracked that ring (phone-only: Move).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS activity_rings (
+                    day               TEXT PRIMARY KEY,  -- 'YYYY-MM-DD' (UTC)
+                    move_kcal         REAL,
+                    move_goal_kcal    REAL,
+                    exercise_min      REAL,
+                    exercise_goal_min REAL,
+                    stand_hours       REAL,
+                    stand_goal_hours  REAL
+                );",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
