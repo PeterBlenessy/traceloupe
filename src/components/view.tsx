@@ -10,7 +10,6 @@
 import { useRef, useState } from "react";
 import { Search, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
@@ -339,34 +338,37 @@ export function ListSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const open = focused || value.length > 0;
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        aria-label={placeholder}
-        title={placeholder}
-        onClick={() => {
+  // One bordered box whose WIDTH animates from the collapsed icon button (w-8)
+  // to the open input (w-44/w-56). Width animates reliably in WebKit — unlike the
+  // `scale`/`translate` properties. The border/bg live on the container (so the
+  // collapsed state is a clean island button); the input inside is transparent
+  // and clipped, so nothing bleeds under the neighbouring app controls.
+  return (
+    <div
+      onClick={() => {
+        if (!open) {
           setFocused(true);
           requestAnimationFrame(() => inputRef.current?.focus());
-        }}
-        className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        <Search className="size-4" />
-      </button>
-    );
-  }
-  return (
-    <div className="relative w-44 shrink-0 transition-[width] duration-200 sm:w-56">
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
+        }
+      }}
+      className={cn(
+        "relative flex h-8 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
+        open ? "w-44 sm:w-56" : "w-8 cursor-pointer hover:bg-accent hover:text-foreground",
+      )}
+    >
+      <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2" />
+      <input
         ref={inputRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        placeholder={placeholder}
-        className="h-8 select-text pl-8 pr-7"
+        placeholder={open ? placeholder : ""}
+        aria-label={placeholder}
+        title={open ? undefined : placeholder}
+        className="h-full w-full select-text bg-transparent pl-8 pr-7 text-sm text-foreground outline-none placeholder:text-muted-foreground"
       />
-      {value && (
+      {open && value && (
         <button
           type="button"
           aria-label="Clear search"

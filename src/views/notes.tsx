@@ -26,13 +26,14 @@ import {
   ItemDescription,
   ItemTitle,
 } from "@/components/ui/item";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, multiBadgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import {
   EmptyView,
   ErrorState,
@@ -194,7 +195,7 @@ export function NotesView() {
   // Filters — all derived client-side from the note metadata we already hold.
   const [folder, setFolder] = usePersistedState<string>("notes:folder", "all");
   const [lockState, setLockState] = usePersistedState<string>("notes:lock", "all");
-  const [tag, setTag] = usePersistedState<string>("notes:tag", "all");
+  const [selectedTags, setSelectedTags] = usePersistedState<string[]>("notes:tags", []);
   // Free-text search over title / snippet / folder.
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim().toLowerCase());
@@ -227,7 +228,11 @@ export function NotesView() {
   // (its control may be hidden, leaving no way to reset).
   const effFolder = folder !== "all" && folders.includes(folder) ? folder : "all";
   const effLock = hasLocked ? lockState : "all";
-  const effTag = tag !== "all" && tags.includes(tag) ? tag : "all";
+  // Stable reference (memoized) so the filter memos below don't rerun each render.
+  const effTags = useMemo(
+    () => selectedTags.filter((t) => tags.includes(t)),
+    [selectedTags, tags],
+  );
 
   // Whether a note's modified date falls in a [lo, hi) window (undated notes
   // only pass the fully-open "All" window).
@@ -248,7 +253,7 @@ export function NotesView() {
       if (effFolder !== "all" && n.folder !== effFolder) return false;
       if (effLock === "locked" && !n.locked) return false;
       if (effLock === "unlocked" && n.locked) return false;
-      if (effTag !== "all" && !n.tags.includes(effTag)) return false;
+      if (effTags.length > 0 && !effTags.some((t) => n.tags.includes(t))) return false;
       if (search) {
         const hay = [n.title, n.snippet, n.folder]
           .filter(Boolean)
@@ -258,7 +263,7 @@ export function NotesView() {
       }
       return true;
     });
-  }, [notes, effFolder, effLock, effTag, search]);
+  }, [notes, effFolder, effLock, effTags, search]);
 
   const presetCounts = useMemo(
     () =>
@@ -291,34 +296,24 @@ export function NotesView() {
   }, [sortedNotes, sort, viewMode, collapsed]);
 
   const hasNotes = (notes?.length ?? 0) > 0;
-  const islands = useMemo(() => {
+  // Faceted filters for the single Filter control. Only groups this backup
+  // actually has are included — no locked notes → no Lock group at all.
+  const filterGroups = useMemo(() => {
     if (!hasNotes) return [];
-    const out = [
-      badgeIsland({
-        key: "layout",
-        label: "Layout",
-        icon: <List className="size-4" />,
-        options: [
-          { value: "flat", label: "List", icon: <List className="size-3.5" /> },
-          { value: "tree", label: "Folders", icon: <FolderTree className="size-3.5" /> },
-        ],
-        value: viewMode,
-        onChange: (v) => setViewMode(v as "flat" | "tree"),
-      }),
-    ];
-    // The folder facet is redundant in tree view (the tree groups by folder).
+    const out: FilterGroup[] = [];
+    // Folder facet is redundant in tree view (the tree already groups by folder).
     if (viewMode === "flat" && folders.length > 1) {
       const folderOptions: BadgeFilterOption[] = [
         { value: "all", label: "All folders" },
         ...folders.map((f) => ({ value: f, label: f, count: (notes ?? []).filter((n) => n.folder === f).length })),
       ];
-      out.push(badgeIsland({ key: "folder", label: "Folder", icon: <Folder className="size-4" />, options: folderOptions, value: effFolder, onChange: setFolder }));
+      out.push(badgeGroup({ key: "folder", label: "Folder", description: "Which folder the note lives in", options: folderOptions, value: effFolder, onChange: setFolder }));
     }
     if (hasLocked)
-      out.push(badgeIsland({
+      out.push(badgeGroup({
         key: "lock",
         label: "Lock",
-        icon: <Lock className="size-4" />,
+        description: "Password-protected notes",
         options: [
           { value: "all", label: "All" },
           { value: "unlocked", label: "Unlocked", icon: <LockOpen className="size-3.5" /> },
@@ -328,23 +323,82 @@ export function NotesView() {
         onChange: setLockState,
       }));
     if (tags.length > 0) {
-      const tagOptions: BadgeFilterOption[] = [
-        { value: "all", label: "All tags" },
-        ...tags.map((t) => ({ value: t, label: t, count: (notes ?? []).filter((n) => n.tags.includes(t)).length })),
-      ];
-      out.push(badgeIsland({ key: "tag", label: "Tags", icon: <ListChecks className="size-4" />, options: tagOptions, value: effTag, onChange: setTag }));
+      const tagOptions: BadgeFilterOption[] = tags.map((t) => ({
+        value: t,
+        label: t,
+        count: (notes ?? []).filter((n) => n.tags.includes(t)).length,
+      }));
+      out.push(
+        multiBadgeGroup({
+          key: "tag",
+          label: "Tags",
+          description: "Hashtags used inside the note (pick any)",
+          options: tagOptions,
+          selected: effTags,
+          onToggle: (t) =>
+            setSelectedTags((prev) =>
+              prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t],
+            ),
+        }),
+      );
     }
-    out.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
-    out.push(sortIsland({ fields: [{ value: "modified", label: "Modified" }, { value: "title", label: "Title" }], value: sort, onChange: setSort }));
+    out.push(timeGroup({ description: "When the note was last modified", presets, counts: presetCounts, value: range, onChange: setRange }));
     return out;
-  }, [hasNotes, viewMode, folders, notes, effFolder, hasLocked, effLock, tags, effTag, presets, presetCounts, range, sort, setViewMode, setFolder, setLockState, setTag, setRange, setSort]);
+  }, [hasNotes, viewMode, folders, notes, effFolder, hasLocked, effLock, tags, effTags, presets, presetCounts, range, setFolder, setLockState, setSelectedTags, setRange]);
+
+  // Always-visible controls beside the Filter button.
+  const modesNode = useMemo(
+    () =>
+      hasNotes ? (
+        <ToggleGroup
+          type="single"
+          value={viewMode}
+          onValueChange={(v) => v && setViewMode(v as "flat" | "tree")}
+          variant="outline"
+          size="sm"
+        >
+          <ToggleGroupItem value="flat" aria-label="List" title="List">
+            <List className="size-4" />
+          </ToggleGroupItem>
+          <ToggleGroupItem value="tree" aria-label="Folders" title="Folder tree">
+            <FolderTree className="size-4" />
+          </ToggleGroupItem>
+        </ToggleGroup>
+      ) : undefined,
+    [hasNotes, viewMode, setViewMode],
+  );
+  const sortNode = useMemo(
+    () =>
+      hasNotes ? (
+        <SortControl
+          fields={[
+            { value: "modified", label: "Modified" },
+            { value: "title", label: "Title" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      ) : undefined,
+    [hasNotes, sort, setSort],
+  );
   const searchNode = useMemo(
     () => (hasNotes ? <ListSearch value={q} onChange={setQ} placeholder="Search notes" /> : undefined),
     [hasNotes, q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Notes", count: sortedNotes?.length, islands, search: searchNode } : null),
-    [active, sortedNotes?.length, islands, searchNode],
+    () =>
+      active === true
+        ? {
+            title: "Notes",
+            count: sortedNotes?.length,
+            islands: [],
+            filter: filterGroups,
+            modes: modesNode,
+            sort: sortNode,
+            search: searchNode,
+          }
+        : null,
+    [active, sortedNotes?.length, filterGroups, modesNode, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 

@@ -201,6 +201,50 @@
   }
 }
 
+/* Filter panel morph (see src/components/filter-control.tsx). Keyframes play
+   reliably on mount — unlike a CSS transition, whose start-state paint WebKit
+   can skip, jumping straight to the end. Scaled from the top-right corner so the
+   panel grows out of the funnel button. Honours "reduce motion" via the rule
+   above (which forces animation-duration to ~0). */
+/* Use the `transform` property (not the individual `scale` property): this
+   WebKit build animates `transform` reliably but not `scale`/`translate`. */
+@keyframes filter-panel-in {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes filter-panel-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+@keyframes filter-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes filter-scrim-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 /* Rendered rich-text note bodies (see src/views/notes.tsx). The generated HTML
    uses a fixed, escaped tag set; these styles restore structure that Tailwind's
    preflight reset strips. */

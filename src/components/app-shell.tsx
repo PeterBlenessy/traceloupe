@@ -7,7 +7,6 @@ import {
   Smartphone,
   Waypoints,
   Globe,
-  HardDrive,
   Image,
   Loader2,
   MessageSquare,
@@ -26,6 +25,7 @@ import {
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -44,6 +44,7 @@ import { ModeToggle } from "@/components/mode-toggle";
 import { ToolbarGroup } from "@/components/toolbar-group";
 import { AdaptiveToolbar } from "@/components/adaptive-toolbar";
 import { ToolbarProvider, useToolbar } from "@/components/toolbar-context";
+import { FilterControl } from "@/components/filter-control";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -85,7 +86,6 @@ const nav = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
-  { to: "/device", label: "Device", icon: Smartphone },
 ] as const;
 
 export function AppShell() {
@@ -103,6 +103,11 @@ export function AppShell() {
     "traceloupe-sidebar-open",
     true,
   );
+  // The open backup's device, shown as the sidebar header (which opens /device).
+  const { data: deviceInfo } = useQuery({
+    queryKey: ["deviceInfo"],
+    queryFn: () => client.deviceInfo(),
+  });
 
   return (
     // ImportProvider / ReimportProvider live above the routes so an import — and a
@@ -126,22 +131,42 @@ export function AppShell() {
             { "--sidebar-width": `${sidebarWidth}px` } as React.CSSProperties
           }
         >
+          {/* The unified HTML title bar spans the FULL window width above both the
+          sidebar and the content (z above the sidebar's z-10). The macOS traffic
+          lights sit in its left; the sidebar starts below it, so the sidebar's
+          right border stops at this bar's bottom instead of running up behind the
+          lights. The whole strip is the window drag region. */}
+          <header
+            data-tauri-drag-region
+            className="fixed inset-x-0 top-0 z-20 flex h-11 items-center border-b bg-background px-3"
+          >
+            <AppToolbar />
+          </header>
           {/* collapsible="icon": the trigger collapses the sidebar to an icon rail
           rather than sliding it off-canvas. */}
           <Sidebar collapsible="icon">
             {/* pt-10 clears the macOS traffic lights, which float over the top-left
             of the window (titleBarStyle: Overlay); data-tauri-drag-region makes
             that band draggable like a real title bar. */}
-            <SidebarHeader className="pt-10" data-tauri-drag-region>
-              <Link
-                to="/"
-                className="flex items-center gap-2 px-2 py-1.5 font-semibold"
-              >
-                <HardDrive className="size-4" />
-                <span className="group-data-[collapsible=icon]:hidden">
-                  TraceLoupe
-                </span>
-              </Link>
+            <SidebarHeader className="pt-14" data-tauri-drag-region>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  {/* The device/backup identity doubles as the Device-info entry:
+                      shows the open device's name and opens the Device view. */}
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/device"}
+                    tooltip={deviceInfo?.deviceName ?? "Device"}
+                  >
+                    <Link to="/device">
+                      <Smartphone />
+                      <span className="truncate font-semibold group-data-[collapsible=icon]:hidden">
+                        {deviceInfo?.deviceName ?? "TraceLoupe"}
+                      </span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
               <SidebarGroup>
@@ -171,20 +196,16 @@ export function AppShell() {
                 </SidebarGroupContent>
               </SidebarGroup>
             </SidebarContent>
+            <SidebarFooter>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SettingsMenu />
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarFooter>
           </Sidebar>
           <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
-          <SidebarInset>
-            {/* The app control bar. With titleBarStyle: Overlay the native title
-            bar is gone and the macOS traffic lights float over the top-left (the
-            sidebar). Controls are right-aligned so that corner stays clear in
-            both expanded and collapsed states, and the whole strip is the window
-            drag region. Views render their own header below it. */}
-            <div
-              data-tauri-drag-region
-              className="flex h-11 shrink-0 items-center gap-2 border-b px-3"
-            >
-              <AppToolbar />
-            </div>
+          <SidebarInset className="pt-11">
             <div className="min-h-0 flex-1 overflow-hidden">
               <Outlet />
             </div>
@@ -203,10 +224,12 @@ function AppToolbar() {
   return (
     <AdaptiveToolbar
       leading={
-        // Sidebar toggle sits at the far left, next to the sidebar; then the
-        // view's title.
-        <div className="flex items-center gap-2">
-          <SidebarTrigger />
+        // The full-width title bar starts at the window's left edge, so pad past
+        // the macOS traffic lights. The sidebar toggle is its own island.
+        <div className="flex items-center gap-2 pl-16">
+          <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
+            <SidebarTrigger />
+          </div>
           {tb?.title && (
             <div className="flex items-baseline gap-2">
               <h1 className="text-base font-semibold">{tb.title}</h1>
@@ -222,6 +245,18 @@ function AppToolbar() {
       islands={tb?.islands ?? []}
       search={tb?.search}
       searchExpanded={tb?.searchExpanded}
+      middle={
+        // New paradigm: a view that publishes `filter` gets the stable
+        // Filter · Sort · Search cluster instead of the island engine.
+        tb?.filter ? (
+          <>
+            {tb.modes}
+            {tb.filter.length > 0 && <FilterControl groups={tb.filter} />}
+            {tb.sort}
+            {tb.search}
+          </>
+        ) : undefined
+      }
       trailing={
         // App-wide controls, rightmost.
         <>
@@ -229,7 +264,6 @@ function AppToolbar() {
           <ToolbarGroup>
             <DensityToggle />
             <ModeToggle />
-            <SettingsMenu />
           </ToolbarGroup>
         </>
       }
@@ -388,9 +422,10 @@ function SettingsMenu() {
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-7" aria-label="Settings">
+        <SidebarMenuButton tooltip="Settings">
           <Settings className="size-4" />
-        </Button>
+          <span>Settings</span>
+        </SidebarMenuButton>
       </DialogTrigger>
       <DialogContent className="flex h-[75vh] gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-2xl">
         <DialogTitle className="sr-only">Settings</DialogTitle>
