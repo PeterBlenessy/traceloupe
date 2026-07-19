@@ -242,20 +242,16 @@ function AppToolbar() {
           )}
         </div>
       }
-      islands={tb?.islands ?? []}
-      search={tb?.search}
-      searchExpanded={tb?.searchExpanded}
       middle={
-        // New paradigm: a view that publishes `filter` gets the stable
-        // Filter · Sort · Search cluster instead of the island engine.
-        tb?.filter ? (
-          <>
-            {tb.modes}
-            {tb.filter.length > 0 && <FilterControl groups={tb.filter} />}
-            {tb.sort}
-            {tb.search}
-          </>
-        ) : undefined
+        // A view's right-aligned controls: view-mode toggle, the Filter panel
+        // (when it has facets), sort, and search. Views with none (e.g. Device)
+        // publish nothing and get just the title + app controls.
+        <>
+          {tb?.modes}
+          {tb?.filter && tb.filter.length > 0 && <FilterControl groups={tb.filter} />}
+          {tb?.sort}
+          {tb?.search}
+        </>
       }
       trailing={
         // App-wide controls, rightmost.

@@ -152,7 +152,7 @@ export function HealthView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Health", count: hasWorkouts ? filtered.length : undefined, islands: [], filter: filterGroups, sort: sortNode }
+        ? { title: "Health", count: hasWorkouts ? filtered.length : undefined, filter: filterGroups, sort: sortNode }
         : null,
     [active, hasWorkouts, filtered.length, filterGroups, sortNode],
   );

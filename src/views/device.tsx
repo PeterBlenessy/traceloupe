@@ -51,7 +51,7 @@ export function DeviceView() {
   });
 
   const toolbar = useMemo(
-    () => (active === true ? { title: "Device", islands: [] } : null),
+    () => (active === true ? { title: "Device" } : null),
     [active],
   );
   useViewToolbar(toolbar);

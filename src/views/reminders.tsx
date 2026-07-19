@@ -201,7 +201,7 @@ export function RemindersView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Reminders", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Reminders", count: filtered.length, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, filtered.length, filterGroups, sortNode, searchNode],
   );

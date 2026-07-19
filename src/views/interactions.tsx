@@ -162,7 +162,7 @@ export function InteractionsView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Interactions", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Interactions", count: filtered.length, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, filtered.length, filterGroups, sortNode, searchNode],
   );

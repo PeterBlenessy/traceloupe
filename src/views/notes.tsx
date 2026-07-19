@@ -391,7 +391,6 @@ export function NotesView() {
         ? {
             title: "Notes",
             count: sortedNotes?.length,
-            islands: [],
             filter: filterGroups,
             modes: modesNode,
             sort: sortNode,

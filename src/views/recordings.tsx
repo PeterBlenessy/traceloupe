@@ -123,7 +123,7 @@ export function RecordingsView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Recordings", count: sortedRecordings?.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Recordings", count: sortedRecordings?.length, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, sortedRecordings?.length, filterGroups, sortNode, searchNode],
   );

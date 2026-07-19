@@ -129,7 +129,7 @@ export function SafariView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Safari", count, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        ? { title: "Safari", count, filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
     [active, count, filterGroups, sortNode, searchNode],
   );
