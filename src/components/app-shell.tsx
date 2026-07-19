@@ -203,25 +203,30 @@ function AppToolbar() {
   return (
     <AdaptiveToolbar
       leading={
-        tb?.title ? (
-          <div className="flex items-baseline gap-2">
-            <h1 className="text-base font-semibold">{tb.title}</h1>
-            {tb.count !== undefined && (
-              <span className="text-xs tabular-nums text-muted-foreground/60">
-                {formatCount(tb.count)}
-              </span>
-            )}
-          </div>
-        ) : null
+        // Sidebar toggle sits at the far left, next to the sidebar; then the
+        // view's title.
+        <div className="flex items-center gap-2">
+          <SidebarTrigger />
+          {tb?.title && (
+            <div className="flex items-baseline gap-2">
+              <h1 className="text-base font-semibold">{tb.title}</h1>
+              {tb.count !== undefined && (
+                <span className="text-xs tabular-nums text-muted-foreground/60">
+                  {formatCount(tb.count)}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       }
       islands={tb?.islands ?? []}
       search={tb?.search}
       searchExpanded={tb?.searchExpanded}
       trailing={
+        // App-wide controls, rightmost.
         <>
           <ImportIndicator />
           <ToolbarGroup>
-            <SidebarTrigger />
             <DensityToggle />
             <ModeToggle />
             <SettingsMenu />
