@@ -327,6 +327,9 @@ export interface Message {
   replyToSnippet: string | null;
   /** The message was edited (iOS 16+). */
   edited: boolean;
+  /** Content class; "system" marks a group-action row (rename/add/remove/leave)
+   *  rendered as a centered note rather than a chat bubble. */
+  kind?: string | null;
   attachments: Attachment[];
 }
 
