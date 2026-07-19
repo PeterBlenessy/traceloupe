@@ -676,6 +676,26 @@ function NoteDetail({ note }: { note: Note }) {
               {note.body ?? note.snippet ?? "(empty note)"}
             </div>
           )}
+          {/* The note's primary embedded image (the same one the list thumbnails).
+              Full inline rendering of *every* attachment at its position in the
+              body is a future parser pass — see docs/app-data-coverage.md. */}
+          {!note.locked && note.hasImage && (
+            <img
+              src={client.noteImageUrl(note.id)}
+              alt=""
+              loading="lazy"
+              className="mt-4 max-h-[70vh] w-auto max-w-full rounded-lg border object-contain"
+              onError={(e) => {
+                e.currentTarget.style.display = "none";
+              }}
+            />
+          )}
+          {!note.locked && note.imageCount > 1 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              +{note.imageCount - 1} more image
+              {note.imageCount - 1 === 1 ? "" : "s"} in this note
+            </p>
+          )}
         </div>
       </ScrollArea>
     </div>
