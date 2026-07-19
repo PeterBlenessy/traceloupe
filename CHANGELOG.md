@@ -24,6 +24,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.14.0` | **Filter · Sort · Search paradigm + window chrome** — the islands give way to one **Filter** button that morphs into a grouped, described filter panel (single- or multi-select), with sort and an expanding search as standalone controls. A full-width HTML title bar that yields the full height to the sidebar when it's open, the sidebar top merged with the Device view, and Settings moved to the sidebar footer. |
 | `0.15.0` | **Data-coverage pass** — surfacing fields already parsed but unshown: all of a note's embedded images (detail gallery), iMessage group-action system rows, Safari reading-list read/last-viewed. |
 | `0.16.0` | **Health deep-dive + contact relationships** — the HealthKit store beyond workouts: daily activity aggregates (steps/distance/energy/flights/heart-rate), sleep sessions, and workout GPS routes with inline previews; plus contact related-names and address-book groups. |
+| `0.17.0` | **Health rings, mobility & the timezone timeline** — Apple activity rings vs goals, walking/audio-exposure daily metrics, and a per-timezone travel timeline from sample provenances; the Health view's sections refactored onto one descriptor-driven pipeline. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -31,6 +32,37 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.17.0] — 2026-07-20
+
+**Health rings, mobility metrics & the timezone timeline.** Requires a
+re-import to populate for existing caches.
+
+### Added
+
+- **Activity rings** — `activity_caches` (the pre-aggregated Move/Exercise/
+  Stand rings with their goals) becomes an `activity_rings` table (schema
+  v34); daily rows show goal progress ("Move 412/500 kcal"). Rings a device
+  never tracked stay blank (phone-only stores have Move only).
+- **Mobility + audio-exposure metrics** — five more quantity types in the
+  daily aggregation: headphone audio exposure (dB, loudest sample), walking
+  speed, step length, double-support and walking-asymmetry fractions. Spread
+  metrics merge min/avg/max across sources instead of summing.
+- **Timezone timeline** — every sample's recording timezone
+  (`data_provenances.tz_name`) aggregated per zone and device model (schema
+  v35) into a new **Timezones** section: zone, sample count, devices,
+  first–last span. A travel history hiding in the Health store.
+
+### Changed
+
+- **Health view sections are descriptor-driven** — the per-section machinery
+  (sort state, windowing, counts, empty states, rendering) collapsed into one
+  pipeline; workouts share the same virtualized list as the other sections.
+  Adding the Timezones section was one descriptor entry. (Review finding.)
+- The `health_daily` metric names are shared constants between parser and
+  query — a rename can no longer silently drop a metric. (Review finding.)
+- The device-model → marketing-name mapping moved to a shared module (used
+  by Device and the timezone timeline) and covers more models.
 
 ## [0.16.1] — 2026-07-20
 
