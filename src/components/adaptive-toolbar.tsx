@@ -46,7 +46,8 @@ export interface ToolbarIsland {
 // Layout constants (px). Approximate; the fit math only needs to be close.
 const GAP = 2; // between items within an island
 const ISLAND_GAP = 8; // between islands / the search
-const MORE_W = 30; // the "⋮" trigger
+const MORE_W = 30; // the expand chevron
+const ICON_W = 38; // a collapsed island icon button (+ its gap)
 const PAD = 8; // an island's border + inner padding (both edges)
 
 type Mode = "normal" | "expanded" | "icon";
@@ -78,20 +79,21 @@ export function AdaptiveToolbar({
   className?: string;
 }) {
   const areaRef = useRef<HTMLDivElement>(null);
-  const leadingRef = useRef<HTMLDivElement>(null);
+  const middleRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
-  const trailingRef = useRef<HTMLDivElement>(null);
   const measRef = useRef<Map<string, HTMLSpanElement | null>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
   const [layouts, setLayouts] = useState<Record<string, IslandLayout>>({});
 
   const compute = useCallback(() => {
-    const area = areaRef.current;
-    if (!area) return;
-    const leadW = leadingRef.current?.offsetWidth ?? 0;
+    const middle = middleRef.current;
+    if (!middle) return;
+    // The middle is a flex-1 container between the fixed leading (title) and the
+    // fixed trailing (app controls); its width is exactly the room for the view
+    // islands + the search that lives inside it. Measuring it directly means the
+    // fit can never overflow the app controls off-screen.
     const searchW = searchRef.current?.offsetWidth ?? 0;
-    const trailW = trailingRef.current?.offsetWidth ?? 0;
-    const W = area.clientWidth - leadW - searchW - trailW;
+    const W = middle.clientWidth - searchW;
     if (W <= 0) return;
 
     // Per-item measured widths.
@@ -103,59 +105,93 @@ export function AdaptiveToolbar({
     }
     const islandContentAll = (k: string) =>
       w[k].reduce((a, x, i) => a + x + (i > 0 ? GAP : 0), 0);
-    const twoItemW = (k: string) =>
-      (w[k][0] ?? 0) + GAP + (w[k][1] ?? 0) + GAP + MORE_W + PAD;
 
     // W already excludes the fixed leading/trailing (which contains the search).
     const N = islands.length;
     const avail = Math.max(0, W - ISLAND_GAP * (N + 1));
 
-    // Fit as many items as possible into `budget`, reserving the ⋮ if some fold.
-    const fit = (k: string, budget: number, min: number): IslandLayout => {
+    // Width of island k showing `count` items (with the expand chevron if some
+    // items are still hidden).
+    const widthAt = (k: string, count: number) => {
       const items = w[k];
-      if (islandContentAll(k) + PAD <= budget) {
-        return { mode: "normal", count: items.length, more: false };
-      }
-      let used = PAD;
-      let count = 0;
-      for (let i = 0; i < items.length; i++) {
-        const add = items[i] + (count > 0 ? GAP : 0);
-        if (used + add + GAP + MORE_W <= budget) {
-          used += add;
-          count += 1;
-        } else break;
-      }
-      count = Math.min(items.length, Math.max(count, min));
-      return { mode: "normal", count, more: count < items.length };
+      let s = PAD;
+      for (let i = 0; i < count; i++) s += items[i] + (i > 0 ? GAP : 0);
+      if (count < items.length) s += GAP + MORE_W;
+      return s;
     };
+    const minCount = (k: string) => Math.min(2, w[k].length);
 
     const next: Record<string, IslandLayout> = {};
     if (!expanded || !islands.some((i) => i.key === expanded)) {
-      const share = avail / Math.max(N, 1);
+      // Start every island at its 2-item minimum.
+      const counts: Record<string, number> = {};
+      let total = 0;
       for (const isl of islands) {
-        const min = Math.min(2, isl.items.length);
-        // If an island's even share can't fit its 2-item minimum, collapse it to
-        // a single icon rather than overflow the toolbar (which would push the
-        // app controls off-screen). It stays one click from its full contents.
-        if (isl.items.length >= 2 && share < twoItemW(isl.key)) {
-          next[isl.key] = { mode: "icon", count: 0, more: false };
-        } else {
-          next[isl.key] = fit(isl.key, share, min);
+        counts[isl.key] = minCount(isl.key);
+        total += widthAt(isl.key, counts[isl.key]);
+      }
+      if (total <= avail) {
+        // Everyone fits their minimum — greedily reveal more items into the slack
+        // (round-robin so no single island hogs the extra room).
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const isl of islands) {
+            if (counts[isl.key] < isl.items.length) {
+              const delta =
+                widthAt(isl.key, counts[isl.key] + 1) - widthAt(isl.key, counts[isl.key]);
+              if (total + delta <= avail) {
+                total += delta;
+                counts[isl.key] += 1;
+                changed = true;
+              }
+            }
+          }
+        }
+        for (const isl of islands)
+          next[isl.key] = {
+            mode: "normal",
+            count: counts[isl.key],
+            more: counts[isl.key] < isl.items.length,
+          };
+      } else {
+        // Can't fit every minimum — collapse the widest islands to icons (one
+        // click from their contents) until the rest fit, so nothing overflows.
+        const icon = new Set<string>();
+        const order = [...islands].sort(
+          (a, b) => widthAt(b.key, minCount(b.key)) - widthAt(a.key, minCount(a.key)),
+        );
+        const measure = () =>
+          islands.reduce(
+            (t, isl) => t + (icon.has(isl.key) ? ICON_W : widthAt(isl.key, minCount(isl.key))),
+            0,
+          );
+        for (let i = 0; measure() > avail && i < order.length; i++) icon.add(order[i].key);
+        for (const isl of islands) {
+          if (icon.has(isl.key)) {
+            next[isl.key] = { mode: "icon", count: 0, more: false };
+          } else {
+            const c = minCount(isl.key);
+            next[isl.key] = { mode: "normal", count: c, more: c < isl.items.length };
+          }
         }
       }
     } else {
-      // One island expanded: it takes its full content; the rest share what's
-      // left, dropping to a single icon when they can't keep 2 items.
+      // One island expanded: it takes its full content; the rest keep their 2-item
+      // minimum where it fits, else collapse to a single icon.
       const K = expanded;
       next[K] = { mode: "expanded", count: w[K].length, more: true };
       const wK = islandContentAll(K) + PAD;
+      let rem = avail - wK;
       const others = islands.filter((i) => i.key !== K);
-      const shareO = others.length ? (avail - wK) / others.length : 0;
       for (const isl of others) {
-        const min = Math.min(2, isl.items.length);
-        if (shareO >= twoItemW(isl.key) && isl.items.length >= 2) {
-          next[isl.key] = fit(isl.key, shareO, min);
+        const c = minCount(isl.key);
+        const wMin = widthAt(isl.key, c);
+        if (isl.items.length >= 2 && rem >= wMin) {
+          rem -= wMin;
+          next[isl.key] = { mode: "normal", count: c, more: c < isl.items.length };
         } else {
+          rem -= ICON_W;
           next[isl.key] = { mode: "icon", count: 0, more: false };
         }
       }
@@ -166,12 +202,10 @@ export function AdaptiveToolbar({
   useLayoutEffect(() => {
     compute();
     const ro = new ResizeObserver(compute);
-    if (areaRef.current) ro.observe(areaRef.current);
-    // Observe the fixed parts too: an expanding search changes the space left for
-    // the islands without resizing the toolbar itself.
-    if (leadingRef.current) ro.observe(leadingRef.current);
+    // The middle container resizes as the leading/trailing (and window) change;
+    // the search resizes when it expands. Both drive the island fit.
+    if (middleRef.current) ro.observe(middleRef.current);
     if (searchRef.current) ro.observe(searchRef.current);
-    if (trailingRef.current) ro.observe(trailingRef.current);
     return () => ro.disconnect();
   }, [compute]);
 
@@ -201,12 +235,17 @@ export function AdaptiveToolbar({
       </div>
 
       {leading && (
-        <div ref={leadingRef} className="flex shrink-0 items-center gap-2">
-          {leading}
-        </div>
+        <div className="flex shrink-0 items-center gap-2">{leading}</div>
       )}
 
-      {islands.map((isl) => {
+      {/* Middle: view islands + search, right-aligned (flex-1 pushes them over to
+          the trailing app controls). Clips here if the fit ever runs long, so the
+          app controls (a separate sibling) are never pushed off-screen. */}
+      <div
+        ref={middleRef}
+        className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-hidden"
+      >
+        {islands.map((isl) => {
         const L = layouts[isl.key] ?? {
           mode: "normal" as Mode,
           count: Math.min(2, isl.items.length),
@@ -264,20 +303,20 @@ export function AdaptiveToolbar({
             )}
           </div>
         );
-      })}
+        })}
 
-      {/* Search belongs to the view, so it sits right after the view islands —
-          not out at the far right with the app-wide controls. */}
-      {search && (
-        <div ref={searchRef} className="flex shrink-0 items-center">
-          {search}
-        </div>
-      )}
-      {/* App-wide controls are the rightmost actions. */}
+        {/* Search belongs to the view — right after the islands, inside the
+            clipped middle, before the app controls. */}
+        {search && (
+          <div ref={searchRef} className="flex shrink-0 items-center">
+            {search}
+          </div>
+        )}
+      </div>
+
+      {/* App-wide controls are the rightmost actions and never clip. */}
       {trailing && (
-        <div ref={trailingRef} className="ml-auto flex shrink-0 items-center gap-2">
-          {trailing}
-        </div>
+        <div className="flex shrink-0 items-center gap-2">{trailing}</div>
       )}
     </div>
   );
