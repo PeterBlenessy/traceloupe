@@ -169,24 +169,24 @@ export function CalendarView() {
   }, [baseFiltered, sort, range]);
 
   const hasEvents = (events?.length ?? 0) > 0;
-  const calOptions: BadgeFilterOption[] = [
-    { value: "all", label: "All", count: events?.length },
-    ...calendars.map((c) => ({
-      value: c,
-      label: c,
-      count: (events ?? []).filter((e) => e.calendarName === c).length,
-    })),
-  ];
-  const availOptions: BadgeFilterOption[] = [
-    { value: "all", label: "Any" },
-    ...avails.map((a) => ({
-      value: a,
-      label: a.charAt(0).toUpperCase() + a.slice(1),
-      count: (events ?? []).filter((e) => e.availability === a).length,
-    })),
-  ];
   const islands = useMemo(() => {
     if (!hasEvents) return [];
+    const calOptions: BadgeFilterOption[] = [
+      { value: "all", label: "All", count: events?.length },
+      ...calendars.map((c) => ({
+        value: c,
+        label: c,
+        count: (events ?? []).filter((e) => e.calendarName === c).length,
+      })),
+    ];
+    const availOptions: BadgeFilterOption[] = [
+      { value: "all", label: "Any" },
+      ...avails.map((a) => ({
+        value: a,
+        label: a.charAt(0).toUpperCase() + a.slice(1),
+        count: (events ?? []).filter((e) => e.availability === a).length,
+      })),
+    ];
     const list = [];
     if (calendars.length > 1)
       list.push(badgeIsland({ key: "cal", label: "Calendar", icon: <CalendarDays className="size-4" />, options: calOptions, value: effCal, onChange: setCal }));
@@ -195,8 +195,7 @@ export function CalendarView() {
     list.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
     list.push(sortIsland({ fields: [{ value: "start", label: "Date" }, { value: "title", label: "Title" }], value: sort, onChange: setSort }));
     return list;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasEvents, calendars.length, avails.length, effCal, effAvail, calOptions, availOptions, presets, presetCounts, range, sort]);
+  }, [hasEvents, events, calendars, avails, effCal, effAvail, presets, presetCounts, range, sort, setCal, setAvail, setRange, setSort]);
   const searchNode = useMemo(
     () => (hasEvents ? <ListSearch value={q} onChange={setQ} placeholder="Search events" /> : undefined),
     [hasEvents, q],

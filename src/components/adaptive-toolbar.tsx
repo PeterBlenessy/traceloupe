@@ -134,7 +134,14 @@ export function AdaptiveToolbar({
       const share = avail / Math.max(N, 1);
       for (const isl of islands) {
         const min = Math.min(2, isl.items.length);
-        next[isl.key] = fit(isl.key, share, min);
+        // If an island's even share can't fit its 2-item minimum, collapse it to
+        // a single icon rather than overflow the toolbar (which would push the
+        // app controls off-screen). It stays one click from its full contents.
+        if (isl.items.length >= 2 && share < twoItemW(isl.key)) {
+          next[isl.key] = { mode: "icon", count: 0, more: false };
+        } else {
+          next[isl.key] = fit(isl.key, share, min);
+        }
       }
     } else {
       // One island expanded: it takes its full content; the rest share what's
