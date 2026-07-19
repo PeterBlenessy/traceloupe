@@ -1,8 +1,10 @@
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, LockOpen, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { EmptyView, ErrorState, ViewHeader } from "@/components/view";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { EmptyView, ErrorState } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type BackupInfo } from "@/lib/ipc";
 
@@ -48,6 +50,12 @@ export function DeviceView() {
     enabled: active === true,
   });
 
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Device", islands: [] } : null),
+    [active],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -65,7 +73,6 @@ export function DeviceView() {
   if (error) {
     return (
       <div className="flex h-full flex-col">
-        <ViewHeader title="Device" />
         <ErrorState error={error} />
       </div>
     );
@@ -73,7 +80,6 @@ export function DeviceView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title="Device" />
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-xl p-6">
           <div className="flex flex-col items-center gap-3 pb-6 text-center">

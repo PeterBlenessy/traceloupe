@@ -27,10 +27,11 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { BadgeFilter } from "@/components/badge-filter";
+import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland } from "@/components/toolbar-islands";
 import {
   Message as MessageRow,
   MessageContent,
@@ -312,6 +313,45 @@ function MessagesViewInner() {
     }
   }, [search.service, services, setServiceFilter]);
 
+  const islands = useMemo(() => {
+    const out = [
+      badgeIsland({
+        key: "mode",
+        label: "View",
+        icon: <MessagesSquare className="size-4" />,
+        options: [
+          { value: "conversations", label: "Chats", icon: <MessagesSquare className="size-3.5" /> },
+          { value: "timeline", label: "Timeline", icon: <GalleryVerticalEnd className="size-3.5" /> },
+        ],
+        value: mode,
+        onChange: (v) => switchMode(v as Mode),
+      }),
+    ];
+    if (services.length > 1) {
+      const serviceOptions: BadgeFilterOption[] = [
+        { value: "all", label: "All", count: totalCount },
+        ...services.map((s) => {
+          const slug = serviceSlug(s);
+          return {
+            value: s,
+            label: s,
+            count: serviceCounts.get(s) ?? 0,
+            icon: hasBrandIcon(slug) ? <BrandIcon slug={slug} name={s} className="size-3.5" /> : undefined,
+          };
+        }),
+      ];
+      // Show the clamped value so a stale persisted service (absent from this
+      // backup) highlights "All" rather than no pill at all.
+      out.push(badgeIsland({ key: "service", label: "App", icon: <MessageSquare className="size-4" />, options: serviceOptions, value: service ?? "all", onChange: setServiceFilter }));
+    }
+    return out;
+  }, [mode, services, totalCount, serviceCounts, service, setServiceFilter]);
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Messages", islands } : null),
+    [active, islands],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -326,53 +366,6 @@ function MessagesViewInner() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Match ViewHeader's height/padding (h-14 px-4) so this bar aligns with
-          every other view's header; the mode toggle sits beside the title. */}
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-        <h1 className="text-base font-semibold">Messages</h1>
-        <ToggleGroup
-          type="single"
-          value={mode}
-          onValueChange={(v) => v && switchMode(v as Mode)}
-          variant="outline"
-          size="sm"
-          className="ml-1"
-        >
-          <ToggleGroupItem
-            value="conversations"
-            aria-label="Conversations"
-            title="Conversations"
-          >
-            <MessagesSquare className="size-4" />
-          </ToggleGroupItem>
-          <ToggleGroupItem value="timeline" aria-label="Timeline" title="Timeline">
-            <GalleryVerticalEnd className="size-4" />
-          </ToggleGroupItem>
-        </ToggleGroup>
-        {services.length > 1 && (
-          <BadgeFilter
-            className="ml-auto"
-            // Display the clamped value so a stale persisted service (absent from
-            // this backup) highlights "All" rather than no pill at all.
-            value={service ?? "all"}
-            onChange={setServiceFilter}
-            options={[
-              { value: "all", label: "All", count: totalCount },
-              ...services.map((s) => {
-                const slug = serviceSlug(s);
-                return {
-                  value: s,
-                  label: s,
-                  count: serviceCounts.get(s) ?? 0,
-                  icon: hasBrandIcon(slug) ? (
-                    <BrandIcon slug={slug} name={s} className="size-3.5" />
-                  ) : undefined,
-                };
-              }),
-            ]}
-          />
-        )}
-      </header>
       <div className="min-h-0 flex-1">
         {mode === "conversations" ? (
           <Conversations
