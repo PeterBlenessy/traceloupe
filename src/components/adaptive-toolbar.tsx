@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { MoreHorizontal } from "lucide-react";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -246,7 +246,11 @@ export function AdaptiveToolbar({
                 data-active={isExpanded || isl.active}
                 className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[active=true]:text-foreground"
               >
-                <MoreHorizontal className="size-4" />
+                {isExpanded ? (
+                  <ChevronsLeft className="size-4" />
+                ) : (
+                  <ChevronsRight className="size-4" />
+                )}
               </button>
             )}
           </div>
