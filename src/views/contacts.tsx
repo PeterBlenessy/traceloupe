@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Phone,
   StickyNote,
+  Tag,
   User,
   Users,
 } from "lucide-react";
@@ -318,6 +319,28 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
               {contact.addresses.map((a, i) => (
                 <Field key={i} icon={MapPin} label={a.label} value={a.value} wrap />
               ))}
+            </FieldGroup>
+          )}
+          {contact.related.length > 0 && (
+            <FieldGroup title="Related">
+              {contact.related.map((rel, i) => (
+                <Field key={i} icon={Users} label={rel.label} value={rel.value} />
+              ))}
+            </FieldGroup>
+          )}
+          {contact.groups.length > 0 && (
+            <FieldGroup title="Groups">
+              <div className="flex flex-wrap gap-1.5 px-3 py-2.5">
+                {contact.groups.map((g) => (
+                  <span
+                    key={g}
+                    className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                  >
+                    <Tag className="size-3" />
+                    {g}
+                  </span>
+                ))}
+              </div>
             </FieldGroup>
           )}
           {(contact.jobTitle || contact.department) && (

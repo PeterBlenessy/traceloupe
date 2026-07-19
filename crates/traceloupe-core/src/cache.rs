@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 32;
+const SCHEMA_VERSION: i64 = 33;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -555,6 +555,20 @@ impl CacheDb {
                     altitude   REAL,                -- metres
                     PRIMARY KEY (workout_id, seq)
                 );",
+            )?;
+            // v33: contact relationships (related names, JSON [{label,value}])
+            // + address-book group memberships (JSON [name]).
+            ensure_column(
+                &conn,
+                "contacts",
+                "related_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )?;
+            ensure_column(
+                &conn,
+                "contacts",
+                "groups_json",
+                "TEXT NOT NULL DEFAULT '[]'",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
