@@ -257,6 +257,14 @@ function inWindow(at: number | null, lo: number | null, hi: number | null) {
   return (lo == null || at >= lo) && (hi == null || at < hi);
 }
 
+/** `dayAt` is midnight UTC of an aggregated day, but the time presets compute
+ *  their bounds at LOCAL midnight — comparing them directly shifts days across
+ *  preset edges for any non-UTC timezone. Convert to the local-midnight
+ *  instant of the same calendar date before windowing. */
+function localDayStart(dayAt: number): number {
+  return dayAt + new Date(dayAt * 1000).getTimezoneOffset() * 60;
+}
+
 export function HealthView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
@@ -281,6 +289,9 @@ export function HealthView() {
     queryFn: () => client.healthSummary(),
     enabled: active === true,
   });
+  // The daily/sleep lists are only fetched for their visible section — the
+  // summary's dayCount/sleepCount covers the section badges, so mounting on
+  // Workouts doesn't materialize thousands of unrendered rows.
   const {
     data: days,
     isPending: daysPending,
@@ -288,7 +299,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthDaily"],
     queryFn: () => client.healthDaily(),
-    enabled: active === true,
+    enabled: active === true && section === "daily",
   });
   const {
     data: sleep,
@@ -297,7 +308,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthSleep"],
     queryFn: () => client.listSleep(),
-    enabled: active === true,
+    enabled: active === true && section === "sleep",
   });
 
   const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
@@ -342,7 +353,7 @@ export function HealthView() {
   const presetCounts = useMemo(
     () =>
       section === "daily"
-        ? presets.map((p) => (days ?? []).filter((d) => inWindow(d.dayAt, p.lo, p.hi)).length)
+        ? presets.map((p) => (days ?? []).filter((d) => inWindow(localDayStart(d.dayAt), p.lo, p.hi)).length)
         : section === "sleep"
           ? presets.map((p) => (sleep ?? []).filter((s) => inWindow(s.startAt, p.lo, p.hi)).length)
           : presets.map((p) => baseFiltered.filter((w) => inWindow(w.startAt, p.lo, p.hi)).length),
@@ -363,7 +374,7 @@ export function HealthView() {
   }, [baseFiltered, range, sort]);
   const filteredDays = useMemo(() => {
     if (section !== "daily") return [];
-    const inRange = (days ?? []).filter((d) => inWindow(d.dayAt, range.lo, range.hi));
+    const inRange = (days ?? []).filter((d) => inWindow(localDayStart(d.dayAt), range.lo, range.hi));
     return sortItems(
       inRange,
       (d) =>
@@ -390,9 +401,11 @@ export function HealthView() {
     );
   }, [section, sleep, range, sleepSort]);
 
+  // Presence comes from the summary (always fetched), not the gated lists —
+  // otherwise the Section filter would vanish until each list was visited.
   const hasWorkouts = (workouts?.length ?? 0) > 0;
-  const hasDays = (days?.length ?? 0) > 0;
-  const hasSleep = (sleep?.length ?? 0) > 0;
+  const hasDays = (summary?.dayCount ?? 0) > 0;
+  const hasSleep = (summary?.sleepCount ?? 0) > 0;
   const hasAny = hasWorkouts || hasDays || hasSleep;
   const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasAny) return [];
@@ -408,8 +421,8 @@ export function HealthView() {
             s.value === "workouts"
               ? workouts?.length
               : s.value === "daily"
-                ? days?.length
-                : sleep?.length,
+                ? summary?.dayCount
+                : summary?.sleepCount,
         })),
         value: section,
         onChange: (v) => setSection(v as HealthSection),
@@ -437,7 +450,7 @@ export function HealthView() {
       }),
     );
     return out;
-  }, [hasAny, workouts, days, sleep, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
+  }, [hasAny, workouts, summary, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
   const sortNode = useMemo(() => {
     if (!hasAny) return undefined;
     return section === "daily" ? (
@@ -470,7 +483,7 @@ export function HealthView() {
         onChange={setSort}
       />
     );
-  }, [hasAny, section, sort, setSort, daySort, setDaySort]);
+  }, [hasAny, section, sort, setSort, daySort, setDaySort, sleepSort, setSleepSort]);
   const toolbar = useMemo(
     () =>
       active === true
@@ -545,10 +558,12 @@ export function HealthView() {
   }
 
   if (section === "daily") {
+    // No key={clockFormat} here: DayRow renders no time-of-day (formatDayUTC
+    // is date-only), so a clock-preference change must not reset the list.
     return (
       <div className="flex h-full flex-col">
         {summaryStrip}
-        <div key={clockFormat} className="min-h-0 flex-1">
+        <div className="min-h-0 flex-1">
           <VirtualListView<HealthDay>
             items={filteredDays}
             getKey={(d) => d.dayAt}
@@ -579,7 +594,9 @@ export function HealthView() {
           {summaryStrip}
           {!hasWorkouts ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
-              No health data in this backup.
+              {hasAny
+                ? "No workouts in this backup — switch Section to see daily activity or sleep."
+                : "No health data in this backup."}
             </p>
           ) : filtered.length === 0 ? (
             <p className="p-6 text-center text-sm text-muted-foreground">

@@ -883,6 +883,10 @@ pub struct HealthSummary {
     pub first_at: Option<i64>,
     pub last_at: Option<i64>,
     pub workout_count: i64,
+    /// Days with activity aggregates / sleep sessions — lets the view show
+    /// section counts without materializing either list.
+    pub day_count: i64,
+    pub sleep_count: i64,
 }
 
 /// Workouts, most recent first.
@@ -1025,14 +1029,16 @@ pub fn list_sleep(cache: &CacheDb) -> Result<Vec<SleepSession>> {
 /// summary when no Health data was imported.
 pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
     let meta_i = |k: &str| -> Option<i64> { cache.get_meta(k).ok().flatten()?.parse().ok() };
-    let workout_count: i64 = cache
-        .conn()
-        .query_row("SELECT COUNT(*) FROM workouts", [], |r| r.get(0))?;
+    let count = |sql: &str| -> Result<i64> {
+        Ok(cache.conn().query_row(sql, [], |r| r.get(0))?)
+    };
     Ok(HealthSummary {
         sample_count: meta_i("health_sample_count").unwrap_or(0),
         first_at: meta_i("health_first_at"),
         last_at: meta_i("health_last_at"),
-        workout_count,
+        workout_count: count("SELECT COUNT(*) FROM workouts")?,
+        day_count: count("SELECT COUNT(DISTINCT day) FROM health_daily")?,
+        sleep_count: count("SELECT COUNT(*) FROM sleep_sessions")?,
     })
 }
 

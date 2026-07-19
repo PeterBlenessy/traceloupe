@@ -88,7 +88,8 @@ pub fn parse_health(
         parse_workouts(&src, cache, report, replace)?;
     }
     if has("quantity_samples")? {
-        parse_daily(&src, cache, replace)?;
+        let has_provenance = has("objects")? && has("data_provenances")?;
+        parse_daily(&src, cache, replace, has_provenance)?;
         summarize_samples(&src, cache)?;
     }
     if has("category_samples")? {
@@ -178,6 +179,12 @@ fn parse_routes(
     id_map: &[(i64, i64)],
     replace: bool,
 ) -> Result<()> {
+    // Clear BEFORE the table guards: on a replace import the old routes must
+    // go even when this store has no route tables, or stale traces would
+    // attach to the re-inserted workouts' reused rowids.
+    if replace {
+        cache.conn().execute("DELETE FROM workout_routes", [])?;
+    }
     let has = |table: &str| -> Result<bool> {
         Ok(src.query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
@@ -207,9 +214,6 @@ fn parse_routes(
 
     let conn = cache.conn();
     let tx = conn.unchecked_transaction()?;
-    if replace {
-        tx.execute("DELETE FROM workout_routes", [])?;
-    }
     for &(src_id, cache_id) in id_map {
         let points: Vec<(Option<i64>, f64, f64, Option<f64>)> = stmt
             .query_map([src_id], |r| {
@@ -245,36 +249,82 @@ fn parse_routes(
     Ok(())
 }
 
-/// Daily activity aggregates: steps / distance / energy / flights (sum per UTC
+/// One source's per-day stats for a metric, before cross-source merging.
+struct SourceStats {
+    sum: Option<f64>,
+    min: Option<f64>,
+    max: Option<f64>,
+    avg: Option<f64>,
+    n: i64,
+}
+
+/// Daily activity aggregates: steps / distance / energy / flights (per UTC
 /// day) and heart rate (min/avg/max, ×60 → bpm). One `health_daily` row per
 /// (day, metric) — a few thousand rows instead of 344k raw samples.
-fn parse_daily(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
-    let mut stmt = src.prepare(
+///
+/// A phone and a watch both record steps/distance/energy for the same walk, so
+/// naively summing every sample double-counts multi-device days. When the
+/// provenance tables exist we aggregate per (day, metric, `source_id`) and
+/// keep the **largest source's total** for cumulative metrics — never
+/// double-counted, at worst a slight undercount when devices trade off within
+/// a day (HealthKit's own priority-merge is not reproducible offline). Heart
+/// rate merges across sources instead: min of mins, max of maxes,
+/// sample-weighted mean.
+fn parse_daily(
+    src: &Connection,
+    cache: &CacheDb,
+    replace: bool,
+    has_provenance: bool,
+) -> Result<()> {
+    // Without the provenance tables (old schema, minimal fixtures) everything
+    // lands in one group per (day, type) and the merge below degrades to a
+    // plain SUM. (A literal in GROUP BY would be read as a column index, so
+    // the source term is only present when it's a real column.)
+    let (provenance_join, group_by) = if has_provenance {
+        (
+            "JOIN objects o ON o.data_id = s.data_id
+             JOIN data_provenances dp ON dp.ROWID = o.provenance",
+            "day, s.data_type, dp.source_id",
+        )
+    } else {
+        ("", "day, s.data_type")
+    };
+    let mut stmt = src.prepare(&format!(
         "SELECT date(s.start_date + 978307200, 'unixepoch') AS day, s.data_type,
                 SUM(q.quantity), MIN(q.quantity), MAX(q.quantity), AVG(q.quantity), COUNT(*)
          FROM samples s
          JOIN quantity_samples q ON q.data_id = s.data_id
+         {provenance_join}
          WHERE s.data_type IN (5, 7, 8, 9, 10, 12) AND s.start_date > 0
-         GROUP BY day, s.data_type
-         ORDER BY day",
-    )?;
+         GROUP BY {group_by}
+         ORDER BY day, s.data_type",
+    ))?;
 
     let conn = cache.conn();
     let tx = conn.unchecked_transaction()?;
     if replace {
         tx.execute("DELETE FROM health_daily", [])?;
     }
-    let mut rows = stmt.query([])?;
-    while let Some(r) = rows.next()? {
-        let day: String = r.get(0)?;
-        let Some(metric) = metric_name(r.get(1)?) else {
-            continue;
+
+    // Rows arrive grouped by (day, data_type); collect each group's per-source
+    // stats, merge, write one row.
+    let mut current: Option<(String, i64, Vec<SourceStats>)> = None;
+    let mut flush = |tx: &rusqlite::Transaction,
+                     day: &str,
+                     data_type: i64,
+                     sources: &[SourceStats]|
+     -> Result<()> {
+        let Some(metric) = metric_name(data_type) else {
+            return Ok(());
+        };
+        let merged = if metric == "heart_rate_bpm" {
+            merge_spread(sources)
+        } else {
+            merge_cumulative(sources)
         };
         // Heart rate is stored in canonical count/sec; scale every stat to bpm.
         let scale = if metric == "heart_rate_bpm" { 60.0 } else { 1.0 };
-        let stat = |i: usize| -> rusqlite::Result<Option<f64>> {
-            Ok(r.get::<_, Option<f64>>(i)?.map(|v| v * scale))
-        };
+        let s = |v: Option<f64>| v.map(|v| v * scale);
         tx.execute(
             "INSERT OR REPLACE INTO health_daily
                  (day, metric, value_sum, value_min, value_max, value_avg, samples)
@@ -282,16 +332,96 @@ fn parse_daily(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
             rusqlite::params![
                 day,
                 metric,
-                stat(2)?,
-                stat(3)?,
-                stat(4)?,
-                stat(5)?,
-                r.get::<_, i64>(6)?
+                s(merged.sum),
+                s(merged.min),
+                s(merged.max),
+                s(merged.avg),
+                merged.n
             ],
         )?;
+        Ok(())
+    };
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let day: String = r.get(0)?;
+        let data_type: i64 = r.get(1)?;
+        let stats = SourceStats {
+            sum: r.get(2)?,
+            min: r.get(3)?,
+            max: r.get(4)?,
+            avg: r.get(5)?,
+            n: r.get(6)?,
+        };
+        match &mut current {
+            Some((d, t, sources)) if *d == day && *t == data_type => sources.push(stats),
+            _ => {
+                if let Some((d, t, sources)) = current.take() {
+                    flush(&tx, &d, t, &sources)?;
+                }
+                current = Some((day, data_type, vec![stats]));
+            }
+        }
+    }
+    if let Some((d, t, sources)) = current.take() {
+        flush(&tx, &d, t, &sources)?;
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Cumulative metrics (steps/distance/energy/flights): keep the source with
+/// the largest daily total — overlapping devices never double-count.
+fn merge_cumulative(sources: &[SourceStats]) -> SourceStats {
+    let best = sources
+        .iter()
+        .max_by(|a, b| {
+            a.sum
+                .unwrap_or(0.0)
+                .total_cmp(&b.sum.unwrap_or(0.0))
+        })
+        .expect("flush is only called with at least one source");
+    SourceStats {
+        sum: best.sum,
+        min: best.min,
+        max: best.max,
+        avg: best.avg,
+        n: best.n,
+    }
+}
+
+/// Spread metrics (heart rate): all sources' readings are real measurements,
+/// so merge them — min of mins, max of maxes, sample-weighted mean.
+fn merge_spread(sources: &[SourceStats]) -> SourceStats {
+    let mut out = SourceStats {
+        sum: None,
+        min: None,
+        max: None,
+        avg: None,
+        n: 0,
+    };
+    let mut weighted = 0.0f64;
+    for s in sources {
+        out.sum = match (out.sum, s.sum) {
+            (Some(a), Some(b)) => Some(a + b),
+            (a, b) => a.or(b),
+        };
+        out.min = match (out.min, s.min) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        out.max = match (out.max, s.max) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        if let Some(avg) = s.avg {
+            weighted += avg * s.n as f64;
+        }
+        out.n += s.n;
+    }
+    if out.n > 0 {
+        out.avg = Some(weighted / out.n as f64);
+    }
+    out
 }
 
 /// `HKCategoryValueSleepAnalysis` → friendly stage name. Older iOS only writes
@@ -489,6 +619,95 @@ mod tests {
             )
             .unwrap();
         assert_eq!((min, max), (90.0, 120.0));
+    }
+
+    #[test]
+    fn multi_source_days_do_not_double_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE quantity_samples (data_id INTEGER, quantity REAL);
+             CREATE TABLE objects (data_id INTEGER PRIMARY KEY, provenance INTEGER);
+             CREATE TABLE data_provenances (ROWID INTEGER PRIMARY KEY, source_id INTEGER);
+             INSERT INTO data_provenances VALUES (1, 100), (2, 200);
+             -- Phone (source 100) and watch (source 200) both record the same
+             -- walk on one UTC day: 200 vs 150 steps. The day must report the
+             -- larger source (200), not the 350 double-count.
+             INSERT INTO samples VALUES (1, 721692800.0, 721692860.0, 7);
+             INSERT INTO samples VALUES (2, 721693000.0, 721693060.0, 7);
+             INSERT INTO samples VALUES (3, 721692900.0, 721692960.0, 7);
+             INSERT INTO quantity_samples VALUES (1, 120.0);
+             INSERT INTO quantity_samples VALUES (2, 80.0);
+             INSERT INTO quantity_samples VALUES (3, 150.0);
+             INSERT INTO objects VALUES (1, 1), (2, 1), (3, 2);
+             -- Heart rate from both sources merges: min/max span both.
+             INSERT INTO samples VALUES (4, 721692900.0, 721692901.0, 5);
+             INSERT INTO samples VALUES (5, 721693100.0, 721693101.0, 5);
+             INSERT INTO quantity_samples VALUES (4, 1.0);  -- 60 bpm, phone
+             INSERT INTO quantity_samples VALUES (5, 2.0);  -- 120 bpm, watch
+             INSERT INTO objects VALUES (4, 1), (5, 2);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let steps: f64 = c
+            .query_row(
+                "SELECT value_sum FROM health_daily WHERE metric='steps'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(steps, 200.0, "largest source wins, no 350 double-count");
+        let (hr_min, hr_max, hr_n): (f64, f64, i64) = c
+            .query_row(
+                "SELECT value_min, value_max, samples FROM health_daily WHERE metric='heart_rate_bpm'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((hr_min, hr_max, hr_n), (60.0, 120.0, 2), "HR merges across sources");
+    }
+
+    #[test]
+    fn replace_clears_stale_routes_even_without_route_tables() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        // A store with workouts but NO route tables.
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE workouts (data_id INTEGER PRIMARY KEY, total_distance REAL);
+             CREATE TABLE workout_activities (ROWID INTEGER PRIMARY KEY, owner_id INTEGER,
+                 is_primary_activity INTEGER, activity_type INTEGER, duration REAL);
+             INSERT INTO workouts VALUES (1, 0.0);
+             INSERT INTO samples VALUES (1, 721692800.0, 721694600.0, 80);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        // Simulate a previous import's route for the workout rowid this one reuses.
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO workout_routes (workout_id, seq, at, latitude, longitude, altitude)
+                 VALUES (1, 0, 0, 56.0, 13.0, 0.0)",
+                [],
+            )
+            .unwrap();
+
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, true).unwrap();
+        let n: i64 = cache
+            .conn()
+            .query_row("SELECT COUNT(*) FROM workout_routes", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "replace must clear routes even when the store has no route tables");
     }
 
     #[test]

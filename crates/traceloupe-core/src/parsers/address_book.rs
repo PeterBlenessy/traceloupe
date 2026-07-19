@@ -170,13 +170,27 @@ fn parse_groups(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<
     if !has_groups {
         return Ok(out);
     }
-    let mut stmt = conn.prepare(
+    // member_type 0 = person; other kinds (e.g. CardDAV-synced nested groups)
+    // carry an ABGroup ROWID in member_id, which must not be matched against
+    // ABPerson ROWIDs. Filter when the column exists (older schemas may lack it).
+    let has_member_type = conn
+        .prepare("PRAGMA table_info(ABGroupMembers)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|c| c == "member_type");
+    let sql = format!(
         "SELECT gm.member_id, g.Name
          FROM ABGroupMembers gm
          JOIN ABGroup g ON g.ROWID = gm.group_id
-         WHERE g.Name IS NOT NULL AND g.Name <> ''
+         WHERE g.Name IS NOT NULL AND g.Name <> ''{}
          ORDER BY g.Name, gm.member_id",
-    )?;
+        if has_member_type {
+            " AND gm.member_type = 0"
+        } else {
+            ""
+        }
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let member: i64 = r.get(0)?;
@@ -428,8 +442,11 @@ mod tests {
              CREATE TABLE ABGroup (ROWID INTEGER PRIMARY KEY, Name TEXT);
              CREATE TABLE ABGroupMembers (UID INTEGER PRIMARY KEY, group_id INTEGER, member_type INTEGER, member_id INTEGER);
              INSERT INTO ABGroup (ROWID, Name) VALUES (1, 'Family'), (2, 'Climbing'), (3, NULL);
+             -- Row 5 is a non-person member (member_type 1, e.g. a nested
+             -- subgroup) whose member_id collides with contact 2's ABPerson
+             -- ROWID — it must NOT tag that contact with 'Family'.
              INSERT INTO ABGroupMembers (UID, group_id, member_type, member_id)
-                 VALUES (1, 1, 0, 1), (2, 2, 0, 1), (3, 3, 0, 1), (4, 2, 0, 2);",
+                 VALUES (1, 1, 0, 1), (2, 2, 0, 1), (3, 3, 0, 1), (4, 2, 0, 2), (5, 1, 1, 2);",
         )
         .unwrap();
     }
@@ -476,6 +493,9 @@ mod tests {
         assert!(pizza.first_name.is_none() && pizza.last_name.is_none());
         assert_eq!(pizza.phones.len(), 1);
         assert!(pizza.emails.is_empty());
+        // Only the person membership (Climbing); the colliding member_type-1
+        // row must not add 'Family'.
+        assert_eq!(pizza.groups, vec!["Climbing".to_string()]);
     }
 
     #[test]
