@@ -79,6 +79,7 @@ export function AdaptiveToolbar({
 }) {
   const areaRef = useRef<HTMLDivElement>(null);
   const leadingRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
   const trailingRef = useRef<HTMLDivElement>(null);
   const measRef = useRef<Map<string, HTMLSpanElement | null>>(new Map());
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -88,8 +89,9 @@ export function AdaptiveToolbar({
     const area = areaRef.current;
     if (!area) return;
     const leadW = leadingRef.current?.offsetWidth ?? 0;
+    const searchW = searchRef.current?.offsetWidth ?? 0;
     const trailW = trailingRef.current?.offsetWidth ?? 0;
-    const W = area.clientWidth - leadW - trailW;
+    const W = area.clientWidth - leadW - searchW - trailW;
     if (W <= 0) return;
 
     // Per-item measured widths.
@@ -158,9 +160,10 @@ export function AdaptiveToolbar({
     compute();
     const ro = new ResizeObserver(compute);
     if (areaRef.current) ro.observe(areaRef.current);
-    // Observe the fixed ends too: an expanding search (in `trailing`) changes the
-    // space left for islands without resizing the toolbar itself.
+    // Observe the fixed parts too: an expanding search changes the space left for
+    // the islands without resizing the toolbar itself.
     if (leadingRef.current) ro.observe(leadingRef.current);
+    if (searchRef.current) ro.observe(searchRef.current);
     if (trailingRef.current) ro.observe(trailingRef.current);
     return () => ro.disconnect();
   }, [compute]);
@@ -257,10 +260,17 @@ export function AdaptiveToolbar({
         );
       })}
 
-      {(trailing || search) && (
+      {/* Search belongs to the view, so it sits right after the view islands —
+          not out at the far right with the app-wide controls. */}
+      {search && (
+        <div ref={searchRef} className="flex shrink-0 items-center">
+          {search}
+        </div>
+      )}
+      {/* App-wide controls are the rightmost actions. */}
+      {trailing && (
         <div ref={trailingRef} className="ml-auto flex shrink-0 items-center gap-2">
           {trailing}
-          {search}
         </div>
       )}
     </div>
