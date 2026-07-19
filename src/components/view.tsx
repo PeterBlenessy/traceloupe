@@ -349,7 +349,7 @@ export function ListSearch({
           setFocused(true);
           requestAnimationFrame(() => inputRef.current?.focus());
         }}
-        className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         <Search className="size-4" />
       </button>
