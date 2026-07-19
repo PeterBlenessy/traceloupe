@@ -237,7 +237,6 @@ export function CalendarView() {
   return (
     <VirtualListView<CalendarEvent>
       key={clockFormat}
-      headless
       title="Calendar"
       count={filtered.length}
       estimateSize={76}

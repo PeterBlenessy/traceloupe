@@ -8,13 +8,12 @@
  * primitive here over inlining it in the view.
  */
 import { useRef, useState } from "react";
-import { Search, SlidersHorizontal, TriangleAlert, X } from "lucide-react";
+import { Search, TriangleAlert, X } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
-import { usePersistedState } from "@/lib/use-persisted-state";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -82,87 +81,12 @@ export function ErrorState({ error }: { error: unknown }) {
 }
 
 /**
- * The canonical panel header every list view shares (see docs/ui.md): a title row
- * (title + count + inline filter chips), an optional full-width search row, and an
- * optional filter/sort toolbar row. Used by `VirtualListView`/`LazyListView` and
- * composed directly by the master column of `ListDetail` views — so all list
- * headers are consistent by construction, not by copy-paste.
- */
-export function PanelHeader({
-  title,
-  count,
-  icon,
-  actions,
-  search,
-  toolbar,
-}: {
-  title: string;
-  count?: number;
-  icon?: React.ReactNode;
-  /** Inline controls on the title row (e.g. source/type filter chips). */
-  actions?: React.ReactNode;
-  /** The search control — rendered inline in the title row (expanding icon). */
-  search?: React.ReactNode;
-  /** Filter/sort controls, revealed in a row below the title by the Filter
-   *  toggle so the header stays minimal until the user wants them. */
-  toolbar?: React.ReactNode;
-}) {
-  // Remember per view whether the filter row is revealed.
-  const [filtersOpen, setFiltersOpen] = usePersistedState(
-    `panel-filters:${title}`,
-    false,
-  );
-  return (
-    <>
-      <ViewHeader title={title} count={count} icon={icon}>
-        {actions && (
-          // Give the filter actions the free width (and make the actions element
-          // itself fill it) so an OverflowRow measures the real available space
-          // and shows every chip that fits instead of collapsing into "⋮".
-          <div className="flex min-w-0 flex-1 items-center gap-1 [&>*]:min-w-0 [&>*]:flex-1">
-            {actions}
-          </div>
-        )}
-        {toolbar && (
-          <button
-            type="button"
-            aria-label="Filters and sort"
-            aria-pressed={filtersOpen}
-            title="Filters & sort"
-            onClick={() => setFiltersOpen((o) => !o)}
-            className={cn(
-              "inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-              filtersOpen && "bg-accent text-foreground",
-            )}
-          >
-            <SlidersHorizontal className="size-4" />
-          </button>
-        )}
-        {search}
-      </ViewHeader>
-      {toolbar && filtersOpen && (
-        // No wrap: a wide toolbar (time chips + sort) scrolls its own content
-        // rather than pushing the sort onto a second row.
-        <div className="flex min-w-0 shrink-0 items-center gap-2 border-b px-3 py-1.5">
-          {toolbar}
-        </div>
-      )}
-    </>
-  );
-}
-
-/**
  * A full-height, single-column view whose rows are virtualized — the same shape
  * as ListView, but only the visible rows mount, so it stays fast for lists of
  * tens of thousands of items (Calls, Safari, Apps). Rows are centered to the
  * same max width as ListView.
  */
 export function VirtualListView<T>({
-  title,
-  count,
-  header,
-  search,
-  toolbar,
   items,
   renderItem,
   getKey,
@@ -171,13 +95,11 @@ export function VirtualListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
-  headless,
 }: {
-  title: string;
+  /** Unused now that all list views publish to the unified toolbar; kept so
+   *  callers can pass it for readability. */
+  title?: string;
   count?: number;
-  header?: React.ReactNode;
-  search?: React.ReactNode;
-  toolbar?: React.ReactNode;
   items: T[];
   renderItem: (item: T) => React.ReactNode;
   getKey?: (item: T, index: number) => React.Key;
@@ -186,20 +108,9 @@ export function VirtualListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
-  /** Skip the internal PanelHeader — the view publishes to the unified toolbar. */
-  headless?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
-      {!headless && (
-        <PanelHeader
-          title={title}
-          count={count}
-          actions={header}
-          search={search}
-          toolbar={toolbar}
-        />
-      )}
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
@@ -228,10 +139,6 @@ export function VirtualListView<T>({
  * the filter changes so the scroll position resets.
  */
 export function LazyListView<T>({
-  title,
-  header,
-  search,
-  toolbar,
   count,
   windowKey,
   fetchWindow,
@@ -241,14 +148,10 @@ export function LazyListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
-  headless,
 }: {
-  title: string;
-  header?: React.ReactNode;
-  /** An optional full-width search row directly below the title. */
-  search?: React.ReactNode;
-  /** An optional full-width row below the title (filters, etc.). */
-  toolbar?: React.ReactNode;
+  /** Unused now that all list views publish to the unified toolbar; kept so
+   *  callers can pass it for readability. */
+  title?: string;
   /** Total matching rows (from a count query); undefined while loading. */
   count: number | undefined;
   windowKey: (page: number) => unknown[];
@@ -259,21 +162,9 @@ export function LazyListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
-  /** Skip the internal PanelHeader — the view publishes to the unified app
-   *  toolbar (see useViewToolbar) and renders only the list body. */
-  headless?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
-      {!headless && (
-        <PanelHeader
-          title={title}
-          count={count}
-          actions={header}
-          search={search}
-          toolbar={toolbar}
-        />
-      )}
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (

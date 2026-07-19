@@ -96,7 +96,6 @@ export function AppsView() {
 
   return (
     <VirtualListView
-      headless
       title="Apps"
       count={filtered.length}
       isPending={isPending}

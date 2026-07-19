@@ -102,7 +102,6 @@ export function CallsView() {
 
   return (
     <LazyListView<Call>
-      headless
       title="Calls"
       count={active === true ? count : undefined}
       error={error}
