@@ -31,10 +31,10 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useSettings } from "@/components/settings-provider";
-import { type SortState } from "@/components/sort-control";
+import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { EmptyView, ErrorState, ListSearch } from "@/components/view";
 import { useDebounced } from "@/lib/use-debounced";
 import { formatCount, formatDateTime } from "@/lib/format";
@@ -150,32 +150,35 @@ function PhotosViewInner() {
     ],
     [sources, total],
   );
-  const islands = useMemo(() => {
-    const list = [];
+  const filterGroups = useMemo<FilterGroup[]>(() => {
+    const list: FilterGroup[] = [];
     if (hasFilter)
       list.push(
-        badgeIsland({
+        badgeGroup({
           key: "source",
           label: "Source",
-          icon: <Images className="size-4" />,
+          description: "Which app or album the media came from",
           options: sourceOptions,
           value: source,
           onChange: setSource,
         }),
       );
-    list.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
-    list.push(
-      sortIsland({
-        fields: [
+    list.push(timeGroup({ description: "When the media was created", presets, counts: presetCounts, value: range, onChange: setRange }));
+    return list;
+  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range]);
+  const sortNode = useMemo(
+    () => (
+      <SortControl
+        fields={[
           { value: "date", label: "Date" },
           { value: "source", label: "Source" },
-        ],
-        value: sort,
-        onChange: setSort,
-      }),
-    );
-    return list;
-  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range, sort, setSort]);
+        ]}
+        value={sort}
+        onChange={setSort}
+      />
+    ),
+    [sort, setSort],
+  );
   const searchNode = useMemo(
     () => (
       <ListSearch
@@ -187,8 +190,11 @@ function PhotosViewInner() {
     [q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Photos", count, islands, search: searchNode } : null),
-    [active, count, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Photos", count, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, count, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
