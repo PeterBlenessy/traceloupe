@@ -956,6 +956,13 @@ pub struct HealthDay {
     pub hr_min: Option<f64>,
     pub hr_avg: Option<f64>,
     pub hr_max: Option<f64>,
+    /// Headphone audio exposure, loudest sample of the day (dB).
+    pub audio_db_max: Option<f64>,
+    /// Walking/mobility daily averages.
+    pub walk_speed_ms: Option<f64>,
+    pub step_length_m: Option<f64>,
+    pub double_support_pct: Option<f64>,
+    pub walk_asymmetry_pct: Option<f64>,
     /// Activity rings (NULL when the device never tracked that ring).
     pub move_kcal: Option<f64>,
     pub move_goal_kcal: Option<f64>,
@@ -998,6 +1005,11 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
                 d.hr_max = r.get(4)?;
                 d.hr_avg = r.get(5)?;
             }
+            metric::AUDIO_DB => d.audio_db_max = r.get(4)?,
+            metric::WALK_SPEED_MS => d.walk_speed_ms = r.get(5)?,
+            metric::STEP_LENGTH_M => d.step_length_m = r.get(5)?,
+            metric::DOUBLE_SUPPORT_PCT => d.double_support_pct = r.get(5)?,
+            metric::WALK_ASYMMETRY_PCT => d.walk_asymmetry_pct = r.get(5)?,
             _ => {}
         }
     }

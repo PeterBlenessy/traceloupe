@@ -217,6 +217,17 @@ function DayRow({ day }: { day: HealthDay }) {
     ringBit("Exercise", day.exerciseMin, day.exerciseGoalMin, "min"),
     ringBit("Stand", day.standHours, day.standGoalHours, "hr"),
   ].filter(Boolean);
+  const mobility = [
+    day.walkSpeedMs != null ? `walk ${day.walkSpeedMs.toFixed(1)} m/s` : null,
+    day.stepLengthM != null ? `step ${day.stepLengthM.toFixed(2)} m` : null,
+    day.doubleSupportPct != null
+      ? `support ${Math.round(day.doubleSupportPct * 100)}%`
+      : null,
+    day.walkAsymmetryPct != null
+      ? `asym ${Math.round(day.walkAsymmetryPct * 100)}%`
+      : null,
+    day.audioDbMax != null ? `audio ≤${Math.round(day.audioDbMax)} dB` : null,
+  ].filter(Boolean);
   return (
     <Item>
       <ItemMedia>
@@ -227,9 +238,9 @@ function DayRow({ day }: { day: HealthDay }) {
         <div className="text-xs text-muted-foreground">
           {bits.length > 0 ? bits.join(" · ") : "No activity recorded"}
         </div>
-        {rings.length > 0 && (
+        {(rings.length > 0 || mobility.length > 0) && (
           <div className="text-xs text-muted-foreground/70">
-            {rings.join(" · ")}
+            {[...rings, ...mobility].join(" · ")}
           </div>
         )}
       </ItemContent>

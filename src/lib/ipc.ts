@@ -222,6 +222,13 @@ export interface HealthDay {
   hrMin: number | null;
   hrAvg: number | null;
   hrMax: number | null;
+  /** Headphone audio exposure, loudest sample of the day (dB). */
+  audioDbMax: number | null;
+  /** Walking/mobility daily averages. */
+  walkSpeedMs: number | null;
+  stepLengthM: number | null;
+  doubleSupportPct: number | null;
+  walkAsymmetryPct: number | null;
   /** Activity rings (null when the device never tracked that ring). */
   moveKcal: number | null;
   moveGoalKcal: number | null;
@@ -2003,6 +2010,11 @@ export const mockClient: TraceLoupeClient = {
             hrMin: 52,
             hrAvg: 71,
             hrMax: 142,
+            audioDbMax: 74,
+            walkSpeedMs: 1.31,
+            stepLengthM: 0.68,
+            doubleSupportPct: 0.28,
+            walkAsymmetryPct: 0.03,
             moveKcal: 412,
             moveGoalKcal: 500,
             exerciseMin: 22,
@@ -2020,6 +2032,11 @@ export const mockClient: TraceLoupeClient = {
             hrMin: null,
             hrAvg: null,
             hrMax: null,
+            audioDbMax: null,
+            walkSpeedMs: null,
+            stepLengthM: null,
+            doubleSupportPct: null,
+            walkAsymmetryPct: null,
             moveKcal: 180,
             moveGoalKcal: 500,
             exerciseMin: null,

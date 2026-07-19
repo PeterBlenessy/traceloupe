@@ -60,11 +60,20 @@ pub mod metric {
     pub const RESTING_KCAL: &str = "resting_kcal";
     pub const ACTIVE_KCAL: &str = "active_kcal";
     pub const FLIGHTS: &str = "flights";
+    pub const AUDIO_DB: &str = "audio_db";
+    pub const WALK_SPEED_MS: &str = "walk_speed_ms";
+    pub const STEP_LENGTH_M: &str = "step_length_m";
+    pub const DOUBLE_SUPPORT_PCT: &str = "double_support_pct";
+    pub const WALK_ASYMMETRY_PCT: &str = "walk_asymmetry_pct";
 }
 
 /// `samples.data_type` codes for the quantity metrics we aggregate per day.
 /// Verified against a real store: distance is metres, energy is kcal, heart
-/// rate is count/sec (×60 → bpm). Code → cache `health_daily.metric` name.
+/// rate is count/sec (×60 → bpm); 173 is headphone audio exposure in dB (avg
+/// ~51, max ~102 there); 182/187/188 are the walking metrics (double-support
+/// fraction / speed m·s⁻¹ / step length m) and 194 is walking asymmetry (a
+/// 0–1 fraction, ~0 for a symmetric gait — 92% of real samples < 0.1).
+/// Code → cache `health_daily.metric` name.
 fn metric_name(data_type: i64) -> Option<&'static str> {
     Some(match data_type {
         5 => metric::HEART_RATE_BPM,
@@ -73,8 +82,27 @@ fn metric_name(data_type: i64) -> Option<&'static str> {
         9 => metric::RESTING_KCAL,
         10 => metric::ACTIVE_KCAL,
         12 => metric::FLIGHTS,
+        173 => metric::AUDIO_DB,
+        182 => metric::DOUBLE_SUPPORT_PCT,
+        187 => metric::WALK_SPEED_MS,
+        188 => metric::STEP_LENGTH_M,
+        194 => metric::WALK_ASYMMETRY_PCT,
         _ => return None,
     })
+}
+
+/// Spread metrics are measurements (min/avg/max meaningful, sum meaningless);
+/// everything else is cumulative (the day's total, dedup'd per source).
+fn is_spread(metric_name: &str) -> bool {
+    matches!(
+        metric_name,
+        metric::HEART_RATE_BPM
+            | metric::AUDIO_DB
+            | metric::WALK_SPEED_MS
+            | metric::STEP_LENGTH_M
+            | metric::DOUBLE_SUPPORT_PCT
+            | metric::WALK_ASYMMETRY_PCT
+    )
 }
 
 /// Parse Health workouts + daily aggregates + a summary into the cache. With
@@ -355,7 +383,8 @@ fn parse_daily(
          FROM samples s
          JOIN quantity_samples q ON q.data_id = s.data_id
          {provenance_join}
-         WHERE s.data_type IN (5, 7, 8, 9, 10, 12) AND s.start_date > 0
+         WHERE s.data_type IN (5, 7, 8, 9, 10, 12, 173, 182, 187, 188, 194)
+           AND s.start_date > 0
          GROUP BY {group_by}
          ORDER BY day, s.data_type",
     ))?;
@@ -377,13 +406,17 @@ fn parse_daily(
         let Some(metric) = metric_name(data_type) else {
             return Ok(());
         };
-        let merged = if metric == "heart_rate_bpm" {
+        let merged = if is_spread(metric) {
             merge_spread(sources)
         } else {
             merge_cumulative(sources)
         };
         // Heart rate is stored in canonical count/sec; scale every stat to bpm.
-        let scale = if metric == "heart_rate_bpm" { 60.0 } else { 1.0 };
+        let scale = if metric == self::metric::HEART_RATE_BPM {
+            60.0
+        } else {
+            1.0
+        };
         let s = |v: Option<f64>| v.map(|v| v * scale);
         tx.execute(
             "INSERT OR REPLACE INTO health_daily
