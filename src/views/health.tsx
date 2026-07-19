@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Activity, ChevronDown, Footprints, HeartPulse, MapPin, Moon } from "lucide-react";
@@ -11,7 +11,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
-import { EmptyView, ErrorState, ListSkeleton, VirtualListView } from "@/components/view";
+import { EmptyView, VirtualListView } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -265,6 +265,39 @@ function localDayStart(dayAt: number): number {
   return dayAt + new Date(dayAt * 1000).getTimezoneOffset() * 60;
 }
 
+/** Everything section-specific, so filtering, windowing, sorting, counting and
+ *  rendering all run through ONE pipeline. Adding a section = adding an entry;
+ *  there is no per-section branch to forget elsewhere. */
+interface SectionDef<T = unknown> {
+  /** The section's list (undefined until its gated query has run). */
+  items: T[] | undefined;
+  pending: boolean;
+  error: unknown;
+  /** Section-badge count — summary-based so gated lists show it unfetched. */
+  count: number | undefined;
+  /** Timestamp compared against the time-filter window. */
+  windowAt(item: T): number | null;
+  sortFields: { value: string; label: string }[];
+  sortKey(item: T, by: string): number | null;
+  sort: SortState;
+  setSort(s: SortState): void;
+  timeDescription: string;
+  emptyIcon: ComponentType<{ className?: string }>;
+  /** Message when the list itself is empty / when filters exclude everything. */
+  emptyAll: string;
+  emptyFiltered: string;
+  /** Rows render time-of-day, so remount them when the clock format changes. */
+  clockSensitive: boolean;
+  render(item: T): ReactNode;
+  rowKey(item: T): React.Key;
+}
+
+/** Identity helper so each entry infers its own item type while the record
+ *  stores the erased form. */
+function defineSection<T>(def: SectionDef<T>): SectionDef {
+  return def as SectionDef;
+}
+
 export function HealthView() {
   const navigate = useNavigate();
   const { data: active } = useQuery({
@@ -341,72 +374,129 @@ export function HealthView() {
   const effActivity =
     activity !== "all" && activities.includes(activity) ? activity : "all";
 
-  const baseFiltered = useMemo(
-    () =>
-      section !== "workouts"
-        ? []
-        : (workouts ?? []).filter(
-            (w) => effActivity === "all" || w.activity === effActivity,
-          ),
-    [section, workouts, effActivity],
-  );
-  const presetCounts = useMemo(
-    () =>
-      section === "daily"
-        ? presets.map((p) => (days ?? []).filter((d) => inWindow(localDayStart(d.dayAt), p.lo, p.hi)).length)
-        : section === "sleep"
-          ? presets.map((p) => (sleep ?? []).filter((s) => inWindow(s.startAt, p.lo, p.hi)).length)
-          : presets.map((p) => baseFiltered.filter((w) => inWindow(w.startAt, p.lo, p.hi)).length),
-    [section, presets, baseFiltered, days, sleep],
-  );
-  const filtered = useMemo(() => {
-    const inRange = baseFiltered.filter((w) => inWindow(w.startAt, range.lo, range.hi));
-    return sortItems(
-      inRange,
-      (w) =>
-        sort.by === "duration"
-          ? (w.durationS ?? 0)
-          : sort.by === "distance"
-            ? (w.distanceM ?? 0)
-            : w.startAt,
-      sort.desc,
-    );
-  }, [baseFiltered, range, sort]);
-  const filteredDays = useMemo(() => {
-    if (section !== "daily") return [];
-    const inRange = (days ?? []).filter((d) => inWindow(localDayStart(d.dayAt), range.lo, range.hi));
-    return sortItems(
-      inRange,
-      (d) =>
-        daySort.by === "steps"
-          ? (d.steps ?? 0)
-          : daySort.by === "distance"
-            ? (d.distanceM ?? 0)
-            : d.dayAt,
-      daySort.desc,
-    );
-  }, [section, days, range, daySort]);
-  const filteredSleep = useMemo(() => {
-    if (section !== "sleep") return [];
-    const inRange = (sleep ?? []).filter((s) => inWindow(s.startAt, range.lo, range.hi));
-    return sortItems(
-      inRange,
-      (s) =>
-        sleepSort.by === "duration"
-          ? s.startAt != null && s.endAt != null
-            ? s.endAt - s.startAt
-            : 0
-          : s.startAt,
-      sleepSort.desc,
-    );
-  }, [section, sleep, range, sleepSort]);
-
   // Presence comes from the summary (always fetched), not the gated lists —
   // otherwise the Section filter would vanish until each list was visited.
   const hasWorkouts = (workouts?.length ?? 0) > 0;
   const hasDays = (summary?.dayCount ?? 0) > 0;
   const hasSleep = (summary?.sleepCount ?? 0) > 0;
   const hasAny = hasWorkouts || hasDays || hasSleep;
+
+  // One descriptor per section; everything below (windowing, sorting, counts,
+  // toolbar, rendering) is section-agnostic.
+  const defs = useMemo<Record<HealthSection, SectionDef>>(
+    () => ({
+      workouts: defineSection<Workout>({
+        items:
+          workouts &&
+          workouts.filter((w) => effActivity === "all" || w.activity === effActivity),
+        pending: isPending,
+        error,
+        count: workouts?.length,
+        windowAt: (w) => w.startAt,
+        sortFields: [
+          { value: "date", label: "Date" },
+          { value: "duration", label: "Duration" },
+          { value: "distance", label: "Distance" },
+        ],
+        sortKey: (w, by) =>
+          by === "duration"
+            ? (w.durationS ?? 0)
+            : by === "distance"
+              ? (w.distanceM ?? 0)
+              : w.startAt,
+        sort,
+        setSort,
+        timeDescription: "When the workout took place",
+        emptyIcon: Activity,
+        emptyAll: hasAny
+          ? "No workouts in this backup — switch Section to see daily activity or sleep."
+          : "No health data in this backup.",
+        emptyFiltered: "No workouts match these filters.",
+        clockSensitive: true,
+        render: (w) => <WorkoutRow workout={w} />,
+        rowKey: (w) => w.id,
+      }),
+      daily: defineSection<HealthDay>({
+        items: days,
+        pending: daysPending,
+        error: daysError,
+        count: summary?.dayCount,
+        // Compare via the local-midnight instant of the row's calendar date.
+        windowAt: (d) => localDayStart(d.dayAt),
+        sortFields: [
+          { value: "date", label: "Date" },
+          { value: "steps", label: "Steps" },
+          { value: "distance", label: "Distance" },
+        ],
+        sortKey: (d, by) =>
+          by === "steps"
+            ? (d.steps ?? 0)
+            : by === "distance"
+              ? (d.distanceM ?? 0)
+              : d.dayAt,
+        sort: daySort,
+        setSort: setDaySort,
+        timeDescription: "The day the activity was recorded",
+        emptyIcon: Footprints,
+        emptyAll: "No daily activity indexed — re-import this backup to index it.",
+        emptyFiltered: "No days match these filters.",
+        // DayRow renders no time-of-day (formatDayUTC is date-only), so a
+        // clock-preference change must not reset the list.
+        clockSensitive: false,
+        render: (d) => <DayRow day={d} />,
+        rowKey: (d) => d.dayAt,
+      }),
+      sleep: defineSection<SleepSession>({
+        items: sleep,
+        pending: sleepPending,
+        error: sleepError,
+        count: summary?.sleepCount,
+        windowAt: (s) => s.startAt,
+        sortFields: [
+          { value: "date", label: "Date" },
+          { value: "duration", label: "Duration" },
+        ],
+        sortKey: (s, by) =>
+          by === "duration"
+            ? s.startAt != null && s.endAt != null
+              ? s.endAt - s.startAt
+              : 0
+            : s.startAt,
+        sort: sleepSort,
+        setSort: setSleepSort,
+        timeDescription: "When the sleep was recorded",
+        emptyIcon: Moon,
+        emptyAll: "No sleep data indexed — re-import this backup to index it.",
+        emptyFiltered: "No sleep sessions match these filters.",
+        clockSensitive: true,
+        render: (s) => <SleepRow session={s} />,
+        rowKey: (s) => s.id,
+      }),
+    }),
+    [
+      workouts, isPending, error, effActivity, sort, setSort,
+      days, daysPending, daysError, daySort, setDaySort,
+      sleep, sleepPending, sleepError, sleepSort, setSleepSort,
+      summary, hasAny,
+    ],
+  );
+  const cur = defs[section];
+
+  const baseItems = cur.items ?? [];
+  const presetCounts = useMemo(
+    () => presets.map((p) => baseItems.filter((i) => inWindow(cur.windowAt(i), p.lo, p.hi)).length),
+    [presets, baseItems, cur],
+  );
+  const shown = useMemo(
+    () =>
+      sortItems(
+        baseItems.filter((i) => inWindow(cur.windowAt(i), range.lo, range.hi)),
+        (i) => cur.sortKey(i, cur.sort.by),
+        cur.sort.desc,
+      ),
+    [baseItems, range, cur],
+  );
+
   const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasAny) return [];
     const out: FilterGroup[] = [
@@ -417,12 +507,7 @@ export function HealthView() {
         options: SECTIONS.map((s) => ({
           value: s.value,
           label: s.label,
-          count:
-            s.value === "workouts"
-              ? workouts?.length
-              : s.value === "daily"
-                ? summary?.dayCount
-                : summary?.sleepCount,
+          count: defs[s.value].count,
         })),
         value: section,
         onChange: (v) => setSection(v as HealthSection),
@@ -437,12 +522,7 @@ export function HealthView() {
     }
     out.push(
       timeGroup({
-        description:
-          section === "daily"
-            ? "The day the activity was recorded"
-            : section === "sleep"
-              ? "When the sleep was recorded"
-              : "When the workout took place",
+        description: cur.timeDescription,
         presets,
         counts: presetCounts,
         value: range,
@@ -450,57 +530,25 @@ export function HealthView() {
       }),
     );
     return out;
-  }, [hasAny, workouts, summary, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
-  const sortNode = useMemo(() => {
-    if (!hasAny) return undefined;
-    return section === "daily" ? (
-      <SortControl
-        fields={[
-          { value: "date", label: "Date" },
-          { value: "steps", label: "Steps" },
-          { value: "distance", label: "Distance" },
-        ]}
-        value={daySort}
-        onChange={setDaySort}
-      />
-    ) : section === "sleep" ? (
-      <SortControl
-        fields={[
-          { value: "date", label: "Date" },
-          { value: "duration", label: "Duration" },
-        ]}
-        value={sleepSort}
-        onChange={setSleepSort}
-      />
-    ) : (
-      <SortControl
-        fields={[
-          { value: "date", label: "Date" },
-          { value: "duration", label: "Duration" },
-          { value: "distance", label: "Distance" },
-        ]}
-        value={sort}
-        onChange={setSort}
-      />
-    );
-  }, [hasAny, section, sort, setSort, daySort, setDaySort, sleepSort, setSleepSort]);
+  }, [hasAny, defs, cur, workouts, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
+  const sortNode = useMemo(
+    () =>
+      hasAny ? (
+        <SortControl fields={cur.sortFields} value={cur.sort} onChange={cur.setSort} />
+      ) : undefined,
+    [hasAny, cur],
+  );
   const toolbar = useMemo(
     () =>
       active === true
         ? {
             title: "Health",
-            count: hasAny
-              ? section === "daily"
-                ? filteredDays.length
-                : section === "sleep"
-                  ? filteredSleep.length
-                  : filtered.length
-              : undefined,
+            count: hasAny ? shown.length : undefined,
             filter: filterGroups,
             sort: sortNode,
           }
         : null,
-    [active, hasAny, section, filtered.length, filteredDays.length, filteredSleep.length, filterGroups, sortNode],
+    [active, hasAny, shown.length, filterGroups, sortNode],
   );
   useViewToolbar(toolbar);
 
@@ -533,87 +581,26 @@ export function HealthView() {
     </div>
   );
 
-  if (section === "sleep") {
-    return (
-      <div className="flex h-full flex-col">
-        {summaryStrip}
-        <div key={clockFormat} className="min-h-0 flex-1">
-          <VirtualListView<SleepSession>
-            items={filteredSleep}
-            getKey={(s) => s.id}
-            estimateSize={56}
-            isPending={sleepPending}
-            error={sleepError}
-            emptyIcon={Moon}
-            emptyMessage={
-              hasSleep
-                ? "No sleep sessions match these filters."
-                : "No sleep data indexed — re-import this backup to index it."
-            }
-            renderItem={(s) => <SleepRow session={s} />}
-          />
-        </div>
-      </div>
-    );
-  }
-
-  if (section === "daily") {
-    // No key={clockFormat} here: DayRow renders no time-of-day (formatDayUTC
-    // is date-only), so a clock-preference change must not reset the list.
-    return (
-      <div className="flex h-full flex-col">
-        {summaryStrip}
-        <div className="min-h-0 flex-1">
-          <VirtualListView<HealthDay>
-            items={filteredDays}
-            getKey={(d) => d.dayAt}
-            estimateSize={56}
-            isPending={daysPending}
-            error={daysError}
-            emptyIcon={Footprints}
-            emptyMessage={
-              hasDays
-                ? "No days match these filters."
-                : "No daily activity indexed — re-import this backup to index it."
-            }
-            renderItem={(d) => <DayRow day={d} />}
-          />
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full flex-col">
-      {error ? (
-        <ErrorState error={error} />
-      ) : isPending ? (
-        <ListSkeleton />
-      ) : (
-        <div className="min-h-0 flex-1 overflow-auto">
-          {summaryStrip}
-          {!hasWorkouts ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">
-              {hasAny
-                ? "No workouts in this backup — switch Section to see daily activity or sleep."
-                : "No health data in this backup."}
-            </p>
-          ) : filtered.length === 0 ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">
-              No workouts match these filters.
-            </p>
-          ) : (
-            <div key={clockFormat} className="w-full">
-              <h3 className="px-4 pb-1 pt-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                Workouts
-              </h3>
-              {filtered.map((w) => (
-                <WorkoutRow key={w.id} workout={w} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {summaryStrip}
+      <div
+        // Remount on section change; clock-sensitive sections also remount
+        // when the 12h/24h preference flips so times re-format.
+        key={`${section}:${cur.clockSensitive ? clockFormat : ""}`}
+        className="min-h-0 flex-1"
+      >
+        <VirtualListView
+          items={shown}
+          getKey={cur.rowKey}
+          estimateSize={56}
+          isPending={cur.pending}
+          error={cur.error}
+          emptyIcon={cur.emptyIcon}
+          emptyMessage={baseItems.length > 0 ? cur.emptyFiltered : cur.emptyAll}
+          renderItem={cur.render}
+        />
+      </div>
     </div>
   );
 }
