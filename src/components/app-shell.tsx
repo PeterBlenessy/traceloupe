@@ -226,7 +226,7 @@ function AppToolbar() {
       leading={
         // The full-width title bar starts at the window's left edge, so pad past
         // the macOS traffic lights. The sidebar toggle is its own island.
-        <div className="flex items-center gap-2 pl-16">
+        <div className="flex items-center gap-2 pl-20">
           <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
             <SidebarTrigger />
           </div>

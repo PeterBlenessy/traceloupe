@@ -221,7 +221,6 @@ export function RemindersView() {
 
   return (
     <VirtualListView<Reminder>
-      headless
       title="Reminders"
       count={filtered.length}
       estimateSize={64}

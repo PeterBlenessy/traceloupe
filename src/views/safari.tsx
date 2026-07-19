@@ -149,7 +149,6 @@ export function SafariView() {
 
   return (
     <LazyListView<HistoryVisit | SafariBookmark>
-      headless
       title="Safari"
       count={count}
       error={error}

@@ -182,7 +182,6 @@ export function InteractionsView() {
 
   return (
     <VirtualListView<Interaction>
-      headless
       title="Interactions"
       count={filtered.length}
       estimateSize={68}
