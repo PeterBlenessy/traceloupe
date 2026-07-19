@@ -114,7 +114,8 @@ fn parse_workouts(
     // stable instead of letting GROUP BY grab an arbitrary matching row. Sample
     // dates use MIN/MAX so multiple samples collapse to the true span.
     let mut stmt = src.prepare(
-        "SELECT MIN(s.start_date), MAX(s.end_date), wa.activity_type, wa.duration, w.total_distance
+        "SELECT MIN(s.start_date), MAX(s.end_date), wa.activity_type, wa.duration, w.total_distance,
+                w.data_id
          FROM workouts w
          JOIN samples s ON s.data_id = w.data_id
          LEFT JOIN workout_activities wa ON wa.ROWID = (
@@ -134,6 +135,8 @@ fn parse_workouts(
         tx.execute("DELETE FROM workouts", [])?;
     }
     let mut inserted = 0usize;
+    // Source workout data_id → cache workouts.id, for attaching GPS routes.
+    let mut id_map: Vec<(i64, i64)> = Vec::new();
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let start_at = to_unix(r.get::<_, Option<f64>>(0)?);
@@ -153,10 +156,92 @@ fn parse_workouts(
              VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![activity, start_at, end_at, duration_s, distance_m],
         )?;
+        id_map.push((r.get(5)?, tx.last_insert_rowid()));
         inserted += 1;
     }
     tx.commit()?;
     report.workouts += inserted;
+    parse_routes(src, cache, &id_map, replace)?;
+    Ok(())
+}
+
+/// Cap on stored route points per workout — plenty for a preview polyline, and
+/// keeps a heavy multi-hour GPS series (8k+ points here) from bloating the cache.
+const MAX_ROUTE_POINTS: usize = 1000;
+
+/// Workout GPS routes: each workout may have an associated location series
+/// (`associations` → `data_series` → `location_series_data`). Stored
+/// downsampled (every n-th point plus the last) in insertion order.
+fn parse_routes(
+    src: &Connection,
+    cache: &CacheDb,
+    id_map: &[(i64, i64)],
+    replace: bool,
+) -> Result<()> {
+    let has = |table: &str| -> Result<bool> {
+        Ok(src.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+            [table],
+            |r| r.get::<_, i64>(0),
+        )? > 0)
+    };
+    if !(has("associations")? && has("data_series")? && has("location_series_data")?) {
+        return Ok(());
+    }
+    // Skip tombstoned links when the schema has the flag (older ones may not).
+    let has_deleted = src
+        .prepare("PRAGMA table_info(associations)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|c| c == "deleted");
+    let sql = format!(
+        "SELECT l.timestamp, l.latitude, l.longitude, l.altitude
+         FROM associations a
+         JOIN data_series ds ON ds.data_id = a.source_object_id
+         JOIN location_series_data l ON l.series_identifier = ds.hfd_key
+         WHERE a.destination_object_id = ?1{}
+         ORDER BY l.timestamp",
+        if has_deleted { " AND a.deleted = 0" } else { "" }
+    );
+    let mut stmt = src.prepare(&sql)?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM workout_routes", [])?;
+    }
+    for &(src_id, cache_id) in id_map {
+        let points: Vec<(Option<i64>, f64, f64, Option<f64>)> = stmt
+            .query_map([src_id], |r| {
+                Ok((
+                    to_unix(r.get::<_, Option<f64>>(0)?),
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        if points.is_empty() {
+            continue;
+        }
+        // Even stride down to the cap; always keep the final point so the
+        // route ends where the workout did.
+        let stride = points.len().div_ceil(MAX_ROUTE_POINTS);
+        let last = points.len() - 1;
+        let mut seq = 0i64;
+        for (i, (at, lat, lon, alt)) in points.iter().enumerate() {
+            if i % stride != 0 && i != last {
+                continue;
+            }
+            tx.execute(
+                "INSERT INTO workout_routes (workout_id, seq, at, latitude, longitude, altitude)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![cache_id, seq, at, lat, lon, alt],
+            )?;
+            seq += 1;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -404,6 +489,81 @@ mod tests {
             )
             .unwrap();
         assert_eq!((min, max), (90.0, 120.0));
+    }
+
+    #[test]
+    fn parses_and_downsamples_workout_routes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE workouts (data_id INTEGER PRIMARY KEY, total_distance REAL);
+             CREATE TABLE workout_activities (ROWID INTEGER PRIMARY KEY, owner_id INTEGER,
+                 is_primary_activity INTEGER, activity_type INTEGER, duration REAL);
+             CREATE TABLE quantity_samples (data_id INTEGER, quantity REAL);
+             CREATE TABLE associations (destination_object_id INTEGER, source_object_id INTEGER,
+                 deleted INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE data_series (data_id INTEGER PRIMARY KEY, hfd_key INTEGER);
+             CREATE TABLE location_series_data (series_identifier INTEGER, timestamp REAL,
+                 latitude REAL, longitude REAL, altitude REAL);
+             INSERT INTO workouts VALUES (10, 5000.0);
+             INSERT INTO samples VALUES (10, 721692800.0, 721694600.0, 80);
+             INSERT INTO workout_activities VALUES (1, 10, 1, 37, 1800.0);
+             -- Route series 7 linked to the workout; a deleted link (series 8)
+             -- must be ignored.
+             INSERT INTO associations VALUES (10, 20, 0);
+             INSERT INTO associations VALUES (10, 21, 1);
+             INSERT INTO data_series VALUES (20, 7);
+             INSERT INTO data_series VALUES (21, 8);
+             INSERT INTO location_series_data VALUES (8, 721692800.0, 99.0, 99.0, 0.0);",
+        )
+        .unwrap();
+        // 2500 points → stride 3 → ceil(2500/3)=834 kept (+ the last point).
+        {
+            let mut stmt = conn
+                .prepare("INSERT INTO location_series_data VALUES (7, ?1, ?2, ?3, ?4)")
+                .unwrap();
+            for i in 0..2500 {
+                stmt.execute(rusqlite::params![
+                    721692800.0 + i as f64,
+                    56.0 + i as f64 * 1e-5,
+                    13.0,
+                    20.0
+                ])
+                .unwrap();
+            }
+        }
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let (n, wid): (i64, i64) = c
+            .query_row(
+                "SELECT COUNT(*), MIN(workout_id) FROM workout_routes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(n <= 1001, "downsampled to the cap (+last), got {n}");
+        assert!(n >= 800, "kept a dense preview, got {n}");
+        // Route rows attach to the cache workout id.
+        let cache_wid: i64 = c.query_row("SELECT id FROM workouts", [], |r| r.get(0)).unwrap();
+        assert_eq!(wid, cache_wid);
+        // The deleted link's series (lat 99) must not appear; the final point is kept.
+        let (max_lat, last_lat): (f64, f64) = c
+            .query_row(
+                "SELECT MAX(latitude),
+                        (SELECT latitude FROM workout_routes ORDER BY seq DESC LIMIT 1)
+                 FROM workout_routes",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(max_lat < 57.0, "deleted association leaked in: {max_lat}");
+        assert!((last_lat - (56.0 + 2499.0 * 1e-5)).abs() < 1e-9);
     }
 
     #[test]

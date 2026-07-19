@@ -867,6 +867,8 @@ pub struct Workout {
     pub end_at: Option<i64>,
     pub duration_s: Option<i64>,
     pub distance_m: Option<f64>,
+    /// A GPS route was recorded (rows in `workout_routes`).
+    pub has_route: bool,
 }
 
 /// A digest of the Health store's raw-sample volume (from the `meta` table).
@@ -883,7 +885,8 @@ pub struct HealthSummary {
 pub fn list_workouts(cache: &CacheDb) -> Result<Vec<Workout>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, activity, start_at, end_at, duration_s, distance_m
+        "SELECT id, activity, start_at, end_at, duration_s, distance_m,
+                EXISTS(SELECT 1 FROM workout_routes r WHERE r.workout_id = workouts.id)
          FROM workouts ORDER BY start_at DESC NULLS LAST, id DESC",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -894,6 +897,36 @@ pub fn list_workouts(cache: &CacheDb) -> Result<Vec<Workout>> {
             end_at: r.get(3)?,
             duration_s: r.get(4)?,
             distance_m: r.get(5)?,
+            has_route: r.get(6)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// One point of a workout's GPS route.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutePoint {
+    pub at: Option<i64>,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub altitude: Option<f64>,
+}
+
+/// The (downsampled) GPS route of one workout, in recording order.
+pub fn workout_route(cache: &CacheDb, workout_id: i64) -> Result<Vec<RoutePoint>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT at, latitude, longitude, altitude
+         FROM workout_routes WHERE workout_id = ?1 ORDER BY seq",
+    )?;
+    let rows = stmt.query_map([workout_id], |r| {
+        Ok(RoutePoint {
+            at: r.get(0)?,
+            latitude: r.get(1)?,
+            longitude: r.get(2)?,
+            altitude: r.get(3)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

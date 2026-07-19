@@ -181,6 +181,16 @@ export interface Workout {
   endAt: number | null;
   durationS: number | null;
   distanceM: number | null;
+  /** A GPS route was recorded for this workout. */
+  hasRoute: boolean;
+}
+
+/** One point of a workout's (downsampled) GPS route. */
+export interface RoutePoint {
+  at: number | null;
+  latitude: number;
+  longitude: number;
+  altitude: number | null;
 }
 
 export interface HealthSummary {
@@ -444,6 +454,8 @@ export interface TraceLoupeClient {
   listCalendarEvents(): Promise<CalendarEvent[]>;
   listReminders(): Promise<Reminder[]>;
   listWorkouts(): Promise<Workout[]>;
+  /** The GPS route of one workout, in recording order (empty if none). */
+  workoutRoute(workoutId: number): Promise<RoutePoint[]>;
   /** Daily activity aggregates, most recent day first. */
   healthDaily(): Promise<HealthDay[]>;
   /** Sleep-analysis sessions, most recent first. */
@@ -686,6 +698,7 @@ const tauriClient: TraceLoupeClient = {
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
+  workoutRoute: (workoutId) => invoke<RoutePoint[]>("workout_route", { workoutId }),
   healthDaily: () => invoke<HealthDay[]>("health_daily"),
   listSleep: () => invoke<SleepSession[]>("list_sleep"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
@@ -1930,6 +1943,7 @@ export const mockClient: TraceLoupeClient = {
             endAt: 1717842600,
             durationS: 1800,
             distanceM: 5200,
+            hasRoute: true,
           },
           {
             id: 2,
@@ -1938,8 +1952,22 @@ export const mockClient: TraceLoupeClient = {
             endAt: 1717756200,
             durationS: 1800,
             distanceM: 2100,
+            hasRoute: false,
           },
         ]
+      : [],
+  workoutRoute: async (workoutId) =>
+    mockActive && workoutId === 1
+      ? // A wobbly out-and-back loop, enough shape to exercise the preview.
+        Array.from({ length: 120 }, (_, i) => {
+          const t = (i / 119) * 2 * Math.PI;
+          return {
+            at: 1717840800 + i * 15,
+            latitude: 56.05 + 0.004 * Math.sin(t) + 0.001 * Math.sin(3 * t),
+            longitude: 13.0 + 0.007 * (1 - Math.cos(t)) + 0.001 * Math.cos(5 * t),
+            altitude: 20 + 5 * Math.sin(2 * t),
+          };
+        })
       : [],
   healthDaily: async () =>
     mockActive
