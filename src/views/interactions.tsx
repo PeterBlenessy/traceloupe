@@ -5,8 +5,10 @@ import { ArrowDownLeft, ArrowUpRight, Users, Waypoints } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { sortIsland, timeIsland } from "@/components/toolbar-islands";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
@@ -128,6 +130,40 @@ export function InteractionsView() {
     );
   }, [baseFiltered, range, sort]);
 
+  const hasData = (interactions?.length ?? 0) > 0;
+  const islands = useMemo(
+    () =>
+      hasData
+        ? [
+            timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
+            sortIsland({
+              fields: [
+                { value: "total", label: "Total" },
+                { value: "incoming", label: "In" },
+                { value: "outgoing", label: "Out" },
+                { value: "recent", label: "Recent" },
+              ],
+              value: sort,
+              onChange: setSort,
+            }),
+          ]
+        : [],
+    [hasData, presets, presetCounts, range, sort, setSort],
+  );
+  const searchNode = useMemo(
+    () =>
+      hasData ? <ListSearch value={q} onChange={setQ} placeholder="Search people" /> : undefined,
+    [hasData, q],
+  );
+  const toolbar = useMemo(
+    () =>
+      active === true
+        ? { title: "Interactions", count: filtered.length, islands, search: searchNode }
+        : null,
+    [active, filtered.length, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -140,10 +176,9 @@ export function InteractionsView() {
     );
   }
 
-  const hasData = (interactions?.length ?? 0) > 0;
-
   return (
     <VirtualListView<Interaction>
+      headless
       title="Interactions"
       count={filtered.length}
       estimateSize={68}
@@ -151,34 +186,6 @@ export function InteractionsView() {
       error={error}
       emptyMessage={
         hasData ? "No contacts match these filters." : "No interaction data in this backup."
-      }
-      search={
-        hasData ? (
-          <ListSearch value={q} onChange={setQ} placeholder="Search people" />
-        ) : undefined
-      }
-      toolbar={
-        hasData ? (
-          <>
-            <TimeFilterBar
-              className="flex-1"
-              presets={presets}
-              value={range}
-              onChange={setRange}
-              counts={presetCounts}
-            />
-            <SortControl
-              fields={[
-                { value: "total", label: "Total" },
-                { value: "incoming", label: "In" },
-                { value: "outgoing", label: "Out" },
-                { value: "recent", label: "Recent" },
-              ]}
-              value={sort}
-              onChange={setSort}
-            />
-          </>
-        ) : undefined
       }
       items={filtered}
       getKey={(i) => i.id}

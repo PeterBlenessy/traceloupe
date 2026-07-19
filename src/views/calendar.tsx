@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { CalendarDays, Clock, MapPin, Repeat } from "lucide-react";
+import { CalendarDays, CircleDot, Clock, MapPin, Repeat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { type BadgeFilterOption } from "@/components/badge-filter";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import {
@@ -166,18 +168,6 @@ export function CalendarView() {
     );
   }, [baseFiltered, sort, range]);
 
-  if (active === false) {
-    return (
-      <EmptyView
-        icon={CalendarDays}
-        title="No backup open"
-        description="Import a backup to see calendar events."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
-    );
-  }
-
   const hasEvents = (events?.length ?? 0) > 0;
   const calOptions: BadgeFilterOption[] = [
     { value: "all", label: "All", count: events?.length },
@@ -195,10 +185,44 @@ export function CalendarView() {
       count: (events ?? []).filter((e) => e.availability === a).length,
     })),
   ];
+  const islands = useMemo(() => {
+    if (!hasEvents) return [];
+    const list = [];
+    if (calendars.length > 1)
+      list.push(badgeIsland({ key: "cal", label: "Calendar", icon: <CalendarDays className="size-4" />, options: calOptions, value: effCal, onChange: setCal }));
+    if (avails.length > 1)
+      list.push(badgeIsland({ key: "avail", label: "Availability", icon: <CircleDot className="size-4" />, options: availOptions, value: effAvail, onChange: setAvail }));
+    list.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
+    list.push(sortIsland({ fields: [{ value: "start", label: "Date" }, { value: "title", label: "Title" }], value: sort, onChange: setSort }));
+    return list;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasEvents, calendars.length, avails.length, effCal, effAvail, calOptions, availOptions, presets, presetCounts, range, sort]);
+  const searchNode = useMemo(
+    () => (hasEvents ? <ListSearch value={q} onChange={setQ} placeholder="Search events" /> : undefined),
+    [hasEvents, q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Calendar", count: filtered.length, islands, search: searchNode } : null),
+    [active, filtered.length, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
+  if (active === false) {
+    return (
+      <EmptyView
+        icon={CalendarDays}
+        title="No backup open"
+        description="Import a backup to see calendar events."
+      >
+        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+      </EmptyView>
+    );
+  }
 
   return (
     <VirtualListView<CalendarEvent>
       key={clockFormat}
+      headless
       title="Calendar"
       count={filtered.length}
       estimateSize={76}
@@ -206,39 +230,6 @@ export function CalendarView() {
       error={error}
       emptyMessage={
         hasEvents ? "No events match these filters." : "No calendar events in this backup."
-      }
-      search={
-        hasEvents ? (
-          <ListSearch value={q} onChange={setQ} placeholder="Search events" />
-        ) : undefined
-      }
-      toolbar={
-        hasEvents ? (
-          <>
-            {/* Time range fills the left; the facets + sort sit at the right. */}
-            <TimeFilterBar
-              className="flex-1"
-              presets={presets}
-              value={range}
-              onChange={setRange}
-              counts={presetCounts}
-            />
-            {calendars.length > 1 && (
-              <BadgeFilter options={calOptions} value={effCal} onChange={setCal} />
-            )}
-            {avails.length > 1 && (
-              <BadgeFilter options={availOptions} value={effAvail} onChange={setAvail} />
-            )}
-            <SortControl
-              fields={[
-                { value: "start", label: "Date" },
-                { value: "title", label: "Title" },
-              ]}
-              value={sort}
-              onChange={setSort}
-            />
-          </>
-        ) : undefined
       }
       items={filtered}
       getKey={(e) => e.id}
