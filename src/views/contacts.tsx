@@ -17,17 +17,18 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { BadgeFilter } from "@/components/badge-filter";
+import { type BadgeFilterOption } from "@/components/badge-filter";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland } from "@/components/toolbar-islands";
 import {
   EmptyView,
   ErrorState,
   ListDetail,
   ListSearch,
   ListSkeleton,
-  PanelHeader,
 } from "@/components/view";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { contactName, initials } from "@/lib/contact";
@@ -112,6 +113,29 @@ export function ContactsView() {
     [filtered, sort],
   );
 
+  const islands = useMemo(() => {
+    const out = [];
+    if (sources.length > 1) {
+      const sourceOptions: BadgeFilterOption[] = sources.map((s) => ({
+        value: s,
+        label: s,
+        count: (contacts ?? []).filter((c) => c.source === s).length,
+      }));
+      out.push(badgeIsland({ key: "source", label: "Source", icon: <Users className="size-4" />, options: sourceOptions, value: activeSource, onChange: setSource }));
+    }
+    out.push(sortIsland({ fields: [{ value: "name", label: "Name" }, { value: "organization", label: "Organization" }], value: sort, onChange: setSort }));
+    return out;
+  }, [sources, contacts, activeSource, sort, setSource, setSort]);
+  const searchNode = useMemo(
+    () => <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />,
+    [q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Contacts", count: filtered.length, islands, search: searchNode } : null),
+    [active, filtered.length, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView icon={Users} title="No backup open" description="Import a backup to see contacts.">
@@ -123,36 +147,7 @@ export function ContactsView() {
   const selected = sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
 
   return (
-    // Full-width header across the top; the list + detail split sits below it.
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title="Contacts"
-        count={filtered.length}
-        actions={
-          sources.length > 1 ? (
-            <BadgeFilter
-              value={activeSource}
-              onChange={setSource}
-              options={sources.map((s) => ({ value: s, label: s }))}
-            />
-          ) : undefined
-        }
-        search={
-          <ListSearch value={q} onChange={setQ} placeholder="Search contacts" />
-        }
-        toolbar={
-          <div className="ml-auto">
-            <SortControl
-              fields={[
-                { value: "name", label: "Name" },
-                { value: "organization", label: "Organization" },
-              ]}
-              value={sort}
-              onChange={setSort}
-            />
-          </div>
-        }
-      />
       <div className="min-h-0 flex-1">
         <ListDetail
           master={

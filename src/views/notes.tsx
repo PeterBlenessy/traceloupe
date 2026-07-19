@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -29,27 +28,17 @@ import {
 } from "@/components/ui/item";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
-import {
-  SortControl,
-  sortItems,
-  type SortState,
-} from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
-import { BadgeFilter } from "@/components/badge-filter";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { type BadgeFilterOption } from "@/components/badge-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
 import {
   EmptyView,
   ErrorState,
   ListDetail,
   ListSearch,
   ListSkeleton,
-  PanelHeader,
   ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatListTime } from "@/lib/format";
@@ -301,6 +290,64 @@ export function NotesView() {
       : groupNotes(sortedNotes, sort, new Date());
   }, [sortedNotes, sort, viewMode, collapsed]);
 
+  const hasNotes = (notes?.length ?? 0) > 0;
+  const islands = useMemo(() => {
+    if (!hasNotes) return [];
+    const out = [
+      badgeIsland({
+        key: "layout",
+        label: "Layout",
+        icon: <List className="size-4" />,
+        options: [
+          { value: "flat", label: "List", icon: <List className="size-3.5" /> },
+          { value: "tree", label: "Folders", icon: <FolderTree className="size-3.5" /> },
+        ],
+        value: viewMode,
+        onChange: (v) => setViewMode(v as "flat" | "tree"),
+      }),
+    ];
+    // The folder facet is redundant in tree view (the tree groups by folder).
+    if (viewMode === "flat" && folders.length > 1) {
+      const folderOptions: BadgeFilterOption[] = [
+        { value: "all", label: "All folders" },
+        ...folders.map((f) => ({ value: f, label: f, count: (notes ?? []).filter((n) => n.folder === f).length })),
+      ];
+      out.push(badgeIsland({ key: "folder", label: "Folder", icon: <Folder className="size-4" />, options: folderOptions, value: effFolder, onChange: setFolder }));
+    }
+    if (hasLocked)
+      out.push(badgeIsland({
+        key: "lock",
+        label: "Lock",
+        icon: <Lock className="size-4" />,
+        options: [
+          { value: "all", label: "All" },
+          { value: "unlocked", label: "Unlocked", icon: <LockOpen className="size-3.5" /> },
+          { value: "locked", label: "Locked", icon: <Lock className="size-3.5" /> },
+        ],
+        value: effLock,
+        onChange: setLockState,
+      }));
+    if (tags.length > 0) {
+      const tagOptions: BadgeFilterOption[] = [
+        { value: "all", label: "All tags" },
+        ...tags.map((t) => ({ value: t, label: t, count: (notes ?? []).filter((n) => n.tags.includes(t)).length })),
+      ];
+      out.push(badgeIsland({ key: "tag", label: "Tags", icon: <ListChecks className="size-4" />, options: tagOptions, value: effTag, onChange: setTag }));
+    }
+    out.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
+    out.push(sortIsland({ fields: [{ value: "modified", label: "Modified" }, { value: "title", label: "Title" }], value: sort, onChange: setSort }));
+    return out;
+  }, [hasNotes, viewMode, folders, notes, effFolder, hasLocked, effLock, tags, effTag, presets, presetCounts, range, sort, setViewMode, setFolder, setLockState, setTag, setRange, setSort]);
+  const searchNode = useMemo(
+    () => (hasNotes ? <ListSearch value={q} onChange={setQ} placeholder="Search notes" /> : undefined),
+    [hasNotes, q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Notes", count: sortedNotes?.length, islands, search: searchNode } : null),
+    [active, sortedNotes?.length, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -316,111 +363,8 @@ export function NotesView() {
   const selected =
     sortedNotes?.find((n) => n.id === selectedId) ?? sortedNotes?.[0] ?? null;
 
-  const hasNotes = (notes?.length ?? 0) > 0;
-
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title="Notes"
-        count={sortedNotes?.length}
-        actions={
-          hasNotes ? (
-            <>
-              <ToggleGroup
-                type="single"
-                value={viewMode}
-                onValueChange={(v) => v && setViewMode(v as "flat" | "tree")}
-                variant="outline"
-                size="sm"
-              >
-                <ToggleGroupItem value="flat" aria-label="Flat list" title="Flat list">
-                  <List className="size-4" />
-                </ToggleGroupItem>
-                <ToggleGroupItem value="tree" aria-label="Folder tree" title="Folder tree">
-                  <FolderTree className="size-4" />
-                </ToggleGroupItem>
-              </ToggleGroup>
-              {/* The folder dropdown is redundant in tree view (the tree groups by
-                  folder), so only offer it in flat view. */}
-              {viewMode === "flat" && folders.length > 1 && (
-                <Select value={effFolder} onValueChange={setFolder}>
-                  <SelectTrigger size="sm" className="h-7 w-[9rem] text-xs">
-                    <SelectValue placeholder="Folder" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All folders</SelectItem>
-                    {folders.map((f) => (
-                      <SelectItem key={f} value={f}>
-                        {f}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-              {hasLocked && (
-                <BadgeFilter
-                  value={effLock}
-                  onChange={setLockState}
-                  options={[
-                    { value: "all", label: "All" },
-                    {
-                      value: "unlocked",
-                      label: "Unlocked",
-                      icon: <LockOpen className="size-3.5" />,
-                    },
-                    {
-                      value: "locked",
-                      label: "Locked",
-                      icon: <Lock className="size-3.5" />,
-                    },
-                  ]}
-                />
-              )}
-            </>
-          ) : undefined
-        }
-        search={
-          hasNotes ? (
-            <ListSearch value={q} onChange={setQ} placeholder="Search notes" />
-          ) : undefined
-        }
-        toolbar={
-          hasNotes ? (
-            <>
-              {tags.length > 0 && (
-                <BadgeFilter
-                  value={effTag}
-                  onChange={setTag}
-                  options={[
-                    { value: "all", label: "All tags" },
-                    ...tags.map((t) => ({
-                      value: t,
-                      label: t,
-                      count: (notes ?? []).filter((n) => n.tags.includes(t)).length,
-                    })),
-                  ]}
-                />
-              )}
-              <TimeFilterBar
-                className="flex-1"
-                presets={presets}
-                value={range}
-                onChange={setRange}
-                counts={presetCounts}
-              />
-              <SortControl
-                fields={[
-                  { value: "modified", label: "Modified" },
-                  { value: "title", label: "Title" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
-            </>
-          ) : undefined
-        }
-      />
-      {/* Then the note list + content panel. */}
       <div className="min-h-0 flex-1">
         <ListDetail
           master={
