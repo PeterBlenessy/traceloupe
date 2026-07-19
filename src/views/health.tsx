@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, Footprints, HeartPulse, Moon } from "lucide-react";
+import { Activity, ChevronDown, Footprints, HeartPulse, MapPin, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
@@ -13,6 +13,7 @@ import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
 import { EmptyView, ErrorState, ListSkeleton, VirtualListView } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import {
   client,
   type HealthDay,
@@ -47,27 +48,140 @@ function formatDayUTC(at: number): string {
   });
 }
 
+/** The recorded GPS trace as an inline polyline (equirectangular projection,
+ *  fitted and centered). Single series in the primary hue; start ring + end dot
+ *  mark direction. Fetched lazily when the row expands. */
+function RoutePreview({ workoutId }: { workoutId: number }) {
+  const { data: route, isPending } = useQuery({
+    queryKey: ["workoutRoute", workoutId],
+    queryFn: () => client.workoutRoute(workoutId),
+  });
+  if (isPending)
+    return <div className="mx-2 mb-1 h-44 animate-pulse rounded-md bg-muted/40" />;
+  if (!route || route.length < 2)
+    return (
+      <p className="px-4 pb-2 text-xs text-muted-foreground">
+        No route points recorded.
+      </p>
+    );
+
+  const W = 640;
+  const H = 260;
+  const PAD = 12;
+  // Longitude degrees shrink with latitude; scale them so the shape keeps its
+  // real-world proportions at this latitude.
+  const midLat =
+    route.reduce((acc, p) => acc + p.latitude, 0) / route.length;
+  const k = Math.cos((midLat * Math.PI) / 180);
+  const xs = route.map((p) => p.longitude * k);
+  const ys = route.map((p) => -p.latitude);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const spanX = maxX - minX || 1e-9;
+  const spanY = maxY - minY || 1e-9;
+  const scale = Math.min((W - 2 * PAD) / spanX, (H - 2 * PAD) / spanY);
+  const ox = (W - spanX * scale) / 2;
+  const oy = (H - spanY * scale) / 2;
+  const px = (i: number) => ox + (xs[i] - minX) * scale;
+  const py = (i: number) => oy + (ys[i] - minY) * scale;
+  const points = route.map((_, i) => `${px(i).toFixed(1)},${py(i).toFixed(1)}`).join(" ");
+  const last = route.length - 1;
+
+  const alts = route
+    .map((p) => p.altitude)
+    .filter((a): a is number => a != null);
+  const caption = [
+    `${formatCount(route.length)} GPS points`,
+    alts.length > 0
+      ? `alt ${Math.round(Math.min(...alts))}–${Math.round(Math.max(...alts))} m`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div className="mx-2 mb-1 rounded-md border bg-muted/20 px-3 py-2">
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="h-44 w-full text-primary"
+        role="img"
+        aria-label="Workout GPS route"
+      >
+        <polyline
+          points={points}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {/* Start: open ring; end: filled dot — direction without a legend. */}
+        <circle
+          cx={px(0)}
+          cy={py(0)}
+          r={5}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          className="text-muted-foreground"
+        />
+        <circle cx={px(last)} cy={py(last)} r={5} fill="currentColor" />
+      </svg>
+      <p className="pt-1 text-xs text-muted-foreground">{caption}</p>
+    </div>
+  );
+}
+
 function WorkoutRow({ workout }: { workout: Workout }) {
+  const [expanded, setExpanded] = useState(false);
   const bits = [
     formatDuration(workout.durationS),
     formatDistance(workout.distanceM),
   ].filter(Boolean);
+  const inner = (
+    <>
+      <ItemMedia>
+        <Activity className="size-4 text-muted-foreground" />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">
+          {workout.activity ?? "Workout"}
+        </ItemTitle>
+        <div className="text-xs text-muted-foreground">
+          {workout.startAt != null ? formatDateTime(workout.startAt) : "—"}
+          {bits.length > 0 && ` · ${bits.join(" · ")}`}
+        </div>
+      </ItemContent>
+      {workout.hasRoute && (
+        <div className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+          <MapPin className="size-3.5" />
+          Route
+          <ChevronDown
+            className={cn("size-3.5 transition-transform", expanded && "rotate-180")}
+          />
+        </div>
+      )}
+    </>
+  );
   return (
     <div className="px-2 py-0.5">
-      <Item>
-        <ItemMedia>
-          <Activity className="size-4 text-muted-foreground" />
-        </ItemMedia>
-        <ItemContent>
-          <ItemTitle className="truncate">
-            {workout.activity ?? "Workout"}
-          </ItemTitle>
-          <div className="text-xs text-muted-foreground">
-            {workout.startAt != null ? formatDateTime(workout.startAt) : "—"}
-            {bits.length > 0 && ` · ${bits.join(" · ")}`}
-          </div>
-        </ItemContent>
-      </Item>
+      {workout.hasRoute ? (
+        <Item asChild className="rounded-md transition-colors hover:bg-accent/50">
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            title={expanded ? "Hide route" : "Show route"}
+            className="w-full text-left"
+          >
+            {inner}
+          </button>
+        </Item>
+      ) : (
+        <Item>{inner}</Item>
+      )}
+      {expanded && <RoutePreview workoutId={workout.id} />}
     </div>
   );
 }

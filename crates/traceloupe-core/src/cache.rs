@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 31;
+const SCHEMA_VERSION: i64 = 32;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -543,6 +543,18 @@ impl CacheDb {
                     stage    TEXT NOT NULL          -- In Bed|Asleep|Awake|Core|Deep|REM
                 );
                 CREATE INDEX IF NOT EXISTS idx_sleep_start ON sleep_sessions(start_at DESC);",
+            )?;
+            // v32: workout GPS routes, downsampled to ≤1000 points per workout.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS workout_routes (
+                    workout_id INTEGER NOT NULL,    -- workouts.id
+                    seq        INTEGER NOT NULL,    -- order along the route
+                    at         INTEGER,             -- unix seconds
+                    latitude   REAL NOT NULL,
+                    longitude  REAL NOT NULL,
+                    altitude   REAL,                -- metres
+                    PRIMARY KEY (workout_id, seq)
+                );",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
