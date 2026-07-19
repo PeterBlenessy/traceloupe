@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Circle, CircleCheck, Flag, ListTodo, SlidersHorizontal } from "lucide-react";
+import { Circle, CircleCheck, Flag, ListTodo } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { type BadgeFilterOption } from "@/components/badge-filter";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
@@ -155,7 +155,7 @@ export function RemindersView() {
   }, [baseFiltered, range, sort]);
 
   const hasReminders = (reminders?.length ?? 0) > 0;
-  const islands = useMemo(() => {
+  const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasReminders) return [];
     const openCount = (reminders ?? []).filter((r) => !r.completed).length;
     const doneCount = (reminders?.length ?? 0) - openCount;
@@ -171,22 +171,39 @@ export function RemindersView() {
       { value: "all", label: "All lists" },
       ...lists.map((l) => ({ value: l, label: l, count: (reminders ?? []).filter((r) => r.listName === l).length })),
     ];
-    const out = [
-      badgeIsland({ key: "status", label: "Status", icon: <SlidersHorizontal className="size-4" />, options: statusOptions, value: effStatus, onChange: setStatus }),
+    const out: FilterGroup[] = [
+      badgeGroup({ key: "status", label: "Status", description: "Open, completed or flagged", options: statusOptions, value: effStatus, onChange: setStatus }),
     ];
     if (lists.length > 1)
-      out.push(badgeIsland({ key: "list", label: "List", icon: <ListTodo className="size-4" />, options: listOptions, value: effList, onChange: setList }));
-    out.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
-    out.push(sortIsland({ fields: [{ value: "title", label: "Title" }, { value: "created", label: "Created" }, { value: "due", label: "Due" }], value: sort, onChange: setSort }));
+      out.push(badgeGroup({ key: "list", label: "List", description: "Which reminder list", options: listOptions, value: effList, onChange: setList }));
+    out.push(timeGroup({ description: "When the reminder was created", presets, counts: presetCounts, value: range, onChange: setRange }));
     return out;
-  }, [hasReminders, reminders, hasFlagged, lists, effStatus, effList, presets, presetCounts, range, sort, setStatus, setList, setRange, setSort]);
+  }, [hasReminders, reminders, hasFlagged, lists, effStatus, effList, presets, presetCounts, range, setStatus, setList, setRange]);
+  const sortNode = useMemo(
+    () =>
+      hasReminders ? (
+        <SortControl
+          fields={[
+            { value: "title", label: "Title" },
+            { value: "created", label: "Created" },
+            { value: "due", label: "Due" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      ) : undefined,
+    [hasReminders, sort, setSort],
+  );
   const searchNode = useMemo(
     () => (hasReminders ? <ListSearch value={q} onChange={setQ} placeholder="Search reminders" /> : undefined),
     [hasReminders, q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Reminders", count: filtered.length, islands, search: searchNode } : null),
-    [active, filtered.length, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Reminders", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, filtered.length, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
