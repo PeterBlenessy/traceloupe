@@ -11,20 +11,17 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { VirtualList } from "@/components/virtual-list";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { useTimePresets } from "@/components/time-filter";
 import { useSettings } from "@/components/settings-provider";
-import {
-  SortControl,
-  sortItems,
-  type SortState,
-} from "@/components/sort-control";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { sortIsland, timeIsland } from "@/components/toolbar-islands";
 import {
   EmptyView,
   ErrorState,
   ListDetail,
   ListSearch,
   ListSkeleton,
-  PanelHeader,
   ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatDuration, formatListTime } from "@/lib/format";
@@ -96,6 +93,35 @@ export function RecordingsView() {
     );
   }, [recordings, sort, baseFiltered, range]);
 
+  const hasRecordings = (recordings?.length ?? 0) > 0;
+  const islands = useMemo(
+    () =>
+      hasRecordings
+        ? [
+            timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
+            sortIsland({
+              fields: [
+                { value: "recorded", label: "Date" },
+                { value: "title", label: "Title" },
+                { value: "duration", label: "Duration" },
+              ],
+              value: sort,
+              onChange: setSort,
+            }),
+          ]
+        : [],
+    [hasRecordings, presets, presetCounts, range, sort, setSort],
+  );
+  const searchNode = useMemo(
+    () => (hasRecordings ? <ListSearch value={q} onChange={setQ} placeholder="Search recordings" /> : undefined),
+    [hasRecordings, q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Recordings", count: sortedRecordings?.length, islands, search: searchNode } : null),
+    [active, sortedRecordings?.length, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -114,43 +140,7 @@ export function RecordingsView() {
     null;
 
   return (
-    // Full-width header across the top; the list + detail split sits below it.
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title="Recordings"
-        count={sortedRecordings?.length}
-        search={
-          (recordings?.length ?? 0) > 0 ? (
-            <ListSearch
-              value={q}
-              onChange={setQ}
-              placeholder="Search recordings"
-            />
-          ) : undefined
-        }
-        toolbar={
-          (recordings?.length ?? 0) > 0 ? (
-            <>
-              <TimeFilterBar
-                className="flex-1"
-                presets={presets}
-                value={range}
-                onChange={setRange}
-                counts={presetCounts}
-              />
-              <SortControl
-                fields={[
-                  { value: "recorded", label: "Date" },
-                  { value: "title", label: "Title" },
-                  { value: "duration", label: "Duration" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
-            </>
-          ) : undefined
-        }
-      />
       <div className="min-h-0 flex-1">
         <ListDetail
           master={
