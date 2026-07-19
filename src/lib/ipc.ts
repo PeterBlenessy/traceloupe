@@ -597,7 +597,7 @@ export interface TraceLoupeClient {
   /** URL the webview can load for a voice recording's audio bytes. */
   audioUrl(id: number): string;
   /** URL for a note's first-image thumbnail (see `Note.hasImage`). */
-  noteImageUrl(id: number): string;
+  noteImageUrl(id: number, index?: number): string;
   /** Open an attachment's file with the OS default app (documents, etc.). */
   openAttachment(id: number): Promise<void>;
   /**
@@ -811,7 +811,7 @@ const tauriClient: TraceLoupeClient = {
   attachmentUrl: (id, opts) =>
     `traceloupe-attachment://localhost/${id}${mediaQuery(opts)}`,
   audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
-  noteImageUrl: (id) => `traceloupe-note-image://localhost/${id}`,
+  noteImageUrl: (id, index) => `traceloupe-note-image://localhost/${id}${index != null ? `/${index}` : ""}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
   reimportModule: (moduleId) =>
     invoke<ReimportResult>("reimport_module", { moduleId }),
@@ -2128,7 +2128,7 @@ export const mockClient: TraceLoupeClient = {
   // A short silent WAV so the browser mock renders a working <audio> control
   // (the real bytes come from the traceloupe-audio scheme under Tauri).
   audioUrl: () => SILENT_WAV_DATA_URL,
-  noteImageUrl: () => "",
+  noteImageUrl: (_id?: number, _index?: number) => "",
   openAttachment: async () => {},
   reimportModule: async (moduleId) => ({
     module: moduleId,
