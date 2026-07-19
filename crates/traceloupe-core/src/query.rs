@@ -960,6 +960,7 @@ pub struct HealthDay {
 
 /// Daily activity aggregates, most recent day first.
 pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
+    use crate::parsers::health::metric;
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT CAST(strftime('%s', day) AS INTEGER), metric,
@@ -980,12 +981,12 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
         }
         let d = out.last_mut().expect("pushed above");
         match metric.as_str() {
-            "steps" => d.steps = sum.map(|v| v.round() as i64),
-            "distance_m" => d.distance_m = sum,
-            "flights" => d.flights = sum.map(|v| v.round() as i64),
-            "active_kcal" => d.active_kcal = sum,
-            "resting_kcal" => d.resting_kcal = sum,
-            "heart_rate_bpm" => {
+            metric::STEPS => d.steps = sum.map(|v| v.round() as i64),
+            metric::DISTANCE_M => d.distance_m = sum,
+            metric::FLIGHTS => d.flights = sum.map(|v| v.round() as i64),
+            metric::ACTIVE_KCAL => d.active_kcal = sum,
+            metric::RESTING_KCAL => d.resting_kcal = sum,
+            metric::HEART_RATE_BPM => {
                 d.hr_min = r.get(3)?;
                 d.hr_max = r.get(4)?;
                 d.hr_avg = r.get(5)?;

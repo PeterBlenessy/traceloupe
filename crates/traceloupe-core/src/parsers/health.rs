@@ -49,17 +49,30 @@ fn activity_name(code: i64) -> &'static str {
     }
 }
 
+/// Cache `health_daily.metric` names — the single source of truth shared by
+/// the writer (`parse_daily`) and the reader (`query::health_daily`). Using
+/// these consts on both sides makes a rename a compile-time event instead of a
+/// metric silently vanishing from the pivot.
+pub mod metric {
+    pub const HEART_RATE_BPM: &str = "heart_rate_bpm";
+    pub const STEPS: &str = "steps";
+    pub const DISTANCE_M: &str = "distance_m";
+    pub const RESTING_KCAL: &str = "resting_kcal";
+    pub const ACTIVE_KCAL: &str = "active_kcal";
+    pub const FLIGHTS: &str = "flights";
+}
+
 /// `samples.data_type` codes for the quantity metrics we aggregate per day.
 /// Verified against a real store: distance is metres, energy is kcal, heart
 /// rate is count/sec (×60 → bpm). Code → cache `health_daily.metric` name.
 fn metric_name(data_type: i64) -> Option<&'static str> {
     Some(match data_type {
-        5 => "heart_rate_bpm",
-        7 => "steps",
-        8 => "distance_m",
-        9 => "resting_kcal",
-        10 => "active_kcal",
-        12 => "flights",
+        5 => metric::HEART_RATE_BPM,
+        7 => metric::STEPS,
+        8 => metric::DISTANCE_M,
+        9 => metric::RESTING_KCAL,
+        10 => metric::ACTIVE_KCAL,
+        12 => metric::FLIGHTS,
         _ => return None,
     })
 }
