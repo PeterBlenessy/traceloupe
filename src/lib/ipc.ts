@@ -198,9 +198,22 @@ export interface HealthSummary {
   firstAt: number | null;
   lastAt: number | null;
   workoutCount: number;
-  /** Days with activity aggregates / sleep sessions (section counts). */
+  /** Days with activity aggregates / sleep sessions / recorded timezones
+   *  (section counts). */
   dayCount: number;
   sleepCount: number;
+  timezoneCount: number;
+}
+
+/** One timezone Health samples were recorded in — a travel-timeline entry. */
+export interface HealthTimezone {
+  /** IANA name, e.g. "Europe/Stockholm". */
+  tzName: string;
+  /** Device product types that recorded there (e.g. "iPhone12,8"). */
+  devices: string[];
+  samples: number;
+  firstAt: number | null;
+  lastAt: number | null;
 }
 
 /** One sleep-analysis session (a raw HealthKit category sample). */
@@ -481,6 +494,8 @@ export interface TraceLoupeClient {
   healthDaily(): Promise<HealthDay[]>;
   /** Sleep-analysis sessions, most recent first. */
   listSleep(): Promise<SleepSession[]>;
+  /** Timezones Health data was recorded in, most samples first. */
+  listHealthTimezones(): Promise<HealthTimezone[]>;
   healthSummary(): Promise<HealthSummary>;
   listInteractions(): Promise<Interaction[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
@@ -722,6 +737,7 @@ const tauriClient: TraceLoupeClient = {
   workoutRoute: (workoutId) => invoke<RoutePoint[]>("workout_route", { workoutId }),
   healthDaily: () => invoke<HealthDay[]>("health_daily"),
   listSleep: () => invoke<SleepSession[]>("list_sleep"),
+  listHealthTimezones: () => invoke<HealthTimezone[]>("list_health_timezones"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
   listInteractions: () => invoke<Interaction[]>("list_interactions"),
   messageKinds: (threadId = null, service = null) =>
@@ -2054,6 +2070,32 @@ export const mockClient: TraceLoupeClient = {
           { id: 3, startAt: 1717737600, endAt: 1717763400, stage: "In Bed" },
         ]
       : [],
+  listHealthTimezones: async () =>
+    mockActive
+      ? [
+          {
+            tzName: "Europe/Stockholm",
+            devices: ["iPhone12,8", "iPhone8,1"],
+            samples: 310211,
+            firstAt: 1500000000,
+            lastAt: 1717900000,
+          },
+          {
+            tzName: "America/New_York",
+            devices: ["iPhone12,8"],
+            samples: 3120,
+            firstAt: 1651000000,
+            lastAt: 1652200000,
+          },
+          {
+            tzName: "Europe/Copenhagen",
+            devices: ["iPhone12,8"],
+            samples: 1890,
+            firstAt: 1620000000,
+            lastAt: 1688000000,
+          },
+        ]
+      : [],
   healthSummary: async () =>
     mockActive
       ? {
@@ -2063,6 +2105,7 @@ export const mockClient: TraceLoupeClient = {
           workoutCount: 2,
           dayCount: 2,
           sleepCount: 3,
+          timezoneCount: 3,
         }
       : {
           sampleCount: 0,
@@ -2071,6 +2114,7 @@ export const mockClient: TraceLoupeClient = {
           workoutCount: 0,
           dayCount: 0,
           sleepCount: 0,
+          timezoneCount: 0,
         },
   listInteractions: async () =>
     mockActive

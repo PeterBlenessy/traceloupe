@@ -139,6 +139,56 @@ pub fn parse_health(
     if has("activity_caches")? {
         parse_rings(&src, cache, replace)?;
     }
+    if has("objects")? && has("data_provenances")? {
+        parse_timezones(&src, cache, replace)?;
+    }
+    Ok(())
+}
+
+/// Provenance timezones: every sample is stamped with the timezone it was
+/// recorded in (`data_provenances.tz_name`) — aggregated per (tz, device
+/// model) with its sample count and first/last dates, this is a travel
+/// timeline. Skipped when the tz column is absent (older schema).
+fn parse_timezones(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let has_tz = src
+        .prepare("PRAGMA table_info(data_provenances)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|c| c == "tz_name");
+    if !has_tz {
+        return Ok(());
+    }
+    let mut stmt = src.prepare(
+        "SELECT dp.tz_name, dp.origin_product_type, COUNT(*),
+                MIN(s.start_date), MAX(s.start_date)
+         FROM samples s
+         JOIN objects o ON o.data_id = s.data_id
+         JOIN data_provenances dp ON dp.ROWID = o.provenance
+         WHERE dp.tz_name <> '' AND s.start_date > 0
+         GROUP BY dp.tz_name, dp.origin_product_type",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM health_timezones", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        tx.execute(
+            "INSERT OR REPLACE INTO health_timezones
+                 (tz_name, device, samples, first_at, last_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                r.get::<_, i64>(2)?,
+                to_unix(r.get::<_, Option<f64>>(3)?),
+                to_unix(r.get::<_, Option<f64>>(4)?),
+            ],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 

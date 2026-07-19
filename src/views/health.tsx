@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, ChevronDown, Footprints, HeartPulse, MapPin, Moon } from "lucide-react";
+import { Activity, ChevronDown, Footprints, Globe, HeartPulse, MapPin, Moon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
@@ -14,20 +14,23 @@ import { useSettings } from "@/components/settings-provider";
 import { EmptyView, VirtualListView } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { modelName } from "@/lib/device-names";
 import {
   client,
   type HealthDay,
+  type HealthTimezone,
   type SleepSession,
   type Workout,
   type TimeRange,
 } from "@/lib/ipc";
 
 /** The Health data sections, selectable via the Section filter. */
-type HealthSection = "workouts" | "daily" | "sleep";
+type HealthSection = "workouts" | "daily" | "sleep" | "timezones";
 const SECTIONS: { value: HealthSection; label: string }[] = [
   { value: "workouts", label: "Workouts" },
   { value: "daily", label: "Daily activity" },
   { value: "sleep", label: "Sleep" },
+  { value: "timezones", label: "Timezones" },
 ];
 
 /** Metres → a compact "5.2 km" / "820 m". */
@@ -285,6 +288,29 @@ function SleepRow({ session }: { session: SleepSession }) {
   );
 }
 
+function TimezoneRow({ tz }: { tz: HealthTimezone }) {
+  const devices = tz.devices.map((d) => modelName(d) ?? d).join(", ");
+  return (
+    <Item>
+      <ItemMedia>
+        <Globe className="size-4 text-muted-foreground" />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">{tz.tzName.replace(/_/g, " ")}</ItemTitle>
+        <div className="truncate text-xs text-muted-foreground">
+          {formatCount(tz.samples)} samples
+          {devices && ` · ${devices}`}
+        </div>
+      </ItemContent>
+      {tz.firstAt != null && tz.lastAt != null && (
+        <div className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          {formatDate(tz.firstAt)} – {formatDate(tz.lastAt)}
+        </div>
+      )}
+    </Item>
+  );
+}
+
 /** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
 function inWindow(at: number | null, lo: number | null, hi: number | null) {
   if (lo == null && hi == null) return true;
@@ -378,6 +404,15 @@ export function HealthView() {
     queryFn: () => client.listSleep(),
     enabled: active === true && section === "sleep",
   });
+  const {
+    data: timezones,
+    isPending: tzPending,
+    error: tzError,
+  } = useQuery({
+    queryKey: ["healthTimezones"],
+    queryFn: () => client.listHealthTimezones(),
+    enabled: active === true && section === "timezones",
+  });
 
   const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
   const [sort, setSort] = usePersistedState<SortState>("health:sort", {
@@ -390,6 +425,10 @@ export function HealthView() {
   });
   const [sleepSort, setSleepSort] = usePersistedState<SortState>("health:sleepSort", {
     by: "date",
+    desc: true,
+  });
+  const [tzSort, setTzSort] = usePersistedState<SortState>("health:tzSort", {
+    by: "samples",
     desc: true,
   });
   const { presets } = useTimePresets();
@@ -414,7 +453,8 @@ export function HealthView() {
   const hasWorkouts = (workouts?.length ?? 0) > 0;
   const hasDays = (summary?.dayCount ?? 0) > 0;
   const hasSleep = (summary?.sleepCount ?? 0) > 0;
-  const hasAny = hasWorkouts || hasDays || hasSleep;
+  const hasTz = (summary?.timezoneCount ?? 0) > 0;
+  const hasAny = hasWorkouts || hasDays || hasSleep || hasTz;
 
   // One descriptor per section; everything below (windowing, sorting, counts,
   // toolbar, rendering) is section-agnostic.
@@ -507,11 +547,34 @@ export function HealthView() {
         render: (s) => <SleepRow session={s} />,
         rowKey: (s) => s.id,
       }),
+      timezones: defineSection<HealthTimezone>({
+        items: timezones,
+        pending: tzPending,
+        error: tzError,
+        count: summary?.timezoneCount,
+        // A span, not an instant — window on when the tz was last recorded.
+        windowAt: (t) => t.lastAt,
+        sortFields: [
+          { value: "samples", label: "Samples" },
+          { value: "date", label: "Last seen" },
+        ],
+        sortKey: (t, by) => (by === "date" ? t.lastAt : t.samples),
+        sort: tzSort,
+        setSort: setTzSort,
+        timeDescription: "When the timezone was last recorded",
+        emptyIcon: Globe,
+        emptyAll: "No timezone history indexed — re-import this backup to index it.",
+        emptyFiltered: "No timezones match these filters.",
+        clockSensitive: false,
+        render: (t) => <TimezoneRow tz={t} />,
+        rowKey: (t) => t.tzName,
+      }),
     }),
     [
       workouts, isPending, error, effActivity, sort, setSort,
       days, daysPending, daysError, daySort, setDaySort,
       sleep, sleepPending, sleepError, sleepSort, setSleepSort,
+      timezones, tzPending, tzError, tzSort, setTzSort,
       summary, hasAny,
     ],
   );
