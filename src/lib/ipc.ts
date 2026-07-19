@@ -198,6 +198,9 @@ export interface HealthSummary {
   firstAt: number | null;
   lastAt: number | null;
   workoutCount: number;
+  /** Days with activity aggregates / sleep sessions (section counts). */
+  dayCount: number;
+  sleepCount: number;
 }
 
 /** One sleep-analysis session (a raw HealthKit category sample). */
@@ -2022,8 +2025,17 @@ export const mockClient: TraceLoupeClient = {
           firstAt: 1500000000,
           lastAt: 1717900000,
           workoutCount: 2,
+          dayCount: 2,
+          sleepCount: 3,
         }
-      : { sampleCount: 0, firstAt: null, lastAt: null, workoutCount: 0 },
+      : {
+          sampleCount: 0,
+          firstAt: null,
+          lastAt: null,
+          workoutCount: 0,
+          dayCount: 0,
+          sleepCount: 0,
+        },
   listInteractions: async () =>
     mockActive
       ? [

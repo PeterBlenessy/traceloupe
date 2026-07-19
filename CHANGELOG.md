@@ -30,7 +30,19 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **Health daily aggregates no longer double-count multi-device days** — samples
+  are aggregated per source (`data_provenances.source_id`); cumulative metrics
+  keep the largest source's daily total, heart rate merges across sources.
+  Requires a re-import to correct existing caches.
+- The Sleep section's sort control reflected stale state after changing the
+  sort field; daily rows now window against local-midnight preset bounds
+  (was off by one day at range edges outside UTC); the Workouts section no
+  longer claims "No health data" when daily/sleep data exists.
+- Contact groups ignore non-person `ABGroupMembers` rows (`member_type != 0`),
+  which could mis-tag a contact via a ROWID collision.
+- The daily/sleep lists are fetched only when their section is visible.
 
 ## [0.16.0] — 2026-07-19
 
