@@ -42,7 +42,7 @@ iMessage is unsurfaced.
 | Attachment size / dimensions / `transfer_state` / `is_sticker` | ✅ | ⬜ | Not surfaced — can't flag stickers (641) or not-downloaded attachments |
 | Thread / conversation | ✅ | ✅ | |
 | Group name + participants | ✅ 84/85 | ✅ | `display_name`, `chat_handle_join` |
-| Group actions (rename/join/leave) | ✅ 544 | ⬜ | **Dropped** — parser requires text or attachment, so action rows are skipped |
+| Group actions (rename/join/leave) | ✅ 544 | ✅ (0.15.0) | `item_type` 1–4 rendered as centered system rows ("‹actor› ‹action›") |
 | Tapbacks / reactions (+ custom emoji) | ✅ 7,600 / 478 | ✅ | `associated_message_type`/`_guid`/`_emoji` folded (add/remove, per reactor) into a per-message "❤️×2 👍" badge; the tapback rows are no longer shown as messages |
 | Replies (inline threads) | ✅ 6,560 | ✅ | `thread_originator_guid` resolved (via the GUID map) to a quoted preview above the reply bubble |
 | Expressive effects | ✅ 217 | ⬜ | `expressive_send_style_id` |
@@ -68,7 +68,7 @@ plain-text protobuf body layer is decoded.
 | Locked (flag + withhold body) | ✅ 9 | ✅ | Lock icon, filter, password prompt |
 | **Locked-note unlock (decrypt body)** | ✅ | ✅ | On-demand: user enters the note password in-app → PBKDF2 → AES-key-unwrap → AES-128-GCM. Never decrypted at rest |
 | Password hint | ✅ | ✅ | none present on the 9 locked notes here |
-| Embedded images / scans / drawings | ✅ 505 notes | ◑ | Per-note **counts** surfaced (image + total-attachment badges via `ZTYPEUTI`/`ZNOTE`); inline rendering of the blobs is still future work |
+| Embedded images / scans / drawings | ✅ 505 notes | ✅ (0.15.0) | Counts as badges + every image in a detail gallery (`note_media` table); true inline-at-position rendering still future work |
 | Checklists (structured) | ✅ 46 | ◑ | `ZHASCHECKLIST` → a checklist badge on the note; item text/checked-state (protobuf attribute runs) not decoded |
 | Tables | ✅ 18 notes | ◑ | Counted in the attachment badge (`com.apple.notes.table`); cells not decoded |
 | Hashtags / mentions | ✅ 273 | ⬜ | Inline attribute runs |
@@ -110,7 +110,7 @@ Parser extracts 6 of ~45 `ZCALLRECORD` columns.
 | Bookmarks (title/url) | ✅ 8 | ✅ | + open external |
 | Bookmark folder hierarchy | ✅ | ◑ | Only immediate parent shown; no tree/breadcrumb |
 | Reading list (title/url/added/preview) | ✅ 1 | ✅ | |
-| Reading-list last-viewed | ✅ | ⬜ | Parsed to cache (`date_viewed`) but never rendered |
+| Reading-list last-viewed | ✅ | ✅ (0.15.0) | "Read ‹date›" or an "Unread" badge on each reading-list row |
 | Reading-list unread/fetched flags | ✅ | ⬜ | No read/unread indicator |
 | Open tabs (title/url) | ✅ 41 | ✅ | + tab group name |
 | Tab windows / active-tab / private vs local | ✅ | ⬜ | `windows*` tables unread — flat list, no open-vs-recently-closed split |
@@ -131,10 +131,10 @@ properties 3 & 4).
 | Emails (+ labels) | ✅ 11 | ✅ | mailto: |
 | Postal addresses | ✅ 6 | ✅ | `ABMultiValueEntry` (Street/City/State/ZIP/Country) → one-line address, shown with its label |
 | Social / IM handles | ✅ 1 | ⬜ | property 46 |
-| Related names (relationship graph) | ✅ 24 | ⬜ | Mother/Father/custom — fully dropped |
+| Related names (relationship graph) | ✅ 24 | ✅ (0.16.0) | Property 23 → "Related" detail section (label = relationship, magic labels cleaned, custom kept) |
 | Birthday | ✅ 11 | ✅ | `Birthday` Core Data timestamp → shown in detail |
 | Contact note | ✅ 22 | ✅ | shown in the detail "Note" section |
-| Groups + membership | ✅ 3 / 40 | ⬜ | `ABGroup`/`ABGroupMembers` untouched |
+| Groups + membership | ✅ 3 / 40 | ✅ (0.16.0) | `ABGroup` ⋈ `ABGroupMembers` → "Groups" chips in the detail |
 | Photo | ✅ 54 | ✅ | thumbnail w/ full-size fallback |
 | Memoji / avatar recipe | ✅ | ⬜ | |
 | Creation / modification dates | ✅ 71/71 | ⬜ | present on all; unused |
@@ -230,7 +230,7 @@ backup but has no parser. Ranked by value × feasibility.
 
 | Domain | Present here? | Rough scale | Value | Notes |
 |--------|:---:|-------|:---:|-------|
-| **Health** | ✅ **workouts surfaced (0.10.0-dev)** | 344,063 quantity samples, 13 workouts | ★★★ | New **Health** view: a workout log (`workouts` ⋈ `samples` ⋈ `workout_activities` → activity/date/duration/distance) + a sample-count/date-range summary. Raw samples (steps/HR/sleep) + GPS routes not surfaced yet |
+| **Health** | ✅ **samples + routes surfaced (0.16.0)** | 344,063 quantity samples, 13 workouts, 24k GPS points | ★★★ | **Health** view sections: workout log with inline GPS-route previews (10/13 workouts here), a daily-activity table (steps/distance/flights/energy summed per UTC day + heart-rate min/avg/max — `health_daily`, 2,742 days), and sleep sessions (`sleep_sessions`, 91 here). Remaining: more quantity types (audio exposure, walking metrics), per-sample browsing |
 | **CoreDuet interactions** | ✅ **surfaced (0.10.0-dev)** | 15,055 interactions, 66 contacts | ★★★ | New **Interactions** view: pre-aggregated `ZCONTACTS` per-person graph (name/handle · incoming/outgoing counts · first–last span), most-contacted first. Per-app breakdown not yet surfaced |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
@@ -244,10 +244,11 @@ backup but has no parser. Ranked by value × feasibility.
 | **Mail** | no store here | only prefs + Gmail autocomplete contacts | ★ | no Envelope Index in this backup |
 | **Screen Time (knowledgeC)** | absent | — | — | not in this backup (only CoreDuet) |
 
-**Highest-value additions:** Health, the CoreDuet interaction graph, and
+**Highest-value additions** (all since shipped): Health (workouts 0.10.0; daily
+activity, sleep and GPS routes 0.16.0), the CoreDuet interaction graph, and
 Calendar/Reminders — all hold substantial real data, are plain SQLite with
-documented schemas, and need no new decryption path. A **Device Info** view is
-almost free (the data is already extracted and thrown away). Keychain should be
+documented schemas, and need no new decryption path. A **Device Info** view was
+almost free (the data was already extracted and thrown away). Keychain should be
 presence-and-counts only. Maps/Podcasts/Journal/Wallet are worth a parser for the
 schema but render empty on this particular device.
 

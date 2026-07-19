@@ -23,6 +23,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.13.0` | **Adaptive "islands" toolbar** — every view's filters, sort, and search become segmented, bordered islands in one unified top bar that shares width evenly, reveals more chips as room allows, collapses to representative icons when tight, and expands one island on demand while the others fold. Rolled out across all thirteen views. |
 | `0.14.0` | **Filter · Sort · Search paradigm + window chrome** — the islands give way to one **Filter** button that morphs into a grouped, described filter panel (single- or multi-select), with sort and an expanding search as standalone controls. A full-width HTML title bar that yields the full height to the sidebar when it's open, the sidebar top merged with the Device view, and Settings moved to the sidebar footer. |
 | `0.15.0` | **Data-coverage pass** — surfacing fields already parsed but unshown: all of a note's embedded images (detail gallery), iMessage group-action system rows, Safari reading-list read/last-viewed. |
+| `0.16.0` | **Health deep-dive + contact relationships** — the HealthKit store beyond workouts: daily activity aggregates (steps/distance/energy/flights/heart-rate), sleep sessions, and workout GPS routes with inline previews; plus contact related-names and address-book groups. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -30,6 +31,36 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.16.0] — 2026-07-19
+
+**Health deep-dive + contact relationships.** Requires a re-import to populate
+for existing caches (the migrations create the structures; the parsers fill
+them).
+
+### Added
+
+- **Health: daily activity** — the raw HealthKit quantity samples (steps,
+  distance, resting/active energy, flights, heart rate) are aggregated per UTC
+  day into a new `health_daily` cache table (schema v30) and shown in a new
+  **Daily activity** section: one row per day with totals and the heart-rate
+  min/avg/max (canonical count/sec scaled to bpm), time-filterable and sortable
+  by date/steps/distance. 2,742 days in the reference backup.
+- **Health: sleep sessions** — sleep-analysis category samples (data type 63)
+  become a `sleep_sessions` table (schema v31) with friendly stage names
+  (In Bed / Asleep / Awake / Core / Deep / REM) and a **Sleep** section
+  (start–end, duration, date/duration sort).
+- **Health: workout GPS routes** — each workout's location series
+  (`associations` → `data_series` → `location_series_data`, tombstoned links
+  skipped) is stored downsampled to ≤1,000 points (schema v32). Workout rows
+  with a route expand to an inline SVG route preview (equirectangular
+  projection, start/end markers, altitude-range caption). The Health view now
+  has a **Section** filter (Workouts | Daily activity | Sleep).
+- **Contacts: relationships + groups** — related names (`ABMultiValue`
+  property 23; label = relationship, iOS magic labels cleaned, custom labels
+  kept) and address-book group memberships (`ABGroup` ⋈ `ABGroupMembers`) are
+  parsed into `related_json`/`groups_json` (schema v33) and shown as a
+  **Related** field group and **Groups** chips in the contact detail.
 
 ## [0.15.0] — 2026-07-19
 
