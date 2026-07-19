@@ -29,12 +29,13 @@ import {
 const PAGE = 100;
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { BadgeFilter } from "@/components/badge-filter";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useSettings } from "@/components/settings-provider";
-import { SortControl, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
-import { EmptyView, ErrorState, ListSearch, PanelHeader } from "@/components/view";
+import { type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { EmptyView, ErrorState, ListSearch } from "@/components/view";
 import { useDebounced } from "@/lib/use-debounced";
 import { formatCount, formatDateTime } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
@@ -130,6 +131,67 @@ function PhotosViewInner() {
     [qc, sourceArg, range, search, sort],
   );
 
+  const hasFilter = (sources?.length ?? 0) > 1;
+  const total = sources?.reduce((sum, [, c]) => sum + c, 0) ?? 0;
+  const sourceOptions = useMemo(
+    () => [
+      { value: "all", label: "All", count: total },
+      ...(sources ?? []).map(([name, c]) => {
+        const slug = serviceSlug(name);
+        return {
+          value: name,
+          label: sourceLabel(name),
+          count: c,
+          icon: hasBrandIcon(slug) ? (
+            <BrandIcon slug={slug} name={name} className="size-3.5" />
+          ) : undefined,
+        };
+      }),
+    ],
+    [sources, total],
+  );
+  const islands = useMemo(() => {
+    const list = [];
+    if (hasFilter)
+      list.push(
+        badgeIsland({
+          key: "source",
+          label: "Source",
+          icon: <Images className="size-4" />,
+          options: sourceOptions,
+          value: source,
+          onChange: setSource,
+        }),
+      );
+    list.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
+    list.push(
+      sortIsland({
+        fields: [
+          { value: "date", label: "Date" },
+          { value: "source", label: "Source" },
+        ],
+        value: sort,
+        onChange: setSort,
+      }),
+    );
+    return list;
+  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range, sort, setSort]);
+  const searchNode = useMemo(
+    () => (
+      <ListSearch
+        value={q}
+        onChange={setQ}
+        placeholder="Search filename, person, place, or album (e.g. Florida)"
+      />
+    ),
+    [q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Photos", count, islands, search: searchNode } : null),
+    [active, count, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -142,51 +204,8 @@ function PhotosViewInner() {
     );
   }
 
-  const hasFilter = (sources?.length ?? 0) > 1;
-  const total = sources?.reduce((sum, [, c]) => sum + c, 0) ?? 0;
-
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title="Photos"
-        count={count}
-        actions={
-          hasFilter ? (
-            <SourceFilter
-              sources={sources ?? []}
-              total={total}
-              value={source}
-              onChange={setSource}
-            />
-          ) : undefined
-        }
-        search={
-          <ListSearch
-            value={q}
-            onChange={setQ}
-            placeholder="Search filename, person, place, or album (e.g. Florida)"
-          />
-        }
-        toolbar={
-          <>
-            <TimeFilterBar
-              className="flex-1"
-              presets={presets}
-              value={range}
-              onChange={setRange}
-              counts={presetCounts}
-            />
-            <SortControl
-              fields={[
-                { value: "date", label: "Date" },
-                { value: "source", label: "Source" },
-              ]}
-              value={sort}
-              onChange={setSort}
-            />
-          </>
-        }
-      />
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (
@@ -230,39 +249,6 @@ function PhotosViewInner() {
         onClose={() => setOpenIndex(null)}
       />
     </div>
-  );
-}
-
-function SourceFilter({
-  sources,
-  total,
-  value,
-  onChange,
-}: {
-  sources: [string, number][];
-  total: number;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <BadgeFilter
-      value={value}
-      onChange={onChange}
-      options={[
-        { value: "all", label: "All", count: total },
-        ...sources.map(([name, count]) => {
-          const slug = serviceSlug(name);
-          return {
-            value: name,
-            label: sourceLabel(name),
-            count,
-            icon: hasBrandIcon(slug) ? (
-              <BrandIcon slug={slug} name={name} className="size-3.5" />
-            ) : undefined,
-          };
-        }),
-      ]}
-    />
   );
 }
 

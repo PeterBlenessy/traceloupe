@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -247,9 +247,9 @@ export function AdaptiveToolbar({
                 className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[active=true]:text-foreground"
               >
                 {isExpanded ? (
-                  <ChevronsLeft className="size-4" />
+                  <ChevronLeft className="size-4" />
                 ) : (
-                  <ChevronsRight className="size-4" />
+                  <ChevronRight className="size-4" />
                 )}
               </button>
             )}
