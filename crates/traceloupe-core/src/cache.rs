@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 29;
+const SCHEMA_VERSION: i64 = 30;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -517,6 +517,21 @@ impl CacheDb {
                     plain_size  INTEGER,
                     mime        TEXT,
                     PRIMARY KEY (note_id, position)
+                );",
+            )?;
+            // v30: Health daily activity aggregates — one row per (UTC day,
+            // metric). Cumulative metrics (steps/distance/energy/flights) read
+            // value_sum; heart_rate_bpm reads value_min/avg/max.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS health_daily (
+                    day        TEXT NOT NULL,      -- 'YYYY-MM-DD' (UTC)
+                    metric     TEXT NOT NULL,      -- steps|distance_m|flights|active_kcal|resting_kcal|heart_rate_bpm
+                    value_sum  REAL,
+                    value_min  REAL,
+                    value_max  REAL,
+                    value_avg  REAL,
+                    samples    INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (day, metric)
                 );",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;

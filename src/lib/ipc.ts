@@ -190,6 +190,19 @@ export interface HealthSummary {
   workoutCount: number;
 }
 
+/** One day of Health activity (aggregated per UTC day at import). */
+export interface HealthDay {
+  dayAt: number;
+  steps: number | null;
+  distanceM: number | null;
+  flights: number | null;
+  activeKcal: number | null;
+  restingKcal: number | null;
+  hrMin: number | null;
+  hrAvg: number | null;
+  hrMax: number | null;
+}
+
 export interface Reminder {
   id: number;
   title: string | null;
@@ -423,6 +436,8 @@ export interface TraceLoupeClient {
   listCalendarEvents(): Promise<CalendarEvent[]>;
   listReminders(): Promise<Reminder[]>;
   listWorkouts(): Promise<Workout[]>;
+  /** Daily activity aggregates, most recent day first. */
+  healthDaily(): Promise<HealthDay[]>;
   healthSummary(): Promise<HealthSummary>;
   listInteractions(): Promise<Interaction[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
@@ -661,6 +676,7 @@ const tauriClient: TraceLoupeClient = {
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
+  healthDaily: () => invoke<HealthDay[]>("health_daily"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
   listInteractions: () => invoke<Interaction[]>("list_interactions"),
   messageKinds: (threadId = null, service = null) =>
@@ -1911,6 +1927,33 @@ export const mockClient: TraceLoupeClient = {
             endAt: 1717756200,
             durationS: 1800,
             distanceM: 2100,
+          },
+        ]
+      : [],
+  healthDaily: async () =>
+    mockActive
+      ? [
+          {
+            dayAt: 1717804800,
+            steps: 8412,
+            distanceM: 6120,
+            flights: 9,
+            activeKcal: 412,
+            restingKcal: 1688,
+            hrMin: 52,
+            hrAvg: 71,
+            hrMax: 142,
+          },
+          {
+            dayAt: 1717718400,
+            steps: 3120,
+            distanceM: 2210,
+            flights: 2,
+            activeKcal: 180,
+            restingKcal: 1671,
+            hrMin: null,
+            hrAvg: null,
+            hrMax: null,
           },
         ]
       : [],

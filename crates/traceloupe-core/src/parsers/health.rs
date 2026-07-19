@@ -4,10 +4,12 @@
 //! `HealthDomain/Health/healthdb_secure.sqlite`.
 //!
 //! Health stores hundreds of thousands of numeric `quantity_samples`, which are
-//! noise to browse directly. We surface the two digestible, high-value things: a
+//! noise to browse directly. We surface the digestible, high-value things: a
 //! **workout** log (`workouts` ⋈ `samples` for dates ⋈ `workout_activities` for
-//! type/duration) and a **summary** (total samples + date range) stored in the
-//! cache `meta` table. Dates are Core Data time (seconds since 2001).
+//! type/duration), **daily activity aggregates** (steps / distance / energy /
+//! flights summed per UTC day, heart rate min/avg/max — the `health_daily`
+//! table) and a **summary** (total samples + date range) stored in the cache
+//! `meta` table. Dates are Core Data time (seconds since 2001).
 
 use std::path::Path;
 
@@ -47,8 +49,24 @@ fn activity_name(code: i64) -> &'static str {
     }
 }
 
-/// Parse Health workouts + a summary into the cache. With `replace`, clears the
-/// `workouts` table first. Best-effort: an unrecognized schema is a no-op.
+/// `samples.data_type` codes for the quantity metrics we aggregate per day.
+/// Verified against a real store: distance is metres, energy is kcal, heart
+/// rate is count/sec (×60 → bpm). Code → cache `health_daily.metric` name.
+fn metric_name(data_type: i64) -> Option<&'static str> {
+    Some(match data_type {
+        5 => "heart_rate_bpm",
+        7 => "steps",
+        8 => "distance_m",
+        9 => "resting_kcal",
+        10 => "active_kcal",
+        12 => "flights",
+        _ => return None,
+    })
+}
+
+/// Parse Health workouts + daily aggregates + a summary into the cache. With
+/// `replace`, clears the cache tables first. Best-effort: an unrecognized
+/// schema is a no-op.
 pub fn parse_health(
     db_path: &Path,
     cache: &CacheDb,
@@ -56,15 +74,33 @@ pub fn parse_health(
     replace: bool,
 ) -> Result<()> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let has_tables: i64 = src.query_row(
-        "SELECT COUNT(*) FROM sqlite_master
-         WHERE type='table' AND name IN ('workouts','samples')",
-        [],
-        |r| r.get(0),
-    )?;
-    if has_tables < 2 {
+    let has = |table: &str| -> Result<bool> {
+        Ok(src.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+            [table],
+            |r| r.get::<_, i64>(0),
+        )? > 0)
+    };
+    if !has("samples")? {
         return Ok(());
     }
+    if has("workouts")? {
+        parse_workouts(&src, cache, report, replace)?;
+    }
+    if has("quantity_samples")? {
+        parse_daily(&src, cache, replace)?;
+        summarize_samples(&src, cache)?;
+    }
+    Ok(())
+}
+
+/// The workout log: one row per workout with activity/date/duration/distance.
+fn parse_workouts(
+    src: &Connection,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+    replace: bool,
+) -> Result<()> {
 
     // One row per workout: its dates (aggregated from `samples`) + activity
     // type/duration + total distance. A workout can have several
@@ -118,9 +154,61 @@ pub fn parse_health(
     }
     tx.commit()?;
     report.workouts += inserted;
+    Ok(())
+}
 
-    // Summary of the raw sample volume, for the Health view header — stored in
-    // `meta` so the UI can show scale without materializing 344k rows.
+/// Daily activity aggregates: steps / distance / energy / flights (sum per UTC
+/// day) and heart rate (min/avg/max, ×60 → bpm). One `health_daily` row per
+/// (day, metric) — a few thousand rows instead of 344k raw samples.
+fn parse_daily(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let mut stmt = src.prepare(
+        "SELECT date(s.start_date + 978307200, 'unixepoch') AS day, s.data_type,
+                SUM(q.quantity), MIN(q.quantity), MAX(q.quantity), AVG(q.quantity), COUNT(*)
+         FROM samples s
+         JOIN quantity_samples q ON q.data_id = s.data_id
+         WHERE s.data_type IN (5, 7, 8, 9, 10, 12) AND s.start_date > 0
+         GROUP BY day, s.data_type
+         ORDER BY day",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM health_daily", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let day: String = r.get(0)?;
+        let Some(metric) = metric_name(r.get(1)?) else {
+            continue;
+        };
+        // Heart rate is stored in canonical count/sec; scale every stat to bpm.
+        let scale = if metric == "heart_rate_bpm" { 60.0 } else { 1.0 };
+        let stat = |i: usize| -> rusqlite::Result<Option<f64>> {
+            Ok(r.get::<_, Option<f64>>(i)?.map(|v| v * scale))
+        };
+        tx.execute(
+            "INSERT OR REPLACE INTO health_daily
+                 (day, metric, value_sum, value_min, value_max, value_avg, samples)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                day,
+                metric,
+                stat(2)?,
+                stat(3)?,
+                stat(4)?,
+                stat(5)?,
+                r.get::<_, i64>(6)?
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Summary of the raw sample volume, for the Health view header — stored in
+/// `meta` so the UI can show scale without materializing 344k rows.
+fn summarize_samples(src: &Connection, cache: &CacheDb) -> Result<()> {
     if let Ok((count, first, last)) = src.query_row(
         "SELECT COUNT(*), MIN(start_date), MAX(start_date) FROM quantity_samples
          JOIN samples ON samples.data_id = quantity_samples.data_id",
@@ -211,6 +299,65 @@ mod tests {
             Some("2")
         );
         assert!(cache.get_meta("health_first_at").unwrap().is_some());
+    }
+
+    #[test]
+    fn aggregates_daily_metrics_per_utc_day() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE quantity_samples (data_id INTEGER, quantity REAL);
+             -- 721692800 Mac = 1_700_000_000 unix = 2023-11-14 22:13 UTC.
+             -- Two step samples the same UTC day → one summed row.
+             INSERT INTO samples VALUES (1, 721692800.0, 721692860.0, 7);
+             INSERT INTO samples VALUES (2, 721693000.0, 721693060.0, 7);
+             INSERT INTO quantity_samples VALUES (1, 120.0);
+             INSERT INTO quantity_samples VALUES (2, 80.0);
+             -- A step sample the next UTC day → its own row.
+             INSERT INTO samples VALUES (3, 721779200.0, 721779260.0, 7);
+             INSERT INTO quantity_samples VALUES (3, 50.0);
+             -- Heart rate is canonical count/sec: 1.5/s → 90 bpm, 2.0/s → 120 bpm.
+             INSERT INTO samples VALUES (4, 721692900.0, 721692901.0, 5);
+             INSERT INTO samples VALUES (5, 721693100.0, 721693101.0, 5);
+             INSERT INTO quantity_samples VALUES (4, 1.5);
+             INSERT INTO quantity_samples VALUES (5, 2.0);
+             -- An unsurfaced data type must be ignored.
+             INSERT INTO samples VALUES (6, 721692900.0, 721692901.0, 999);
+             INSERT INTO quantity_samples VALUES (6, 42.0);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let rows: Vec<(String, String, f64, i64)> = c
+            .prepare("SELECT day, metric, value_sum, samples FROM health_daily ORDER BY day, metric")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("2023-11-14".into(), "heart_rate_bpm".into(), 210.0, 2),
+                ("2023-11-14".into(), "steps".into(), 200.0, 2),
+                ("2023-11-15".into(), "steps".into(), 50.0, 1),
+            ]
+        );
+        // Heart-rate min/max scaled to bpm.
+        let (min, max): (f64, f64) = c
+            .query_row(
+                "SELECT value_min, value_max FROM health_daily WHERE metric='heart_rate_bpm'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((min, max), (90.0, 120.0));
     }
 
     #[test]

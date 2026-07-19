@@ -900,6 +900,61 @@ pub fn list_workouts(cache: &CacheDb) -> Result<Vec<Workout>> {
         .map_err(Into::into)
 }
 
+/// One day of Health activity: the cumulative metrics summed over the (UTC)
+/// day plus the heart-rate spread, pivoted from `health_daily` rows.
+#[derive(Debug, Clone, Serialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthDay {
+    /// Midnight UTC of the day, unix seconds (sortable/filterable timestamp).
+    pub day_at: i64,
+    pub steps: Option<i64>,
+    pub distance_m: Option<f64>,
+    pub flights: Option<i64>,
+    pub active_kcal: Option<f64>,
+    pub resting_kcal: Option<f64>,
+    pub hr_min: Option<f64>,
+    pub hr_avg: Option<f64>,
+    pub hr_max: Option<f64>,
+}
+
+/// Daily activity aggregates, most recent day first.
+pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT CAST(strftime('%s', day) AS INTEGER), metric,
+                value_sum, value_min, value_max, value_avg
+         FROM health_daily ORDER BY day DESC",
+    )?;
+    let mut out: Vec<HealthDay> = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let day_at: i64 = r.get(0)?;
+        let metric: String = r.get(1)?;
+        let sum: Option<f64> = r.get(2)?;
+        if out.last().map(|d| d.day_at) != Some(day_at) {
+            out.push(HealthDay {
+                day_at,
+                ..Default::default()
+            });
+        }
+        let d = out.last_mut().expect("pushed above");
+        match metric.as_str() {
+            "steps" => d.steps = sum.map(|v| v.round() as i64),
+            "distance_m" => d.distance_m = sum,
+            "flights" => d.flights = sum.map(|v| v.round() as i64),
+            "active_kcal" => d.active_kcal = sum,
+            "resting_kcal" => d.resting_kcal = sum,
+            "heart_rate_bpm" => {
+                d.hr_min = r.get(3)?;
+                d.hr_max = r.get(4)?;
+                d.hr_avg = r.get(5)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
 /// The Health summary (sample count + date range + workout count), or a zeroed
 /// summary when no Health data was imported.
 pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
