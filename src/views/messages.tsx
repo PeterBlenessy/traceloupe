@@ -31,7 +31,8 @@ import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, type FilterGroup } from "@/components/filter-groups";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Message as MessageRow,
   MessageContent,
@@ -313,42 +314,50 @@ function MessagesViewInner() {
     }
   }, [search.service, services, setServiceFilter]);
 
-  const islands = useMemo(() => {
-    const out = [
-      badgeIsland({
-        key: "mode",
-        label: "View",
-        icon: <MessagesSquare className="size-4" />,
-        options: [
-          { value: "conversations", label: "Chats", icon: <MessagesSquare className="size-3.5" /> },
-          { value: "timeline", label: "Timeline", icon: <GalleryVerticalEnd className="size-3.5" /> },
-        ],
-        value: mode,
-        onChange: (v) => switchMode(v as Mode),
+  // The Chats/Timeline view mode is an always-visible toggle; the app-service
+  // facet is a filter group.
+  const modesNode = useMemo(
+    () => (
+      <ToggleGroup
+        type="single"
+        value={mode}
+        onValueChange={(v) => v && switchMode(v as Mode)}
+        variant="outline"
+        size="sm"
+      >
+        <ToggleGroupItem value="conversations" aria-label="Chats" title="Chats">
+          <MessagesSquare className="size-4" />
+        </ToggleGroupItem>
+        <ToggleGroupItem value="timeline" aria-label="Timeline" title="Timeline">
+          <GalleryVerticalEnd className="size-4" />
+        </ToggleGroupItem>
+      </ToggleGroup>
+    ),
+    [mode],
+  );
+  const filterGroups = useMemo<FilterGroup[]>(() => {
+    if (services.length <= 1) return [];
+    const serviceOptions: BadgeFilterOption[] = [
+      { value: "all", label: "All", count: totalCount },
+      ...services.map((s) => {
+        const slug = serviceSlug(s);
+        return {
+          value: s,
+          label: s,
+          count: serviceCounts.get(s) ?? 0,
+          icon: hasBrandIcon(slug) ? <BrandIcon slug={slug} name={s} className="size-3.5" /> : undefined,
+        };
       }),
     ];
-    if (services.length > 1) {
-      const serviceOptions: BadgeFilterOption[] = [
-        { value: "all", label: "All", count: totalCount },
-        ...services.map((s) => {
-          const slug = serviceSlug(s);
-          return {
-            value: s,
-            label: s,
-            count: serviceCounts.get(s) ?? 0,
-            icon: hasBrandIcon(slug) ? <BrandIcon slug={slug} name={s} className="size-3.5" /> : undefined,
-          };
-        }),
-      ];
-      // Show the clamped value so a stale persisted service (absent from this
-      // backup) highlights "All" rather than no pill at all.
-      out.push(badgeIsland({ key: "service", label: "App", icon: <MessageSquare className="size-4" />, options: serviceOptions, value: service ?? "all", onChange: setServiceFilter }));
-    }
-    return out;
-  }, [mode, services, totalCount, serviceCounts, service, setServiceFilter]);
+    // Show the clamped value so a stale persisted service (absent from this
+    // backup) highlights "All" rather than no pill at all.
+    return [
+      badgeGroup({ key: "service", label: "App", description: "Which messaging app", options: serviceOptions, value: service ?? "all", onChange: setServiceFilter }),
+    ];
+  }, [services, totalCount, serviceCounts, service, setServiceFilter]);
   const toolbar = useMemo(
-    () => (active === true ? { title: "Messages", islands } : null),
-    [active, islands],
+    () => (active === true ? { title: "Messages", islands: [], filter: filterGroups, modes: modesNode } : null),
+    [active, filterGroups, modesNode],
   );
   useViewToolbar(toolbar);
 
