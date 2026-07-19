@@ -63,6 +63,7 @@ export function AdaptiveToolbar({
   trailing,
   search,
   searchExpanded,
+  middle,
   className,
 }: {
   /** Fixed content pinned to the left (e.g. the view title + count). */
@@ -76,8 +77,42 @@ export function AdaptiveToolbar({
   /** Whether `search` is currently in its expanded (wide) state, so islands
    *  reserve room for it. */
   searchExpanded?: boolean;
+  /** When provided, replaces the whole island engine with this right-aligned
+   *  cluster (the Filter/Sort/Search paradigm). `islands`/`search` are ignored. */
+  middle?: ReactNode;
   className?: string;
 }) {
+  // The Filter/Sort/Search cluster bypasses the island fit entirely: it's a
+  // small, stable set of controls, right-aligned before the app controls.
+  if (middle) {
+    return (
+      // `data-tauri-drag-region` on the containers makes their empty areas drag
+      // the window (the merged titlebar has no native drag bar). Interactive
+      // children aren't drag regions, so buttons still click normally.
+      <div
+        data-tauri-drag-region
+        className={cn(
+          "relative flex min-w-0 flex-1 items-center gap-2",
+          className,
+        )}
+      >
+        {leading && (
+          <div data-tauri-drag-region className="flex shrink-0 items-center gap-2">
+            {leading}
+          </div>
+        )}
+        <div
+          data-tauri-drag-region
+          className="flex min-w-0 flex-1 items-center justify-end gap-2"
+        >
+          {middle}
+        </div>
+        {trailing && (
+          <div className="flex shrink-0 items-center gap-2">{trailing}</div>
+        )}
+      </div>
+    );
+  }
   const areaRef = useRef<HTMLDivElement>(null);
   const middleRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
@@ -212,6 +247,7 @@ export function AdaptiveToolbar({
   return (
     <div
       ref={areaRef}
+      data-tauri-drag-region
       className={cn("relative flex min-w-0 flex-1 items-center gap-2", className)}
     >
       {/* Hidden measurement layer — natural item widths. */}
@@ -235,7 +271,9 @@ export function AdaptiveToolbar({
       </div>
 
       {leading && (
-        <div className="flex shrink-0 items-center gap-2">{leading}</div>
+        <div data-tauri-drag-region className="flex shrink-0 items-center gap-2">
+          {leading}
+        </div>
       )}
 
       {/* Middle: view islands + search, right-aligned (flex-1 pushes them over to
@@ -243,6 +281,7 @@ export function AdaptiveToolbar({
           app controls (a separate sibling) are never pushed off-screen. */}
       <div
         ref={middleRef}
+        data-tauri-drag-region
         className="flex min-w-0 flex-1 items-center justify-end gap-2 overflow-hidden"
       >
         {islands.map((isl) => {

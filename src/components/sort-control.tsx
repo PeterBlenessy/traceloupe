@@ -1,5 +1,4 @@
 import { ArrowDownWideNarrow, ArrowUpNarrowWide } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /** One selectable sort field: the value sent to the backend + its label. */
@@ -51,12 +50,18 @@ export function SortControl({
   className?: string;
 }) {
   return (
-    <div className={cn("flex items-center gap-1", className)}>
+    // One bordered island grouping the "sort by" dropdown + the direction toggle.
+    <div
+      className={cn(
+        "inline-flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/40 p-0.5",
+        className,
+      )}
+    >
       <select
         value={value.by}
         onChange={(e) => onChange({ ...value, by: e.target.value })}
         aria-label="Sort by"
-        className="rounded-md border bg-transparent px-2 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="rounded-md border-0 bg-transparent px-1.5 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {fields.map((f) => (
           <option key={f.value} value={f.value}>
@@ -64,9 +69,8 @@ export function SortControl({
           </option>
         ))}
       </select>
-      <Button
-        variant="ghost"
-        size="icon"
+      <button
+        type="button"
         onClick={() => onChange({ ...value, desc: !value.desc })}
         aria-label={value.desc ? "Sort descending" : "Sort ascending"}
         title={
@@ -74,13 +78,14 @@ export function SortControl({
             ? "Descending — click for ascending"
             : "Ascending — click for descending"
         }
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
       >
         {value.desc ? (
           <ArrowDownWideNarrow className="size-4" />
         ) : (
           <ArrowUpNarrowWide className="size-4" />
         )}
-      </Button>
+      </button>
     </div>
   );
 }

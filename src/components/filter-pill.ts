@@ -11,9 +11,11 @@ import { cn } from "@/lib/utils";
 export function filterPillClass(active: boolean, extra?: string): string {
   return cn(
     "inline-flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs transition-colors",
+    // Discrete borders — no louder than the island border (border-border/70).
+    // Selected reads via a subtle fill + medium weight, not a bright accent.
     active
-      ? "border-primary bg-primary/10 text-foreground"
-      : "text-muted-foreground hover:bg-accent hover:text-foreground",
+      ? "border-border bg-accent font-medium text-foreground"
+      : "border-border/60 text-muted-foreground hover:bg-accent/60 hover:text-foreground",
     extra,
   );
 }

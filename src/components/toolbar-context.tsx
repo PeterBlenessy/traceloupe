@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ToolbarIsland } from "@/components/adaptive-toolbar";
+import type { FilterGroup } from "@/components/filter-groups";
 
 /**
  * The current view's contribution to the app's single unified toolbar. A view
@@ -19,6 +20,13 @@ export interface ViewToolbar {
   islands: ToolbarIsland[];
   search?: ReactNode;
   searchExpanded?: boolean;
+  /** Faceted filter groups for the single **Filter** control. When present, the
+   *  shell renders the new filter/sort/search cluster instead of `islands`. */
+  filter?: FilterGroup[];
+  /** Always-visible sort control, shown beside the Filter button. */
+  sort?: ReactNode;
+  /** Always-visible view-mode toggle (e.g. Notes' List/Folders), left of Filter. */
+  modes?: ReactNode;
 }
 
 const ToolbarContext = createContext<{
