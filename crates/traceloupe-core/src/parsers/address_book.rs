@@ -45,11 +45,16 @@ pub struct ParsedContact {
     pub emails: Vec<LabeledValue>,
     /// Postal addresses, each formatted to one line with its (cleaned) label.
     pub addresses: Vec<LabeledValue>,
+    /// Related people: label = relationship (Mother / custom), value = name.
+    pub related: Vec<LabeledValue>,
+    /// Names of the address-book groups this contact belongs to.
+    pub groups: Vec<String>,
 }
 
 const PROP_PHONE: i64 = 3;
 const PROP_EMAIL: i64 = 4;
 const PROP_ADDRESS: i64 = 5;
+const PROP_RELATED: i64 = 23;
 /// Core Data epoch (2001-01-01) → Unix, for the `Birthday` timestamp column.
 const MAC_EPOCH: i64 = 978_307_200;
 
@@ -65,12 +70,12 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
                 p.Middle, p.Nickname, p.JobTitle, p.Department, p.Birthday, p.Note
          FROM ABPerson p
          LEFT JOIN ABMultiValue mv
-                ON mv.record_id = p.ROWID AND mv.property IN (?1, ?2)
+                ON mv.record_id = p.ROWID AND mv.property IN (?1, ?2, ?3)
          LEFT JOIN ABMultiValueLabel lbl ON mv.label = lbl.ROWID
          ORDER BY p.Last IS NULL, p.Last, p.First, p.ROWID, mv.property",
     )?;
 
-    let rows = stmt.query_map([PROP_PHONE, PROP_EMAIL], |r| {
+    let rows = stmt.query_map([PROP_PHONE, PROP_EMAIL, PROP_RELATED], |r| {
         // Birthday is a Core Data timestamp stored as a TEXT float; parse + shift
         // to Unix. None if absent or unparseable.
         let birthday_at = r
@@ -126,6 +131,7 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
             match prop {
                 PROP_PHONE => contact.phones.push(entry),
                 PROP_EMAIL => contact.emails.push(entry),
+                PROP_RELATED => contact.related.push(entry),
                 _ => {}
             }
         }
@@ -139,7 +145,45 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
             c.addresses = a;
         }
     }
+    // Group memberships, attached by record_id.
+    let mut groups = parse_groups(&conn)?;
+    for c in &mut contacts {
+        if let Some(g) = groups.remove(&c.id) {
+            c.groups = g;
+        }
+    }
     Ok(contacts)
+}
+
+/// Address-book group names keyed by member ABPerson ROWID (`ABGroup` ⋈
+/// `ABGroupMembers`). Empty map when the tables are absent (older schema).
+fn parse_groups(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<String>>> {
+    let mut out: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
+    let has_groups = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ABGroup'
+             AND EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='ABGroupMembers')",
+            [],
+            |_| Ok(()),
+        )
+        .is_ok();
+    if !has_groups {
+        return Ok(out);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT gm.member_id, g.Name
+         FROM ABGroupMembers gm
+         JOIN ABGroup g ON g.ROWID = gm.group_id
+         WHERE g.Name IS NOT NULL AND g.Name <> ''
+         ORDER BY g.Name, gm.member_id",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let member: i64 = r.get(0)?;
+        let name: String = r.get(1)?;
+        out.entry(member).or_default().push(name);
+    }
+    Ok(out)
 }
 
 /// Postal addresses (property 5), formatted one-line, keyed by ABPerson ROWID.
@@ -308,8 +352,9 @@ pub fn insert_contacts(
         tx.execute(
             "INSERT INTO contacts
                 (first_name, last_name, organization, phones_json, emails_json, image,
-                 middle_name, nickname, job_title, department, birthday_at, note, addresses_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                 middle_name, nickname, job_title, department, birthday_at, note, addresses_json,
+                 related_json, groups_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
                 c.first_name,
                 c.last_name,
@@ -324,6 +369,8 @@ pub fn insert_contacts(
                 c.birthday_at,
                 c.note,
                 serde_json::to_string(&c.addresses).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&c.related).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&c.groups).unwrap_or_else(|_| "[]".into()),
             ],
         )?;
     }
@@ -372,7 +419,17 @@ mod tests {
              INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (12, 2, 3, 1, '+15550001111');
              -- A Home address (property 5) for Alex, split across entry rows.
              INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (13, 1, 5, 2, NULL);
-             INSERT INTO ABMultiValueEntry (parent_id, key, value) VALUES (13,1,'1 Market St'),(13,2,'Springfield'),(13,3,'CA'),(13,4,'90001'),(13,5,'USA');",
+             INSERT INTO ABMultiValueEntry (parent_id, key, value) VALUES (13,1,'1 Market St'),(13,2,'Springfield'),(13,3,'CA'),(13,4,'90001'),(13,5,'USA');
+             -- Related names (property 23): a magic label and a custom one.
+             INSERT INTO ABMultiValueLabel (rowid, value) VALUES (3, '_$!<Mother>!$_'), (4, 'Bestie');
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (14, 1, 23, 3, 'Maria Rivera');
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (15, 1, 23, 4, 'Sam Chen');
+             -- Groups: Alex in two, one unnamed group ignored.
+             CREATE TABLE ABGroup (ROWID INTEGER PRIMARY KEY, Name TEXT);
+             CREATE TABLE ABGroupMembers (UID INTEGER PRIMARY KEY, group_id INTEGER, member_type INTEGER, member_id INTEGER);
+             INSERT INTO ABGroup (ROWID, Name) VALUES (1, 'Family'), (2, 'Climbing'), (3, NULL);
+             INSERT INTO ABGroupMembers (UID, group_id, member_type, member_id)
+                 VALUES (1, 1, 0, 1), (2, 2, 0, 1), (3, 3, 0, 1), (4, 2, 0, 2);",
         )
         .unwrap();
     }
@@ -405,6 +462,14 @@ mod tests {
             alex.addresses[0].value,
             "1 Market St, Springfield, CA 90001, USA"
         );
+        // Related names: magic label cleaned, custom label passed through.
+        assert_eq!(alex.related.len(), 2);
+        assert_eq!(alex.related[0].label.as_deref(), Some("Mother"));
+        assert_eq!(alex.related[0].value, "Maria Rivera");
+        assert_eq!(alex.related[1].label.as_deref(), Some("Bestie"));
+        assert_eq!(alex.related[1].value, "Sam Chen");
+        // Groups sorted by name; the unnamed group is dropped.
+        assert_eq!(alex.groups, vec!["Climbing".to_string(), "Family".to_string()]);
 
         // Org-only contact with no name.
         let pizza = contacts.iter().find(|c| c.organization.is_some()).unwrap();

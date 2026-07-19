@@ -268,6 +268,10 @@ export interface Contact {
   emails: LabeledValue[];
   /** Postal addresses, each formatted to one line with its label. */
   addresses: LabeledValue[];
+  /** Related people: label = relationship (Mother / custom), value = name. */
+  related: LabeledValue[];
+  /** Names of the address-book groups this contact belongs to. */
+  groups: string[];
   /** Whether a contact photo is stored (load it via `contactAvatarUrl`). */
   hasImage: boolean;
   /** 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter. */
@@ -1431,6 +1435,8 @@ const contactExtras = {
   birthdayAt: null,
   note: null,
   addresses: [] as LabeledValue[],
+  related: [] as LabeledValue[],
+  groups: [] as string[],
 };
 const mockContacts: Contact[] = [
   {
@@ -1458,6 +1464,11 @@ const mockContacts: Contact[] = [
     birthdayAt: 1678307200,
     note: "met at the conference",
     addresses: [{ label: "Home", value: "1 Market St, Springfield, CA 90001, USA" }],
+    related: [
+      { label: "Mother", value: "Maria Rivera" },
+      { label: "Bestie", value: "Sam Taylor" },
+    ],
+    groups: ["Climbing", "Family"],
   },
   {
     id: 3,
