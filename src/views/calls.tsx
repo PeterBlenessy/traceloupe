@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -18,8 +18,10 @@ import {
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/components/settings-provider";
-import { SortControl, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { sortIsland, timeIsland } from "@/components/toolbar-islands";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
@@ -59,6 +61,31 @@ export function CallsView() {
   // Resolve each call's phone number to a saved contact, like Messages does.
   const resolve = useContactResolver();
 
+  const islands = useMemo(
+    () => [
+      timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
+      sortIsland({
+        fields: [
+          { value: "date", label: "Date" },
+          { value: "name", label: "Name" },
+          { value: "duration", label: "Duration" },
+        ],
+        value: sort,
+        onChange: setSort,
+      }),
+    ],
+    [presets, presetCounts, range, sort, setSort],
+  );
+  const searchNode = useMemo(
+    () => <ListSearch value={q} onChange={setQ} placeholder="Search calls" />,
+    [q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Calls", count, islands, search: searchNode } : null),
+    [active, count, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView icon={PhoneCall} title="No backup open" description="Import a backup to see call history.">
@@ -69,32 +96,12 @@ export function CallsView() {
 
   return (
     <LazyListView<Call>
+      headless
       title="Calls"
       count={active === true ? count : undefined}
       error={error}
       resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching calls." : "No calls in this backup."}
-      search={<ListSearch value={q} onChange={setQ} placeholder="Search calls" />}
-      toolbar={
-        <>
-          <TimeFilterBar
-            className="flex-1"
-            presets={presets}
-            value={range}
-            onChange={setRange}
-            counts={presetCounts}
-          />
-          <SortControl
-            fields={[
-              { value: "date", label: "Date" },
-              { value: "name", label: "Name" },
-              { value: "duration", label: "Duration" },
-            ]}
-            value={sort}
-            onChange={setSort}
-          />
-        </>
-      }
       windowKey={(page) => [
         "callsWindow",
         search,

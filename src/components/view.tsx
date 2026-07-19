@@ -172,6 +172,7 @@ export function VirtualListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
+  headless,
 }: {
   title: string;
   count?: number;
@@ -186,16 +187,20 @@ export function VirtualListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
+  /** Skip the internal PanelHeader — the view publishes to the unified toolbar. */
+  headless?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title={title}
-        count={count}
-        actions={header}
-        search={search}
-        toolbar={toolbar}
-      />
+      {!headless && (
+        <PanelHeader
+          title={title}
+          count={count}
+          actions={header}
+          search={search}
+          toolbar={toolbar}
+        />
+      )}
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
