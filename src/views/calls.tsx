@@ -18,10 +18,10 @@ import {
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/components/settings-provider";
-import { type SortState } from "@/components/sort-control";
+import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
@@ -61,28 +61,34 @@ export function CallsView() {
   // Resolve each call's phone number to a saved contact, like Messages does.
   const resolve = useContactResolver();
 
-  const islands = useMemo(
-    () => [
-      timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
-      sortIsland({
-        fields: [
+  const filterGroups = useMemo<FilterGroup[]>(
+    () => [timeGroup({ description: "When the call happened", presets, counts: presetCounts, value: range, onChange: setRange })],
+    [presets, presetCounts, range],
+  );
+  const sortNode = useMemo(
+    () => (
+      <SortControl
+        fields={[
           { value: "date", label: "Date" },
           { value: "name", label: "Name" },
           { value: "duration", label: "Duration" },
-        ],
-        value: sort,
-        onChange: setSort,
-      }),
-    ],
-    [presets, presetCounts, range, sort, setSort],
+        ]}
+        value={sort}
+        onChange={setSort}
+      />
+    ),
+    [sort, setSort],
   );
   const searchNode = useMemo(
     () => <ListSearch value={q} onChange={setQ} placeholder="Search calls" />,
     [q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Calls", count, islands, search: searchNode } : null),
-    [active, count, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Calls", count, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, count, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
