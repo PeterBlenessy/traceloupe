@@ -75,6 +75,40 @@ fn associated_target_guid(raw: &str) -> &str {
     raw.rsplit(['/', ':']).next().unwrap_or(raw)
 }
 
+/// The column names of `table` (empty on error / missing table).
+fn message_table_columns(conn: &Connection, table: &str) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) {
+        if let Ok(mut rows) = stmt.query([]) {
+            while let Ok(Some(r)) = rows.next() {
+                if let Ok(name) = r.get::<_, String>(1) {
+                    set.insert(name);
+                }
+            }
+        }
+    }
+    set
+}
+
+/// A human phrase for an iMessage group-action row (`item_type` != 0), told from
+/// the actor's perspective (the UI prefixes the sender). `None` for normal
+/// messages and action types whose meaning we don't surface.
+fn group_action_body(item_type: i64, action_type: i64, group_title: Option<&str>) -> Option<String> {
+    Some(match item_type {
+        1 => match group_title {
+            Some(t) if !t.trim().is_empty() => format!("named the conversation \u{201c}{t}\u{201d}"),
+            _ => "changed the group name".to_string(),
+        },
+        2 => match action_type {
+            1 => "removed a participant".to_string(),
+            _ => "added a participant".to_string(),
+        },
+        3 => "left the conversation".to_string(),
+        4 => "changed the group photo".to_string(),
+        _ => return None,
+    })
+}
+
 /// Recover a message's plain text from its `attributedBody` — an NSAttributedString
 /// serialized in Apple's `streamtyped` (typedstream) format. Modern iMessage leaves
 /// `message.text` NULL and stores the content only here. The text is the first
@@ -299,16 +333,25 @@ pub fn parse_messages(
     } else {
         ""
     };
+    // Group-action columns (item_type/group_action_type/group_title) are absent
+    // from older schemas + the test fixtures; fall back to 0/NULL so the SELECT
+    // and the `<> 0` filter are inert there.
+    let mcols = message_table_columns(&src, "message");
+    let it_expr = if mcols.contains("item_type") { "m.item_type" } else { "0" };
+    let ga_expr = if mcols.contains("group_action_type") { "m.group_action_type" } else { "0" };
+    let gt_expr = if mcols.contains("group_title") { "m.group_title" } else { "NULL" };
     let mut mstmt = src.prepare(&format!(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
                 m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
-                m.thread_originator_guid, m.attributedBody, m.date_edited
+                m.thread_originator_guid, m.attributedBody, m.date_edited,
+                {it_expr}, {ga_expr}, {gt_expr}
          FROM message m
          JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
                OR COALESCE(m.associated_message_type, 0) <> 0
                OR m.attributedBody IS NOT NULL
+               OR ({it_expr}) <> 0
                {att_exists}
          ORDER BY cmj.chat_id, m.date, m.ROWID",
     ))?;
@@ -356,6 +399,16 @@ pub fn parse_messages(
                 .and_then(attributed_body_text),
         };
         let edited = r.get::<_, Option<i64>>(15)?.unwrap_or(0) != 0;
+        // Group-action rows (renames/adds/removes/leaves) carry no text or
+        // attachment; synthesize a system-message body for them.
+        let item_type = r.get::<_, Option<i64>>(16)?.unwrap_or(0);
+        let action_type = r.get::<_, Option<i64>>(17)?.unwrap_or(0);
+        let group_title: Option<String> = r.get(18)?;
+        let system_body = if item_type != 0 {
+            group_action_body(item_type, action_type, group_title.as_deref())
+        } else {
+            None
+        };
 
         // A tapback row: record the event and skip it — it is not a chat message.
         if assoc_type >= 2000 {
@@ -378,7 +431,7 @@ pub fn parse_messages(
         // A row with neither body nor attachment (a group-action item, or an
         // attributedBody that held only formatting) is not a chat message. This
         // guards the broadened `OR attributedBody IS NOT NULL` selection above.
-        if text.is_none() && !has_attachment {
+        if text.is_none() && !has_attachment && system_body.is_none() {
             continue;
         }
 
@@ -423,6 +476,27 @@ pub fn parse_messages(
             })
         };
         let sent_unix = mac_to_unix(date);
+        // A group-action row: store it as a `system` message and move on (it's not
+        // a chat bubble, has no attachments/tapbacks/replies).
+        if let Some(sysbody) = system_body {
+            tx.execute(
+                "INSERT INTO messages
+                    (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
+                     read_at, delivered_at, edited)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'system', ?6, ?7, 0)",
+                rusqlite::params![
+                    thread_id,
+                    sender,
+                    is_from_me as i64,
+                    sysbody,
+                    sent_unix,
+                    read_at,
+                    delivered_at,
+                ],
+            )?;
+            report.messages += 1;
+            continue;
+        }
         // Content class for the filter: does any attachment look like image/video?
         let has_media = msg_atts.get(&msg_rowid).is_some_and(|ids| {
             ids.iter().any(|aid| {

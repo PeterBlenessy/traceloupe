@@ -1326,6 +1326,16 @@ function MessageBubble({
   showTime: boolean;
   senderLabel?: string | null;
 }) {
+  // Group-action rows (rename/add/remove/leave) render as a centered note, not a
+  // chat bubble: "<actor> <action>".
+  if (message.kind === "system") {
+    const actor = message.isFromMe ? "You" : (senderLabel ?? message.sender ?? "Someone");
+    return (
+      <div className="py-1.5 text-center text-xs text-muted-foreground">
+        {actor} {message.body}
+      </div>
+    );
+  }
   const align = message.isFromMe ? "end" : "start";
   // In "inline" mode every link unfurls into a card (capped). A link whose
   // preview loads is dropped from the text; a message that is *only* one link
