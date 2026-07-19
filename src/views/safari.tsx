@@ -12,10 +12,10 @@ import {
 } from "@/components/ui/item";
 import { Button } from "@/components/ui/button";
 import { useSettings } from "@/components/settings-provider";
-import { type SortState } from "@/components/sort-control";
+import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
 import { formatCount, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -87,41 +87,51 @@ export function SafariView() {
     [setType, setSort],
   );
 
-  const islands = useMemo(
+  const filterGroups = useMemo<FilterGroup[]>(
     () => [
-      badgeIsland({
+      badgeGroup({
         key: "type",
         label: "Type",
-        icon: <Globe className="size-4" />,
+        description: "History, bookmarks, reading list or tabs",
         options: TYPES.map((t) => ({ value: t.value, label: t.label })),
         value: type,
         onChange: (v) => changeType(v as SafariType),
       }),
-      timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
-      sortIsland({
-        fields: isHistory
-          ? [
-              { value: "date", label: "Date" },
-              { value: "title", label: "Title" },
-              { value: "visits", label: "Visits" },
-            ]
-          : [
-              { value: "date", label: "Date" },
-              { value: "title", label: "Title" },
-            ],
-        value: sort,
-        onChange: setSort,
-      }),
+      timeGroup({ description: "When it was last visited", presets, counts: presetCounts, value: range, onChange: setRange }),
     ],
-    [type, isHistory, presets, presetCounts, range, sort, changeType, setRange, setSort],
+    [type, presets, presetCounts, range, changeType, setRange],
+  );
+  const sortNode = useMemo(
+    () => (
+      <SortControl
+        fields={
+          isHistory
+            ? [
+                { value: "date", label: "Date" },
+                { value: "title", label: "Title" },
+                { value: "visits", label: "Visits" },
+              ]
+            : [
+                { value: "date", label: "Date" },
+                { value: "title", label: "Title" },
+              ]
+        }
+        value={sort}
+        onChange={setSort}
+      />
+    ),
+    [isHistory, sort, setSort],
   );
   const searchNode = useMemo(
     () => <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />,
     [q],
   );
   const toolbar = useMemo(
-    () => (active === true ? { title: "Safari", count, islands, search: searchNode } : null),
-    [active, count, islands, searchNode],
+    () =>
+      active === true
+        ? { title: "Safari", count, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
+        : null,
+    [active, count, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
