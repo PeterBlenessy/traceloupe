@@ -17,7 +17,7 @@ import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { EmptyView, LazyListView, ListSearch } from "@/components/view";
-import { formatCount, formatDateTime } from "@/lib/format";
+import { formatCount, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
 import {
@@ -268,11 +268,19 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
           </ItemDescription>
         )}
       </ItemContent>
-      {item.dateAdded != null && (
-        <div className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
-          {formatDateTime(item.dateAdded)}
-        </div>
-      )}
+      <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
+        {item.dateAdded != null && <span>{formatDateTime(item.dateAdded)}</span>}
+        {item.kind === "reading_list" &&
+          (item.dateViewed != null ? (
+            <span className="text-muted-foreground/60">
+              Read {formatDate(item.dateViewed)}
+            </span>
+          ) : (
+            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+              Unread
+            </span>
+          ))}
+      </div>
     </>
   );
   // Openable when it has a URL (bookmarks/tabs/reading list); folders don't.
