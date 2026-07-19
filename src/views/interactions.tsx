@@ -5,10 +5,10 @@ import { ArrowDownLeft, ArrowUpRight, Users, Waypoints } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
-import { sortItems, type SortState } from "@/components/sort-control";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { sortIsland, timeIsland } from "@/components/toolbar-islands";
+import { timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
@@ -131,24 +131,28 @@ export function InteractionsView() {
   }, [baseFiltered, range, sort]);
 
   const hasData = (interactions?.length ?? 0) > 0;
-  const islands = useMemo(
+  const filterGroups = useMemo<FilterGroup[]>(
     () =>
       hasData
-        ? [
-            timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }),
-            sortIsland({
-              fields: [
-                { value: "total", label: "Total" },
-                { value: "incoming", label: "In" },
-                { value: "outgoing", label: "Out" },
-                { value: "recent", label: "Recent" },
-              ],
-              value: sort,
-              onChange: setSort,
-            }),
-          ]
+        ? [timeGroup({ description: "When you last interacted", presets, counts: presetCounts, value: range, onChange: setRange })]
         : [],
-    [hasData, presets, presetCounts, range, sort, setSort],
+    [hasData, presets, presetCounts, range],
+  );
+  const sortNode = useMemo(
+    () =>
+      hasData ? (
+        <SortControl
+          fields={[
+            { value: "total", label: "Total" },
+            { value: "incoming", label: "In" },
+            { value: "outgoing", label: "Out" },
+            { value: "recent", label: "Recent" },
+          ]}
+          value={sort}
+          onChange={setSort}
+        />
+      ) : undefined,
+    [hasData, sort, setSort],
   );
   const searchNode = useMemo(
     () =>
@@ -158,9 +162,9 @@ export function InteractionsView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Interactions", count: filtered.length, islands, search: searchNode }
+        ? { title: "Interactions", count: filtered.length, islands: [], filter: filterGroups, sort: sortNode, search: searchNode }
         : null,
-    [active, filtered.length, islands, searchNode],
+    [active, filtered.length, filterGroups, sortNode, searchNode],
   );
   useViewToolbar(toolbar);
 
