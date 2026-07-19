@@ -42,6 +42,8 @@ import { useResizableWidth } from "@/components/resize";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { ModeToggle } from "@/components/mode-toggle";
 import { ToolbarGroup } from "@/components/toolbar-group";
+import { AdaptiveToolbar } from "@/components/adaptive-toolbar";
+import { ToolbarProvider, useToolbar } from "@/components/toolbar-context";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -63,7 +65,7 @@ import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
-import { type ClockFormat } from "@/lib/format";
+import { formatCount, type ClockFormat } from "@/lib/format";
 
 const nav = [
   { to: "/photos", label: "Photos", icon: Image, module: "camera_roll" },
@@ -108,6 +110,7 @@ export function AppShell() {
     // navigation between views.
     <ImportProvider>
       <ReimportProvider>
+       <ToolbarProvider>
         {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
         only sets `min-h-svh`, which lets the layout grow with its content — so a
         virtualized list's tall spacer would inflate the whole document and its
@@ -178,25 +181,54 @@ export function AppShell() {
             drag region. Views render their own header below it. */}
             <div
               data-tauri-drag-region
-              className="flex h-11 shrink-0 items-center gap-2 px-2"
+              className="flex h-11 shrink-0 items-center gap-2 border-b px-3"
             >
-              <div className="ml-auto flex items-center gap-1.5">
-                <ImportIndicator />
-                <ToolbarGroup>
-                  <SidebarTrigger />
-                  <DensityToggle />
-                  <ModeToggle />
-                  <SettingsMenu />
-                </ToolbarGroup>
-              </div>
+              <AppToolbar />
             </div>
             <div className="min-h-0 flex-1 overflow-hidden">
               <Outlet />
             </div>
           </SidebarInset>
         </SidebarProvider>
+       </ToolbarProvider>
       </ReimportProvider>
     </ImportProvider>
+  );
+}
+
+/** The single unified toolbar: the current view's title + islands (published via
+ *  the toolbar context) on the left, the app-wide controls + search on the right. */
+function AppToolbar() {
+  const tb = useToolbar();
+  return (
+    <AdaptiveToolbar
+      leading={
+        tb?.title ? (
+          <div className="flex items-baseline gap-2">
+            <h1 className="text-base font-semibold">{tb.title}</h1>
+            {tb.count !== undefined && (
+              <span className="text-xs tabular-nums text-muted-foreground/60">
+                {formatCount(tb.count)}
+              </span>
+            )}
+          </div>
+        ) : null
+      }
+      islands={tb?.islands ?? []}
+      search={tb?.search}
+      searchExpanded={tb?.searchExpanded}
+      trailing={
+        <>
+          <ImportIndicator />
+          <ToolbarGroup>
+            <SidebarTrigger />
+            <DensityToggle />
+            <ModeToggle />
+            <SettingsMenu />
+          </ToolbarGroup>
+        </>
+      }
+    />
   );
 }
 

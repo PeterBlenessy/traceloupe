@@ -161,7 +161,7 @@ function toDateInput(epochSeconds: number): string {
  * the bounds only while a custom range is active — a preset shouldn't populate
  * the date fields.
  */
-function DateRangeFilter({
+export function DateRangeFilter({
   value,
   active,
   onChange,
