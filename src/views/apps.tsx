@@ -12,6 +12,7 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
+import { useViewToolbar } from "@/components/toolbar-context";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
 import { BrandIcon } from "@/lib/brand-icon";
@@ -71,6 +72,16 @@ export function AppsView() {
     );
   }, [apps, q]);
 
+  const searchNode = useMemo(
+    () => (apps.length > 0 ? <ListSearch value={q} onChange={setQ} placeholder="Search apps" /> : undefined),
+    [apps.length, q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Apps", count: filtered.length, islands: [], search: searchNode } : null),
+    [active, filtered.length, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -85,16 +96,12 @@ export function AppsView() {
 
   return (
     <VirtualListView
+      headless
       title="Apps"
       count={filtered.length}
       isPending={isPending}
       error={error}
       emptyMessage="No installed-app list in this backup."
-      search={
-        apps.length > 0 ? (
-          <ListSearch value={q} onChange={setQ} placeholder="Search apps" />
-        ) : undefined
-      }
       items={filtered}
       getKey={(a) => a.bundleId}
       renderItem={(a) => <AppItem app={a} />}
