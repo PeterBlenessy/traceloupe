@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Circle, CircleCheck, Flag, ListTodo } from "lucide-react";
+import { Circle, CircleCheck, Flag, ListTodo, SlidersHorizontal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { type BadgeFilterOption } from "@/components/badge-filter";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
@@ -152,6 +154,42 @@ export function RemindersView() {
     );
   }, [baseFiltered, range, sort]);
 
+  const hasReminders = (reminders?.length ?? 0) > 0;
+  const islands = useMemo(() => {
+    if (!hasReminders) return [];
+    const openCount = (reminders ?? []).filter((r) => !r.completed).length;
+    const doneCount = (reminders?.length ?? 0) - openCount;
+    const statusOptions: BadgeFilterOption[] = [
+      { value: "all", label: "All", count: reminders?.length },
+      { value: "open", label: "Open", count: openCount },
+      { value: "completed", label: "Completed", count: doneCount },
+      ...(hasFlagged
+        ? [{ value: "flagged", label: "Flagged", count: (reminders ?? []).filter((r) => r.flagged).length }]
+        : []),
+    ];
+    const listOptions: BadgeFilterOption[] = [
+      { value: "all", label: "All lists" },
+      ...lists.map((l) => ({ value: l, label: l, count: (reminders ?? []).filter((r) => r.listName === l).length })),
+    ];
+    const out = [
+      badgeIsland({ key: "status", label: "Status", icon: <SlidersHorizontal className="size-4" />, options: statusOptions, value: effStatus, onChange: setStatus }),
+    ];
+    if (lists.length > 1)
+      out.push(badgeIsland({ key: "list", label: "List", icon: <ListTodo className="size-4" />, options: listOptions, value: effList, onChange: setList }));
+    out.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
+    out.push(sortIsland({ fields: [{ value: "title", label: "Title" }, { value: "created", label: "Created" }, { value: "due", label: "Due" }], value: sort, onChange: setSort }));
+    return out;
+  }, [hasReminders, reminders, hasFlagged, lists, effStatus, effList, presets, presetCounts, range, sort, setStatus, setList, setRange, setSort]);
+  const searchNode = useMemo(
+    () => (hasReminders ? <ListSearch value={q} onChange={setQ} placeholder="Search reminders" /> : undefined),
+    [hasReminders, q],
+  );
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Reminders", count: filtered.length, islands, search: searchNode } : null),
+    [active, filtered.length, islands, searchNode],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -164,34 +202,9 @@ export function RemindersView() {
     );
   }
 
-  const hasReminders = (reminders?.length ?? 0) > 0;
-  const openCount = (reminders ?? []).filter((r) => !r.completed).length;
-  const doneCount = (reminders?.length ?? 0) - openCount;
-  const statusOptions: BadgeFilterOption[] = [
-    { value: "all", label: "All", count: reminders?.length },
-    { value: "open", label: "Open", count: openCount },
-    { value: "completed", label: "Completed", count: doneCount },
-    ...(hasFlagged
-      ? [
-          {
-            value: "flagged",
-            label: "Flagged",
-            count: (reminders ?? []).filter((r) => r.flagged).length,
-          },
-        ]
-      : []),
-  ];
-  const listOptions: BadgeFilterOption[] = [
-    { value: "all", label: "All lists" },
-    ...lists.map((l) => ({
-      value: l,
-      label: l,
-      count: (reminders ?? []).filter((r) => r.listName === l).length,
-    })),
-  ];
-
   return (
     <VirtualListView<Reminder>
+      headless
       title="Reminders"
       count={filtered.length}
       estimateSize={64}
@@ -199,38 +212,6 @@ export function RemindersView() {
       error={error}
       emptyMessage={
         hasReminders ? "No reminders match these filters." : "No reminders in this backup."
-      }
-      search={
-        hasReminders ? (
-          <ListSearch value={q} onChange={setQ} placeholder="Search reminders" />
-        ) : undefined
-      }
-      toolbar={
-        hasReminders ? (
-          <>
-            {/* Time range fills the left; the facets + sort sit at the right. */}
-            <TimeFilterBar
-              className="flex-1"
-              presets={presets}
-              value={range}
-              onChange={setRange}
-              counts={presetCounts}
-            />
-            <BadgeFilter options={statusOptions} value={effStatus} onChange={setStatus} />
-            {lists.length > 1 && (
-              <BadgeFilter options={listOptions} value={effList} onChange={setList} />
-            )}
-            <SortControl
-              fields={[
-                { value: "title", label: "Title" },
-                { value: "created", label: "Created" },
-                { value: "due", label: "Due" },
-              ]}
-              value={sort}
-              onChange={setSort}
-            />
-          </>
-        ) : undefined
       }
       items={filtered}
       getKey={(r) => r.id}

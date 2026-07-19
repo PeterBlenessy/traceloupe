@@ -4,12 +4,14 @@ import { useNavigate } from "@tanstack/react-router";
 import { Activity, HeartPulse } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
-import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
-import { SortControl, sortItems, type SortState } from "@/components/sort-control";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import { type BadgeFilterOption } from "@/components/badge-filter";
+import { sortItems, type SortState } from "@/components/sort-control";
+import { useTimePresets } from "@/components/time-filter";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { badgeIsland, sortIsland, timeIsland } from "@/components/toolbar-islands";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
-import { EmptyView, ErrorState, ListSkeleton, PanelHeader } from "@/components/view";
+import { EmptyView, ErrorState, ListSkeleton } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { client, type Workout, type TimeRange } from "@/lib/ipc";
 
@@ -119,6 +121,26 @@ export function HealthView() {
     );
   }, [baseFiltered, range, sort]);
 
+  const hasWorkouts = (workouts?.length ?? 0) > 0;
+  const islands = useMemo(() => {
+    if (!hasWorkouts) return [];
+    const activityOptions: BadgeFilterOption[] = [
+      { value: "all", label: "All", count: workouts?.length },
+      ...activities.map((a) => ({ value: a, label: a, count: (workouts ?? []).filter((w) => w.activity === a).length })),
+    ];
+    const out = [];
+    if (activities.length > 1)
+      out.push(badgeIsland({ key: "activity", label: "Activity", icon: <Activity className="size-4" />, options: activityOptions, value: effActivity, onChange: setActivity }));
+    out.push(timeIsland({ presets, counts: presetCounts, value: range, onChange: setRange }));
+    out.push(sortIsland({ fields: [{ value: "date", label: "Date" }, { value: "duration", label: "Duration" }, { value: "distance", label: "Distance" }], value: sort, onChange: setSort }));
+    return out;
+  }, [hasWorkouts, workouts, activities, effActivity, presets, presetCounts, range, sort, setActivity, setRange, setSort]);
+  const toolbar = useMemo(
+    () => (active === true ? { title: "Health", count: hasWorkouts ? filtered.length : undefined, islands, search: undefined } : null),
+    [active, hasWorkouts, filtered.length, islands],
+  );
+  useViewToolbar(toolbar);
+
   if (active === false) {
     return (
       <EmptyView
@@ -131,48 +153,8 @@ export function HealthView() {
     );
   }
 
-  const hasWorkouts = (workouts?.length ?? 0) > 0;
-  const activityOptions: BadgeFilterOption[] = [
-    { value: "all", label: "All", count: workouts?.length },
-    ...activities.map((a) => ({
-      value: a,
-      label: a,
-      count: (workouts ?? []).filter((w) => w.activity === a).length,
-    })),
-  ];
-
   return (
     <div className="flex h-full flex-col">
-      <PanelHeader
-        title="Health"
-        count={hasWorkouts ? filtered.length : undefined}
-        toolbar={
-          hasWorkouts ? (
-            <>
-              {/* Time range fills the left; the facet + sort sit at the right. */}
-              <TimeFilterBar
-                className="flex-1"
-                presets={presets}
-                value={range}
-                onChange={setRange}
-                counts={presetCounts}
-              />
-              {activities.length > 1 && (
-                <BadgeFilter options={activityOptions} value={activity} onChange={setActivity} />
-              )}
-              <SortControl
-                fields={[
-                  { value: "date", label: "Date" },
-                  { value: "duration", label: "Duration" },
-                  { value: "distance", label: "Distance" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
-            </>
-          ) : undefined
-        }
-      />
       {error ? (
         <ErrorState error={error} />
       ) : isPending ? (
