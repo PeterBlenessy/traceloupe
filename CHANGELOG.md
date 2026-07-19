@@ -22,6 +22,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.12.0` | **Messages & media UX overhaul + hardening** — inline/hover link previews (OpenGraph, single 3-way mode), an in-app image/video lightbox, opt-in recovery of missing attachments from the camera roll, Notes rich-text rendering, persisted scroll/sidebar/window state, and a pre-release review pass that closed a DNS-rebind SSRF hole in link fetching. See "Planned" below for what's next. |
 | `0.13.0` | **Adaptive "islands" toolbar** — every view's filters, sort, and search become segmented, bordered islands in one unified top bar that shares width evenly, reveals more chips as room allows, collapses to representative icons when tight, and expands one island on demand while the others fold. Rolled out across all thirteen views. |
 | `0.14.0` | **Filter · Sort · Search paradigm + window chrome** — the islands give way to one **Filter** button that morphs into a grouped, described filter panel (single- or multi-select), with sort and an expanding search as standalone controls. A full-width HTML title bar that yields the full height to the sidebar when it's open, the sidebar top merged with the Device view, and Settings moved to the sidebar footer. |
+| `0.15.0` | **Data-coverage pass** — surfacing fields already parsed but unshown: all of a note's embedded images (detail gallery), iMessage group-action system rows, Safari reading-list read/last-viewed. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -29,6 +30,31 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.15.0] — 2026-07-19
+
+**Data-coverage pass — surfacing fields already in the backup.** Requires a
+re-import of the affected module to populate for existing caches (the migrations
+create the structures; the parsers fill them).
+
+### Added
+
+- **Notes: all embedded images** — the detail pane now shows every image in a
+  note (gallery), not just the list thumbnail. New `note_media` cache table
+  (schema v29) holds each resolved image with its on-demand decrypt fields; the
+  note-image protocol takes an optional index. True inline-at-position rendering
+  remains future work.
+- **Messages: group actions** — iMessage system rows (rename, add/remove
+  participant, leave, group-photo change; `item_type` 1–4) were dropped because
+  they carry no text/attachment. They're now surfaced as centered `system`
+  messages ("‹actor› ‹action›"). ~370 in the reference backup.
+- **Safari: reading list** — reading-list rows show their last-viewed date
+  ("Read ‹date›") or an "Unread" badge.
+
+### Fixed
+
+- The Messages parser's new columns are schema-guarded, so older `sms.db`
+  versions (and the test fixtures) are unaffected.
 
 ## [0.14.0] — 2026-07-19
 
