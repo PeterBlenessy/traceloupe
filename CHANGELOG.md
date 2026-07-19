@@ -21,6 +21,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.11.0` | **Locked-note decryption** — password-protected Apple Notes unlock on demand (PBKDF2 → RFC-3394 key-unwrap → AES-128-GCM), the note password entered in-app and nothing decrypted at rest. Closes the last coverage-audit gap. |
 | `0.12.0` | **Messages & media UX overhaul + hardening** — inline/hover link previews (OpenGraph, single 3-way mode), an in-app image/video lightbox, opt-in recovery of missing attachments from the camera roll, Notes rich-text rendering, persisted scroll/sidebar/window state, and a pre-release review pass that closed a DNS-rebind SSRF hole in link fetching. See "Planned" below for what's next. |
 | `0.13.0` | **Adaptive "islands" toolbar** — every view's filters, sort, and search become segmented, bordered islands in one unified top bar that shares width evenly, reveals more chips as room allows, collapses to representative icons when tight, and expands one island on demand while the others fold. Rolled out across all thirteen views. |
+| `0.14.0` | **Filter · Sort · Search paradigm + window chrome** — the islands give way to one **Filter** button that morphs into a grouped, described filter panel (single- or multi-select), with sort and an expanding search as standalone controls. A full-width HTML title bar that yields the full height to the sidebar when it's open, the sidebar top merged with the Device view, and Settings moved to the sidebar footer. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -28,6 +29,48 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.14.0] — 2026-07-19
+
+**The "islands" toolbar (0.13.0) becomes a Filter · Sort · Search paradigm.** One
+funnel **Filter** button morphs open into a grouped panel; sort and search stand
+on their own. Plus a state-aware title bar and a reorganised sidebar.
+
+### Added
+
+- **Filter panel** (`FilterControl`): the funnel button *morphs* into the panel —
+  its width/height/radius animate from the button's footprint to the full panel
+  (the NoteSage command-bar technique; width/height animate reliably in the macOS
+  webview, unlike the `scale`/`translate` properties). Each facet is a **labelled,
+  described group**; facets the backup lacks are omitted, empty time presets are
+  disabled. Selected filters show as **removable chips** on the closed island that
+  collapse-animate away on removal. **Multi-select** where it fits (e.g. Notes
+  tags); single-select for Time and single-choice facets.
+- **Standalone Sort** (a bordered island) and an **expanding Search** box whose
+  width animates open.
+- **State-aware title bar**: when the sidebar is **collapsed** the title bar spans
+  the full window width above the icon rail; when **expanded** the sidebar runs
+  full height and the bar only covers the content area to its right. Traffic
+  lights vertically centred; the sidebar toggle is its own island.
+- **Sidebar reorg**: the top entry merges with the **Device** view (shows the
+  open device's name); **Settings** moved to the sidebar footer.
+
+### Changed
+
+- **All views** migrated off the islands engine to the new paradigm; the adaptive
+  islands fit-engine (`toolbar-islands`, the measurement logic in
+  `AdaptiveToolbar`) and the now-unused `PanelHeader` were removed.
+- Filter chips use discrete borders (no louder than the island border).
+
+### Fixed
+
+- WebKit wouldn't animate the individual `scale`/`translate` CSS properties, so
+  all toolbar animations use `transform`/`width`/`height` instead.
+- The dev window config now applies the merged-titlebar settings (it previously
+  replaced the base window, losing `titleBarStyle`/`hiddenTitle`).
+- A review pass hardened `FilterControl`: guards a toggle-based multi-select clear
+  against double-firing, cancels pending timers on unmount, adds focus
+  management, and re-measures the panel with a `ResizeObserver`.
 
 ## [0.13.0] — 2026-07-19
 
