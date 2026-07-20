@@ -157,9 +157,8 @@ fn enumerate(
         };
         let key = rel.strip_prefix(DCIM_PREFIX).unwrap_or(&rel).to_string();
         let asset_meta = meta.get(&key);
-        if asset_meta.is_some_and(|m| m.trashed) {
-            continue; // recently-deleted assets
-        }
+        // Recently-deleted (trashed) assets are ingested too and badged later by
+        // photos_meta (ZTRASHEDSTATE) — surfaced, not excluded, for forensics.
 
         // Resolve the thumbnail to a servable plaintext path (decrypt to the
         // cache for encrypted backups, raw path otherwise).
@@ -225,12 +224,12 @@ fn resolve_thumb(
 
 struct AssetMeta {
     taken_at: Option<i64>,
-    trashed: bool,
 }
 
-/// Per-asset capture date + trashed flag from the backup's `Photos.sqlite`,
-/// keyed by "<album>/<filename>" (e.g. "258APPLE/IMG_8998.HEIC"). Best-effort:
-/// schema varies by iOS version, so any failure yields an empty map.
+/// Per-asset capture date from the backup's `Photos.sqlite`, keyed by
+/// "<album>/<filename>" (e.g. "258APPLE/IMG_8998.HEIC"). Best-effort: schema
+/// varies by iOS version, so any failure yields an empty map. (The trashed flag
+/// and the rest of the ZASSET metadata are applied later by `photos_meta`.)
 fn load_photos_metadata(
     manifest: &Connection,
     backup_dir: &Path,
@@ -274,12 +273,12 @@ fn load_photos_metadata(
     read_photos_metadata(&conn)
 }
 
-/// Query ZASSET on an open Photos.sqlite for capture dates + trashed flags.
+/// Query ZASSET on an open Photos.sqlite for capture dates.
 fn read_photos_metadata(conn: &Connection) -> Result<HashMap<String, AssetMeta>> {
     // ZDATECREATED is a Core Data timestamp (seconds since 2001-01-01).
     const COCOA_EPOCH_OFFSET: f64 = 978_307_200.0;
     let mut stmt = conn.prepare(
-        "SELECT ZDIRECTORY, ZFILENAME, ZDATECREATED, ZTRASHEDSTATE
+        "SELECT ZDIRECTORY, ZFILENAME, ZDATECREATED
          FROM ZASSET WHERE ZDIRECTORY LIKE 'DCIM/%'",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -287,18 +286,16 @@ fn read_photos_metadata(conn: &Connection) -> Result<HashMap<String, AssetMeta>>
             r.get::<_, String>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, Option<f64>>(2)?,
-            r.get::<_, Option<i64>>(3)?,
         ))
     })?;
 
     let mut map = HashMap::new();
-    for (dir, fname, date, trashed) in rows.flatten() {
+    for (dir, fname, date) in rows.flatten() {
         let key = format!("{}/{}", dir.strip_prefix("DCIM/").unwrap_or(&dir), fname);
         map.insert(
             key,
             AssetMeta {
                 taken_at: date.map(|d| (d + COCOA_EPOCH_OFFSET) as i64),
-                trashed: trashed.unwrap_or(0) != 0,
             },
         );
     }
@@ -368,12 +365,16 @@ mod tests {
 
         // Unencrypted: no decryptor, cache dir unused.
         let assets = parse_camera_roll(backup, None, &backup.join("_cache")).unwrap();
-        // .AAE sidecar skipped; trashed IMG_7777 excluded.
-        assert_eq!(assets.len(), 2);
-        assert!(assets.iter().all(|a| !a.relative_path.contains("IMG_7777")));
+        // .AAE sidecar skipped; trashed IMG_7777 is ingested now (badged later by
+        // photos_meta), not excluded — so photo, video, and the trashed photo.
+        assert_eq!(assets.len(), 3);
+        assert!(assets.iter().any(|a| a.relative_path.contains("IMG_7777")));
 
-        let photo = assets.iter().find(|a| a.kind == "photo").unwrap();
-        assert!(photo.relative_path.ends_with("IMG_8998.HEIC"));
+        let photo = assets
+            .iter()
+            .find(|a| a.relative_path.ends_with("IMG_8998.HEIC"))
+            .unwrap();
+        assert_eq!(photo.kind, "photo");
         assert_eq!(photo.full_path, backup.join("aa").join("aa11"));
         assert_eq!(photo.thumb_path, Some(backup.join("bb").join("bb22")));
         assert_eq!(photo.mime.as_deref(), Some("image/heic"));

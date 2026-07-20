@@ -22,8 +22,24 @@ import { client } from "@/lib/ipc";
 interface AppRow {
   bundleId: string;
   name: string;
+  /** The built-in catalog name, used as the Messages `service` filter value
+   *  (threads are tagged with this, not the App Store `name`). */
+  serviceName: string;
   support: AppSupport;
   slug?: string;
+  /** App Store metadata from the backup's Info.plist (may be absent). */
+  seller: string | null;
+  version: string | null;
+  genre: string | null;
+  released: string | null;
+}
+
+/** "2018" — just the year of an RFC-3339 release date (the day/time is noise
+ *  for an app's original App Store release). */
+function releasedYear(released: string | null): string | null {
+  if (!released) return null;
+  const d = new Date(released);
+  return Number.isNaN(d.getTime()) ? null : String(d.getUTCFullYear());
 }
 
 export function AppsView() {
@@ -33,7 +49,7 @@ export function AppsView() {
     queryFn: () => client.hasActiveBackup(),
   });
   const {
-    data: bundleIds,
+    data: installed,
     isPending,
     error,
   } = useQuery({
@@ -44,8 +60,9 @@ export function AppsView() {
   const [q, setQ] = useState("");
 
   // TraceLoupe-recoverable apps first, system apps last; each group by name.
+  // Prefer the backup's own App Store name over the built-in catalog name.
   const apps: AppRow[] = useMemo(() => {
-    if (!bundleIds) return [];
+    if (!installed) return [];
     const rank: Record<AppSupport, number> = {
       native: 0,
       available: 1,
@@ -54,13 +71,26 @@ export function AppsView() {
       unknown: 4,
       system: 5,
     };
-    return bundleIds
-      .map((bundleId) => ({ bundleId, ...appMeta(bundleId) }))
+    return installed
+      .map((app): AppRow => {
+        const meta = appMeta(app.bundleId);
+        return {
+          bundleId: app.bundleId,
+          name: app.name ?? meta.name,
+          serviceName: meta.name,
+          support: meta.support,
+          slug: meta.slug,
+          seller: app.seller,
+          version: app.version,
+          genre: app.genre,
+          released: app.released,
+        };
+      })
       .sort(
         (a, b) =>
           rank[a.support] - rank[b.support] || a.name.localeCompare(b.name),
       );
-  }, [bundleIds]);
+  }, [installed]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -68,7 +98,9 @@ export function AppsView() {
     return apps.filter(
       (a) =>
         a.name.toLowerCase().includes(needle) ||
-        a.bundleId.toLowerCase().includes(needle),
+        a.bundleId.toLowerCase().includes(needle) ||
+        (a.seller?.toLowerCase().includes(needle) ?? false) ||
+        (a.genre?.toLowerCase().includes(needle) ?? false),
     );
   }, [apps, q]);
 
@@ -125,6 +157,11 @@ function AppItem({ app }: { app: AppRow }) {
       <ItemContent>
         <ItemTitle className="flex items-center gap-2">
           {app.name}
+          {app.version && (
+            <span className="text-xs font-normal tabular-nums text-muted-foreground/70">
+              v{app.version}
+            </span>
+          )}
           {label && (
             // Both states share the soft "secondary" pill shape (identical box, so
             // no optical height difference); "native" only re-tints it. A solid
@@ -141,7 +178,18 @@ function AppItem({ app }: { app: AppRow }) {
             </Badge>
           )}
         </ItemTitle>
-        <ItemDescription className="truncate">{app.bundleId}</ItemDescription>
+        {/* Seller · genre · release year from the backup's App Store metadata,
+            when present; otherwise fall back to the bundle id. */}
+        {app.seller || app.genre || app.released ? (
+          <ItemDescription className="truncate">
+            {[app.seller, app.genre, releasedYear(app.released)]
+              .filter(Boolean)
+              .join(" · ")}
+          </ItemDescription>
+        ) : null}
+        <ItemDescription className="truncate text-muted-foreground/60">
+          {app.bundleId}
+        </ItemDescription>
       </ItemContent>
       {app.support === "native" ? (
         <ItemActions>
@@ -149,7 +197,7 @@ function AppItem({ app }: { app: AppRow }) {
             variant="ghost"
             size="sm"
             onClick={() =>
-              navigate({ to: "/messages", search: { service: app.name } })
+              navigate({ to: "/messages", search: { service: app.serviceName } })
             }
             className="text-xs text-muted-foreground"
           >

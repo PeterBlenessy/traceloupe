@@ -471,15 +471,25 @@ pub fn import_backup(
     }
 
     step!("Indexing Installed Apps");
-    // Record which apps were on the device (from Info.plist) for the Apps view.
-    let apps = crate::discovery::installed_apps(backup_dir);
+    // Record which apps were on the device + their App Store metadata (name,
+    // seller, version, genre, release date) from Info.plist's iTunesMetadata.
+    let apps = crate::discovery::installed_apps_meta(backup_dir);
     {
         let conn = cache.conn();
         let tx = conn.unchecked_transaction()?;
-        for bundle_id in &apps {
+        for app in &apps {
             tx.execute(
-                "INSERT OR IGNORE INTO installed_apps (bundle_id) VALUES (?1)",
-                [bundle_id],
+                "INSERT OR REPLACE INTO installed_apps
+                     (bundle_id, name, seller, version, genre, released)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    app.bundle_id,
+                    app.name,
+                    app.seller,
+                    app.version,
+                    app.genre,
+                    app.released,
+                ],
             )?;
         }
         tx.commit()?;
@@ -981,6 +991,9 @@ fn import_safari_bookmarks_native(
     let stores = [
         ("Library/Safari/Bookmarks.db", ".Bookmarks.db", "bookmarks"),
         ("Library/Safari/SafariTabs.db", ".SafariTabs.db", "tabs"),
+        // BrowserState.db (local open tabs) is parsed AFTER SafariTabs.db and
+        // replaces its tabs when present — richer (last-viewed, private flag).
+        ("Library/Safari/BrowserState.db", ".BrowserState.db", "open_tabs"),
     ];
     for (rel, tmp, which) in stores {
         let entry = match index.find("HomeDomain", rel) {
@@ -1001,10 +1014,14 @@ fn import_safari_bookmarks_native(
                 .push(format!("Native Safari {which}: extract failed ({e})."));
             continue;
         }
-        let res = if which == "bookmarks" {
-            crate::parsers::safari_bookmarks::parse_safari_bookmarks(&out, cache, report, replace)
-        } else {
-            crate::parsers::safari_bookmarks::parse_safari_tabs(&out, cache, report, replace)
+        let res = match which {
+            "bookmarks" => {
+                crate::parsers::safari_bookmarks::parse_safari_bookmarks(&out, cache, report, replace)
+            }
+            "open_tabs" => {
+                crate::parsers::safari_bookmarks::parse_browser_tabs(&out, cache, report)
+            }
+            _ => crate::parsers::safari_bookmarks::parse_safari_tabs(&out, cache, report, replace),
         };
         if let Err(e) = res {
             report

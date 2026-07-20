@@ -317,6 +317,61 @@ pub fn parse_safari_tabs(
     Ok(())
 }
 
+/// Parse `BrowserState.db` — the device's **local** open tabs — into
+/// `safari_bookmarks` as `kind = 'tab'`. This is richer and more complete than
+/// the iCloud-synced `SafariTabs.db` (per-tab last-viewed time, private-browsing
+/// flag), so when it's present it **replaces** any tabs already parsed. Runs
+/// after `parse_safari_tabs` in the import; best-effort on an unknown schema.
+pub fn parse_browser_tabs(db_path: &Path, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+    let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    if !table_exists(&src, "tabs")? {
+        // Not a BrowserState schema — leave whatever SafariTabs.db provided.
+        return Ok(());
+    }
+    // `last_viewed_time` is CFAbsoluteTime (seconds since 2001). Some rows carry a
+    // corrupt far-future sentinel, so accept only plausible values (< ~2032).
+    const MAC_EPOCH: f64 = 978_307_200.0;
+    // `addr` prefers a non-empty user_visible_url, falls back to url, and is NULL
+    // when both are empty/absent (outer NULLIF) so the WHERE skips url-less rows.
+    let mut stmt = src.prepare(
+        "SELECT title, NULLIF(COALESCE(NULLIF(user_visible_url, ''), url), '') AS addr,
+                order_index, last_viewed_time, private_browsing
+         FROM tabs
+         WHERE NULLIF(COALESCE(NULLIF(user_visible_url, ''), url), '') IS NOT NULL
+         ORDER BY private_browsing, order_index",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    // BrowserState is authoritative for open tabs — always clear existing tab rows
+    // first so the local and iCloud sources can't stack. Discount the rows we
+    // remove from the running report so a re-parse doesn't double-count tabs.
+    let removed = tx.execute("DELETE FROM safari_bookmarks WHERE kind = 'tab'", [])?;
+    report.safari_bookmarks = report.safari_bookmarks.saturating_sub(removed);
+    let mut inserted = 0usize;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let title: Option<String> = r.get(0)?;
+        let url: String = r.get(1)?;
+        let position: Option<i64> = r.get(2)?;
+        let date_viewed = r
+            .get::<_, Option<f64>>(3)?
+            .filter(|t| *t > 0.0 && *t < 1_000_000_000.0)
+            .map(|t| (t + MAC_EPOCH) as i64);
+        let private = r.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0;
+        tx.execute(
+            "INSERT INTO safari_bookmarks
+                (kind, title, url, folder, date_added, date_viewed, preview_text, position, private)
+             VALUES ('tab', ?1, ?2, NULL, NULL, ?3, NULL, ?4, ?5)",
+            rusqlite::params![title, url, date_viewed, position, private as i64],
+        )?;
+        inserted += 1;
+    }
+    tx.commit()?;
+    report.safari_bookmarks += inserted;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +443,68 @@ mod tests {
         assert_eq!(preview.as_deref(), Some("a preview"));
         // 2023-01-01T00:00:00Z.
         assert_eq!(added, Some(1_672_531_200));
+    }
+
+    #[test]
+    fn browser_state_replaces_tabs_with_local_open_tabs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("BrowserState.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tabs (id INTEGER PRIMARY KEY, title TEXT, url TEXT,
+                 user_visible_url TEXT, order_index INTEGER, last_viewed_time REAL,
+                 private_browsing INTEGER, browser_window_uuid TEXT);
+             -- a normal tab with a real last-viewed (721692800 CFAbsolute → 1_700_000_000 unix)
+             INSERT INTO tabs VALUES (1,'Example','https://example.com/x','https://example.com',0,721692800.0,0,'w1');
+             -- a private tab, no user_visible_url (falls back to url), corrupt far-future last-viewed → dropped
+             INSERT INTO tabs VALUES (2,'Secret',NULL,'https://private.example',1,1783839264.0,1,'w2');
+             -- a row with no url at all → skipped
+             INSERT INTO tabs VALUES (3,'Blank',NULL,'',2,0,0,'w1');",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        // A stale iCloud tab already in the table — must be replaced by BrowserState.
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO safari_bookmarks (kind, title, url) VALUES ('tab','Old iCloud tab','https://old.example')",
+                [],
+            )
+            .unwrap();
+
+        let mut report = ImportReport::default();
+        parse_browser_tabs(&db, &cache, &mut report).unwrap();
+        assert_eq!(report.safari_bookmarks, 2, "two valid tabs; the url-less row skipped");
+
+        let c = cache.conn();
+        let n: i64 = c
+            .query_row("SELECT COUNT(*) FROM safari_bookmarks WHERE kind='tab'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 2, "the stale iCloud tab was replaced");
+
+        // Normal tab: user_visible_url preferred, real last-viewed kept.
+        let (url, viewed, private): (String, Option<i64>, i64) = c
+            .query_row(
+                "SELECT url, date_viewed, private FROM safari_bookmarks WHERE title='Example'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(url, "https://example.com", "user_visible_url preferred over url");
+        assert_eq!(viewed, Some(1_700_000_000));
+        assert_eq!(private, 0);
+
+        // Private tab: flagged, url fallback, corrupt future date dropped.
+        let (url2, viewed2, private2): (String, Option<i64>, i64) = c
+            .query_row(
+                "SELECT url, date_viewed, private FROM safari_bookmarks WHERE title='Secret'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(url2, "https://private.example");
+        assert_eq!(viewed2, None, "far-future sentinel dropped");
+        assert_eq!(private2, 1);
     }
 }
