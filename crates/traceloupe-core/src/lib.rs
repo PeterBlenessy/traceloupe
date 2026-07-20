@@ -6,6 +6,7 @@
 
 pub mod analyzer;
 pub mod cache;
+pub mod detection_settings;
 pub mod crypto;
 pub mod discovery;
 pub mod engine;

@@ -560,6 +560,139 @@ pub fn bundled_snapshot_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/indicators")
 }
 
+/// A feed's canonical download URL, carried in the bundled manifest.
+#[derive(Deserialize)]
+struct FetchManifest {
+    feeds: Vec<FetchFeedEntry>,
+}
+
+#[derive(Deserialize)]
+struct FetchFeedEntry {
+    file: String,
+    #[serde(default)]
+    url: Option<String>,
+}
+
+/// Refresh the indicator snapshot at `dest` from the feed URLs recorded in the
+/// bundled snapshot's `manifest.json`. Downloads to a temp file per feed and
+/// swaps into place only on success, so a failed/partial fetch leaves the
+/// previous snapshot intact. Copies the manifest and attribution over so
+/// `dest` is a self-contained loadable snapshot.
+///
+/// Privacy (ADR 0001): every request URL is a static public-repo feed path
+/// from the bundled manifest. No backup-derived data is sent. `agent` is
+/// injected for testability.
+pub fn fetch_snapshot_with(
+    agent: &ureq::Agent,
+    bundled_dir: &std::path::Path,
+    dest: &std::path::Path,
+    mut on_progress: impl FnMut(&str, usize, usize),
+) -> Result<SnapshotInfo> {
+    let manifest_path = bundled_dir.join("manifest.json");
+    let manifest_text =
+        std::fs::read_to_string(&manifest_path).map_err(|e| Error::io(&manifest_path, e))?;
+    let manifest: FetchManifest =
+        serde_json::from_str(&manifest_text).map_err(|e| Error::IndicatorFeed {
+            feed: "manifest.json".to_string(),
+            message: e.to_string(),
+        })?;
+
+    std::fs::create_dir_all(dest).map_err(|e| Error::io(dest, e))?;
+    // Each indicator feed is a few MB at most; cap to guard a MITM'd host from
+    // filling the disk (verification/parse happens after the whole file lands).
+    const MAX_FEED_BYTES: u64 = 64 * 1024 * 1024;
+
+    let total = manifest.feeds.len();
+    for (idx, feed) in manifest.feeds.iter().enumerate() {
+        let Some(url) = &feed.url else { continue };
+        on_progress(&feed.file, idx, total);
+        let resp = agent
+            .get(url)
+            .call()
+            .map_err(|e| Error::IndicatorFeed {
+                feed: feed.file.clone(),
+                message: format!("request failed: {e}"),
+            })?;
+        let tmp = dest.join(format!("{}.download", feed.file));
+        let mut reader = std::io::Read::take(resp.into_reader(), MAX_FEED_BYTES + 1);
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut reader, &mut buf).map_err(|e| Error::IndicatorFeed {
+            feed: feed.file.clone(),
+            message: e.to_string(),
+        })?;
+        if buf.len() as u64 > MAX_FEED_BYTES {
+            return Err(Error::IndicatorFeed {
+                feed: feed.file.clone(),
+                message: "feed exceeded size cap".into(),
+            });
+        }
+        std::fs::write(&tmp, &buf).map_err(|e| Error::io(&tmp, e))?;
+        let final_path = dest.join(&feed.file);
+        std::fs::rename(&tmp, &final_path).map_err(|e| Error::io(&final_path, e))?;
+    }
+
+    // Refresh manifest + attribution so `dest` loads standalone. Stamp the
+    // manifest's generated_at with the fetch time by rewriting the field.
+    let mut manifest_value: serde_json::Value =
+        serde_json::from_str(&manifest_text).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = manifest_value.as_object_mut() {
+        obj.insert(
+            "generated_at".into(),
+            serde_json::Value::String(fetch_timestamp()),
+        );
+    }
+    std::fs::write(
+        dest.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest_value).unwrap_or(manifest_text),
+    )
+    .map_err(|e| Error::io(dest.join("manifest.json"), e))?;
+    let attribution = bundled_dir.join("ATTRIBUTION.md");
+    if attribution.exists() {
+        let _ = std::fs::copy(&attribution, dest.join("ATTRIBUTION.md"));
+    }
+
+    let (_, info) = load_snapshot_dir(dest)?;
+    Ok(info)
+}
+
+fn fetch_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    match time::OffsetDateTime::from_unix_timestamp(secs as i64) {
+        Ok(dt) => dt
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| secs.to_string()),
+        Err(_) => secs.to_string(),
+    }
+}
+
+/// Convenience wrapper building a default agent.
+pub fn fetch_snapshot(
+    bundled_dir: &std::path::Path,
+    dest: &std::path::Path,
+    on_progress: impl FnMut(&str, usize, usize),
+) -> Result<SnapshotInfo> {
+    let agent = ureq::AgentBuilder::new().build();
+    fetch_snapshot_with(&agent, bundled_dir, dest, on_progress)
+}
+
+/// Resolve the active snapshot directory: a previously fetched one under
+/// `app_data` if present and non-empty, else the bundled directory.
+pub fn active_snapshot_dir(
+    app_data: &std::path::Path,
+    bundled_dir: &std::path::Path,
+) -> std::path::PathBuf {
+    let fetched = app_data.join("indicators");
+    if fetched.join("manifest.json").exists() {
+        fetched
+    } else {
+        bundled_dir.to_path_buf()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
