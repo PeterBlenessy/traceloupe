@@ -31,7 +31,41 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ## [Unreleased]
 
-_Nothing yet._
+**Data-coverage pass.** More fields already present in a backup, now surfaced.
+Requires a re-import to populate for existing caches.
+
+### Added
+
+- **Interactions — per-app channels.** A "Channels" summary strip above the
+  interaction list shows which apps CoreDuet interactions flowed through
+  (Messages, Phone, FaceTime, Snapchat, Gmail, …) with in/out totals, read from
+  the raw `ZINTERACTIONS` table (the person-level `ZCONTACTS` graph has no app
+  dimension). Bundle ids sharing a name merge; zero-total channels drop.
+- **Health — Cycle Tracking.** A menstrual-flow + symptoms section from the
+  HealthKit category samples.
+- **Health — Awards.** Earned Apple Fitness achievements.
+- **Contacts — social / IM profiles.** AddressBook property 46 (Twitter,
+  Instagram, and other service handles).
+- **Apps — App Store metadata.** Name, seller, version, genre, and release year
+  parsed from each app's `iTunesMetadata` bplist.
+- **Messages — expressive send effects.** "Sent with Confetti / Slam / Invisible
+  Ink / …" from `expressive_send_style_id`.
+- **Messages — app-bubble messages.** iMessage-app bubbles (`balloon_bundle_id`)
+  surfaced as a distinct message kind instead of empty rows.
+- **Photos — Live Photo & burst badges.** Distinguishes Live Photos
+  (`ZPLAYBACKSTYLE`) and burst stacks (`ZAVALANCHEUUID`).
+- **Notes — image filter.** Filter for notes that carry embedded images.
+- **Device — toolbar.** Close the backup, re-import, or open another backup
+  without leaving the view.
+
+### Fixed
+
+- **Photos — panorama mislabel.** `ZKINDSUBTYPE == 2` is a Live Photo
+  still-frame, not a panorama (which is `== 1`); panoramas are now counted
+  correctly.
+- **Notes — honest image availability.** Notes whose images were offloaded to
+  iCloud no longer pretend to display them; they state the images aren't in the
+  backup instead.
 
 ## [0.17.0] — 2026-07-20
 
