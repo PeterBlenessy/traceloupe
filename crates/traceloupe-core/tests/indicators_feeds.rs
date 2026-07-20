@@ -178,6 +178,31 @@ fn synthetic_bundle_skips_unknown_patterns_without_failing() {
 }
 
 #[test]
+fn bundled_snapshot_loads_offline() {
+    let dir = traceloupe_core::indicators::bundled_snapshot_dir();
+    let (set, info) = traceloupe_core::indicators::load_snapshot_dir(&dir).expect("snapshot loads");
+    // 11 mercenary STIX bundles + Echap ioc.yaml + watchware.yaml.
+    assert_eq!(info.feeds.len(), 13);
+    assert!(!info.generated_at.is_empty());
+    // Every feed parsed (a failed feed reports count 0).
+    for f in &info.feeds {
+        assert!(f.count > 0, "feed {} loaded nothing", f.source);
+    }
+    // The merged set is substantial and covers the kinds the scan engine needs.
+    assert!(set.len() > 5000, "only {} indicators", set.len());
+    for kind in [
+        IndicatorKind::Domain,
+        IndicatorKind::ProcessName,
+        IndicatorKind::BundleId,
+        IndicatorKind::Email,
+    ] {
+        assert!(set.count_by_kind(kind) > 0, "no {kind:?} indicators");
+    }
+    // Attribution must ship next to the data.
+    assert!(dir.join("ATTRIBUTION.md").exists());
+}
+
+#[test]
 fn malformed_feed_is_a_feed_error() {
     assert!(load_stix_bundle("not json", "x", FeedClass::Mercenary).is_err());
     assert!(load_echap_yaml(": broken\n- yaml", "x", FeedClass::Stalkerware).is_err());
