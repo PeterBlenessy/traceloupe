@@ -523,6 +523,8 @@ async fn import_backup(
     let password = zeroize::Zeroizing::new(password);
     let key_password = zeroize::Zeroizing::new(password.to_string());
 
+    // Held for the post-import Passive Check (the pipeline closure moves `app`).
+    let app_for_passive = app.clone();
     // Blocking pipeline on a worker thread; progress is emitted as it runs.
     let result = tauri::async_runtime::spawn_blocking(move || {
         logging::info(&app, "Import started");
@@ -649,6 +651,12 @@ async fn import_backup(
         session.set(decryptor);
     }
 
+    // Passive Check: if the user consented, run the (apps-only by default)
+    // detection pass over the just-built cache so a fresh import surfaces
+    // findings without a separate scan. Best-effort — never fail an import
+    // because detection hiccupped.
+    run_passive_check_if_consented(&app_for_passive, &outcome.cache_path).await;
+
     Ok(ImportResult {
         cache_path: outcome.cache_path.display().to_string(),
         threads: outcome.report.threads,
@@ -659,6 +667,109 @@ async fn import_backup(
         contacts: outcome.report.contacts,
         warnings: outcome.report.warnings,
     })
+}
+
+/// Run the Passive Check against `cache_path` when the user has consented and
+/// enabled it. Used both after an import and by `run_passive_check_now` (the
+/// first-launch flow, against an already-imported cache). Best-effort: logs
+/// and returns on any error.
+async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let settings = DetectionSettings::load(&data_dir).unwrap_or_default();
+    if !settings.passive_active() {
+        return;
+    }
+    let scan_kind = ScanKind::Passive;
+    let modules: Vec<&'static str> = match settings.passive_scope {
+        traceloupe_core::detection_settings::PassiveScope::AppsOnly => vec!["apps"],
+        traceloupe_core::detection_settings::PassiveScope::Full => {
+            analyzer::MODULES.to_vec()
+        }
+    };
+    let snapshot_dir = active_indicators_dir(app);
+    let cp = cache_path.to_path_buf();
+    let app2 = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let db = CacheDb::open(&cp)?;
+        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
+        analyzer::run_scan(
+            &db,
+            &set,
+            scan_kind,
+            &modules,
+            None,
+            &feeds_json,
+            &CancelToken::new(),
+            |module, index, total| {
+                let _ = app2.emit(
+                    "scan://progress",
+                    ScanProgress {
+                        module: module.to_string(),
+                        index,
+                        total,
+                    },
+                );
+            },
+        )
+    })
+    .await;
+    match outcome {
+        Ok(Ok(o)) => {
+            if o.findings > 0 {
+                logging::warn(
+                    app,
+                    format!(
+                        "\u{26a0} Passive Check flagged {} item(s) — open Security to review",
+                        o.findings
+                    ),
+                );
+            } else {
+                logging::info(
+                    app,
+                    "\u{2713} Passive Check: no known indicators matched".to_string(),
+                );
+            }
+        }
+        Ok(Err(e)) => logging::warn(app, format!("Passive Check skipped: {e}")),
+        Err(e) => logging::warn(app, format!("Passive Check skipped: {e}")),
+    }
+}
+
+/// Run the Passive Check now against the active backup (the first-launch
+/// consent flow: the user just granted consent and we scan the already-imported
+/// cache without waiting for a re-import). No-op if consent isn't granted.
+#[tauri::command]
+async fn run_passive_check_now(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+) -> Result<Option<ScanSummary>, String> {
+    let Ok(cache_path) = active.path() else {
+        return Ok(None);
+    };
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    if !DetectionSettings::load(&data_dir)
+        .unwrap_or_default()
+        .passive_active()
+    {
+        return Ok(None);
+    }
+    run_passive_check_if_consented(&app, &cache_path).await;
+    let path = cache_path.clone();
+    let run = tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        query::latest_scan_run(&cache)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok(run.map(|run_id| ScanSummary {
+        run_id,
+        findings: 0,
+        cancelled: false,
+    }))
 }
 
 /// Open a previously-imported backup's cache (by id) for browsing, without
@@ -924,6 +1035,375 @@ fn reimport_count(module_id: &str, r: &traceloupe_core::normalize::ImportReport)
         "safari" => format!("{} Safari visits", r.safari_visits),
         _ => String::new(),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Security Check (spyware/stalkerware indicator scan). See
+// docs/spyware-analyzer-prd.md and docs/security-check-m1-plan.md.
+// ---------------------------------------------------------------------------
+
+use traceloupe_core::analyzer::{self, ScanKind};
+use traceloupe_core::detection_settings::DetectionSettings;
+use traceloupe_core::indicators::{self, SnapshotInfo};
+use traceloupe_core::manifest::ManifestIndex;
+
+/// Cancel token for the scan currently in flight (mirrors [`ImportCancel`]).
+#[derive(Default)]
+struct ScanCancel(Mutex<Option<CancelToken>>);
+
+/// Serializes scans so two never write findings to the same cache at once.
+#[derive(Default)]
+struct ScanGate(tauri::async_runtime::Mutex<()>);
+
+/// Progress payload for the `scan://progress` event.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanProgress {
+    module: String,
+    index: usize,
+    total: usize,
+}
+
+/// Summary returned when a scan finishes.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanSummary {
+    run_id: i64,
+    findings: usize,
+    cancelled: bool,
+}
+
+/// The bundled indicator snapshot dir: the packaged app resource, or (dev
+/// build) the crate's `resources/indicators`.
+fn bundled_indicators_dir(app: &AppHandle) -> PathBuf {
+    if let Ok(res) = app.path().resource_dir() {
+        let packaged = res.join("indicators");
+        if packaged.join("manifest.json").exists() {
+            return packaged;
+        }
+    }
+    indicators::bundled_snapshot_dir()
+}
+
+/// Where fetched indicator snapshots live (survives re-imports; not the cache).
+fn indicators_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("indicators"))
+        .map_err(|e| e.to_string())
+}
+
+/// The active snapshot dir — a fetched one if present, else the bundle.
+fn active_indicators_dir(app: &AppHandle) -> PathBuf {
+    let bundled = bundled_indicators_dir(app);
+    match app.path().app_data_dir() {
+        Ok(data) => indicators::active_snapshot_dir(&data, &bundled),
+        Err(_) => bundled,
+    }
+}
+
+/// `…/caches/<id>/cache.db` → `(backup_id, work_dir)`.
+fn backup_layout(cache_path: &Path) -> Result<(String, PathBuf), String> {
+    let id_dir = cache_path
+        .parent()
+        .ok_or("unexpected cache layout")?;
+    let backup_id = id_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("unexpected cache layout")?
+        .to_string();
+    let data_dir = id_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("unexpected cache layout")?;
+    let work_dir = data_dir.join("work").join(&backup_id);
+    Ok((backup_id, work_dir))
+}
+
+/// Run a Security Check scan over the active backup's cache. `kind` is
+/// "explicit" (full modules, may fetch fresh feeds) or "passive" (apps-only by
+/// default). Emits `scan://progress`; cancellable via `cancel_scan`.
+#[tauri::command]
+async fn run_security_scan(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    scan_gate: State<'_, ScanGate>,
+    cancel_state: State<'_, ScanCancel>,
+    kind: String,
+) -> Result<ScanSummary, String> {
+    let scan_kind = match kind.as_str() {
+        "explicit" => ScanKind::Explicit,
+        "passive" => ScanKind::Passive,
+        _ => return Err(format!("unknown scan kind '{kind}'")),
+    };
+    let _gate = scan_gate.0.lock().await;
+    let cache_path = active.path()?;
+
+    let settings = DetectionSettings::load(
+        &app.path().app_data_dir().map_err(|e| e.to_string())?,
+    )
+    .unwrap_or_default();
+
+    // Refresh feeds first when the user has opted in (Explicit Scan only).
+    let bundled = bundled_indicators_dir(&app);
+    if scan_kind == ScanKind::Explicit && settings.may_fetch() {
+        if let Ok(dest) = indicators_data_dir(&app) {
+            let app2 = app.clone();
+            let bundled2 = bundled.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                indicators::fetch_snapshot(&bundled2, &dest, |file, i, n| {
+                    let _ = app2.emit(
+                        "scan://progress",
+                        ScanProgress {
+                            module: format!("updating indicators: {file}"),
+                            index: i,
+                            total: n,
+                        },
+                    );
+                })
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    let snapshot_dir = active_indicators_dir(&app);
+
+    // For an Explicit Scan, build the manifest file list so the sweep can run.
+    // Needs the backup source + (for encrypted) decryption keys, exactly like
+    // reimport_module.
+    let mut manifest_entries: Option<Vec<(String, String)>> = None;
+    if scan_kind == ScanKind::Explicit {
+        let (backup_id, work_dir) = backup_layout(&cache_path)?;
+        let source_dir = {
+            let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+            cache.get_meta("source_dir").map_err(|e| e.to_string())?
+        };
+        if let Some(source_dir) = source_dir {
+            let mut decryptor = session.get();
+            if decryptor.is_none() {
+                let cp = cache_path.clone();
+                let bid = backup_id.clone();
+                decryptor =
+                    tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&cp, &bid))
+                        .await
+                        .ok()
+                        .flatten();
+                if let Some(d) = &decryptor {
+                    session.set(Some(d.clone()));
+                }
+            }
+            let entries = tauri::async_runtime::spawn_blocking(move || {
+                let idx = ManifestIndex::open(
+                    Path::new(&source_dir),
+                    decryptor.as_deref(),
+                    &work_dir,
+                )?;
+                let mut out = Vec::new();
+                idx.for_each_path(|domain, path| out.push((domain, path)))?;
+                Ok::<_, traceloupe_core::Error>(out)
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            match entries {
+                Ok(e) => manifest_entries = Some(e),
+                Err(e) => logging::warn(
+                    &app,
+                    format!("Security Check: manifest sweep unavailable: {e}"),
+                ),
+            }
+        }
+    }
+
+    let cancel = CancelToken::new();
+    *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
+    logging::info(&app, format!("\u{25b6} Security Check ({kind}) started\u{2026}"));
+    let started = Instant::now();
+
+    let app_progress = app.clone();
+    let cp = cache_path.clone();
+    let modules: Vec<&'static str> = scan_kind.default_modules();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let db = CacheDb::open(&cp)?;
+        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
+        let mut sweep = manifest_entries.map(|v| v.into_iter());
+        let sweep_ref = sweep
+            .as_mut()
+            .map(|it| it as &mut dyn Iterator<Item = (String, String)>);
+        analyzer::run_scan(
+            &db,
+            &set,
+            scan_kind,
+            &modules,
+            sweep_ref,
+            &feeds_json,
+            &cancel,
+            |module, index, total| {
+                let _ = app_progress.emit(
+                    "scan://progress",
+                    ScanProgress {
+                        module: module.to_string(),
+                        index,
+                        total,
+                    },
+                );
+            },
+        )
+    })
+    .await;
+
+    *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    let outcome = result.map_err(|e| e.to_string())?.map_err(|e| {
+        let e = e.to_string();
+        logging::error(&app, format!("\u{2717} Security Check failed: {e}"));
+        e
+    })?;
+    logging::info(
+        &app,
+        format!(
+            "\u{2713} Security Check ({kind}): {} findings in {} ms{}",
+            outcome.findings,
+            started.elapsed().as_millis(),
+            if outcome.cancelled { " (cancelled)" } else { "" }
+        ),
+    );
+
+    Ok(ScanSummary {
+        run_id: outcome.run_id,
+        findings: outcome.findings,
+        cancelled: outcome.cancelled,
+    })
+}
+
+/// Cancel a scan in flight (no-op if none running).
+#[tauri::command]
+fn cancel_scan(cancel_state: State<'_, ScanCancel>) {
+    if let Some(token) = cancel_state
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+    {
+        token.cancel();
+    }
+}
+
+#[tauri::command]
+async fn list_scan_runs(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<query::ScanRun>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        query::list_scan_runs(&cache)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// The most recent completed run's id (so the UI can open it by default).
+#[tauri::command]
+async fn latest_scan_run(active: State<'_, ActiveBackup>) -> Result<Option<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        query::latest_scan_run(&cache)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_findings(
+    active: State<'_, ActiveBackup>,
+    run_id: i64,
+    min_severity: Option<String>,
+    module: Option<String>,
+) -> Result<Vec<query::Finding>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        query::list_findings(&cache, run_id, min_severity.as_deref(), module.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Load info about the active indicator snapshot (feed counts + freshness).
+#[tauri::command]
+async fn get_indicator_info(app: AppHandle) -> Result<SnapshotInfo, String> {
+    let dir = active_indicators_dir(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        indicators::load_snapshot_dir(&dir).map(|(_, info)| info)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Fetch fresh indicator feeds now (user-initiated "Update indicators").
+#[tauri::command]
+async fn update_indicators(app: AppHandle) -> Result<SnapshotInfo, String> {
+    let bundled = bundled_indicators_dir(&app);
+    let dest = indicators_data_dir(&app)?;
+    let app2 = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        indicators::fetch_snapshot(&bundled, &dest, |file, i, n| {
+            let _ = app2.emit(
+                "scan://progress",
+                ScanProgress {
+                    module: format!("updating indicators: {file}"),
+                    index: i,
+                    total: n,
+                },
+            );
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Write a CSV report of a scan run to `path` (chosen via a save dialog on the
+/// frontend). Returns the number of bytes written.
+#[tauri::command]
+async fn export_scan_report(
+    active: State<'_, ActiveBackup>,
+    run_id: i64,
+    path: String,
+) -> Result<u64, String> {
+    let cache_path = active.path()?;
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+        let csv = analyzer::export_report_csv(&cache, run_id, &version)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&path, &csv).map_err(|e| format!("writing {path}: {e}"))?;
+        Ok::<u64, String>(csv.len() as u64)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn get_detection_settings(app: AppHandle) -> Result<DetectionSettings, String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    DetectionSettings::load(&data).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_detection_settings(
+    app: AppHandle,
+    settings: DetectionSettings,
+) -> Result<(), String> {
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    settings.save(&data).map_err(|e| e.to_string())
 }
 
 /// Forget an imported backup: delete its cache DB and all derived caches
@@ -2791,6 +3271,8 @@ pub fn run() {
         .manage(SessionKeys::default())
         .manage(ImportCancel::default())
         .manage(ImportGate::default())
+        .manage(ScanCancel::default())
+        .manage(ScanGate::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of
@@ -2922,7 +3404,18 @@ pub fn run() {
             count_safari_bookmarks,
             count_safari_bookmark_ranges,
             get_safari_bookmarks_window,
-            get_safari_window
+            get_safari_window,
+            run_security_scan,
+            cancel_scan,
+            list_scan_runs,
+            latest_scan_run,
+            list_findings,
+            get_indicator_info,
+            update_indicators,
+            get_detection_settings,
+            set_detection_settings,
+            run_passive_check_now,
+            export_scan_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

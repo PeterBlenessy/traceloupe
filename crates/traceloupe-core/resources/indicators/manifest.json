@@ -1,0 +1,18 @@
+{
+  "generated_at": "2026-07-20T16:08:47Z",
+  "feeds": [
+    {"file": "pegasus.stix2", "source": "AmnestyTech/pegasus", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/AmnestyTech/investigations/master/2021-07-18_nso/pegasus.stix2"},
+    {"file": "predator.stix2", "source": "mvt-project/predator", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/main/intellexa_predator/predator.stix2"},
+    {"file": "rcs.stix2", "source": "mvt-project/rcs", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/main/2022-06-23_rcs_lab/rcs.stix2"},
+    {"file": "kingspawn.stix2", "source": "DigiDNA/kingspawn", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/DigiDNA/iMazing-Indicators-Of-Compromise/main/spywares/2023-04-11_KingsPawn-QuaDream/kingspawn.stix2"},
+    {"file": "operation_triangulation.stix2", "source": "mvt-project/operation_triangulation", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/main/2023-06_01_operation_triangulation/operation_triangulation.stix2"},
+    {"file": "novispy.stix2", "source": "AmnestyTech/novispy", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/AmnestyTech/investigations/master/2024-12-16_serbia_novispy/novispy.stix2"},
+    {"file": "candiru.stix2", "source": "mvt-project/candiru", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/refs/heads/main/candiru/candiru.stix2"},
+    {"file": "wintego_helios.stix2", "source": "AmnestyTech/wintego_helios", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/AmnestyTech/investigations/refs/heads/master/2024-05-02_wintego_helios/wintego_helios.stix2"},
+    {"file": "eaglemsgspy.stix2", "source": "mvt-project/eaglemsgspy", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/refs/heads/main/2024-12-25_eaglemsgspy/eaglemsgspy.stix2"},
+    {"file": "coruna.stix2", "source": "mvt-project/coruna", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/refs/heads/main/2026-03-03_coruna_cryptowaters/coruna.stix2"},
+    {"file": "darksword.stix2", "source": "mvt-project/darksword", "class": "mercenary", "format": "stix2", "url": "https://raw.githubusercontent.com/mvt-project/mvt-indicators/refs/heads/main/2026-03-30_darksword/darksword.stix2"},
+    {"file": "ioc.yaml", "source": "echap/ioc", "class": "stalkerware", "format": "echap_yaml", "url": "https://raw.githubusercontent.com/AssoEchap/stalkerware-indicators/master/ioc.yaml"},
+    {"file": "watchware.yaml", "source": "echap/watchware", "class": "watchware", "format": "echap_yaml", "url": "https://raw.githubusercontent.com/AssoEchap/stalkerware-indicators/master/watchware.yaml"}
+  ]
+}

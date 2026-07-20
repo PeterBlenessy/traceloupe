@@ -2,6 +2,7 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
   Boxes,
+  ShieldAlert,
   CalendarDays,
   HeartPulse,
   ListTodo,
@@ -87,6 +88,7 @@ const nav = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
+  { to: "/security", label: "Security", icon: ShieldAlert },
 ] as const;
 
 export function AppShell() {

@@ -120,6 +120,20 @@ impl ManifestIndex {
             .map_err(Into::into)
     }
 
+    /// Every `(domain, relativePath)` in the backup, for the Security Check
+    /// manifest sweep. Streams via the callback so the whole file list (tens of
+    /// thousands of rows) is never held in memory at once.
+    pub fn for_each_path(&self, mut f: impl FnMut(String, String)) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT domain, relativePath FROM Files WHERE relativePath != ''")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            f(row.get(0)?, row.get(1)?);
+        }
+        Ok(())
+    }
+
     /// The on-disk (possibly ciphertext) path of a backed-up file. `file_id` is
     /// from the untrusted Manifest; a non-hex value (`../..`, `/etc/passwd`) would
     /// escape `backup_dir` via `join`, so anything that isn't a content-addressed

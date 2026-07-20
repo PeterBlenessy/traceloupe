@@ -27,6 +27,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.17.0` | **Health rings, mobility & the timezone timeline** — Apple activity rings vs goals, walking/audio-exposure daily metrics, and a per-timezone travel timeline from sample provenances; the Health view's sections refactored onto one descriptor-driven pipeline. |
 | `0.18.0` | **Data-coverage pass, recovery-themed** — Recently-Deleted photos (`ZTRASHEDSTATE`) and messages (`chat_recoverable_message_join`), per-app Interaction channels, Messages sticker/effect/app-bubble classification, Health Cycle-Tracking + Awards, Contacts social profiles, and App Store metadata. |
 | `0.19.0` | **Data-coverage close-out** — Safari local open tabs (`BrowserState.db`, with a private-browsing badge), Calls number-country flags, and Photos added-to-library date. Field-level coverage is now closed; remaining gaps are marked won't-implement. |
+| `0.20.0` | **Security Check (M1)** — a spyware/stalkerware indicator scan (MVT-style) over the imported backup: STIX2 + Echap indicator feeds bundled and refreshable, a native Rust scan engine across messages/Safari/apps/contacts/notes/calendar/interactions + a Manifest file sweep, Explicit Scans and a consent-gated Passive Check at import, a Security view with severity-graded findings and CSV export. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -34,6 +35,41 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.20.0] — 2026-07-20
+
+**Security Check (M1).** A local scan that checks an imported iPhone backup for
+indicators of compromise from known mercenary spyware (Pegasus, Predator,
+KingsPawn, Operation Triangulation, NoviSpy, Wintego, EagleMsgSpy, Candiru,
+Coruna, DarkSword) and commercial stalkerware/watchware — modeled on iMazing's
+Spyware Analyzer and Amnesty International's MVT methodology, implemented
+natively in Rust (no MVT code; only its CC-BY indicator data and the public
+Echap stalkerware feed).
+
+- **Indicator feeds.** STIX2 bundles + Echap `ioc.yaml`/`watchware.yaml`
+  normalized into one indicator set (domains, URLs, emails, process names,
+  file names/paths, bundle IDs, cert hashes, IPs), with evidence-graded
+  severity. A snapshot of ~5,800 indicators is bundled for offline use and can
+  be refreshed over HTTPS from the public feed repos.
+- **Scan engine.** Evaluates the set against the cache (messages, attachments,
+  Safari history/bookmarks, notes, calendar, contacts, interactions, installed
+  apps) plus a `Manifest.db` file-name/path/app-domain sweep. Conservative host
+  tokenizer and exact-or-subdomain matching to limit false positives. Full scan
+  of a real backup completes in well under a second.
+- **Two modes.** User-initiated **Explicit Scan** (all modules, optional fresh
+  feed fetch) and a consent-gated **Passive Check** at import (apps-only by
+  default, configurable). Both governed by persisted detection settings with
+  one-time consent dialogs.
+- **Security view.** Severity-graded findings table with per-finding detail and
+  deep links into the source artifact, a persistent false-positive/clean-≠-safe
+  disclaimer, a stalkerware-victim safety panel, indicator-freshness display,
+  and CSV report export with CC-BY attribution.
+- **Privacy (ADR 0001).** Backup-derived data never leaves the machine; feed
+  fetches are disclosed, setting-governed, send-nothing operational traffic.
+
+Validated against `mvt-ios check-backup` (see `docs/security-check-validation.md`):
+every indicator class MVT matches from these feeds is covered by a shipped
+module; the rest maps to the named M2 (Tier B) scope.
 
 ## [0.19.0] — 2026-07-20
 

@@ -165,11 +165,31 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
     {
         // ZPLAYBACKSTYLE (Live Photo = 3) and ZAVALANCHEUUID (burst grouping) are
         // present on modern schemas; fall back to NULL where absent.
-        let play_expr = if asset_cols.contains("ZPLAYBACKSTYLE") { "a.ZPLAYBACKSTYLE" } else { "NULL" };
-        let aval_expr = if asset_cols.contains("ZAVALANCHEUUID") { "a.ZAVALANCHEUUID" } else { "NULL" };
-        let trash_expr = if asset_cols.contains("ZTRASHEDSTATE") { "a.ZTRASHEDSTATE" } else { "NULL" };
-        let trashdate_expr = if asset_cols.contains("ZTRASHEDDATE") { "a.ZTRASHEDDATE" } else { "NULL" };
-        let added_expr = if asset_cols.contains("ZADDEDDATE") { "a.ZADDEDDATE" } else { "NULL" };
+        let play_expr = if asset_cols.contains("ZPLAYBACKSTYLE") {
+            "a.ZPLAYBACKSTYLE"
+        } else {
+            "NULL"
+        };
+        let aval_expr = if asset_cols.contains("ZAVALANCHEUUID") {
+            "a.ZAVALANCHEUUID"
+        } else {
+            "NULL"
+        };
+        let trash_expr = if asset_cols.contains("ZTRASHEDSTATE") {
+            "a.ZTRASHEDSTATE"
+        } else {
+            "NULL"
+        };
+        let trashdate_expr = if asset_cols.contains("ZTRASHEDDATE") {
+            "a.ZTRASHEDDATE"
+        } else {
+            "NULL"
+        };
+        let added_expr = if asset_cols.contains("ZADDEDDATE") {
+            "a.ZADDEDDATE"
+        } else {
+            "NULL"
+        };
         let mut stmt = src.prepare(&format!(
             "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
                     a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE,
