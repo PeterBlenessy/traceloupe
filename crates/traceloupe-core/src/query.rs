@@ -2074,6 +2074,127 @@ pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<String>> {
         .map_err(Into::into)
 }
 
+/// A Security Check scan run (Explicit Scan or Passive Check), newest first.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanRun {
+    pub id: i64,
+    pub kind: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub status: String,
+    pub modules: Vec<String>,
+    pub indicator_count: Option<i64>,
+    /// Rollup of this run's findings by severity.
+    pub critical: i64,
+    pub warning: i64,
+    pub info: i64,
+}
+
+/// One indicator match for the findings table / detail view.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Finding {
+    pub id: i64,
+    pub run_id: i64,
+    pub severity: String,
+    pub kind: String,
+    pub module: String,
+    pub malware: String,
+    pub matched_value: String,
+    pub context: Option<String>,
+    pub ref_kind: Option<String>,
+    pub ref_id: Option<i64>,
+    pub event_time: Option<i64>,
+}
+
+pub fn list_scan_runs(cache: &CacheDb) -> Result<Vec<ScanRun>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.kind, r.started_at, r.finished_at, r.status, r.modules_json,
+                r.indicator_count,
+                coalesce(sum(f.severity = 'critical'), 0),
+                coalesce(sum(f.severity = 'warning'), 0),
+                coalesce(sum(f.severity = 'info'), 0)
+         FROM scan_runs r
+         LEFT JOIN findings f ON f.run_id = r.id
+         GROUP BY r.id
+         ORDER BY r.started_at DESC, r.id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let modules_json: String = r.get(5)?;
+        Ok(ScanRun {
+            id: r.get(0)?,
+            kind: r.get(1)?,
+            started_at: r.get(2)?,
+            finished_at: r.get(3)?,
+            status: r.get(4)?,
+            modules: serde_json::from_str(&modules_json).unwrap_or_default(),
+            indicator_count: r.get(6)?,
+            critical: r.get(7)?,
+            warning: r.get(8)?,
+            info: r.get(9)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// The id of the most recent completed scan run, if any.
+pub fn latest_scan_run(cache: &CacheDb) -> Result<Option<i64>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT id FROM scan_runs WHERE status = 'done'
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
+/// Findings for a run, most severe first. `min_severity` filters (info counts
+/// everything). `module` optionally restricts to one analyzer module.
+pub fn list_findings(
+    cache: &CacheDb,
+    run_id: i64,
+    min_severity: Option<&str>,
+    module: Option<&str>,
+) -> Result<Vec<Finding>> {
+    let rank = |s: &str| match s {
+        "critical" => 3,
+        "warning" => 2,
+        _ => 1,
+    };
+    let min = min_severity.map(rank).unwrap_or(1);
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, run_id, severity, kind, module, malware, matched_value, context,
+                ref_kind, ref_id, event_time,
+                CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END AS rank
+         FROM findings
+         WHERE run_id = ?1 AND rank >= ?2 AND (?3 IS NULL OR module = ?3)
+         ORDER BY rank DESC, module, id",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![run_id, min, module], |r| {
+        Ok(Finding {
+            id: r.get(0)?,
+            run_id: r.get(1)?,
+            severity: r.get(2)?,
+            kind: r.get(3)?,
+            module: r.get(4)?,
+            malware: r.get(5)?,
+            matched_value: r.get(6)?,
+            context: r.get(7)?,
+            ref_kind: r.get(8)?,
+            ref_id: r.get(9)?,
+            event_time: r.get(10)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// A stored value from the backup's `meta` table (device name, etc.), if set.
 pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
     Ok(cache

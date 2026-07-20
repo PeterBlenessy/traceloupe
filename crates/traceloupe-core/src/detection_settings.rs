@@ -38,7 +38,7 @@ pub enum Consent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub struct DetectionSettings {
     /// Master switch for the Passive Check running inside import.
     pub passive_enabled: bool,
@@ -162,7 +162,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("detection-settings.json"),
-            r#"{"passive_scope":"full","future_field":true}"#,
+            r#"{"passiveScope":"full","future_field":true}"#,
         )
         .unwrap();
         let s = DetectionSettings::load(tmp.path()).unwrap();
