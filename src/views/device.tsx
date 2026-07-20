@@ -1,9 +1,11 @@
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Lock, LockOpen, Smartphone } from "lucide-react";
+import { FolderOpen, Lock, LockOpen, LogOut, RotateCw, Smartphone } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { useViewToolbar } from "@/components/toolbar-context";
+import { useImport } from "@/components/import-provider";
 import { EmptyView, ErrorState } from "@/components/view";
 import { formatDateTime } from "@/lib/format";
 import { client, type BackupInfo } from "@/lib/ipc";
@@ -21,6 +23,8 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
 
 export function DeviceView() {
   const navigate = useNavigate();
+  const qc = useQueryClient();
+  const imp = useImport();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -31,9 +35,60 @@ export function DeviceView() {
     enabled: active === true,
   });
 
+  // Close the open backup: clear session state, then return to the picker.
+  async function closeBackup() {
+    try {
+      await client.closeBackup();
+      qc.setQueryData(["hasActiveBackup"], false);
+      await qc.invalidateQueries();
+      navigate({ to: "/" });
+    } catch (e) {
+      toast.error("Couldn't close backup", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  // The backup-management actions the sidebar header no longer exposes (the
+  // "TraceLoupe" header now opens this Device view instead of the picker).
+  const actions = useMemo(
+    () => (
+      <div className="flex items-center gap-1 rounded-lg border border-border/70 bg-muted/40 p-0.5">
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!info}
+          title="Parse this backup again (updates data, e.g. new fields)"
+          onClick={() => info && imp.open(info)}
+        >
+          <RotateCw className="size-4" /> Re-import
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Open a different backup"
+          onClick={() => navigate({ to: "/" })}
+        >
+          <FolderOpen className="size-4" /> Open other…
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          title="Close this backup (its imported data is kept)"
+          onClick={() => void closeBackup()}
+        >
+          <LogOut className="size-4" /> Close
+        </Button>
+      </div>
+    ),
+    // closeBackup is stable enough for this view; deps kept minimal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [info, imp, navigate],
+  );
+
   const toolbar = useMemo(
-    () => (active === true ? { title: "Device" } : null),
-    [active],
+    () => (active === true ? { title: "Device", modes: actions } : null),
+    [active, actions],
   );
   useViewToolbar(toolbar);
 

@@ -501,6 +501,8 @@ export interface TraceLoupeClient {
   /** Subscribe to backend log records (forwarded to the console). */
   onLog(cb: (r: LogRecord) => void): Promise<UnlistenFn>;
   hasActiveBackup(): Promise<boolean>;
+  /** Close the open backup (clears session state; the on-disk cache remains). */
+  closeBackup(): Promise<void>;
   openBackup(backupId: string): Promise<boolean>;
   /** Delete an imported backup's caches + stored password (not the original). */
   forgetBackup(backupId: string): Promise<void>;
@@ -754,6 +756,7 @@ const tauriClient: TraceLoupeClient = {
   appSigningStatus: () => invoke<SigningStatus>("app_signing_status"),
   onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
+  closeBackup: () => invoke<void>("close_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
   forgetBackup: (backupId) => invoke<void>("forget_backup", { backupId }),
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
@@ -1956,6 +1959,9 @@ export const mockClient: TraceLoupeClient = {
   }),
   onLog: async () => () => {},
   hasActiveBackup: async () => mockActive,
+  closeBackup: async () => {
+    mockActive = false;
+  },
   openBackup: async (backupId) => {
     if (!mockImported.has(backupId)) return false;
     mockActive = true;

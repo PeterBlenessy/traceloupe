@@ -729,6 +729,16 @@ fn has_active_backup(active: State<'_, ActiveBackup>) -> bool {
     active.path().is_ok()
 }
 
+/// Close the open backup: clear the active pointer and drop the session's
+/// decryption keys. The on-disk cache is untouched (reopening stays instant);
+/// only in-session state is cleared, so the UI returns to the picker with
+/// nothing open.
+#[tauri::command]
+fn close_backup(app: AppHandle) {
+    app.state::<ActiveBackup>().clear();
+    app.state::<SessionKeys>().set(None);
+}
+
 /// Turn the Touch ID gate for backup keys on/off (persisted by the frontend and
 /// re-applied at startup). When on, reconstructing an encrypted backup's decryptor
 /// prompts for Touch ID first.
@@ -2846,6 +2856,7 @@ pub fn run() {
             import_backup,
             open_backup,
             has_active_backup,
+            close_backup,
             set_biometric_required,
             app_signing_status,
             reimport_module,
