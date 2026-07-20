@@ -45,7 +45,8 @@ MVT modules that evaluate indicators (from the installed package):
 | `interactionc` | per-contact interaction records, bundle IDs | **Tier A** — `interactions` |
 | `applications` | installed app bundle IDs | **Tier A** — `apps` (installed_apps) |
 | `manifest` | suspicious file names/paths across the backup | **Tier A** — `manifest` sweep |
-| `configuration_profiles` / `profile_events` | unknown MDM/proxy profiles + install events | **Tier B (M2)** — extraction defined in the PRD |
+| `configuration_profiles` | unknown/hidden MDM/proxy profiles | **Shipped (M2, v0.22.0)** — `parse_configuration_profiles` (ProfileTruth + PayloadManifest): indicator match + hidden/device-mgmt review findings |
+| `profile_events` | profile install/remove events | **Partial** — installed profiles are surfaced via ProfileTruth; per-event install/remove history is a later addition |
 | `osanalytics_addaily` | malicious **process names** | **Shipped (M2, v0.21.0)** — `parse_addaily` scans `netUsageBaseline` process names |
 | `net_datausage` | process names with network usage | **Shipped (M2, v0.21.0)** — `parse_datausage` scans `ZPROCESS` names + bundle names |
 | `tcc` | apps holding mic/camera/location grants | **Tier B (M2)** |
@@ -59,7 +60,7 @@ MVT modules that evaluate indicators (from the installed package):
 (domains, URLs, emails, bundle IDs, file names/paths, **process names**) is now
 covered by a shipped module — Tier A plus the Tier-B process-activity extraction
 added in M2 (v0.21.0). The remaining MVT modules match Tier-B artifacts still
-scheduled for M2 (configuration profiles, TCC, Shortcuts, WebKit) — named in the
+scheduled for M2 (TCC, Shortcuts, WebKit) — named in the
 PRD, not unexplained gaps.
 
 ## Indicator-kind parity

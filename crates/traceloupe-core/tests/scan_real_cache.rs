@@ -7,7 +7,9 @@
 //! The cache is copied to a temp dir first — a scan writes scan_runs/findings
 //! and must never touch the live cache from a test.
 
-use traceloupe_core::analyzer::{parse_addaily, parse_datausage, run_scan, ScanKind, MODULES};
+use traceloupe_core::analyzer::{
+    parse_addaily, parse_configuration_profiles, parse_datausage, run_scan, ScanKind, MODULES,
+};
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::indicators::{bundled_snapshot_dir, load_snapshot_dir};
 use traceloupe_core::sidecar::CancelToken;
@@ -39,6 +41,21 @@ fn process_extraction_on_real_mirror() {
         "expected many processes on a real device"
     );
 
+    // Configuration profiles from ProfileTruth + PayloadManifest.
+    let cp_dir = format!(
+        "{mirror}/SysSharedContainerDomain-systemgroup.com.apple.configurationprofiles/Library/ConfigurationProfiles"
+    );
+    let truth = std::fs::read(format!("{cp_dir}/ProfileTruth.plist")).expect("ProfileTruth");
+    let manifest = std::fs::read(format!("{cp_dir}/PayloadManifest.plist")).ok();
+    let profiles = parse_configuration_profiles(&truth, manifest.as_deref()).expect("profiles");
+    eprintln!("extracted {} configuration profiles:", profiles.len());
+    for p in &profiles {
+        eprintln!(
+            "  {} (org={:?} hidden={} caps={:?})",
+            p.display_name, p.organization, p.hidden, p.capabilities
+        );
+    }
+
     // Scan them against the bundled indicators (cache-less: in-memory db).
     let (set, _) = load_snapshot_dir(&bundled_snapshot_dir()).unwrap();
     let db = CacheDb::open_in_memory().unwrap();
@@ -46,9 +63,10 @@ fn process_extraction_on_real_mirror() {
         &db,
         &set,
         ScanKind::Explicit,
-        &["process_names"],
+        &["process_names", "profiles"],
         None,
         &processes,
+        &profiles,
         "[]",
         &CancelToken::new(),
         |_, _, _| {},
@@ -101,6 +119,7 @@ fn full_tier_a_scan_under_60s() {
         ScanKind::Explicit,
         MODULES,
         None,
+        &[],
         &[],
         "[]",
         &CancelToken::new(),
