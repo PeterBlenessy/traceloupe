@@ -663,6 +663,125 @@ pub fn run_scan<'a>(
     })
 }
 
+// ---------------------------------------------------------------------------
+// CSV report export
+// ---------------------------------------------------------------------------
+
+/// Escape one CSV field per RFC 4180: wrap in quotes when it contains a comma,
+/// quote, CR or LF, doubling any embedded quotes.
+fn csv_field(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn format_epoch(secs: Option<i64>) -> String {
+    let Some(secs) = secs else { return String::new() };
+    match time::OffsetDateTime::from_unix_timestamp(secs) {
+        Ok(dt) => dt
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_else(|_| secs.to_string()),
+        Err(_) => secs.to_string(),
+    }
+}
+
+/// Render a scan run's findings as a CSV report (columns modeled on iMazing's:
+/// Severity, Time, Threat, Kind, Module, Matched, Context). A leading comment
+/// block records scan metadata + feed attribution (CC-BY requires it). Returns
+/// the whole document as a string. `app_version` is stamped into the header.
+pub fn export_report_csv(db: &CacheDb, run_id: i64, app_version: &str) -> Result<String> {
+    let conn = db.conn();
+    let (kind, started, finished, status, feeds_json, indicator_count): (
+        String,
+        i64,
+        Option<i64>,
+        String,
+        String,
+        Option<i64>,
+    ) = conn.query_row(
+        "SELECT kind, started_at, finished_at, status, feeds_json, indicator_count
+         FROM scan_runs WHERE id = ?1",
+        [run_id],
+        |r| {
+            Ok((
+                r.get(0)?,
+                r.get(1)?,
+                r.get(2)?,
+                r.get(3)?,
+                r.get(4)?,
+                r.get(5)?,
+            ))
+        },
+    )?;
+
+    let mut out = String::new();
+    out.push_str("# TraceLoupe Security Check report\n");
+    out.push_str(&format!("# App version: {app_version}\n"));
+    out.push_str(&format!("# Scan kind: {kind}\n"));
+    out.push_str(&format!("# Started: {}\n", format_epoch(Some(started))));
+    out.push_str(&format!("# Finished: {}\n", format_epoch(finished)));
+    out.push_str(&format!("# Status: {status}\n"));
+    out.push_str(&format!(
+        "# Indicators evaluated: {}\n",
+        indicator_count.map(|c| c.to_string()).unwrap_or_default()
+    ));
+    // Feeds used (for attribution).
+    if let Ok(feeds) = serde_json::from_str::<Vec<serde_json::Value>>(&feeds_json) {
+        for f in feeds {
+            if let Some(src) = f.get("source").and_then(|v| v.as_str()) {
+                let count = f.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+                out.push_str(&format!("# Feed: {src} ({count} indicators)\n"));
+            }
+        }
+    }
+    out.push_str(
+        "# Indicators are CC-BY (Amnesty International, MVT project, Echap). \
+         A match is not proof of compromise.\n",
+    );
+
+    out.push_str("Severity,Time,Threat,Kind,Module,Matched,Context\n");
+    let mut stmt = conn.prepare(
+        "SELECT severity, event_time, malware, kind, module, matched_value, context
+         FROM findings WHERE run_id = ?1
+         ORDER BY CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END DESC,
+                  module, id",
+    )?;
+    let rows = stmt.query_map([run_id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<i64>>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            r.get::<_, Option<String>>(6)?,
+        ))
+    })?;
+    for row in rows {
+        let (severity, event_time, malware, kind, module, matched, context) = row?;
+        let fields = [
+            severity,
+            format_epoch(event_time),
+            malware,
+            kind,
+            module,
+            matched,
+            context.unwrap_or_default(),
+        ];
+        out.push_str(
+            &fields
+                .iter()
+                .map(|f| csv_field(f))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,6 +974,49 @@ mod tests {
         assert_eq!(outcome.findings, 1);
         assert_eq!(count(&db, "apps"), 1);
         assert_eq!(count(&db, "messages"), 0);
+    }
+
+    #[test]
+    fn csv_report_has_header_metadata_and_escapes_fields() {
+        let db = seeded_db();
+        let mut manifest = std::iter::empty::<(String, String)>();
+        let outcome = run_scan(
+            &db,
+            &test_set(),
+            ScanKind::Explicit,
+            MODULES,
+            Some(&mut manifest),
+            r#"[{"source":"echap/ioc","class":"stalkerware","count":2746,"skipped":0}]"#,
+            &CancelToken::new(),
+            |_, _, _| {},
+        )
+        .unwrap();
+
+        // Inject a finding whose context needs CSV quoting.
+        db.conn()
+            .execute(
+                "INSERT INTO findings (run_id, severity, kind, module, malware, matched_value, context)
+                 VALUES (?1, 'warning', 'domain', 'messages', 'TestWare', 'evil.example',
+                         'contains, comma and \"quote\"')",
+                [outcome.run_id],
+            )
+            .unwrap();
+
+        let csv = export_report_csv(&db, outcome.run_id, "9.9.9").unwrap();
+        assert!(csv.contains("# TraceLoupe Security Check report"));
+        assert!(csv.contains("# App version: 9.9.9"));
+        assert!(csv.contains("# Feed: echap/ioc (2746 indicators)"));
+        assert!(csv.contains("# Scan kind: explicit"));
+        assert!(csv.contains("Severity,Time,Threat,Kind,Module,Matched,Context"));
+        // The tricky field is quoted and its quotes doubled.
+        assert!(csv.contains("\"contains, comma and \"\"quote\"\"\""));
+        // Every finding row is present (header lines start with '#').
+        let data_rows = csv
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.starts_with("Severity,"))
+            .filter(|l| !l.is_empty())
+            .count();
+        assert!(data_rows >= 1);
     }
 
     #[test]

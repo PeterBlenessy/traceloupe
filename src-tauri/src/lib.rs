@@ -1370,6 +1370,27 @@ async fn update_indicators(app: AppHandle) -> Result<SnapshotInfo, String> {
     .map_err(|e| e.to_string())
 }
 
+/// Write a CSV report of a scan run to `path` (chosen via a save dialog on the
+/// frontend). Returns the number of bytes written.
+#[tauri::command]
+async fn export_scan_report(
+    active: State<'_, ActiveBackup>,
+    run_id: i64,
+    path: String,
+) -> Result<u64, String> {
+    let cache_path = active.path()?;
+    let version = env!("CARGO_PKG_VERSION").to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+        let csv = analyzer::export_report_csv(&cache, run_id, &version)
+            .map_err(|e| e.to_string())?;
+        std::fs::write(&path, &csv).map_err(|e| format!("writing {path}: {e}"))?;
+        Ok::<u64, String>(csv.len() as u64)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn get_detection_settings(app: AppHandle) -> Result<DetectionSettings, String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -3377,7 +3398,8 @@ pub fn run() {
             update_indicators,
             get_detection_settings,
             set_detection_settings,
-            run_passive_check_now
+            run_passive_check_now,
+            export_scan_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

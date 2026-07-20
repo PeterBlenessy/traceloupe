@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   Info,
   ExternalLink,
+  Download,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -334,6 +335,15 @@ function ResultSummary({
         <span className="text-xs text-muted-foreground">
           scanned {formatListTime(run.startedAt)}
         </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          onClick={() => client.exportScanReport(run.id)}
+        >
+          <Download className="size-4" />
+          Export CSV
+        </Button>
       </div>
 
       {loadingFindings ? (
