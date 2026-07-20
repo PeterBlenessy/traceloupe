@@ -29,6 +29,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.19.0` | **Data-coverage close-out** — Safari local open tabs (`BrowserState.db`, with a private-browsing badge), Calls number-country flags, and Photos added-to-library date. Field-level coverage is now closed; remaining gaps are marked won't-implement. |
 | `0.20.0` | **Security Check (M1)** — a spyware/stalkerware indicator scan (MVT-style) over the imported backup: STIX2 + Echap indicator feeds bundled and refreshable, a native Rust scan engine across messages/Safari/apps/contacts/notes/calendar/interactions + a Manifest file sweep, Explicit Scans and a consent-gated Passive Check at import, a Security view with severity-graded findings and CSV export. |
 | `0.21.0` | **Security Check M2 — process-name detection** — the first Tier-B artifact surface: DataUsage.sqlite and OSAnalytics ADDaily process activity scanned against process-name indicators (the class that first exposed Pegasus), extracted on demand during an Explicit Scan. |
+| `0.22.0` | **Security Check M2 — configuration profiles** — installed profiles (ProfileTruth + PayloadManifest) surfaced for review: indicator matches on profile hosts/names, plus structural flags for hidden profiles (Warning) and device-management profiles (Info). The classic stalkerware install vector. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -36,6 +37,29 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.22.0] — 2026-07-20
+
+**Security Check M2 — configuration profiles.** Surfaces installed configuration
+profiles, the classic stalkerware install vector (an unexpected or hidden
+profile can grant broad control over the device).
+
+- **New parser** (`analyzer::parse_configuration_profiles`): reads
+  `ProfileTruth.plist` (the authoritative installed-profile list, keyed by
+  `Name from Org (UUID)`) and `PayloadManifest.plist` (the `HiddenProfiles`
+  set), extracting each profile's name, organization, UUID, referenced hosts,
+  device-management capabilities, and hidden flag.
+- **New `profiles` scan module:** matches profile hosts/names/orgs against
+  indicators (feed-graded), and adds one structural review finding per profile —
+  **Warning** for a hidden profile (invisible in Settings), **Info** for a
+  device-management profile (MDM/proxy/VPN/content-filter), else a plain
+  "review if unexpected" **Info**.
+- **On-demand extraction** during an Explicit Scan via the Manifest index
+  (SysSharedContainer configuration-profiles domain), best-effort. Passive Check
+  unaffected.
+- Validated against the real dev backup: the one installed profile (a legitimate
+  university printer profile) is parsed correctly and surfaced as a single Info
+  review finding — no false alarm. See `docs/security-check-validation.md`.
 
 ## [0.21.0] — 2026-07-20
 

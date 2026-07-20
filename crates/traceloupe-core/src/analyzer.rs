@@ -30,6 +30,7 @@ pub const MODULES: &[&str] = &[
     "interactions",
     "manifest",
     "process_names",
+    "profiles",
 ];
 
 /// A process observed running on the device, from a Tier-B artifact
@@ -46,6 +47,24 @@ pub struct ObservedProcess {
     pub source: &'static str,
     /// Unix seconds of the most recent activity, if known.
     pub last_seen: Option<i64>,
+}
+
+/// An installed configuration profile (from `ProfileTruth.plist` +
+/// `PayloadManifest.plist`). A profile can grant broad control over a device —
+/// an unexpected or hidden one is a classic stalkerware install vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedProfile {
+    pub display_name: String,
+    pub organization: Option<String>,
+    pub uuid: Option<String>,
+    /// Hidden from Settings (present in `PayloadManifest.HiddenProfiles`) — a
+    /// profile the user cannot see is a strong monitoring signal.
+    pub hidden: bool,
+    /// Device-management capabilities detected in the profile's settings
+    /// (MDM enrollment, global proxy, always-on VPN, web-content filter).
+    pub capabilities: Vec<String>,
+    /// Hostnames/URLs referenced by the profile, for indicator matching.
+    pub hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,8 +241,23 @@ struct Hit<'a> {
     event_time: Option<i64>,
 }
 
+/// A heuristic finding not backed by an indicator match — e.g. a hidden or
+/// device-management configuration profile flagged for review. Carries its own
+/// severity/attribution rather than borrowing from an [`Indicator`].
+struct StructuralFinding {
+    severity: &'static str,
+    kind: &'static str,
+    module: &'static str,
+    malware: String,
+    matched_value: String,
+    context: String,
+    ref_kind: &'static str,
+    event_time: Option<i64>,
+}
+
 struct Sink<'a> {
     hits: Vec<Hit<'a>>,
+    structural: Vec<StructuralFinding>,
     dedupe: HashSet<(&'static str, String, &'static str, Option<i64>)>,
 }
 
@@ -231,6 +265,7 @@ impl<'a> Sink<'a> {
     fn new() -> Self {
         Sink {
             hits: Vec::new(),
+            structural: Vec::new(),
             dedupe: HashSet::new(),
         }
     }
@@ -245,6 +280,17 @@ impl<'a> Sink<'a> {
         if self.dedupe.insert(key) {
             self.hits.push(hit);
         }
+    }
+
+    fn push_structural(&mut self, f: StructuralFinding) {
+        let key = (f.module, f.matched_value.clone(), f.ref_kind, None);
+        if self.dedupe.insert(key) {
+            self.structural.push(f);
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.hits.len() + self.structural.len()
     }
 }
 
@@ -319,8 +365,9 @@ fn scan_text<'a>(
 /// Run a scan. `manifest_entries` is `(domain, relative_path)` for every file
 /// in the backup manifest; pass `None` when only cache modules should run
 /// (the `manifest` module is then skipped). `processes` are Tier-B observed
-/// processes (empty skips the `process_names` module). `feeds_json` describes
-/// the indicator feeds used (stored on the run for the report header).
+/// processes (empty skips the `process_names` module); `profiles` are installed
+/// configuration profiles (empty skips the `profiles` module). `feeds_json`
+/// describes the indicator feeds used (stored on the run for the report header).
 /// `progress` receives `(module, index, total)` before each module runs.
 #[allow(clippy::too_many_arguments)] // a scan genuinely needs all of these inputs
 pub fn run_scan(
@@ -330,6 +377,7 @@ pub fn run_scan(
     modules: &[&'static str],
     mut manifest_entries: Option<&mut dyn Iterator<Item = (String, String)>>,
     processes: &[ObservedProcess],
+    profiles: &[ObservedProfile],
     feeds_json: &str,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str, usize, usize),
@@ -340,6 +388,7 @@ pub fn run_scan(
         .copied()
         .filter(|m| *m != "manifest" || manifest_entries.is_some())
         .filter(|m| *m != "process_names" || !processes.is_empty())
+        .filter(|m| *m != "profiles" || !profiles.is_empty())
         .collect();
     conn.execute(
         "INSERT INTO scan_runs (kind, started_at, status, modules_json, feeds_json, indicator_count)
@@ -684,6 +733,63 @@ pub fn run_scan(
                     }
                 }
             }
+            "profiles" => {
+                for prof in profiles {
+                    // Indicator matches on any string the profile carries
+                    // (display name, organization, referenced hosts/URLs).
+                    let scanned = format!(
+                        "{} {} {}",
+                        prof.display_name,
+                        prof.organization.as_deref().unwrap_or(""),
+                        prof.hosts.join(" ")
+                    );
+                    scan_text(
+                        &lookup, &scanned, "profiles", "profile", None, None, &mut sink,
+                    );
+
+                    // One structural review finding per profile, escalating on
+                    // the strongest signal. Attribution is a category, not a
+                    // named threat — a profile is evidence to review, not proof.
+                    let org = prof
+                        .organization
+                        .as_deref()
+                        .map(|o| format!(" from {o}"))
+                        .unwrap_or_default();
+                    let (severity, malware, note): (&str, &str, String) = if prof.hidden {
+                        (
+                            "warning",
+                            "Hidden configuration profile",
+                            "hidden from Settings — a profile you cannot see is a monitoring red flag"
+                                .to_string(),
+                        )
+                    } else if !prof.capabilities.is_empty() {
+                        (
+                            "info",
+                            "Device-management profile",
+                            format!(
+                                "can control/monitor the device ({}); confirm you installed it",
+                                prof.capabilities.join(", ")
+                            ),
+                        )
+                    } else {
+                        (
+                            "info",
+                            "Configuration profile",
+                            "an installed profile; review it if you didn't add it".to_string(),
+                        )
+                    };
+                    sink.push_structural(StructuralFinding {
+                        severity,
+                        kind: "profile",
+                        module: "profiles",
+                        malware: malware.to_string(),
+                        matched_value: prof.display_name.clone(),
+                        context: format!("{}{org}: {note}", prof.display_name),
+                        ref_kind: "profile",
+                        event_time: None,
+                    });
+                }
+            }
             other => {
                 // Unknown module ids are a programming error upstream; skip.
                 let _ = other;
@@ -721,6 +827,20 @@ pub fn run_scan(
             h.event_time,
         ])?;
     }
+    for f in &sink.structural {
+        insert.execute(params![
+            run_id,
+            f.severity,
+            f.kind,
+            f.module,
+            f.malware,
+            f.matched_value,
+            f.context,
+            f.ref_kind,
+            Option::<i64>::None,
+            f.event_time,
+        ])?;
+    }
     drop(insert);
     conn.execute(
         "UPDATE scan_runs SET status = ?2, finished_at = ?3 WHERE id = ?1",
@@ -734,7 +854,7 @@ pub fn run_scan(
 
     Ok(ScanOutcome {
         run_id,
-        findings: sink.hits.len(),
+        findings: sink.len(),
         cancelled,
     })
 }
@@ -804,6 +924,127 @@ pub fn parse_addaily(plist_bytes: &[u8]) -> Result<Vec<ObservedProcess>> {
             bundle_id: None,
             source: "OSAnalytics",
             last_seen,
+        });
+    }
+    Ok(out)
+}
+
+/// Union setting keys / values whose presence marks a device-control capability
+/// (MDM enrollment, global proxy, always-on VPN, web-content filter). Matched
+/// case-insensitively as substrings against a profile's setting keys.
+const RISKY_PROFILE_CAPABILITIES: &[(&str, &str)] = &[
+    ("mdm", "MDM enrollment"),
+    ("globalhttpproxy", "global HTTP proxy"),
+    ("proxy", "proxy"),
+    ("vpn", "VPN"),
+    ("webcontentfilter", "web-content filter"),
+    ("contentfilter", "content filter"),
+];
+
+/// Recursively collect string leaf values and dictionary keys from a plist.
+fn collect_plist(value: &plist::Value, strings: &mut Vec<String>, keys: &mut Vec<String>) {
+    match value {
+        plist::Value::String(s) => strings.push(s.clone()),
+        plist::Value::Array(a) => {
+            for v in a {
+                collect_plist(v, strings, keys);
+            }
+        }
+        plist::Value::Dictionary(d) => {
+            for (k, v) in d {
+                keys.push(k.clone());
+                collect_plist(v, strings, keys);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Split a `ProfileTruth` key of the form `Name from Org (UUID)` (or
+/// `Name (UUID)`, or just `Name`) into its parts.
+fn parse_profile_key(key: &str) -> (String, Option<String>, Option<String>) {
+    let mut head = key.trim();
+    let mut uuid = None;
+    if head.ends_with(')') {
+        if let Some(open) = head.rfind('(') {
+            let inside = &head[open + 1..head.len() - 1];
+            if !inside.is_empty() && inside.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-') {
+                uuid = Some(inside.to_string());
+                head = head[..open].trim();
+            }
+        }
+    }
+    match head.rsplit_once(" from ") {
+        Some((name, org)) => (name.trim().to_string(), Some(org.trim().to_string()), uuid),
+        None => (head.to_string(), None, uuid),
+    }
+}
+
+/// A candidate host/URL string is host-like: has a dot, no whitespace, bounded
+/// length. Keeps the indicator scan focused and cheap.
+fn host_like(s: &str) -> bool {
+    let s = s.trim();
+    s.len() >= 4 && s.len() < 256 && s.contains('.') && !s.chars().any(|c| c.is_whitespace())
+}
+
+// ---------------------------------------------------------------------------
+// Configuration-profile extraction (ProfileTruth + PayloadManifest)
+// ---------------------------------------------------------------------------
+
+/// Parse installed configuration profiles from `ProfileTruth.plist` (the
+/// authoritative installed-profile list, keyed by `Name from Org (UUID)`) and
+/// `PayloadManifest.plist` (which lists `HiddenProfiles`). Both live in the
+/// `SysSharedContainerDomain-systemgroup.com.apple.configurationprofiles`
+/// domain under `Library/ConfigurationProfiles/`.
+pub fn parse_configuration_profiles(
+    profiletruth_bytes: &[u8],
+    payloadmanifest_bytes: Option<&[u8]>,
+) -> Result<Vec<ObservedProfile>> {
+    let truth = plist::Value::from_reader(std::io::Cursor::new(profiletruth_bytes))
+        .map_err(|e| crate::error::Error::Parse(format!("ProfileTruth plist: {e}")))?;
+    let Some(dict) = truth.as_dictionary() else {
+        return Ok(Vec::new());
+    };
+
+    // Hidden-profile set from PayloadManifest.HiddenProfiles.
+    let hidden: HashSet<String> = payloadmanifest_bytes
+        .and_then(|b| plist::Value::from_reader(std::io::Cursor::new(b)).ok())
+        .and_then(|v| v.as_dictionary().cloned())
+        .and_then(|d| d.get("HiddenProfiles").and_then(|v| v.as_array()).cloned())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_string().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut out = Vec::new();
+    for (key, value) in dict {
+        let (display_name, organization, uuid) = parse_profile_key(key);
+        let mut strings = Vec::new();
+        let mut keys = Vec::new();
+        collect_plist(value, &mut strings, &mut keys);
+
+        // Capabilities: risky setting keys detected anywhere in the profile.
+        let mut capabilities = Vec::new();
+        let lower_keys: Vec<String> = keys.iter().map(|k| k.to_ascii_lowercase()).collect();
+        for (needle, label) in RISKY_PROFILE_CAPABILITIES {
+            if lower_keys.iter().any(|k| k.contains(needle))
+                && !capabilities.contains(&label.to_string())
+            {
+                capabilities.push(label.to_string());
+            }
+        }
+
+        let hosts: Vec<String> = strings.into_iter().filter(|s| host_like(s)).collect();
+
+        out.push(ObservedProfile {
+            display_name,
+            organization,
+            uuid,
+            hidden: hidden.contains(key),
+            capabilities,
+            hosts,
         });
     }
     Ok(out)
@@ -1015,6 +1256,39 @@ mod tests {
         ]
     }
 
+    fn test_profiles() -> Vec<ObservedProfile> {
+        vec![
+            // A hidden profile → Warning (structural).
+            ObservedProfile {
+                display_name: "Support Helper".into(),
+                organization: Some("Acme".into()),
+                uuid: Some("abc-123".into()),
+                hidden: true,
+                capabilities: vec![],
+                hosts: vec![],
+            },
+            // A device-management profile referencing an indicator host → the
+            // host matches (Warning) AND a structural device-mgmt finding (Info).
+            ObservedProfile {
+                display_name: "Work MDM".into(),
+                organization: Some("IT".into()),
+                uuid: Some("def-456".into()),
+                hidden: false,
+                capabilities: vec!["MDM enrollment".into()],
+                hosts: vec!["evil.example".into()],
+            },
+            // A plain profile → one Info review finding.
+            ObservedProfile {
+                display_name: "Printer".into(),
+                organization: Some("Office".into()),
+                uuid: None,
+                hidden: false,
+                capabilities: vec![],
+                hosts: vec!["printer.local".into()],
+            },
+        ]
+    }
+
     fn seeded_db() -> CacheDb {
         let db = CacheDb::open_in_memory().unwrap();
         let c = db.conn();
@@ -1073,6 +1347,7 @@ mod tests {
         .into_iter();
         let cancel = CancelToken::new();
         let processes = test_processes();
+        let profiles = test_profiles();
         let mut seen_modules = Vec::new();
         let outcome = run_scan(
             &db,
@@ -1081,6 +1356,7 @@ mod tests {
             MODULES,
             Some(&mut manifest),
             &processes,
+            &profiles,
             "[]",
             &cancel,
             |m, _, _| seen_modules.push(m.to_string()),
@@ -1111,6 +1387,21 @@ mod tests {
         // process_names: the bare daemon name matches; the compass basename does
         // not. One finding.
         assert_eq!(count(&db, "process_names"), 1);
+        // profiles: hidden profile (Warning structural) + MDM profile (host
+        // indicator match Warning + Device-management structural Info) + plain
+        // profile (Info structural) = 4.
+        assert_eq!(count(&db, "profiles"), 4);
+        // The hidden profile is graded Warning, the plain one Info.
+        let profile_sev: Vec<String> = {
+            let mut stmt = db
+                .conn()
+                .prepare("SELECT severity FROM findings WHERE module='profiles' ORDER BY severity")
+                .unwrap();
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+            rows.filter_map(|r| r.ok()).collect()
+        };
+        assert!(profile_sev.iter().any(|s| s == "warning"));
+        assert!(profile_sev.iter().any(|s| s == "info"));
 
         // Severity flows from the indicator.
         let critical: i64 = db
@@ -1223,6 +1514,96 @@ mod tests {
     }
 
     #[test]
+    fn profile_key_parsing() {
+        assert_eq!(
+            parse_profile_key(
+                "PaperCut Profile from mobileprint.lund.se (06dd7752-f276-465b-9876-fb7cf674ff55)"
+            ),
+            (
+                "PaperCut Profile".to_string(),
+                Some("mobileprint.lund.se".to_string()),
+                Some("06dd7752-f276-465b-9876-fb7cf674ff55".to_string())
+            )
+        );
+        // No org, no uuid.
+        assert_eq!(
+            parse_profile_key("Plain Profile"),
+            ("Plain Profile".to_string(), None, None)
+        );
+        // A trailing parenthetical that isn't a UUID stays part of the name.
+        assert_eq!(
+            parse_profile_key("Weird (not a uuid)"),
+            ("Weird (not a uuid)".to_string(), None, None)
+        );
+    }
+
+    #[test]
+    fn parse_configuration_profiles_extracts_fields_and_hidden() {
+        // ProfileTruth: two profiles, one carrying an MDM setting key + a host.
+        let mut mdm_settings = plist::Dictionary::new();
+        mdm_settings.insert(
+            "MDMServerURL".into(),
+            plist::Value::String("https://mdm.evil.example/enroll".into()),
+        );
+        let mut truth = plist::Dictionary::new();
+        truth.insert(
+            "Work MDM from IT (aaaa-1111)".into(),
+            plist::Value::Dictionary(mdm_settings),
+        );
+        truth.insert(
+            "Printer from Office (bbbb-2222)".into(),
+            plist::Value::Dictionary(plist::Dictionary::new()),
+        );
+        let mut truth_bytes = Vec::new();
+        plist::to_writer_binary(&mut truth_bytes, &plist::Value::Dictionary(truth)).unwrap();
+
+        // PayloadManifest: the printer profile is hidden.
+        let mut manifest = plist::Dictionary::new();
+        manifest.insert(
+            "HiddenProfiles".into(),
+            plist::Value::Array(vec![plist::Value::String(
+                "Printer from Office (bbbb-2222)".into(),
+            )]),
+        );
+        let mut manifest_bytes = Vec::new();
+        plist::to_writer_binary(&mut manifest_bytes, &plist::Value::Dictionary(manifest)).unwrap();
+
+        let profiles = parse_configuration_profiles(&truth_bytes, Some(&manifest_bytes)).unwrap();
+        assert_eq!(profiles.len(), 2);
+
+        let mdm = profiles
+            .iter()
+            .find(|p| p.display_name == "Work MDM")
+            .unwrap();
+        assert_eq!(mdm.organization.as_deref(), Some("IT"));
+        assert_eq!(mdm.uuid.as_deref(), Some("aaaa-1111"));
+        assert!(!mdm.hidden);
+        assert!(mdm.capabilities.iter().any(|c| c.contains("MDM")));
+        assert!(mdm.hosts.iter().any(|h| h.contains("mdm.evil.example")));
+
+        let printer = profiles
+            .iter()
+            .find(|p| p.display_name == "Printer")
+            .unwrap();
+        assert!(printer.hidden);
+        assert!(printer.capabilities.is_empty());
+    }
+
+    #[test]
+    fn parse_configuration_profiles_no_manifest_is_fine() {
+        let mut truth = plist::Dictionary::new();
+        truth.insert(
+            "Solo (cccc-9999)".into(),
+            plist::Value::Dictionary(plist::Dictionary::new()),
+        );
+        let mut bytes = Vec::new();
+        plist::to_writer_binary(&mut bytes, &plist::Value::Dictionary(truth)).unwrap();
+        let profiles = parse_configuration_profiles(&bytes, None).unwrap();
+        assert_eq!(profiles.len(), 1);
+        assert!(!profiles[0].hidden);
+    }
+
+    #[test]
     fn clean_cache_yields_zero_findings() {
         let db = CacheDb::open_in_memory().unwrap();
         db.conn()
@@ -1239,6 +1620,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             None,
+            &[],
             &[],
             "[]",
             &CancelToken::new(),
@@ -1258,6 +1640,7 @@ mod tests {
             ScanKind::Passive,
             &modules,
             None,
+            &[],
             &[],
             "[]",
             &CancelToken::new(),
@@ -1280,6 +1663,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             Some(&mut manifest),
+            &[],
             &[],
             r#"[{"source":"echap/ioc","class":"stalkerware","count":2746,"skipped":0}]"#,
             &CancelToken::new(),
@@ -1325,6 +1709,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             None,
+            &[],
             &[],
             "[]",
             &cancel,
