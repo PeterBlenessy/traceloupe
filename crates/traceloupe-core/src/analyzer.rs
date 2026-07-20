@@ -29,7 +29,24 @@ pub const MODULES: &[&str] = &[
     "contacts",
     "interactions",
     "manifest",
+    "process_names",
 ];
+
+/// A process observed running on the device, from a Tier-B artifact
+/// (DataUsage.sqlite or OSAnalytics ADDaily). The scan matches `name` against
+/// process-name indicators — the artifact class that first exposed Pegasus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedProcess {
+    /// The process/executable name as recorded (may be a `UUID/bundle` form in
+    /// DataUsage, or a bare daemon name in ADDaily).
+    pub name: String,
+    /// The associated bundle id, when the source records one (DataUsage).
+    pub bundle_id: Option<String>,
+    /// Which Tier-B artifact this came from ("DataUsage" | "OSAnalytics").
+    pub source: &'static str,
+    /// Unix seconds of the most recent activity, if known.
+    pub last_seen: Option<i64>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScanKind {
@@ -70,6 +87,7 @@ struct Lookup<'a> {
     bundle_ids: HashMap<&'a str, &'a Indicator>,
     file_names: HashMap<String, &'a Indicator>,
     file_paths: Vec<&'a Indicator>,
+    process_names: HashMap<String, &'a Indicator>,
 }
 
 impl<'a> Lookup<'a> {
@@ -81,6 +99,7 @@ impl<'a> Lookup<'a> {
             bundle_ids: HashMap::new(),
             file_names: HashMap::new(),
             file_paths: Vec::new(),
+            process_names: HashMap::new(),
         };
         for i in &set.indicators {
             match i.kind {
@@ -98,8 +117,12 @@ impl<'a> Lookup<'a> {
                     l.file_names.insert(i.value.to_ascii_lowercase(), i);
                 }
                 IndicatorKind::FilePath => l.file_paths.push(i),
-                // ProcessName matching needs Tier B sources (ADDaily,
-                // DataUsage); CertSha1/FileHash/Ip have no Tier A surface.
+                IndicatorKind::ProcessName => {
+                    // Process names are matched case-sensitively in MVT, but
+                    // fold case so an indicator's casing never hides a match.
+                    l.process_names.insert(i.value.to_ascii_lowercase(), i);
+                }
+                // CertSha1/FileHash/Ip have no Tier A/B surface a backup carries.
                 _ => {}
             }
         }
@@ -295,8 +318,9 @@ fn scan_text<'a>(
 
 /// Run a scan. `manifest_entries` is `(domain, relative_path)` for every file
 /// in the backup manifest; pass `None` when only cache modules should run
-/// (the `manifest` module is then skipped). `feeds_json` describes the
-/// indicator feeds used (stored on the run for the report header).
+/// (the `manifest` module is then skipped). `processes` are Tier-B observed
+/// processes (empty skips the `process_names` module). `feeds_json` describes
+/// the indicator feeds used (stored on the run for the report header).
 /// `progress` receives `(module, index, total)` before each module runs.
 #[allow(clippy::too_many_arguments)] // a scan genuinely needs all of these inputs
 pub fn run_scan(
@@ -305,6 +329,7 @@ pub fn run_scan(
     kind: ScanKind,
     modules: &[&'static str],
     mut manifest_entries: Option<&mut dyn Iterator<Item = (String, String)>>,
+    processes: &[ObservedProcess],
     feeds_json: &str,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str, usize, usize),
@@ -314,6 +339,7 @@ pub fn run_scan(
         .iter()
         .copied()
         .filter(|m| *m != "manifest" || manifest_entries.is_some())
+        .filter(|m| *m != "process_names" || !processes.is_empty())
         .collect();
     conn.execute(
         "INSERT INTO scan_runs (kind, started_at, status, modules_json, feeds_json, indicator_count)
@@ -620,6 +646,44 @@ pub fn run_scan(
                     }
                 }
             }
+            "process_names" => {
+                for p in processes {
+                    // Match the recorded name and its basename (DataUsage stores
+                    // a `UUID/bundle` form; malicious daemon names are bare).
+                    let base = p.name.rsplit('/').next().unwrap_or(&p.name);
+                    for candidate in [p.name.as_str(), base] {
+                        if let Some(ind) = lookup
+                            .process_names
+                            .get(candidate.to_ascii_lowercase().as_str())
+                        {
+                            sink.push(Hit {
+                                indicator: ind,
+                                module: "process_names",
+                                ref_kind: "process",
+                                ref_id: None,
+                                context: format!("{} ({})", p.name, p.source),
+                                event_time: p.last_seen,
+                            });
+                        }
+                    }
+                    // A DataUsage bundle name is also a bundle-id surface for
+                    // processes that never appear in installed_apps.
+                    if let Some(bundle) = &p.bundle_id {
+                        if let Some(ind) =
+                            lookup.bundle_ids.get(bundle.to_ascii_lowercase().as_str())
+                        {
+                            sink.push(Hit {
+                                indicator: ind,
+                                module: "process_names",
+                                ref_kind: "process",
+                                ref_id: None,
+                                context: format!("{bundle} ({})", p.source),
+                                event_time: p.last_seen,
+                            });
+                        }
+                    }
+                }
+            }
             other => {
                 // Unknown module ids are a programming error upstream; skip.
                 let _ = other;
@@ -673,6 +737,76 @@ pub fn run_scan(
         findings: sink.hits.len(),
         cancelled,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Tier-B process-activity extraction (DataUsage.sqlite + OSAnalytics ADDaily)
+// ---------------------------------------------------------------------------
+
+/// Core Data / CFAbsoluteTime epoch: seconds between 2001-01-01 and the Unix
+/// epoch. DataUsage timestamps are seconds since 2001; ADDaily uses real dates.
+const MAC_ABSOLUTE_EPOCH: i64 = 978_307_200;
+
+/// Parse observed processes from a `DataUsage.sqlite` (WirelessDomain,
+/// `Library/Databases/DataUsage.sqlite`). Reads `ZPROCESS`: process name,
+/// bundle name, and last-seen timestamp. Errors only on an unreadable /
+/// non-DataUsage database, so the caller can skip it and continue the scan.
+pub fn parse_datausage(db_path: &std::path::Path) -> Result<Vec<ObservedProcess>> {
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut stmt = conn.prepare(
+        "SELECT ZPROCNAME, ZBUNDLENAME, ZTIMESTAMP FROM ZPROCESS
+         WHERE ZPROCNAME IS NOT NULL",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let name: String = r.get(0)?;
+        let bundle: Option<String> = r.get(1)?;
+        let ts: Option<f64> = r.get(2)?;
+        Ok(ObservedProcess {
+            name,
+            bundle_id: bundle,
+            source: "DataUsage",
+            last_seen: ts.map(|t| t as i64 + MAC_ABSOLUTE_EPOCH),
+        })
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Parse observed processes from `com.apple.osanalytics.addaily.plist`
+/// (HomeDomain, `Library/Preferences/…`). The `netUsageBaseline` dictionary is
+/// keyed by process name; each value is `[date, wifi_in, wifi_out, wwan_in,
+/// wwan_out]`. This is the artifact class the original Pegasus discovery used.
+pub fn parse_addaily(plist_bytes: &[u8]) -> Result<Vec<ObservedProcess>> {
+    let root = plist::Value::from_reader(std::io::Cursor::new(plist_bytes))
+        .map_err(|e| crate::error::Error::Parse(format!("addaily plist: {e}")))?;
+    let Some(baseline) = root
+        .as_dictionary()
+        .and_then(|d| d.get("netUsageBaseline"))
+        .and_then(|v| v.as_dictionary())
+    else {
+        // No baseline dict (empty/older plist) — nothing to scan, not an error.
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for (name, value) in baseline {
+        let last_seen = value
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_date())
+            .and_then(|d| {
+                std::time::SystemTime::from(d)
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()
+                    .map(|dur| dur.as_secs() as i64)
+            });
+        out.push(ObservedProcess {
+            name: name.clone(),
+            bundle_id: None,
+            source: "OSAnalytics",
+            last_seen,
+        });
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -851,9 +985,34 @@ mod tests {
                     "TestWare",
                     Severity::Critical,
                 ),
+                ind(
+                    IndicatorKind::ProcessName,
+                    "roleaboutd",
+                    "TestWare",
+                    Severity::Critical,
+                ),
             ],
             skipped: vec![],
         }])
+    }
+
+    fn test_processes() -> Vec<ObservedProcess> {
+        vec![
+            // Bare daemon name (ADDaily form) — matches the indicator.
+            ObservedProcess {
+                name: "roleaboutd".into(),
+                bundle_id: None,
+                source: "OSAnalytics",
+                last_seen: Some(1_700_000_500),
+            },
+            // UUID/bundle form (DataUsage) whose basename is benign.
+            ObservedProcess {
+                name: "1FB47783/com.apple.compass".into(),
+                bundle_id: Some("com.apple.compass".into()),
+                source: "DataUsage",
+                last_seen: Some(1_700_000_600),
+            },
+        ]
     }
 
     fn seeded_db() -> CacheDb {
@@ -913,6 +1072,7 @@ mod tests {
         ]
         .into_iter();
         let cancel = CancelToken::new();
+        let processes = test_processes();
         let mut seen_modules = Vec::new();
         let outcome = run_scan(
             &db,
@@ -920,6 +1080,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             Some(&mut manifest),
+            &processes,
             "[]",
             &cancel,
             |m, _, _| seen_modules.push(m.to_string()),
@@ -947,6 +1108,9 @@ mod tests {
         // so 3 total: bundle, implant.db path, implant.plist? No — implant.db
         // basename is not a FileName indicator. bundle + path = 2.
         assert_eq!(count(&db, "manifest"), 2);
+        // process_names: the bare daemon name matches; the compass basename does
+        // not. One finding.
+        assert_eq!(count(&db, "process_names"), 1);
 
         // Severity flows from the indicator.
         let critical: i64 = db
@@ -957,7 +1121,8 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(critical, 4); // app + attachment + manifest bundle + manifest path
+        // app + attachment + manifest bundle + manifest path + process name.
+        assert_eq!(critical, 5);
 
         // The near-miss host produced nothing.
         let miss: i64 = db
@@ -984,6 +1149,80 @@ mod tests {
     }
 
     #[test]
+    fn parse_datausage_reads_zprocess() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("DataUsage.sqlite");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ZPROCESS (Z_PK INTEGER PRIMARY KEY, ZFIRSTTIMESTAMP TIMESTAMP,
+                ZTIMESTAMP TIMESTAMP, ZBUNDLENAME VARCHAR, ZPROCNAME VARCHAR);
+             INSERT INTO ZPROCESS (ZPROCNAME, ZBUNDLENAME, ZTIMESTAMP) VALUES
+                ('UUID/com.apple.compass', 'com.apple.compass', 548420038.9),
+                ('roleaboutd', NULL, 700000000.0),
+                (NULL, 'com.nulls', 1.0);",
+        )
+        .unwrap();
+        drop(conn);
+        let procs = parse_datausage(&path).unwrap();
+        // The NULL-name row is filtered out.
+        assert_eq!(procs.len(), 2);
+        let compass = procs.iter().find(|p| p.name.ends_with("compass")).unwrap();
+        assert_eq!(compass.bundle_id.as_deref(), Some("com.apple.compass"));
+        assert_eq!(compass.source, "DataUsage");
+        // Mac-absolute → Unix: 548420038 + 978307200.
+        assert_eq!(compass.last_seen, Some(548420038 + MAC_ABSOLUTE_EPOCH));
+    }
+
+    #[test]
+    fn parse_datausage_rejects_non_datausage_db() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("other.sqlite");
+        rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute_batch("CREATE TABLE unrelated (x);")
+            .unwrap();
+        assert!(parse_datausage(&path).is_err());
+    }
+
+    #[test]
+    fn parse_addaily_reads_netusagebaseline_keys() {
+        // Build a minimal ADDaily plist: netUsageBaseline dict keyed by process.
+        let mut baseline = plist::Dictionary::new();
+        baseline.insert(
+            "roleaboutd".into(),
+            plist::Value::Array(vec![
+                plist::Value::Date(std::time::UNIX_EPOCH.into()),
+                plist::Value::Integer(1.into()),
+            ]),
+        );
+        baseline.insert(
+            "callservicesd".into(),
+            plist::Value::Array(vec![plist::Value::Date(std::time::UNIX_EPOCH.into())]),
+        );
+        let mut root = plist::Dictionary::new();
+        root.insert(
+            "netUsageBaseline".into(),
+            plist::Value::Dictionary(baseline),
+        );
+        let mut bytes = Vec::new();
+        plist::to_writer_binary(&mut bytes, &plist::Value::Dictionary(root)).unwrap();
+
+        let procs = parse_addaily(&bytes).unwrap();
+        assert_eq!(procs.len(), 2);
+        assert!(procs
+            .iter()
+            .any(|p| p.name == "roleaboutd" && p.source == "OSAnalytics"));
+    }
+
+    #[test]
+    fn parse_addaily_missing_baseline_is_empty_not_error() {
+        let root = plist::Value::Dictionary(plist::Dictionary::new());
+        let mut bytes = Vec::new();
+        plist::to_writer_binary(&mut bytes, &root).unwrap();
+        assert!(parse_addaily(&bytes).unwrap().is_empty());
+    }
+
+    #[test]
     fn clean_cache_yields_zero_findings() {
         let db = CacheDb::open_in_memory().unwrap();
         db.conn()
@@ -1000,6 +1239,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             None,
+            &[],
             "[]",
             &CancelToken::new(),
             |_, _, _| {},
@@ -1018,6 +1258,7 @@ mod tests {
             ScanKind::Passive,
             &modules,
             None,
+            &[],
             "[]",
             &CancelToken::new(),
             |_, _, _| {},
@@ -1039,6 +1280,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             Some(&mut manifest),
+            &[],
             r#"[{"source":"echap/ioc","class":"stalkerware","count":2746,"skipped":0}]"#,
             &CancelToken::new(),
             |_, _, _| {},
@@ -1083,6 +1325,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             None,
+            &[],
             "[]",
             &cancel,
             |_, _, _| {},
