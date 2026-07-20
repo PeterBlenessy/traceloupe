@@ -523,6 +523,8 @@ async fn import_backup(
     let password = zeroize::Zeroizing::new(password);
     let key_password = zeroize::Zeroizing::new(password.to_string());
 
+    // Held for the post-import Passive Check (the pipeline closure moves `app`).
+    let app_for_passive = app.clone();
     // Blocking pipeline on a worker thread; progress is emitted as it runs.
     let result = tauri::async_runtime::spawn_blocking(move || {
         logging::info(&app, "Import started");
@@ -649,6 +651,12 @@ async fn import_backup(
         session.set(decryptor);
     }
 
+    // Passive Check: if the user consented, run the (apps-only by default)
+    // detection pass over the just-built cache so a fresh import surfaces
+    // findings without a separate scan. Best-effort — never fail an import
+    // because detection hiccupped.
+    run_passive_check_if_consented(&app_for_passive, &outcome.cache_path).await;
+
     Ok(ImportResult {
         cache_path: outcome.cache_path.display().to_string(),
         threads: outcome.report.threads,
@@ -659,6 +667,109 @@ async fn import_backup(
         contacts: outcome.report.contacts,
         warnings: outcome.report.warnings,
     })
+}
+
+/// Run the Passive Check against `cache_path` when the user has consented and
+/// enabled it. Used both after an import and by `run_passive_check_now` (the
+/// first-launch flow, against an already-imported cache). Best-effort: logs
+/// and returns on any error.
+async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
+    let Ok(data_dir) = app.path().app_data_dir() else {
+        return;
+    };
+    let settings = DetectionSettings::load(&data_dir).unwrap_or_default();
+    if !settings.passive_active() {
+        return;
+    }
+    let scan_kind = ScanKind::Passive;
+    let modules: Vec<&'static str> = match settings.passive_scope {
+        traceloupe_core::detection_settings::PassiveScope::AppsOnly => vec!["apps"],
+        traceloupe_core::detection_settings::PassiveScope::Full => {
+            analyzer::MODULES.to_vec()
+        }
+    };
+    let snapshot_dir = active_indicators_dir(app);
+    let cp = cache_path.to_path_buf();
+    let app2 = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let db = CacheDb::open(&cp)?;
+        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
+        analyzer::run_scan(
+            &db,
+            &set,
+            scan_kind,
+            &modules,
+            None,
+            &feeds_json,
+            &CancelToken::new(),
+            |module, index, total| {
+                let _ = app2.emit(
+                    "scan://progress",
+                    ScanProgress {
+                        module: module.to_string(),
+                        index,
+                        total,
+                    },
+                );
+            },
+        )
+    })
+    .await;
+    match outcome {
+        Ok(Ok(o)) => {
+            if o.findings > 0 {
+                logging::warn(
+                    app,
+                    format!(
+                        "\u{26a0} Passive Check flagged {} item(s) — open Security to review",
+                        o.findings
+                    ),
+                );
+            } else {
+                logging::info(
+                    app,
+                    "\u{2713} Passive Check: no known indicators matched".to_string(),
+                );
+            }
+        }
+        Ok(Err(e)) => logging::warn(app, format!("Passive Check skipped: {e}")),
+        Err(e) => logging::warn(app, format!("Passive Check skipped: {e}")),
+    }
+}
+
+/// Run the Passive Check now against the active backup (the first-launch
+/// consent flow: the user just granted consent and we scan the already-imported
+/// cache without waiting for a re-import). No-op if consent isn't granted.
+#[tauri::command]
+async fn run_passive_check_now(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+) -> Result<Option<ScanSummary>, String> {
+    let Ok(cache_path) = active.path() else {
+        return Ok(None);
+    };
+    let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    if !DetectionSettings::load(&data_dir)
+        .unwrap_or_default()
+        .passive_active()
+    {
+        return Ok(None);
+    }
+    run_passive_check_if_consented(&app, &cache_path).await;
+    let path = cache_path.clone();
+    let run = tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        query::latest_scan_run(&cache)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    Ok(run.map(|run_id| ScanSummary {
+        run_id,
+        findings: 0,
+        cancelled: false,
+    }))
 }
 
 /// Open a previously-imported backup's cache (by id) for browsing, without
@@ -3265,7 +3376,8 @@ pub fn run() {
             get_indicator_info,
             update_indicators,
             get_detection_settings,
-            set_detection_settings
+            set_detection_settings,
+            run_passive_check_now
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

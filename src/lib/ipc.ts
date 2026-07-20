@@ -703,6 +703,10 @@ export interface TraceLoupeClient {
   updateIndicators(): Promise<SnapshotInfo>;
   getDetectionSettings(): Promise<DetectionSettings>;
   setDetectionSettings(settings: DetectionSettings): Promise<void>;
+  /** Run the Passive Check now against the already-imported backup (the
+   *  first-launch consent flow). Returns null if consent isn't granted or no
+   *  backup is open. */
+  runPassiveCheckNow(): Promise<ScanSummary | null>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -1033,6 +1037,8 @@ const tauriClient: TraceLoupeClient = {
     invoke<DetectionSettings>("get_detection_settings"),
   setDetectionSettings: (settings) =>
     invoke("set_detection_settings", { settings }),
+  runPassiveCheckNow: () =>
+    invoke<ScanSummary | null>("run_passive_check_now"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
@@ -2581,6 +2587,11 @@ export const mockClient: TraceLoupeClient = {
   getDetectionSettings: async () => mockDetectionSettings,
   setDetectionSettings: async (s) => {
     mockDetectionSettings = s;
+  },
+  runPassiveCheckNow: async () => {
+    if (!mockActive || mockDetectionSettings.passiveConsent !== "granted")
+      return null;
+    return { runId: 1, findings: 1, cancelled: false };
   },
 
   listMedia: async () => (mockActive ? mockMedia : []),
