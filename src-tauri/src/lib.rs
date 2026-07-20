@@ -701,6 +701,7 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
             scan_kind,
             &modules,
             None,
+            &[], // Passive Check never does Tier-B process extraction.
             &feeds_json,
             &CancelToken::new(),
             |module, index, total| {
@@ -1174,6 +1175,7 @@ async fn run_security_scan(
     // Needs the backup source + (for encrypted) decryption keys, exactly like
     // reimport_module.
     let mut manifest_entries: Option<Vec<(String, String)>> = None;
+    let mut tierb_processes: Vec<analyzer::ObservedProcess> = Vec::new();
     if scan_kind == ScanKind::Explicit {
         let (backup_id, work_dir) = backup_layout(&cache_path)?;
         let source_dir = {
@@ -1194,7 +1196,7 @@ async fn run_security_scan(
                     session.set(Some(d.clone()));
                 }
             }
-            let entries = tauri::async_runtime::spawn_blocking(move || {
+            let extracted = tauri::async_runtime::spawn_blocking(move || {
                 let idx = ManifestIndex::open(
                     Path::new(&source_dir),
                     decryptor.as_deref(),
@@ -1202,12 +1204,40 @@ async fn run_security_scan(
                 )?;
                 let mut out = Vec::new();
                 idx.for_each_path(|domain, path| out.push((domain, path)))?;
-                Ok::<_, traceloupe_core::Error>(out)
+                // Tier-B process activity: DataUsage.sqlite + OSAnalytics ADDaily.
+                // Best-effort — a missing/unreadable file just yields fewer
+                // processes, never fails the sweep.
+                let mut processes: Vec<analyzer::ObservedProcess> = Vec::new();
+                if let Ok(Some(entry)) =
+                    idx.find("WirelessDomain", "Library/Databases/DataUsage.sqlite")
+                {
+                    let dest = work_dir.join(".security-datausage.sqlite");
+                    if idx.extract_db(&entry, decryptor.as_deref(), &dest).is_ok() {
+                        if let Ok(mut ps) = analyzer::parse_datausage(&dest) {
+                            processes.append(&mut ps);
+                        }
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                }
+                if let Ok(Some(entry)) = idx.find(
+                    "HomeDomain",
+                    "Library/Preferences/com.apple.osanalytics.addaily.plist",
+                ) {
+                    if let Ok(bytes) = idx.read_bytes(&entry, decryptor.as_deref()) {
+                        if let Ok(mut ps) = analyzer::parse_addaily(&bytes) {
+                            processes.append(&mut ps);
+                        }
+                    }
+                }
+                Ok::<_, traceloupe_core::Error>((out, processes))
             })
             .await
             .map_err(|e| e.to_string())?;
-            match entries {
-                Ok(e) => manifest_entries = Some(e),
+            match extracted {
+                Ok((e, ps)) => {
+                    manifest_entries = Some(e);
+                    tierb_processes = ps;
+                }
                 Err(e) => logging::warn(
                     &app,
                     format!("Security Check: manifest sweep unavailable: {e}"),
@@ -1238,6 +1268,7 @@ async fn run_security_scan(
             scan_kind,
             &modules,
             sweep_ref,
+            &tierb_processes,
             &feeds_json,
             &cancel,
             |module, index, total| {

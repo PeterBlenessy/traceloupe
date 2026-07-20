@@ -38,6 +38,7 @@ fn full_tier_a_scan_under_60s() {
         ScanKind::Explicit,
         MODULES,
         None,
+        &[],
         "[]",
         &CancelToken::new(),
         |m, i, n| eprintln!("  [{}/{}] {m} ({:?} elapsed)", i + 1, n, start.elapsed()),
