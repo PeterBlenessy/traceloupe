@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 46;
+const SCHEMA_VERSION: i64 = 47;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -293,6 +293,35 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_fts USING fts5(
     title,
     body
 );
+
+-- Security Check: one row per detection pass (Explicit Scan or Passive Check).
+CREATE TABLE IF NOT EXISTS scan_runs (
+    id              INTEGER PRIMARY KEY,
+    kind            TEXT NOT NULL,                    -- 'explicit' | 'passive'
+    started_at      INTEGER NOT NULL,                 -- unix seconds
+    finished_at     INTEGER,
+    status          TEXT NOT NULL DEFAULT 'running',  -- running|done|cancelled|failed
+    modules_json    TEXT NOT NULL DEFAULT '[]',       -- analyzer modules run
+    feeds_json      TEXT NOT NULL DEFAULT '[]',       -- [{source, fetched_at, count}]
+    indicator_count INTEGER
+);
+
+-- Security Check: one row per indicator match. ref_kind/ref_id point back at
+-- the source artifact row (same convention as search_fts).
+CREATE TABLE IF NOT EXISTS findings (
+    id            INTEGER PRIMARY KEY,
+    run_id        INTEGER NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+    severity      TEXT NOT NULL,       -- 'info' | 'warning' | 'critical'
+    kind          TEXT NOT NULL,       -- indicator kind (domain, url, bundle_id, …)
+    module        TEXT NOT NULL,       -- analyzer module that matched
+    malware       TEXT NOT NULL,       -- threat attribution
+    matched_value TEXT NOT NULL,
+    context       TEXT,                -- human-readable snippet around the match
+    ref_kind      TEXT,
+    ref_id        INTEGER,
+    event_time    INTEGER              -- unix seconds of the underlying event
+);
+CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, severity);
 "#;
 
 /// Add `column` to `table` if it isn't already present (SQLite has no
@@ -643,7 +672,12 @@ impl CacheDb {
             )?;
             // v42: recently-deleted camera-roll assets (surfaced as a badge, not
             // excluded — forensic, matching the hidden-album treatment).
-            ensure_column(&conn, "media_items", "trashed", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                &conn,
+                "media_items",
+                "trashed",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             ensure_column(&conn, "media_items", "trashed_at", "INTEGER")?;
             // v43: recoverable (recently-deleted) iMessages from
             // chat_recoverable_message_join — surfaced with a "Deleted" badge.
@@ -656,7 +690,39 @@ impl CacheDb {
             // international calls.
             ensure_column(&conn, "calls", "country_code", "TEXT")?;
             // v46: private-browsing flag on Safari open tabs (BrowserState.db).
-            ensure_column(&conn, "safari_bookmarks", "private", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                &conn,
+                "safari_bookmarks",
+                "private",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            // v47: Security Check scan runs + findings (see docs/spyware-analyzer-prd.md §6.3).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS scan_runs (
+                    id              INTEGER PRIMARY KEY,
+                    kind            TEXT NOT NULL,
+                    started_at      INTEGER NOT NULL,
+                    finished_at     INTEGER,
+                    status          TEXT NOT NULL DEFAULT 'running',
+                    modules_json    TEXT NOT NULL DEFAULT '[]',
+                    feeds_json      TEXT NOT NULL DEFAULT '[]',
+                    indicator_count INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS findings (
+                    id            INTEGER PRIMARY KEY,
+                    run_id        INTEGER NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+                    severity      TEXT NOT NULL,
+                    kind          TEXT NOT NULL,
+                    module        TEXT NOT NULL,
+                    malware       TEXT NOT NULL,
+                    matched_value TEXT NOT NULL,
+                    context       TEXT,
+                    ref_kind      TEXT,
+                    ref_id        INTEGER,
+                    event_time    INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, severity);",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
@@ -707,6 +773,78 @@ mod tests {
         // Second open must not re-run CREATEs.
         let db = CacheDb::open(&path).unwrap();
         assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn v39_migration_adds_scan_tables_to_older_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cache.db");
+        {
+            // Simulate a pre-v39 cache: full base schema minus the new tables,
+            // stamped with the previous version.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.execute_batch("DROP TABLE findings; DROP TABLE scan_runs;")
+                .unwrap();
+            conn.pragma_update(None, "user_version", 38).unwrap();
+        }
+        let db = CacheDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        for table in ["scan_runs", "findings"] {
+            let n: i64 = db
+                .conn()
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "missing table {table}");
+        }
+    }
+
+    #[test]
+    fn finding_artifact_ref_round_trips() {
+        let db = CacheDb::open_in_memory().unwrap();
+        let conn = db.conn();
+        conn.execute(
+            "INSERT INTO threads (id, identifier, service) VALUES (7, 'x', 'SMS')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, thread_id, sent_at, body) VALUES (99, 7, 1700000000, 'visit evil.example now')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO scan_runs (id, kind, started_at, status) VALUES (1, 'explicit', 1700000001, 'done')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO findings (run_id, severity, kind, module, malware, matched_value, ref_kind, ref_id, event_time)
+             VALUES (1, 'warning', 'domain', 'messages', 'TestWare', 'evil.example', 'message', 99, 1700000000)",
+            [],
+        )
+        .unwrap();
+        // Resolve the finding back to its source artifact row.
+        let body: String = conn
+            .query_row(
+                "SELECT m.body FROM findings f JOIN messages m ON m.id = f.ref_id
+                 WHERE f.ref_kind = 'message' AND f.run_id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(body.contains("evil.example"));
+        // Deleting the run cascades to its findings.
+        conn.execute("DELETE FROM scan_runs WHERE id = 1", [])
+            .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM findings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
     }
 
     #[test]

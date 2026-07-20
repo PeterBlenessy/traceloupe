@@ -445,8 +445,7 @@ fn load_note_images(
     cols: &HashSet<String>,
     images: Option<&NoteImageSource>,
 ) -> std::collections::HashMap<i64, Vec<NoteImage>> {
-    let mut map: std::collections::HashMap<i64, Vec<NoteImage>> =
-        std::collections::HashMap::new();
+    let mut map: std::collections::HashMap<i64, Vec<NoteImage>> = std::collections::HashMap::new();
     let Some(src) = images else {
         return map;
     };

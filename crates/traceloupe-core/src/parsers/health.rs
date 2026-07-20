@@ -281,7 +281,6 @@ fn parse_workouts(
     report: &mut ImportReport,
     replace: bool,
 ) -> Result<()> {
-
     // One row per workout: its dates (aggregated from `samples`) + activity
     // type/duration + total distance. A workout can have several
     // `workout_activities` rows (multi-sport, or all with a NULL primary flag), so
@@ -384,7 +383,11 @@ fn parse_routes(
          JOIN location_series_data l ON l.series_identifier = ds.hfd_key
          WHERE a.destination_object_id = ?1{}
          ORDER BY l.timestamp",
-        if has_deleted { " AND a.deleted = 0" } else { "" }
+        if has_deleted {
+            " AND a.deleted = 0"
+        } else {
+            ""
+        }
     );
     let mut stmt = src.prepare(&sql)?;
 
@@ -555,11 +558,7 @@ fn parse_daily(
 fn merge_cumulative(sources: &[SourceStats]) -> SourceStats {
     let best = sources
         .iter()
-        .max_by(|a, b| {
-            a.sum
-                .unwrap_or(0.0)
-                .total_cmp(&b.sum.unwrap_or(0.0))
-        })
+        .max_by(|a, b| a.sum.unwrap_or(0.0).total_cmp(&b.sum.unwrap_or(0.0)))
         .expect("flush is only called with at least one source");
     SourceStats {
         sum: best.sum,
@@ -871,7 +870,9 @@ mod tests {
 
         let c = cache.conn();
         let rows: Vec<(String, String, f64, i64)> = c
-            .prepare("SELECT day, metric, value_sum, samples FROM health_daily ORDER BY day, metric")
+            .prepare(
+                "SELECT day, metric, value_sum, samples FROM health_daily ORDER BY day, metric",
+            )
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .unwrap()
@@ -946,7 +947,11 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!((hr_min, hr_max, hr_n), (60.0, 120.0, 2), "HR merges across sources");
+        assert_eq!(
+            (hr_min, hr_max, hr_n),
+            (60.0, 120.0, 2),
+            "HR merges across sources"
+        );
     }
 
     #[test]
@@ -982,7 +987,10 @@ mod tests {
             .conn()
             .query_row("SELECT COUNT(*) FROM workout_routes", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n, 0, "replace must clear routes even when the store has no route tables");
+        assert_eq!(
+            n, 0,
+            "replace must clear routes even when the store has no route tables"
+        );
     }
 
     #[test]
@@ -1044,7 +1052,9 @@ mod tests {
         assert!(n <= 1001, "downsampled to the cap (+last), got {n}");
         assert!(n >= 800, "kept a dense preview, got {n}");
         // Route rows attach to the cache workout id.
-        let cache_wid: i64 = c.query_row("SELECT id FROM workouts", [], |r| r.get(0)).unwrap();
+        let cache_wid: i64 = c
+            .query_row("SELECT id FROM workouts", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(wid, cache_wid);
         // The deleted link's series (lat 99) must not appear; the final point is kept.
         let (max_lat, last_lat): (f64, f64) = c
@@ -1100,8 +1110,14 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                ("Cervical mucus quality".to_string(), Some("Egg white".to_string())),
-                ("Ovulation test result".to_string(), Some("LH surge".to_string())),
+                (
+                    "Cervical mucus quality".to_string(),
+                    Some("Egg white".to_string())
+                ),
+                (
+                    "Ovulation test result".to_string(),
+                    Some("LH surge".to_string())
+                ),
                 ("Menstrual flow".to_string(), Some("Medium".to_string())),
                 ("Abdominal cramps".to_string(), None),
             ]
@@ -1178,7 +1194,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(n, 1, "duplicate day collapses to one row");
-        assert_eq!((move_kcal, goal), (412.0, 500.0), "highest Move energy wins");
+        assert_eq!(
+            (move_kcal, goal),
+            (412.0, 500.0),
+            "highest Move energy wins"
+        );
         assert_eq!((ex, stand), (22.0, 9.0));
     }
 
