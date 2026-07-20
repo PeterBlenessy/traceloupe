@@ -26,11 +26,20 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.16.0` | **Health deep-dive + contact relationships** — the HealthKit store beyond workouts: daily activity aggregates (steps/distance/energy/flights/heart-rate), sleep sessions, and workout GPS routes with inline previews; plus contact related-names and address-book groups. |
 | `0.17.0` | **Health rings, mobility & the timezone timeline** — Apple activity rings vs goals, walking/audio-exposure daily metrics, and a per-timezone travel timeline from sample provenances; the Health view's sections refactored onto one descriptor-driven pipeline. |
 | `0.18.0` | **Data-coverage pass, recovery-themed** — Recently-Deleted photos (`ZTRASHEDSTATE`) and messages (`chat_recoverable_message_join`), per-app Interaction channels, Messages sticker/effect/app-bubble classification, Health Cycle-Tracking + Awards, Contacts social profiles, and App Store metadata. |
+| `0.19.0` | **Data-coverage close-out** — Safari local open tabs (`BrowserState.db`, with a private-browsing badge), Calls number-country flags, and Photos added-to-library date. Field-level coverage is now closed; remaining gaps are marked won't-implement. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
 
 ## [Unreleased]
+
+_Nothing yet._
+
+## [0.19.0] — 2026-07-20
+
+**Data-coverage close-out.** The last field-level items, and a line drawn under
+the coverage effort (see `docs/app-data-coverage.md`). Requires a re-import to
+populate for existing caches.
 
 ### Added
 
