@@ -184,7 +184,7 @@ struct StixObject {
 fn stix_path_kind(path: &str) -> Option<IndicatorKind> {
     // Hash paths appear both quoted (file:hashes.'SHA-256') and bare
     // (file:hashes.sha256) in the wild.
-    let p = path.replace('\'', "").replace('"', "");
+    let p = path.replace(['\'', '"'], "");
     match p.as_str() {
         "domain-name:value" => Some(IndicatorKind::Domain),
         "url:value" => Some(IndicatorKind::Url),
@@ -298,11 +298,10 @@ fn parse_stix_pattern(pattern: &str) -> (Vec<(String, String)>, Vec<String>) {
 /// Load a STIX2 bundle. `source` is a short feed label recorded on every
 /// indicator (e.g. "amnesty/pegasus").
 pub fn load_stix_bundle(json_text: &str, source: &str, class: FeedClass) -> Result<LoadedFeed> {
-    let bundle: StixBundle =
-        serde_json::from_str(json_text).map_err(|e| Error::IndicatorFeed {
-            feed: source.to_string(),
-            message: e.to_string(),
-        })?;
+    let bundle: StixBundle = serde_json::from_str(json_text).map_err(|e| Error::IndicatorFeed {
+        feed: source.to_string(),
+        message: e.to_string(),
+    })?;
 
     // malware id → name
     let mut malware_names: HashMap<&str, &str> = HashMap::new();
@@ -606,13 +605,10 @@ pub fn fetch_snapshot_with(
     for (idx, feed) in manifest.feeds.iter().enumerate() {
         let Some(url) = &feed.url else { continue };
         on_progress(&feed.file, idx, total);
-        let resp = agent
-            .get(url)
-            .call()
-            .map_err(|e| Error::IndicatorFeed {
-                feed: feed.file.clone(),
-                message: format!("request failed: {e}"),
-            })?;
+        let resp = agent.get(url).call().map_err(|e| Error::IndicatorFeed {
+            feed: feed.file.clone(),
+            message: format!("request failed: {e}"),
+        })?;
         let tmp = dest.join(format!("{}.download", feed.file));
         let mut reader = std::io::Read::take(resp.into_reader(), MAX_FEED_BYTES + 1);
         let mut buf = Vec::new();
@@ -700,7 +696,10 @@ mod tests {
     #[test]
     fn pattern_single_comparison() {
         let (pairs, unknown) = parse_stix_pattern("[domain-name:value = 'Example.COM.']");
-        assert_eq!(pairs, vec![("domain-name:value".into(), "Example.COM.".into())]);
+        assert_eq!(
+            pairs,
+            vec![("domain-name:value".into(), "Example.COM.".into())]
+        );
         assert!(unknown.is_empty());
     }
 
@@ -714,8 +713,7 @@ mod tests {
 
     #[test]
     fn pattern_quoted_hash_key() {
-        let (pairs, unknown) =
-            parse_stix_pattern("[file:hashes.'SHA-256' = 'abc123']");
+        let (pairs, unknown) = parse_stix_pattern("[file:hashes.'SHA-256' = 'abc123']");
         assert_eq!(pairs.len(), 1, "unknown: {unknown:?}");
         assert_eq!(pairs[0].0, "file:hashes.'SHA-256'");
         assert_eq!(pairs[0].1, "abc123");
@@ -760,6 +758,9 @@ mod tests {
         let set = IndicatorSet::from_feeds(vec![a, b]);
         assert_eq!(set.len(), 1);
         assert_eq!(set.indicators[0].severity, Severity::Warning);
-        assert_eq!(set.indicators[0].sources, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            set.indicators[0].sources,
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 }

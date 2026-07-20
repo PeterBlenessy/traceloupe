@@ -432,9 +432,16 @@ mod tests {
         write_plist(&dir.join("Info.plist"), Value::Dictionary(info));
 
         let out = installed_apps_meta(dir);
-        assert_eq!(out.len(), 2, "the metadata-less system app must NOT be dropped");
+        assert_eq!(
+            out.len(),
+            2,
+            "the metadata-less system app must NOT be dropped"
+        );
         // Sorted by bundle id: mobilesafari, then instagram.
-        let ig = out.iter().find(|a| a.bundle_id == "com.burbn.instagram").unwrap();
+        let ig = out
+            .iter()
+            .find(|a| a.bundle_id == "com.burbn.instagram")
+            .unwrap();
         assert_eq!(ig.name.as_deref(), Some("Instagram"));
         assert_eq!(ig.seller.as_deref(), Some("Instagram, Inc."));
         assert_eq!(ig.version.as_deref(), Some("436.0.0"));
@@ -442,7 +449,10 @@ mod tests {
         assert_eq!(ig.released.as_deref(), Some("2010-10-06T08:12:41Z"));
         // The system app (in the array, absent from Applications) still appears,
         // with only its bundle id.
-        let safari = out.iter().find(|a| a.bundle_id == "com.apple.mobilesafari").unwrap();
+        let safari = out
+            .iter()
+            .find(|a| a.bundle_id == "com.apple.mobilesafari")
+            .unwrap();
         assert_eq!(safari.name, None);
     }
 }

@@ -16,10 +16,18 @@ fn fixture(name: &str) -> String {
 
 #[test]
 fn pegasus_stix_loads_fully() {
-    let feed = load_stix_bundle(&fixture("pegasus.stix2"), "amnesty/pegasus", FeedClass::Mercenary)
-        .expect("parses");
+    let feed = load_stix_bundle(
+        &fixture("pegasus.stix2"),
+        "amnesty/pegasus",
+        FeedClass::Mercenary,
+    )
+    .expect("parses");
     assert_eq!(feed.indicators.len(), 1549);
-    assert!(feed.skipped.is_empty(), "skipped: {:?}", &feed.skipped[..5.min(feed.skipped.len())]);
+    assert!(
+        feed.skipped.is_empty(),
+        "skipped: {:?}",
+        &feed.skipped[..5.min(feed.skipped.len())]
+    );
 
     let by = |k| feed.indicators.iter().filter(|i| i.kind == k).count();
     assert_eq!(by(IndicatorKind::Domain), 1438);
@@ -30,15 +38,11 @@ fn pegasus_stix_loads_fully() {
     // Attribution flows through the relationship objects.
     assert!(feed.indicators.iter().all(|i| i.malware == "Pegasus"));
     // Severity by kind for mercenary feeds.
-    assert!(feed
-        .indicators
-        .iter()
-        .all(|i| match i.kind {
-            IndicatorKind::Domain | IndicatorKind::Email => i.severity == Severity::Warning,
-            IndicatorKind::ProcessName | IndicatorKind::FileName =>
-                i.severity == Severity::Critical,
-            _ => true,
-        }));
+    assert!(feed.indicators.iter().all(|i| match i.kind {
+        IndicatorKind::Domain | IndicatorKind::Email => i.severity == Severity::Warning,
+        IndicatorKind::ProcessName | IndicatorKind::FileName => i.severity == Severity::Critical,
+        _ => true,
+    }));
     // Values are normalized.
     assert!(feed
         .indicators
@@ -75,8 +79,8 @@ fn kingspawn_stix_loads_fully() {
 
 #[test]
 fn echap_ioc_yaml_loads_fully() {
-    let feed = load_echap_yaml(&fixture("ioc.yaml"), "echap/ioc", FeedClass::Stalkerware)
-        .expect("parses");
+    let feed =
+        load_echap_yaml(&fixture("ioc.yaml"), "echap/ioc", FeedClass::Stalkerware).expect("parses");
     assert_eq!(feed.indicators.len(), 2746);
 
     let by = |k| feed.indicators.iter().filter(|i| i.kind == k).count();
@@ -110,8 +114,12 @@ fn echap_ioc_yaml_loads_fully() {
 
 #[test]
 fn echap_watchware_is_all_info() {
-    let feed = load_echap_yaml(&fixture("watchware.yaml"), "echap/watchware", FeedClass::Watchware)
-        .expect("parses");
+    let feed = load_echap_yaml(
+        &fixture("watchware.yaml"),
+        "echap/watchware",
+        FeedClass::Watchware,
+    )
+    .expect("parses");
     assert_eq!(feed.indicators.len(), 159);
     assert!(feed.indicators.iter().all(|i| i.severity == Severity::Info));
 }
@@ -120,9 +128,12 @@ fn echap_watchware_is_all_info() {
 fn merged_set_dedupes_within_and_across_feeds() {
     let ioc = load_echap_yaml(&fixture("ioc.yaml"), "echap/ioc", FeedClass::Stalkerware).unwrap();
     let raw = ioc.indicators.len();
-    let watch =
-        load_echap_yaml(&fixture("watchware.yaml"), "echap/watchware", FeedClass::Watchware)
-            .unwrap();
+    let watch = load_echap_yaml(
+        &fixture("watchware.yaml"),
+        "echap/watchware",
+        FeedClass::Watchware,
+    )
+    .unwrap();
     let set = IndicatorSet::from_feeds(vec![ioc, watch]);
     // Same family lists copy9.com as both website and C2 → deduped, max severity wins.
     assert!(set.len() < raw + 159);

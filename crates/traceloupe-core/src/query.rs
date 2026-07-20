@@ -1071,11 +1071,8 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
                 stand_hours, stand_goal_hours
          FROM activity_rings",
     )?;
-    let mut idx: std::collections::HashMap<i64, usize> = out
-        .iter()
-        .enumerate()
-        .map(|(i, d)| (d.day_at, i))
-        .collect();
+    let mut idx: std::collections::HashMap<i64, usize> =
+        out.iter().enumerate().map(|(i, d)| (d.day_at, i)).collect();
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let day_at: i64 = r.get(0)?;
@@ -1094,7 +1091,7 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
         d.stand_hours = r.get(5)?;
         d.stand_goal_hours = r.get(6)?;
     }
-    out.sort_by(|a, b| b.day_at.cmp(&a.day_at));
+    out.sort_by_key(|b| std::cmp::Reverse(b.day_at));
     Ok(out)
 }
 
@@ -1236,9 +1233,7 @@ pub fn list_sleep(cache: &CacheDb) -> Result<Vec<SleepSession>> {
 /// summary when no Health data was imported.
 pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
     let meta_i = |k: &str| -> Option<i64> { cache.get_meta(k).ok().flatten()?.parse().ok() };
-    let count = |sql: &str| -> Result<i64> {
-        Ok(cache.conn().query_row(sql, [], |r| r.get(0))?)
-    };
+    let count = |sql: &str| -> Result<i64> { Ok(cache.conn().query_row(sql, [], |r| r.get(0))?) };
     Ok(HealthSummary {
         sample_count: meta_i("health_sample_count").unwrap_or(0),
         first_at: meta_i("health_first_at"),
