@@ -23,6 +23,7 @@ import {
   MapPin,
   Play,
   Smartphone,
+  Trash2,
   Users,
 } from "lucide-react";
 
@@ -474,6 +475,14 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         </span>
       )}
       <div className="absolute right-1 top-1 flex gap-1">
+        {item.trashed && (
+          <span
+            className="rounded-full bg-red-600/80 p-1 text-white"
+            title="In Recently Deleted"
+          >
+            <Trash2 className="size-3" />
+          </span>
+        )}
         {item.hidden && (
           <span
             className="rounded-full bg-black/55 p-1 text-white"
@@ -597,6 +606,12 @@ function Lightbox({
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-3">
+            {item.trashed && (
+              <Trash2
+                className="size-3.5 shrink-0 text-red-400"
+                aria-label="In Recently Deleted"
+              />
+            )}
             {item.hidden && (
               <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />
             )}
