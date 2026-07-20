@@ -1864,7 +1864,13 @@ pub struct Note {
     /// Rich-content indicators: has a checklist, and counts of embedded
     /// image/video attachments vs total attachments (tables, drawings, files…).
     pub has_checklist: bool,
+    /// Image attachments the note *references* (from its metadata). These may
+    /// not be present in the backup — Notes media is often stored in iCloud and
+    /// not downloaded to the device, in which case none can be displayed.
     pub image_count: i64,
+    /// Image attachments actually present in the backup (rows in `note_media`),
+    /// i.e. the number the detail gallery can display. `<= image_count`.
+    pub available_image_count: i64,
     pub attachment_count: i64,
     /// Hashtag tags on the note (iOS 15+); empty when none.
     pub tags: Vec<String>,
@@ -1877,7 +1883,8 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned,
-                has_checklist, image_count, attachment_count, tags, image_local_path IS NOT NULL, body_rich
+                has_checklist, image_count, attachment_count, tags, image_local_path IS NOT NULL, body_rich,
+                (SELECT COUNT(*) FROM note_media WHERE note_media.note_id = notes.id)
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -1896,6 +1903,7 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
             pinned: r.get::<_, i64>(9)? != 0,
             has_checklist: r.get::<_, i64>(10)? != 0,
             image_count: r.get(11)?,
+            available_image_count: r.get(16)?,
             attachment_count: r.get(12)?,
             tags: r
                 .get::<_, Option<String>>(13)?

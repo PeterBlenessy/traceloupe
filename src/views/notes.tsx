@@ -8,6 +8,7 @@ import {
   Folder,
   FolderTree,
   Image as ImageIcon,
+  ImageOff,
   List,
   ListChecks,
   Lock,
@@ -702,12 +703,16 @@ function NoteDetail({ note }: { note: Note }) {
               {note.body ?? note.snippet ?? "(empty note)"}
             </div>
           )}
-          {/* All of the note's embedded images (from note_media), shown as a
-              gallery below the body. True inline-at-position rendering is a
-              future pass — see docs/app-data-coverage.md. */}
-          {!note.locked && note.imageCount > 0 && (
+          {/* Embedded images (from note_media), shown as a gallery below the
+              body. We render only images actually present in the backup
+              (availableImageCount), never one <img> per referenced attachment —
+              Notes media is frequently iCloud-only and not downloaded, so a
+              referenced image often has no file to serve. When that's the case
+              we say so honestly instead of showing an empty/broken gallery.
+              True inline-at-position rendering is a future pass. */}
+          {!note.locked && note.availableImageCount > 0 && (
             <div className="mt-4 flex flex-col gap-3">
-              {Array.from({ length: note.imageCount }).map((_, i) => (
+              {Array.from({ length: note.availableImageCount }).map((_, i) => (
                 <img
                   key={i}
                   src={client.noteImageUrl(note.id, i)}
@@ -719,8 +724,34 @@ function NoteDetail({ note }: { note: Note }) {
                   }}
                 />
               ))}
+              {note.imageCount > note.availableImageCount && (
+                <p className="text-xs text-muted-foreground">
+                  {note.imageCount - note.availableImageCount} more image
+                  {note.imageCount - note.availableImageCount > 1 ? "s aren't" : " isn't"}{" "}
+                  included in this backup.
+                </p>
+              )}
             </div>
           )}
+          {!note.locked &&
+            note.imageCount > 0 &&
+            note.availableImageCount === 0 && (
+              <div className="mt-4 flex items-start gap-3 rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                <ImageOff className="mt-0.5 size-4 shrink-0" />
+                <div>
+                  <p className="text-foreground">
+                    {note.imageCount} image{note.imageCount > 1 ? "s" : ""} not
+                    included in this backup
+                  </p>
+                  <p className="mt-0.5 text-xs">
+                    This note references {note.imageCount > 1 ? "them" : "it"}, but
+                    the file{note.imageCount > 1 ? "s" : ""}{" "}
+                    {note.imageCount > 1 ? "aren't" : "isn't"} present — Notes media
+                    is often stored in iCloud and not downloaded to the device.
+                  </p>
+                </div>
+              </div>
+            )}
         </div>
       </ScrollArea>
     </div>

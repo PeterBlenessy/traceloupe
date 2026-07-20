@@ -130,7 +130,10 @@ export interface Note {
   passwordHint: string | null;
   /** Rich-content indicators: a checklist, and embedded image/attachment counts. */
   hasChecklist: boolean;
+  /** Image attachments the note *references* (may be iCloud-only, not in the backup). */
   imageCount: number;
+  /** Image attachments actually present in the backup (displayable). `<= imageCount`. */
+  availableImageCount: number;
   attachmentCount: number;
   /** Hashtag tags on the note (iOS 15+); empty when none. */
   tags: string[];
@@ -1406,6 +1409,7 @@ const mockNotes: Note[] = [
     passwordHint: null,
     hasChecklist: false,
     imageCount: 2,
+    availableImageCount: 0,
     attachmentCount: 2,
     tags: [],
     hasImage: true,
@@ -1424,6 +1428,7 @@ const mockNotes: Note[] = [
     passwordHint: null,
     hasChecklist: false,
     imageCount: 0,
+    availableImageCount: 0,
     attachmentCount: 0,
     tags: [],
     hasImage: false,
@@ -1442,6 +1447,7 @@ const mockNotes: Note[] = [
     passwordHint: null,
     hasChecklist: false,
     imageCount: 0,
+    availableImageCount: 0,
     attachmentCount: 0,
     tags: [],
     hasImage: false,
@@ -1460,6 +1466,7 @@ const mockNotes: Note[] = [
     passwordHint: "the usual",
     hasChecklist: false,
     imageCount: 0,
+    availableImageCount: 0,
     attachmentCount: 0,
     tags: [],
     hasImage: false,
