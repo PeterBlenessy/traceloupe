@@ -18,6 +18,7 @@ import {
   EyeOff,
   Frame,
   Heart,
+  Import,
   Image as ImageIcon,
   Images,
   MapPin,
@@ -647,6 +648,17 @@ function Lightbox({
             )}
             {item.source && <span>{item.source}</span>}
             {item.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
+            {item.addedAt != null &&
+              (item.takenAt == null ||
+                Math.abs(item.addedAt - item.takenAt) > 86400) && (
+                <span
+                  className="inline-flex items-center gap-1 text-amber-400"
+                  title="Added to this device's library later than it was captured — likely received, saved, or imported"
+                >
+                  <Import className="size-3 shrink-0" />
+                  Added {formatDateTime(item.addedAt)}
+                </span>
+              )}
           </div>
         </div>
         {(item.camera || item.lens || item.exif || item.width || item.fileSize) && (

@@ -32,7 +32,13 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **Photos — added-to-library date.** When a camera-roll asset was added to the
+  library (`ZASSET.ZADDEDDATE`) is surfaced in the lightbox as "Added &lt;date&gt;"
+  whenever it differs from the capture date by more than a day — flagging media
+  that was received, saved, or imported rather than shot on this device (schema
+  v44). ~1,174 such assets in the reference backup.
 
 ## [0.18.0] — 2026-07-20
 

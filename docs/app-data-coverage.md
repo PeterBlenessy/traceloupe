@@ -163,7 +163,7 @@ people/GPS/favorite/moment/albums onto `media_items`.
 |------|:---------:|:--------:|-------|
 | Photo / video file + thumbnail | ✅ 88k / 7.1k | ✅ | full-res + thumb, decrypt-on-demand |
 | Capture date | ✅ | ✅ | primary sort + time filter |
-| Added / modified dates | ✅ | ⬜ | `ZADDEDDATE`/`ZMODIFICATIONDATE` unread |
+| Added / modified dates | ✅ | ◑ | `ZADDEDDATE` → lightbox "Added &lt;date&gt;" when it differs from capture by >1 day (received/saved/imported media; 1,174 here). `ZMODIFICATIONDATE` still unread |
 | GPS lat/long | ✅ 24k | ✅ | lightbox Maps link (no map/grid pin) |
 | Reverse-geocoded place | ◑ | ◑ | moment/event title only; per-asset reverse-geocode blob ignored |
 | **EXIF** (camera, lens, ISO, exposure, focal length) | ✅ 22–25k | ✅ | `ZEXTENDEDATTRIBUTES` → camera + lens + "ISO · ƒ · shutter · mm" in the lightbox |

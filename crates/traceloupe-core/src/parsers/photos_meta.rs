@@ -37,6 +37,9 @@ struct AssetMeta {
     /// In Recently Deleted (`ZASSET.ZTRASHEDSTATE`), with its deletion date.
     trashed: bool,
     trashed_at: Option<i64>,
+    /// When the asset was added to the library (`ZASSET.ZADDEDDATE`) — differs
+    /// from capture for received/saved/imported media.
+    added_at: Option<i64>,
     /// Media subtype we can classify confidently: "screenshot" | "panorama".
     subtype: Option<&'static str>,
     persons: Option<String>,
@@ -166,12 +169,13 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         let aval_expr = if asset_cols.contains("ZAVALANCHEUUID") { "a.ZAVALANCHEUUID" } else { "NULL" };
         let trash_expr = if asset_cols.contains("ZTRASHEDSTATE") { "a.ZTRASHEDSTATE" } else { "NULL" };
         let trashdate_expr = if asset_cols.contains("ZTRASHEDDATE") { "a.ZTRASHEDDATE" } else { "NULL" };
+        let added_expr = if asset_cols.contains("ZADDEDDATE") { "a.ZADDEDDATE" } else { "NULL" };
         let mut stmt = src.prepare(&format!(
             "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
                     a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE,
                     a.ZWIDTH, a.ZHEIGHT, a.ZDURATION, a.ZHIDDEN,
                     a.ZKINDSUBTYPE, a.ZISDETECTEDSCREENSHOT, {play_expr}, {aval_expr},
-                    {trash_expr}, {trashdate_expr}
+                    {trash_expr}, {trashdate_expr}, {added_expr}
              FROM ZASSET a
              LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
              WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
@@ -221,6 +225,10 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 .get::<_, Option<f64>>(17)?
                 .filter(|t| *t > 0.0)
                 .map(|t| (t + MAC_EPOCH as f64) as i64);
+            let added_at = r
+                .get::<_, Option<f64>>(18)?
+                .filter(|t| *t > 0.0)
+                .map(|t| (t + MAC_EPOCH as f64) as i64);
             let subtype = if is_screenshot || kind_subtype == 10 {
                 Some("screenshot")
             } else if playback_style == 3 {
@@ -244,6 +252,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                     hidden,
                     trashed,
                     trashed_at,
+                    added_at,
                     subtype,
                     location,
                     width,
@@ -404,7 +413,8 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                  hidden = ?15,
                  subtype = ?16,
                  trashed = ?18,
-                 trashed_at = ?19
+                 trashed_at = ?19,
+                 added_at = ?20
              WHERE id = ?17",
             rusqlite::params![
                 meta.persons,
@@ -426,6 +436,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 id,
                 meta.trashed as i64,
                 meta.trashed_at,
+                meta.added_at,
             ],
         )?;
     }
@@ -446,7 +457,7 @@ mod tests {
                  ZWIDTH INTEGER, ZHEIGHT INTEGER, ZDURATION REAL, ZHIDDEN INTEGER,
                  ZKINDSUBTYPE INTEGER, ZISDETECTEDSCREENSHOT INTEGER,
                  ZPLAYBACKSTYLE INTEGER, ZAVALANCHEUUID TEXT,
-                 ZTRASHEDSTATE INTEGER, ZTRASHEDDATE REAL);
+                 ZTRASHEDSTATE INTEGER, ZTRASHEDDATE REAL, ZADDEDDATE REAL);
              CREATE TABLE ZPERSON (Z_PK INTEGER PRIMARY KEY, ZFULLNAME TEXT, ZDISPLAYNAME TEXT);
              CREATE TABLE ZDETECTEDFACE (Z_PK INTEGER PRIMARY KEY, ZASSETFORFACE INTEGER, ZPERSONFORFACE INTEGER);
              CREATE TABLE ZMOMENT (Z_PK INTEGER PRIMARY KEY, ZTITLE TEXT);
@@ -460,15 +471,16 @@ mod tests {
              INSERT INTO ZMOMENT VALUES (500, 'Florida');
              -- Asset 1: named people, a real date (721692800 Mac = 1_700_000_000 unix),
              -- a GPS fix, favorited, in the 'Florida' moment, 4032x3024 photo.
-             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0, 0, 0, 0, 1, NULL, 0, NULL);
+             -- Asset 1 was captured at 721692800 but ADDED later (721700000), e.g. saved from Messages.
+             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0, 0, 0, 0, 1, NULL, 0, NULL, 721700000.0);
              -- Asset 2: no named people, no location (-180 sentinel), not favorited, no moment, hidden, a screenshot, and trashed.
-             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 1, 10, 1, 1, NULL, 1, 721700000.0);
+             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 1, 10, 1, 1, NULL, 1, 721700000.0, NULL);
              -- Asset 3: a Live Photo (ZPLAYBACKSTYLE=3; ZKINDSUBTYPE=2 is the still frame, NOT a panorama).
-             INSERT INTO ZASSET VALUES (3, 'DCIM/100APPLE', 'IMG_0003.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 2, 0, 3, NULL, 0, NULL);
+             INSERT INTO ZASSET VALUES (3, 'DCIM/100APPLE', 'IMG_0003.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 2, 0, 3, NULL, 0, NULL, NULL);
              -- Asset 4: a real panorama (ZKINDSUBTYPE=1, standard playback).
-             INSERT INTO ZASSET VALUES (4, 'DCIM/100APPLE', 'IMG_0004.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 1, 0, 1, NULL, 0, NULL);
+             INSERT INTO ZASSET VALUES (4, 'DCIM/100APPLE', 'IMG_0004.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 1, 0, 1, NULL, 0, NULL, NULL);
              -- Asset 5: a burst member (shares a ZAVALANCHEUUID).
-             INSERT INTO ZASSET VALUES (5, 'DCIM/100APPLE', 'IMG_0005.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 0, 0, 1, 'AVAL-UUID-1', 0, NULL);
+             INSERT INTO ZASSET VALUES (5, 'DCIM/100APPLE', 'IMG_0005.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 0, 0, 1, 'AVAL-UUID-1', 0, NULL, NULL);
              -- EXIF + file size for asset 1 (make 'Apple' + model 'iPhone 14 Pro').
              INSERT INTO ZEXTENDEDATTRIBUTES VALUES (1, 1, 'Apple', 'iPhone 14 Pro', 'iPhone 14 Pro back camera', 100, 1.8, 0.008, 26.0);
              INSERT INTO ZADDITIONALASSETATTRIBUTES VALUES (1, 1, 2097152);
@@ -559,6 +571,15 @@ mod tests {
         assert_eq!(lon, Some(18.06));
         assert_eq!(fav, 1);
         assert_eq!(taken, Some(1_700_000_000));
+        // Added later than captured (721700000 Mac → 1_700_007_200 Unix).
+        let added: Option<i64> = conn
+            .query_row(
+                "SELECT added_at FROM media_items WHERE relative_path LIKE '%IMG_0001%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(added, Some(1_700_007_200));
 
         let (location, albums): (Option<String>, Option<String>) = conn
             .query_row(
