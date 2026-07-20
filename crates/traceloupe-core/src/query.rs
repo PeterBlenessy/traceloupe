@@ -754,6 +754,8 @@ pub struct Contact {
     pub related: Vec<crate::parsers::address_book::LabeledValue>,
     /// Names of the address-book groups this contact belongs to.
     pub groups: Vec<String>,
+    /// Social / IM profiles: label = service, value = username.
+    pub social: Vec<crate::parsers::address_book::LabeledValue>,
     /// Whether a photo is stored for this contact (fetched via `contact_image`).
     pub has_image: bool,
     /// 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter.
@@ -1256,7 +1258,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
         "SELECT id, first_name, last_name, organization, phones_json, emails_json,
                 image IS NOT NULL, source,
                 middle_name, nickname, job_title, department, birthday_at, note, addresses_json,
-                related_json, groups_json
+                related_json, groups_json, social_json
          FROM contacts
          ORDER BY last_name IS NULL AND first_name IS NULL,
                   last_name COLLATE NOCASE, first_name COLLATE NOCASE, id",
@@ -1267,6 +1269,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
         let addresses: String = r.get(14)?;
         let related: String = r.get(15)?;
         let groups: String = r.get(16)?;
+        let social: String = r.get(17)?;
         Ok(Contact {
             id: r.get(0)?,
             first_name: r.get(1)?,
@@ -1277,6 +1280,7 @@ pub fn list_contacts(cache: &CacheDb) -> Result<Vec<Contact>> {
             addresses: serde_json::from_str(&addresses).unwrap_or_default(),
             related: serde_json::from_str(&related).unwrap_or_default(),
             groups: serde_json::from_str(&groups).unwrap_or_default(),
+            social: serde_json::from_str(&social).unwrap_or_default(),
             has_image: r.get(6)?,
             source: r.get(7)?,
             middle_name: r.get(8)?,

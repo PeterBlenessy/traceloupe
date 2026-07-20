@@ -324,6 +324,8 @@ export interface Contact {
   related: LabeledValue[];
   /** Names of the address-book groups this contact belongs to. */
   groups: string[];
+  /** Social / IM profiles: label = service (Snapchat/…), value = username. */
+  social: LabeledValue[];
   /** Whether a contact photo is stored (load it via `contactAvatarUrl`). */
   hasImage: boolean;
   /** 'Address Book' or a third-party app (e.g. 'TikTok'); drives the filter. */
@@ -1499,6 +1501,7 @@ const contactExtras = {
   addresses: [] as LabeledValue[],
   related: [] as LabeledValue[],
   groups: [] as string[],
+  social: [] as LabeledValue[],
 };
 const mockContacts: Contact[] = [
   {
@@ -1531,6 +1534,7 @@ const mockContacts: Contact[] = [
       { label: "Bestie", value: "Sam Taylor" },
     ],
     groups: ["Climbing", "Family"],
+    social: [{ label: "Snapchat", value: "alex_r" }],
   },
   {
     id: 3,

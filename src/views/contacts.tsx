@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  AtSign,
   Briefcase,
   Building2,
   Cake,
@@ -325,6 +326,13 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
             <FieldGroup title="Related">
               {contact.related.map((rel, i) => (
                 <Field key={i} icon={Users} label={rel.label} value={rel.value} />
+              ))}
+            </FieldGroup>
+          )}
+          {contact.social.length > 0 && (
+            <FieldGroup title="Social">
+              {contact.social.map((s, i) => (
+                <Field key={i} icon={AtSign} label={s.label} value={s.value} />
               ))}
             </FieldGroup>
           )}

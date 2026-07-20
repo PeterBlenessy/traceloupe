@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 37;
+const SCHEMA_VERSION: i64 = 38;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -617,6 +617,13 @@ impl CacheDb {
                     logged_at INTEGER         -- unix seconds
                 );
                 CREATE INDEX IF NOT EXISTS idx_cycle_at ON cycle_tracking(logged_at DESC);",
+            )?;
+            // v38: contact social / IM profiles (JSON [{label:service,value:username}]).
+            ensure_column(
+                &conn,
+                "contacts",
+                "social_json",
+                "TEXT NOT NULL DEFAULT '[]'",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
