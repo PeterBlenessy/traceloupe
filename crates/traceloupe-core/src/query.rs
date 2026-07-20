@@ -680,13 +680,15 @@ pub struct Call {
     pub call_type: Option<String>,
     /// Carrier/geo location string stored on the call, if any.
     pub location: Option<String>,
+    /// The number's ISO country code (lowercase alpha-2, e.g. "se"), or None.
+    pub country_code: Option<String>,
 }
 
 /// Calls, most recent first.
 pub fn list_calls(cache: &CacheDb) -> Result<Vec<Call>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location
+        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location, country_code
          FROM calls ORDER BY occurred_at DESC NULLS LAST, id DESC",
     )?;
     let rows = stmt.query_map([], row_to_call)?;
@@ -705,6 +707,7 @@ fn row_to_call(r: &rusqlite::Row<'_>) -> rusqlite::Result<Call> {
         service: r.get(6)?,
         call_type: r.get(7)?,
         location: r.get(8)?,
+        country_code: r.get(9)?,
     })
 }
 
@@ -1641,7 +1644,7 @@ pub fn get_calls_window(
     // the `Sort` type. `id` is the stable tiebreaker.
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location
+        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location, country_code
          FROM calls
          WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
            AND (?4 IS NULL OR occurred_at >= ?4)

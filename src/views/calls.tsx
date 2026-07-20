@@ -147,6 +147,17 @@ function callVisual(call: Call): { Icon: typeof PhoneCall; className: string } {
 }
 
 /// A friendly medium label: "FaceTime Video" / "FaceTime Audio" / "Phone".
+/** A lowercase ISO alpha-2 code → its flag emoji (regional-indicator pair), or
+ *  null. Lets a call's number country show at a glance without a lookup table. */
+function countryFlag(code: string | null): string | null {
+  if (!code || !/^[a-z]{2}$/.test(code)) return null;
+  const base = 0x1f1e6; // regional indicator 'A'
+  return String.fromCodePoint(
+    base + (code.charCodeAt(0) - 97),
+    base + (code.charCodeAt(1) - 97),
+  );
+}
+
 function serviceLabel(call: Call): string | null {
   const isFaceTime = call.service?.toLowerCase().includes("facetime");
   if (isFaceTime) {
@@ -184,6 +195,14 @@ function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | nul
         </ItemTitle>
         <ItemDescription className="truncate">{subtitle}</ItemDescription>
       </ItemContent>
+      {call.countryCode && countryFlag(call.countryCode) && (
+        <span
+          className="shrink-0 text-base leading-none"
+          title={`Number country: ${call.countryCode.toUpperCase()}`}
+        >
+          {countryFlag(call.countryCode)}
+        </span>
+      )}
       <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
         <span>{formatDateTime(call.occurredAt)}</span>
         {duration && <span>{duration}</span>}

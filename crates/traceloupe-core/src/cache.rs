@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 44;
+const SCHEMA_VERSION: i64 = 45;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -652,6 +652,9 @@ impl CacheDb {
             // v44: when a camera-roll asset was added to the library (ZADDEDDATE),
             // which differs from capture for received/saved/imported media.
             ensure_column(&conn, "media_items", "added_at", "INTEGER")?;
+            // v45: a call number's ISO country code (ZISO_COUNTRY_CODE) — flags
+            // international calls.
+            ensure_column(&conn, "calls", "country_code", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

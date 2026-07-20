@@ -87,7 +87,7 @@ Parser extracts 6 of ~45 `ZCALLRECORD` columns.
 | Service (phone/FaceTime) | ✅ | ✅ | coarse (`ZSERVICE_PROVIDER`) |
 | FaceTime video vs audio | ✅ (315 audio / 710 video) | ✅ | `ZCALLTYPE` → "FaceTime Video/Audio" label; only video gets the video icon |
 | Location | ✅ «redacted» | ✅ | `ZLOCATION` → shown in the call row subtitle |
-| Country code | ✅ «redacted» | ⬜ | `ZISO_COUNTRY_CODE` |
+| Country code | ✅ «redacted» | ✅ (0.18.x) | `ZISO_COUNTRY_CODE` → a flag emoji on the call row («redacted» se, plus us/dk/it here) |
 | Read / new-missed flag | ✅ | ⬜ | `ZREAD` — no unseen-missed badge |
 | Withheld / unavailable number | ✅ 5 | ⬜ | `ZNUMBER_AVAILABILITY` |
 | Disconnect cause / filtered reason | ✅ | ⬜ | declined/blocked/junk not distinguished |

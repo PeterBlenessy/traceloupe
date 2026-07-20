@@ -34,6 +34,9 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ### Added
 
+- **Calls — number country.** A call number's ISO country
+  (`ZISO_COUNTRY_CODE`) shows as a flag on the call row (schema v45), so
+  international calls stand out at a glance.
 - **Photos — added-to-library date.** When a camera-roll asset was added to the
   library (`ZASSET.ZADDEDDATE`) is surfaced in the lightbox as "Added &lt;date&gt;"
   whenever it differs from the capture date by more than a day — flagging media

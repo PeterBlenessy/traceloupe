@@ -87,6 +87,8 @@ export interface Call {
   callType: string | null;
   /** Carrier/geo location shown beside the call, if any. */
   location: string | null;
+  /** The number's ISO country code (lowercase alpha-2, e.g. "se"), or null. */
+  countryCode: string | null;
 }
 
 export interface HistoryVisit {
@@ -1342,6 +1344,7 @@ const mockCalls: Call[] = [
     service: "facetime",
     callType: "audio",
     location: null,
+    countryCode: null,
   },
   {
     id: 2,
@@ -1353,6 +1356,7 @@ const mockCalls: Call[] = [
     service: "phone",
     callType: null,
     location: "California",
+    countryCode: "us",
   },
   {
     id: 3,
@@ -1364,6 +1368,7 @@ const mockCalls: Call[] = [
     service: "phone",
     callType: null,
     location: null,
+    countryCode: "gb",
   },
 ];
 
