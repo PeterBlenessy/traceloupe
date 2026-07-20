@@ -55,6 +55,12 @@ pub enum Error {
     /// back to the iLEAPP path.
     #[error("parse error: {0}")]
     Parse(String),
+
+    /// An indicator feed (STIX2 bundle or Echap YAML) could not be parsed at
+    /// all. Individual unrecognized patterns inside a feed are skipped and
+    /// reported, not errors.
+    #[error("indicator feed {feed}: {message}")]
+    IndicatorFeed { feed: String, message: String },
 }
 
 impl Error {

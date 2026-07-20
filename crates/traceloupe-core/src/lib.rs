@@ -10,6 +10,7 @@ pub mod discovery;
 pub mod engine;
 mod error;
 pub mod import;
+pub mod indicators;
 pub mod install;
 pub mod manifest;
 pub mod normalize;
