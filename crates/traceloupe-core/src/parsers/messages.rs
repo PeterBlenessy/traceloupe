@@ -148,6 +148,66 @@ fn attributed_body_text(blob: &[u8]) -> Option<String> {
     (!s.trim().is_empty()).then_some(s)
 }
 
+/// A friendly placeholder for an iMessage **app-bubble** message
+/// (`balloon_bundle_id`) — Digital Touch, Handwriting, an iMessage app
+/// extension (GamePigeon, Spotify, …), etc. These carry no `text`, so without
+/// a placeholder they render as empty bubbles or get dropped. Used only when
+/// the message has no recoverable text/attachment of its own.
+fn balloon_label(bundle_id: &str) -> String {
+    // iMessage app extensions: com.apple.messages.MSMessageExtensionBalloonPlugin:<team>:<app-bundle-id>
+    if bundle_id.contains("MSMessageExtensionBalloonPlugin") {
+        let app = bundle_id.rsplit(':').next().unwrap_or("");
+        return match app {
+            "com.apple.mobileslideshow.PhotosMessagesApp" => "Shared photos".to_string(),
+            "com.apple.findmy.FindMyMessagesApp" => "Shared location (Find My)".to_string(),
+            "com.apple.PeopleMessageService.AskToBuy"
+            | "com.apple.AskToMessagesHost.AskToMessagesExtension" => "Ask to Buy request".to_string(),
+            "com.spotify.client.imessage" => "Spotify".to_string(),
+            "com.gamerdelights.gamepigeon.ext" => "GamePigeon".to_string(),
+            "com.google.ios.youtube.MessagesExtension" => "YouTube".to_string(),
+            // Otherwise name it from the app bundle id's last dotted segment.
+            other => {
+                let name = other
+                    .rsplit('.')
+                    .find(|s| !s.is_empty() && !s.eq_ignore_ascii_case("ext"))
+                    .unwrap_or("iMessage app");
+                format!("{name} (iMessage app)")
+            }
+        };
+    }
+    match bundle_id {
+        "com.apple.messages.URLBalloonProvider" => "Link".to_string(),
+        "com.apple.DigitalTouchBalloonProvider" => "Digital Touch".to_string(),
+        "com.apple.Handwriting.HandwritingProvider" => "Handwriting".to_string(),
+        _ => "iMessage app".to_string(),
+    }
+}
+
+/// Friendly name for an iMessage **expressive send effect**
+/// (`expressive_send_style_id`). Screen effects use
+/// `com.apple.messages.effect.CK<Name>Effect`; bubble effects use
+/// `com.apple.MobileSMS.expressivesend.<name>`. `None` for an unknown id.
+fn effect_name(style_id: &str) -> Option<&'static str> {
+    Some(match style_id {
+        // Bubble effects.
+        "com.apple.MobileSMS.expressivesend.impact" => "Slam",
+        "com.apple.MobileSMS.expressivesend.loud" => "Loud",
+        "com.apple.MobileSMS.expressivesend.gentle" => "Gentle",
+        "com.apple.MobileSMS.expressivesend.invisibleink" => "Invisible Ink",
+        // Full-screen effects.
+        "com.apple.messages.effect.CKEchoEffect" => "Echo",
+        "com.apple.messages.effect.CKSpotlightEffect" => "Spotlight",
+        "com.apple.messages.effect.CKHappyBirthdayEffect" => "Balloons",
+        "com.apple.messages.effect.CKConfettiEffect" => "Confetti",
+        "com.apple.messages.effect.CKHeartEffect" => "Love",
+        "com.apple.messages.effect.CKLasersEffect" => "Lasers",
+        "com.apple.messages.effect.CKFireworksEffect" => "Fireworks",
+        "com.apple.messages.effect.CKSparklesEffect" => "Celebration",
+        "com.apple.messages.effect.CKShootingStarEffect" => "Shooting Star",
+        _ => return None,
+    })
+}
+
 /// A single-line preview of a message body, capped at `max` chars (char-safe).
 fn truncate_snippet(body: &str, max: usize) -> String {
     let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -239,6 +299,28 @@ pub fn parse_messages(
         } else {
             std::collections::HashSet::new()
         };
+
+    // Message IDs whose attachment is a sticker (`attachment.is_sticker`), loaded
+    // regardless of a file resolver so classification never depends on it. Guarded
+    // on the table + column (older schemas / fixtures omit `is_sticker`).
+    let sticker_msg_ids: std::collections::HashSet<i64> = if table_exists(&src, "attachment")
+        && table_exists(&src, "message_attachment_join")
+        && message_table_columns(&src, "attachment").contains("is_sticker")
+    {
+        let mut stmt = src.prepare(
+            "SELECT DISTINCT maj.message_id
+             FROM message_attachment_join maj
+             JOIN attachment a ON a.ROWID = maj.attachment_id
+             WHERE a.is_sticker <> 0",
+        )?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, i64>(0))?
+            .filter_map(std::result::Result::ok)
+            .collect();
+        ids
+    } else {
+        std::collections::HashSet::new()
+    };
 
     // handle.ROWID → phone/email.
     let handles: HashMap<i64, String> = {
@@ -340,18 +422,35 @@ pub fn parse_messages(
     let it_expr = if mcols.contains("item_type") { "m.item_type" } else { "0" };
     let ga_expr = if mcols.contains("group_action_type") { "m.group_action_type" } else { "0" };
     let gt_expr = if mcols.contains("group_title") { "m.group_title" } else { "NULL" };
+    // App-bubble bundle id (Digital Touch / Handwriting / iMessage extensions);
+    // absent from older schemas + the test fixtures, so fall back to NULL.
+    let bb_expr = if mcols.contains("balloon_bundle_id") { "m.balloon_bundle_id" } else { "NULL" };
+    // Expressive send effect (Confetti / Slam / …); guarded the same way.
+    let es_expr = if mcols.contains("expressive_send_style_id") { "m.expressive_send_style_id" } else { "NULL" };
+    // Recently-deleted but still-recoverable messages live only in
+    // chat_recoverable_message_join (never in chat_message_join), each with a
+    // `delete_date`. UNION them into the chat→message mapping so they surface,
+    // badged as deleted. Guarded on the table's presence (older DBs / fixtures).
+    let recoverable_union = if table_exists(&src, "chat_recoverable_message_join") {
+        "UNION ALL
+         SELECT chat_id, message_id, delete_date FROM chat_recoverable_message_join"
+    } else {
+        ""
+    };
     let mut mstmt = src.prepare(&format!(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
                 m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
                 m.thread_originator_guid, m.attributedBody, m.date_edited,
-                {it_expr}, {ga_expr}, {gt_expr}
+                {it_expr}, {ga_expr}, {gt_expr}, {bb_expr}, {es_expr}, cmj.delete_date
          FROM message m
-         JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+         JOIN (SELECT chat_id, message_id, NULL AS delete_date FROM chat_message_join
+               {recoverable_union}) cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
                OR COALESCE(m.associated_message_type, 0) <> 0
                OR m.attributedBody IS NOT NULL
                OR ({it_expr}) <> 0
+               OR ({bb_expr}) IS NOT NULL
                {att_exists}
          ORDER BY cmj.chat_id, m.date, m.ROWID",
     ))?;
@@ -409,6 +508,28 @@ pub fn parse_messages(
         } else {
             None
         };
+        // App-bubble messages (Digital Touch, iMessage extensions, …) carry no
+        // text of their own; give them a typed placeholder body so they surface
+        // instead of rendering blank or being dropped. Only when there's nothing
+        // else to show (a URL bubble keeps its URL text; a sticker keeps media).
+        let balloon_bundle_id: Option<String> = r.get(19)?;
+        let app_body = balloon_bundle_id
+            .as_deref()
+            .filter(|_| text.is_none() && !has_attachment)
+            .map(balloon_label);
+        // A text-less URL bubble is still a link (its "Link" placeholder belongs
+        // in the Links filter, not App messages).
+        let is_url_balloon =
+            balloon_bundle_id.as_deref() == Some("com.apple.messages.URLBalloonProvider");
+        // The expressive send effect this message was sent with, if any.
+        let effect = r
+            .get::<_, Option<String>>(20)?
+            .as_deref()
+            .and_then(effect_name);
+        // A non-NULL delete_date means this row came from the recoverable-message
+        // join: the message was deleted but is still recoverable. Badge it.
+        let deleted_at = mac_to_unix(r.get::<_, Option<i64>>(21)?.unwrap_or(0));
+        let deleted = r.get::<_, Option<i64>>(21)?.is_some();
 
         // A tapback row: record the event and skip it — it is not a chat message.
         if assoc_type >= 2000 {
@@ -428,10 +549,10 @@ pub fn parse_messages(
             continue;
         }
 
-        // A row with neither body nor attachment (a group-action item, or an
-        // attributedBody that held only formatting) is not a chat message. This
-        // guards the broadened `OR attributedBody IS NOT NULL` selection above.
-        if text.is_none() && !has_attachment && system_body.is_none() {
+        // A row with nothing to show — no text, attachment, group-action, or
+        // app-bubble placeholder — is not a chat message. Guards the broadened
+        // `attributedBody`/`balloon_bundle_id` selection above.
+        if text.is_none() && !has_attachment && system_body.is_none() && app_body.is_none() {
             continue;
         }
 
@@ -482,8 +603,8 @@ pub fn parse_messages(
             tx.execute(
                 "INSERT INTO messages
                     (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
-                     read_at, delivered_at, edited)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'system', ?6, ?7, 0)",
+                     read_at, delivered_at, edited, deleted, deleted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'system', ?6, ?7, 0, ?8, ?9)",
                 rusqlite::params![
                     thread_id,
                     sender,
@@ -492,6 +613,8 @@ pub fn parse_messages(
                     sent_unix,
                     read_at,
                     delivered_at,
+                    deleted as i64,
+                    deleted_at,
                 ],
             )?;
             report.messages += 1;
@@ -505,23 +628,43 @@ pub fn parse_messages(
                     .is_some_and(|a| media_kind(a.mime.as_deref(), a.filename.as_deref()).is_some())
             })
         });
-        let kind = crate::normalize::message_kind(text.as_deref(), has_media);
+        // A sticker attachment (peel-and-stick / Memoji / sticker-pack art) is its
+        // own content class, distinct from a regular image — powers the Stickers
+        // filter, which otherwise never matches anything.
+        let has_sticker = sticker_msg_ids.contains(&msg_rowid);
+        // An app-bubble placeholder takes precedence (it's only set when there's
+        // no text/attachment) and gets the "app" content kind for the filter. A
+        // sticker is classified regardless of any recovered body — real stickers
+        // carry an attributedBody placeholder that decodes to text, so gating on
+        // text.is_none() here would classify none of them (verified on real data).
+        // The body (if any) is still kept and shown; only the filter kind changes.
+        let (body, kind) = match app_body {
+            Some(b) => (Some(b), if is_url_balloon { "link" } else { "app" }),
+            None if has_sticker => (text, "sticker"),
+            None => {
+                let k = crate::normalize::message_kind(text.as_deref(), has_media);
+                (text, k)
+            }
+        };
         tx.execute(
             "INSERT INTO messages
                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
-                 read_at, delivered_at, edited)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 read_at, delivered_at, edited, effect, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 thread_id,
                 sender,
                 is_from_me as i64,
-                text,
+                body,
                 sent_unix,
                 has_attachment as i64,
                 kind,
                 read_at,
                 delivered_at,
                 edited as i64,
+                effect,
+                deleted as i64,
+                deleted_at,
             ],
         )?;
         let message_id = tx.last_insert_rowid();
@@ -834,6 +977,184 @@ mod tests {
             .unwrap();
         assert_eq!(body, None);
         assert_eq!(has_att, 1, "flagged as having an attachment");
+    }
+
+    #[test]
+    fn app_bubble_messages_get_typed_placeholders() {
+        // A message table WITH balloon_bundle_id. Three app-bubble rows that carry
+        // no text/attachment: Digital Touch, a GamePigeon extension, and a URL
+        // balloon that DOES have text (its URL) — the URL keeps its text, the
+        // others get a placeholder body + the "app" kind.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER, balloon_bundle_id TEXT);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             INSERT INTO message VALUES (1,NULL,0,721700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.DigitalTouchBalloonProvider');
+             INSERT INTO message VALUES (2,NULL,1,721700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.MSMessageExtensionBalloonPlugin:EWFNLB79LQ:com.gamerdelights.gamepigeon.ext');
+             INSERT INTO message VALUES (3,'https://example.com',0,721700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.URLBalloonProvider');
+             -- A URL balloon with NO recoverable text still buckets as a link.
+             INSERT INTO message VALUES (4,NULL,0,721700040000000000,1,0,0,0,'G4',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.URLBalloonProvider');
+             INSERT INTO chat_message_join VALUES (10,1),(10,2),(10,3),(10,4);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+        assert_eq!(report.messages, 4, "all four app bubbles surface");
+        let rows: Vec<(String, String)> = cache
+            .conn()
+            .prepare("SELECT body, kind FROM messages ORDER BY sent_at")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows[0], ("Digital Touch".to_string(), "app".to_string()));
+        assert_eq!(rows[1], ("GamePigeon".to_string(), "app".to_string()));
+        // The URL balloon keeps its own text and is classified as a link.
+        assert_eq!(rows[2], ("https://example.com".to_string(), "link".to_string()));
+        // A text-less URL balloon: "Link" placeholder, still the link kind (not app).
+        assert_eq!(rows[3], ("Link".to_string(), "link".to_string()));
+    }
+
+    #[test]
+    fn expressive_send_effects_are_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER, expressive_send_style_id TEXT);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             INSERT INTO message VALUES (1,'happy bday!',1,721700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.effect.CKConfettiEffect');
+             INSERT INTO message VALUES (2,'boom',0,721700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.MobileSMS.expressivesend.impact');
+             INSERT INTO message VALUES (3,'plain',0,721700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,NULL);
+             INSERT INTO chat_message_join VALUES (10,1),(10,2),(10,3);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+        let rows: Vec<(String, Option<String>)> = cache
+            .conn()
+            .prepare("SELECT body, effect FROM messages ORDER BY sent_at")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows[0], ("happy bday!".to_string(), Some("Confetti".to_string())));
+        assert_eq!(rows[1], ("boom".to_string(), Some("Slam".to_string())));
+        assert_eq!(rows[2], ("plain".to_string(), None));
+    }
+
+    #[test]
+    fn surfaces_recoverable_deleted_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE chat_recoverable_message_join (chat_id INTEGER, message_id INTEGER, delete_date INTEGER, ck_sync_state INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             -- A live message and a deleted-but-recoverable one, both in chat 10.
+             INSERT INTO message VALUES (100,'still here',0,721692800000000000,1,0,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,'oops deleted this',1,721692860000000000,0,0,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100);
+             -- 101 is ONLY in the recoverable join (never in chat_message_join).
+             INSERT INTO chat_recoverable_message_join VALUES (10,101,721692900000000000,0);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+
+        let rows: Vec<(String, i64, Option<i64>)> = cache
+            .conn()
+            .prepare("SELECT body, deleted, deleted_at FROM messages ORDER BY sent_at")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "the deleted message is recovered, not dropped");
+        assert_eq!(rows[0], ("still here".to_string(), 0, None));
+        // 721692900000000000 ns → unix 1_700_000_100.
+        assert_eq!(rows[1], ("oops deleted this".to_string(), 1, Some(1_700_000_100)));
+    }
+
+    #[test]
+    fn classifies_sticker_attachments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, transfer_name TEXT, mime_type TEXT, is_sticker INTEGER);
+             CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             -- 100: a sticker that ALSO carries body text (real stickers decode an
+             -- attributedBody placeholder) — must still classify as sticker.
+             -- 101: a plain image. 102: a text message.
+             INSERT INTO message VALUES (100,'[Sticker]',0,721700010000000000,1,1,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,NULL,0,721700020000000000,1,1,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (102,'hi',1,721700030000000000,0,0,0,0,'G-102',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100),(10,101),(10,102);
+             INSERT INTO attachment VALUES (1,'/a/sticker.heic','sticker.heic','image/heic',1);
+             INSERT INTO attachment VALUES (2,'/a/photo.jpg','photo.jpg','image/jpeg',0);
+             INSERT INTO message_attachment_join VALUES (100,1),(101,2);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+
+        let kind = |guid_order: i64| -> String {
+            cache
+                .conn()
+                .query_row(
+                    "SELECT kind FROM messages ORDER BY sent_at LIMIT 1 OFFSET ?1",
+                    [guid_order],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        // The sticker set is loaded even without an AttachmentSource (None here),
+        // so the sticker is classified regardless of its body text; the non-sticker
+        // image isn't a sticker (its media classification needs the resolver, hence
+        // "other" in this mode).
+        assert_eq!(kind(0), "sticker", "a sticker classifies even with body text");
+        assert_eq!(kind(1), "other", "a non-sticker attachment is not a sticker");
+        assert_eq!(kind(2), "text");
     }
 
     #[test]

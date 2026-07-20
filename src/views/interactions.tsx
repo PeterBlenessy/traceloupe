@@ -13,11 +13,96 @@ import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
 import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
 import { initials } from "@/lib/contact";
+import { appMeta } from "@/lib/apps";
+import { BrandIcon } from "@/lib/brand-icon";
 import { formatCount, formatDate } from "@/lib/format";
-import { client, type Interaction, type TimeRange } from "@/lib/ipc";
+import {
+  client,
+  type Interaction,
+  type InteractionChannel,
+  type TimeRange,
+} from "@/lib/ipc";
 
 function label(i: Interaction): string {
   return i.displayName ?? i.identifier ?? "Unknown";
+}
+
+/** Apple system-app bundle ids CoreDuet uses, mapped to channel names; other
+ *  bundle ids fall back to the app catalog (Snapchat, Gmail, …) then the id. */
+const CHANNEL_NAMES: Record<string, string> = {
+  "com.apple.MobileSMS": "Messages",
+  "com.apple.InCallService": "Phone",
+  "com.apple.TelephonyUtilities": "Phone",
+  "com.apple.facetime": "FaceTime",
+  "com.apple.Contacts.Autocomplete": "Contacts",
+  "com.apple.mobileslideshow": "Photos",
+  "com.apple.camera": "Camera",
+  "com.apple.ScreenshotServicesService": "Screenshots",
+};
+function channelName(bundleId: string): string {
+  return CHANNEL_NAMES[bundleId] ?? appMeta(bundleId).name;
+}
+
+interface Channel {
+  name: string;
+  slug?: string;
+  incoming: number;
+  outgoing: number;
+}
+
+/** Collapse raw per-bundle rows into display channels: bundle ids that share a
+ *  name (InCallService + TelephonyUtilities → Phone) merge, zero-total channels
+ *  drop, and the result is busiest-first. */
+function mergeChannels(rows: InteractionChannel[]): Channel[] {
+  const byName = new Map<string, Channel>();
+  for (const r of rows) {
+    const name = channelName(r.bundleId);
+    const existing = byName.get(name);
+    if (existing) {
+      existing.incoming += r.incoming;
+      existing.outgoing += r.outgoing;
+      existing.slug ??= appMeta(r.bundleId).slug;
+    } else {
+      byName.set(name, {
+        name,
+        slug: appMeta(r.bundleId).slug,
+        incoming: r.incoming,
+        outgoing: r.outgoing,
+      });
+    }
+  }
+  return [...byName.values()]
+    .filter((c) => c.incoming + c.outgoing > 0)
+    .sort((a, b) => b.incoming + b.outgoing - (a.incoming + a.outgoing));
+}
+
+/** A horizontal strip of the apps that CoreDuet interactions flowed through,
+ *  busiest first — the communication channels the person used. */
+function ChannelsBar({ channels }: { channels: InteractionChannel[] }) {
+  const merged = useMemo(() => mergeChannels(channels), [channels]);
+  if (merged.length === 0) return null;
+  return (
+    <div className="border-b px-4 py-3">
+      <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        Channels
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {merged.map((c) => (
+          <div
+            key={c.name}
+            className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2.5 py-1.5"
+            title={`${formatCount(c.incoming)} in · ${formatCount(c.outgoing)} out`}
+          >
+            <BrandIcon slug={c.slug} name={c.name} className="size-4" />
+            <span className="text-sm">{c.name}</span>
+            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+              {formatCount(c.incoming + c.outgoing)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function InteractionRow({ interaction }: { interaction: Interaction }) {
@@ -85,6 +170,11 @@ export function InteractionsView() {
   } = useQuery({
     queryKey: ["interactions"],
     queryFn: () => client.listInteractions(),
+    enabled: active === true,
+  });
+  const { data: channels } = useQuery({
+    queryKey: ["interactionChannels"],
+    queryFn: () => client.interactionChannels(),
     enabled: active === true,
   });
 
@@ -181,18 +271,23 @@ export function InteractionsView() {
   }
 
   return (
-    <VirtualListView<Interaction>
-      title="Interactions"
-      count={filtered.length}
-      estimateSize={68}
-      isPending={isPending}
-      error={error}
-      emptyMessage={
-        hasData ? "No contacts match these filters." : "No interaction data in this backup."
-      }
-      items={filtered}
-      getKey={(i) => i.id}
-      renderItem={(i) => <InteractionRow interaction={i} />}
-    />
+    <div className="flex h-full flex-col">
+      <ChannelsBar channels={channels ?? []} />
+      <div className="min-h-0 flex-1">
+        <VirtualListView<Interaction>
+          title="Interactions"
+          count={filtered.length}
+          estimateSize={68}
+          isPending={isPending}
+          error={error}
+          emptyMessage={
+            hasData ? "No contacts match these filters." : "No interaction data in this backup."
+          }
+          items={filtered}
+          getKey={(i) => i.id}
+          renderItem={(i) => <InteractionRow interaction={i} />}
+        />
+      </div>
+    </div>
   );
 }

@@ -46,6 +46,12 @@ pub struct Message {
     /// Content class: text / media / link / shared / sticker / system. `system`
     /// marks a non-bubble group-action row (rename/add/remove/leave).
     pub kind: Option<String>,
+    /// Expressive send effect it was sent with (e.g. "Confetti", "Slam"), or None.
+    pub effect: Option<String>,
+    /// Recovered from the recoverable-message store: deleted but still on-device,
+    /// with the deletion time (Unix) when known.
+    pub deleted: bool,
+    pub deleted_at: Option<i64>,
     pub attachments: Vec<Attachment>,
 }
 
@@ -140,7 +146,7 @@ pub fn get_message_window(
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect, deleted, deleted_at
          FROM messages
          WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
          ORDER BY sent_at {dir}, id {dir}
@@ -214,7 +220,7 @@ pub fn message_row_index(
 pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect, deleted, deleted_at
          FROM messages
          WHERE thread_id = ?1
          ORDER BY sent_at ASC, id ASC",
@@ -239,6 +245,9 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         reply_to_snippet: r.get(8)?,
         edited: r.get::<_, i64>(9)? != 0,
         kind: r.get(10)?,
+        effect: r.get(11)?,
+        deleted: r.get::<_, i64>(12)? != 0,
+        deleted_at: r.get(13)?,
         attachments: Vec::new(),
     })
 }
@@ -599,6 +608,9 @@ fn range_window(
                         reply_to_snippet: None,
                         edited: false,
                         kind: None,
+                        effect: None,
+                        deleted: false,
+                        deleted_at: None,
                         attachments: Vec::new(),
                     },
                 })
@@ -668,13 +680,15 @@ pub struct Call {
     pub call_type: Option<String>,
     /// Carrier/geo location string stored on the call, if any.
     pub location: Option<String>,
+    /// The number's ISO country code (lowercase alpha-2, e.g. "se"), or None.
+    pub country_code: Option<String>,
 }
 
 /// Calls, most recent first.
 pub fn list_calls(cache: &CacheDb) -> Result<Vec<Call>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location
+        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location, country_code
          FROM calls ORDER BY occurred_at DESC NULLS LAST, id DESC",
     )?;
     let rows = stmt.query_map([], row_to_call)?;
@@ -693,6 +707,7 @@ fn row_to_call(r: &rusqlite::Row<'_>) -> rusqlite::Result<Call> {
         service: r.get(6)?,
         call_type: r.get(7)?,
         location: r.get(8)?,
+        country_code: r.get(9)?,
     })
 }
 
@@ -857,6 +872,35 @@ pub fn list_interactions(cache: &CacheDb) -> Result<Vec<Interaction>> {
             incoming_recipient: r.get(5)?,
             first_at: r.get(6)?,
             last_at: r.get(7)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// One communication "channel": an app that CoreDuet interactions flowed
+/// through, with incoming/outgoing counts (the UI maps the bundle id to a name).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionChannel {
+    pub bundle_id: String,
+    pub incoming: i64,
+    pub outgoing: i64,
+}
+
+/// Per-app interaction channels, busiest first.
+pub fn interaction_channels(cache: &CacheDb) -> Result<Vec<InteractionChannel>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT bundle_id, incoming, outgoing
+         FROM interaction_channels
+         ORDER BY (incoming + outgoing) DESC, bundle_id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(InteractionChannel {
+            bundle_id: r.get(0)?,
+            incoming: r.get(1)?,
+            outgoing: r.get(2)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -1343,6 +1387,13 @@ pub struct MediaItem {
     pub exif: Option<String>,
     /// In the device's Hidden album (surfaced as a badge, not excluded).
     pub hidden: bool,
+    /// In Recently Deleted (surfaced as a badge, not excluded), with the deletion
+    /// timestamp when known.
+    pub trashed: bool,
+    pub trashed_at: Option<i64>,
+    /// When the asset was added to the library (Unix), which differs from capture
+    /// for received/saved/imported media, or None.
+    pub added_at: Option<i64>,
     /// Media subtype ("screenshot" | "panorama"), or None.
     pub subtype: Option<String>,
 }
@@ -1354,7 +1405,8 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
-                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype
+                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
+                trashed, trashed_at, added_at
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -1389,6 +1441,9 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         exif: r.get(18)?,
         hidden: r.get::<_, i64>(19)? != 0,
         subtype: r.get(20)?,
+        trashed: r.get::<_, i64>(21)? != 0,
+        trashed_at: r.get(22)?,
+        added_at: r.get(23)?,
     })
 }
 
@@ -1475,7 +1530,8 @@ pub fn get_media_window(
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
-                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype
+                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
+                trashed, trashed_at, added_at
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
@@ -1588,7 +1644,7 @@ pub fn get_calls_window(
     // the `Sort` type. `id` is the stable tiebreaker.
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location
+        "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location, country_code
          FROM calls
          WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
            AND (?4 IS NULL OR occurred_at >= ?4)
@@ -1689,6 +1745,9 @@ pub struct SafariBookmark {
     pub date_added: Option<i64>,
     pub date_viewed: Option<i64>,
     pub preview_text: Option<String>,
+    /// An open tab in a private-browsing window (BrowserState.db). Always false
+    /// for bookmarks / reading-list rows.
+    pub private: bool,
 }
 
 fn row_to_bookmark(r: &rusqlite::Row<'_>) -> rusqlite::Result<SafariBookmark> {
@@ -1701,6 +1760,7 @@ fn row_to_bookmark(r: &rusqlite::Row<'_>) -> rusqlite::Result<SafariBookmark> {
         date_added: r.get(5)?,
         date_viewed: r.get(6)?,
         preview_text: r.get(7)?,
+        private: r.get::<_, i64>(8)? != 0,
     })
 }
 
@@ -1769,7 +1829,7 @@ pub fn get_safari_bookmarks_window(
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, kind, title, url, folder, date_added, date_viewed, preview_text
+        "SELECT id, kind, title, url, folder, date_added, date_viewed, preview_text, private
          FROM safari_bookmarks
          WHERE kind = ?1
            AND (?2 IS NULL OR url LIKE '%' || ?2 || '%' ESCAPE '\\'
@@ -2065,11 +2125,36 @@ pub fn recording_blob(cache: &CacheDb, id: i64) -> Result<Option<RecordingBlob>>
         .optional()?)
 }
 
-/// Bundle IDs of apps installed on the device, sorted.
-pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<String>> {
+/// An installed app with the App Store metadata the backup carries.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledApp {
+    pub bundle_id: String,
+    pub name: Option<String>,
+    pub seller: Option<String>,
+    pub version: Option<String>,
+    pub genre: Option<String>,
+    /// The app's App Store release date (RFC-3339); the UI formats it.
+    pub released: Option<String>,
+}
+
+/// Apps installed on the device with their metadata, sorted by bundle id.
+pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<InstalledApp>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare("SELECT bundle_id FROM installed_apps ORDER BY bundle_id")?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut stmt = conn.prepare(
+        "SELECT bundle_id, name, seller, version, genre, released
+         FROM installed_apps ORDER BY bundle_id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(InstalledApp {
+            bundle_id: r.get(0)?,
+            name: r.get(1)?,
+            seller: r.get(2)?,
+            version: r.get(3)?,
+            genre: r.get(4)?,
+            released: r.get(5)?,
+        })
+    })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }

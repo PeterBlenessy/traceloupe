@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 38;
+const SCHEMA_VERSION: i64 = 46;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -625,6 +625,38 @@ impl CacheDb {
                 "social_json",
                 "TEXT NOT NULL DEFAULT '[]'",
             )?;
+            // v39: per-app App Store metadata (from Info.plist iTunesMetadata).
+            ensure_column(&conn, "installed_apps", "name", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "seller", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "version", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "genre", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "released", "TEXT")?;
+            // v40: iMessage expressive send effect (Confetti/Slam/Invisible Ink…).
+            ensure_column(&conn, "messages", "effect", "TEXT")?;
+            // v41: CoreDuet per-app interaction channels (which apps comms went through).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS interaction_channels (
+                    bundle_id TEXT PRIMARY KEY,
+                    incoming  INTEGER NOT NULL DEFAULT 0,
+                    outgoing  INTEGER NOT NULL DEFAULT 0
+                );",
+            )?;
+            // v42: recently-deleted camera-roll assets (surfaced as a badge, not
+            // excluded — forensic, matching the hidden-album treatment).
+            ensure_column(&conn, "media_items", "trashed", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(&conn, "media_items", "trashed_at", "INTEGER")?;
+            // v43: recoverable (recently-deleted) iMessages from
+            // chat_recoverable_message_join — surfaced with a "Deleted" badge.
+            ensure_column(&conn, "messages", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(&conn, "messages", "deleted_at", "INTEGER")?;
+            // v44: when a camera-roll asset was added to the library (ZADDEDDATE),
+            // which differs from capture for received/saved/imported media.
+            ensure_column(&conn, "media_items", "added_at", "INTEGER")?;
+            // v45: a call number's ISO country code (ZISO_COUNTRY_CODE) — flags
+            // international calls.
+            ensure_column(&conn, "calls", "country_code", "TEXT")?;
+            // v46: private-browsing flag on Safari open tabs (BrowserState.db).
+            ensure_column(&conn, "safari_bookmarks", "private", "INTEGER NOT NULL DEFAULT 0")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

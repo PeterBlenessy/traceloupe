@@ -96,6 +96,53 @@ pub fn parse_interactions(
         )?;
         inserted += 1;
     }
+
+    // Per-app "channels": which apps the interactions flowed through, from the
+    // raw ZINTERACTIONS table (ZCONTACTS above is aggregated per-person and has
+    // no app dimension). ZDIRECTION is 0 = incoming, 1 = outgoing. Best-effort:
+    // an older schema without these tables/columns just yields no channels.
+    let has_interactions: i64 = src.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ZINTERACTIONS'",
+        [],
+        |r| r.get(0),
+    )?;
+    let interaction_cols: std::collections::HashSet<String> = if has_interactions > 0 {
+        src.prepare("PRAGMA table_info(ZINTERACTIONS)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .filter_map(|c| c.ok())
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+    // Only aggregate channels when the app + direction columns are present; an
+    // older schema without them yields no channels rather than aborting the
+    // whole transaction (which would also drop the ZCONTACTS interactions above).
+    if interaction_cols.contains("ZBUNDLEID") && interaction_cols.contains("ZDIRECTION") {
+        if replace {
+            tx.execute("DELETE FROM interaction_channels", [])?;
+        }
+        let mut cstmt = src.prepare(
+            "SELECT ZBUNDLEID,
+                    SUM(CASE WHEN ZDIRECTION = 0 THEN 1 ELSE 0 END),
+                    SUM(CASE WHEN ZDIRECTION = 1 THEN 1 ELSE 0 END)
+             FROM ZINTERACTIONS
+             WHERE ZBUNDLEID IS NOT NULL AND ZBUNDLEID <> ''
+             GROUP BY ZBUNDLEID",
+        )?;
+        let mut crows = cstmt.query([])?;
+        while let Some(r) = crows.next()? {
+            tx.execute(
+                "INSERT OR REPLACE INTO interaction_channels (bundle_id, incoming, outgoing)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ],
+            )?;
+        }
+    }
+
     tx.commit()?;
     report.interactions += inserted;
     Ok(())
@@ -122,7 +169,15 @@ mod tests {
              -- an identifier-only contact with interactions.
              INSERT INTO ZCONTACTS VALUES (2,NULL,'a@b.com',3,0,721695000.0,NULL,NULL,721696000.0,NULL,NULL,0);
              -- zero interactions → excluded.
-             INSERT INTO ZCONTACTS VALUES (3,'Ghost','x@y.com',0,0,NULL,NULL,NULL,NULL,NULL,NULL,0);",
+             INSERT INTO ZCONTACTS VALUES (3,'Ghost','x@y.com',0,0,NULL,NULL,NULL,NULL,NULL,NULL,0);
+             -- raw per-interaction rows carry the app (ZBUNDLEID) + direction.
+             CREATE TABLE ZINTERACTIONS (Z_PK INTEGER PRIMARY KEY, ZBUNDLEID TEXT, ZDIRECTION INTEGER);
+             INSERT INTO ZINTERACTIONS VALUES (1,'com.apple.MobileSMS',0);
+             INSERT INTO ZINTERACTIONS VALUES (2,'com.apple.MobileSMS',0);
+             INSERT INTO ZINTERACTIONS VALUES (3,'com.apple.MobileSMS',1);
+             INSERT INTO ZINTERACTIONS VALUES (4,'com.apple.facetime',1);
+             INSERT INTO ZINTERACTIONS VALUES (5,'',0);
+             INSERT INTO ZINTERACTIONS VALUES (6,NULL,1);",
         )
         .unwrap();
 
@@ -143,5 +198,20 @@ mod tests {
         assert_eq!(inc, 10);
         assert_eq!(out, 25);
         assert_eq!(first, 1_700_000_000);
+
+        // Per-app channels: SMS = 2 in / 1 out, FaceTime = 0 in / 1 out; the
+        // empty/NULL bundle-id rows are excluded.
+        let (sms_in, sms_out): (i64, i64) = c
+            .query_row(
+                "SELECT incoming, outgoing FROM interaction_channels WHERE bundle_id='com.apple.MobileSMS'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((sms_in, sms_out), (2, 1));
+        let n_channels: i64 = c
+            .query_row("SELECT COUNT(*) FROM interaction_channels", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n_channels, 2, "empty/NULL bundle ids excluded");
     }
 }

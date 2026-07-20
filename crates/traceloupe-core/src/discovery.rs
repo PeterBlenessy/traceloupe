@@ -158,6 +158,92 @@ pub fn installed_apps(dir: &Path) -> Vec<String> {
     apps
 }
 
+/// An installed app with the App Store metadata the backup carries for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AppInfo {
+    pub bundle_id: String,
+    /// App Store display name (`itemName`), e.g. "Instagram".
+    pub name: Option<String>,
+    /// Seller / developer (`artistName`), e.g. "Instagram, Inc.".
+    pub seller: Option<String>,
+    /// Marketing version installed (`bundleShortVersionString`), e.g. "436.0.0".
+    pub version: Option<String>,
+    /// App Store category (`genre`), e.g. "Photo & Video".
+    pub genre: Option<String>,
+    /// The app's App Store release date, an RFC-3339 string (`releaseDate`).
+    /// This is the app's original release, not the install/update date (which
+    /// the backup doesn't expose) — labelled accordingly in the UI.
+    pub released: Option<String>,
+}
+
+/// Installed apps with their per-app App Store metadata, read from
+/// `Info.plist`'s "Applications" dict (each value carries an `iTunesMetadata`
+/// **nested binary plist**). Falls back to bundle-id-only entries for apps
+/// whose metadata is absent/unreadable. Sorted by bundle id; cheap, no
+/// decryption. Info.plist itself is never encrypted.
+pub fn installed_apps_meta(dir: &Path) -> Vec<AppInfo> {
+    use std::collections::BTreeSet;
+
+    let Ok(info) = plist::Value::from_file(dir.join("Info.plist")) else {
+        return Vec::new();
+    };
+    let dict = info.as_dictionary();
+    // `Applications` holds per-app App Store metadata, but only for apps with a
+    // store receipt — it's a SUBSET. `Installed Applications` is the complete
+    // list of bundle ids (system + sideloaded + metadata-less apps included).
+    // Take the union so no installed app is dropped, and enrich from the
+    // metadata dict where present.
+    let apps_meta = dict
+        .and_then(|d| d.get("Applications"))
+        .and_then(|v| v.as_dictionary());
+    let mut ids: BTreeSet<String> = dict
+        .and_then(|d| d.get("Installed Applications"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_string().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(meta) = apps_meta {
+        ids.extend(meta.keys().cloned());
+    }
+
+    let str_field = |md: &plist::Dictionary, key: &str| -> Option<String> {
+        md.get(key)
+            .and_then(|v| v.as_string())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+
+    // BTreeSet already yields bundle ids sorted + de-duplicated.
+    ids.into_iter()
+        .map(|bundle_id| {
+            let mut app = AppInfo {
+                bundle_id: bundle_id.clone(),
+                ..Default::default()
+            };
+            // iTunesMetadata is a Data blob holding a nested binary plist.
+            let md = apps_meta
+                .and_then(|m| m.get(&bundle_id))
+                .and_then(|entry| entry.as_dictionary())
+                .and_then(|d| d.get("iTunesMetadata"))
+                .and_then(|v| v.as_data())
+                .and_then(|bytes| plist::Value::from_reader(std::io::Cursor::new(bytes)).ok())
+                .and_then(|v| v.into_dictionary());
+            if let Some(md) = md {
+                app.name = str_field(&md, "itemName");
+                app.seller = str_field(&md, "artistName");
+                app.version = str_field(&md, "bundleShortVersionString");
+                app.genre = str_field(&md, "genre");
+                app.released = str_field(&md, "releaseDate");
+            }
+            app
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +388,61 @@ mod tests {
 
         let backups = discover_backups(tmp.path()).unwrap();
         assert_eq!(backups[0].id, "bbb");
+    }
+
+    #[test]
+    fn reads_app_metadata_from_itunes_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // A nested iTunesMetadata bplist (serialized to bytes, stored as Data).
+        let mut md = Dictionary::new();
+        md.insert("itemName".into(), Value::String("Instagram".into()));
+        md.insert("artistName".into(), Value::String("Instagram, Inc.".into()));
+        md.insert(
+            "bundleShortVersionString".into(),
+            Value::String("436.0.0".into()),
+        );
+        md.insert("genre".into(), Value::String("Photo & Video".into()));
+        md.insert(
+            "releaseDate".into(),
+            Value::String("2010-10-06T08:12:41Z".into()),
+        );
+        let mut md_bytes: Vec<u8> = Vec::new();
+        Value::Dictionary(md)
+            .to_writer_binary(&mut md_bytes)
+            .unwrap();
+
+        // Only Instagram has metadata (a receipt). Safari is a system app that
+        // appears in "Installed Applications" but NOT in "Applications".
+        let mut app_entry = Dictionary::new();
+        app_entry.insert("iTunesMetadata".into(), Value::Data(md_bytes));
+        let mut apps = Dictionary::new();
+        apps.insert("com.burbn.instagram".into(), Value::Dictionary(app_entry));
+
+        let mut info = Dictionary::new();
+        info.insert("Applications".into(), Value::Dictionary(apps));
+        info.insert(
+            "Installed Applications".into(),
+            Value::Array(vec![
+                Value::String("com.burbn.instagram".into()),
+                Value::String("com.apple.mobilesafari".into()),
+            ]),
+        );
+        write_plist(&dir.join("Info.plist"), Value::Dictionary(info));
+
+        let out = installed_apps_meta(dir);
+        assert_eq!(out.len(), 2, "the metadata-less system app must NOT be dropped");
+        // Sorted by bundle id: mobilesafari, then instagram.
+        let ig = out.iter().find(|a| a.bundle_id == "com.burbn.instagram").unwrap();
+        assert_eq!(ig.name.as_deref(), Some("Instagram"));
+        assert_eq!(ig.seller.as_deref(), Some("Instagram, Inc."));
+        assert_eq!(ig.version.as_deref(), Some("436.0.0"));
+        assert_eq!(ig.genre.as_deref(), Some("Photo & Video"));
+        assert_eq!(ig.released.as_deref(), Some("2010-10-06T08:12:41Z"));
+        // The system app (in the array, absent from Applications) still appears,
+        // with only its bundle id.
+        let safari = out.iter().find(|a| a.bundle_id == "com.apple.mobilesafari").unwrap();
+        assert_eq!(safari.name, None);
     }
 }

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Bookmark, BookOpen, Globe, SquareStack, Trash2 } from "lucide-react";
+import { Bookmark, BookOpen, EyeOff, Globe, SquareStack, Trash2 } from "lucide-react";
 import {
   Item,
   ItemContent,
@@ -258,8 +258,19 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
         <Icon className="size-5 text-muted-foreground" />
       </ItemMedia>
       <ItemContent>
-        <ItemTitle className="truncate">
-          {item.title ?? (url ? hostOf(url) : "Untitled")}
+        <ItemTitle className="flex items-center gap-1.5 truncate">
+          <span className="truncate">
+            {item.title ?? (url ? hostOf(url) : "Untitled")}
+          </span>
+          {item.private && (
+            <span
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-medium text-purple-500"
+              title="Open in a private-browsing window"
+            >
+              <EyeOff className="size-2.5" />
+              Private
+            </span>
+          )}
         </ItemTitle>
         {url && <ItemDescription className="truncate">{url}</ItemDescription>}
         {secondary && (
@@ -270,6 +281,11 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
       </ItemContent>
       <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
         {item.dateAdded != null && <span>{formatDateTime(item.dateAdded)}</span>}
+        {item.kind === "tab" && item.dateViewed != null && (
+          <span className="text-muted-foreground/60">
+            Last viewed {formatDate(item.dateViewed)}
+          </span>
+        )}
         {item.kind === "reading_list" &&
           (item.dateViewed != null ? (
             <span className="text-muted-foreground/60">

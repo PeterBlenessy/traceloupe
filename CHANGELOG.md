@@ -25,6 +25,8 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.15.0` | **Data-coverage pass** — surfacing fields already parsed but unshown: all of a note's embedded images (detail gallery), iMessage group-action system rows, Safari reading-list read/last-viewed. |
 | `0.16.0` | **Health deep-dive + contact relationships** — the HealthKit store beyond workouts: daily activity aggregates (steps/distance/energy/flights/heart-rate), sleep sessions, and workout GPS routes with inline previews; plus contact related-names and address-book groups. |
 | `0.17.0` | **Health rings, mobility & the timezone timeline** — Apple activity rings vs goals, walking/audio-exposure daily metrics, and a per-timezone travel timeline from sample provenances; the Health view's sections refactored onto one descriptor-driven pipeline. |
+| `0.18.0` | **Data-coverage pass, recovery-themed** — Recently-Deleted photos (`ZTRASHEDSTATE`) and messages (`chat_recoverable_message_join`), per-app Interaction channels, Messages sticker/effect/app-bubble classification, Health Cycle-Tracking + Awards, Contacts social profiles, and App Store metadata. |
+| `0.19.0` | **Data-coverage close-out** — Safari local open tabs (`BrowserState.db`, with a private-browsing badge), Calls number-country flags, and Photos added-to-library date. Field-level coverage is now closed; remaining gaps are marked won't-implement. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -32,6 +34,77 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.19.0] — 2026-07-20
+
+**Data-coverage close-out.** The last field-level items, and a line drawn under
+the coverage effort (see `docs/app-data-coverage.md`). Requires a re-import to
+populate for existing caches.
+
+### Added
+
+- **Safari — local open tabs.** The Safari "Tabs" list now comes from
+  `BrowserState.db` (this device's actual open tabs, 201 here) instead of the
+  thinner iCloud-synced `SafariTabs.db` (44), and each tab shows its last-viewed
+  time and a **Private** badge for private-browsing tabs (schema v46).
+- **Calls — number country.** A call number's ISO country
+  (`ZISO_COUNTRY_CODE`) shows as a flag on the call row (schema v45), so
+  international calls stand out at a glance.
+- **Photos — added-to-library date.** When a camera-roll asset was added to the
+  library (`ZASSET.ZADDEDDATE`) is surfaced in the lightbox as "Added &lt;date&gt;"
+  whenever it differs from the capture date by more than a day — flagging media
+  that was received, saved, or imported rather than shot on this device (schema
+  v44). ~1,174 such assets in the reference backup.
+
+## [0.18.0] — 2026-07-20
+
+**Data-coverage pass.** More fields already present in a backup, now surfaced —
+with a forensic "recover what was deleted or hidden" throughline (Recently
+Deleted photos and messages). Requires a re-import to populate for existing
+caches.
+
+### Added
+
+- **Interactions — per-app channels.** A "Channels" summary strip above the
+  interaction list shows which apps CoreDuet interactions flowed through
+  (Messages, Phone, FaceTime, Snapchat, Gmail, …) with in/out totals, read from
+  the raw `ZINTERACTIONS` table (the person-level `ZCONTACTS` graph has no app
+  dimension). Bundle ids sharing a name merge; zero-total channels drop.
+- **Health — Cycle Tracking.** A menstrual-flow + symptoms section from the
+  HealthKit category samples.
+- **Health — Awards.** Earned Apple Fitness achievements.
+- **Contacts — social / IM profiles.** AddressBook property 46 (Twitter,
+  Instagram, and other service handles).
+- **Apps — App Store metadata.** Name, seller, version, genre, and release year
+  parsed from each app's `iTunesMetadata` bplist.
+- **Messages — sticker classification.** Sticker attachments
+  (`attachment.is_sticker`) are now classified as their own content kind,
+  lighting up the Stickers content-filter (which previously never matched).
+- **Messages — Recently Deleted.** Deleted-but-recoverable iMessages
+  (`chat_recoverable_message_join`, never read before) are recovered and shown
+  with a red "Deleted &lt;date&gt;" badge — messages that had vanished from the
+  conversation reappear, forensic.
+- **Messages — expressive send effects.** "Sent with Confetti / Slam / Invisible
+  Ink / …" from `expressive_send_style_id`.
+- **Messages — app-bubble messages.** iMessage-app bubbles (`balloon_bundle_id`)
+  surfaced as a distinct message kind instead of empty rows.
+- **Photos — Live Photo & burst badges.** Distinguishes Live Photos
+  (`ZPLAYBACKSTYLE`) and burst stacks (`ZAVALANCHEUUID`).
+- **Photos — Recently Deleted.** Trashed camera-roll assets (`ZTRASHEDSTATE`)
+  are now surfaced with a red trash badge and a lightbox indicator instead of
+  being dropped at ingest — forensic, matching the Hidden-album treatment.
+- **Notes — image filter.** Filter for notes that carry embedded images.
+- **Device — toolbar.** Close the backup, re-import, or open another backup
+  without leaving the view.
+
+### Fixed
+
+- **Photos — panorama mislabel.** `ZKINDSUBTYPE == 2` is a Live Photo
+  still-frame, not a panorama (which is `== 1`); panoramas are now counted
+  correctly.
+- **Notes — honest image availability.** Notes whose images were offloaded to
+  iCloud no longer pretend to display them; they state the images aren't in the
+  backup instead.
 
 ## [0.17.0] — 2026-07-20
 
