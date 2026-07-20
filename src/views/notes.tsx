@@ -195,6 +195,7 @@ export function NotesView() {
   // Filters — all derived client-side from the note metadata we already hold.
   const [folder, setFolder] = usePersistedState<string>("notes:folder", "all");
   const [lockState, setLockState] = usePersistedState<string>("notes:lock", "all");
+  const [mediaState, setMediaState] = usePersistedState<string>("notes:media", "all");
   const [selectedTags, setSelectedTags] = usePersistedState<string[]>("notes:tags", []);
   // Free-text search over title / snippet / folder.
   const [q, setQ] = useState("");
@@ -215,6 +216,12 @@ export function NotesView() {
     [notes],
   );
   const hasLocked = useMemo(() => (notes ?? []).some((n) => n.locked), [notes]);
+  // Whether any note has an embedded image, so the media facet only shows when
+  // it can do something.
+  const hasImagesAny = useMemo(
+    () => (notes ?? []).some((n) => n.imageCount > 0),
+    [notes],
+  );
   // The distinct hashtag tags present, for the tag facet.
   const tags = useMemo(
     () =>
@@ -228,6 +235,7 @@ export function NotesView() {
   // (its control may be hidden, leaving no way to reset).
   const effFolder = folder !== "all" && folders.includes(folder) ? folder : "all";
   const effLock = hasLocked ? lockState : "all";
+  const effMedia = hasImagesAny ? mediaState : "all";
   // Stable reference (memoized) so the filter memos below don't rerun each render.
   const effTags = useMemo(
     () => selectedTags.filter((t) => tags.includes(t)),
@@ -253,6 +261,7 @@ export function NotesView() {
       if (effFolder !== "all" && n.folder !== effFolder) return false;
       if (effLock === "locked" && !n.locked) return false;
       if (effLock === "unlocked" && n.locked) return false;
+      if (effMedia === "images" && n.imageCount === 0) return false;
       if (effTags.length > 0 && !effTags.some((t) => n.tags.includes(t))) return false;
       if (search) {
         const hay = [n.title, n.snippet, n.folder]
@@ -263,7 +272,7 @@ export function NotesView() {
       }
       return true;
     });
-  }, [notes, effFolder, effLock, effTags, search]);
+  }, [notes, effFolder, effLock, effMedia, effTags, search]);
 
   const presetCounts = useMemo(
     () =>
@@ -322,6 +331,23 @@ export function NotesView() {
         value: effLock,
         onChange: setLockState,
       }));
+    if (hasImagesAny)
+      out.push(badgeGroup({
+        key: "media",
+        label: "Media",
+        description: "Notes with embedded images",
+        options: [
+          { value: "all", label: "All" },
+          {
+            value: "images",
+            label: "Has images",
+            icon: <ImageIcon className="size-3.5" />,
+            count: (notes ?? []).filter((n) => n.imageCount > 0).length,
+          },
+        ],
+        value: effMedia,
+        onChange: setMediaState,
+      }));
     if (tags.length > 0) {
       const tagOptions: BadgeFilterOption[] = tags.map((t) => ({
         value: t,
@@ -344,7 +370,7 @@ export function NotesView() {
     }
     out.push(timeGroup({ description: "When the note was last modified", presets, counts: presetCounts, value: range, onChange: setRange }));
     return out;
-  }, [hasNotes, viewMode, folders, notes, effFolder, hasLocked, effLock, tags, effTags, presets, presetCounts, range, setFolder, setLockState, setSelectedTags, setRange]);
+  }, [hasNotes, viewMode, folders, notes, effFolder, hasLocked, effLock, hasImagesAny, effMedia, tags, effTags, presets, presetCounts, range, setFolder, setLockState, setMediaState, setSelectedTags, setRange]);
 
   // Always-visible controls beside the Filter button.
   const modesNode = useMemo(
