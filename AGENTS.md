@@ -1,0 +1,95 @@
+# Agent ground rules
+
+Multiple AI agents work on this repo **on the same machine, from the same
+clone**. Branches alone do **not** isolate them — a git checkout swaps the whole
+working tree, and `target/` / `node_modules` are shared, so two agents editing
+or building at once collide and can lose uncommitted work. These rules keep each
+agent in its own lane.
+
+> **The one rule that prevents everything else: work in your own worktree, never
+> in the shared main checkout.**
+
+## Start every task in your own worktree
+
+Before editing or building anything, create an isolated worktree whose **branch
+name equals its directory name**:
+
+```bash
+scripts/agent-worktree.sh <slug>          # e.g. calls-country-code
+# → .claude/worktrees/<slug>  on branch  <slug>  (based on origin/main)
+```
+
+That helper is just a wrapper around:
+
+```bash
+git worktree add .claude/worktrees/<slug> -b <slug> origin/main
+```
+
+`.claude/worktrees/` is gitignored, so worktrees never show up in `git status`.
+Then `cd` into the worktree and do all your work there.
+
+Claude Code users can also use the built-in `EnterWorktree` tool, which does the
+same thing — the naming convention below still applies.
+
+## Naming
+
+- **`<slug>` is kebab-case and describes the task**: `messages-stickers`,
+  `spyware-ioc-engine`.
+- **Branch name == worktree directory name.** One slug, used for both. If you
+  want a type prefix, put it in *both* (`feature/foo` → branch `feature/foo`,
+  dir `.claude/worktrees/feature/foo`) so they stay identical.
+
+## While you work
+
+- **Stay on your branch in your worktree.** Never `git checkout <other-branch>`
+  inside a worktree to peek at other work — that is the collision. One worktree,
+  one branch, for its whole life.
+- **Only touch your own worktree and branch.** Don't edit files, commit, rebase,
+  reset, or delete branches that belong to another agent. Don't run `git clean`,
+  `checkout -f`, or `reset --hard` outside your worktree.
+- **Base off `origin/main`** (or the agreed integration branch), not off whatever
+  the shared checkout happens to be sitting on.
+- **Commit early and often**, and **push right after your first commit**
+  (`git push -u origin <slug>`). A branch that lives only on this laptop is
+  unbacked-up — if the folder is clobbered it's gone. Everything on GitHub is
+  safe.
+- **Builds are per-worktree.** Each worktree has its own `target/` and its own
+  `node_modules` (run `pnpm install` once in it). Do **not** point multiple
+  worktrees at a shared `CARGO_TARGET_DIR` — they'd contend on the build lock.
+
+## Verify your isolation before the first edit
+
+```bash
+git rev-parse --show-toplevel   # must be your .claude/worktrees/<slug>, NOT the shared main checkout
+git branch --show-current       # must be your <slug>
+git worktree list               # see who else is where
+```
+
+If `--show-toplevel` is the plain repo root, stop and make your worktree first.
+
+## The shared main checkout
+
+The top-level clone (`iphone-backup-analyzer/`) is the **canonical repo**, not a
+dev sandbox. Don't develop directly in it. Leave whatever branch it's on alone;
+create a worktree instead.
+
+## Finishing up
+
+- Open a PR (or hand off) once CI-clean and the branch is pushed.
+- When your branch is merged or abandoned, clean up:
+  ```bash
+  git worktree remove .claude/worktrees/<slug>
+  git branch -d <slug>          # -d refuses unless merged; that's the safety net
+  git worktree prune            # drop stale worktree admin entries
+  ```
+
+## Project-specific notes
+
+- Stack: Tauri + Rust (`crates/traceloupe-core`, `src-tauri`) + React (`src/`).
+- Verify a change builds the **binary**, not just `cargo check`:
+  `cargo test -p traceloupe-core && cargo build -p traceloupe && pnpm exec tsc --noEmit`.
+- Parser changes need a **re-import** to populate existing caches (the cache
+  migration only creates the empty structures; bump `SCHEMA_VERSION` in
+  `crates/traceloupe-core/src/cache.rs`).
+- Domain glossary: `CONTEXT.md`. Field-level data-coverage roadmap:
+  `docs/app-data-coverage.md`.
