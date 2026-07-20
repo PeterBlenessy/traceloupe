@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 42;
+const SCHEMA_VERSION: i64 = 43;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -645,6 +645,10 @@ impl CacheDb {
             // excluded — forensic, matching the hidden-album treatment).
             ensure_column(&conn, "media_items", "trashed", "INTEGER NOT NULL DEFAULT 0")?;
             ensure_column(&conn, "media_items", "trashed_at", "INTEGER")?;
+            // v43: recoverable (recently-deleted) iMessages from
+            // chat_recoverable_message_join — surfaced with a "Deleted" badge.
+            ensure_column(&conn, "messages", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(&conn, "messages", "deleted_at", "INTEGER")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
