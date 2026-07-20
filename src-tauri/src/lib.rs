@@ -702,6 +702,7 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
             &modules,
             None,
             &[], // Passive Check never does Tier-B process extraction.
+            &[], // …nor configuration-profile extraction.
             &feeds_json,
             &CancelToken::new(),
             |module, index, total| {
@@ -1176,6 +1177,7 @@ async fn run_security_scan(
     // reimport_module.
     let mut manifest_entries: Option<Vec<(String, String)>> = None;
     let mut tierb_processes: Vec<analyzer::ObservedProcess> = Vec::new();
+    let mut tierb_profiles: Vec<analyzer::ObservedProfile> = Vec::new();
     if scan_kind == ScanKind::Explicit {
         let (backup_id, work_dir) = backup_layout(&cache_path)?;
         let source_dir = {
@@ -1229,14 +1231,39 @@ async fn run_security_scan(
                         }
                     }
                 }
-                Ok::<_, traceloupe_core::Error>((out, processes))
+                // Tier-B configuration profiles: ProfileTruth.plist (installed
+                // profiles) + PayloadManifest.plist (hidden set). Best-effort.
+                let mut profiles: Vec<analyzer::ObservedProfile> = Vec::new();
+                const CP_DOMAIN: &str =
+                    "SysSharedContainerDomain-systemgroup.com.apple.configurationprofiles";
+                if let Ok(Some(truth_entry)) =
+                    idx.find(CP_DOMAIN, "Library/ConfigurationProfiles/ProfileTruth.plist")
+                {
+                    if let Ok(truth) = idx.read_bytes(&truth_entry, decryptor.as_deref()) {
+                        let manifest = idx
+                            .find(
+                                CP_DOMAIN,
+                                "Library/ConfigurationProfiles/PayloadManifest.plist",
+                            )
+                            .ok()
+                            .flatten()
+                            .and_then(|e| idx.read_bytes(&e, decryptor.as_deref()).ok());
+                        if let Ok(mut ps) =
+                            analyzer::parse_configuration_profiles(&truth, manifest.as_deref())
+                        {
+                            profiles.append(&mut ps);
+                        }
+                    }
+                }
+                Ok::<_, traceloupe_core::Error>((out, processes, profiles))
             })
             .await
             .map_err(|e| e.to_string())?;
             match extracted {
-                Ok((e, ps)) => {
+                Ok((e, ps, prof)) => {
                     manifest_entries = Some(e);
                     tierb_processes = ps;
+                    tierb_profiles = prof;
                 }
                 Err(e) => logging::warn(
                     &app,
@@ -1269,6 +1296,7 @@ async fn run_security_scan(
             &modules,
             sweep_ref,
             &tierb_processes,
+            &tierb_profiles,
             &feeds_json,
             &cancel,
             |module, index, total| {
