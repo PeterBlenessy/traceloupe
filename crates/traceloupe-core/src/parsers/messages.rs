@@ -93,10 +93,16 @@ fn message_table_columns(conn: &Connection, table: &str) -> std::collections::Ha
 /// A human phrase for an iMessage group-action row (`item_type` != 0), told from
 /// the actor's perspective (the UI prefixes the sender). `None` for normal
 /// messages and action types whose meaning we don't surface.
-fn group_action_body(item_type: i64, action_type: i64, group_title: Option<&str>) -> Option<String> {
+fn group_action_body(
+    item_type: i64,
+    action_type: i64,
+    group_title: Option<&str>,
+) -> Option<String> {
     Some(match item_type {
         1 => match group_title {
-            Some(t) if !t.trim().is_empty() => format!("named the conversation \u{201c}{t}\u{201d}"),
+            Some(t) if !t.trim().is_empty() => {
+                format!("named the conversation \u{201c}{t}\u{201d}")
+            }
             _ => "changed the group name".to_string(),
         },
         2 => match action_type {
@@ -161,7 +167,9 @@ fn balloon_label(bundle_id: &str) -> String {
             "com.apple.mobileslideshow.PhotosMessagesApp" => "Shared photos".to_string(),
             "com.apple.findmy.FindMyMessagesApp" => "Shared location (Find My)".to_string(),
             "com.apple.PeopleMessageService.AskToBuy"
-            | "com.apple.AskToMessagesHost.AskToMessagesExtension" => "Ask to Buy request".to_string(),
+            | "com.apple.AskToMessagesHost.AskToMessagesExtension" => {
+                "Ask to Buy request".to_string()
+            }
             "com.spotify.client.imessage" => "Spotify".to_string(),
             "com.gamerdelights.gamepigeon.ext" => "GamePigeon".to_string(),
             "com.google.ios.youtube.MessagesExtension" => "YouTube".to_string(),
@@ -419,14 +427,34 @@ pub fn parse_messages(
     // from older schemas + the test fixtures; fall back to 0/NULL so the SELECT
     // and the `<> 0` filter are inert there.
     let mcols = message_table_columns(&src, "message");
-    let it_expr = if mcols.contains("item_type") { "m.item_type" } else { "0" };
-    let ga_expr = if mcols.contains("group_action_type") { "m.group_action_type" } else { "0" };
-    let gt_expr = if mcols.contains("group_title") { "m.group_title" } else { "NULL" };
+    let it_expr = if mcols.contains("item_type") {
+        "m.item_type"
+    } else {
+        "0"
+    };
+    let ga_expr = if mcols.contains("group_action_type") {
+        "m.group_action_type"
+    } else {
+        "0"
+    };
+    let gt_expr = if mcols.contains("group_title") {
+        "m.group_title"
+    } else {
+        "NULL"
+    };
     // App-bubble bundle id (Digital Touch / Handwriting / iMessage extensions);
     // absent from older schemas + the test fixtures, so fall back to NULL.
-    let bb_expr = if mcols.contains("balloon_bundle_id") { "m.balloon_bundle_id" } else { "NULL" };
+    let bb_expr = if mcols.contains("balloon_bundle_id") {
+        "m.balloon_bundle_id"
+    } else {
+        "NULL"
+    };
     // Expressive send effect (Confetti / Slam / …); guarded the same way.
-    let es_expr = if mcols.contains("expressive_send_style_id") { "m.expressive_send_style_id" } else { "NULL" };
+    let es_expr = if mcols.contains("expressive_send_style_id") {
+        "m.expressive_send_style_id"
+    } else {
+        "NULL"
+    };
     // Recently-deleted but still-recoverable messages live only in
     // chat_recoverable_message_join (never in chat_message_join), each with a
     // `delete_date`. UNION them into the chat→message mapping so they surface,
@@ -1021,7 +1049,10 @@ mod tests {
         assert_eq!(rows[0], ("Digital Touch".to_string(), "app".to_string()));
         assert_eq!(rows[1], ("GamePigeon".to_string(), "app".to_string()));
         // The URL balloon keeps its own text and is classified as a link.
-        assert_eq!(rows[2], ("https://example.com".to_string(), "link".to_string()));
+        assert_eq!(
+            rows[2],
+            ("https://example.com".to_string(), "link".to_string())
+        );
         // A text-less URL balloon: "Link" placeholder, still the link kind (not app).
         assert_eq!(rows[3], ("Link".to_string(), "link".to_string()));
     }
@@ -1058,7 +1089,10 @@ mod tests {
             .unwrap()
             .map(|r| r.unwrap())
             .collect();
-        assert_eq!(rows[0], ("happy bday!".to_string(), Some("Confetti".to_string())));
+        assert_eq!(
+            rows[0],
+            ("happy bday!".to_string(), Some("Confetti".to_string()))
+        );
         assert_eq!(rows[1], ("boom".to_string(), Some("Slam".to_string())));
         assert_eq!(rows[2], ("plain".to_string(), None));
     }
@@ -1099,10 +1133,17 @@ mod tests {
             .unwrap()
             .map(|r| r.unwrap())
             .collect();
-        assert_eq!(rows.len(), 2, "the deleted message is recovered, not dropped");
+        assert_eq!(
+            rows.len(),
+            2,
+            "the deleted message is recovered, not dropped"
+        );
         assert_eq!(rows[0], ("still here".to_string(), 0, None));
         // 721692900000000000 ns → unix 1_700_000_100.
-        assert_eq!(rows[1], ("oops deleted this".to_string(), 1, Some(1_700_000_100)));
+        assert_eq!(
+            rows[1],
+            ("oops deleted this".to_string(), 1, Some(1_700_000_100))
+        );
     }
 
     #[test]
@@ -1152,8 +1193,16 @@ mod tests {
         // so the sticker is classified regardless of its body text; the non-sticker
         // image isn't a sticker (its media classification needs the resolver, hence
         // "other" in this mode).
-        assert_eq!(kind(0), "sticker", "a sticker classifies even with body text");
-        assert_eq!(kind(1), "other", "a non-sticker attachment is not a sticker");
+        assert_eq!(
+            kind(0),
+            "sticker",
+            "a sticker classifies even with body text"
+        );
+        assert_eq!(
+            kind(1),
+            "other",
+            "a non-sticker attachment is not a sticker"
+        );
         assert_eq!(kind(2), "text");
     }
 

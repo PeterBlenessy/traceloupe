@@ -44,7 +44,10 @@ fn full_tier_a_scan_under_60s() {
     )
     .unwrap();
     let elapsed = start.elapsed();
-    eprintln!("scan finished in {elapsed:?}: {} findings", outcome.findings);
+    eprintln!(
+        "scan finished in {elapsed:?}: {} findings",
+        outcome.findings
+    );
     let conn = db.conn();
     let mut stmt = conn
         .prepare("SELECT severity, module, malware, matched_value, context FROM findings WHERE run_id = ?1")

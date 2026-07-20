@@ -176,7 +176,11 @@ fn parse_social(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<
     let mut out: HashMap<i64, Vec<LabeledValue>> = HashMap::new();
     for ((rec, _uid), (_label, fields)) in group_multivalue_entries(conn, PROP_SOCIAL)? {
         // The handle is the point; skip a profile that has only metadata.
-        if let Some(username) = fields.get("username").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        if let Some(username) = fields
+            .get("username")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
             out.entry(rec).or_default().push(LabeledValue {
                 // `service` is a plain name here, but clean_label is harmless
                 // and keeps social labels consistent with every other parser.
@@ -254,10 +258,7 @@ fn parse_addresses(conn: &Connection) -> Result<std::collections::HashMap<i64, V
 
 /// One multivalue's optional label (from `ABMultiValueLabel`) + its key→value
 /// field map (from `ABMultiValueEntry`), keyed by `(record_id, UID)`.
-type MultiValueGroup = (
-    Option<String>,
-    std::collections::HashMap<String, String>,
-);
+type MultiValueGroup = (Option<String>, std::collections::HashMap<String, String>);
 
 /// Group the `ABMultiValueEntry` rows of every multivalue with the given
 /// `property` by `(record_id, UID)`. Shared by the postal-address and
@@ -541,7 +542,10 @@ mod tests {
         assert_eq!(alex.related[1].label.as_deref(), Some("Bestie"));
         assert_eq!(alex.related[1].value, "Sam Chen");
         // Groups sorted by name; the unnamed group is dropped.
-        assert_eq!(alex.groups, vec!["Climbing".to_string(), "Family".to_string()]);
+        assert_eq!(
+            alex.groups,
+            vec!["Climbing".to_string(), "Family".to_string()]
+        );
         // Social profile: service label + username value.
         assert_eq!(alex.social.len(), 1);
         assert_eq!(alex.social[0].label.as_deref(), Some("Snapchat"));

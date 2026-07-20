@@ -672,7 +672,12 @@ impl CacheDb {
             )?;
             // v42: recently-deleted camera-roll assets (surfaced as a badge, not
             // excluded — forensic, matching the hidden-album treatment).
-            ensure_column(&conn, "media_items", "trashed", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                &conn,
+                "media_items",
+                "trashed",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             ensure_column(&conn, "media_items", "trashed_at", "INTEGER")?;
             // v43: recoverable (recently-deleted) iMessages from
             // chat_recoverable_message_join — surfaced with a "Deleted" badge.
@@ -685,7 +690,12 @@ impl CacheDb {
             // international calls.
             ensure_column(&conn, "calls", "country_code", "TEXT")?;
             // v46: private-browsing flag on Safari open tabs (BrowserState.db).
-            ensure_column(&conn, "safari_bookmarks", "private", "INTEGER NOT NULL DEFAULT 0")?;
+            ensure_column(
+                &conn,
+                "safari_bookmarks",
+                "private",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             // v47: Security Check scan runs + findings (see docs/spyware-analyzer-prd.md §6.3).
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS scan_runs (
@@ -829,7 +839,8 @@ mod tests {
             .unwrap();
         assert!(body.contains("evil.example"));
         // Deleting the run cascades to its findings.
-        conn.execute("DELETE FROM scan_runs WHERE id = 1", []).unwrap();
+        conn.execute("DELETE FROM scan_runs WHERE id = 1", [])
+            .unwrap();
         let left: i64 = conn
             .query_row("SELECT count(*) FROM findings", [], |r| r.get(0))
             .unwrap();

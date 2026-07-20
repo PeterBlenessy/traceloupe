@@ -145,11 +145,12 @@ fn extract_hosts(text: &str) -> Vec<String> {
             continue;
         }
         let labels: Vec<&str> = token.split('.').collect();
-        let valid = labels.iter().all(|l| {
-            !l.is_empty() && !l.starts_with('-') && !l.ends_with('-')
-        }) && labels
-            .last()
-            .is_some_and(|tld| tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_alphabetic()));
+        let valid = labels
+            .iter()
+            .all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-'))
+            && labels
+                .last()
+                .is_some_and(|tld| tld.len() >= 2 && tld.bytes().all(|b| b.is_ascii_alphabetic()));
         if !valid {
             continue;
         }
@@ -297,7 +298,8 @@ fn scan_text<'a>(
 /// (the `manifest` module is then skipped). `feeds_json` describes the
 /// indicator feeds used (stored on the run for the report header).
 /// `progress` receives `(module, index, total)` before each module runs.
-pub fn run_scan<'a>(
+#[allow(clippy::too_many_arguments)] // a scan genuinely needs all of these inputs
+pub fn run_scan(
     db: &CacheDb,
     set: &IndicatorSet,
     kind: ScanKind,
@@ -342,8 +344,7 @@ pub fn run_scan<'a>(
                 let mut stmt = conn.prepare("SELECT bundle_id FROM installed_apps")?;
                 let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
                 for bundle in rows.filter_map(|r| r.ok()) {
-                    if let Some(ind) = lookup.bundle_ids.get(bundle.to_ascii_lowercase().as_str())
-                    {
+                    if let Some(ind) = lookup.bundle_ids.get(bundle.to_ascii_lowercase().as_str()) {
                         sink.push(Hit {
                             indicator: ind,
                             module: "apps",
@@ -372,11 +373,17 @@ pub fn run_scan<'a>(
                         cancelled = true;
                         break;
                     }
-                    scan_text(&lookup, &body, "messages", "message", Some(id), sent_at, &mut sink);
+                    scan_text(
+                        &lookup,
+                        &body,
+                        "messages",
+                        "message",
+                        Some(id),
+                        sent_at,
+                        &mut sink,
+                    );
                     if let Some(sender) = sender {
-                        if let Some(ind) =
-                            lookup.emails.get(sender.to_ascii_lowercase().as_str())
-                        {
+                        if let Some(ind) = lookup.emails.get(sender.to_ascii_lowercase().as_str()) {
                             sink.push(Hit {
                                 indicator: ind,
                                 module: "messages",
@@ -497,15 +504,22 @@ pub fn run_scan<'a>(
                     ))
                 })?;
                 for (id, text, at) in rows.filter_map(|r| r.ok()) {
-                    scan_text(&lookup, &text, "calendar", "calendar_event", Some(id), at, &mut sink);
+                    scan_text(
+                        &lookup,
+                        &text,
+                        "calendar",
+                        "calendar_event",
+                        Some(id),
+                        at,
+                        &mut sink,
+                    );
                 }
             }
             "contacts" => {
                 let mut stmt =
                     conn.prepare("SELECT id, emails_json FROM contacts WHERE emails_json != '[]'")?;
-                let rows = stmt.query_map([], |r| {
-                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                })?;
+                let rows =
+                    stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
                 #[derive(serde::Deserialize)]
                 struct LV {
                     value: String,
@@ -541,9 +555,7 @@ pub fn run_scan<'a>(
                     ))
                 })?;
                 for (id, identifier, at) in rows.filter_map(|r| r.ok()) {
-                    if let Some(ind) =
-                        lookup.emails.get(identifier.to_ascii_lowercase().as_str())
-                    {
+                    if let Some(ind) = lookup.emails.get(identifier.to_ascii_lowercase().as_str()) {
                         sink.push(Hit {
                             indicator: ind,
                             module: "interactions",
@@ -678,7 +690,9 @@ fn csv_field(s: &str) -> String {
 }
 
 fn format_epoch(secs: Option<i64>) -> String {
-    let Some(secs) = secs else { return String::new() };
+    let Some(secs) = secs else {
+        return String::new();
+    };
     match time::OffsetDateTime::from_unix_timestamp(secs) {
         Ok(dt) => dt
             .format(&time::format_description::well_known::Rfc3339)
@@ -801,12 +815,42 @@ mod tests {
         IndicatorSet::from_feeds(vec![LoadedFeed {
             source: "test".into(),
             indicators: vec![
-                ind(IndicatorKind::Domain, "evil.example", "TestWare", Severity::Warning),
-                ind(IndicatorKind::Url, "https://short.url/x1", "TestWare", Severity::Warning),
-                ind(IndicatorKind::Email, "operator@evil.example", "TestWare", Severity::Warning),
-                ind(IndicatorKind::BundleId, "com.evil.tracker", "TestWare", Severity::Critical),
-                ind(IndicatorKind::FileName, "implant.plist", "TestWare", Severity::Critical),
-                ind(IndicatorKind::FilePath, "Library/Caches/implant.db", "TestWare", Severity::Critical),
+                ind(
+                    IndicatorKind::Domain,
+                    "evil.example",
+                    "TestWare",
+                    Severity::Warning,
+                ),
+                ind(
+                    IndicatorKind::Url,
+                    "https://short.url/x1",
+                    "TestWare",
+                    Severity::Warning,
+                ),
+                ind(
+                    IndicatorKind::Email,
+                    "operator@evil.example",
+                    "TestWare",
+                    Severity::Warning,
+                ),
+                ind(
+                    IndicatorKind::BundleId,
+                    "com.evil.tracker",
+                    "TestWare",
+                    Severity::Critical,
+                ),
+                ind(
+                    IndicatorKind::FileName,
+                    "implant.plist",
+                    "TestWare",
+                    Severity::Critical,
+                ),
+                ind(
+                    IndicatorKind::FilePath,
+                    "Library/Caches/implant.db",
+                    "TestWare",
+                    Severity::Critical,
+                ),
             ],
             skipped: vec![],
         }])
@@ -854,9 +898,18 @@ mod tests {
         let db = seeded_db();
         let set = test_set();
         let mut manifest = vec![
-            ("AppDomain-com.evil.tracker".to_string(), "Documents/x".to_string()),
-            ("HomeDomain".to_string(), "Library/Caches/implant.db".to_string()),
-            ("HomeDomain".to_string(), "Library/Preferences/ok.plist".to_string()),
+            (
+                "AppDomain-com.evil.tracker".to_string(),
+                "Documents/x".to_string(),
+            ),
+            (
+                "HomeDomain".to_string(),
+                "Library/Caches/implant.db".to_string(),
+            ),
+            (
+                "HomeDomain".to_string(),
+                "Library/Preferences/ok.plist".to_string(),
+            ),
         ]
         .into_iter();
         let cancel = CancelToken::new();

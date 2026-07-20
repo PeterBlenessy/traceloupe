@@ -12,19 +12,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 /// Which analyzer modules the Passive Check runs. Default apps-only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PassiveScope {
     /// Bundle-id + manifest AppDomain matching only (near-zero false positives).
+    #[default]
     AppsOnly,
     /// Everything an Explicit Scan runs (message/URL/domain content included).
     Full,
-}
-
-impl Default for PassiveScope {
-    fn default() -> Self {
-        PassiveScope::AppsOnly
-    }
 }
 
 /// A yes/no/unasked consent tri-state so first-run dialogs fire exactly once.
@@ -79,9 +74,8 @@ impl DetectionSettings {
     pub fn load(app_data: &Path) -> Result<Self> {
         let path = Self::file(app_data);
         match std::fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|e| Error::Parse(format!(
-                "detection-settings.json: {e}"
-            ))),
+            Ok(text) => serde_json::from_str(&text)
+                .map_err(|e| Error::Parse(format!("detection-settings.json: {e}"))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(Error::io(&path, e)),
         }

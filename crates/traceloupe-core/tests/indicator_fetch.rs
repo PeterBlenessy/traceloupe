@@ -5,9 +5,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
 
-use traceloupe_core::indicators::{
-    active_snapshot_dir, fetch_snapshot_with, load_snapshot_dir,
-};
+use traceloupe_core::indicators::{active_snapshot_dir, fetch_snapshot_with, load_snapshot_dir};
 
 /// Serve a fixed set of `path -> body` responses until `count` requests have
 /// been handled, on a throwaway port. Returns the base URL.
@@ -23,7 +21,11 @@ fn serve(routes: Vec<(String, Vec<u8>)>, count: usize) -> String {
             let mut req_line = String::new();
             reader.read_line(&mut req_line).unwrap();
             // "GET /path HTTP/1.1"
-            let path = req_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+            let path = req_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/")
+                .to_string();
             let mut line = String::new();
             while reader.read_line(&mut line).unwrap() > 0 {
                 if line == "\r\n" {
@@ -36,10 +38,7 @@ fn serve(routes: Vec<(String, Vec<u8>)>, count: usize) -> String {
                 .find(|(p, _)| *p == path)
                 .map(|(_, b)| b.clone())
                 .unwrap_or_default();
-            let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-                body.len()
-            );
+            let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
             stream.write_all(header.as_bytes()).unwrap();
             stream.write_all(&body).unwrap();
             stream.flush().unwrap();
@@ -109,7 +108,10 @@ fn fetch_downloads_swaps_and_loads() {
 
     let (set, _) = load_snapshot_dir(&dest).unwrap();
     // Fresh domain replaced the bundled one; new package landed.
-    assert!(set.indicators.iter().any(|i| i.value == "fresh.demo.example"));
+    assert!(set
+        .indicators
+        .iter()
+        .any(|i| i.value == "fresh.demo.example"));
     assert!(set.indicators.iter().any(|i| i.value == "com.demo.spy2"));
     // Attribution copied alongside.
     assert!(dest.join("ATTRIBUTION.md").exists());
@@ -149,5 +151,8 @@ fn failed_fetch_leaves_previous_snapshot_intact() {
     let err = fetch_snapshot_with(&agent, &bundled, &dest, |_, _, _| {});
     assert!(err.is_err());
     // The old feed file is untouched (temp-then-rename never overwrote it).
-    assert_eq!(std::fs::read_to_string(dest.join("demo.stix2")).unwrap(), before);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("demo.stix2")).unwrap(),
+        before
+    );
 }
