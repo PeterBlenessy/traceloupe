@@ -888,6 +888,7 @@ pub struct HealthSummary {
     pub day_count: i64,
     pub sleep_count: i64,
     pub timezone_count: i64,
+    pub achievement_count: i64,
 }
 
 /// Workouts, most recent first.
@@ -1050,6 +1051,40 @@ pub fn health_daily(cache: &CacheDb) -> Result<Vec<HealthDay>> {
     Ok(out)
 }
 
+/// One earned Apple Fitness achievement.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthAchievement {
+    pub id: i64,
+    /// Template id, e.g. "MoveGoal200Percent" (humanized in the UI).
+    pub name: String,
+    /// Midnight UTC of the earned day, unix seconds.
+    pub earned_at: Option<i64>,
+    pub value: Option<f64>,
+    pub unit: Option<String>,
+}
+
+/// Earned achievements, most recent first.
+pub fn list_health_achievements(cache: &CacheDb) -> Result<Vec<HealthAchievement>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, CAST(strftime('%s', earned_on) AS INTEGER), value, unit
+         FROM health_achievements
+         ORDER BY earned_on DESC NULLS LAST, id DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(HealthAchievement {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            earned_at: r.get(2)?,
+            value: r.get(3)?,
+            unit: r.get(4)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// One timezone Health samples were recorded in — a travel-timeline entry.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1135,6 +1170,7 @@ pub fn health_summary(cache: &CacheDb) -> Result<HealthSummary> {
         day_count: count("SELECT COUNT(DISTINCT day) FROM health_daily")?,
         sleep_count: count("SELECT COUNT(*) FROM sleep_sessions")?,
         timezone_count: count("SELECT COUNT(DISTINCT tz_name) FROM health_timezones")?,
+        achievement_count: count("SELECT COUNT(*) FROM health_achievements")?,
     })
 }
 

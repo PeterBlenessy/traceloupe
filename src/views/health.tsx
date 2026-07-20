@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, ChevronDown, Footprints, Globe, HeartPulse, MapPin, Moon } from "lucide-react";
+import { Activity, ChevronDown, Footprints, Globe, HeartPulse, MapPin, Moon, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { modelName } from "@/lib/device-names";
 import {
   client,
+  type HealthAchievement,
   type HealthDay,
   type HealthTimezone,
   type SleepSession,
@@ -25,12 +26,13 @@ import {
 } from "@/lib/ipc";
 
 /** The Health data sections, selectable via the Section filter. */
-type HealthSection = "workouts" | "daily" | "sleep" | "timezones";
+type HealthSection = "workouts" | "daily" | "sleep" | "timezones" | "awards";
 const SECTIONS: { value: HealthSection; label: string }[] = [
   { value: "workouts", label: "Workouts" },
   { value: "daily", label: "Daily activity" },
   { value: "sleep", label: "Sleep" },
   { value: "timezones", label: "Timezones" },
+  { value: "awards", label: "Awards" },
 ];
 
 /** Metres → a compact "5.2 km" / "820 m". */
@@ -288,6 +290,40 @@ function SleepRow({ session }: { session: SleepSession }) {
   );
 }
 
+/** "MonthlyChallengeTypeDaysDoublingMoveGoal" → "Monthly Challenge Type Days
+ *  Doubling Move Goal" — split the CamelCase template id for display. */
+function humanizeAward(name: string): string {
+  return name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-zA-Z])(\d)/g, "$1 $2");
+}
+
+function AchievementRow({ award }: { award: HealthAchievement }) {
+  const value =
+    award.value != null
+      ? `${formatCount(Math.round(award.value))}${award.unit && award.unit !== "count" ? ` ${award.unit}` : "×"}`
+      : null;
+  return (
+    <Item>
+      <ItemMedia>
+        <Trophy className="size-4 text-muted-foreground" />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">{humanizeAward(award.name)}</ItemTitle>
+        {value && (
+          <div className="text-xs text-muted-foreground">{value}</div>
+        )}
+      </ItemContent>
+      {award.earnedAt != null && (
+        <div className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          {formatDayUTC(award.earnedAt)}
+        </div>
+      )}
+    </Item>
+  );
+}
+
 function TimezoneRow({ tz }: { tz: HealthTimezone }) {
   const devices = tz.devices.map((d) => modelName(d) ?? d).join(", ");
   return (
@@ -339,7 +375,7 @@ interface SectionDef<T = unknown> {
   /** Timestamp compared against the time-filter window. */
   windowAt(item: T): number | null;
   sortFields: { value: string; label: string }[];
-  sortKey(item: T, by: string): number | null;
+  sortKey(item: T, by: string): number | string | null;
   sort: SortState;
   setSort(s: SortState): void;
   timeDescription: string;
@@ -413,6 +449,15 @@ export function HealthView() {
     queryFn: () => client.listHealthTimezones(),
     enabled: active === true && section === "timezones",
   });
+  const {
+    data: awards,
+    isPending: awardsPending,
+    error: awardsError,
+  } = useQuery({
+    queryKey: ["healthAwards"],
+    queryFn: () => client.listHealthAchievements(),
+    enabled: active === true && section === "awards",
+  });
 
   const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
   const [sort, setSort] = usePersistedState<SortState>("health:sort", {
@@ -429,6 +474,10 @@ export function HealthView() {
   });
   const [tzSort, setTzSort] = usePersistedState<SortState>("health:tzSort", {
     by: "samples",
+    desc: true,
+  });
+  const [awardSort, setAwardSort] = usePersistedState<SortState>("health:awardSort", {
+    by: "date",
     desc: true,
   });
   const { presets } = useTimePresets();
@@ -454,7 +503,8 @@ export function HealthView() {
   const hasDays = (summary?.dayCount ?? 0) > 0;
   const hasSleep = (summary?.sleepCount ?? 0) > 0;
   const hasTz = (summary?.timezoneCount ?? 0) > 0;
-  const hasAny = hasWorkouts || hasDays || hasSleep || hasTz;
+  const hasAwards = (summary?.achievementCount ?? 0) > 0;
+  const hasAny = hasWorkouts || hasDays || hasSleep || hasTz || hasAwards;
 
   // One descriptor per section; everything below (windowing, sorting, counts,
   // toolbar, rendering) is section-agnostic.
@@ -569,12 +619,34 @@ export function HealthView() {
         render: (t) => <TimezoneRow tz={t} />,
         rowKey: (t) => t.tzName,
       }),
+      awards: defineSection<HealthAchievement>({
+        items: awards,
+        pending: awardsPending,
+        error: awardsError,
+        count: summary?.achievementCount,
+        windowAt: (a) => (a.earnedAt != null ? localDayStart(a.earnedAt) : null),
+        sortFields: [
+          { value: "date", label: "Date" },
+          { value: "name", label: "Name" },
+        ],
+        sortKey: (a, by) => (by === "name" ? a.name : a.earnedAt),
+        sort: awardSort,
+        setSort: setAwardSort,
+        timeDescription: "When the award was earned",
+        emptyIcon: Trophy,
+        emptyAll: "No awards indexed — re-import this backup to index it.",
+        emptyFiltered: "No awards match these filters.",
+        clockSensitive: false,
+        render: (a) => <AchievementRow award={a} />,
+        rowKey: (a) => a.id,
+      }),
     }),
     [
       workouts, isPending, error, effActivity, sort, setSort,
       days, daysPending, daysError, daySort, setDaySort,
       sleep, sleepPending, sleepError, sleepSort, setSleepSort,
       timezones, tzPending, tzError, tzSort, setTzSort,
+      awards, awardsPending, awardsError, awardSort, setAwardSort,
       summary, hasAny,
     ],
   );

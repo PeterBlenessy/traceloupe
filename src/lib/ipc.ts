@@ -198,11 +198,23 @@ export interface HealthSummary {
   firstAt: number | null;
   lastAt: number | null;
   workoutCount: number;
-  /** Days with activity aggregates / sleep sessions / recorded timezones
-   *  (section counts). */
+  /** Days with activity aggregates / sleep sessions / recorded timezones /
+   *  earned achievements (section counts). */
   dayCount: number;
   sleepCount: number;
   timezoneCount: number;
+  achievementCount: number;
+}
+
+/** One earned Apple Fitness achievement. */
+export interface HealthAchievement {
+  id: number;
+  /** Template id, e.g. "MoveGoal200Percent" (humanized in the UI). */
+  name: string;
+  /** Midnight UTC of the earned day, unix seconds. */
+  earnedAt: number | null;
+  value: number | null;
+  unit: string | null;
 }
 
 /** One timezone Health samples were recorded in — a travel-timeline entry. */
@@ -496,6 +508,8 @@ export interface TraceLoupeClient {
   listSleep(): Promise<SleepSession[]>;
   /** Timezones Health data was recorded in, most samples first. */
   listHealthTimezones(): Promise<HealthTimezone[]>;
+  /** Earned Apple Fitness achievements, most recent first. */
+  listHealthAchievements(): Promise<HealthAchievement[]>;
   healthSummary(): Promise<HealthSummary>;
   listInteractions(): Promise<Interaction[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
@@ -738,6 +752,8 @@ const tauriClient: TraceLoupeClient = {
   healthDaily: () => invoke<HealthDay[]>("health_daily"),
   listSleep: () => invoke<SleepSession[]>("list_sleep"),
   listHealthTimezones: () => invoke<HealthTimezone[]>("list_health_timezones"),
+  listHealthAchievements: () =>
+    invoke<HealthAchievement[]>("list_health_achievements"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
   listInteractions: () => invoke<Interaction[]>("list_interactions"),
   messageKinds: (threadId = null, service = null) =>
@@ -2070,6 +2086,14 @@ export const mockClient: TraceLoupeClient = {
           { id: 3, startAt: 1717737600, endAt: 1717763400, stage: "In Bed" },
         ]
       : [],
+  listHealthAchievements: async () =>
+    mockActive
+      ? [
+          { id: 1, name: "NewMoveRecord", earnedAt: 1717804800, value: 1284, unit: "kcal" },
+          { id: 2, name: "MoveGoal200Percent", earnedAt: 1717718400, value: 400, unit: "kcal" },
+          { id: 3, name: "PerfectWeekMove", earnedAt: 1716854400, value: 7, unit: "count" },
+        ]
+      : [],
   listHealthTimezones: async () =>
     mockActive
       ? [
@@ -2106,6 +2130,7 @@ export const mockClient: TraceLoupeClient = {
           dayCount: 2,
           sleepCount: 3,
           timezoneCount: 3,
+          achievementCount: 3,
         }
       : {
           sampleCount: 0,
@@ -2115,6 +2140,7 @@ export const mockClient: TraceLoupeClient = {
           dayCount: 0,
           sleepCount: 0,
           timezoneCount: 0,
+          achievementCount: 0,
         },
   listInteractions: async () =>
     mockActive
