@@ -1,7 +1,7 @@
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Activity, ChevronDown, Footprints, Globe, HeartPulse, MapPin, Moon, Trophy } from "lucide-react";
+import { Activity, ChevronDown, Droplet, Footprints, Globe, HeartPulse, MapPin, Moon, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 import { modelName } from "@/lib/device-names";
 import {
   client,
+  type CycleEntry,
   type HealthAchievement,
   type HealthDay,
   type HealthTimezone,
@@ -26,13 +27,20 @@ import {
 } from "@/lib/ipc";
 
 /** The Health data sections, selectable via the Section filter. */
-type HealthSection = "workouts" | "daily" | "sleep" | "timezones" | "awards";
+type HealthSection =
+  | "workouts"
+  | "daily"
+  | "sleep"
+  | "timezones"
+  | "awards"
+  | "cycle";
 const SECTIONS: { value: HealthSection; label: string }[] = [
   { value: "workouts", label: "Workouts" },
   { value: "daily", label: "Daily activity" },
   { value: "sleep", label: "Sleep" },
   { value: "timezones", label: "Timezones" },
   { value: "awards", label: "Awards" },
+  { value: "cycle", label: "Cycle Tracking" },
 ];
 
 /** Metres → a compact "5.2 km" / "820 m". */
@@ -324,6 +332,30 @@ function AchievementRow({ award }: { award: HealthAchievement }) {
   );
 }
 
+function CycleRow({ entry }: { entry: CycleEntry }) {
+  return (
+    <Item>
+      <ItemMedia>
+        <Droplet className="size-4 text-muted-foreground" />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">
+          {entry.category}
+          {entry.detail && (
+            <span className="text-muted-foreground"> · {entry.detail}</span>
+          )}
+        </ItemTitle>
+      </ItemContent>
+      {entry.loggedAt != null && (
+        // Local date to match the time-filter windowing (raw instant).
+        <div className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+          {formatDate(entry.loggedAt)}
+        </div>
+      )}
+    </Item>
+  );
+}
+
 function TimezoneRow({ tz }: { tz: HealthTimezone }) {
   const devices = tz.devices.map((d) => modelName(d) ?? d).join(", ");
   return (
@@ -458,6 +490,15 @@ export function HealthView() {
     queryFn: () => client.listHealthAchievements(),
     enabled: active === true && section === "awards",
   });
+  const {
+    data: cycle,
+    isPending: cyclePending,
+    error: cycleError,
+  } = useQuery({
+    queryKey: ["healthCycle"],
+    queryFn: () => client.listCycle(),
+    enabled: active === true && section === "cycle",
+  });
 
   const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
   const [sort, setSort] = usePersistedState<SortState>("health:sort", {
@@ -477,6 +518,10 @@ export function HealthView() {
     desc: true,
   });
   const [awardSort, setAwardSort] = usePersistedState<SortState>("health:awardSort", {
+    by: "date",
+    desc: true,
+  });
+  const [cycleSort, setCycleSort] = usePersistedState<SortState>("health:cycleSort", {
     by: "date",
     desc: true,
   });
@@ -504,7 +549,8 @@ export function HealthView() {
   const hasSleep = (summary?.sleepCount ?? 0) > 0;
   const hasTz = (summary?.timezoneCount ?? 0) > 0;
   const hasAwards = (summary?.achievementCount ?? 0) > 0;
-  const hasAny = hasWorkouts || hasDays || hasSleep || hasTz || hasAwards;
+  const hasCycle = (summary?.cycleCount ?? 0) > 0;
+  const hasAny = hasWorkouts || hasDays || hasSleep || hasTz || hasAwards || hasCycle;
 
   // One descriptor per section; everything below (windowing, sorting, counts,
   // toolbar, rendering) is section-agnostic.
@@ -640,6 +686,29 @@ export function HealthView() {
         render: (a) => <AchievementRow award={a} />,
         rowKey: (a) => a.id,
       }),
+      cycle: defineSection<CycleEntry>({
+        items: cycle,
+        pending: cyclePending,
+        error: cycleError,
+        count: summary?.cycleCount,
+        // A real logged instant (not a midnight-UTC aggregated day), so window
+        // on the raw timestamp like workouts/sleep — no localDayStart shift.
+        windowAt: (e) => e.loggedAt,
+        sortFields: [
+          { value: "date", label: "Date" },
+          { value: "name", label: "Type" },
+        ],
+        sortKey: (e, by) => (by === "name" ? e.category : e.loggedAt),
+        sort: cycleSort,
+        setSort: setCycleSort,
+        timeDescription: "When the entry was logged",
+        emptyIcon: Droplet,
+        emptyAll: "No cycle-tracking data indexed — re-import this backup to index it.",
+        emptyFiltered: "No cycle-tracking entries match these filters.",
+        clockSensitive: false,
+        render: (e) => <CycleRow entry={e} />,
+        rowKey: (e) => e.id,
+      }),
     }),
     [
       workouts, isPending, error, effActivity, sort, setSort,
@@ -647,6 +716,7 @@ export function HealthView() {
       sleep, sleepPending, sleepError, sleepSort, setSleepSort,
       timezones, tzPending, tzError, tzSort, setTzSort,
       awards, awardsPending, awardsError, awardSort, setAwardSort,
+      cycle, cyclePending, cycleError, cycleSort, setCycleSort,
       summary, hasAny,
     ],
   );

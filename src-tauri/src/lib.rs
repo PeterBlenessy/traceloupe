@@ -1409,6 +1409,17 @@ async fn health_daily(active: State<'_, ActiveBackup>) -> Result<Vec<query::Heal
 }
 
 #[tauri::command]
+async fn list_cycle(active: State<'_, ActiveBackup>) -> Result<Vec<query::CycleEntry>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_cycle(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn list_health_achievements(
     active: State<'_, ActiveBackup>,
 ) -> Result<Vec<query::HealthAchievement>, String> {
@@ -2850,6 +2861,7 @@ pub fn run() {
             list_sleep,
             list_health_timezones,
             list_health_achievements,
+            list_cycle,
             health_summary,
             list_interactions,
             message_kinds,

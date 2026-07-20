@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 36;
+const SCHEMA_VERSION: i64 = 37;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -607,6 +607,16 @@ impl CacheDb {
                 );
                 CREATE INDEX IF NOT EXISTS idx_achievements_on
                     ON health_achievements(earned_on DESC);",
+            )?;
+            // v37: Cycle Tracking — menstrual flow + symptom category samples.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS cycle_tracking (
+                    id       INTEGER PRIMARY KEY,
+                    category TEXT NOT NULL,   -- 'Menstrual flow', 'Cramps', …
+                    detail   TEXT,            -- decoded value (e.g. 'Medium'), or NULL
+                    logged_at INTEGER         -- unix seconds
+                );
+                CREATE INDEX IF NOT EXISTS idx_cycle_at ON cycle_tracking(logged_at DESC);",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }

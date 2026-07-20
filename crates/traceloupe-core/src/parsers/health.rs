@@ -135,6 +135,7 @@ pub fn parse_health(
     }
     if has("category_samples")? {
         parse_sleep(&src, cache, replace)?;
+        parse_cycle(&src, cache, replace)?;
     }
     if has("activity_caches")? {
         parse_rings(&src, cache, replace)?;
@@ -647,6 +648,100 @@ fn parse_sleep(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
     Ok(())
 }
 
+/// Cycle Tracking category `data_type` → display name. Reproductive-health +
+/// symptom codes, identified authoritatively from the HealthKit
+/// `HKCategoryTypeIdentifier` integer map (christophhagen/HealthDB), NOT
+/// guessed. Only codes with a confirmed identity are surfaced.
+fn cycle_category(data_type: i64) -> Option<&'static str> {
+    Some(match data_type {
+        91 => "Cervical mucus quality",
+        92 => "Ovulation test result",
+        95 => "Menstrual flow",
+        96 => "Intermenstrual bleeding",
+        97 => "Sexual activity",
+        157 => "Abdominal cramps",
+        158 => "Breast pain",
+        159 => "Bloating",
+        160 => "Headache",
+        161 => "Acne",
+        162 => "Lower back pain",
+        163 => "Pelvic pain",
+        164 => "Mood changes",
+        165 => "Constipation",
+        166 => "Diarrhea",
+        167 => "Fatigue",
+        168 => "Nausea",
+        169 => "Sleep changes",
+        170 => "Appetite changes",
+        171 => "Hot flashes",
+        _ => return None,
+    })
+}
+
+/// Decode a cycle category's value to a label, per the category's own
+/// `HKCategoryValue*` enum (all verified against Apple's documented raw
+/// values, not guessed). Categories whose value carries no information here
+/// — symptoms (value 0 = present, unspecified severity), sexual activity
+/// (value 0; the detail lives in metadata we don't parse) and intermenstrual
+/// bleeding — return None, so the row shows the category name alone.
+fn category_detail(data_type: i64, value: i64) -> Option<&'static str> {
+    Some(match (data_type, value) {
+        // HKCategoryValueMenstrualFlow: 0 NotApplicable, 1 Unspecified,
+        // 2 Light, 3 Medium, 4 Heavy, 5 None.
+        (95, 2) => "Light",
+        (95, 3) => "Medium",
+        (95, 4) => "Heavy",
+        (95, 5) => "No flow",
+        // HKCategoryValueCervicalMucusQuality: 1 Dry … 5 EggWhite.
+        (91, 1) => "Dry",
+        (91, 2) => "Sticky",
+        (91, 3) => "Creamy",
+        (91, 4) => "Watery",
+        (91, 5) => "Egg white",
+        // HKCategoryValueOvulationTestResult: 1 Negative, 2 LH surge
+        // (a.k.a. Positive), 3 Indeterminate, 4 Estrogen surge.
+        (92, 1) => "Negative",
+        (92, 2) => "LH surge",
+        (92, 3) => "Indeterminate",
+        (92, 4) => "Estrogen surge",
+        _ => return None,
+    })
+}
+
+/// Cycle Tracking: reproductive-health + symptom category samples, one cache
+/// row per logged entry with its (decoded, where verified) value.
+fn parse_cycle(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let mut stmt = src.prepare(
+        "SELECT s.data_type, c.value, s.start_date
+         FROM samples s
+         JOIN category_samples c ON c.data_id = s.data_id
+         WHERE s.data_type IN
+             (91,92,95,96,97,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171)
+         ORDER BY s.start_date",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM cycle_tracking", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let Some(category) = cycle_category(r.get(0)?) else {
+            continue;
+        };
+        let data_type: i64 = r.get(0)?;
+        let value: i64 = r.get::<_, Option<i64>>(1)?.unwrap_or(0);
+        let detail = category_detail(data_type, value);
+        tx.execute(
+            "INSERT INTO cycle_tracking (category, detail, logged_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![category, detail, to_unix(r.get::<_, Option<f64>>(2)?)],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Summary of the raw sample volume, for the Health view header — stored in
 /// `meta` so the UI can show scale without materializing 344k rows.
 fn summarize_samples(src: &Connection, cache: &CacheDb) -> Result<()> {
@@ -963,6 +1058,54 @@ mod tests {
             .unwrap();
         assert!(max_lat < 57.0, "deleted association leaked in: {max_lat}");
         assert!((last_lat - (56.0 + 2499.0 * 1e-5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_cycle_tracking_with_verified_flow_labels() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE category_samples (data_id INTEGER, value INTEGER);
+             -- 721692800 Mac = 1_700_000_000 unix.
+             -- Menstrual flow value 3 → 'Medium'; a symptom (cramps, value 0) → no detail;
+             -- ovulation value 2 → 'LH surge'; cervical mucus value 5 → 'Egg white'.
+             INSERT INTO samples VALUES (1, 721692800.0, 721692800.0, 95);
+             INSERT INTO samples VALUES (2, 721600000.0, 721600000.0, 157);
+             INSERT INTO samples VALUES (4, 721692810.0, 721692810.0, 92);
+             INSERT INTO samples VALUES (5, 721692820.0, 721692820.0, 91);
+             INSERT INTO category_samples VALUES (1, 3);
+             INSERT INTO category_samples VALUES (2, 0);
+             INSERT INTO category_samples VALUES (4, 2);
+             INSERT INTO category_samples VALUES (5, 5);
+             -- A non-cycle category (sleep 63) must be ignored here.
+             INSERT INTO samples VALUES (3, 721692800.0, 721721600.0, 63);
+             INSERT INTO category_samples VALUES (3, 0);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let rows: Vec<(String, Option<String>)> = c
+            .prepare("SELECT category, detail FROM cycle_tracking ORDER BY logged_at DESC")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                ("Cervical mucus quality".to_string(), Some("Egg white".to_string())),
+                ("Ovulation test result".to_string(), Some("LH surge".to_string())),
+                ("Menstrual flow".to_string(), Some("Medium".to_string())),
+                ("Abdominal cramps".to_string(), None),
+            ]
+        );
     }
 
     #[test]
