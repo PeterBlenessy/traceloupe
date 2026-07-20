@@ -7,7 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface BackupInfo {
@@ -707,6 +707,9 @@ export interface TraceLoupeClient {
    *  first-launch consent flow). Returns null if consent isn't granted or no
    *  backup is open. */
   runPassiveCheckNow(): Promise<ScanSummary | null>;
+  /** Open a save dialog and write a CSV report of the run. Returns the path
+   *  written, or null if the user cancelled. */
+  exportScanReport(runId: number): Promise<string | null>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -1039,6 +1042,16 @@ const tauriClient: TraceLoupeClient = {
     invoke("set_detection_settings", { settings }),
   runPassiveCheckNow: () =>
     invoke<ScanSummary | null>("run_passive_check_now"),
+  exportScanReport: async (runId) => {
+    const path = await save({
+      title: "Save Security Check report",
+      defaultPath: "security-check-report.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (typeof path !== "string") return null;
+    await invoke("export_scan_report", { runId, path });
+    return path;
+  },
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
@@ -2593,6 +2606,7 @@ export const mockClient: TraceLoupeClient = {
       return null;
     return { runId: 1, findings: 1, cancelled: false };
   },
+  exportScanReport: async () => "/tmp/security-check-report.csv",
 
   listMedia: async () => (mockActive ? mockMedia : []),
   mediaSources: async () => {
