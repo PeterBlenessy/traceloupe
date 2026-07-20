@@ -4,12 +4,15 @@
 //! shell calls over IPC: backup discovery, import orchestration, and cached
 //! artifact queries. See architecture.md §5.
 
+pub mod analyzer;
 pub mod cache;
 pub mod crypto;
+pub mod detection_settings;
 pub mod discovery;
 pub mod engine;
 mod error;
 pub mod import;
+pub mod indicators;
 pub mod install;
 pub mod manifest;
 pub mod normalize;

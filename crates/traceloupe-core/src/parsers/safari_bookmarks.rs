@@ -322,7 +322,11 @@ pub fn parse_safari_tabs(
 /// the iCloud-synced `SafariTabs.db` (per-tab last-viewed time, private-browsing
 /// flag), so when it's present it **replaces** any tabs already parsed. Runs
 /// after `parse_safari_tabs` in the import; best-effort on an unknown schema.
-pub fn parse_browser_tabs(db_path: &Path, cache: &CacheDb, report: &mut ImportReport) -> Result<()> {
+pub fn parse_browser_tabs(
+    db_path: &Path,
+    cache: &CacheDb,
+    report: &mut ImportReport,
+) -> Result<()> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if !table_exists(&src, "tabs")? {
         // Not a BrowserState schema — leave whatever SafariTabs.db provided.
@@ -475,11 +479,18 @@ mod tests {
 
         let mut report = ImportReport::default();
         parse_browser_tabs(&db, &cache, &mut report).unwrap();
-        assert_eq!(report.safari_bookmarks, 2, "two valid tabs; the url-less row skipped");
+        assert_eq!(
+            report.safari_bookmarks, 2,
+            "two valid tabs; the url-less row skipped"
+        );
 
         let c = cache.conn();
         let n: i64 = c
-            .query_row("SELECT COUNT(*) FROM safari_bookmarks WHERE kind='tab'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM safari_bookmarks WHERE kind='tab'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(n, 2, "the stale iCloud tab was replaced");
 
@@ -491,7 +502,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
-        assert_eq!(url, "https://example.com", "user_visible_url preferred over url");
+        assert_eq!(
+            url, "https://example.com",
+            "user_visible_url preferred over url"
+        );
         assert_eq!(viewed, Some(1_700_000_000));
         assert_eq!(private, 0);
 

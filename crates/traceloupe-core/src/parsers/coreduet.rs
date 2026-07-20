@@ -210,7 +210,9 @@ mod tests {
             .unwrap();
         assert_eq!((sms_in, sms_out), (2, 1));
         let n_channels: i64 = c
-            .query_row("SELECT COUNT(*) FROM interaction_channels", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM interaction_channels", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(n_channels, 2, "empty/NULL bundle ids excluded");
     }
