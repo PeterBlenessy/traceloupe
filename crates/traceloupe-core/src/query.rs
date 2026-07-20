@@ -1376,6 +1376,10 @@ pub struct MediaItem {
     pub exif: Option<String>,
     /// In the device's Hidden album (surfaced as a badge, not excluded).
     pub hidden: bool,
+    /// In Recently Deleted (surfaced as a badge, not excluded), with the deletion
+    /// timestamp when known.
+    pub trashed: bool,
+    pub trashed_at: Option<i64>,
     /// Media subtype ("screenshot" | "panorama"), or None.
     pub subtype: Option<String>,
 }
@@ -1387,7 +1391,8 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let mut stmt = conn.prepare(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
-                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype
+                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
+                trashed, trashed_at
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -1422,6 +1427,8 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         exif: r.get(18)?,
         hidden: r.get::<_, i64>(19)? != 0,
         subtype: r.get(20)?,
+        trashed: r.get::<_, i64>(21)? != 0,
+        trashed_at: r.get(22)?,
     })
 }
 
@@ -1508,7 +1515,8 @@ pub fn get_media_window(
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
-                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype
+                width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
+                trashed, trashed_at
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)

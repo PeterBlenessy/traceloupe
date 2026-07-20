@@ -54,6 +54,9 @@ Requires a re-import to populate for existing caches.
   surfaced as a distinct message kind instead of empty rows.
 - **Photos — Live Photo & burst badges.** Distinguishes Live Photos
   (`ZPLAYBACKSTYLE`) and burst stacks (`ZAVALANCHEUUID`).
+- **Photos — Recently Deleted.** Trashed camera-roll assets (`ZTRASHEDSTATE`)
+  are now surfaced with a red trash badge and a lightbox indicator instead of
+  being dropped at ingest — forensic, matching the Hidden-album treatment.
 - **Notes — image filter.** Filter for notes that carry embedded images.
 - **Device — toolbar.** Close the backup, re-import, or open another backup
   without leaving the view.

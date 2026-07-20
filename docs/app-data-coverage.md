@@ -172,7 +172,7 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Albums — smart/system | ⬜ 235 | ⬜ | excluded (`ZKIND=2` only) |
 | Favorite | ✅ 17k | ✅ | heart badge + search |
 | Hidden | ✅ 46k | ✅ | `ZHIDDEN` → an eye-off badge on the grid tile + lightbox (shown, not excluded — forensic) |
-| Recently-deleted / trashed | ✅ 48 | ◑ | excluded from grid; not shown as a category |
+| Recently-deleted / trashed | ✅ 48 | ✅ (0.18.0) | `ZTRASHEDSTATE`/`ZTRASHEDDATE` → red trash badge on the grid tile + lightbox indicator (shown, not excluded — forensic, like Hidden). Not yet a standalone filter category |
 | Faces / people (named) | ✅ 69 named / 72k faces | ✅ | badge + lightbox + search (named only) |
 | Live Photo / burst | 374 / 53 | ✅ (0.18.0) | Live Photo = `ZPLAYBACKSTYLE=3`, burst = shared `ZAVALANCHEUUID` → grid badges (circle-dot / stacked). Full burst-group *stacking* still future work |
 | Subtype — screenshot (~65k), panorama (45) | ✅ | ✅ | screenshot = `ZISDETECTEDSCREENSHOT` (`ZKINDSUBTYPE=10` corroborates); panorama = `ZKINDSUBTYPE=1` (**fixed 0.18.0** — was wrongly `=2`, which is a Live Photo's still frame, so 381 Live Photos were mislabeled "panorama"). HDR/portrait/slo-mo codes left unclassified (ambiguous) |
@@ -230,7 +230,7 @@ backup but has no parser. Ranked by value × feasibility.
 
 | Domain | Present here? | Rough scale | Value | Notes |
 |--------|:---:|-------|:---:|-------|
-| **Health** | ✅ **rings + mobility + timezones (0.17.0)** | 344,063 quantity samples, 13 workouts, 24k GPS points, 1,137 ring days, 10 timezones | ★★★ | **Health** view sections: workout log with inline GPS-route previews, daily-activity table (steps/distance/flights/energy + HR + activity rings vs goals + walking/audio metrics), sleep sessions, and a per-timezone travel timeline from `data_provenances.tz_name`. Remaining: per-sample browsing, achievements, stand hours, symptoms categories |
+| **Health** | ✅ **rings + mobility + timezones (0.17.0)** | 344,063 quantity samples, 13 workouts, 24k GPS points, 1,137 ring days, 10 timezones | ★★★ | **Health** view sections: workout log with inline GPS-route previews, daily-activity table (steps/distance/flights/energy + HR + activity rings vs goals + walking/audio metrics), sleep sessions, and a per-timezone travel timeline from `data_provenances.tz_name`. Remaining: per-sample browsing (raw quantity samples). Achievements (Awards) and symptoms (Cycle Tracking) now shipped; stand-hours (`appleStandHour`, cat 70) is absent from this backup |
 | **CoreDuet interactions** | ✅ **surfaced (0.10.0-dev; channels 0.18.0-dev)** | 15,055 interactions, 66 contacts, 12 apps | ★★★ | **Interactions** view: pre-aggregated `ZCONTACTS` per-person graph (name/handle · incoming/outgoing counts · first–last span), most-contacted first, plus a per-app **Channels** strip from the raw `ZINTERACTIONS` table (`ZBUNDLEID`/`ZDIRECTION`) — which apps the interactions flowed through, with in/out totals |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
