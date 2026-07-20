@@ -28,6 +28,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.18.0` | **Data-coverage pass, recovery-themed** — Recently-Deleted photos (`ZTRASHEDSTATE`) and messages (`chat_recoverable_message_join`), per-app Interaction channels, Messages sticker/effect/app-bubble classification, Health Cycle-Tracking + Awards, Contacts social profiles, and App Store metadata. |
 | `0.19.0` | **Data-coverage close-out** — Safari local open tabs (`BrowserState.db`, with a private-browsing badge), Calls number-country flags, and Photos added-to-library date. Field-level coverage is now closed; remaining gaps are marked won't-implement. |
 | `0.20.0` | **Security Check (M1)** — a spyware/stalkerware indicator scan (MVT-style) over the imported backup: STIX2 + Echap indicator feeds bundled and refreshable, a native Rust scan engine across messages/Safari/apps/contacts/notes/calendar/interactions + a Manifest file sweep, Explicit Scans and a consent-gated Passive Check at import, a Security view with severity-graded findings and CSV export. |
+| `0.21.0` | **Security Check M2 — process-name detection** — the first Tier-B artifact surface: DataUsage.sqlite and OSAnalytics ADDaily process activity scanned against process-name indicators (the class that first exposed Pegasus), extracted on demand during an Explicit Scan. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -35,6 +36,28 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.21.0] — 2026-07-20
+
+**Security Check M2 — process-name detection (first Tier-B surface).** Adds the
+artifact class that originally exposed Pegasus: process activity, matched
+against process-name indicators.
+
+- **New parsers** (`analyzer::parse_datausage`, `parse_addaily`): DataUsage.sqlite
+  `ZPROCESS` (process name, bundle name, Mac-absolute timestamp → Unix) and the
+  OSAnalytics `com.apple.osanalytics.addaily.plist` `netUsageBaseline` dictionary
+  (keyed by process name).
+- **New `process_names` scan module:** matches each observed process name (and
+  its basename) against process-name indicators, and DataUsage bundle names
+  against bundle-id indicators, graded Critical.
+- **On-demand extraction:** an Explicit Scan locates and extracts both files via
+  the Manifest index (WirelessDomain / HomeDomain), best-effort — a missing or
+  unreadable file just yields fewer processes, never fails the scan. The Passive
+  Check stays apps-only.
+- Validated against the real dev backup: 1,825 processes extracted, no mercenary
+  process-name matches; the bundle-name cross-check independently re-surfaced the
+  known Kaspersky Safe Kids watchware (Info) found in M1. See
+  `docs/security-check-validation.md`.
 
 ## [0.20.0] — 2026-07-20
 
