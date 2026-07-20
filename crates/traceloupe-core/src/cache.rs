@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 35;
+const SCHEMA_VERSION: i64 = 36;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -595,6 +595,18 @@ impl CacheDb {
                     last_at  INTEGER,
                     PRIMARY KEY (tz_name, device)
                 );",
+            )?;
+            // v36: Apple Fitness achievements (earned awards).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS health_achievements (
+                    id        INTEGER PRIMARY KEY,
+                    name      TEXT NOT NULL,   -- template id, e.g. 'MoveGoal200Percent'
+                    earned_on TEXT,            -- 'YYYY-MM-DD'
+                    value     REAL,            -- e.g. the kcal that earned it
+                    unit      TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_achievements_on
+                    ON health_achievements(earned_on DESC);",
             )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }

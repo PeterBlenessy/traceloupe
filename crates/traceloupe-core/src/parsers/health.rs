@@ -142,6 +142,43 @@ pub fn parse_health(
     if has("objects")? && has("data_provenances")? {
         parse_timezones(&src, cache, replace)?;
     }
+    if has("ACHAchievementsPlugin_earned_instances")? {
+        parse_achievements(&src, cache, replace)?;
+    }
+    Ok(())
+}
+
+/// Apple Fitness achievements: one row per earned award, with the template id
+/// (a readable CamelCase name like `MoveGoal200Percent`), the day it was
+/// earned ('YYYY-MM-DD' TEXT in the store) and the value that earned it.
+fn parse_achievements(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let mut stmt = src.prepare(
+        "SELECT template_unique_name, substr(earned_date, 1, 10),
+                value_in_canonical_unit, value_canonical_unit
+         FROM ACHAchievementsPlugin_earned_instances
+         WHERE template_unique_name IS NOT NULL
+         ORDER BY earned_date",
+    )?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM health_achievements", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        tx.execute(
+            "INSERT INTO health_achievements (name, earned_on, value, unit)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, Option<f64>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -926,6 +963,41 @@ mod tests {
             .unwrap();
         assert!(max_lat < 57.0, "deleted association leaked in: {max_lat}");
         assert!((last_lat - (56.0 + 2499.0 * 1e-5)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_achievements() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL, end_date REAL, data_type INTEGER);
+             CREATE TABLE ACHAchievementsPlugin_earned_instances (
+                 ROWID INTEGER PRIMARY KEY, template_unique_name TEXT, created_date REAL,
+                 earned_date TEXT, value_in_canonical_unit REAL, value_canonical_unit TEXT);
+             INSERT INTO ACHAchievementsPlugin_earned_instances
+                 VALUES (1, 'NewMoveRecord', 0, '2023-11-14', 1283.9, 'kcal'),
+                        (2, NULL, 0, '2023-11-15', 1.0, 'count');",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_health(&db, &cache, &mut report, false).unwrap();
+
+        let c = cache.conn();
+        let (n, name, on, value): (i64, String, String, f64) = c
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM health_achievements), name, earned_on, value
+                 FROM health_achievements",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "nameless rows are skipped");
+        assert_eq!(name, "NewMoveRecord");
+        assert_eq!(on, "2023-11-14");
+        assert_eq!(value, 1283.9);
     }
 
     #[test]
