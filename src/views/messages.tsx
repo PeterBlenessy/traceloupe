@@ -18,6 +18,7 @@ import {
   MessagesSquare,
   Paperclip,
   Sparkles,
+  Trash2,
   Users,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -99,9 +100,10 @@ const KIND_LABELS: Record<string, string> = {
   link: "Links",
   shared: "Shared",
   sticker: "Stickers",
+  app: "App messages",
   system: "System",
 };
-const KIND_ORDER = ["text", "media", "link", "shared", "sticker", "system"];
+const KIND_ORDER = ["text", "media", "link", "shared", "sticker", "app", "system"];
 
 /** Clickable content-kind badges (same pill component as the Apps "Native"/"Coming
  *  soon" tags). Shows only the kinds present in `available`, and hides itself unless
@@ -1414,9 +1416,30 @@ function MessageBubble({
                 sentAt={message.sentAt}
                 from={message.isFromMe ? "You" : (senderLabel ?? message.sender ?? null)}
               />
+              {message.effect && (
+                <span className="mt-0.5 flex items-center gap-1 text-[10px] opacity-60">
+                  <Sparkles className="size-2.5" />
+                  Sent with {message.effect}
+                </span>
+              )}
               {message.edited && (
                 <span className="mt-0.5 block text-[10px] italic opacity-60">
                   Edited
+                </span>
+              )}
+              {message.deleted && (
+                <span
+                  className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-red-500"
+                  title={
+                    message.deletedAt
+                      ? `Deleted ${formatMessageTime(message.deletedAt)}`
+                      : "Recovered from Recently Deleted"
+                  }
+                >
+                  <Trash2 className="size-2.5" />
+                  {message.deletedAt
+                    ? `Deleted ${formatMessageTime(message.deletedAt)}`
+                    : "Deleted"}
                 </span>
               )}
             </BubbleContent>

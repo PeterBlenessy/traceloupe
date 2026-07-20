@@ -7,8 +7,27 @@ database actually contains and whether TraceLoupe surfaces it. Tick a row (⬜ �
 Companion to [`app-support.md`](app-support.md) (native vs iLEAPP per app); this
 file tracks *field-level* coverage within each source.
 
-**Legend:** ✅ surfaced · ◑ partial · ⬜ present in the backup, not surfaced · —
-not present / N/A in this backup.
+**Legend:** ✅ surfaced · ◑ partial · ⬜ present in the backup, not surfaced ·
+⊘ **won't implement** (deliberate — see below) · — not present / N/A in this backup.
+
+> **📕 Field-level coverage is closed (v0.19.0).** Safari **local open tabs**
+> (`BrowserState.db`) was the last field-level item built. **Every remaining
+> `⬜` and `◑` row below is now `⊘` won't-implement** — kept in the table for
+> the record, not as a backlog. The reasons, by category:
+> - **Low signal in real backups** — e.g. Calls read/country-availability, Notes
+>   account, Photos orientation/description, Messages filtered (11 rows), receiving
+>   SIM: the field is nearly always empty or single-valued on a real device.
+> - **Not authoritatively decodable** — e.g. Calls `ZDISCONNECTED_CAUSE`
+>   (declined/blocked/junk): even iLEAPP only maps 2 of ~10 codes; we won't guess.
+> - **Redundant** — e.g. Photos `ZMODIFICATIONDATE` (≈ the edited/added signals
+>   already shown), Contacts creation/modification dates.
+> - **Disproportionate effort** — e.g. Notes hashtags/tables/checklist-items and
+>   Safari redirect-graph need protobuf/attribute-run or graph reconstruction.
+>
+> Two things are **not** covered by this closure and remain live elsewhere:
+> **new stores/parsers** (e.g. iCloud-offloaded media — its own branch), and
+> **per-app third-party chat** enhancements (the app-chat table below), which are
+> gated on a backup that actually has the app installed.
 
 > **Verified against a real backup (2026-07-15).** The counts below come from
 > auditing the decrypted mirror of one real device: **«redacted»** messages ·
@@ -39,16 +58,17 @@ iMessage is unsurfaced.
 | Receiving line (`destination_caller_id`) | ✅ 143k | ⬜ | Which SIM/account received it — dropped |
 | Service (iMessage/SMS) | ✅ 140k / 3.4k | ✅ | Per-thread; service filter + brand icon |
 | Attachments (image/video/file) | ✅ «redacted» | ✅ | filename, mime, on-demand decrypt/serve |
-| Attachment size / dimensions / `transfer_state` / `is_sticker` | ✅ | ⬜ | Not surfaced — can't flag stickers (641) or not-downloaded attachments |
+| Attachment size / dimensions / `transfer_state` | ✅ | ⬜ | Not surfaced — can't flag not-downloaded attachments |
+| `is_sticker` | ✅ 641 | ✅ (0.18.0) | Sticker attachments → content kind `sticker`, lighting up the (previously dead) Stickers filter pill; «redacted» text-less sticker messages classify here |
 | Thread / conversation | ✅ | ✅ | |
 | Group name + participants | ✅ 84/85 | ✅ | `display_name`, `chat_handle_join` |
 | Group actions (rename/join/leave) | ✅ 544 | ✅ (0.15.0) | `item_type` 1–4 rendered as centered system rows ("‹actor› ‹action›") |
 | Tapbacks / reactions (+ custom emoji) | ✅ «redacted» / 478 | ✅ | `associated_message_type`/`_guid`/`_emoji` folded (add/remove, per reactor) into a per-message "❤️×2 👍" badge; the tapback rows are no longer shown as messages |
 | Replies (inline threads) | ✅ «redacted» | ✅ | `thread_originator_guid` resolved (via the GUID map) to a quoted preview above the reply bubble |
-| Expressive effects | ✅ 217 | ⬜ | `expressive_send_style_id` |
+| Expressive effects | ✅ 217 | ✅ (0.18.0) | `expressive_send_style_id` → "Sent with Confetti/Slam/…" label under the bubble (208 messages, «redacted» effect types) |
 | App/bubble messages (Apple Cash, polls…) | ✅ 589 | ⬜ | `balloon_bundle_id` / `payload_data` not decoded |
 | Filtered (unknown sender) / archived | ✅ 11 | ⬜ | `chat.is_filtered` — no Unknown/Filtered separation |
-| Recently-deleted / recoverable | ✅ (tables) | ⬜ | `chat_recoverable_message_join` not read |
+| Recently-deleted / recoverable | ✅ 54 | ✅ (0.18.0) | `chat_recoverable_message_join` (not in `chat_message_join`) UNIONed into the parse; deleted messages surface in-thread with a red "Deleted &lt;date&gt;" badge — 54 recovered here |
 | Content kind (media/text/link/sticker) | derived | ✅ | `messages.kind` → content-filter pills |
 
 ## Notes — `NoteStore.sqlite`
@@ -86,7 +106,7 @@ Parser extracts 6 of ~45 `ZCALLRECORD` columns.
 | Service (phone/FaceTime) | ✅ | ✅ | coarse (`ZSERVICE_PROVIDER`) |
 | FaceTime video vs audio | ✅ (315 audio / 710 video) | ✅ | `ZCALLTYPE` → "FaceTime Video/Audio" label; only video gets the video icon |
 | Location | ✅ «redacted» | ✅ | `ZLOCATION` → shown in the call row subtitle |
-| Country code | ✅ «redacted» | ⬜ | `ZISO_COUNTRY_CODE` |
+| Country code | ✅ «redacted» | ✅ (0.18.x) | `ZISO_COUNTRY_CODE` → a flag emoji on the call row («redacted» se, plus us/dk/it here) |
 | Read / new-missed flag | ✅ | ⬜ | `ZREAD` — no unseen-missed badge |
 | Withheld / unavailable number | ✅ 5 | ⬜ | `ZNUMBER_AVAILABILITY` |
 | Disconnect cause / filtered reason | ✅ | ⬜ | declined/blocked/junk not distinguished |
@@ -113,7 +133,7 @@ Parser extracts 6 of ~45 `ZCALLRECORD` columns.
 | Reading-list last-viewed | ✅ | ✅ (0.15.0) | "Read ‹date›" or an "Unread" badge on each reading-list row |
 | Reading-list unread/fetched flags | ✅ | ⬜ | No read/unread indicator |
 | Open tabs (title/url) | ✅ 41 | ✅ | + tab group name |
-| Tab windows / active-tab / private vs local | ✅ | ⬜ | `windows*` tables unread — flat list, no open-vs-recently-closed split |
+| Open tabs (local) + private-browsing | ✅ 201 tabs | ✅ (0.19.0) | `BrowserState.db` `tabs` replaces the thinner iCloud `SafariTabs.db` (44) as the Tabs source: per-tab last-viewed + a **Private** badge (`private_browsing`; 0 private here but wired). Window/tab-group grouping + recently-closed left as ⊘ |
 
 ## Contacts — `AddressBook.sqlitedb`
 
@@ -162,7 +182,7 @@ people/GPS/favorite/moment/albums onto `media_items`.
 |------|:---------:|:--------:|-------|
 | Photo / video file + thumbnail | ✅ 88k / 7.1k | ✅ | full-res + thumb, decrypt-on-demand |
 | Capture date | ✅ | ✅ | primary sort + time filter |
-| Added / modified dates | ✅ | ⬜ | `ZADDEDDATE`/`ZMODIFICATIONDATE` unread |
+| Added / modified dates | ✅ | ◑ | `ZADDEDDATE` → lightbox "Added &lt;date&gt;" when it differs from capture by >1 day (received/saved/imported media; «redacted» here). `ZMODIFICATIONDATE` still unread |
 | GPS lat/long | ✅ 24k | ✅ | lightbox Maps link (no map/grid pin) |
 | Reverse-geocoded place | ◑ | ◑ | moment/event title only; per-asset reverse-geocode blob ignored |
 | **EXIF** (camera, lens, ISO, exposure, focal length) | ✅ 22–25k | ✅ | `ZEXTENDEDATTRIBUTES` → camera + lens + "ISO · ƒ · shutter · mm" in the lightbox |
@@ -172,10 +192,10 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Albums — smart/system | ⬜ 235 | ⬜ | excluded (`ZKIND=2` only) |
 | Favorite | ✅ 17k | ✅ | heart badge + search |
 | Hidden | ✅ 46k | ✅ | `ZHIDDEN` → an eye-off badge on the grid tile + lightbox (shown, not excluded — forensic) |
-| Recently-deleted / trashed | ✅ 48 | ◑ | excluded from grid; not shown as a category |
+| Recently-deleted / trashed | ✅ 48 | ✅ (0.18.0) | `ZTRASHEDSTATE`/`ZTRASHEDDATE` → red trash badge on the grid tile + lightbox indicator (shown, not excluded — forensic, like Hidden). Not yet a standalone filter category |
 | Faces / people (named) | ✅ 69 named / 72k faces | ✅ | badge + lightbox + search (named only) |
-| Live Photo / burst | 381 / 53 | ⬜ | not paired/grouped |
-| Subtype — screenshot (~62k), panorama (384) | ✅ | ✅ | `ZISDETECTEDSCREENSHOT`/`ZKINDSUBTYPE` → grid badge (phone/frame icon). HDR/portrait/slo-mo codes left unclassified (ambiguous) |
+| Live Photo / burst | 374 / 53 | ✅ (0.18.0) | Live Photo = `ZPLAYBACKSTYLE=3`, burst = shared `ZAVALANCHEUUID` → grid badges (circle-dot / stacked). Full burst-group *stacking* still future work |
+| Subtype — screenshot (~65k), panorama (45) | ✅ | ✅ | screenshot = `ZISDETECTEDSCREENSHOT` (`ZKINDSUBTYPE=10` corroborates); panorama = `ZKINDSUBTYPE=1` (**fixed 0.18.0** — was wrongly `=2`, which is a Live Photo's still frame, so 381 Live Photos were mislabeled "panorama"). HDR/portrait/slo-mo codes left unclassified (ambiguous) |
 | Video duration | ✅ 7.1k | ✅ | `ZDURATION` → `media_items.duration_s` |
 | Description | ⬜ «redacted» | ⬜ | `ZASSETDESCRIPTION` unread |
 | Edited-vs-original / import session / cloud state | ⬜ 17k edited | ⬜ | provenance + edit state unread |
@@ -230,8 +250,8 @@ backup but has no parser. Ranked by value × feasibility.
 
 | Domain | Present here? | Rough scale | Value | Notes |
 |--------|:---:|-------|:---:|-------|
-| **Health** | ✅ **rings + mobility + timezones (0.17.0)** | «redacted» quantity samples, «redacted» workouts, «redacted» GPS points, «redacted» ring days, «redacted» timezones | ★★★ | **Health** view sections: workout log with inline GPS-route previews, daily-activity table (steps/distance/flights/energy + HR + activity rings vs goals + walking/audio metrics), sleep sessions, and a per-timezone travel timeline from `data_provenances.tz_name`. Remaining: per-sample browsing, achievements, stand hours, symptoms categories |
-| **CoreDuet interactions** | ✅ **surfaced (0.10.0-dev)** | «redacted» interactions, 66 contacts | ★★★ | New **Interactions** view: pre-aggregated `ZCONTACTS` per-person graph (name/handle · incoming/outgoing counts · first–last span), most-contacted first. Per-app breakdown not yet surfaced |
+| **Health** | ✅ **rings + mobility + timezones (0.17.0)** | «redacted» quantity samples, «redacted» workouts, «redacted» GPS points, «redacted» ring days, «redacted» timezones | ★★★ | **Health** view sections: workout log with inline GPS-route previews, daily-activity table (steps/distance/flights/energy + HR + activity rings vs goals + walking/audio metrics), sleep sessions, and a per-timezone travel timeline from `data_provenances.tz_name`. Remaining: per-sample browsing (raw quantity samples). Achievements (Awards) and symptoms (Cycle Tracking) now shipped; stand-hours (`appleStandHour`, cat 70) is absent from this backup |
+| **CoreDuet interactions** | ✅ **surfaced (0.10.0-dev; channels 0.18.0-dev)** | «redacted» interactions, 66 contacts, 12 apps | ★★★ | **Interactions** view: pre-aggregated `ZCONTACTS` per-person graph (name/handle · incoming/outgoing counts · first–last span), most-contacted first, plus a per-app **Channels** strip from the raw `ZINTERACTIONS` table (`ZBUNDLEID`/`ZDIRECTION`) — which apps the interactions flowed through, with in/out totals |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
 | **Reminders** | ✅ **surfaced (0.10.0-dev)** | «redacted» reminders | ★★ | New **Reminders** view: title/notes/due/completion/flag + list name (`ZREMCDREMINDER` joined to `ZREMCDBASELIST`; trashed excluded) |

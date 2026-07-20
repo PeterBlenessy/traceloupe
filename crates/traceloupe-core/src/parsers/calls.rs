@@ -80,10 +80,11 @@ pub fn parse_calls(
     let provider = col_or_null(&cols, "ZSERVICE_PROVIDER");
     let call_type = col_or_null(&cols, "ZCALLTYPE");
     let location = col_or_null(&cols, "ZLOCATION");
+    let country = col_or_null(&cols, "ZISO_COUNTRY_CODE");
 
     let sql = format!(
         "SELECT {address}, {date}, {duration}, {originated}, {answered}, {provider},
-                {call_type}, {location}
+                {call_type}, {location}, {country}
          FROM ZCALLRECORD n
          ORDER BY {date} DESC"
     );
@@ -137,11 +138,17 @@ pub fn parse_calls(
             .get::<_, Option<String>>(7)?
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        // ZISO_COUNTRY_CODE is the number's country (e.g. "se", "us"); normalize
+        // to lowercase alpha-2 so the UI can render a flag.
+        let country_code = r
+            .get::<_, Option<String>>(8)?
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| s.len() == 2 && s.chars().all(|c| c.is_ascii_alphabetic()));
 
         tx.execute(
             "INSERT INTO calls
-                (address, direction, answered, duration_s, occurred_at, service, call_type, location)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                (address, direction, answered, duration_s, occurred_at, service, call_type, location, country_code)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
                 address,
                 direction,
@@ -150,7 +157,8 @@ pub fn parse_calls(
                 occurred_at,
                 service,
                 call_type,
-                location
+                location,
+                country_code
             ],
         )?;
         inserted += 1;
@@ -171,10 +179,12 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE ZCALLRECORD (
                 Z_PK INTEGER PRIMARY KEY, ZADDRESS BLOB, ZDATE REAL, ZDURATION REAL,
-                ZORIGINATED INTEGER, ZANSWERED INTEGER, ZSERVICE_PROVIDER TEXT);
+                ZORIGINATED INTEGER, ZANSWERED INTEGER, ZSERVICE_PROVIDER TEXT,
+                ZISO_COUNTRY_CODE TEXT);
              -- Outgoing answered phone call, 65s, at Mac-time 721692800 (unix 1_700_000_000).
-             INSERT INTO ZCALLRECORD (Z_PK, ZADDRESS, ZDATE, ZDURATION, ZORIGINATED, ZANSWERED, ZSERVICE_PROVIDER)
-                VALUES (1, CAST('+15551234567' AS BLOB), 721692800.0, 65.4, 1, 1, 'com.apple.Telephony');
+             -- Country stored uppercase 'US' — normalized to lowercase 'us'.
+             INSERT INTO ZCALLRECORD (Z_PK, ZADDRESS, ZDATE, ZDURATION, ZORIGINATED, ZANSWERED, ZSERVICE_PROVIDER, ZISO_COUNTRY_CODE)
+                VALUES (1, CAST('+15551234567' AS BLOB), 721692800.0, 65.4, 1, 1, 'com.apple.Telephony', 'US');
              -- Incoming missed FaceTime call.
              INSERT INTO ZCALLRECORD (Z_PK, ZADDRESS, ZDATE, ZDURATION, ZORIGINATED, ZANSWERED, ZSERVICE_PROVIDER)
                 VALUES (2, CAST('friend@icloud.com' AS BLOB), 721692700.0, 0.0, 0, 0, 'com.apple.FaceTime');",
@@ -225,6 +235,26 @@ mod tests {
         assert_eq!(duration, 65); // truncated from 65.4
         assert_eq!(occurred, 1_700_000_000);
         assert_eq!(service, "phone");
+        // ISO country normalized to lowercase; the FaceTime row has none.
+        let (cc1, cc2): (Option<String>, Option<String>) = {
+            let one = c
+                .query_row(
+                    "SELECT country_code FROM calls ORDER BY occurred_at DESC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let two = c
+                .query_row(
+                    "SELECT country_code FROM calls ORDER BY occurred_at ASC LIMIT 1",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            (one, two)
+        };
+        assert_eq!(cc1.as_deref(), Some("us"));
+        assert_eq!(cc2, None);
 
         // The FaceTime row classified as facetime, incoming, unanswered.
         let (direction, service): (String, String) = c
