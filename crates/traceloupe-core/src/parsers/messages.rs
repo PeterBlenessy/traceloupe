@@ -300,6 +300,28 @@ pub fn parse_messages(
             std::collections::HashSet::new()
         };
 
+    // Message IDs whose attachment is a sticker (`attachment.is_sticker`), loaded
+    // regardless of a file resolver so classification never depends on it. Guarded
+    // on the table + column (older schemas / fixtures omit `is_sticker`).
+    let sticker_msg_ids: std::collections::HashSet<i64> = if table_exists(&src, "attachment")
+        && table_exists(&src, "message_attachment_join")
+        && message_table_columns(&src, "attachment").contains("is_sticker")
+    {
+        let mut stmt = src.prepare(
+            "SELECT DISTINCT maj.message_id
+             FROM message_attachment_join maj
+             JOIN attachment a ON a.ROWID = maj.attachment_id
+             WHERE a.is_sticker <> 0",
+        )?;
+        let ids = stmt
+            .query_map([], |r| r.get::<_, i64>(0))?
+            .filter_map(std::result::Result::ok)
+            .collect();
+        ids
+    } else {
+        std::collections::HashSet::new()
+    };
+
     // handle.ROWID → phone/email.
     let handles: HashMap<i64, String> = {
         let mut stmt = src.prepare("SELECT ROWID, id FROM handle")?;
@@ -606,10 +628,19 @@ pub fn parse_messages(
                     .is_some_and(|a| media_kind(a.mime.as_deref(), a.filename.as_deref()).is_some())
             })
         });
+        // A sticker attachment (peel-and-stick / Memoji / sticker-pack art) is its
+        // own content class, distinct from a regular image — powers the Stickers
+        // filter, which otherwise never matches anything.
+        let has_sticker = sticker_msg_ids.contains(&msg_rowid);
         // An app-bubble placeholder takes precedence (it's only set when there's
-        // no text/attachment) and gets the "app" content kind for the filter.
+        // no text/attachment) and gets the "app" content kind for the filter. A
+        // sticker is classified regardless of any recovered body — real stickers
+        // carry an attributedBody placeholder that decodes to text, so gating on
+        // text.is_none() here would classify none of them (verified on real data).
+        // The body (if any) is still kept and shown; only the filter kind changes.
         let (body, kind) = match app_body {
             Some(b) => (Some(b), if is_url_balloon { "link" } else { "app" }),
+            None if has_sticker => (text, "sticker"),
             None => {
                 let k = crate::normalize::message_kind(text.as_deref(), has_media);
                 (text, k)
@@ -1072,6 +1103,58 @@ mod tests {
         assert_eq!(rows[0], ("still here".to_string(), 0, None));
         // 721692900000000000 ns → unix 1_700_000_100.
         assert_eq!(rows[1], ("oops deleted this".to_string(), 1, Some(1_700_000_100)));
+    }
+
+    #[test]
+    fn classifies_sticker_attachments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, transfer_name TEXT, mime_type TEXT, is_sticker INTEGER);
+             CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             -- 100: a sticker that ALSO carries body text (real stickers decode an
+             -- attributedBody placeholder) — must still classify as sticker.
+             -- 101: a plain image. 102: a text message.
+             INSERT INTO message VALUES (100,'[Sticker]',0,721700010000000000,1,1,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,NULL,0,721700020000000000,1,1,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (102,'hi',1,721700030000000000,0,0,0,0,'G-102',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100),(10,101),(10,102);
+             INSERT INTO attachment VALUES (1,'/a/sticker.heic','sticker.heic','image/heic',1);
+             INSERT INTO attachment VALUES (2,'/a/photo.jpg','photo.jpg','image/jpeg',0);
+             INSERT INTO message_attachment_join VALUES (100,1),(101,2);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+
+        let kind = |guid_order: i64| -> String {
+            cache
+                .conn()
+                .query_row(
+                    "SELECT kind FROM messages ORDER BY sent_at LIMIT 1 OFFSET ?1",
+                    [guid_order],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        // The sticker set is loaded even without an AttachmentSource (None here),
+        // so the sticker is classified regardless of its body text; the non-sticker
+        // image isn't a sticker (its media classification needs the resolver, hence
+        // "other" in this mode).
+        assert_eq!(kind(0), "sticker", "a sticker classifies even with body text");
+        assert_eq!(kind(1), "other", "a non-sticker attachment is not a sticker");
+        assert_eq!(kind(2), "text");
     }
 
     #[test]

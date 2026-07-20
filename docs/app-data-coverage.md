@@ -39,7 +39,8 @@ iMessage is unsurfaced.
 | Receiving line (`destination_caller_id`) | ✅ 143k | ⬜ | Which SIM/account received it — dropped |
 | Service (iMessage/SMS) | ✅ 140k / 3.4k | ✅ | Per-thread; service filter + brand icon |
 | Attachments (image/video/file) | ✅ 8,558 | ✅ | filename, mime, on-demand decrypt/serve |
-| Attachment size / dimensions / `transfer_state` / `is_sticker` | ✅ | ⬜ | Not surfaced — can't flag stickers (641) or not-downloaded attachments |
+| Attachment size / dimensions / `transfer_state` | ✅ | ⬜ | Not surfaced — can't flag not-downloaded attachments |
+| `is_sticker` | ✅ 641 | ✅ (0.18.0) | Sticker attachments → content kind `sticker`, lighting up the (previously dead) Stickers filter pill; 616 text-less sticker messages classify here |
 | Thread / conversation | ✅ | ✅ | |
 | Group name + participants | ✅ 84/85 | ✅ | `display_name`, `chat_handle_join` |
 | Group actions (rename/join/leave) | ✅ 544 | ✅ (0.15.0) | `item_type` 1–4 rendered as centered system rows ("‹actor› ‹action›") |

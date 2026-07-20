@@ -48,6 +48,9 @@ Requires a re-import to populate for existing caches.
   Instagram, and other service handles).
 - **Apps — App Store metadata.** Name, seller, version, genre, and release year
   parsed from each app's `iTunesMetadata` bplist.
+- **Messages — sticker classification.** Sticker attachments
+  (`attachment.is_sticker`) are now classified as their own content kind,
+  lighting up the Stickers content-filter (which previously never matched).
 - **Messages — Recently Deleted.** Deleted-but-recoverable iMessages
   (`chat_recoverable_message_join`, never read before) are recovered and shown
   with a red "Deleted &lt;date&gt;" badge — messages that had vanished from the
