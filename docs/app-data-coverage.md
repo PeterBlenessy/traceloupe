@@ -174,8 +174,8 @@ people/GPS/favorite/moment/albums onto `media_items`.
 | Hidden | ✅ 46k | ✅ | `ZHIDDEN` → an eye-off badge on the grid tile + lightbox (shown, not excluded — forensic) |
 | Recently-deleted / trashed | ✅ 48 | ◑ | excluded from grid; not shown as a category |
 | Faces / people (named) | ✅ 69 named / 72k faces | ✅ | badge + lightbox + search (named only) |
-| Live Photo / burst | 381 / 53 | ⬜ | not paired/grouped |
-| Subtype — screenshot (~62k), panorama (384) | ✅ | ✅ | `ZISDETECTEDSCREENSHOT`/`ZKINDSUBTYPE` → grid badge (phone/frame icon). HDR/portrait/slo-mo codes left unclassified (ambiguous) |
+| Live Photo / burst | 374 / 53 | ✅ (0.18.0) | Live Photo = `ZPLAYBACKSTYLE=3`, burst = shared `ZAVALANCHEUUID` → grid badges (circle-dot / stacked). Full burst-group *stacking* still future work |
+| Subtype — screenshot (~65k), panorama (45) | ✅ | ✅ | screenshot = `ZISDETECTEDSCREENSHOT` (`ZKINDSUBTYPE=10` corroborates); panorama = `ZKINDSUBTYPE=1` (**fixed 0.18.0** — was wrongly `=2`, which is a Live Photo's still frame, so 381 Live Photos were mislabeled "panorama"). HDR/portrait/slo-mo codes left unclassified (ambiguous) |
 | Video duration | ✅ 7.1k | ✅ | `ZDURATION` → `media_items.duration_s` |
 | Description | ⬜ «redacted» | ⬜ | `ZASSETDESCRIPTION` unread |
 | Edited-vs-original / import session / cloud state | ⬜ 17k edited | ⬜ | provenance + edit state unread |
