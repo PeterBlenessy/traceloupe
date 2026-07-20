@@ -1,14 +1,14 @@
-# Spyware Analyzer
+# Security Check
 
-**Product Requirements Document**
+**Product Requirements Document** *(internal codename: spyware-analyzer)*
 
-*Status: Draft for review · Target: post-0.2.0 feature · Platform: macOS (TraceLoupe, Tauri v2)*
+*Status: Draft — core design decisions resolved 2026-07-20 (see `CONTEXT.md` and `docs/adr/0001`) · Target: post-0.2.0 feature · Platform: macOS (TraceLoupe, Tauri v2)*
 
 ---
 
 ## 1. Executive summary
 
-Add a **Spyware Analyzer** to TraceLoupe: a scan that checks an already-imported iPhone backup for indicators of compromise (IOCs) from known mercenary spyware (Pegasus, Predator, KingsPawn, Operation Triangulation, NoviSpy, …) and from commercial stalkerware/watchware ("parental control" apps repurposed for covert surveillance).
+Add a **Security Check** to TraceLoupe (user-facing name; sidebar entry "Security"): detection that checks an already-imported iPhone backup for indicators of compromise (IOCs) from known mercenary spyware (Pegasus, Predator, KingsPawn, Operation Triangulation, NoviSpy, …) and from commercial stalkerware/watchware ("parental control" apps repurposed for covert surveillance).
 
 The feature is modeled on iMazing's free Spyware Analyzer (<https://imazing.com/spyware-analyzer>), which wraps Amnesty International's open-source **Mobile Verification Toolkit (MVT)** methodology: download community-maintained **STIX2 indicator files**, scan the artifacts of an iTunes-style backup for matching domains, links, email addresses, process names, file paths, and bundle IDs, and present the matches with severity and context.
 
@@ -56,7 +56,7 @@ Sources: the product page, the user guide (`imazing.com/guides/detect-pegasus-an
 - One-click scan of the currently imported backup against up-to-date public IOC feeds; findings in minutes, re-scans in seconds.
 - Cover the same indicator classes as MVT/iMazing: domains/URLs, email addresses, process names, file names/paths, and app bundle IDs.
 - Both threat families: mercenary spyware (STIX2 feeds) and stalkerware/watchware (`ioc.yaml`-style feeds + heuristics).
-- 100 % local analysis. The only network use is fetching indicator feeds (and, later and opt-in, expanding shortened URLs). Never upload anything.
+- Backup-derived data never leaves the machine — the **privacy promise** (ADR 0001). Network use is limited to disclosed operational traffic (feed fetches) plus the single opt-in exception (shortened-URL expansion, M3).
 - Work fully offline against a bundled indicator snapshot shipped with the app.
 - Exportable report (CSV first) suitable for handing to a security lab.
 - Honest UX: severity levels, false-positive framing, "clean ≠ safe" language, links to real help (Access Now helpline, Amnesty Security Lab).
@@ -77,6 +77,13 @@ Primary: privacy-conscious individuals who suspect surveillance; journalists/act
 Stalkerware has a specific safety dynamic the UI must respect: **the abuser may monitor the device**. Findings screens should include a short, calm safety note (modeled on the Coalition Against Stalkerware guidance): removing an app or changing passwords can alert the person who installed it; consider your situation and seek support before acting. This is a product requirement, not copy polish.
 
 ## 6. Feature description
+
+### 6.0 Detection model
+
+Detection runs in two modes (both defined in `CONTEXT.md`):
+
+- **Explicit Scan** — user-initiated from the Security view; evaluates every indicator class against the whole backup. Starts by fetching fresh feeds when the update setting is on.
+- **Passive Check** — runs automatically inside every import, restricted by default to app matching (bundle IDs; configuration profiles once Tier B lands). Requires one-time consent, gathered at the first app launch after the feature ships; on acceptance the check runs immediately against the existing cache, so existing users get coverage without re-importing. Scope and on/off are configurable in Settings.
 
 ### 6.1 Scan surface — mapping MVT modules to TraceLoupe
 
@@ -103,7 +110,7 @@ Tier B artifacts are also independently interesting as future browse views (prof
 
 - **Formats:** STIX2 JSON bundles (Amnesty, iMazing repos) and Echap's `ioc.yaml`/`watchware.yaml`. A small `indicators` module in `traceloupe-core` normalizes both into one internal set: `{ kind: Domain | Url | Email | ProcessName | FilePath | BundleId | PhoneNumber, value, malware_name, source, severity }`.
 - **Bundled snapshot:** a build-time script vendors the current feeds into the app bundle (with license attribution — both feeds are CC-BY). Guarantees offline operation and a working scan on first run.
-- **Refresh:** "Update indicators" fetches the raw files from the three GitHub repos over HTTPS into `~/Library/Application Support/TraceLoupe/indicators/`, shows feed timestamps, and falls back to the bundled snapshot on failure. This is TraceLoupe's first networked feature; it must be user-initiated (button) or clearly-labeled-and-optional (auto-check toggle, default off in v1).
+- **Refresh:** each Explicit Scan starts by fetching the raw feed files from the three GitHub repos over HTTPS into `~/Library/Application Support/TraceLoupe/indicators/`, falling back to the local snapshot offline. Governed by a Settings toggle ("Update indicators automatically", default on); a manual "Update indicators" button exists too. The Passive Check never fetches — it uses the latest local snapshot and, when the setting is on, surfaces that newer indicators are available. Disclosure is both: a first-run consent dialog before the first fetch and a permanent inline note on the scan screen ("nothing about you or your backup is sent"). Feed timestamps are always visible. See ADR 0001 for the privacy scoping.
 - **Custom indicators:** point at a local folder of `.stix`/`.stix2`/`.yaml` files (parity with iMazing's researcher mode; nearly free once the loaders exist).
 - **Matching:** exact + subdomain matching for domains; substring for URLs in message/note bodies; exact for bundle IDs, process names, emails; glob-style for file paths. Domain extraction from free text (message bodies) needs a conservative tokenizer to keep false positives down.
 
@@ -118,11 +125,11 @@ Tier B artifacts are also independently interesting as future browse views (prof
 
 ### 6.4 Tauri commands & IPC
 
-Added to `src-tauri/src/lib.rs` and `src/lib/ipc.ts` following existing patterns: `run_spyware_scan(module_ids?)`, `cancel_scan`, `get_scan_status`, `list_scan_runs`, `list_findings(run_id, filters)`, `update_indicators`, `get_indicator_info`, `export_scan_report(run_id, format, path)`; event `scan://progress`.
+Added to `src-tauri/src/lib.rs` and `src/lib/ipc.ts` following existing patterns: `run_security_scan(module_ids?)`, `cancel_scan`, `get_scan_status`, `list_scan_runs`, `list_findings(run_id, filters)`, `update_indicators`, `get_indicator_info`, `get_detection_settings` / `set_detection_settings` (passive on/off, passive scope, auto-update toggle, consent state), `export_scan_report(run_id, format, path)`; event `scan://progress`. The Passive Check is not a command — it runs inside the import pipeline when consented, contributing its findings to the import result.
 
 ### 6.5 UI
 
-- Sidebar entry **"Spyware"** (shield icon) in `app-shell.tsx`; route `/spyware`; view `src/views/spyware.tsx`. shadcn components throughout (check the registry first, per house rules — `alert`, `badge`, `card`, `progress`, `empty` cover most of it).
+- Sidebar entry **"Security"** (shield icon) in `app-shell.tsx`; route `/security`; view `src/views/security.tsx`, titled "Security Check". The word "spyware" stays prominent in the view copy — the person searching for that word is the person who needs it. shadcn components throughout (check the registry first, per house rules — `alert`, `badge`, `card`, `progress`, `empty` cover most of it).
 - **Idle / first-run state:** explains what the scan does and does not do (the disclaimer content from §3), shows indicator-feed freshness + "Update indicators", and a **Run scan** button. Scan history list below.
 - **Running state:** progress by module (reuse the import-provider pattern so navigation doesn't kill the job).
 - **Clean result:** a calm "no known indicators matched" card that explicitly repeats *clean ≠ guaranteed safe*, with the scan metadata (feeds + timestamps, modules run).
@@ -131,11 +138,11 @@ Added to `src-tauri/src/lib.rs` and `src/lib/ipc.ts` following existing patterns
 
 ## 7. Milestones
 
-**M1 — Core engine + mercenary spyware (ship as experimental).** Indicator loaders (STIX2 + yaml) with bundled snapshot; Tier A scan + manifest sweep; `findings`/`scan_runs` tables; commands + progress events; `/spyware` view with run/results/clean states; CSV export. *Definition of done per house workflow: implemented → verified against a real backup → screenshots → review → pushed.*
+**M1 — Core engine + launch surface (ship as experimental).** Indicator loaders (STIX2 + yaml) with bundled snapshot, including the Echap bundle-ID/app indicators (moved up from M2 so the Passive Check has something to match); auto-fetch at Explicit Scan start with consent dialog + settings toggle; Tier A scan + manifest sweep; Passive Check (apps-only) with the first-launch consent flow; `findings`/`scan_runs` tables; commands + progress events; `/security` view with run/results/clean states; CSV export. *Definition of done per house workflow: implemented → verified against a real backup → screenshots → review → pushed.*
 
-**M2 — Stalkerware + Tier B artifacts.** Echap feed fully wired (bundle-ID matches against `installed_apps` and TCC); configuration-profile, analytics (process names), and DataUsage extractions; finding deep-links into existing views; safety-note UX.
+**M2 — Full stalkerware surface + Tier B artifacts.** Remaining Echap indicator classes (C2 domains, websites); TCC cross-checks; configuration-profile, analytics (process names), and DataUsage extractions; finding deep-links into existing views; safety-note UX.
 
-**M3 — Freshness & polish.** "Update indicators" networking + feed status UI; custom local indicator folders; optional shortened-URL expansion (explicit opt-in — it leaks URLs to resolver hosts); scan history diffing ("new findings since last scan"); possible Excel export.
+**M3 — Polish.** Custom local indicator folders; shortened-URL expansion behind an explicit, informed, per-feature opt-in (default off) — the sole sanctioned exception to the backup-data rule (ADR 0001); scan history diffing ("new findings since last scan") within a cache generation; possible Excel export.
 
 **Validation strategy** (per the research-authoritatively rule): build test fixtures by injecting known-benign indicator values (e.g. Amnesty's own test domains) into a scratch backup mirror; cross-check our scan of a public test image against `mvt-ios check-backup` output — the same diff-against-reference loop used for native parsers.
 
@@ -143,10 +150,11 @@ Added to `src-tauri/src/lib.rs` and `src/lib/ipc.ts` following existing patterns
 
 - **False positives** are the defining UX risk (visiting a vendor site → domain match). Mitigations: severity tiers, per-finding context, framing copy everywhere. Never a red scare-screen for Info-level matches.
 - **False negatives / stale feeds:** public IOCs lag real campaigns. The clean-result screen must carry the disclaimer; feed timestamps are always visible.
-- **First networked feature:** indicator refresh breaks the "fully offline" absolute. Decision: acceptable because it is user-initiated, HTTPS-to-GitHub only, and send-nothing; the bundled snapshot preserves an offline path. Needs a line in the privacy story.
+- **Privacy scoping (resolved — ADR 0001):** the privacy promise covers backup-derived data, not the app's operational traffic. Feed fetches are ordinary, disclosed, setting-governed app behavior; the bundled snapshot preserves an offline path. Public docs still saying "fully offline" (product-architecture-description.md §5) must be reworded.
 - **Licensing:** MVT's code is under a restricted-use license — we do **not** vendor or port its code, only consume public indicator data (CC-BY 2.0 / 4.0, attribution required in-app and in the report footer). Our engine is an independent Rust implementation. A brief license review before M1 ships.
 - **Legal/ethical copy:** we detect; we don't accuse. Report language mirrors iMazing's ("indicators of compromise were detected") — worth a review pass.
-- **Open:** Do we keep findings across re-imports (backup identity vs cache lifetime)? Should `installed_apps` bundle-ID matching run continuously at import time (passive badge in Apps view) rather than only inside explicit scans? Do we surface Tier B artifacts (profiles, data usage) as first-class browse views later?
+- **Resolved 2026-07-20** (full decisions log in `CONTEXT.md`): findings live in the cache DB and share its lifecycle (Passive Check repopulates after re-import; UI prompts to re-run the Explicit Scan); detection is Explicit Scan + consented Passive Check (apps-only default, configurable); severity is the 3-level Critical/Warning/Info taxonomy; user-facing name is Security Check.
+- **Open:** Do we surface Tier B artifacts (profiles, data usage) as first-class browse views later?
 
 ## 9. References
 
