@@ -25,14 +25,21 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.15.0` | **Data-coverage pass** — surfacing fields already parsed but unshown: all of a note's embedded images (detail gallery), iMessage group-action system rows, Safari reading-list read/last-viewed. |
 | `0.16.0` | **Health deep-dive + contact relationships** — the HealthKit store beyond workouts: daily activity aggregates (steps/distance/energy/flights/heart-rate), sleep sessions, and workout GPS routes with inline previews; plus contact related-names and address-book groups. |
 | `0.17.0` | **Health rings, mobility & the timezone timeline** — Apple activity rings vs goals, walking/audio-exposure daily metrics, and a per-timezone travel timeline from sample provenances; the Health view's sections refactored onto one descriptor-driven pipeline. |
+| `0.18.0` | **Data-coverage pass, recovery-themed** — Recently-Deleted photos (`ZTRASHEDSTATE`) and messages (`chat_recoverable_message_join`), per-app Interaction channels, Messages sticker/effect/app-bubble classification, Health Cycle-Tracking + Awards, Contacts social profiles, and App Store metadata. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
 
 ## [Unreleased]
 
-**Data-coverage pass.** More fields already present in a backup, now surfaced.
-Requires a re-import to populate for existing caches.
+_Nothing yet._
+
+## [0.18.0] — 2026-07-20
+
+**Data-coverage pass.** More fields already present in a backup, now surfaced —
+with a forensic "recover what was deleted or hidden" throughline (Recently
+Deleted photos and messages). Requires a re-import to populate for existing
+caches.
 
 ### Added
 
