@@ -8,6 +8,7 @@ description = "UI-agnostic core for the local iOS backup browser: discovery, cac
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 rusqlite = { workspace = true }
 plist = { workspace = true }

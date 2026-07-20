@@ -7,7 +7,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface BackupInfo {
@@ -490,6 +490,75 @@ export type EngineProgress =
   | { phase: "verifying" }
   | { phase: "done" };
 
+// --- Security Check (spyware/stalkerware indicator scan) -------------------
+
+export type ScanKind = "explicit" | "passive";
+export type Severity = "critical" | "warning" | "info";
+
+/** Progress event during a scan or an indicator update. */
+export interface ScanProgress {
+  module: string;
+  index: number;
+  total: number;
+}
+
+export interface ScanSummary {
+  runId: number;
+  findings: number;
+  cancelled: boolean;
+}
+
+export interface ScanRun {
+  id: number;
+  kind: ScanKind;
+  startedAt: number;
+  finishedAt: number | null;
+  status: "running" | "done" | "cancelled" | "failed";
+  modules: string[];
+  indicatorCount: number | null;
+  critical: number;
+  warning: number;
+  info: number;
+}
+
+export interface Finding {
+  id: number;
+  runId: number;
+  severity: Severity;
+  kind: string;
+  module: string;
+  malware: string;
+  matchedValue: string;
+  context: string | null;
+  refKind: string | null;
+  refId: number | null;
+  eventTime: number | null;
+}
+
+export interface FeedInfo {
+  source: string;
+  class: string;
+  count: number;
+  skipped: number;
+}
+
+export interface SnapshotInfo {
+  generatedAt: string;
+  feeds: FeedInfo[];
+}
+
+export type PassiveScope = "apps_only" | "full";
+export type Consent = "unasked" | "granted" | "denied";
+
+export interface DetectionSettings {
+  passiveEnabled: boolean;
+  passiveScope: PassiveScope;
+  passiveConsent: Consent;
+  autoUpdateIndicators: boolean;
+  fetchConsent: Consent;
+  expandShortUrls: boolean;
+}
+
 export interface TraceLoupeClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
@@ -644,6 +713,39 @@ export interface TraceLoupeClient {
   listContacts(): Promise<Contact[]>;
   /** Apps installed on the device, with their App Store metadata. */
   listInstalledApps(): Promise<InstalledApp[]>;
+
+  // --- Security Check ---
+  /** Run a scan over the active backup. "explicit" runs all modules (and may
+   *  fetch fresh feeds); "passive" is apps-only by default. */
+  runSecurityScan(kind: ScanKind): Promise<ScanSummary>;
+  /** Cancel a scan in flight (no-op if none running). */
+  cancelScan(): Promise<void>;
+  /** Subscribe to scan / indicator-update progress. Returns an unsubscribe fn. */
+  onScanProgress(cb: (p: ScanProgress) => void): Promise<UnlistenFn>;
+  /** Past scan runs for the active backup, newest first. */
+  listScanRuns(): Promise<ScanRun[]>;
+  /** The most recent completed run's id, or null. */
+  latestScanRun(): Promise<number | null>;
+  /** Findings for a run, most severe first. */
+  listFindings(
+    runId: number,
+    minSeverity?: Severity | null,
+    module?: string | null,
+  ): Promise<Finding[]>;
+  /** Info about the active indicator snapshot (feed counts + freshness). */
+  getIndicatorInfo(): Promise<SnapshotInfo>;
+  /** Fetch fresh indicator feeds now. Makes an outbound request to the public
+   *  feed repos; sends nothing about the user or their backup (ADR 0001). */
+  updateIndicators(): Promise<SnapshotInfo>;
+  getDetectionSettings(): Promise<DetectionSettings>;
+  setDetectionSettings(settings: DetectionSettings): Promise<void>;
+  /** Run the Passive Check now against the already-imported backup (the
+   *  first-launch consent flow). Returns null if consent isn't granted or no
+   *  backup is open. */
+  runPassiveCheckNow(): Promise<ScanSummary | null>;
+  /** Open a save dialog and write a CSV report of the run. Returns the path
+   *  written, or null if the user cancelled. */
+  exportScanReport(runId: number): Promise<string | null>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -956,6 +1058,38 @@ const tauriClient: TraceLoupeClient = {
     }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listInstalledApps: () => invoke<InstalledApp[]>("list_installed_apps"),
+
+  runSecurityScan: (kind) =>
+    invoke<ScanSummary>("run_security_scan", { kind }),
+  cancelScan: () => invoke("cancel_scan"),
+  onScanProgress: (cb) =>
+    listen<ScanProgress>("scan://progress", (e) => cb(e.payload)),
+  listScanRuns: () => invoke<ScanRun[]>("list_scan_runs"),
+  latestScanRun: () => invoke<number | null>("latest_scan_run"),
+  listFindings: (runId, minSeverity, module) =>
+    invoke<Finding[]>("list_findings", {
+      runId,
+      minSeverity: minSeverity ?? null,
+      module: module ?? null,
+    }),
+  getIndicatorInfo: () => invoke<SnapshotInfo>("get_indicator_info"),
+  updateIndicators: () => invoke<SnapshotInfo>("update_indicators"),
+  getDetectionSettings: () =>
+    invoke<DetectionSettings>("get_detection_settings"),
+  setDetectionSettings: (settings) =>
+    invoke("set_detection_settings", { settings }),
+  runPassiveCheckNow: () =>
+    invoke<ScanSummary | null>("run_passive_check_now"),
+  exportScanReport: async (runId) => {
+    const path = await save({
+      title: "Save Security Check report",
+      defaultPath: "security-check-report.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+    if (typeof path !== "string") return null;
+    await invoke("export_scan_report", { runId, path });
+    return path;
+  },
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
@@ -1813,6 +1947,56 @@ const mockInstalledApps: InstalledApp[] = [
   { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null },
 ];
 
+const mockSnapshotInfo: SnapshotInfo = {
+  generatedAt: "2026-07-20T16:08:47Z",
+  feeds: [
+    { source: "AmnestyTech/pegasus", class: "mercenary", count: 1549, skipped: 0 },
+    { source: "mvt-project/predator", class: "mercenary", count: 812, skipped: 0 },
+    { source: "echap/ioc", class: "stalkerware", count: 2746, skipped: 0 },
+    { source: "echap/watchware", class: "watchware", count: 159, skipped: 0 },
+  ],
+};
+
+let mockDetectionSettings: DetectionSettings = {
+  passiveEnabled: true,
+  passiveScope: "apps_only",
+  passiveConsent: "unasked",
+  autoUpdateIndicators: true,
+  fetchConsent: "unasked",
+  expandShortUrls: false,
+};
+
+let mockScanRuns: ScanRun[] = [];
+
+const mockFindings: Finding[] = [
+  {
+    id: 1,
+    runId: 1,
+    severity: "info",
+    kind: "bundle_id",
+    module: "apps",
+    malware: "KasperskySafeKids",
+    matchedValue: "com.kaspersky.safekids",
+    context: "com.kaspersky.safekids",
+    refKind: "app",
+    refId: null,
+    eventTime: null,
+  },
+  {
+    id: 2,
+    runId: 1,
+    severity: "warning",
+    kind: "domain",
+    module: "safari",
+    malware: "TheTruthSpy",
+    matchedValue: "thetruthspy.com",
+    context: "https://thetruthspy.com/features",
+    refKind: "safari_history",
+    refId: 42,
+    eventTime: 1700001000,
+  },
+];
+
 let mockActive = false;
 const mockImported = new Set<string>();
 
@@ -2475,6 +2659,55 @@ export const mockClient: TraceLoupeClient = {
       : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),
+
+  runSecurityScan: async (kind) => {
+    if (!mockActive) throw new Error("no backup is open");
+    mockScanRuns = [
+      {
+        id: 1,
+        kind,
+        startedAt: Math.floor(Date.now() / 1000) - 2,
+        finishedAt: Math.floor(Date.now() / 1000),
+        status: "done",
+        modules: kind === "passive" ? ["apps"] : ["apps", "messages", "safari"],
+        indicatorCount: 5833,
+        critical: kind === "passive" ? 0 : 0,
+        warning: kind === "passive" ? 0 : 1,
+        info: 1,
+      },
+      ...mockScanRuns,
+    ];
+    return {
+      runId: 1,
+      findings: kind === "passive" ? 1 : 2,
+      cancelled: false,
+    };
+  },
+  cancelScan: async () => {},
+  onScanProgress: async () => () => {},
+  listScanRuns: async () => (mockActive ? mockScanRuns : []),
+  latestScanRun: async () =>
+    mockActive && mockScanRuns.length ? mockScanRuns[0].id : null,
+  listFindings: async (_runId, minSeverity) => {
+    if (!mockActive) return [];
+    const rank = (s: Severity) =>
+      s === "critical" ? 3 : s === "warning" ? 2 : 1;
+    const min = minSeverity ? rank(minSeverity) : 1;
+    return mockFindings.filter((f) => rank(f.severity) >= min);
+  },
+  getIndicatorInfo: async () => mockSnapshotInfo,
+  updateIndicators: async () => mockSnapshotInfo,
+  getDetectionSettings: async () => mockDetectionSettings,
+  setDetectionSettings: async (s) => {
+    mockDetectionSettings = s;
+  },
+  runPassiveCheckNow: async () => {
+    if (!mockActive || mockDetectionSettings.passiveConsent !== "granted")
+      return null;
+    return { runId: 1, findings: 1, cancelled: false };
+  },
+  exportScanReport: async () => "/tmp/security-check-report.csv",
+
   listMedia: async () => (mockActive ? mockMedia : []),
   mediaSources: async () => {
     if (!mockActive) return [];
