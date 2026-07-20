@@ -384,6 +384,9 @@ export interface MediaItem {
   /** In Recently Deleted, with the deletion time (Unix seconds) when known. */
   trashed: boolean;
   trashedAt: number | null;
+  /** When the asset was added to the library (Unix seconds), which differs from
+   *  capture for received/saved/imported media, or null. */
+  addedAt: number | null;
   /** Media subtype ("screenshot" | "panorama" | "live" | "burst"), or null. */
   subtype: string | null;
 }
@@ -1686,6 +1689,7 @@ const mockMedia: MediaItem[] = [
     hidden: false,
     trashed: false,
     trashedAt: null,
+    addedAt: null,
     subtype: "live",
   },
   {
@@ -1711,6 +1715,7 @@ const mockMedia: MediaItem[] = [
     hidden: false,
     trashed: false,
     trashedAt: null,
+    addedAt: null,
     subtype: "panorama",
   },
   {
@@ -1736,6 +1741,7 @@ const mockMedia: MediaItem[] = [
     hidden: false,
     trashed: false,
     trashedAt: null,
+    addedAt: 1720000000,
     subtype: "burst",
   },
   {
@@ -1761,6 +1767,7 @@ const mockMedia: MediaItem[] = [
     hidden: false,
     trashed: true,
     trashedAt: 1718000000,
+    addedAt: null,
     subtype: "screenshot",
   },
 ];

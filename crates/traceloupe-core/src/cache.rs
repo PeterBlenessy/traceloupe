@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 43;
+const SCHEMA_VERSION: i64 = 44;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -649,6 +649,9 @@ impl CacheDb {
             // chat_recoverable_message_join — surfaced with a "Deleted" badge.
             ensure_column(&conn, "messages", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
             ensure_column(&conn, "messages", "deleted_at", "INTEGER")?;
+            // v44: when a camera-roll asset was added to the library (ZADDEDDATE),
+            // which differs from capture for received/saved/imported media.
+            ensure_column(&conn, "media_items", "added_at", "INTEGER")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
