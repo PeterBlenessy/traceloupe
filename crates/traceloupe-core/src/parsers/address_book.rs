@@ -49,12 +49,15 @@ pub struct ParsedContact {
     pub related: Vec<LabeledValue>,
     /// Names of the address-book groups this contact belongs to.
     pub groups: Vec<String>,
+    /// Social / IM profiles: label = service (Snapchat/…), value = username.
+    pub social: Vec<LabeledValue>,
 }
 
 const PROP_PHONE: i64 = 3;
 const PROP_EMAIL: i64 = 4;
 const PROP_ADDRESS: i64 = 5;
 const PROP_RELATED: i64 = 23;
+const PROP_SOCIAL: i64 = 46;
 /// Core Data epoch (2001-01-01) → Unix, for the `Birthday` timestamp column.
 const MAC_EPOCH: i64 = 978_307_200;
 
@@ -152,7 +155,37 @@ pub fn parse_address_book(db_path: &Path) -> Result<Vec<ParsedContact>> {
             c.groups = g;
         }
     }
+    // Social / IM profiles (property 46), attached by record_id.
+    let mut social = parse_social(&conn)?;
+    for c in &mut contacts {
+        if let Some(s) = social.remove(&c.id) {
+            c.social = s;
+        }
+    }
     Ok(contacts)
+}
+
+/// Social / instant-messaging profiles (property 46), keyed by ABPerson ROWID.
+/// Like postal addresses, each profile's fields live in `ABMultiValueEntry`
+/// (`service`, `username`, `url`, …); we surface `service` as the label and
+/// `username` as the value. Returns an empty map if the entry tables are
+/// absent (older schema).
+fn parse_social(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<LabeledValue>>> {
+    use std::collections::HashMap;
+
+    let mut out: HashMap<i64, Vec<LabeledValue>> = HashMap::new();
+    for ((rec, _uid), (_label, fields)) in group_multivalue_entries(conn, PROP_SOCIAL)? {
+        // The handle is the point; skip a profile that has only metadata.
+        if let Some(username) = fields.get("username").map(|s| s.trim()).filter(|s| !s.is_empty()) {
+            out.entry(rec).or_default().push(LabeledValue {
+                // `service` is a plain name here, but clean_label is harmless
+                // and keeps social labels consistent with every other parser.
+                label: fields.get("service").map(|s| clean_label(s.trim())),
+                value: username.to_string(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Address-book group names keyed by member ABPerson ROWID (`ABGroup` ⋈
@@ -205,9 +238,39 @@ fn parse_groups(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<
 /// with `key` → `ABMultiValueEntryKey` ("Street"/"City"/"State"/"ZIP"/"Country"…).
 /// Returns an empty map if the entry tables are absent (older schema).
 fn parse_addresses(conn: &Connection) -> Result<std::collections::HashMap<i64, Vec<LabeledValue>>> {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::HashMap;
 
     let mut out: HashMap<i64, Vec<LabeledValue>> = HashMap::new();
+    for ((rec, _uid), (label, fields)) in group_multivalue_entries(conn, PROP_ADDRESS)? {
+        if let Some(value) = format_address(&fields) {
+            out.entry(rec).or_default().push(LabeledValue {
+                label: label.as_deref().map(clean_label),
+                value,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// One multivalue's optional label (from `ABMultiValueLabel`) + its key→value
+/// field map (from `ABMultiValueEntry`), keyed by `(record_id, UID)`.
+type MultiValueGroup = (
+    Option<String>,
+    std::collections::HashMap<String, String>,
+);
+
+/// Group the `ABMultiValueEntry` rows of every multivalue with the given
+/// `property` by `(record_id, UID)`. Shared by the postal-address and
+/// social-profile parsers — both are multi-field multivalues that differ only
+/// in which keys they read. Ordered (BTreeMap) so output is deterministic;
+/// empty when the entry tables are absent (older schema).
+fn group_multivalue_entries(
+    conn: &Connection,
+    property: i64,
+) -> Result<std::collections::BTreeMap<(i64, i64), MultiValueGroup>> {
+    use std::collections::{BTreeMap, HashMap};
+
+    let mut groups: BTreeMap<(i64, i64), MultiValueGroup> = BTreeMap::new();
     let has_entries = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ABMultiValueEntry'",
@@ -216,7 +279,7 @@ fn parse_addresses(conn: &Connection) -> Result<std::collections::HashMap<i64, V
         )
         .is_ok();
     if !has_entries {
-        return Ok(out);
+        return Ok(groups);
     }
 
     let mut stmt = conn.prepare(
@@ -228,12 +291,7 @@ fn parse_addresses(conn: &Connection) -> Result<std::collections::HashMap<i64, V
          WHERE mv.property = ?1
          ORDER BY mv.record_id, mv.UID",
     )?;
-    // Group each address's key/value pairs by its multivalue UID (ordered so the
-    // output is deterministic). label is carried on the multivalue row.
-    // (label, key→value) for one address.
-    type Group = (Option<String>, HashMap<String, String>);
-    let mut groups: BTreeMap<(i64, i64), Group> = BTreeMap::new();
-    let mut rows = stmt.query([PROP_ADDRESS])?;
+    let mut rows = stmt.query([property])?;
     while let Some(r) = rows.next()? {
         let rec: i64 = r.get(0)?;
         let uid: i64 = r.get(1)?;
@@ -249,15 +307,7 @@ fn parse_addresses(conn: &Connection) -> Result<std::collections::HashMap<i64, V
             }
         }
     }
-    for ((rec, _uid), (label, fields)) in groups {
-        if let Some(value) = format_address(&fields) {
-            out.entry(rec).or_default().push(LabeledValue {
-                label: label.as_deref().map(clean_label),
-                value,
-            });
-        }
-    }
-    Ok(out)
+    Ok(groups)
 }
 
 /// Format an address's components into one line: "Street, City, State ZIP, Country".
@@ -367,8 +417,8 @@ pub fn insert_contacts(
             "INSERT INTO contacts
                 (first_name, last_name, organization, phones_json, emails_json, image,
                  middle_name, nickname, job_title, department, birthday_at, note, addresses_json,
-                 related_json, groups_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 related_json, groups_json, social_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
                 c.first_name,
                 c.last_name,
@@ -385,6 +435,7 @@ pub fn insert_contacts(
                 serde_json::to_string(&c.addresses).unwrap_or_else(|_| "[]".into()),
                 serde_json::to_string(&c.related).unwrap_or_else(|_| "[]".into()),
                 serde_json::to_string(&c.groups).unwrap_or_else(|_| "[]".into()),
+                serde_json::to_string(&c.social).unwrap_or_else(|_| "[]".into()),
             ],
         )?;
     }
@@ -434,6 +485,10 @@ mod tests {
              -- A Home address (property 5) for Alex, split across entry rows.
              INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (13, 1, 5, 2, NULL);
              INSERT INTO ABMultiValueEntry (parent_id, key, value) VALUES (13,1,'1 Market St'),(13,2,'Springfield'),(13,3,'CA'),(13,4,'90001'),(13,5,'USA');
+             -- A social profile (property 46) for Alex: service + username entry rows.
+             INSERT INTO ABMultiValueEntryKey (ROWID, value) VALUES (6,'service'),(7,'username');
+             INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (16, 1, 46, NULL, NULL);
+             INSERT INTO ABMultiValueEntry (parent_id, key, value) VALUES (16,6,'Snapchat'),(16,7,'alex_r');
              -- Related names (property 23): a magic label and a custom one.
              INSERT INTO ABMultiValueLabel (rowid, value) VALUES (3, '_$!<Mother>!$_'), (4, 'Bestie');
              INSERT INTO ABMultiValue (UID, record_id, property, label, value) VALUES (14, 1, 23, 3, 'Maria Rivera');
@@ -487,6 +542,10 @@ mod tests {
         assert_eq!(alex.related[1].value, "Sam Chen");
         // Groups sorted by name; the unnamed group is dropped.
         assert_eq!(alex.groups, vec!["Climbing".to_string(), "Family".to_string()]);
+        // Social profile: service label + username value.
+        assert_eq!(alex.social.len(), 1);
+        assert_eq!(alex.social[0].label.as_deref(), Some("Snapchat"));
+        assert_eq!(alex.social[0].value, "alex_r");
 
         // Org-only contact with no name.
         let pizza = contacts.iter().find(|c| c.organization.is_some()).unwrap();
