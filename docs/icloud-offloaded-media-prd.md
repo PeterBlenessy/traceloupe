@@ -183,6 +183,26 @@ Surfaced as a status on the existing honest UI (`notes.tsx`, `messages.tsx`): th
 `download_state` to the relevant cache rows (bump `SCHEMA_VERSION` in
 `crates/traceloupe-core/src/cache.rs`; needs a re-import to populate).
 
+> **Validation finding (2026-07-20) — M0 is blocked on test data, and
+> `transfer_state` is not the signal we assumed.** Empirical check against the
+> reference backup mirror (`~/.traceloupe-dev/backup-mirror`):
+> - Messages: **0 of 9,382 attachment blobs are present** — the backup is
+>   fully-offloaded for Messages. `attachment.transfer_state` values (0: 5 463,
+>   5: 2 102, 6: 896, −1: 3, 7: 1) show **no correlation with on-disk presence**
+>   (even `transfer_state=5` has ~nothing on disk). iLEAPP does **not** read
+>   `transfer_state`, and public forensic sources don't pin its offloaded-vs-
+>   downloaded semantics. So we **cannot** authoritatively label *offloaded vs
+>   deleted* for Messages from this flag alone, and there is **no positive ground
+>   truth in this backup** to validate against (same for Notes: 2 698 referenced /
+>   0 present).
+> - **Consequence:** M0 as specified (use native download-state flags to split
+>   offloaded/deleted) cannot be *verified* — which by house rules means it cannot
+>   ship — until we have (a) a backup taken with "Optimize Storage" **off** (so
+>   some media is actually present, giving present/offloaded ground truth), and
+>   (b) an authoritative `transfer_state` (and Notes download-state) mapping, e.g.
+>   from Apple's `IMFileTransfer` enum or a domain expert. Until then, honest
+>   blob-absence ("not in backup") remains the correct, verifiable behaviour.
+
 ### 6.2 Tier 1 — Sanctioned Export importer (default)
 
 - **Input:** the folder/zip set a user downloads from privacy.apple.com. A guided
@@ -309,6 +329,13 @@ fetched Notes/Photos against `icloudpd` output for the same account.
 
 ## 8. Risks & open questions
 
+- **M0 blocked on test data + flag semantics (confirmed 2026-07-20).** The
+  reference backup is fully-offloaded for Messages and Notes (0 present blobs), so
+  it offers no present/offloaded ground truth, and `attachment.transfer_state` does
+  not correlate with presence (see §6.1). M0 needs a backup with "Optimize Storage"
+  **off** and an authoritative flag mapping before its offloaded-vs-deleted labels
+  can be verified — and unverified is unshippable per house rules. **This is the
+  first thing to unblock; everything else in M0 is ready to build once it is.**
 - **Account lockout (T2).** The defining risk. Mitigations: per-item default,
   bulk-only-on-opt-in with warning, single-session reuse, backoff, and never
   storing the password. The consent copy states it plainly.
