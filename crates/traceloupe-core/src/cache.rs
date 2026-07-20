@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 40;
+const SCHEMA_VERSION: i64 = 41;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -633,6 +633,14 @@ impl CacheDb {
             ensure_column(&conn, "installed_apps", "released", "TEXT")?;
             // v40: iMessage expressive send effect (Confetti/Slam/Invisible Ink…).
             ensure_column(&conn, "messages", "effect", "TEXT")?;
+            // v41: CoreDuet per-app interaction channels (which apps comms went through).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS interaction_channels (
+                    bundle_id TEXT PRIMARY KEY,
+                    incoming  INTEGER NOT NULL DEFAULT 0,
+                    outgoing  INTEGER NOT NULL DEFAULT 0
+                );",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

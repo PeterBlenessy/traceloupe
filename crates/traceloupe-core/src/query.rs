@@ -867,6 +867,35 @@ pub fn list_interactions(cache: &CacheDb) -> Result<Vec<Interaction>> {
         .map_err(Into::into)
 }
 
+/// One communication "channel": an app that CoreDuet interactions flowed
+/// through, with incoming/outgoing counts (the UI maps the bundle id to a name).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractionChannel {
+    pub bundle_id: String,
+    pub incoming: i64,
+    pub outgoing: i64,
+}
+
+/// Per-app interaction channels, busiest first.
+pub fn interaction_channels(cache: &CacheDb) -> Result<Vec<InteractionChannel>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT bundle_id, incoming, outgoing
+         FROM interaction_channels
+         ORDER BY (incoming + outgoing) DESC, bundle_id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(InteractionChannel {
+            bundle_id: r.get(0)?,
+            incoming: r.get(1)?,
+            outgoing: r.get(2)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// One Health workout.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
