@@ -374,7 +374,7 @@ export interface MediaItem {
   exif: string | null;
   /** In the device's Hidden album. */
   hidden: boolean;
-  /** Media subtype ("screenshot" | "panorama"), or null. */
+  /** Media subtype ("screenshot" | "panorama" | "live" | "burst"), or null. */
   subtype: string | null;
 }
 
@@ -1661,7 +1661,7 @@ const mockMedia: MediaItem[] = [
     lens: null,
     exif: null,
     hidden: false,
-    subtype: null,
+    subtype: "live",
   },
   {
     id: 2,
@@ -1684,7 +1684,7 @@ const mockMedia: MediaItem[] = [
     lens: null,
     exif: null,
     hidden: false,
-    subtype: null,
+    subtype: "panorama",
   },
   {
     id: 3,
@@ -1707,7 +1707,7 @@ const mockMedia: MediaItem[] = [
     lens: "iPhone 14 Pro back camera",
     exif: "ISO 100 · ƒ/1.8 · 1/125s · 26 mm",
     hidden: false,
-    subtype: null,
+    subtype: "burst",
   },
   {
     id: 4,
@@ -1730,7 +1730,7 @@ const mockMedia: MediaItem[] = [
     lens: null,
     exif: null,
     hidden: false,
-    subtype: null,
+    subtype: "screenshot",
   },
 ];
 

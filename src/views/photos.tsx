@@ -13,6 +13,8 @@ import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Camera,
+  CircleDot,
+  Copy,
   EyeOff,
   Frame,
   Heart,
@@ -27,6 +29,14 @@ import {
 /** Media items fetched per lazy window (shared by the grid and the lightbox's
  *  neighbour lookup so their cache keys line up). */
 const PAGE = 100;
+
+/** Human labels for the media-subtype badge tooltip. */
+const SUBTYPE_LABELS: Record<string, string> = {
+  screenshot: "Screenshot",
+  panorama: "Panorama",
+  live: "Live Photo",
+  burst: "Burst",
+};
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -488,10 +498,14 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         {item.subtype && (
           <span
             className="rounded-full bg-black/55 p-1 text-white"
-            title={item.subtype}
+            title={SUBTYPE_LABELS[item.subtype] ?? item.subtype}
           >
             {item.subtype === "panorama" ? (
               <Frame className="size-3" />
+            ) : item.subtype === "live" ? (
+              <CircleDot className="size-3" />
+            ) : item.subtype === "burst" ? (
+              <Copy className="size-3" />
             ) : (
               <Smartphone className="size-3" />
             )}

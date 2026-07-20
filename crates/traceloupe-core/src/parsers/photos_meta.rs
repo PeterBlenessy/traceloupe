@@ -14,7 +14,7 @@
 //! provenance: reference (own implementation) from a real `Photos.sqlite`
 //! (iOS 17-era Core Data schema) on a device backup.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
@@ -143,6 +143,13 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         }
     }
 
+    // ZASSET's columns vary across iOS versions; guard the newer ones we read.
+    let asset_cols: HashSet<String> = src
+        .prepare("SELECT name FROM pragma_table_info('ZASSET')")?
+        .query_map([], |r| r.get::<_, String>(0))?
+        .filter_map(|c| c.ok())
+        .collect();
+
     // asset path suffix ("DCIM/100APPLE/IMG_0058.JPG") -> metadata, and the
     // asset's Core Data Z_PK -> suffix (album/keyword joins are keyed by PK).
     let mut by_suffix: HashMap<String, AssetMeta> = HashMap::new();
@@ -150,15 +157,19 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
 
     // Base metadata for every asset: date, GPS, favorite, and moment place name.
     {
-        let mut stmt = src.prepare(
+        // ZPLAYBACKSTYLE (Live Photo = 3) and ZAVALANCHEUUID (burst grouping) are
+        // present on modern schemas; fall back to NULL where absent.
+        let play_expr = if asset_cols.contains("ZPLAYBACKSTYLE") { "a.ZPLAYBACKSTYLE" } else { "NULL" };
+        let aval_expr = if asset_cols.contains("ZAVALANCHEUUID") { "a.ZAVALANCHEUUID" } else { "NULL" };
+        let mut stmt = src.prepare(&format!(
             "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
                     a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE,
                     a.ZWIDTH, a.ZHEIGHT, a.ZDURATION, a.ZHIDDEN,
-                    a.ZKINDSUBTYPE, a.ZISDETECTEDSCREENSHOT
+                    a.ZKINDSUBTYPE, a.ZISDETECTEDSCREENSHOT, {play_expr}, {aval_expr}
              FROM ZASSET a
              LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
              WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
-        )?;
+        ))?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let pk: i64 = r.get(0)?;
@@ -188,14 +199,25 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
             let height = r.get::<_, Option<i64>>(9)?.filter(|v| *v > 0);
             let duration_s = r.get::<_, Option<f64>>(10)?.filter(|v| *v > 0.0);
             let hidden = r.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0;
-            // Classify only confidently: screenshot (two corroborating signals) and
-            // panorama. The 100-series video subtype codes are ambiguous → leave null.
+            // Classify confidently, verified against a real library + the
+            // forensic community's decode (kacos2000/queries): a Live Photo is
+            // ZPLAYBACKSTYLE = 3 (NOT a ZKINDSUBTYPE); a panorama is
+            // ZKINDSUBTYPE = 1 (an earlier version wrongly used 2, which is
+            // actually the still frame of a Live Photo); a screenshot has the
+            // detected-screenshot flag (subtype 10 corroborates). Bursts share a
+            // ZAVALANCHEUUID. 100-series video subtypes stay unclassified.
             let kind_subtype = r.get::<_, Option<i64>>(12)?.unwrap_or(0);
             let is_screenshot = r.get::<_, Option<i64>>(13)?.unwrap_or(0) != 0;
+            let playback_style = r.get::<_, Option<i64>>(14)?.unwrap_or(0);
+            let avalanche_uuid: Option<String> = r.get(15)?;
             let subtype = if is_screenshot || kind_subtype == 10 {
                 Some("screenshot")
-            } else if kind_subtype == 2 {
+            } else if playback_style == 3 {
+                Some("live")
+            } else if kind_subtype == 1 {
                 Some("panorama")
+            } else if avalanche_uuid.is_some() {
+                Some("burst")
             } else {
                 None
             };
@@ -405,7 +427,8 @@ mod tests {
             "CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZDIRECTORY TEXT, ZFILENAME TEXT,
                  ZDATECREATED REAL, ZLATITUDE REAL, ZLONGITUDE REAL, ZFAVORITE INTEGER, ZMOMENT INTEGER,
                  ZWIDTH INTEGER, ZHEIGHT INTEGER, ZDURATION REAL, ZHIDDEN INTEGER,
-                 ZKINDSUBTYPE INTEGER, ZISDETECTEDSCREENSHOT INTEGER);
+                 ZKINDSUBTYPE INTEGER, ZISDETECTEDSCREENSHOT INTEGER,
+                 ZPLAYBACKSTYLE INTEGER, ZAVALANCHEUUID TEXT);
              CREATE TABLE ZPERSON (Z_PK INTEGER PRIMARY KEY, ZFULLNAME TEXT, ZDISPLAYNAME TEXT);
              CREATE TABLE ZDETECTEDFACE (Z_PK INTEGER PRIMARY KEY, ZASSETFORFACE INTEGER, ZPERSONFORFACE INTEGER);
              CREATE TABLE ZMOMENT (Z_PK INTEGER PRIMARY KEY, ZTITLE TEXT);
@@ -419,9 +442,15 @@ mod tests {
              INSERT INTO ZMOMENT VALUES (500, 'Florida');
              -- Asset 1: named people, a real date (721692800 Mac = 1_700_000_000 unix),
              -- a GPS fix, favorited, in the 'Florida' moment, 4032x3024 photo.
-             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0, 0, 0, 0);
+             INSERT INTO ZASSET VALUES (1, 'DCIM/100APPLE', 'IMG_0001.HEIC', 721692800.0, 59.33, 18.06, 1, 500, 4032, 3024, 0.0, 0, 0, 0, 1, NULL);
              -- Asset 2: no named people, no location (-180 sentinel), not favorited, no moment, hidden, a screenshot.
-             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 1, 10, 1);
+             INSERT INTO ZASSET VALUES (2, 'DCIM/100APPLE', 'IMG_0002.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 1, 10, 1, 1, NULL);
+             -- Asset 3: a Live Photo (ZPLAYBACKSTYLE=3; ZKINDSUBTYPE=2 is the still frame, NOT a panorama).
+             INSERT INTO ZASSET VALUES (3, 'DCIM/100APPLE', 'IMG_0003.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 2, 0, 3, NULL);
+             -- Asset 4: a real panorama (ZKINDSUBTYPE=1, standard playback).
+             INSERT INTO ZASSET VALUES (4, 'DCIM/100APPLE', 'IMG_0004.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 1, 0, 1, NULL);
+             -- Asset 5: a burst member (shares a ZAVALANCHEUUID).
+             INSERT INTO ZASSET VALUES (5, 'DCIM/100APPLE', 'IMG_0005.HEIC', NULL, -180.0, -180.0, 0, NULL, NULL, NULL, NULL, 0, 0, 0, 1, 'AVAL-UUID-1');
              -- EXIF + file size for asset 1 (make 'Apple' + model 'iPhone 14 Pro').
              INSERT INTO ZEXTENDEDATTRIBUTES VALUES (1, 1, 'Apple', 'iPhone 14 Pro', 'iPhone 14 Pro back camera', 100, 1.8, 0.008, 26.0);
              INSERT INTO ZADDITIONALASSETATTRIBUTES VALUES (1, 1, 2097152);
@@ -440,6 +469,39 @@ mod tests {
         )
         .unwrap();
         db
+    }
+
+    #[test]
+    fn classifies_screenshot_live_panorama_burst_subtypes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = make_photos_db(tmp.path());
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO media_items (relative_path, kind) VALUES ('Media/DCIM/100APPLE/IMG_0002.HEIC','photo');
+                 INSERT INTO media_items (relative_path, kind) VALUES ('Media/DCIM/100APPLE/IMG_0003.HEIC','photo');
+                 INSERT INTO media_items (relative_path, kind) VALUES ('Media/DCIM/100APPLE/IMG_0004.HEIC','photo');
+                 INSERT INTO media_items (relative_path, kind) VALUES ('Media/DCIM/100APPLE/IMG_0005.HEIC','photo');",
+            )
+            .unwrap();
+        parse_photos_metadata(&db, &cache).unwrap();
+        let subtype = |file: &str| -> Option<String> {
+            cache
+                .conn()
+                .query_row(
+                    "SELECT subtype FROM media_items WHERE relative_path LIKE '%' || ?1 || '%'",
+                    [file],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(subtype("IMG_0002").as_deref(), Some("screenshot"));
+        // ZPLAYBACKSTYLE=3 → Live Photo, NOT panorama (the old bug labeled its
+        // ZKINDSUBTYPE=2 still frame "panorama").
+        assert_eq!(subtype("IMG_0003").as_deref(), Some("live"));
+        assert_eq!(subtype("IMG_0004").as_deref(), Some("panorama")); // ZKINDSUBTYPE=1
+        assert_eq!(subtype("IMG_0005").as_deref(), Some("burst"));
     }
 
     #[test]
