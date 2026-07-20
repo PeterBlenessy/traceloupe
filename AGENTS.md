@@ -87,6 +87,21 @@ force.
 - **Builds are per-worktree.** Each worktree has its own `target/` and its own
   `node_modules` (run `pnpm install` once in it). Do **not** point multiple
   worktrees at a shared `CARGO_TARGET_DIR` — they'd contend on the build lock.
+- **Don't trust the shell's working directory to stay in your worktree.** The
+  shell's cwd is **not** pinned to your worktree — a `cd` elsewhere (a temp dir,
+  a `venv`, a build cache) can drop the *next* command back in the shared main
+  checkout, which is sitting on a **different branch**. Commands that use
+  relative paths then silently read — and `sed -i` / `>` silently edit — that
+  other branch's files. Guard against it:
+  - Prefer **absolute paths rooted at your worktree** for every read, edit,
+    `grep`, and in-place `sed`/redirect. Don't lean on relative paths after
+    you've `cd`'d away.
+  - After any `cd` out of your worktree — or whenever unsure — run `pwd` (and
+    `git branch --show-current`) before touching files again.
+  - Treat a **content mismatch** as a location bug, not a real change: an
+    unexpected version number, CHANGELOG entries you didn't write, or a file
+    that looks "reverted" almost always means you're reading the shared checkout
+    on another branch. Stop and re-check `pwd` before editing or committing.
 
 ## Verify your isolation before the first edit
 
@@ -97,6 +112,9 @@ git worktree list               # see who else is where
 ```
 
 If `--show-toplevel` is the plain repo root, stop and make your worktree first.
+Re-run these (or at least `pwd`) any time you return from a `cd` elsewhere — the
+shell can silently land you back in the shared checkout on another branch (see
+"Don't trust the shell's working directory" above).
 
 ## The shared main checkout
 
