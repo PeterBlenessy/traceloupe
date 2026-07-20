@@ -99,9 +99,10 @@ const KIND_LABELS: Record<string, string> = {
   link: "Links",
   shared: "Shared",
   sticker: "Stickers",
+  app: "App messages",
   system: "System",
 };
-const KIND_ORDER = ["text", "media", "link", "shared", "sticker", "system"];
+const KIND_ORDER = ["text", "media", "link", "shared", "sticker", "app", "system"];
 
 /** Clickable content-kind badges (same pill component as the Apps "Native"/"Coming
  *  soon" tags). Shows only the kinds present in `available`, and hides itself unless
