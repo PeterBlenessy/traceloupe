@@ -141,6 +141,17 @@ export interface Note {
   hasImage: boolean;
 }
 
+/** An installed app with the App Store metadata the backup carries. */
+export interface InstalledApp {
+  bundleId: string;
+  name: string | null;
+  seller: string | null;
+  version: string | null;
+  genre: string | null;
+  /** App Store release date (RFC-3339 string); format with `new Date(...)`. */
+  released: string | null;
+}
+
 export interface Recording {
   id: number;
   title: string | null;
@@ -606,8 +617,8 @@ export interface TraceLoupeClient {
   unlockNote(noteId: number, password: string): Promise<string>;
   listRecordings(): Promise<Recording[]>;
   listContacts(): Promise<Contact[]>;
-  /** Bundle ids of apps that were installed on the device. */
-  listInstalledApps(): Promise<string[]>;
+  /** Apps installed on the device, with their App Store metadata. */
+  listInstalledApps(): Promise<InstalledApp[]>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -917,7 +928,7 @@ const tauriClient: TraceLoupeClient = {
       desc,
     }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
-  listInstalledApps: () => invoke<string[]>("list_installed_apps"),
+  listInstalledApps: () => invoke<InstalledApp[]>("list_installed_apps"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
@@ -1710,17 +1721,19 @@ function mockMediaDataUrl(id: number): string {
 }
 
 // A realistic mix: some TraceLoupe-supported apps, some not, plus system apps.
-const mockInstalledApps = [
-  "net.whatsapp.WhatsApp",
-  "com.burbn.instagram",
-  "com.toyopagroup.picaboo", // Snapchat
-  "com.zhiliaoapp.musically", // TikTok
-  "org.telegram.messenger",
-  "com.spotify.client",
-  "com.apple.mobilesafari",
-  "com.google.Gmail",
-  "com.tinyspeck.chatlyio", // Slack
-  "com.ubercab.UberClient",
+// Metadata mirrors what Info.plist's iTunesMetadata carries (name/seller/
+// version/genre/release date); system apps carry none.
+const mockInstalledApps: InstalledApp[] = [
+  { bundleId: "net.whatsapp.WhatsApp", name: "WhatsApp Messenger", seller: "WhatsApp Inc.", version: "23.24.0", genre: "Social Networking", released: "2009-05-03T00:00:00Z" },
+  { bundleId: "com.burbn.instagram", name: "Instagram", seller: "Instagram, Inc.", version: "436.0.0", genre: "Photo & Video", released: "2010-10-06T08:12:41Z" },
+  { bundleId: "com.toyopagroup.picaboo", name: "Snapchat", seller: "Snap, Inc.", version: "12.80.0", genre: "Photo & Video", released: "2011-07-13T00:00:00Z" },
+  { bundleId: "com.zhiliaoapp.musically", name: "TikTok", seller: "TikTok Ltd.", version: "34.1.0", genre: "Entertainment", released: "2014-04-01T00:00:00Z" },
+  { bundleId: "org.telegram.messenger", name: "Telegram Messenger", seller: "Telegram FZ-LLC", version: "10.5.1", genre: "Social Networking", released: "2013-08-14T00:00:00Z" },
+  { bundleId: "com.spotify.client", name: "Spotify - Music and Podcasts", seller: "Spotify Ltd.", version: "8.9.10", genre: "Music", released: "2011-07-14T00:00:00Z" },
+  { bundleId: "com.google.Gmail", name: "Gmail - Email by Google", seller: "Google LLC", version: "6.0.240107", genre: "Productivity", released: "2011-11-02T00:00:00Z" },
+  { bundleId: "com.tinyspeck.chatlyio", name: "Slack", seller: "Slack Technologies Inc.", version: "23.11.90", genre: "Business", released: "2013-08-21T00:00:00Z" },
+  { bundleId: "com.ubercab.UberClient", name: "Uber - Request a ride", seller: "Uber Technologies, Inc.", version: "3.577.10", genre: "Travel", released: "2010-08-05T00:00:00Z" },
+  { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null },
 ];
 
 let mockActive = false;

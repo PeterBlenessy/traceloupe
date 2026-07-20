@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 38;
+const SCHEMA_VERSION: i64 = 39;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -625,6 +625,12 @@ impl CacheDb {
                 "social_json",
                 "TEXT NOT NULL DEFAULT '[]'",
             )?;
+            // v39: per-app App Store metadata (from Info.plist iTunesMetadata).
+            ensure_column(&conn, "installed_apps", "name", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "seller", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "version", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "genre", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "released", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
