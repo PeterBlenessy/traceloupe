@@ -1405,10 +1405,10 @@ const mockNotes: Note[] = [
     locked: false,
     passwordHint: null,
     hasChecklist: false,
-    imageCount: 0,
-    attachmentCount: 0,
+    imageCount: 2,
+    attachmentCount: 2,
     tags: [],
-    hasImage: false,
+    hasImage: true,
     bodyRich: null,
   },
   {
