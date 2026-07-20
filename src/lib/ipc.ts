@@ -87,6 +87,8 @@ export interface Call {
   callType: string | null;
   /** Carrier/geo location shown beside the call, if any. */
   location: string | null;
+  /** The number's ISO country code (lowercase alpha-2, e.g. "se"), or null. */
+  countryCode: string | null;
 }
 
 export interface HistoryVisit {
@@ -109,6 +111,8 @@ export interface SafariBookmark {
   dateAdded: number | null;
   dateViewed: number | null;
   previewText: string | null;
+  /** An open tab from a private-browsing window; false for bookmarks/reading-list. */
+  private: boolean;
 }
 
 export interface Note {
@@ -139,6 +143,17 @@ export interface Note {
   tags: string[];
   /** Whether the note has a first image (served as a list thumbnail). */
   hasImage: boolean;
+}
+
+/** An installed app with the App Store metadata the backup carries. */
+export interface InstalledApp {
+  bundleId: string;
+  name: string | null;
+  seller: string | null;
+  version: string | null;
+  genre: string | null;
+  /** App Store release date (RFC-3339 string); format with `new Date(...)`. */
+  released: string | null;
 }
 
 export interface Recording {
@@ -175,6 +190,13 @@ export interface Interaction {
   incomingRecipient: number;
   firstAt: number | null;
   lastAt: number | null;
+}
+
+/** A per-app communication channel (which app CoreDuet interactions flowed through). */
+export interface InteractionChannel {
+  bundleId: string;
+  incoming: number;
+  outgoing: number;
 }
 
 export interface Workout {
@@ -363,7 +385,13 @@ export interface MediaItem {
   exif: string | null;
   /** In the device's Hidden album. */
   hidden: boolean;
-  /** Media subtype ("screenshot" | "panorama"), or null. */
+  /** In Recently Deleted, with the deletion time (Unix seconds) when known. */
+  trashed: boolean;
+  trashedAt: number | null;
+  /** When the asset was added to the library (Unix seconds), which differs from
+   *  capture for received/saved/imported media, or null. */
+  addedAt: number | null;
+  /** Media subtype ("screenshot" | "panorama" | "live" | "burst"), or null. */
   subtype: string | null;
 }
 
@@ -422,6 +450,12 @@ export interface Message {
   /** Content class; "system" marks a group-action row (rename/add/remove/leave)
    *  rendered as a centered note rather than a chat bubble. */
   kind?: string | null;
+  /** Expressive send effect (e.g. "Confetti", "Slam"), or null. */
+  effect?: string | null;
+  /** Recovered from the recoverable-message store: deleted but still on-device,
+   *  with the deletion time (Unix) when known. */
+  deleted?: boolean;
+  deletedAt?: number | null;
   attachments: Attachment[];
 }
 
@@ -531,6 +565,8 @@ export interface TraceLoupeClient {
   listCycle(): Promise<CycleEntry[]>;
   healthSummary(): Promise<HealthSummary>;
   listInteractions(): Promise<Interaction[]>;
+  /** Per-app interaction channels (which apps comms flowed through), busiest first. */
+  interactionChannels(): Promise<InteractionChannel[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -606,8 +642,8 @@ export interface TraceLoupeClient {
   unlockNote(noteId: number, password: string): Promise<string>;
   listRecordings(): Promise<Recording[]>;
   listContacts(): Promise<Contact[]>;
-  /** Bundle ids of apps that were installed on the device. */
-  listInstalledApps(): Promise<string[]>;
+  /** Apps installed on the device, with their App Store metadata. */
+  listInstalledApps(): Promise<InstalledApp[]>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -777,6 +813,8 @@ const tauriClient: TraceLoupeClient = {
   listCycle: () => invoke<CycleEntry[]>("list_cycle"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
   listInteractions: () => invoke<Interaction[]>("list_interactions"),
+  interactionChannels: () =>
+    invoke<InteractionChannel[]>("interaction_channels"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -917,7 +955,7 @@ const tauriClient: TraceLoupeClient = {
       desc,
     }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
-  listInstalledApps: () => invoke<string[]>("list_installed_apps"),
+  listInstalledApps: () => invoke<InstalledApp[]>("list_installed_apps"),
   listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
@@ -1057,6 +1095,8 @@ const mockMessages: Record<number, Message[]> = {
       reactions: null,
       replyToSnippet: null,
       edited: false,
+      deleted: true,
+      deletedAt: 1717927620,
       attachments: [],
     },
     {
@@ -1208,6 +1248,7 @@ mockMessages[4] = [
     reactions: null,
     replyToSnippet: null,
     edited: false,
+    effect: "Confetti",
     attachments: [],
   },
   {
@@ -1216,6 +1257,33 @@ mockMessages[4] = [
     sender: "+15550001111",
     body: "See you at the trailhead!",
     sentAt: 1717841700,
+    readAt: null,
+    deliveredAt: null,
+    reactions: null,
+    replyToSnippet: null,
+    edited: false,
+    attachments: [],
+  },
+  // App-bubble messages (no text of their own) now surface as typed placeholders.
+  {
+    id: 2003,
+    isFromMe: true,
+    sender: null,
+    body: "Digital Touch",
+    sentAt: 1717841760,
+    readAt: null,
+    deliveredAt: null,
+    reactions: null,
+    replyToSnippet: null,
+    edited: false,
+    attachments: [],
+  },
+  {
+    id: 2004,
+    isFromMe: false,
+    sender: "+15559876543",
+    body: "GamePigeon",
+    sentAt: 1717841820,
     readAt: null,
     deliveredAt: null,
     reactions: null,
@@ -1278,6 +1346,7 @@ const mockCalls: Call[] = [
     service: "facetime",
     callType: "audio",
     location: null,
+    countryCode: null,
   },
   {
     id: 2,
@@ -1289,6 +1358,7 @@ const mockCalls: Call[] = [
     service: "phone",
     callType: null,
     location: "California",
+    countryCode: "us",
   },
   {
     id: 3,
@@ -1300,6 +1370,7 @@ const mockCalls: Call[] = [
     service: "phone",
     callType: null,
     location: null,
+    countryCode: "gb",
   },
 ];
 
@@ -1348,6 +1419,7 @@ const mockSafariBookmarks: SafariBookmark[] = [
     dateAdded: 1700000000,
     dateViewed: null,
     previewText: null,
+    private: false,
   },
   {
     id: 2,
@@ -1358,6 +1430,7 @@ const mockSafariBookmarks: SafariBookmark[] = [
     dateAdded: 1699000000,
     dateViewed: null,
     previewText: null,
+    private: false,
   },
   {
     id: 3,
@@ -1368,26 +1441,29 @@ const mockSafariBookmarks: SafariBookmark[] = [
     dateAdded: 1712000000,
     dateViewed: 1712500000,
     previewText: "An interesting article saved for later.",
+    private: false,
   },
   {
     id: 4,
     kind: "tab",
     title: "Wikipedia",
     url: "https://en.wikipedia.org/",
-    folder: "Local",
-    dateAdded: 1717000000,
-    dateViewed: null,
+    folder: null,
+    dateAdded: null,
+    dateViewed: 1717200000,
     previewText: null,
+    private: false,
   },
   {
     id: 5,
     kind: "tab",
     title: "Shopping cart",
     url: "https://shop.example.com/cart",
-    folder: "shopping",
-    dateAdded: 1717500000,
-    dateViewed: null,
+    folder: null,
+    dateAdded: null,
+    dateViewed: 1717450000,
     previewText: null,
+    private: true,
   },
 ];
 
@@ -1623,7 +1699,10 @@ const mockMedia: MediaItem[] = [
     lens: null,
     exif: null,
     hidden: false,
-    subtype: null,
+    trashed: false,
+    trashedAt: null,
+    addedAt: null,
+    subtype: "live",
   },
   {
     id: 2,
@@ -1646,7 +1725,10 @@ const mockMedia: MediaItem[] = [
     lens: null,
     exif: null,
     hidden: false,
-    subtype: null,
+    trashed: false,
+    trashedAt: null,
+    addedAt: null,
+    subtype: "panorama",
   },
   {
     id: 3,
@@ -1669,7 +1751,10 @@ const mockMedia: MediaItem[] = [
     lens: "iPhone 14 Pro back camera",
     exif: "ISO 100 · ƒ/1.8 · 1/125s · 26 mm",
     hidden: false,
-    subtype: null,
+    trashed: false,
+    trashedAt: null,
+    addedAt: 1720000000,
+    subtype: "burst",
   },
   {
     id: 4,
@@ -1692,7 +1777,10 @@ const mockMedia: MediaItem[] = [
     lens: null,
     exif: null,
     hidden: false,
-    subtype: null,
+    trashed: true,
+    trashedAt: 1718000000,
+    addedAt: null,
+    subtype: "screenshot",
   },
 ];
 
@@ -1710,17 +1798,19 @@ function mockMediaDataUrl(id: number): string {
 }
 
 // A realistic mix: some TraceLoupe-supported apps, some not, plus system apps.
-const mockInstalledApps = [
-  "net.whatsapp.WhatsApp",
-  "com.burbn.instagram",
-  "com.toyopagroup.picaboo", // Snapchat
-  "com.zhiliaoapp.musically", // TikTok
-  "org.telegram.messenger",
-  "com.spotify.client",
-  "com.apple.mobilesafari",
-  "com.google.Gmail",
-  "com.tinyspeck.chatlyio", // Slack
-  "com.ubercab.UberClient",
+// Metadata mirrors what Info.plist's iTunesMetadata carries (name/seller/
+// version/genre/release date); system apps carry none.
+const mockInstalledApps: InstalledApp[] = [
+  { bundleId: "net.whatsapp.WhatsApp", name: "WhatsApp Messenger", seller: "WhatsApp Inc.", version: "23.24.0", genre: "Social Networking", released: "2009-05-03T00:00:00Z" },
+  { bundleId: "com.burbn.instagram", name: "Instagram", seller: "Instagram, Inc.", version: "436.0.0", genre: "Photo & Video", released: "2010-10-06T08:12:41Z" },
+  { bundleId: "com.toyopagroup.picaboo", name: "Snapchat", seller: "Snap, Inc.", version: "12.80.0", genre: "Photo & Video", released: "2011-07-13T00:00:00Z" },
+  { bundleId: "com.zhiliaoapp.musically", name: "TikTok", seller: "TikTok Ltd.", version: "34.1.0", genre: "Entertainment", released: "2014-04-01T00:00:00Z" },
+  { bundleId: "org.telegram.messenger", name: "Telegram Messenger", seller: "Telegram FZ-LLC", version: "10.5.1", genre: "Social Networking", released: "2013-08-14T00:00:00Z" },
+  { bundleId: "com.spotify.client", name: "Spotify - Music and Podcasts", seller: "Spotify Ltd.", version: "8.9.10", genre: "Music", released: "2011-07-14T00:00:00Z" },
+  { bundleId: "com.google.Gmail", name: "Gmail - Email by Google", seller: "Google LLC", version: "6.0.240107", genre: "Productivity", released: "2011-11-02T00:00:00Z" },
+  { bundleId: "com.tinyspeck.chatlyio", name: "Slack", seller: "Slack Technologies Inc.", version: "23.11.90", genre: "Business", released: "2013-08-21T00:00:00Z" },
+  { bundleId: "com.ubercab.UberClient", name: "Uber - Request a ride", seller: "Uber Technologies, Inc.", version: "3.577.10", genre: "Travel", released: "2010-08-05T00:00:00Z" },
+  { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null },
 ];
 
 let mockActive = false;
@@ -2206,6 +2296,16 @@ export const mockClient: TraceLoupeClient = {
             firstAt: 1600000000,
             lastAt: 1717800000,
           },
+        ]
+      : [],
+  interactionChannels: async () =>
+    mockActive
+      ? [
+          { bundleId: "com.apple.MobileSMS", incoming: 5873, outgoing: 6482 },
+          { bundleId: "com.apple.InCallService", incoming: 140, outgoing: 157 },
+          { bundleId: "com.toyopagroup.picaboo", incoming: 0, outgoing: 166 },
+          { bundleId: "com.apple.facetime", incoming: 60, outgoing: 62 },
+          { bundleId: "com.google.Gmail", incoming: 8, outgoing: 4 },
         ]
       : [],
   listReminders: async () =>

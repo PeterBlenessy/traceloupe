@@ -13,20 +13,32 @@ import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Camera,
+  CircleDot,
+  Copy,
   EyeOff,
   Frame,
   Heart,
+  Import,
   Image as ImageIcon,
   Images,
   MapPin,
   Play,
   Smartphone,
+  Trash2,
   Users,
 } from "lucide-react";
 
 /** Media items fetched per lazy window (shared by the grid and the lightbox's
  *  neighbour lookup so their cache keys line up). */
 const PAGE = 100;
+
+/** Human labels for the media-subtype badge tooltip. */
+const SUBTYPE_LABELS: Record<string, string> = {
+  screenshot: "Screenshot",
+  panorama: "Panorama",
+  live: "Live Photo",
+  burst: "Burst",
+};
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -464,6 +476,14 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         </span>
       )}
       <div className="absolute right-1 top-1 flex gap-1">
+        {item.trashed && (
+          <span
+            className="rounded-full bg-red-600/80 p-1 text-white"
+            title="In Recently Deleted"
+          >
+            <Trash2 className="size-3" />
+          </span>
+        )}
         {item.hidden && (
           <span
             className="rounded-full bg-black/55 p-1 text-white"
@@ -488,10 +508,14 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         {item.subtype && (
           <span
             className="rounded-full bg-black/55 p-1 text-white"
-            title={item.subtype}
+            title={SUBTYPE_LABELS[item.subtype] ?? item.subtype}
           >
             {item.subtype === "panorama" ? (
               <Frame className="size-3" />
+            ) : item.subtype === "live" ? (
+              <CircleDot className="size-3" />
+            ) : item.subtype === "burst" ? (
+              <Copy className="size-3" />
             ) : (
               <Smartphone className="size-3" />
             )}
@@ -583,6 +607,12 @@ function Lightbox({
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-3">
+            {item.trashed && (
+              <Trash2
+                className="size-3.5 shrink-0 text-red-400"
+                aria-label="In Recently Deleted"
+              />
+            )}
             {item.hidden && (
               <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />
             )}
@@ -618,6 +648,17 @@ function Lightbox({
             )}
             {item.source && <span>{item.source}</span>}
             {item.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
+            {item.addedAt != null &&
+              (item.takenAt == null ||
+                Math.abs(item.addedAt - item.takenAt) > 86400) && (
+                <span
+                  className="inline-flex items-center gap-1 text-amber-400"
+                  title="Added to this device's library later than it was captured — likely received, saved, or imported"
+                >
+                  <Import className="size-3 shrink-0" />
+                  Added {formatDateTime(item.addedAt)}
+                </span>
+              )}
           </div>
         </div>
         {(item.camera || item.lens || item.exif || item.width || item.fileSize) && (
