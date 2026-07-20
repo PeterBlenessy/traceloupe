@@ -486,10 +486,10 @@ fn parse_daily(
     // Rows arrive grouped by (day, data_type); collect each group's per-source
     // stats, merge, write one row.
     let mut current: Option<(String, i64, Vec<SourceStats>)> = None;
-    let mut flush = |tx: &rusqlite::Transaction,
-                     day: &str,
-                     data_type: i64,
-                     sources: &[SourceStats]|
+    let flush = |tx: &rusqlite::Transaction,
+                 day: &str,
+                 data_type: i64,
+                 sources: &[SourceStats]|
      -> Result<()> {
         let Some(metric) = metric_name(data_type) else {
             return Ok(());
