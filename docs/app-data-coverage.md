@@ -45,7 +45,7 @@ iMessage is unsurfaced.
 | Group actions (rename/join/leave) | ✅ 544 | ✅ (0.15.0) | `item_type` 1–4 rendered as centered system rows ("‹actor› ‹action›") |
 | Tapbacks / reactions (+ custom emoji) | ✅ 7,600 / 478 | ✅ | `associated_message_type`/`_guid`/`_emoji` folded (add/remove, per reactor) into a per-message "❤️×2 👍" badge; the tapback rows are no longer shown as messages |
 | Replies (inline threads) | ✅ 6,560 | ✅ | `thread_originator_guid` resolved (via the GUID map) to a quoted preview above the reply bubble |
-| Expressive effects | ✅ 217 | ⬜ | `expressive_send_style_id` |
+| Expressive effects | ✅ 217 | ✅ (0.18.0) | `expressive_send_style_id` → "Sent with Confetti/Slam/…" label under the bubble (208 messages, 12 effect types) |
 | App/bubble messages (Apple Cash, polls…) | ✅ 589 | ⬜ | `balloon_bundle_id` / `payload_data` not decoded |
 | Filtered (unknown sender) / archived | ✅ 11 | ⬜ | `chat.is_filtered` — no Unknown/Filtered separation |
 | Recently-deleted / recoverable | ✅ (tables) | ⬜ | `chat_recoverable_message_join` not read |

@@ -183,6 +183,31 @@ fn balloon_label(bundle_id: &str) -> String {
     }
 }
 
+/// Friendly name for an iMessage **expressive send effect**
+/// (`expressive_send_style_id`). Screen effects use
+/// `com.apple.messages.effect.CK<Name>Effect`; bubble effects use
+/// `com.apple.MobileSMS.expressivesend.<name>`. `None` for an unknown id.
+fn effect_name(style_id: &str) -> Option<&'static str> {
+    Some(match style_id {
+        // Bubble effects.
+        "com.apple.MobileSMS.expressivesend.impact" => "Slam",
+        "com.apple.MobileSMS.expressivesend.loud" => "Loud",
+        "com.apple.MobileSMS.expressivesend.gentle" => "Gentle",
+        "com.apple.MobileSMS.expressivesend.invisibleink" => "Invisible Ink",
+        // Full-screen effects.
+        "com.apple.messages.effect.CKEchoEffect" => "Echo",
+        "com.apple.messages.effect.CKSpotlightEffect" => "Spotlight",
+        "com.apple.messages.effect.CKHappyBirthdayEffect" => "Balloons",
+        "com.apple.messages.effect.CKConfettiEffect" => "Confetti",
+        "com.apple.messages.effect.CKHeartEffect" => "Love",
+        "com.apple.messages.effect.CKLasersEffect" => "Lasers",
+        "com.apple.messages.effect.CKFireworksEffect" => "Fireworks",
+        "com.apple.messages.effect.CKSparklesEffect" => "Celebration",
+        "com.apple.messages.effect.CKShootingStarEffect" => "Shooting Star",
+        _ => return None,
+    })
+}
+
 /// A single-line preview of a message body, capped at `max` chars (char-safe).
 fn truncate_snippet(body: &str, max: usize) -> String {
     let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -378,12 +403,14 @@ pub fn parse_messages(
     // App-bubble bundle id (Digital Touch / Handwriting / iMessage extensions);
     // absent from older schemas + the test fixtures, so fall back to NULL.
     let bb_expr = if mcols.contains("balloon_bundle_id") { "m.balloon_bundle_id" } else { "NULL" };
+    // Expressive send effect (Confetti / Slam / …); guarded the same way.
+    let es_expr = if mcols.contains("expressive_send_style_id") { "m.expressive_send_style_id" } else { "NULL" };
     let mut mstmt = src.prepare(&format!(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
                 m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
                 m.thread_originator_guid, m.attributedBody, m.date_edited,
-                {it_expr}, {ga_expr}, {gt_expr}, {bb_expr}
+                {it_expr}, {ga_expr}, {gt_expr}, {bb_expr}, {es_expr}
          FROM message m
          JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
@@ -461,6 +488,11 @@ pub fn parse_messages(
         // in the Links filter, not App messages).
         let is_url_balloon =
             balloon_bundle_id.as_deref() == Some("com.apple.messages.URLBalloonProvider");
+        // The expressive send effect this message was sent with, if any.
+        let effect = r
+            .get::<_, Option<String>>(20)?
+            .as_deref()
+            .and_then(effect_name);
 
         // A tapback row: record the event and skip it — it is not a chat message.
         if assoc_type >= 2000 {
@@ -569,8 +601,8 @@ pub fn parse_messages(
         tx.execute(
             "INSERT INTO messages
                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
-                 read_at, delivered_at, edited)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 read_at, delivered_at, edited, effect)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             rusqlite::params![
                 thread_id,
                 sender,
@@ -582,6 +614,7 @@ pub fn parse_messages(
                 read_at,
                 delivered_at,
                 edited as i64,
+                effect,
             ],
         )?;
         let message_id = tx.last_insert_rowid();
@@ -941,6 +974,43 @@ mod tests {
         assert_eq!(rows[2], ("https://example.com".to_string(), "link".to_string()));
         // A text-less URL balloon: "Link" placeholder, still the link kind (not app).
         assert_eq!(rows[3], ("Link".to_string(), "link".to_string()));
+    }
+
+    #[test]
+    fn expressive_send_effects_are_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER, expressive_send_style_id TEXT);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             INSERT INTO message VALUES (1,'happy bday!',1,721700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.effect.CKConfettiEffect');
+             INSERT INTO message VALUES (2,'boom',0,721700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.MobileSMS.expressivesend.impact');
+             INSERT INTO message VALUES (3,'plain',0,721700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,NULL);
+             INSERT INTO chat_message_join VALUES (10,1),(10,2),(10,3);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+        let rows: Vec<(String, Option<String>)> = cache
+            .conn()
+            .prepare("SELECT body, effect FROM messages ORDER BY sent_at")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows[0], ("happy bday!".to_string(), Some("Confetti".to_string())));
+        assert_eq!(rows[1], ("boom".to_string(), Some("Slam".to_string())));
+        assert_eq!(rows[2], ("plain".to_string(), None));
     }
 
     #[test]

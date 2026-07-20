@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 39;
+const SCHEMA_VERSION: i64 = 40;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -631,6 +631,8 @@ impl CacheDb {
             ensure_column(&conn, "installed_apps", "version", "TEXT")?;
             ensure_column(&conn, "installed_apps", "genre", "TEXT")?;
             ensure_column(&conn, "installed_apps", "released", "TEXT")?;
+            // v40: iMessage expressive send effect (Confetti/Slam/Invisible Ink…).
+            ensure_column(&conn, "messages", "effect", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
