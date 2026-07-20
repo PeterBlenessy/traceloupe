@@ -41,6 +41,18 @@ legal or punitive ToS penalty. This, not litigation, is the real risk of Live
 Fetch.
 _Avoid_: "ban", "ToS enforcement action".
 
+**Recovered blob**:
+A media blob that was offloaded and later retrieved (via T1 or T2). It lives in
+the **augmentation store** with explicit provenance and is **never** written back
+into the read-only backup mirror.
+_Avoid_: treating a recovered blob as backup-native.
+
+**Augmentation store**:
+A separate sidecar store (blob dir + index) keyed to a backup, holding recovered
+blobs and fetched metadata alongside the existing SQLite cache. Exists so the
+decrypted backup mirror stays strictly read-only.
+_Avoid_: "the cache" (that is the parse cache), "the mirror".
+
 ## Relationships
 
 - **Offloaded media** is recovered by either **Sanctioned Export** (T1, default)
