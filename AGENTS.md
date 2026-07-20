@@ -11,25 +11,56 @@ agent in its own lane.
 
 ## Start every task in your own worktree
 
-Before editing or building anything, create an isolated worktree whose **branch
-name equals its directory name**:
+Before editing or building anything, work in an isolated worktree whose **branch
+name equals its directory name**. One helper handles both cases:
 
 ```bash
-scripts/agent-worktree.sh <slug>          # e.g. calls-country-code
-# → .claude/worktrees/<slug>  on branch  <slug>  (based on origin/main)
+scripts/agent-worktree.sh <name>
 ```
 
-That helper is just a wrapper around:
-
-```bash
-git worktree add .claude/worktrees/<slug> -b <slug> origin/main
-```
+- If `<name>` is a **new** task → creates branch `<name>` off `origin/main` in
+  `.claude/worktrees/<name>`.
+- If `<name>` is an **existing** branch (local or on origin) → checks that branch
+  out into `.claude/worktrees/<name>` instead of creating a new one.
 
 `.claude/worktrees/` is gitignored, so worktrees never show up in `git status`.
 Then `cd` into the worktree and do all your work there.
 
-Claude Code users can also use the built-in `EnterWorktree` tool, which does the
-same thing — the naming convention below still applies.
+Claude Code users can also use the built-in `EnterWorktree` tool — the naming
+convention still applies.
+
+### New task (no branch yet)
+
+```bash
+scripts/agent-worktree.sh my-task-slug     # branch + dir both "my-task-slug", off origin/main
+```
+
+Wraps `git worktree add .claude/worktrees/<slug> -b <slug> origin/main`.
+
+### Picking up an EXISTING branch
+
+If the work is on a branch that already exists — one that was handed to you,
+renamed, or left mid-flight (e.g. `feature/icloud-offloaded-media`) — do **not**
+create a new branch. Check the existing one out into a matching worktree:
+
+```bash
+scripts/agent-worktree.sh feature/icloud-offloaded-media   # detects it exists, checks it out
+# equivalently, by hand:
+git fetch origin
+git worktree add .claude/worktrees/feature/icloud-offloaded-media feature/icloud-offloaded-media
+```
+
+(A branch with slashes just nests the worktree dir — name and branch stay
+identical.) Then get current before you start, and re-verify you're isolated:
+
+```bash
+git merge origin/main       # (or rebase, per the branch's convention)
+git branch --show-current   # must be the branch you were handed
+```
+
+A branch can be checked out in only **one** worktree at a time, so if this errors
+with "already checked out", another agent already owns it — coordinate, don't
+force.
 
 ## Naming
 
