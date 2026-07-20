@@ -405,14 +405,25 @@ pub fn parse_messages(
     let bb_expr = if mcols.contains("balloon_bundle_id") { "m.balloon_bundle_id" } else { "NULL" };
     // Expressive send effect (Confetti / Slam / …); guarded the same way.
     let es_expr = if mcols.contains("expressive_send_style_id") { "m.expressive_send_style_id" } else { "NULL" };
+    // Recently-deleted but still-recoverable messages live only in
+    // chat_recoverable_message_join (never in chat_message_join), each with a
+    // `delete_date`. UNION them into the chat→message mapping so they surface,
+    // badged as deleted. Guarded on the table's presence (older DBs / fixtures).
+    let recoverable_union = if table_exists(&src, "chat_recoverable_message_join") {
+        "UNION ALL
+         SELECT chat_id, message_id, delete_date FROM chat_recoverable_message_join"
+    } else {
+        ""
+    };
     let mut mstmt = src.prepare(&format!(
         "SELECT cmj.chat_id, m.text, m.is_from_me, m.date, m.handle_id, m.cache_has_attachments, m.ROWID,
                 m.date_read, m.date_delivered, m.guid,
                 m.associated_message_guid, m.associated_message_type, m.associated_message_emoji,
                 m.thread_originator_guid, m.attributedBody, m.date_edited,
-                {it_expr}, {ga_expr}, {gt_expr}, {bb_expr}, {es_expr}
+                {it_expr}, {ga_expr}, {gt_expr}, {bb_expr}, {es_expr}, cmj.delete_date
          FROM message m
-         JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+         JOIN (SELECT chat_id, message_id, NULL AS delete_date FROM chat_message_join
+               {recoverable_union}) cmj ON cmj.message_id = m.ROWID
          WHERE m.text IS NOT NULL OR m.cache_has_attachments <> 0
                OR COALESCE(m.associated_message_type, 0) <> 0
                OR m.attributedBody IS NOT NULL
@@ -493,6 +504,10 @@ pub fn parse_messages(
             .get::<_, Option<String>>(20)?
             .as_deref()
             .and_then(effect_name);
+        // A non-NULL delete_date means this row came from the recoverable-message
+        // join: the message was deleted but is still recoverable. Badge it.
+        let deleted_at = mac_to_unix(r.get::<_, Option<i64>>(21)?.unwrap_or(0));
+        let deleted = r.get::<_, Option<i64>>(21)?.is_some();
 
         // A tapback row: record the event and skip it — it is not a chat message.
         if assoc_type >= 2000 {
@@ -566,8 +581,8 @@ pub fn parse_messages(
             tx.execute(
                 "INSERT INTO messages
                     (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
-                     read_at, delivered_at, edited)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'system', ?6, ?7, 0)",
+                     read_at, delivered_at, edited, deleted, deleted_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'system', ?6, ?7, 0, ?8, ?9)",
                 rusqlite::params![
                     thread_id,
                     sender,
@@ -576,6 +591,8 @@ pub fn parse_messages(
                     sent_unix,
                     read_at,
                     delivered_at,
+                    deleted as i64,
+                    deleted_at,
                 ],
             )?;
             report.messages += 1;
@@ -601,8 +618,8 @@ pub fn parse_messages(
         tx.execute(
             "INSERT INTO messages
                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind,
-                 read_at, delivered_at, edited, effect)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 read_at, delivered_at, edited, effect, deleted, deleted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             rusqlite::params![
                 thread_id,
                 sender,
@@ -615,6 +632,8 @@ pub fn parse_messages(
                 delivered_at,
                 edited as i64,
                 effect,
+                deleted as i64,
+                deleted_at,
             ],
         )?;
         let message_id = tx.last_insert_rowid();
@@ -1011,6 +1030,48 @@ mod tests {
         assert_eq!(rows[0], ("happy bday!".to_string(), Some("Confetti".to_string())));
         assert_eq!(rows[1], ("boom".to_string(), Some("Slam".to_string())));
         assert_eq!(rows[2], ("plain".to_string(), None));
+    }
+
+    #[test]
+    fn surfaces_recoverable_deleted_messages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE chat_recoverable_message_join (chat_id INTEGER, message_id INTEGER, delete_date INTEGER, ck_sync_state INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             -- A live message and a deleted-but-recoverable one, both in chat 10.
+             INSERT INTO message VALUES (100,'still here',0,721692800000000000,1,0,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,'oops deleted this',1,721692860000000000,0,0,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100);
+             -- 101 is ONLY in the recoverable join (never in chat_message_join).
+             INSERT INTO chat_recoverable_message_join VALUES (10,101,721692900000000000,0);",
+        )
+        .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, false, None).unwrap();
+
+        let rows: Vec<(String, i64, Option<i64>)> = cache
+            .conn()
+            .prepare("SELECT body, deleted, deleted_at FROM messages ORDER BY sent_at")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(rows.len(), 2, "the deleted message is recovered, not dropped");
+        assert_eq!(rows[0], ("still here".to_string(), 0, None));
+        // 721692900000000000 ns → unix 1_700_000_100.
+        assert_eq!(rows[1], ("oops deleted this".to_string(), 1, Some(1_700_000_100)));
     }
 
     #[test]

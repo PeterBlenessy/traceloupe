@@ -48,6 +48,10 @@ pub struct Message {
     pub kind: Option<String>,
     /// Expressive send effect it was sent with (e.g. "Confetti", "Slam"), or None.
     pub effect: Option<String>,
+    /// Recovered from the recoverable-message store: deleted but still on-device,
+    /// with the deletion time (Unix) when known.
+    pub deleted: bool,
+    pub deleted_at: Option<i64>,
     pub attachments: Vec<Attachment>,
 }
 
@@ -142,7 +146,7 @@ pub fn get_message_window(
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect, deleted, deleted_at
          FROM messages
          WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
          ORDER BY sent_at {dir}, id {dir}
@@ -216,7 +220,7 @@ pub fn message_row_index(
 pub fn get_messages(cache: &CacheDb, thread_id: i64) -> Result<Vec<Message>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect
+        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect, deleted, deleted_at
          FROM messages
          WHERE thread_id = ?1
          ORDER BY sent_at ASC, id ASC",
@@ -242,6 +246,8 @@ fn row_to_message(r: &rusqlite::Row<'_>) -> rusqlite::Result<Message> {
         edited: r.get::<_, i64>(9)? != 0,
         kind: r.get(10)?,
         effect: r.get(11)?,
+        deleted: r.get::<_, i64>(12)? != 0,
+        deleted_at: r.get(13)?,
         attachments: Vec::new(),
     })
 }
@@ -603,6 +609,8 @@ fn range_window(
                         edited: false,
                         kind: None,
                         effect: None,
+                        deleted: false,
+                        deleted_at: None,
                         attachments: Vec::new(),
                     },
                 })

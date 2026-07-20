@@ -445,6 +445,10 @@ export interface Message {
   kind?: string | null;
   /** Expressive send effect (e.g. "Confetti", "Slam"), or null. */
   effect?: string | null;
+  /** Recovered from the recoverable-message store: deleted but still on-device,
+   *  with the deletion time (Unix) when known. */
+  deleted?: boolean;
+  deletedAt?: number | null;
   attachments: Attachment[];
 }
 
@@ -1084,6 +1088,8 @@ const mockMessages: Record<number, Message[]> = {
       reactions: null,
       replyToSnippet: null,
       edited: false,
+      deleted: true,
+      deletedAt: 1717927620,
       attachments: [],
     },
     {

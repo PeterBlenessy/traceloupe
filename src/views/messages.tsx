@@ -18,6 +18,7 @@ import {
   MessagesSquare,
   Paperclip,
   Sparkles,
+  Trash2,
   Users,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -1424,6 +1425,21 @@ function MessageBubble({
               {message.edited && (
                 <span className="mt-0.5 block text-[10px] italic opacity-60">
                   Edited
+                </span>
+              )}
+              {message.deleted && (
+                <span
+                  className="mt-0.5 flex items-center gap-1 text-[10px] font-medium text-red-500"
+                  title={
+                    message.deletedAt
+                      ? `Deleted ${formatMessageTime(message.deletedAt)}`
+                      : "Recovered from Recently Deleted"
+                  }
+                >
+                  <Trash2 className="size-2.5" />
+                  {message.deletedAt
+                    ? `Deleted ${formatMessageTime(message.deletedAt)}`
+                    : "Deleted"}
                 </span>
               )}
             </BubbleContent>

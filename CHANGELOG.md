@@ -48,6 +48,10 @@ Requires a re-import to populate for existing caches.
   Instagram, and other service handles).
 - **Apps — App Store metadata.** Name, seller, version, genre, and release year
   parsed from each app's `iTunesMetadata` bplist.
+- **Messages — Recently Deleted.** Deleted-but-recoverable iMessages
+  (`chat_recoverable_message_join`, never read before) are recovered and shown
+  with a red "Deleted &lt;date&gt;" badge — messages that had vanished from the
+  conversation reappear, forensic.
 - **Messages — expressive send effects.** "Sent with Confetti / Slam / Invisible
   Ink / …" from `expressive_send_style_id`.
 - **Messages — app-bubble messages.** iMessage-app bubbles (`balloon_bundle_id`)

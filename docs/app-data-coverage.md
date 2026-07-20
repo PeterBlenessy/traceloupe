@@ -48,7 +48,7 @@ iMessage is unsurfaced.
 | Expressive effects | ✅ 217 | ✅ (0.18.0) | `expressive_send_style_id` → "Sent with Confetti/Slam/…" label under the bubble (208 messages, 12 effect types) |
 | App/bubble messages (Apple Cash, polls…) | ✅ 589 | ⬜ | `balloon_bundle_id` / `payload_data` not decoded |
 | Filtered (unknown sender) / archived | ✅ 11 | ⬜ | `chat.is_filtered` — no Unknown/Filtered separation |
-| Recently-deleted / recoverable | ✅ (tables) | ⬜ | `chat_recoverable_message_join` not read |
+| Recently-deleted / recoverable | ✅ 54 | ✅ (0.18.0) | `chat_recoverable_message_join` (not in `chat_message_join`) UNIONed into the parse; deleted messages surface in-thread with a red "Deleted &lt;date&gt;" badge — 54 recovered here |
 | Content kind (media/text/link/sticker) | derived | ✅ | `messages.kind` → content-filter pills |
 
 ## Notes — `NoteStore.sqlite`
