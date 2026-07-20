@@ -1234,6 +1234,33 @@ mockMessages[4] = [
     edited: false,
     attachments: [],
   },
+  // App-bubble messages (no text of their own) now surface as typed placeholders.
+  {
+    id: 2003,
+    isFromMe: true,
+    sender: null,
+    body: "Digital Touch",
+    sentAt: 1717841760,
+    readAt: null,
+    deliveredAt: null,
+    reactions: null,
+    replyToSnippet: null,
+    edited: false,
+    attachments: [],
+  },
+  {
+    id: 2004,
+    isFromMe: false,
+    sender: "+15559876543",
+    body: "GamePigeon",
+    sentAt: 1717841820,
+    readAt: null,
+    deliveredAt: null,
+    reactions: null,
+    replyToSnippet: null,
+    edited: false,
+    attachments: [],
+  },
 ];
 
 // All mock messages flattened into one chronological stream, for the timeline.
