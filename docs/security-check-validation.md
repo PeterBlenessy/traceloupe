@@ -46,8 +46,8 @@ MVT modules that evaluate indicators (from the installed package):
 | `applications` | installed app bundle IDs | **Tier A** — `apps` (installed_apps) |
 | `manifest` | suspicious file names/paths across the backup | **Tier A** — `manifest` sweep |
 | `configuration_profiles` / `profile_events` | unknown MDM/proxy profiles + install events | **Tier B (M2)** — extraction defined in the PRD |
-| `osanalytics_addaily` | malicious **process names** | **Tier B (M2)** — process-name indicators load today; extraction is M2 |
-| `net_datausage` | process names with network usage | **Tier B (M2)** |
+| `osanalytics_addaily` | malicious **process names** | **Shipped (M2, v0.21.0)** — `parse_addaily` scans `netUsageBaseline` process names |
+| `net_datausage` | process names with network usage | **Shipped (M2, v0.21.0)** — `parse_datausage` scans `ZPROCESS` names + bundle names |
 | `tcc` | apps holding mic/camera/location grants | **Tier B (M2)** |
 | `shortcuts` | automation-based surveillance | **Tier B (M2)** |
 | `webkit_resource_load_statistics` / `webkit_session_resource_log` | in-app webview domains | **Tier B (M2)** |
@@ -56,19 +56,20 @@ MVT modules that evaluate indicators (from the installed package):
 | `backup_info` | device metadata (no indicators) | N/A |
 
 **Conclusion:** every MVT module that matches an indicator class our feeds carry
-(domains, URLs, emails, bundle IDs, file names/paths) is covered by a shipped
-Tier A module. The remaining MVT modules match **process names** and Tier B
-artifacts (profiles, DataUsage, TCC, Shortcuts, WebKit) — these are the M2 scope
-already named in the PRD, not unexplained gaps. Process-name indicators are
-already loaded from the feeds; only their extraction surface is deferred.
+(domains, URLs, emails, bundle IDs, file names/paths, **process names**) is now
+covered by a shipped module — Tier A plus the Tier-B process-activity extraction
+added in M2 (v0.21.0). The remaining MVT modules match Tier-B artifacts still
+scheduled for M2 (configuration profiles, TCC, Shortcuts, WebKit) — named in the
+PRD, not unexplained gaps.
 
 ## Indicator-kind parity
 
 Our loaders ingest domains, URLs, emails, process names, file names, file paths,
-bundle IDs, cert SHA-1s, file hashes, and IPs (see `indicators.rs`). The kinds
-with **no M1 Tier A surface** — process names, cert hashes, file hashes, IPs —
-map to Tier B artifacts or on-device binaries a backup does not contain; they
-are carried in the set and become live as Tier B lands.
+bundle IDs, cert SHA-1s, file hashes, and IPs (see `indicators.rs`). Process
+names are live as of M2 (DataUsage + OSAnalytics). The kinds with **no scan
+surface yet** — cert hashes, file hashes, IPs — map to Tier-B artifacts still to
+come or to on-device binaries a backup does not contain; they are carried in the
+set and become live as later Tier-B extractions land.
 
 ## Reproduce
 
