@@ -17,3 +17,9 @@ git push -u origin <slug>          # back it up immediately
 
 The branch name always equals the worktree directory name. See AGENTS.md for the
 naming rules, build/verify commands, and cleanup steps.
+
+> **Watch the shell's working directory.** It is not pinned to your worktree —
+> after a `cd` elsewhere, the next command can run in the shared main checkout on
+> a *different branch*, so relative-path reads/edits hit the wrong files. Use
+> absolute paths rooted at your worktree, and `pwd` after any `cd` away. See
+> "Don't trust the shell's working directory" in AGENTS.md.
