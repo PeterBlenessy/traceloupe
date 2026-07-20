@@ -463,6 +463,103 @@ pub fn load_echap_yaml(yaml_text: &str, source: &str, class: FeedClass) -> Resul
     })
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot directory (bundled or fetched)
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+struct SnapshotManifest {
+    generated_at: String,
+    feeds: Vec<SnapshotFeedEntry>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotFeedEntry {
+    file: String,
+    source: String,
+    class: String,
+    format: String,
+}
+
+/// Per-feed summary reported to the UI (feed freshness screen, scan footer).
+#[derive(Debug, serde::Serialize)]
+pub struct FeedInfo {
+    pub source: String,
+    pub class: String,
+    pub count: usize,
+    pub skipped: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct SnapshotInfo {
+    pub generated_at: String,
+    pub feeds: Vec<FeedInfo>,
+}
+
+/// Load every feed listed in a snapshot directory's `manifest.json` (written
+/// by scripts/update-indicator-snapshot.sh — the bundled resources dir or the
+/// fetched copy under Application Support). A feed that fails to parse is
+/// reported with count 0 rather than failing the whole snapshot; a missing or
+/// malformed manifest is an error.
+pub fn load_snapshot_dir(dir: &std::path::Path) -> Result<(IndicatorSet, SnapshotInfo)> {
+    let manifest_path = dir.join("manifest.json");
+    let manifest_text =
+        std::fs::read_to_string(&manifest_path).map_err(|e| Error::io(&manifest_path, e))?;
+    let manifest: SnapshotManifest =
+        serde_json::from_str(&manifest_text).map_err(|e| Error::IndicatorFeed {
+            feed: "manifest.json".to_string(),
+            message: e.to_string(),
+        })?;
+
+    let mut feeds = Vec::new();
+    let mut infos = Vec::new();
+    for entry in &manifest.feeds {
+        let class = match entry.class.as_str() {
+            "stalkerware" => FeedClass::Stalkerware,
+            "watchware" => FeedClass::Watchware,
+            _ => FeedClass::Mercenary,
+        };
+        let path = dir.join(&entry.file);
+        let loaded = std::fs::read_to_string(&path)
+            .map_err(|e| Error::io(&path, e))
+            .and_then(|text| match entry.format.as_str() {
+                "echap_yaml" => load_echap_yaml(&text, &entry.source, class),
+                _ => load_stix_bundle(&text, &entry.source, class),
+            });
+        match loaded {
+            Ok(feed) => {
+                infos.push(FeedInfo {
+                    source: entry.source.clone(),
+                    class: entry.class.clone(),
+                    count: feed.indicators.len(),
+                    skipped: feed.skipped.len(),
+                });
+                feeds.push(feed);
+            }
+            Err(e) => infos.push(FeedInfo {
+                source: format!("{} (failed: {e})", entry.source),
+                class: entry.class.clone(),
+                count: 0,
+                skipped: 0,
+            }),
+        }
+    }
+    Ok((
+        IndicatorSet::from_feeds(feeds),
+        SnapshotInfo {
+            generated_at: manifest.generated_at,
+            feeds: infos,
+        },
+    ))
+}
+
+/// The snapshot directory vendored into the repo (and bundled as an app
+/// resource). Callers with a Tauri resource dir should prefer that path;
+/// this constant serves tests and dev builds running from the workspace.
+pub fn bundled_snapshot_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/indicators")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
