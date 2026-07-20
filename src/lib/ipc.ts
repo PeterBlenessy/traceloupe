@@ -204,6 +204,16 @@ export interface HealthSummary {
   sleepCount: number;
   timezoneCount: number;
   achievementCount: number;
+  cycleCount: number;
+}
+
+/** One Cycle Tracking entry (a reproductive-health / symptom category sample). */
+export interface CycleEntry {
+  id: number;
+  category: string;
+  /** Decoded value (e.g. menstrual-flow "Medium"), or null. */
+  detail: string | null;
+  loggedAt: number | null;
 }
 
 /** One earned Apple Fitness achievement. */
@@ -510,6 +520,8 @@ export interface TraceLoupeClient {
   listHealthTimezones(): Promise<HealthTimezone[]>;
   /** Earned Apple Fitness achievements, most recent first. */
   listHealthAchievements(): Promise<HealthAchievement[]>;
+  /** Cycle Tracking entries (flow + symptoms), most recent first. */
+  listCycle(): Promise<CycleEntry[]>;
   healthSummary(): Promise<HealthSummary>;
   listInteractions(): Promise<Interaction[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
@@ -754,6 +766,7 @@ const tauriClient: TraceLoupeClient = {
   listHealthTimezones: () => invoke<HealthTimezone[]>("list_health_timezones"),
   listHealthAchievements: () =>
     invoke<HealthAchievement[]>("list_health_achievements"),
+  listCycle: () => invoke<CycleEntry[]>("list_cycle"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
   listInteractions: () => invoke<Interaction[]>("list_interactions"),
   messageKinds: (threadId = null, service = null) =>
@@ -2094,6 +2107,15 @@ export const mockClient: TraceLoupeClient = {
           { id: 3, name: "PerfectWeekMove", earnedAt: 1716854400, value: 7, unit: "count" },
         ]
       : [],
+  listCycle: async () =>
+    mockActive
+      ? [
+          { id: 1, category: "Menstrual flow", detail: "Medium", loggedAt: 1717718400 },
+          { id: 2, category: "Abdominal cramps", detail: null, loggedAt: 1717718400 },
+          { id: 3, category: "Mood changes", detail: null, loggedAt: 1717632000 },
+          { id: 4, category: "Menstrual flow", detail: "Light", loggedAt: 1717632000 },
+        ]
+      : [],
   listHealthTimezones: async () =>
     mockActive
       ? [
@@ -2131,6 +2153,7 @@ export const mockClient: TraceLoupeClient = {
           sleepCount: 3,
           timezoneCount: 3,
           achievementCount: 3,
+          cycleCount: 4,
         }
       : {
           sampleCount: 0,
@@ -2141,6 +2164,7 @@ export const mockClient: TraceLoupeClient = {
           sleepCount: 0,
           timezoneCount: 0,
           achievementCount: 0,
+          cycleCount: 0,
         },
   listInteractions: async () =>
     mockActive
