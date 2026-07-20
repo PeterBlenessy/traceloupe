@@ -34,6 +34,10 @@ While pre-1.0, the **minor** version tracks major milestones:
 
 ### Added
 
+- **Safari — local open tabs.** The Safari "Tabs" list now comes from
+  `BrowserState.db` (this device's actual open tabs, 201 here) instead of the
+  thinner iCloud-synced `SafariTabs.db` (44), and each tab shows its last-viewed
+  time and a **Private** badge for private-browsing tabs (schema v46).
 - **Calls — number country.** A call number's ISO country
   (`ZISO_COUNTRY_CODE`) shows as a flag on the call row (schema v45), so
   international calls stand out at a glance.

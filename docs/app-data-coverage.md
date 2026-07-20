@@ -7,8 +7,27 @@ database actually contains and whether TraceLoupe surfaces it. Tick a row (⬜ �
 Companion to [`app-support.md`](app-support.md) (native vs iLEAPP per app); this
 file tracks *field-level* coverage within each source.
 
-**Legend:** ✅ surfaced · ◑ partial · ⬜ present in the backup, not surfaced · —
-not present / N/A in this backup.
+**Legend:** ✅ surfaced · ◑ partial · ⬜ present in the backup, not surfaced ·
+⊘ **won't implement** (deliberate — see below) · — not present / N/A in this backup.
+
+> **📕 Field-level coverage is closed (v0.19.0).** Safari **local open tabs**
+> (`BrowserState.db`) was the last field-level item built. **Every remaining
+> `⬜` and `◑` row below is now `⊘` won't-implement** — kept in the table for
+> the record, not as a backlog. The reasons, by category:
+> - **Low signal in real backups** — e.g. Calls read/country-availability, Notes
+>   account, Photos orientation/description, Messages filtered (11 rows), receiving
+>   SIM: the field is nearly always empty or single-valued on a real device.
+> - **Not authoritatively decodable** — e.g. Calls `ZDISCONNECTED_CAUSE`
+>   (declined/blocked/junk): even iLEAPP only maps 2 of ~10 codes; we won't guess.
+> - **Redundant** — e.g. Photos `ZMODIFICATIONDATE` (≈ the edited/added signals
+>   already shown), Contacts creation/modification dates.
+> - **Disproportionate effort** — e.g. Notes hashtags/tables/checklist-items and
+>   Safari redirect-graph need protobuf/attribute-run or graph reconstruction.
+>
+> Two things are **not** covered by this closure and remain live elsewhere:
+> **new stores/parsers** (e.g. iCloud-offloaded media — its own branch), and
+> **per-app third-party chat** enhancements (the app-chat table below), which are
+> gated on a backup that actually has the app installed.
 
 > **Verified against a real backup (2026-07-15).** The counts below come from
 > auditing the decrypted mirror of one real device: **143,088** messages ·
@@ -114,7 +133,7 @@ Parser extracts 6 of ~45 `ZCALLRECORD` columns.
 | Reading-list last-viewed | ✅ | ✅ (0.15.0) | "Read ‹date›" or an "Unread" badge on each reading-list row |
 | Reading-list unread/fetched flags | ✅ | ⬜ | No read/unread indicator |
 | Open tabs (title/url) | ✅ 41 | ✅ | + tab group name |
-| Tab windows / active-tab / private vs local | ✅ | ⬜ | `windows*` tables unread — flat list, no open-vs-recently-closed split |
+| Open tabs (local) + private-browsing | ✅ 201 tabs | ✅ (0.19.0) | `BrowserState.db` `tabs` replaces the thinner iCloud `SafariTabs.db` (44) as the Tabs source: per-tab last-viewed + a **Private** badge (`private_browsing`; 0 private here but wired). Window/tab-group grouping + recently-closed left as ⊘ |
 
 ## Contacts — `AddressBook.sqlitedb`
 
