@@ -433,6 +433,8 @@ export interface Message {
   /** Content class; "system" marks a group-action row (rename/add/remove/leave)
    *  rendered as a centered note rather than a chat bubble. */
   kind?: string | null;
+  /** Expressive send effect (e.g. "Confetti", "Slam"), or null. */
+  effect?: string | null;
   attachments: Attachment[];
 }
 
@@ -1219,6 +1221,7 @@ mockMessages[4] = [
     reactions: null,
     replyToSnippet: null,
     edited: false,
+    effect: "Confetti",
     attachments: [],
   },
   {

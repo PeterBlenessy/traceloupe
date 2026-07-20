@@ -1415,6 +1415,12 @@ function MessageBubble({
                 sentAt={message.sentAt}
                 from={message.isFromMe ? "You" : (senderLabel ?? message.sender ?? null)}
               />
+              {message.effect && (
+                <span className="mt-0.5 flex items-center gap-1 text-[10px] opacity-60">
+                  <Sparkles className="size-2.5" />
+                  Sent with {message.effect}
+                </span>
+              )}
               {message.edited && (
                 <span className="mt-0.5 block text-[10px] italic opacity-60">
                   Edited
