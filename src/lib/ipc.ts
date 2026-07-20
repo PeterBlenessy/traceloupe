@@ -111,6 +111,8 @@ export interface SafariBookmark {
   dateAdded: number | null;
   dateViewed: number | null;
   previewText: string | null;
+  /** An open tab from a private-browsing window; false for bookmarks/reading-list. */
+  private: boolean;
 }
 
 export interface Note {
@@ -1417,6 +1419,7 @@ const mockSafariBookmarks: SafariBookmark[] = [
     dateAdded: 1700000000,
     dateViewed: null,
     previewText: null,
+    private: false,
   },
   {
     id: 2,
@@ -1427,6 +1430,7 @@ const mockSafariBookmarks: SafariBookmark[] = [
     dateAdded: 1699000000,
     dateViewed: null,
     previewText: null,
+    private: false,
   },
   {
     id: 3,
@@ -1437,26 +1441,29 @@ const mockSafariBookmarks: SafariBookmark[] = [
     dateAdded: 1712000000,
     dateViewed: 1712500000,
     previewText: "An interesting article saved for later.",
+    private: false,
   },
   {
     id: 4,
     kind: "tab",
     title: "Wikipedia",
     url: "https://en.wikipedia.org/",
-    folder: "Local",
-    dateAdded: 1717000000,
-    dateViewed: null,
+    folder: null,
+    dateAdded: null,
+    dateViewed: 1717200000,
     previewText: null,
+    private: false,
   },
   {
     id: 5,
     kind: "tab",
     title: "Shopping cart",
     url: "https://shop.example.com/cart",
-    folder: "shopping",
-    dateAdded: 1717500000,
-    dateViewed: null,
+    folder: null,
+    dateAdded: null,
+    dateViewed: 1717450000,
     previewText: null,
+    private: true,
   },
 ];
 

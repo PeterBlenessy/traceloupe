@@ -991,6 +991,9 @@ fn import_safari_bookmarks_native(
     let stores = [
         ("Library/Safari/Bookmarks.db", ".Bookmarks.db", "bookmarks"),
         ("Library/Safari/SafariTabs.db", ".SafariTabs.db", "tabs"),
+        // BrowserState.db (local open tabs) is parsed AFTER SafariTabs.db and
+        // replaces its tabs when present — richer (last-viewed, private flag).
+        ("Library/Safari/BrowserState.db", ".BrowserState.db", "open_tabs"),
     ];
     for (rel, tmp, which) in stores {
         let entry = match index.find("HomeDomain", rel) {
@@ -1011,10 +1014,14 @@ fn import_safari_bookmarks_native(
                 .push(format!("Native Safari {which}: extract failed ({e})."));
             continue;
         }
-        let res = if which == "bookmarks" {
-            crate::parsers::safari_bookmarks::parse_safari_bookmarks(&out, cache, report, replace)
-        } else {
-            crate::parsers::safari_bookmarks::parse_safari_tabs(&out, cache, report, replace)
+        let res = match which {
+            "bookmarks" => {
+                crate::parsers::safari_bookmarks::parse_safari_bookmarks(&out, cache, report, replace)
+            }
+            "open_tabs" => {
+                crate::parsers::safari_bookmarks::parse_browser_tabs(&out, cache, report)
+            }
+            _ => crate::parsers::safari_bookmarks::parse_safari_tabs(&out, cache, report, replace),
         };
         if let Err(e) = res {
             report

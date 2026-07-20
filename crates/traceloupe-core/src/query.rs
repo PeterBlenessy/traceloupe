@@ -1745,6 +1745,9 @@ pub struct SafariBookmark {
     pub date_added: Option<i64>,
     pub date_viewed: Option<i64>,
     pub preview_text: Option<String>,
+    /// An open tab in a private-browsing window (BrowserState.db). Always false
+    /// for bookmarks / reading-list rows.
+    pub private: bool,
 }
 
 fn row_to_bookmark(r: &rusqlite::Row<'_>) -> rusqlite::Result<SafariBookmark> {
@@ -1757,6 +1760,7 @@ fn row_to_bookmark(r: &rusqlite::Row<'_>) -> rusqlite::Result<SafariBookmark> {
         date_added: r.get(5)?,
         date_viewed: r.get(6)?,
         preview_text: r.get(7)?,
+        private: r.get::<_, i64>(8)? != 0,
     })
 }
 
@@ -1825,7 +1829,7 @@ pub fn get_safari_bookmarks_window(
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, kind, title, url, folder, date_added, date_viewed, preview_text
+        "SELECT id, kind, title, url, folder, date_added, date_viewed, preview_text, private
          FROM safari_bookmarks
          WHERE kind = ?1
            AND (?2 IS NULL OR url LIKE '%' || ?2 || '%' ESCAPE '\\'
