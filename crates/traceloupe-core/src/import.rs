@@ -471,15 +471,25 @@ pub fn import_backup(
     }
 
     step!("Indexing Installed Apps");
-    // Record which apps were on the device (from Info.plist) for the Apps view.
-    let apps = crate::discovery::installed_apps(backup_dir);
+    // Record which apps were on the device + their App Store metadata (name,
+    // seller, version, genre, release date) from Info.plist's iTunesMetadata.
+    let apps = crate::discovery::installed_apps_meta(backup_dir);
     {
         let conn = cache.conn();
         let tx = conn.unchecked_transaction()?;
-        for bundle_id in &apps {
+        for app in &apps {
             tx.execute(
-                "INSERT OR IGNORE INTO installed_apps (bundle_id) VALUES (?1)",
-                [bundle_id],
+                "INSERT OR REPLACE INTO installed_apps
+                     (bundle_id, name, seller, version, genre, released)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    app.bundle_id,
+                    app.name,
+                    app.seller,
+                    app.version,
+                    app.genre,
+                    app.released,
+                ],
             )?;
         }
         tx.commit()?;

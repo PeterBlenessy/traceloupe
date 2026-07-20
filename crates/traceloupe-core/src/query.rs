@@ -2065,11 +2065,36 @@ pub fn recording_blob(cache: &CacheDb, id: i64) -> Result<Option<RecordingBlob>>
         .optional()?)
 }
 
-/// Bundle IDs of apps installed on the device, sorted.
-pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<String>> {
+/// An installed app with the App Store metadata the backup carries.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledApp {
+    pub bundle_id: String,
+    pub name: Option<String>,
+    pub seller: Option<String>,
+    pub version: Option<String>,
+    pub genre: Option<String>,
+    /// The app's App Store release date (RFC-3339); the UI formats it.
+    pub released: Option<String>,
+}
+
+/// Apps installed on the device with their metadata, sorted by bundle id.
+pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<InstalledApp>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare("SELECT bundle_id FROM installed_apps ORDER BY bundle_id")?;
-    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut stmt = conn.prepare(
+        "SELECT bundle_id, name, seller, version, genre, released
+         FROM installed_apps ORDER BY bundle_id",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(InstalledApp {
+            bundle_id: r.get(0)?,
+            name: r.get(1)?,
+            seller: r.get(2)?,
+            version: r.get(3)?,
+            genre: r.get(4)?,
+            released: r.get(5)?,
+        })
+    })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
