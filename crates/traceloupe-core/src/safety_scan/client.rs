@@ -56,6 +56,27 @@ impl LlmClient {
                 { "role": "user", "content": user },
             ],
         });
+        let content = self.post_chat(&body)?;
+        serde_json::from_str(&content)
+            .map_err(|_| Error::Inference("completion content is not valid JSON".into()))
+    }
+
+    /// One free-text call (the T6 summary passes) — same privacy rules, no
+    /// grammar constraint.
+    pub fn chat_text(&self, system: &str, user: &str, max_tokens: u32) -> Result<String> {
+        let body = json!({
+            "model": self.model,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+            "messages": [
+                { "role": "system", "content": system },
+                { "role": "user", "content": user },
+            ],
+        });
+        self.post_chat(&body)
+    }
+
+    fn post_chat(&self, body: &Value) -> Result<String> {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = self
             .agent
@@ -78,8 +99,7 @@ impl LlmClient {
         let content = envelope["choices"][0]["message"]["content"]
             .as_str()
             .ok_or_else(|| Error::Inference("no message content in response".into()))?;
-        serde_json::from_str(content)
-            .map_err(|_| Error::Inference("completion content is not valid JSON".into()))
+        Ok(content.to_string())
     }
 
     /// Liveness probe against llama-server's /health.
