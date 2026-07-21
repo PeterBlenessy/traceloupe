@@ -72,6 +72,8 @@ fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub struct ModelInfo {
     pub id: String,
     pub display_name: String,
+    /// One-line role blurb (why you'd pick this model).
+    pub note: String,
     pub size_bytes: u64,
     pub installed: bool,
     pub recommended: bool,
@@ -97,6 +99,7 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
         .map(|s| ModelInfo {
             id: s.id.into(),
             display_name: s.display_name.into(),
+            note: s.note.into(),
             size_bytes: s.size_bytes,
             installed: s.installed_at(&dir).is_some(),
             recommended: s.id == rec.id,
@@ -112,6 +115,149 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
         models: infos,
         ready_model_id: ready,
     })
+}
+
+/// Result of a one-shot server health check (NoteSage-style "is it actually
+/// running and is the model loaded?"). Our sidecar is per-scan, not persistent,
+/// so this spins one up, waits for `/health`, then shuts it down.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthReport {
+    pub ok: bool,
+    pub model_id: String,
+    pub display_name: String,
+    /// Time from spawn to a healthy `/health` (only meaningful when `ok`).
+    pub startup_ms: u64,
+    /// Human-readable outcome — the success line, or the failure reason.
+    pub message: String,
+}
+
+/// Spin the sandboxed llama-server up for `model_id` (or the recommended tier),
+/// confirm the model loads and `/health` goes green, then tear it down. Gives
+/// the user on-demand proof the local model actually runs on this Mac.
+#[tauri::command]
+pub async fn safety_scan_health_check(
+    app: AppHandle,
+    gate: State<'_, SafetyScanGate>,
+    model_id: Option<String>,
+) -> Result<HealthReport, String> {
+    // Share the scan gate: never boot a second 5 GB server while a scan (which
+    // owns the GPU/RAM budget) is in flight.
+    let _guard = gate
+        .0
+        .try_lock()
+        .map_err(|_| "a Safety Scan is already running")?;
+
+    let dir = models_dir(&app)?;
+    let spec = match model_id.as_deref() {
+        Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
+        None => models::recommended(models::total_ram_bytes()),
+    };
+    let model_path = spec
+        .installed_at(&dir)
+        .ok_or("model not installed — download it first")?;
+    let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+    let scratch_dir = dir.join("healthcheck-scratch");
+
+    let spec_id = spec.id.to_string();
+    let display_name = spec.display_name.to_string();
+    let ctx_size = spec.ctx_size;
+    let app2 = app.clone();
+
+    let report = tauri::async_runtime::spawn_blocking(move || -> HealthReport {
+        let fail = |message: String| HealthReport {
+            ok: false,
+            model_id: spec_id.clone(),
+            display_name: display_name.clone(),
+            startup_ms: 0,
+            message,
+        };
+
+        crate::logging::info(&app2, format!("Safety Scan health check: model={spec_id}"));
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+        let port = match server::pick_port() {
+            Ok(p) => p,
+            Err(e) => return fail(e.to_string()),
+        };
+
+        // Forward llama-server output to the dev log, same as a real scan.
+        let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+        let app_log = app2.clone();
+        std::thread::spawn(move || {
+            while let Ok(line) = log_rx.recv() {
+                crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let mut llama = match server::LlamaServer::spawn(
+            &server::ServerConfig {
+                binary,
+                model_path,
+                port,
+                ctx_size,
+                gpu_layers: -1,
+                sandbox: true,
+                scratch_dir,
+            },
+            Some(log_tx),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                crate::logging::error(
+                    &app2,
+                    format!("Safety Scan health check: spawn failed: {e}"),
+                );
+                return fail(e.to_string());
+            }
+        };
+
+        // Bounded wait — a health check should fail fast, not hang for the full
+        // 180s scan budget. A cold 5 GB load + Metal warmup fits in ~90s.
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        loop {
+            match llama.wait_healthy(Duration::from_secs(2)) {
+                Ok(()) => {
+                    let startup_ms = started.elapsed().as_millis() as u64;
+                    llama.shutdown();
+                    crate::logging::info(
+                        &app2,
+                        format!("Safety Scan health check: healthy in {startup_ms} ms"),
+                    );
+                    return HealthReport {
+                        ok: true,
+                        model_id: spec_id.clone(),
+                        display_name: display_name.clone(),
+                        startup_ms,
+                        message: format!(
+                            "Server started and {display_name} loaded in {:.1}s.",
+                            startup_ms as f64 / 1000.0
+                        ),
+                    };
+                }
+                Err(e) => {
+                    if llama.has_exited() {
+                        let tail = llama.output_tail();
+                        crate::logging::error(
+                            &app2,
+                            format!("Safety Scan health check: {e}\n{tail}"),
+                        );
+                        return fail(e.to_string());
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        llama.shutdown();
+                        crate::logging::error(&app2, format!("Safety Scan health check: {e}"));
+                        return fail("timed out waiting for the model to load".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(report)
 }
 
 #[derive(Clone, serde::Serialize)]

@@ -579,6 +579,8 @@ export type ContentCategory =
 export interface SafetyModelInfo {
   id: string;
   displayName: string;
+  /** One-line role blurb (why you'd pick this model). */
+  note: string;
   sizeBytes: number;
   installed: boolean;
   recommended: boolean;
@@ -588,6 +590,15 @@ export interface SafetyModelStatus {
   totalRamBytes: number;
   models: SafetyModelInfo[];
   readyModelId: string | null;
+}
+
+/** Result of a one-shot llama-server health check. */
+export interface SafetyHealthReport {
+  ok: boolean;
+  modelId: string;
+  displayName: string;
+  startupMs: number;
+  message: string;
 }
 
 export type SafetyModelProgressEvent =
@@ -869,6 +880,9 @@ export interface TraceLoupeClient {
   // --- Safety Scan (local-LLM content analysis; ADR 0002) ---
   /** Local model catalog + install state + the RAM-gated recommendation. */
   getSafetyScanModelStatus(): Promise<SafetyModelStatus>;
+  /** Spin the sandboxed server up for a model, confirm it loads, tear it down.
+   *  On-demand proof the local model actually runs on this Mac. */
+  safetyScanHealthCheck(modelId?: string | null): Promise<SafetyHealthReport>;
   /** Download a catalog model (progress on `safetyscan://model-progress`). */
   downloadSafetyScanModel(modelId: string): Promise<void>;
   cancelSafetyScanModelDownload(): Promise<void>;
@@ -1234,6 +1248,10 @@ const tauriClient: TraceLoupeClient = {
     }),
   getSafetyScanModelStatus: () =>
     invoke<SafetyModelStatus>("get_safety_scan_model_status"),
+  safetyScanHealthCheck: (modelId) =>
+    invoke<SafetyHealthReport>("safety_scan_health_check", {
+      modelId: modelId ?? null,
+    }),
   downloadSafetyScanModel: (modelId) =>
     invoke("download_safety_scan_model", { modelId }),
   getSafetyScanDownloadStatus: () =>
@@ -2934,20 +2952,29 @@ export const mockClient: TraceLoupeClient = {
     models: [
       {
         id: "gemma-4-E4B-it-Q4_K_M",
-        displayName: "Gemma 4 E4B (recommended)",
+        displayName: "Gemma 4 E4B",
+        note: "Best accuracy — the default classifier.",
         sizeBytes: 4_977_171_584,
         installed: mockSafetyModelInstalled,
         recommended: true,
       },
       {
         id: "gemma-4-E2B-it-Q4_K_M",
-        displayName: "Gemma 4 E2B (for 8 GB Macs)",
+        displayName: "Gemma 4 E2B",
+        note: "Lighter fallback — smaller and faster; use it if the larger model is slow or won't load on this Mac.",
         sizeBytes: 3_106_738_272,
         installed: false,
         recommended: false,
       },
     ],
     readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,
+  }),
+  safetyScanHealthCheck: async (modelId) => ({
+    ok: true,
+    modelId: modelId ?? "gemma-4-E4B-it-Q4_K_M",
+    displayName: "Gemma 4 E4B",
+    startupMs: 4200,
+    message: "Server started and Gemma 4 E4B loaded in 4.2s.",
   }),
   getSafetyScanDownloadStatus: async () => null,
   downloadSafetyScanModel: async () => {
