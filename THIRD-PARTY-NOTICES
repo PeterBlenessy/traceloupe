@@ -10,8 +10,9 @@ parser-provenance rules in architecture.md §10.
   must add the upstream copyright line and license text below, and mark
   its source header `// provenance: port of <module> — see
   THIRD-PARTY-NOTICES`.
-- iLEAPP itself runs as a separate sidecar process (downloaded from its
-  official GitHub releases at first use); it is not linked into or
-  distributed within this binary.
+- iLEAPP is not linked into or distributed within this binary, and is no
+  longer run by the app; it remains a development-time reference only (used
+  to diff native parsers against). The "port" rule above still applies if any
+  future parser is ported rather than written clean-room.
 
 No entries yet.

@@ -1,6 +1,13 @@
 # Local iOS Backup Browser — Architecture
 
-*Working codename: TraceLoupe · Status: 0.2.0 (native lazy-decode core wired in alongside iLEAPP; native-first migration planned for 0.3.0+) · Companion to the Product & Architecture Description*
+*Working codename: TraceLoupe · Companion to the Product & Architecture Description*
+
+> **Status update (0.7.0+).** iLEAPP was removed as a runtime engine — all
+> imports are native Rust (~35s), fully offline, with no engine download. The
+> sidecar/download machinery described below (§6, §9 acquisition, and the §11
+> tables) is dormant and dev-reference only; it describes the historical
+> 0.1–0.2 MVP. The parser-provenance rules in §10 remain the governing policy.
+> This document is otherwise frozen at the 0.2.0 design.
 
 ---
 

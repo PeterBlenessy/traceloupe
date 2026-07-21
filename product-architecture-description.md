@@ -2,7 +2,13 @@
 
 **Product & Architecture Description**
 
-*Working codename: TraceLoupe · Status: 0.2.0 (native lazy-decode core wired in alongside iLEAPP) · Platform: macOS (desktop, Tauri v2)*
+*Working codename: TraceLoupe · Platform: macOS (desktop, Tauri v2)*
+
+> **Status update (0.7.0+).** The native-first migration in §12 is complete:
+> iLEAPP is no longer used at runtime. All imports are native Rust (~35s) and
+> fully offline — there is **no** iLEAPP engine download and **no** first-import
+> network requirement. §8.5 and the engine-download / first-import-network
+> passages below describe the retired 0.1–0.2 MVP and are kept for history.
 
 ---
 
@@ -171,7 +177,7 @@ This split gives dependable automated coverage without depending on a bundled Ch
 
 ## 10. Privacy & security posture
 
-- All processing is local; the application makes no network calls to operate on backup data. The single exception is a one-time, user-visible download of the pinned iLEAPP engine from its official GitHub releases on first import (checksum-verified; version and source shown to the user). After that, the app runs fully offline.
+- All processing is local; the application makes no network calls to operate on backup data. Imports are fully native and offline — there is no engine download of any kind. (The retired 0.1–0.2 MVP fetched a pinned iLEAPP engine on first import; that no longer happens.)
 - The backup password is used only in memory to unwrap file keys; it is never persisted or transmitted.
 - No telemetry or analytics.
 - The tool operates on user-provided copies of a backup; the source device is never written to.
@@ -181,8 +187,8 @@ This split gives dependable automated coverage without depending on a bundled Ch
 
 - **iOS extraction ceiling** (§7): app binaries, `Caches/`, backup-excluded files, and some hardware-bound secrets are unavailable from any backup.
 - **Encrypted-backup requirement**: the fullest data set requires an encrypted backup and its password; a lost password renders a backup unreadable by any tool.
-- **One-time import cost (MVP)** (§8.5): the iLEAPP-powered MVP runs an eager parse pass on first import of a backup; browsing is instant afterward. Phase 2 removes this for high-traffic artifacts.
-- **First-import network requirement (MVP)** (§8.5, §10): the pinned iLEAPP engine is downloaded on first use, so the very first import needs network access (or a manually supplied iLEAPP binary). All subsequent operation is offline.
+- **One-time import cost** (§8.5): import runs an eager native parse pass on first import of a backup (~35s); browsing is instant afterward. (The retired MVP did this via iLEAPP.)
+- **No network requirement**: imports are fully native and offline. (The retired 0.1–0.2 MVP downloaded a pinned iLEAPP engine on first use; that requirement is gone.)
 - **First-access decryption cost (Phase 2)** (§8.6): even in the native path, the first open of a given artifact must decrypt it; only subsequent (cached) access is instant. No tool can read an encrypted backup with zero upfront work.
 - **macOS native-shell E2E gap** (§9): no WebDriver/CDP for WKWebView.
 - **macOS Full Disk Access**: reading Finder's protected `MobileSync` location requires granting the host app Full Disk Access, or working from a copied backup.

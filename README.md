@@ -17,22 +17,24 @@ Safari history, and Notes. All processing is local; nothing leaves your Mac.
 
 ```sh
 pnpm install
-pnpm setup:engine     # one-time: install the local iLEAPP engine into ./engine
-pnpm app:dev          # run the dev app (TraceLoupe Dev), wired to the local engine
+pnpm app:dev          # run the dev app (TraceLoupe Dev)
 cargo test -p traceloupe-core   # core tests
 pnpm dev              # frontend only, in a browser with mocked IPC
 ```
 
-**The iLEAPP engine.** Imports are powered by iLEAPP, which isn't bundled or
-auto-downloaded yet. `pnpm setup:engine` installs a pinned iLEAPP + Python venv
-into `./engine` (git-ignored, ~220 MB), and `pnpm app:dev` points the app at it
-via the `TRACELOUPE_PYTHON` / `TRACELOUPE_ILEAPP_SOURCE` env vars. Without it, imports
-report "engine not installed". See `docs/spike-ileapp.md` for why deps are
-pinned and the plan to ship a re-frozen binary later.
+**Imports are fully native.** TraceLoupe parses backups with its own Rust
+parsers (~35s for a full import) — no iLEAPP, no Python, no engine download,
+and no network access required. iLEAPP is used only as a *development-time
+reference* for cross-checking those native parsers: `pnpm setup:engine`
+installs a pinned iLEAPP + Python venv into the git-ignored `./engine`, which
+you only need if you're diffing a parser against iLEAPP's output. See
+`docs/native-app-parser.md` for the parser workflow and `docs/spike-ileapp.md`
+for the history.
 
 ## License
 
 TraceLoupe is licensed under the [Apache License 2.0](LICENSE) — Copyright 2026
-Peter Blenessy. It builds on third-party open-source software under permissive
-licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). iLEAPP (MIT) runs
-as a separate subprocess and is never linked into TraceLoupe.
+Peter Blenessy. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). TraceLoupe
+ships no third-party parser code — all parsers are original Rust; iLEAPP (MIT)
+is used only as a development reference and is neither bundled nor run by the
+app.
