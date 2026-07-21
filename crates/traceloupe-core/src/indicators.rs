@@ -643,6 +643,24 @@ pub fn load_custom_dir(dir: &std::path::Path) -> Result<(IndicatorSet, SnapshotI
     ))
 }
 
+/// Load the scan's full indicator set: the bundled/fetched snapshot, plus a
+/// user's custom folder when configured, merged and re-deduplicated. The
+/// returned `SnapshotInfo` lists both the snapshot feeds and any custom feeds.
+pub fn load_indicators(
+    snapshot_dir: &std::path::Path,
+    custom_dir: Option<&std::path::Path>,
+) -> Result<(IndicatorSet, SnapshotInfo)> {
+    let (set, mut info) = load_snapshot_dir(snapshot_dir)?;
+    if let Some(custom) = custom_dir {
+        let (custom_set, custom_info) = load_custom_dir(custom)?;
+        if !custom_set.is_empty() {
+            info.feeds.extend(custom_info.feeds);
+            return Ok((set.merged_with(custom_set), info));
+        }
+    }
+    Ok((set, info))
+}
+
 /// The snapshot directory vendored into the repo (and bundled as an app
 /// resource). Callers with a Tauri resource dir should prefer that path;
 /// this constant serves tests and dev builds running from the workspace.

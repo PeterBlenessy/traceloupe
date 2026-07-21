@@ -557,6 +557,8 @@ export interface DetectionSettings {
   autoUpdateIndicators: boolean;
   fetchConsent: Consent;
   expandShortUrls: boolean;
+  /** Optional local folder of custom indicator files merged into scans. */
+  customIndicatorDir: string | null;
 }
 
 export interface TraceLoupeClient {
@@ -569,6 +571,9 @@ export interface TraceLoupeClient {
    * macOS access to it, sidestepping Full Disk Access.
    */
   pickBackupFolder(): Promise<string | null>;
+  /** Open a native folder picker; returns the chosen path, or null if cancelled.
+   *  Used for the custom indicator folder. */
+  pickFolder(title?: string): Promise<string | null>;
   /** Open System Settings at the Full Disk Access pane. */
   openFullDiskAccessSettings(): Promise<void>;
   /** Open a URL in the user's default browser (e.g. an Apple Maps link). */
@@ -874,6 +879,14 @@ const tauriClient: TraceLoupeClient = {
       multiple: false,
       title: "Choose an iPhone backup folder",
       defaultPath,
+    });
+    return typeof chosen === "string" ? chosen : null;
+  },
+  pickFolder: async (title) => {
+    const chosen = await open({
+      directory: true,
+      multiple: false,
+      title: title ?? "Choose a folder",
     });
     return typeof chosen === "string" ? chosen : null;
   },
@@ -1964,6 +1977,7 @@ let mockDetectionSettings: DetectionSettings = {
   autoUpdateIndicators: true,
   fetchConsent: "unasked",
   expandShortUrls: false,
+  customIndicatorDir: null,
 };
 
 let mockScanRuns: ScanRun[] = [];
@@ -2113,6 +2127,7 @@ export const mockClient: TraceLoupeClient = {
     "/Users/dev/Library/Application Support/MobileSync/Backup",
   pickBackupFolder: async () =>
     "/Users/dev/Library/Application Support/MobileSync/Backup",
+  pickFolder: async () => "/Users/dev/custom-indicators",
   openFullDiskAccessSettings: async () => {},
   openExternal: async (url) => {
     window.open(url, "_blank");
