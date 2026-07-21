@@ -404,7 +404,9 @@ function FindingsList({
       </CardHeader>
       <CardContent className="space-y-2">
         {visible.map((f) => {
-          const sev = SEVERITY_META[f.severity];
+          // severity is a u8 at the IPC seam, not really typed 1|2|3 — guard so
+          // an out-of-range value can't blank the whole Findings card.
+          const sev = SEVERITY_META[f.severity] ?? SEVERITY_META[1];
           return (
             <div
               key={`${f.fingerprint}:${f.category}`}

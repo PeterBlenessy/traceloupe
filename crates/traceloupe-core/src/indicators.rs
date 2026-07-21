@@ -490,6 +490,7 @@ struct SnapshotFeedEntry {
 
 /// Per-feed summary reported to the UI (feed freshness screen, scan footer).
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeedInfo {
     pub source: String,
     pub class: String,
@@ -497,7 +498,11 @@ pub struct FeedInfo {
     pub skipped: usize,
 }
 
+// camelCase so `generated_at` reaches the UI as `generatedAt` — the TS type and
+// security.tsx read the camelCase form (every other UI struct already does this;
+// its absence here crashed the Security view with `generatedAt` undefined).
 #[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SnapshotInfo {
     pub generated_at: String,
     pub feeds: Vec<FeedInfo>,

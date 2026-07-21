@@ -249,7 +249,7 @@ export function SecurityView() {
                     {totalIndicators.toLocaleString()}
                   </span>{" "}
                   indicators from {info.data.feeds.length} feeds · updated{" "}
-                  {info.data.generatedAt.slice(0, 10)}
+                  {info.data.generatedAt ? info.data.generatedAt.slice(0, 10) : "—"}
                 </>
               ) : (
                 "Loading indicator feeds…"

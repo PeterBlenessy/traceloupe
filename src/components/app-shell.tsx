@@ -60,6 +60,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -369,15 +374,21 @@ function ReimportAction({ module, label }: { module: string; label: string }) {
   if (active !== true) return null;
   const running = isRunning(module);
   return (
-    <SidebarMenuAction
-      showOnHover={!running}
-      disabled={running}
-      onClick={() => reimport(module)}
-      title={running ? `Re-importing ${label}…` : `Re-import ${label}`}
-      aria-label={running ? `Re-importing ${label}` : `Re-import ${label}`}
-    >
-      {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-    </SidebarMenuAction>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <SidebarMenuAction
+          showOnHover={!running}
+          disabled={running}
+          onClick={() => reimport(module)}
+          aria-label={running ? `Re-importing ${label}` : `Re-import ${label}`}
+        >
+          {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+        </SidebarMenuAction>
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        {running ? `Re-importing ${label}…` : `Re-import ${label}`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -393,16 +404,20 @@ function ImportIndicator() {
         ? `Reading ${p.artifact}…`
         : "starting…";
   return (
-    <button
-      onClick={reopen}
-      title="Reopen import"
-      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
-    >
-      <Loader2 className="size-3 animate-spin" />
-      <span className="max-w-[16rem] truncate">
-        Importing {active.backup.deviceName ?? active.backup.id} · {detail}
-      </span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          onClick={reopen}
+          className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
+        >
+          <Loader2 className="size-3 animate-spin" />
+          <span className="max-w-[16rem] truncate">
+            Importing {active.backup.deviceName ?? active.backup.id} · {detail}
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Reopen import</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -429,13 +444,18 @@ function ModelDownloadIndicator() {
       <Loader2 className="size-3 animate-spin" />
       <span className="max-w-[14rem] truncate">{label}</span>
       {download.phase === "downloading" && (
-        <button
-          onClick={cancelDownload}
-          title="Cancel model download"
-          className="ml-0.5 rounded-full p-0.5 hover:bg-accent hover:text-foreground"
-        >
-          <X className="size-3" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={cancelDownload}
+              aria-label="Cancel model download"
+              className="ml-0.5 rounded-full p-0.5 hover:bg-accent hover:text-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Cancel model download</TooltipContent>
+        </Tooltip>
       )}
     </span>
   );
@@ -458,18 +478,24 @@ function DensityToggle() {
   const next = DENSITIES[(DENSITIES.indexOf(density) + 1) % DENSITIES.length];
   const { icon: Icon, label } = DENSITY_META[density];
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-7"
-      onClick={() => setDensity(next)}
-      title={`Density: ${label} — click for ${DENSITY_META[next].label}`}
-    >
-      <Icon className="size-4" />
-      <span className="sr-only">
-        Density: {label}. Switch to {DENSITY_META[next].label}.
-      </span>
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={() => setDensity(next)}
+        >
+          <Icon className="size-4" />
+          <span className="sr-only">
+            Density: {label}. Switch to {DENSITY_META[next].label}.
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        Density: {label} — click for {DENSITY_META[next].label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

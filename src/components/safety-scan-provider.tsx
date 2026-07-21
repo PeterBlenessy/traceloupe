@@ -53,8 +53,16 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     unlistenModel.current = await client.onSafetyModelProgress((p) => {
       setDownload(p.phase === "done" || p.phase === "error" ? null : p);
       if (p.phase === "error") {
-        // A failure is a toast, not red text wedged into the Settings UI.
-        toast.error(`Model download failed: ${p.message}`);
+        // The listener OWNS download outcome toasts — it's the only handler that
+        // survives a webview refresh (the startDownload promise does not), so
+        // toasting here too would double up. Cancelling emits an error event
+        // whose message is the shared "import cancelled" — that's a user action,
+        // not a failure, so it's a quiet toast, never red.
+        if (p.message.toLowerCase().includes("cancel")) {
+          toast("Model download cancelled");
+        } else {
+          toast.error(`Model download failed: ${p.message}`);
+        }
       }
       if (p.phase === "done") {
         toast.success("Model ready");
@@ -135,18 +143,12 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
       setDownload(null);
       qc.invalidateQueries({ queryKey: ["safetyScan", "modelStatus"] });
     } catch (e) {
-      const msg = String(e);
-      // "already running" — a duplicate start; the real one is still going, so
-      // leave its progress visible and say nothing.
-      if (msg.includes("already running")) return;
-      setDownload(null);
-      // Cancelling is a user action, not a failure — a quiet toast, no red.
-      // (The shared cancel error reads "import cancelled".)
-      if (msg.toLowerCase().includes("cancel")) {
-        toast("Model download cancelled");
-        return;
-      }
-      toast.error(`Model download failed: ${msg}`);
+      // Outcome toasts (cancel/fail) are owned by the progress listener, which
+      // also fires after a refresh — toasting here would double-report.
+      // "already running" means the real download continues, so keep showing
+      // its progress; any other rejection clears the pill defensively (the
+      // terminal event usually already did).
+      if (!String(e).includes("already running")) setDownload(null);
     }
   };
 
