@@ -304,7 +304,7 @@ mod tests {
             return;
         };
         let model = PathBuf::from(model);
-        let binary = crate::safety_scan::server::resolve_binary(None)
+        let binary = crate::safety_scan::server::resolve_binary()
             .expect("set TRACELOUPE_LLAMA_SERVER or bundle a sidecar");
         let port = crate::safety_scan::server::pick_port().unwrap();
         let mut server = crate::safety_scan::server::LlamaServer::spawn(
@@ -315,6 +315,7 @@ mod tests {
                 ctx_size: 8192,
                 gpu_layers: -1,
                 sandbox: true,
+                scratch_dir: std::env::temp_dir().join("traceloupe-eval-scratch"),
             },
         )
         .expect("spawn llama-server");
