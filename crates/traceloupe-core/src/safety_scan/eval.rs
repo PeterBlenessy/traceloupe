@@ -317,6 +317,7 @@ mod tests {
                 sandbox: true,
                 scratch_dir: std::env::temp_dir().join("traceloupe-eval-scratch"),
             },
+            None,
         )
         .expect("spawn llama-server");
         server

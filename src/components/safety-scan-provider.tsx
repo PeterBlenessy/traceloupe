@@ -28,8 +28,6 @@ type SafetyScanContextValue = {
   cancelScan: () => void;
   startDownload: (modelId: string) => Promise<void>;
   cancelDownload: () => void;
-  /** Last scan/download error message, cleared on the next start. */
-  error: string | null;
 };
 
 const SafetyScanContext = createContext<SafetyScanContextValue | null>(null);
@@ -39,6 +37,20 @@ function scanIsTerminal(e: SafetyScanEvent) {
   return e.phase === "done" || e.phase === "error";
 }
 
+/** A short, dismissable error toast. The full technical string (which can
+ *  include multi-line llama-server output) goes to the dev logs; the toast
+ *  shows a friendly title + its first line. */
+function toastScanError(message: string) {
+  const title =
+    message.includes("exited during startup") ||
+    message.includes("model not installed")
+      ? "Safety Scan couldn't start the local model"
+      : "Safety Scan failed";
+  toast.error(title, {
+    description: message.split("\n")[0].slice(0, 200),
+  });
+}
+
 export function SafetyScanProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   const [scan, setScan] = useState<SafetyScanEvent | null>(null);
@@ -46,7 +58,6 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(
     null,
   );
-  const [error, setError] = useState<string | null>(null);
   const unlistenScan = useRef<(() => void) | null>(null);
   const unlistenModel = useRef<(() => void) | null>(null);
 
@@ -112,7 +123,6 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     rangeStart?: number | null;
     rangeEnd?: number | null;
   }) => {
-    setError(null);
     setScan({ phase: "loading" });
     if (!unlistenScan.current) {
       // Claim the slot synchronously (before the await) so a second call in
@@ -120,7 +130,10 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
       unlistenScan.current = () => {};
       unlistenScan.current = await client.onSafetyScanProgress((p) => {
         setScan(scanIsTerminal(p) ? null : p);
-        if (p.phase === "error") setError(p.message);
+        // Errors are a dismissable toast, not red text baked into the view.
+        // The full technical detail (incl. llama-server output) is in the dev
+        // logs; the toast stays short and readable.
+        if (p.phase === "error") toastScanError(p.message);
         if (p.phase === "done") {
           // New findings and a new report exist; let every consumer refetch.
           qc.invalidateQueries({ queryKey: ["safetyScan"] });
@@ -129,9 +142,10 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     }
     try {
       await client.runSafetyScan(opts);
-    } catch (e) {
+    } catch {
+      // The listener owns the error toast (and survives a refresh); only clear
+      // the running state here.
       setScan(null);
-      setError(String(e));
     }
   };
 
@@ -179,7 +193,6 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
         cancelScan,
         startDownload,
         cancelDownload,
-        error,
       }}
     >
       {children}
