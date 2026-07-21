@@ -332,8 +332,10 @@ export function NoBackupState({
 }) {
   const navigate = useNavigate();
   return (
-    <div className="flex h-full items-center justify-center overflow-y-auto p-6">
-      <div className="w-full max-w-xl py-8 text-center">
+    // Top-aligned (not vertically centered): the sidebar items are top-aligned,
+    // so a centered hero reads as floating/misaligned next to them.
+    <div className="flex h-full items-start justify-center overflow-y-auto p-6">
+      <div className="w-full max-w-xl pt-16 pb-8 text-center">
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
           <Icon className="size-6" />
         </div>
