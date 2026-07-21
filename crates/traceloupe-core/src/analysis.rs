@@ -260,6 +260,9 @@ impl AnalysisDb {
         // FULL keeps every committed verdict durable at the cost of an fsync
         // per commit, which is noise next to seconds-per-chunk inference.
         conn.pragma_update(None, "synchronous", "FULL")?;
+        // A UI write (dismiss) will land while a scan commit is in flight once
+        // T7 opens a second connection; wait instead of failing SQLITE_BUSY.
+        conn.pragma_update(None, "busy_timeout", 5000)?;
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version == 0 {
             conn.execute_batch(SCHEMA_V1)?;
@@ -290,6 +293,13 @@ impl AnalysisDb {
         range: (Option<i64>, Option<i64>),
         started_at: i64,
     ) -> Result<i64> {
+        // Repair scans stranded 'running' by a crash or fatal error. Safe
+        // here (not at open): the T7 command layer allows one scan at a time,
+        // so any 'running' row at begin is by definition dead.
+        self.conn.execute(
+            "UPDATE scans SET status = 'failed', finished_at = ?1 WHERE status = 'running'",
+            params![started_at],
+        )?;
         self.conn.execute(
             "INSERT INTO scans (model, range_start, range_end, status, started_at)
              VALUES (?1, ?2, ?3, 'running', ?4)",
@@ -342,6 +352,26 @@ impl AnalysisDb {
             params![scan_id],
         )?;
         Ok(())
+    }
+
+    /// Count a chunk toward `chunks_done` without touching chunk_progress —
+    /// the reused-chunk path, so a resumed scan's persisted progress is honest.
+    pub fn bump_chunks_done(&self, scan_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scans SET chunks_done = chunks_done + 1 WHERE id = ?1",
+            params![scan_id],
+        )?;
+        Ok(())
+    }
+
+    /// Rows written/re-confirmed by `scan_id` — the accurate per-run findings
+    /// count (a message flagged by two overlapping windows is one row).
+    pub fn count_scan_findings(&self, scan_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM content_findings WHERE scan_id = ?1",
+            params![scan_id],
+            |r| r.get(0),
+        )?)
     }
 
     /// True when `chunk_key` was already classified with this exact content —
@@ -671,6 +701,33 @@ mod tests {
         let rows = db.list_findings().unwrap();
         assert!(!rows[0].stale);
         assert_eq!(rows[0].source_id, Some(99));
+    }
+
+    #[test]
+    fn stale_running_scan_repaired_at_next_begin() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let dead = db.begin_scan("m", (None, None), 100).unwrap();
+        // Simulate a crash: never finished. The next begin_scan repairs it.
+        let live = db.begin_scan("m", (None, None), 200).unwrap();
+        let (dead_status, dead_finished): (String, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT status, finished_at FROM scans WHERE id = ?1",
+                params![dead],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(dead_status, "failed");
+        assert_eq!(dead_finished, Some(200));
+        let live_status: String = db
+            .conn()
+            .query_row(
+                "SELECT status FROM scans WHERE id = ?1",
+                params![live],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(live_status, "running");
     }
 
     #[test]
