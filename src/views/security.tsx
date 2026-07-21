@@ -576,12 +576,19 @@ function ShortLinkExpander({ text }: { text: string }) {
             <DialogTitle>Reveal this shortened link?</DialogTitle>
             <DialogDescription>
               TraceLoupe will contact the link’s shortener to find where it
-              points. This is the one time information from your backup leaves
-              your Mac — and if the link was sent by someone monitoring this
-              device, resolving it can signal that the device is being examined.
-              Only the shortener is contacted, never the final destination.
+              points. Only the shortener is contacted, never the final
+              destination.
             </DialogDescription>
           </DialogHeader>
+          <Alert className="border-amber-500/40 text-amber-700 dark:text-amber-400 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
+            <AlertTriangle className="size-4" />
+            <AlertTitle>This sends data from your backup</AlertTitle>
+            <AlertDescription className="text-amber-700/90 dark:text-amber-400/90">
+              This is the one time information from your backup leaves your Mac.
+              If the link was sent by someone monitoring this device, resolving
+              it can signal that the device is being examined.
+            </AlertDescription>
+          </Alert>
           <label className="flex items-center gap-2 text-sm">
             <Switch checked={dontAsk} onCheckedChange={setDontAsk} />
             Don’t ask again for this backup
