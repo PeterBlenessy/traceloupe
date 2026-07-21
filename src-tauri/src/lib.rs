@@ -684,9 +684,7 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
     let scan_kind = ScanKind::Passive;
     let modules: Vec<&'static str> = match settings.passive_scope {
         traceloupe_core::detection_settings::PassiveScope::AppsOnly => vec!["apps"],
-        traceloupe_core::detection_settings::PassiveScope::Full => {
-            analyzer::MODULES.to_vec()
-        }
+        traceloupe_core::detection_settings::PassiveScope::Full => analyzer::MODULES.to_vec(),
     };
     let snapshot_dir = active_indicators_dir(app);
     let cp = cache_path.to_path_buf();
@@ -1105,9 +1103,7 @@ fn active_indicators_dir(app: &AppHandle) -> PathBuf {
 
 /// `…/caches/<id>/cache.db` → `(backup_id, work_dir)`.
 fn backup_layout(cache_path: &Path) -> Result<(String, PathBuf), String> {
-    let id_dir = cache_path
-        .parent()
-        .ok_or("unexpected cache layout")?;
+    let id_dir = cache_path.parent().ok_or("unexpected cache layout")?;
     let backup_id = id_dir
         .file_name()
         .and_then(|s| s.to_str())
@@ -1141,10 +1137,8 @@ async fn run_security_scan(
     let _gate = scan_gate.0.lock().await;
     let cache_path = active.path()?;
 
-    let settings = DetectionSettings::load(
-        &app.path().app_data_dir().map_err(|e| e.to_string())?,
-    )
-    .unwrap_or_default();
+    let settings = DetectionSettings::load(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+        .unwrap_or_default();
 
     // Refresh feeds first when the user has opted in (Explicit Scan only).
     let bundled = bundled_indicators_dir(&app);
@@ -1200,11 +1194,8 @@ async fn run_security_scan(
                 }
             }
             let extracted = tauri::async_runtime::spawn_blocking(move || {
-                let idx = ManifestIndex::open(
-                    Path::new(&source_dir),
-                    decryptor.as_deref(),
-                    &work_dir,
-                )?;
+                let idx =
+                    ManifestIndex::open(Path::new(&source_dir), decryptor.as_deref(), &work_dir)?;
                 let mut out = Vec::new();
                 idx.for_each_path(|domain, path| out.push((domain, path)))?;
                 // Tier-B process activity: DataUsage.sqlite + OSAnalytics ADDaily.
@@ -1237,9 +1228,10 @@ async fn run_security_scan(
                 let mut profiles: Vec<analyzer::ObservedProfile> = Vec::new();
                 const CP_DOMAIN: &str =
                     "SysSharedContainerDomain-systemgroup.com.apple.configurationprofiles";
-                if let Ok(Some(truth_entry)) =
-                    idx.find(CP_DOMAIN, "Library/ConfigurationProfiles/ProfileTruth.plist")
-                {
+                if let Ok(Some(truth_entry)) = idx.find(
+                    CP_DOMAIN,
+                    "Library/ConfigurationProfiles/ProfileTruth.plist",
+                ) {
                     if let Ok(truth) = idx.read_bytes(&truth_entry, decryptor.as_deref()) {
                         let manifest = idx
                             .find(
@@ -1302,7 +1294,10 @@ async fn run_security_scan(
 
     let cancel = CancelToken::new();
     *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
-    logging::info(&app, format!("\u{25b6} Security Check ({kind}) started\u{2026}"));
+    logging::info(
+        &app,
+        format!("\u{25b6} Security Check ({kind}) started\u{2026}"),
+    );
     let started = Instant::now();
 
     let app_progress = app.clone();
@@ -1357,7 +1352,11 @@ async fn run_security_scan(
             "\u{2713} Security Check ({kind}): {} findings in {} ms{}",
             outcome.findings,
             started.elapsed().as_millis(),
-            if outcome.cancelled { " (cancelled)" } else { "" }
+            if outcome.cancelled {
+                " (cancelled)"
+            } else {
+                ""
+            }
         ),
     );
 
@@ -1382,9 +1381,7 @@ fn cancel_scan(cancel_state: State<'_, ScanCancel>) {
 }
 
 #[tauri::command]
-async fn list_scan_runs(
-    active: State<'_, ActiveBackup>,
-) -> Result<Vec<query::ScanRun>, String> {
+async fn list_scan_runs(active: State<'_, ActiveBackup>) -> Result<Vec<query::ScanRun>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path)?;
@@ -1472,8 +1469,8 @@ async fn export_scan_report(
     let version = env!("CARGO_PKG_VERSION").to_string();
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
-        let csv = analyzer::export_report_csv(&cache, run_id, &version)
-            .map_err(|e| e.to_string())?;
+        let csv =
+            analyzer::export_report_csv(&cache, run_id, &version).map_err(|e| e.to_string())?;
         std::fs::write(&path, &csv).map_err(|e| format!("writing {path}: {e}"))?;
         Ok::<u64, String>(csv.len() as u64)
     })
@@ -1488,10 +1485,7 @@ fn get_detection_settings(app: AppHandle) -> Result<DetectionSettings, String> {
 }
 
 #[tauri::command]
-fn set_detection_settings(
-    app: AppHandle,
-    settings: DetectionSettings,
-) -> Result<(), String> {
+fn set_detection_settings(app: AppHandle, settings: DetectionSettings) -> Result<(), String> {
     let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
     settings.save(&data).map_err(|e| e.to_string())
 }
