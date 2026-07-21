@@ -597,7 +597,10 @@ function SettingsMenu() {
             value="general"
             className="mt-0 flex flex-col gap-6"
           >
-            <SettingsGroup title="Display">
+            <SettingsGroup
+              title="Display"
+              description="Appearance, contact display, and how lists and links are shown."
+            >
               <SettingsRow
                 label="Appearance"
                 description="Light, dark, or follow the system."
@@ -821,7 +824,10 @@ function SettingsMenu() {
           </TabsContent>
 
           <TabsContent value="security" className="mt-0 flex flex-col gap-6">
-            <SettingsGroup title="Security Check">
+            <SettingsGroup
+              title="Security Check"
+              description="How TraceLoupe checks your backups against public spyware and stalkerware lists."
+            >
               <div className="p-3">
                 <SecuritySettings />
               </div>
@@ -829,7 +835,10 @@ function SettingsMenu() {
           </TabsContent>
 
           <TabsContent value="safety" className="mt-0 flex flex-col gap-6">
-            <SettingsGroup title="Safety Scan model">
+            <SettingsGroup
+              title="Safety Scan model"
+              description="The local AI model that powers Safety Scan's on-device content analysis."
+            >
               <div className="p-3">
                 <SafetyModelSettings />
               </div>
