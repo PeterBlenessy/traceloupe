@@ -152,6 +152,21 @@ export function SecurityView() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["indicatorInfo"] }),
   });
 
+  const settings = useQuery({
+    queryKey: ["detectionSettings"],
+    queryFn: () => client.getDetectionSettings(),
+  });
+  const setCustomDir = useMutation({
+    mutationFn: async (dir: string | null) => {
+      const s = settings.data ?? (await client.getDetectionSettings());
+      await client.setDetectionSettings({ ...s, customIndicatorDir: dir });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["detectionSettings"] });
+      qc.invalidateQueries({ queryKey: ["indicatorInfo"] });
+    },
+  });
+
   const [selected, setSelected] = useState<Finding | null>(null);
 
   const totalIndicators = useMemo(
@@ -229,6 +244,43 @@ export function SecurityView() {
               ) : (
                 "Loading indicator feeds…"
               )}
+            </div>
+          </div>
+
+          {/* Custom indicator folder (researcher mode). */}
+          <div className="flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm">
+            <div className="min-w-0 text-muted-foreground">
+              Custom indicators:{" "}
+              {settings.data?.customIndicatorDir ? (
+                <span className="font-mono text-xs text-foreground">
+                  {settings.data.customIndicatorDir}
+                </span>
+              ) : (
+                <span>none — add a folder of .stix / .yaml files to scan</span>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              {settings.data?.customIndicatorDir && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCustomDir.mutate(null)}
+                  disabled={setCustomDir.isPending}
+                >
+                  Clear
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={setCustomDir.isPending || running}
+                onClick={async () => {
+                  const dir = await client.pickFolder("Choose a custom indicator folder");
+                  if (dir) setCustomDir.mutate(dir);
+                }}
+              >
+                Choose folder…
+              </Button>
             </div>
           </div>
 

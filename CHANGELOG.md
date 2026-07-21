@@ -33,6 +33,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.23.0` | **Security Check M2 — TCC permissions** — TCC.db grants cross-checked against stalkerware bundle IDs: a known monitoring app holding microphone/camera/location access is surfaced with the exact permissions it holds, corroborating a bundle-id match with real capability evidence. |
 | `0.24.0` | **Security Check M2 — Shortcuts** — Shortcuts.sqlite actions scanned for indicator URLs/hosts: a shortcut that quietly calls out to a malicious endpoint (exfiltration/automation) is flagged. Tier-B scan inputs refactored into one `ScanInputs` struct. |
 | `0.25.0` | **Security Check M2 complete — WebKit** — domains each app's webview contacted (per-app `observations.db`) scanned against indicators: a webview loading a known C2 domain is flagged with the apps that saw it. Completes the M2 Tier-B surfaces. |
+| `0.26.0` | **Security Check M3 — custom indicators** — point the scan at a local folder of `.stix`/`.stix2`/`.yaml` files, merged with the bundled feeds (researcher mode, parity with iMazing). |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -40,6 +41,20 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.26.0] — 2026-07-21
+
+**Security Check M3 — custom indicators.** Researchers can point a scan at their
+own indicator files, merged with the bundled feeds.
+
+- **New loaders** (`indicators::load_custom_dir`, `load_indicators`,
+  `IndicatorSet::merged_with`): a folder is scanned by extension —
+  `.stix`/`.stix2`/`.json` as STIX2, `.yaml`/`.yml` as Echap YAML — with no
+  manifest required; a malformed file is reported and skipped, a missing folder
+  degrades to empty. Custom indicators are re-deduplicated against the snapshot.
+- **Setting** `custom_indicator_dir` on `DetectionSettings`, applied to every
+  scan (Explicit, Passive) and reflected in the indicator-feed counts.
+- **Security view:** a "Custom indicators" row with a folder picker and Clear.
 
 ## [0.25.0] — 2026-07-21
 
