@@ -31,6 +31,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.21.0` | **Security Check M2 — process-name detection** — the first Tier-B artifact surface: DataUsage.sqlite and OSAnalytics ADDaily process activity scanned against process-name indicators (the class that first exposed Pegasus), extracted on demand during an Explicit Scan. |
 | `0.22.0` | **Security Check M2 — configuration profiles** — installed profiles (ProfileTruth + PayloadManifest) surfaced for review: indicator matches on profile hosts/names, plus structural flags for hidden profiles (Warning) and device-management profiles (Info). The classic stalkerware install vector. |
 | `0.23.0` | **Security Check M2 — TCC permissions** — TCC.db grants cross-checked against stalkerware bundle IDs: a known monitoring app holding microphone/camera/location access is surfaced with the exact permissions it holds, corroborating a bundle-id match with real capability evidence. |
+| `0.24.0` | **Security Check M2 — Shortcuts** — Shortcuts.sqlite actions scanned for indicator URLs/hosts: a shortcut that quietly calls out to a malicious endpoint (exfiltration/automation) is flagged. Tier-B scan inputs refactored into one `ScanInputs` struct. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -38,6 +39,25 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.24.0] — 2026-07-21
+
+**Security Check M2 — Shortcuts.** Shortcuts can call out to arbitrary URLs; a
+shortcut quietly posting to a malicious endpoint is an exfiltration/automation
+vector.
+
+- **New parser** (`analyzer::parse_shortcuts`): reads `Shortcuts.sqlite`
+  (HomeDomain, `Library/Shortcuts/Shortcuts.sqlite`) — each
+  `ZSHORTCUTACTIONS.ZDATA` is a binary plist of workflow actions whose string
+  parameters (e.g. an `openurl` action's `WFInput`) carry the URLs, matched
+  against domain/URL indicators.
+- **New `shortcuts` scan module:** matches each shortcut's referenced hosts/URLs
+  against indicators (feed-graded), on-demand during an Explicit Scan.
+- **Refactor:** `run_scan`'s four Tier-B inputs (manifest, processes, profiles,
+  grants — now plus shortcuts) are grouped into one `ScanInputs` struct,
+  replacing a growing positional-argument list.
+- Validated against the real dev backup: 46 shortcuts extracted (44 reference a
+  host), zero indicator matches (clean). See `docs/security-check-validation.md`.
 
 ## [0.23.0] — 2026-07-21
 
