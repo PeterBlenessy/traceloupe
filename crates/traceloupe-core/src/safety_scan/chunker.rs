@@ -14,7 +14,6 @@
 //! the normalized text, so any content change forces re-classification of
 //! exactly the windows it touches.
 
-use rusqlite::params;
 use sha2::{Digest, Sha256};
 
 use crate::analysis::SourceKind;
@@ -309,6 +308,7 @@ pub fn chunk_all(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     fn cache_with(messages: &[(&str, i64, &str, bool)]) -> CacheDb {
         // (thread_identifier, sent_at, body, is_from_me)
