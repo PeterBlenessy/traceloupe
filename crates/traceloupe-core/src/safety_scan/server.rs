@@ -207,6 +207,12 @@ impl LlamaServer {
         }
     }
 
+    /// True once the child process has exited. Lets a health-poll loop bail
+    /// immediately instead of spinning on a dead, already-reaped child.
+    pub fn has_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
     /// Kill and reap the child. Idempotent.
     pub fn shutdown(&mut self) {
         let _ = self.child.kill();
@@ -281,6 +287,28 @@ mod tests {
         let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
         let err = server.wait_healthy(Duration::from_secs(5)).unwrap_err();
         assert!(err.to_string().contains("exited during startup"), "{err}");
+    }
+
+    #[test]
+    fn has_exited_reports_dead_child() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A child that exits immediately; give it a beat to actually die.
+        let bin = fake_binary(tmp.path(), "exit 0");
+        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
+        let _ = server.wait_healthy(Duration::from_secs(2)); // reaps the exit
+        assert!(server.has_exited(), "a dead child must report exited");
+        // Idempotent on a reaped child — this is what stops the poll loop
+        // busy-spinning.
+        assert!(server.has_exited());
+    }
+
+    #[test]
+    fn has_exited_false_while_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_binary(tmp.path(), "sleep 30");
+        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
+        assert!(!server.has_exited());
+        server.shutdown();
     }
 
     #[test]

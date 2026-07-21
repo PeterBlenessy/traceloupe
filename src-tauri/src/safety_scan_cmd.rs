@@ -29,6 +29,10 @@ pub struct SafetyDownloadCancel(pub Mutex<Option<CancelToken>>);
 /// Serializes scans; `try_lock` makes a second start an error, not a queue.
 #[derive(Default)]
 pub struct SafetyScanGate(pub tauri::async_runtime::Mutex<()>);
+/// Serializes model downloads — two concurrent downloads of the same model
+/// would race on the temp file.
+#[derive(Default)]
+pub struct SafetyDownloadGate(pub tauri::async_runtime::Mutex<()>);
 
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
 fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
@@ -106,9 +110,14 @@ enum ModelProgressEvent {
 #[tauri::command]
 pub async fn download_safety_scan_model(
     app: AppHandle,
+    gate: State<'_, SafetyDownloadGate>,
     cancel_state: State<'_, SafetyDownloadCancel>,
     model_id: String,
 ) -> Result<(), String> {
+    let _guard = gate
+        .0
+        .try_lock()
+        .map_err(|_| "a model download is already running")?;
     let spec = models::spec_by_id(&model_id).ok_or("unknown model id")?;
     let dir = models_dir(&app)?;
     let cancel = CancelToken::new();
@@ -247,9 +256,17 @@ pub async fn run_safety_scan(
                     if cancel.is_cancelled() {
                         return Err("cancelled".into());
                     }
+                    // A dead child returns instantly on every subsequent poll;
+                    // surface the failure now instead of tight-spinning to the
+                    // 180s deadline (e.g. an OOM-kill during a forced-E4B load).
+                    if llama.has_exited() {
+                        return Err(e.to_string());
+                    }
                     if std::time::Instant::now() >= deadline {
                         return Err(e.to_string());
                     }
+                    // Backstop so a fast-returning error never busy-loops.
+                    std::thread::sleep(Duration::from_millis(200));
                 }
             }
         }

@@ -118,7 +118,14 @@ pub fn download_model(
     cancel: &CancelToken,
     on_progress: impl FnMut(InstallProgress),
 ) -> Result<PathBuf> {
-    let agent = ureq::AgentBuilder::new().build();
+    // A read timeout is what makes cancellation reliable: the cancel flag is
+    // only polled between reads, so a stalled socket must time out rather than
+    // block `reader.read()` forever (the Cancel button would otherwise do
+    // nothing on a hung 5 GB download).
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .build();
     download_model_with(&agent, &spec.url(), spec, models_dir, cancel, on_progress)
 }
 
@@ -132,7 +139,15 @@ pub(crate) fn download_model_with(
     mut on_progress: impl FnMut(InstallProgress),
 ) -> Result<PathBuf> {
     std::fs::create_dir_all(models_dir).map_err(|e| Error::EngineDownload(e.to_string()))?;
-    let tmp = models_dir.join(format!("{}.downloading", spec.filename));
+    // Per-process-unique temp name: two concurrent downloads of the same model
+    // must never write the same partial file (a torn interleaving could hash
+    // correctly per stream yet be corrupt on disk). The command layer also
+    // gates downloads, but this is cheap defense in depth.
+    let tmp = models_dir.join(format!(
+        "{}.{}.downloading",
+        spec.filename,
+        std::process::id()
+    ));
     let final_path = models_dir.join(spec.filename);
 
     let resp = agent
@@ -284,7 +299,13 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), payload);
         assert!(spec.installed_at(dir.path()).is_some());
-        assert!(!dir.path().join("test.gguf.downloading").exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .all(|e| !e.file_name().to_string_lossy().contains(".downloading")),
+            "no partial temp file left behind"
+        );
     }
 
     #[test]
@@ -298,7 +319,13 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"), "{err}");
         assert!(spec.installed_at(dir.path()).is_none());
-        assert!(!dir.path().join("test.gguf.downloading").exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .all(|e| !e.file_name().to_string_lossy().contains(".downloading")),
+            "no partial temp file left behind"
+        );
         assert!(!dir.path().join("test.gguf").exists());
     }
 
@@ -314,7 +341,13 @@ mod tests {
         let err =
             download_model_with(&agent, &url, &spec, dir.path(), &cancel, |_| {}).unwrap_err();
         assert!(matches!(err, Error::Cancelled));
-        assert!(!dir.path().join("test.gguf.downloading").exists());
+        assert!(
+            std::fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .all(|e| !e.file_name().to_string_lossy().contains(".downloading")),
+            "no partial temp file left behind"
+        );
     }
 
     #[test]
