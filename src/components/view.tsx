@@ -8,8 +8,10 @@
  * primitive here over inlining it in the view.
  */
 import { useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { Search, TriangleAlert, X } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
@@ -301,6 +303,66 @@ export function EmptyView({
       </EmptyHeader>
       {children}
     </Empty>
+  );
+}
+
+/**
+ * The rich "no backup open" state every content view shows before a backup is
+ * loaded. Doubles as onboarding: an action-oriented title, a lead paragraph, a
+ * grid of the capabilities the view offers (search, filters, time range…), a
+ * privacy note, and a one-click CTA back to the backup picker. Kept here so all
+ * views stay consistent by construction. See docs/ui.md.
+ */
+export function NoBackupState({
+  icon: Icon,
+  title,
+  lead,
+  features,
+  note,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  /** Action/value title, e.g. "Open a backup to browse photos & videos". */
+  title: string;
+  /** One or two sentences on what the view is. */
+  lead: string;
+  /** Capability highlights — what the user can actually do in this view. */
+  features?: { label: string; detail: string }[];
+  /** Closing line, typically the local/privacy assurance. */
+  note?: string;
+}) {
+  const navigate = useNavigate();
+  return (
+    <div className="flex h-full items-center justify-center overflow-y-auto p-6">
+      <div className="w-full max-w-xl py-8 text-center">
+        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+          <Icon className="size-6" />
+        </div>
+        <h2 className="text-lg font-semibold">{title}</h2>
+        <p className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
+          {lead}
+        </p>
+        {features && features.length > 0 && (
+          <ul className="mx-auto mt-5 grid max-w-md gap-2.5 text-left sm:grid-cols-2">
+            {features.map((f) => (
+              <li key={f.label} className="rounded-lg border bg-card/40 p-3">
+                <div className="text-xs font-medium">{f.label}</div>
+                <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {f.detail}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {note && (
+          <p className="mx-auto mt-4 max-w-prose text-xs leading-relaxed text-muted-foreground/80">
+            {note}
+          </p>
+        )}
+        <div className="mt-6">
+          <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+        </div>
+      </div>
+    </div>
   );
 }
 

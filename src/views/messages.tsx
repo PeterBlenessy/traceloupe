@@ -44,7 +44,7 @@ import {
   MessageHeader,
 } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import {
+import { NoBackupState,
   EmptyView,
   ErrorState,
   ListDetail,
@@ -216,7 +216,6 @@ export function MessagesView() {
 }
 
 function MessagesViewInner() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -369,13 +368,18 @@ function MessagesViewInner() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={MessageSquare}
-        title="No backup open"
-        description="Import a backup to read its messages."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to read messages"
+        lead="iMessage and SMS conversations reconstructed thread by thread — bubbles, reactions, replies, attachments, and group chats — exactly as they were on the device."
+        features={[
+          { label: "Two views", detail: "Read conversation by conversation, or scan every message in one Timeline stream." },
+          { label: "Search", detail: "Search the timeline across messages, senders, and conversations." },
+          { label: "Filters", detail: "Filter by app (iMessage, SMS, TikTok…), content type, or time range." },
+          { label: "Attachments & links", detail: "Open images in a lightbox, view link previews, and jump to a contact." },
+        ]}
+        note="All parsed locally on this Mac; nothing leaves the machine."
+      />
     );
   }
 
