@@ -10,18 +10,18 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { NoBackupState, ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
+import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
   client,
   type ContentCategory,
   type ContentFinding,
+  type TimeRange,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -53,36 +53,14 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   },
 };
 
-/** Year options for the time-range picker: this year back to 2007 (iPhone 1). */
-function yearOptions(): number[] {
-  const current = new Date().getFullYear();
-  const years: number[] = [];
-  for (let y = current; y >= 2007; y--) years.push(y);
-  return years;
-}
-
-function rangeFor(selection: string): {
-  rangeStart: number | null;
-  rangeEnd: number | null;
-} {
-  if (selection === "all") return { rangeStart: null, rangeEnd: null };
-  if (selection === "12m") {
-    return {
-      rangeStart: Math.floor(Date.now() / 1000) - 365 * 86_400,
-      rangeEnd: null,
-    };
-  }
-  const year = Number(selection);
-  return {
-    rangeStart: Math.floor(Date.UTC(year, 0, 1) / 1000),
-    rangeEnd: Math.floor(Date.UTC(year + 1, 0, 1) / 1000) - 1,
-  };
-}
-
 export function SafetyScanView() {
   const qc = useQueryClient();
   const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
-  const [rangeSel, setRangeSel] = useState("all");
+  // Same preset chips + custom range as Photos/Messages/etc., over the message
+  // and note timestamps. `TimeFilterBar` emits a half-open [lo, hi); the scan
+  // backend's range end is inclusive, so hi maps to `end = hi - 1`.
+  const { presets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   const [showDismissed, setShowDismissed] = useState(false);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
   // real hardware, so the disclaimer stays until the user acknowledges it.
@@ -205,36 +183,40 @@ export function SafetyScanView() {
                 automatically.
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
-              <Select value={rangeSel} onValueChange={setRangeSel}>
-                <SelectTrigger className="w-44">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All history</SelectItem>
-                  <SelectItem value="12m">Last 12 months</SelectItem>
-                  {yearOptions().map((y) => (
-                    <SelectItem key={y} value={String(y)}>
-                      {y}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={() =>
-                  void startScan({
-                    modelId: effectiveModelId,
-                    ...rangeFor(rangeSel),
-                  })
-                }
-              >
-                <Play className="size-4" /> Start Safety Scan
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                Model: {effectiveModel?.displayName}
-                {effectiveModel && !effectiveModel.recommended && " (fallback)"}
-                {installedIds.length >= 2 && " · change in Settings → Safety"}
-              </span>
+            <CardContent className="space-y-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">
+                  Time range
+                </Label>
+                <TimeFilterBar
+                  presets={presets}
+                  value={range}
+                  onChange={setRange}
+                />
+              </div>
+              <div className="flex flex-wrap items-center gap-3">
+                <Button
+                  onClick={() =>
+                    void startScan({
+                      modelId: effectiveModelId,
+                      rangeStart: range.lo,
+                      // TimeFilterBar's hi is exclusive; the scan range end is
+                      // inclusive, so step back one second.
+                      rangeEnd: range.hi != null ? range.hi - 1 : null,
+                    })
+                  }
+                >
+                  <Play className="size-4" /> Start Safety Scan
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  Model: {effectiveModel?.displayName}
+                  {effectiveModel &&
+                    !effectiveModel.recommended &&
+                    " (fallback)"}
+                  {installedIds.length >= 2 &&
+                    " · change in Settings → Safety"}
+                </span>
+              </div>
             </CardContent>
           </Card>
         )}
