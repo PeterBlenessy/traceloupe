@@ -703,6 +703,7 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
             None,
             &[], // Passive Check never does Tier-B process extraction.
             &[], // …nor configuration-profile extraction.
+            &[], // …nor TCC permission extraction.
             &feeds_json,
             &CancelToken::new(),
             |module, index, total| {
@@ -1178,6 +1179,7 @@ async fn run_security_scan(
     let mut manifest_entries: Option<Vec<(String, String)>> = None;
     let mut tierb_processes: Vec<analyzer::ObservedProcess> = Vec::new();
     let mut tierb_profiles: Vec<analyzer::ObservedProfile> = Vec::new();
+    let mut tierb_grants: Vec<analyzer::PermissionGrant> = Vec::new();
     if scan_kind == ScanKind::Explicit {
         let (backup_id, work_dir) = backup_layout(&cache_path)?;
         let source_dir = {
@@ -1255,15 +1257,27 @@ async fn run_security_scan(
                         }
                     }
                 }
-                Ok::<_, traceloupe_core::Error>((out, processes, profiles))
+                // Tier-B TCC permissions: which apps hold mic/camera/etc. grants.
+                let mut grants: Vec<analyzer::PermissionGrant> = Vec::new();
+                if let Ok(Some(entry)) = idx.find("HomeDomain", "Library/TCC/TCC.db") {
+                    let dest = work_dir.join(".security-tcc.db");
+                    if idx.extract_db(&entry, decryptor.as_deref(), &dest).is_ok() {
+                        if let Ok(mut gs) = analyzer::parse_tcc(&dest) {
+                            grants.append(&mut gs);
+                        }
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                }
+                Ok::<_, traceloupe_core::Error>((out, processes, profiles, grants))
             })
             .await
             .map_err(|e| e.to_string())?;
             match extracted {
-                Ok((e, ps, prof)) => {
+                Ok((e, ps, prof, grants)) => {
                     manifest_entries = Some(e);
                     tierb_processes = ps;
                     tierb_profiles = prof;
+                    tierb_grants = grants;
                 }
                 Err(e) => logging::warn(
                     &app,
@@ -1297,6 +1311,7 @@ async fn run_security_scan(
             sweep_ref,
             &tierb_processes,
             &tierb_profiles,
+            &tierb_grants,
             &feeds_json,
             &cancel,
             |module, index, total| {
