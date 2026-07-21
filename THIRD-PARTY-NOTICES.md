@@ -6,13 +6,15 @@ notable components; it is not an exhaustive list of transitive dependencies. A
 complete machine-generated inventory can be produced with `cargo about` (Rust)
 and `license-checker` (npm).
 
-## Parsing engine (run as a separate subprocess — not linked into TraceLoupe)
+## Development reference (not distributed, not run by the app)
 
 - **iLEAPP** — MIT — Copyright Alexis Brignoni and contributors —
   https://github.com/abrignoni/iLEAPP
-  TraceLoupe downloads and runs a pinned iLEAPP build as a headless subprocess.
-  iLEAPP bundles Python libraries under permissive licenses, including
-  **pandas** (BSD-3-Clause), **NumPy** (BSD-3-Clause), and **Pillow** (MIT-CMU / HPND).
+  Used only during development to cross-check TraceLoupe's original native
+  parsers against iLEAPP's output. No iLEAPP code is included in, linked into,
+  bundled with, or executed by the app — so there is no distribution of iLEAPP
+  or its Python dependencies. This acknowledgment is a courtesy, not a license
+  obligation.
 
 ## Rust (application core)
 

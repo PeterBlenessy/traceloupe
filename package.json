@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "setup:engine": "bash scripts/setup-engine.sh",
+    "setup:llama": "bash scripts/download-llama-server.sh",
+    "build:llama": "bash scripts/build-llama-server.sh",
     "build:engine": "bash scripts/build-engine.sh",
     "app:dev": "bash scripts/dev.sh",
     "app:build:dev": "tauri build --debug --config src-tauri/tauri.conf.dev.json",
