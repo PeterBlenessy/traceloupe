@@ -110,7 +110,8 @@ CREATE INDEX IF NOT EXISTS idx_audit_scan ON audit_log(scan_id, at);
 "#;
 
 /// The Forensic 9 taxonomy (CONTEXT.md). Slugs are the wire/storage format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// `Ord` follows declaration order, used only to key eval score maps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {
     ThreatViolence,
     HarassmentBullying,

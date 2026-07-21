@@ -58,6 +58,13 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// Eval-only view of the verdict validator (T10 live eval): returns just the
+/// findings, reusing the exact production parsing/validation path.
+#[cfg(test)]
+pub(crate) fn verdicts_to_findings_for_eval(chunk: &Chunk, output: &Value) -> Vec<NewFinding> {
+    verdicts_to_findings(chunk, output).0
+}
+
 /// Parse + validate one chunk's model output into findings. Verdict indexes
 /// that don't exist in the chunk are rejected (hallucinated ids must never
 /// become findings); the count of rejects is returned for the audit log.
