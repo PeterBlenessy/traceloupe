@@ -296,27 +296,59 @@ pub async fn run_safety_scan(
     let app2 = app.clone();
     let spec_id = spec.id.to_string();
     let ctx_size = spec.ctx_size;
+    let binary_log = binary.display().to_string();
+    let model_log = model_path.display().to_string();
     let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
+        crate::logging::info(
+            &app2,
+            format!("Safety Scan: starting (model={spec_id}, sandbox=on)"),
+        );
+        crate::logging::debug(&app2, format!("Safety Scan: binary={binary_log}"));
+        crate::logging::debug(&app2, format!("Safety Scan: model={model_log}"));
         // Start from a clean scratch dir; spawn() re-creates it.
         let _ = std::fs::remove_dir_all(&scratch_dir);
         let port = server::pick_port().map_err(|e| e.to_string())?;
-        let mut llama = server::LlamaServer::spawn(&server::ServerConfig {
-            binary,
-            model_path,
-            port,
-            ctx_size,
-            gpu_layers: -1,
-            sandbox: true,
-            scratch_dir: scratch_dir.clone(),
-        })
-        .map_err(|e| e.to_string())?;
+        crate::logging::debug(&app2, format!("Safety Scan: llama-server port={port}"));
+
+        // Forward every llama-server output line to the app log (dev console).
+        let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+        let app_log = app2.clone();
+        std::thread::spawn(move || {
+            while let Ok(line) = log_rx.recv() {
+                crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+            }
+        });
+
+        let mut llama = server::LlamaServer::spawn(
+            &server::ServerConfig {
+                binary,
+                model_path,
+                port,
+                ctx_size,
+                gpu_layers: -1,
+                sandbox: true,
+                scratch_dir: scratch_dir.clone(),
+            },
+            Some(log_tx),
+        )
+        .map_err(|e| {
+            crate::logging::error(&app2, format!("Safety Scan: spawn failed: {e}"));
+            e.to_string()
+        })?;
+        crate::logging::info(
+            &app2,
+            "Safety Scan: llama-server spawned, waiting for /health…",
+        );
         // 4–5 GB GGUF load + Metal warmup: allow generous startup time, but
         // poll so cancellation during load still works.
         let deadline = std::time::Instant::now() + Duration::from_secs(180);
         loop {
             match llama.wait_healthy(Duration::from_secs(2)) {
-                Ok(()) => break,
+                Ok(()) => {
+                    crate::logging::info(&app2, "Safety Scan: llama-server healthy — model loaded");
+                    break;
+                }
                 Err(e) => {
                     if cancel.is_cancelled() {
                         return Err("cancelled".into());
@@ -325,9 +357,11 @@ pub async fn run_safety_scan(
                     // surface the failure now instead of tight-spinning to the
                     // 180s deadline (e.g. an OOM-kill during a forced-E4B load).
                     if llama.has_exited() {
+                        crate::logging::error(&app2, format!("Safety Scan: {e}"));
                         return Err(e.to_string());
                     }
                     if std::time::Instant::now() >= deadline {
+                        crate::logging::error(&app2, format!("Safety Scan: {e}"));
                         return Err(e.to_string());
                     }
                     // Backstop so a fast-returning error never busy-loops.

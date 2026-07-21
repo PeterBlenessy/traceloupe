@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  AlertTriangle,
   Ban,
   ExternalLink,
   EyeOff,
@@ -103,7 +102,7 @@ function rangeFor(selection: string): {
 
 export function SafetyScanView() {
   const qc = useQueryClient();
-  const { scan, startScan, cancelScan, error } = useSafetyScan();
+  const { scan, startScan, cancelScan } = useSafetyScan();
   const [rangeSel, setRangeSel] = useState("all");
   const [showDismissed, setShowDismissed] = useState(false);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
@@ -175,14 +174,6 @@ export function SafetyScanView() {
                 Got it
               </Button>
             </AlertDescription>
-          </Alert>
-        )}
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertTriangle className="size-4" />
-            <AlertTitle>Safety Scan error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
 
