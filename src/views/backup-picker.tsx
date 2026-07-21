@@ -2,7 +2,12 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
+import { Check, ChevronRight, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Card,
   CardContent,
@@ -171,7 +176,54 @@ export function BackupPicker() {
           ))}
       </div>
 
+      <AppFeatures />
     </div>
+  );
+}
+
+/** What TraceLoupe does, shown on the home view — the app's front door had no
+ *  feature presentation of its own (unlike each content view's empty state). */
+function AppFeatures() {
+  const features = [
+    {
+      label: "Browse the whole device",
+      detail:
+        "Messages, Photos, Contacts, Calls, Safari, Notes, Health and more — reconstructed and searchable.",
+    },
+    {
+      label: "Security Check",
+      detail:
+        "Scan the backup for traces of known spyware and stalkerware against curated threat feeds.",
+    },
+    {
+      label: "Safety Scan",
+      detail:
+        "A local AI model flags harmful content in messages and notes — threats, harassment, grooming and more.",
+    },
+    {
+      label: "Private by design",
+      detail:
+        "Everything runs on this Mac. Nothing is uploaded, and the backup is never modified.",
+    },
+  ];
+  return (
+    <section className="mt-10 border-t pt-6">
+      <h2 className="text-sm font-semibold">What you can do with TraceLoupe</h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        Open an iPhone backup and TraceLoupe turns it into a browsable,
+        searchable archive — plus security and safety checks, all on your Mac.
+      </p>
+      <ul className="mt-4 grid gap-2.5 sm:grid-cols-2">
+        {features.map((f) => (
+          <li key={f.label} className="rounded-lg border bg-card/40 p-3">
+            <div className="text-xs font-medium">{f.label}</div>
+            <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+              {f.detail}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -342,35 +394,41 @@ function FdaGuidance({ path, action }: { path: string; action: React.ReactNode }
       </CardHeader>
       <CardContent className="space-y-4 text-sm text-muted-foreground">
         {action}
-        <div>
-          <p className="mb-2 font-medium text-foreground">
-            Or grant Full Disk Access:
-          </p>
-          <ol className="list-decimal space-y-1 pl-5">
-            <li>
-              <button
-                onClick={openSettings}
-                className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:text-primary"
-              >
-                <Settings className="size-3.5" />
-                Open Full Disk Access settings
-              </button>
-            </li>
-            <li>
-              TraceLoupe won't be listed yet — click <b>+</b>, then select the
-              TraceLoupe app (in <b>Applications</b>) and turn it on
-            </li>
-            <li>Quit and reopen TraceLoupe</li>
-          </ol>
-          {openError && (
-            <p className="mt-2 select-text text-xs text-destructive">
-              Couldn't open Settings: {openError}
-            </p>
-          )}
-        </div>
-        <p className="text-xs">
-          Blocked path: <code className="select-text">{path}</code>
-        </p>
+        <Collapsible>
+          <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs font-medium text-foreground hover:text-primary">
+            <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
+            Or grant Full Disk Access
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="mt-2 rounded-md border bg-muted/40 p-3 text-xs">
+              <ol className="list-decimal space-y-1 pl-4">
+                <li>
+                  <button
+                    onClick={openSettings}
+                    className="inline-flex items-center gap-1 font-medium text-foreground underline underline-offset-2 hover:text-primary"
+                  >
+                    <Settings className="size-3.5" />
+                    Open Full Disk Access settings
+                  </button>
+                </li>
+                <li>
+                  TraceLoupe won't be listed yet — click <b>+</b>, then select
+                  the TraceLoupe app (in <b>Applications</b>) and turn it on
+                </li>
+                <li>Quit and reopen TraceLoupe</li>
+              </ol>
+              {openError && (
+                <p className="mt-2 select-text text-destructive">
+                  Couldn't open Settings: {openError}
+                </p>
+              )}
+              <p className="mt-2 text-muted-foreground/80">
+                Blocked path:{" "}
+                <code className="select-text">{path}</code>
+              </p>
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
     </Card>
   );
