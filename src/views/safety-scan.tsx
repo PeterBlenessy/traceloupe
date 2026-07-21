@@ -12,7 +12,7 @@ import {
   NotebookText,
   Play,
   RotateCcw,
-  ScanSearch,
+  ShieldUser,
   ShieldQuestion,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -36,7 +36,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
+import { ViewHeader, ErrorState, ListSkeleton, EmptyView } from "@/components/view";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
@@ -102,7 +102,8 @@ function rangeFor(selection: string): {
 
 export function SafetyScanView() {
   const qc = useQueryClient();
-  const { scan, startScan, cancelScan } = useSafetyScan();
+  const navigate = useNavigate();
+  const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
   const [rangeSel, setRangeSel] = useState("all");
   const [showDismissed, setShowDismissed] = useState(false);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
@@ -112,6 +113,10 @@ export function SafetyScanView() {
     false,
   );
 
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -135,15 +140,36 @@ export function SafetyScanView() {
     },
   });
 
+  // Gate on an open backup, like every content view — there is nothing to scan
+  // without one.
+  if (active === false) {
+    return (
+      <EmptyView
+        icon={ShieldUser}
+        title="No backup open"
+        description="Import a backup to scan its messages and notes."
+      >
+        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+      </EmptyView>
+    );
+  }
   if (modelStatus.isPending) return <ListSkeleton />;
   if (modelStatus.isError) return <ErrorState error={modelStatus.error} />;
   const ms = modelStatus.data;
   const running = scan !== null;
+  // Which model this scan will use: the user's Settings pick when it's still
+  // installed, otherwise the recommended installed tier the backend reports.
+  const installedIds = ms.models.filter((m) => m.installed).map((m) => m.id);
+  const effectiveModelId =
+    preferredModelId && installedIds.includes(preferredModelId)
+      ? preferredModelId
+      : ms.readyModelId;
+  const effectiveModel = ms.models.find((m) => m.id === effectiveModelId);
 
   return (
     <div className="flex h-full flex-col">
       <ViewHeader
-        icon={<ScanSearch className="size-4 text-muted-foreground" />}
+        icon={<ShieldUser className="size-4 text-muted-foreground" />}
         title="Safety Scan"
       >
         <span className="text-xs text-muted-foreground">
@@ -153,7 +179,7 @@ export function SafetyScanView() {
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         {!expDismissed && (
           <Alert>
-            <ScanSearch className="size-4" />
+            <ShieldUser className="size-4" />
             <AlertTitle className="flex items-center gap-2">
               Experimental feature
             </AlertTitle>
@@ -212,12 +238,19 @@ export function SafetyScanView() {
                 </SelectContent>
               </Select>
               <Button
-                onClick={() => void startScan({ ...rangeFor(rangeSel) })}
+                onClick={() =>
+                  void startScan({
+                    modelId: effectiveModelId,
+                    ...rangeFor(rangeSel),
+                  })
+                }
               >
                 <Play className="size-4" /> Start Safety Scan
               </Button>
               <span className="text-xs text-muted-foreground">
-                Model: {ms.models.find((m) => m.id === ms.readyModelId)?.displayName}
+                Model: {effectiveModel?.displayName}
+                {effectiveModel && !effectiveModel.recommended && " (fallback)"}
+                {installedIds.length >= 2 && " · change in Settings → Safety"}
               </span>
             </CardContent>
           </Card>
@@ -307,7 +340,7 @@ function RunningCard({
 }) {
   const label =
     scanEvent.phase === "loading"
-      ? "Loading the model…"
+      ? "Starting the local model server…"
       : scanEvent.phase === "summarizing"
         ? "Writing the scan report…"
         : "Scanning…";

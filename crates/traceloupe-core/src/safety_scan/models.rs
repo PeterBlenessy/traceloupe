@@ -21,6 +21,8 @@ pub struct ModelSpec {
     /// Stable id stored in `scans.model` and settings.
     pub id: &'static str,
     pub display_name: &'static str,
+    /// One-line role blurb for the model picker (why you'd pick this one).
+    pub note: &'static str,
     pub repo: &'static str,
     pub filename: &'static str,
     pub sha256: &'static str,
@@ -59,7 +61,8 @@ const GIB: u64 = 1024 * 1024 * 1024;
 pub const CATALOG: [ModelSpec; 2] = [
     ModelSpec {
         id: "gemma-4-E4B-it-Q4_K_M",
-        display_name: "Gemma 4 E4B (recommended)",
+        display_name: "Gemma 4 E4B",
+        note: "Best accuracy — the default classifier.",
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         filename: "gemma-4-E4B-it-Q4_K_M.gguf",
         sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
@@ -69,7 +72,8 @@ pub const CATALOG: [ModelSpec; 2] = [
     },
     ModelSpec {
         id: "gemma-4-E2B-it-Q4_K_M",
-        display_name: "Gemma 4 E2B (for 8 GB Macs)",
+        display_name: "Gemma 4 E2B",
+        note: "Lighter fallback — smaller and faster; use it if the larger model is slow or won't load on this Mac.",
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
         sha256: "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
@@ -254,6 +258,7 @@ mod tests {
         ModelSpec {
             id: "test-model",
             display_name: "Test",
+            note: "test",
             repo: "test/repo",
             filename: "test.gguf",
             sha256: sha,

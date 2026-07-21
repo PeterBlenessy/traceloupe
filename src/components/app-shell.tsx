@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import {
   Boxes,
   ShieldAlert,
-  ScanSearch,
+  ShieldUser,
   X,
   CalendarDays,
   HeartPulse,
@@ -125,6 +125,12 @@ export function AppShell() {
     queryKey: ["deviceInfo"],
     queryFn: () => client.deviceInfo(),
   });
+  // With no backup open there is no Device view to show — the header must lead
+  // back to the backup picker instead.
+  const { data: hasBackup } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
 
   return (
     // ImportProvider / ReimportProvider live above the routes so an import — and a
@@ -167,10 +173,16 @@ export function AppShell() {
                       shows the open device's name and opens the Device view. */}
                   <SidebarMenuButton
                     asChild
-                    isActive={pathname === "/device"}
-                    tooltip={deviceInfo?.deviceName ?? "Device"}
+                    isActive={
+                      hasBackup === true ? pathname === "/device" : pathname === "/"
+                    }
+                    tooltip={
+                      hasBackup === true
+                        ? (deviceInfo?.deviceName ?? "Device")
+                        : "Your iPhone backups"
+                    }
                   >
-                    <Link to="/device">
+                    <Link to={hasBackup === true ? "/device" : "/"}>
                       <Smartphone />
                       <span className="truncate font-semibold group-data-[collapsible=icon]:hidden">
                         {deviceInfo?.deviceName ?? "TraceLoupe"}
@@ -201,7 +213,7 @@ export function AppShell() {
                     tooltip="Safety (experimental)"
                   >
                     <Link to="/safety-scan">
-                      <ScanSearch />
+                      <ShieldUser />
                       <span>Safety</span>
                     </Link>
                   </SidebarMenuButton>
@@ -573,7 +585,7 @@ function SettingsMenu() {
                 ["media", "Media", Image],
                 ["apps", "Apps", Boxes],
                 ["security", "Security", ShieldAlert],
-                ["safety", "Safety", ScanSearch],
+                ["safety", "Safety", ShieldUser],
                 ["developer", "Developer", Terminal],
               ] as const
             ).map(([value, label, Icon]) => (

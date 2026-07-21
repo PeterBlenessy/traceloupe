@@ -3670,6 +3670,7 @@ pub fn run() {
             deshorten_auto_approve_get,
             deshorten_auto_approve_set,
             safety_scan_cmd::get_safety_scan_model_status,
+            safety_scan_cmd::safety_scan_health_check,
             safety_scan_cmd::download_safety_scan_model,
             safety_scan_cmd::get_safety_scan_download_status,
             safety_scan_cmd::cancel_safety_scan_model_download,

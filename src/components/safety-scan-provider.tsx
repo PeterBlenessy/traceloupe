@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import {
   client,
   type SafetyModelProgressEvent,
@@ -20,6 +21,10 @@ type SafetyScanContextValue = {
   download: SafetyModelProgressEvent | null;
   /** Which model id is downloading (so the UI can show progress in-row). */
   downloadingModelId: string | null;
+  /** The user's chosen scan model, or null to use the recommended one. Shared
+   *  by Settings (the picker) and the scan view (which model will run). */
+  preferredModelId: string | null;
+  setPreferredModelId: (id: string | null) => void;
   startScan: (opts: {
     modelId?: string | null;
     rangeStart?: number | null;
@@ -58,6 +63,11 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(
     null,
   );
+  // Persisted so the choice survives navigation and restarts. null ⇒ backend
+  // picks the RAM-recommended tier. Consumers validate it's still installed.
+  const [preferredModelId, setPreferredModelId] = usePersistedState<
+    string | null
+  >("safety-scan:preferred-model", null);
   const unlistenScan = useRef<(() => void) | null>(null);
   const unlistenModel = useRef<(() => void) | null>(null);
 
@@ -141,7 +151,12 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
       });
     }
     try {
-      await client.runSafetyScan(opts);
+      // Fall back to the persisted preference when the caller didn't pin a
+      // model; the backend maps null ⇒ recommended tier.
+      await client.runSafetyScan({
+        ...opts,
+        modelId: opts.modelId ?? preferredModelId,
+      });
     } catch {
       // The listener owns the error toast (and survives a refresh); only clear
       // the running state here.
@@ -189,6 +204,8 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
         scan,
         download,
         downloadingModelId,
+        preferredModelId,
+        setPreferredModelId,
         startScan,
         cancelScan,
         startDownload,
