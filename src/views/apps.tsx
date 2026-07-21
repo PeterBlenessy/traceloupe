@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Boxes, Download } from "lucide-react";
+import { Boxes } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,7 +9,7 @@ import {
 import { useViewToolbar } from "@/components/toolbar-context";
 import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
-import { BrandIcon } from "@/lib/brand-icon";
+import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { cn } from "@/lib/utils";
 import { client } from "@/lib/ipc";
 
@@ -26,6 +26,20 @@ interface AppRow {
   version: string | null;
   genre: string | null;
   released: string | null;
+}
+
+/** A stable, distinct tinted tile for an app without a bundled brand logo —
+ *  hue derived from its bundle id, so each app reads as its own icon rather
+ *  than a uniform grey monogram. (Real App Store artwork can't be used: the
+ *  webview CSP blocks remote images and the backup carries no icon bitmap.) */
+function appTile(bundleId: string): { backgroundColor: string; color: string } {
+  let h = 0;
+  for (let i = 0; i < bundleId.length; i++)
+    h = (h * 31 + bundleId.charCodeAt(i)) % 360;
+  return {
+    backgroundColor: `hsl(${h} 55% 50% / 0.16)`,
+    color: `hsl(${h} 60% 62%)`,
+  };
 }
 
 /** "2018" — just the year of an RFC-3339 release date (the day/time is noise
@@ -141,16 +155,23 @@ export function AppsView() {
 function AppItem({ app }: { app: AppRow }) {
   const navigate = useNavigate();
   const label = SUPPORT_LABEL[app.support];
-  // Only the "coming soon" placeholder — never for apps we already parse natively
-  // (their chats show in Messages) or that keep no local data.
-  const canExtract = app.support === "planned";
 
   return (
     <Item>
       <ItemMedia>
-        <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
-          <BrandIcon slug={app.slug} name={app.name} className="size-5" />
-        </div>
+        {hasBrandIcon(app.slug) ? (
+          <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+            <BrandIcon slug={app.slug} name={app.name} className="size-5" />
+          </div>
+        ) : (
+          <div
+            className="flex size-9 items-center justify-center rounded-lg text-sm font-semibold"
+            style={appTile(app.bundleId)}
+            aria-label={app.name}
+          >
+            {app.name.slice(0, 1).toUpperCase()}
+          </div>
+        )}
       </ItemMedia>
       <ItemContent>
         <ItemTitle className="flex items-center gap-2">
@@ -189,7 +210,7 @@ function AppItem({ app }: { app: AppRow }) {
           {app.bundleId}
         </ItemDescription>
       </ItemContent>
-      {app.support === "native" ? (
+      {app.support === "native" && (
         <ItemActions>
           <Button
             variant="ghost"
@@ -202,19 +223,7 @@ function AppItem({ app }: { app: AppRow }) {
             Chats in Messages →
           </Button>
         </ItemActions>
-      ) : canExtract ? (
-        <ItemActions>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            title="Per-app extraction is coming soon"
-          >
-            <Download className="size-4" />
-            Extract data
-          </Button>
-        </ItemActions>
-      ) : null}
+      )}
     </Item>
   );
 }
