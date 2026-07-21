@@ -8,8 +8,8 @@
 //! and must never touch the live cache from a test.
 
 use traceloupe_core::analyzer::{
-    parse_addaily, parse_configuration_profiles, parse_datausage, parse_tcc, run_scan, ScanInputs,
-    ScanKind, MODULES,
+    parse_addaily, parse_configuration_profiles, parse_datausage, parse_shortcuts, parse_tcc,
+    run_scan, ScanInputs, ScanKind, MODULES,
 };
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::indicators::{bundled_snapshot_dir, load_snapshot_dir};
@@ -68,6 +68,15 @@ fn process_extraction_on_real_mirror() {
         clients.len()
     );
 
+    // Shortcuts.
+    let sc_db = format!("{mirror}/HomeDomain/Library/Shortcuts/Shortcuts.sqlite");
+    let shortcuts = parse_shortcuts(std::path::Path::new(&sc_db)).expect("shortcuts");
+    let with_hosts = shortcuts.iter().filter(|s| !s.hosts.is_empty()).count();
+    eprintln!(
+        "extracted {} shortcuts ({with_hosts} reference at least one host)",
+        shortcuts.len()
+    );
+
     // Scan them against the bundled indicators (cache-less: in-memory db).
     let (set, _) = load_snapshot_dir(&bundled_snapshot_dir()).unwrap();
     let db = CacheDb::open_in_memory().unwrap();
@@ -75,12 +84,13 @@ fn process_extraction_on_real_mirror() {
         &db,
         &set,
         ScanKind::Explicit,
-        &["process_names", "profiles", "tcc"],
+        &["process_names", "profiles", "tcc", "shortcuts"],
         ScanInputs {
             manifest_entries: None,
             processes: &processes,
             profiles: &profiles,
             grants: &grants,
+            shortcuts: &shortcuts,
         },
         "[]",
         &CancelToken::new(),
