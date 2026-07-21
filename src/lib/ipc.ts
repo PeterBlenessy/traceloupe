@@ -746,6 +746,16 @@ export interface TraceLoupeClient {
   updateIndicators(): Promise<SnapshotInfo>;
   getDetectionSettings(): Promise<DetectionSettings>;
   setDetectionSettings(settings: DetectionSettings): Promise<void>;
+  /** Find known URL-shortener links in text (local, no network). */
+  findShortenerUrls(text: string): Promise<string[]>;
+  /** Resolve a shortened link to its destination. Contacts the link's shortener
+   *  (the sole sanctioned backup-data exit, ADR 0001) — call only after explicit
+   *  user approval. Reveals the target without visiting it. */
+  expandShortUrl(url: string): Promise<string>;
+  /** Whether the per-use de-shorten approval prompt is suppressed for THIS
+   *  backup (never global). */
+  deshortenAutoApproveGet(): Promise<boolean>;
+  deshortenAutoApproveSet(enabled: boolean): Promise<void>;
   /** Run the Passive Check now against the already-imported backup (the
    *  first-launch consent flow). Returns null if consent isn't granted or no
    *  backup is open. */
@@ -1093,6 +1103,13 @@ const tauriClient: TraceLoupeClient = {
     invoke<DetectionSettings>("get_detection_settings"),
   setDetectionSettings: (settings) =>
     invoke("set_detection_settings", { settings }),
+  findShortenerUrls: (text) =>
+    invoke<string[]>("find_shortener_urls", { text }),
+  expandShortUrl: (url) => invoke<string>("expand_short_url", { url }),
+  deshortenAutoApproveGet: () =>
+    invoke<boolean>("deshorten_auto_approve_get"),
+  deshortenAutoApproveSet: (enabled) =>
+    invoke("deshorten_auto_approve_set", { enabled }),
   runPassiveCheckNow: () =>
     invoke<ScanSummary | null>("run_passive_check_now"),
   exportScanReport: async (runId) => {
@@ -1982,6 +1999,8 @@ let mockDetectionSettings: DetectionSettings = {
   customIndicatorDir: null,
 };
 
+let mockDeshortenAutoApprove = false;
+
 let mockScanRuns: ScanRun[] = [];
 
 const mockFindings: Finding[] = [
@@ -2007,7 +2026,7 @@ const mockFindings: Finding[] = [
     module: "safari",
     malware: "TheTruthSpy",
     matchedValue: "thetruthspy.com",
-    context: "https://thetruthspy.com/features",
+    context: "tap here https://bit.ly/3xShort to install — thetruthspy.com",
     refKind: "safari_history",
     refId: 42,
     eventTime: 1700001000,
@@ -2719,6 +2738,18 @@ export const mockClient: TraceLoupeClient = {
   getDetectionSettings: async () => mockDetectionSettings,
   setDetectionSettings: async (s) => {
     mockDetectionSettings = s;
+  },
+  findShortenerUrls: async (text) => {
+    const hosts = ["bit.ly", "tinyurl.com", "t.co", "youtu.be"];
+    return (text.match(/https?:\/\/[^\s"'<>()]+/g) ?? []).filter((u) =>
+      hosts.some((h) => u.toLowerCase().includes(`//${h}/`)),
+    );
+  },
+  expandShortUrl: async (url) =>
+    `https://revealed.example/from/${encodeURIComponent(url)}`,
+  deshortenAutoApproveGet: async () => mockDeshortenAutoApprove,
+  deshortenAutoApproveSet: async (enabled) => {
+    mockDeshortenAutoApprove = enabled;
   },
   runPassiveCheckNow: async () => {
     if (!mockActive || mockDetectionSettings.passiveConsent !== "granted")

@@ -11,6 +11,7 @@ import {
   Info,
   ExternalLink,
   Download,
+  Link2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,15 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { ViewHeader, EmptyView, ErrorState, ListSkeleton } from "@/components/view";
 import { formatListTime } from "@/lib/format";
@@ -479,6 +489,115 @@ function WhatNow() {
   );
 }
 
+/**
+ * The opt-in de-shortener (ADR 0001 exception). Resolving a shortened link
+ * contacts a remote host with a URL from the backup, so it is a deliberate,
+ * per-link, user-approved action: every use prompts unless the user has ticked
+ * "don't ask again" for THIS backup. Nothing is contacted until the user clicks
+ * Reveal and approves.
+ */
+function ShortLinkExpander({ text }: { text: string }) {
+  const qc = useQueryClient();
+  const links = useQuery({
+    queryKey: ["shortenerUrls", text],
+    queryFn: () => client.findShortenerUrls(text),
+  });
+  const autoApprove = useQuery({
+    queryKey: ["deshortenAutoApprove"],
+    queryFn: () => client.deshortenAutoApproveGet(),
+  });
+
+  const [results, setResults] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<string | null>(null);
+  const [dontAsk, setDontAsk] = useState(false);
+
+  const expand = useMutation({
+    mutationFn: (url: string) => client.expandShortUrl(url),
+    onSuccess: (target, url) => setResults((r) => ({ ...r, [url]: target })),
+    onError: (e, url) =>
+      setErrors((x) => ({ ...x, [url]: (e as Error).message })),
+  });
+
+  if (!links.data || links.data.length === 0) return null;
+
+  function onReveal(url: string) {
+    if (autoApprove.data) expand.mutate(url);
+    else {
+      setDontAsk(false);
+      setPending(url);
+    }
+  }
+  async function onApprove() {
+    if (!pending) return;
+    if (dontAsk) {
+      await client.deshortenAutoApproveSet(true);
+      qc.invalidateQueries({ queryKey: ["deshortenAutoApprove"] });
+    }
+    const url = pending;
+    setPending(null);
+    expand.mutate(url);
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-medium text-muted-foreground">
+        Shortened links
+      </span>
+      {links.data.map((url) => (
+        <div key={url} className="flex flex-col gap-1 rounded-md border p-2">
+          <span className="break-all font-mono text-xs">{url}</span>
+          {results[url] ? (
+            <span className="break-all text-xs">
+              → <span className="font-mono text-foreground">{results[url]}</span>
+            </span>
+          ) : errors[url] ? (
+            <span className="text-xs text-destructive">
+              Couldn’t resolve: {errors[url]}
+            </span>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-fit"
+              disabled={expand.isPending}
+              onClick={() => onReveal(url)}
+            >
+              <Link2 className="size-4" />
+              Reveal destination
+            </Button>
+          )}
+        </div>
+      ))}
+
+      <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Reveal this shortened link?</DialogTitle>
+            <DialogDescription>
+              TraceLoupe will contact the link’s shortener to find where it
+              points. This is the one time information from your backup leaves
+              your Mac — and if the link was sent by someone monitoring this
+              device, resolving it can signal that the device is being examined.
+              Only the shortener is contacted, never the final destination.
+            </DialogDescription>
+          </DialogHeader>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={dontAsk} onCheckedChange={setDontAsk} />
+            Don’t ask again for this backup
+          </label>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPending(null)}>
+              Cancel
+            </Button>
+            <Button onClick={onApprove}>Reveal link</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
 function FindingDetail({
   finding,
   onClose,
@@ -519,6 +638,11 @@ function FindingDetail({
               {finding.eventTime && (
                 <Field label="When">{formatListTime(finding.eventTime)}</Field>
               )}
+
+              <ShortLinkExpander
+                text={`${finding.matchedValue} ${finding.context ?? ""}`}
+              />
+
               <Separator />
               <p className="text-xs text-muted-foreground">
                 A match is evidence to review, not proof of compromise. False
