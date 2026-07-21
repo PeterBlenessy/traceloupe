@@ -10,11 +10,37 @@ calls. The one exception is a bounded closing pass that writes the Scan report
 and per-flagged-thread summaries from the verdict list.
 
 Inference runs in llama.cpp's `llama-server` as a Tauri sidecar on loopback
-(the NoteSage-proven pattern), spawned under a macOS Seatbelt profile that
-denies all network except its listen socket and all file reads outside the
-model directory; server logging is off, prompt text never reaches app logs,
-and every run leaves a content-free audit log (identifier ranges, model,
-verdict counts — never content).
+(the NoteSage-proven pattern), spawned under a macOS Seatbelt profile; server
+logging is off, prompt text never reaches app logs, and every run leaves a
+content-free audit log (identifier ranges, model, verdict counts — never
+content).
+
+## Sandbox threat model (the containment TraceLoupe must enforce)
+
+The backup text being classified lives in the HTTP prompt bodies sent to the
+sidecar, so the sidecar is the process that must not be able to leak it. Two
+enforced invariants:
+
+1. **TraceLoupe runs only its own binary, always sandboxed.** A *release* build
+   resolves only the bundled sidecar next to the app executable
+   (`resolve_binary`); the env-override and `$PATH` fallbacks are compiled out
+   of release builds, so a shipped app can never be pointed at an external,
+   unsandboxed llama-server. Bundling (Tauri `externalBin`) exists to give the
+   sandbox a known binary to run.
+2. **The sandbox denies filesystem egress, not just network.** The Seatbelt
+   profile denies all network except the loopback listen socket AND denies
+   `file-write*` everywhere except a single TraceLoupe-owned scratch dir (wiped
+   each run); it denies reads of user data outside the model, the binary, and
+   that scratch dir. Metal's shader cache and any temp files are redirected
+   into the scratch dir via `MTL_SHADER_CACHE_PATH`/`TMPDIR`, so GPU init has
+   somewhere to write without opening the rest of the disk. A live
+   `sandbox-exec` test asserts a write outside scratch is refused by the OS.
+
+The earlier profile denied network but allowed writes — insufficient, since the
+prompts could then be persisted to disk inside the sandbox. That gap is closed
+here. **Not yet verified on hardware:** that the write-deny doesn't break Metal
+GPU init on a real model run (only a packaged/hardware run can confirm; the
+scratch-redirect is the mitigation).
 
 ## Considered options
 

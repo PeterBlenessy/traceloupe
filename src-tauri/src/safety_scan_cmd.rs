@@ -225,8 +225,11 @@ pub async fn run_safety_scan(
     let model_path = spec
         .installed_at(&dir)
         .ok_or("model not installed — download it first")?;
-    let binary = server::resolve_binary(app.path().resource_dir().ok().as_deref())
-        .map_err(|e| e.to_string())?;
+    let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+    // The sandbox's only writable location — TraceLoupe-owned, wiped each run
+    // (see below) so nothing the sidecar writes ever persists or is treated as
+    // backup data.
+    let scratch_dir = models_dir(&app)?.join("sidecar-scratch");
 
     let cancel = CancelToken::new();
     *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
@@ -236,6 +239,8 @@ pub async fn run_safety_scan(
     let ctx_size = spec.ctx_size;
     let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
+        // Start from a clean scratch dir; spawn() re-creates it.
+        let _ = std::fs::remove_dir_all(&scratch_dir);
         let port = server::pick_port().map_err(|e| e.to_string())?;
         let mut llama = server::LlamaServer::spawn(&server::ServerConfig {
             binary,
@@ -244,6 +249,7 @@ pub async fn run_safety_scan(
             ctx_size,
             gpu_layers: -1,
             sandbox: true,
+            scratch_dir: scratch_dir.clone(),
         })
         .map_err(|e| e.to_string())?;
         // 4–5 GB GGUF load + Metal warmup: allow generous startup time, but
@@ -306,6 +312,9 @@ pub async fn run_safety_scan(
         summary::run_summaries(&mut analysis, &llm, outcome.scan_id, &cancel)
             .map_err(|e| e.to_string())?;
         llama.shutdown();
+        // Wipe scratch now (a crashed run's residue is cleared at the next
+        // run's start-of-run wipe; this keeps the happy path tidy).
+        let _ = std::fs::remove_dir_all(&scratch_dir);
 
         let _ = app2.emit(
             "safetyscan://progress",
