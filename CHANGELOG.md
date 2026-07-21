@@ -68,6 +68,13 @@ from the backup — the sole sanctioned exception to "nothing leaves the machine
 
 With the de-shortener, **M3 — and the Security Check as a whole — is complete.**
 
+## [0.27.1] — 2026-07-21
+
+**Sidebar: Security grouped with Device.** The Security entry moves up next to
+Device — both are whole-backup operations (its identity, and an audit of it),
+distinct from the content views — with a separator dividing that pair from the
+content list. Gives the security feature fitting prominence.
+
 ## [0.27.0] — 2026-07-21
 
 **Security Check M3 — scan-history diffing.** A re-scan (e.g. after updating
