@@ -53,3 +53,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: cargo check -p traceloupe
+      # Lint the shell crate too (clippy needs the built `dist/` from pnpm
+      # build above, which cargo check also relies on). --all-targets so
+      # test-code lints in the Tauri crate are gated, not just the library.
+      - run: cargo clippy -p traceloupe --all-targets -- -D warnings
