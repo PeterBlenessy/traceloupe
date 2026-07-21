@@ -9,6 +9,7 @@
 pub mod chunker;
 pub mod client;
 pub mod engine;
+pub mod models;
 pub mod prompt;
 pub mod server;
 pub mod summary;
