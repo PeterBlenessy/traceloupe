@@ -32,6 +32,7 @@ pub const MODULES: &[&str] = &[
     "process_names",
     "profiles",
     "tcc",
+    "shortcuts",
 ];
 
 /// A process observed running on the device, from a Tier-B artifact
@@ -66,6 +67,18 @@ pub struct ObservedProfile {
     pub capabilities: Vec<String>,
     /// Hostnames/URLs referenced by the profile, for indicator matching.
     pub hosts: Vec<String>,
+}
+
+/// A user-installed Shortcut (from `Shortcuts.sqlite`). Shortcut actions can
+/// call out to arbitrary URLs — a shortcut that quietly posts data to a
+/// malicious endpoint is an exfiltration/automation vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedShortcut {
+    pub name: String,
+    /// Hostnames/URLs referenced by the shortcut's actions, for indicator matching.
+    pub hosts: Vec<String>,
+    /// Unix seconds the shortcut was last modified, if known.
+    pub modified: Option<i64>,
 }
 
 /// A permission an app was granted, from `TCC.db` (Transparency, Consent &
@@ -379,22 +392,35 @@ fn scan_text<'a>(
 }
 
 /// Run a scan. `manifest_entries` is `(domain, relative_path)` for every file
-/// in the backup manifest; pass `None` when only cache modules should run
-/// (the `manifest` module is then skipped). `processes` are Tier-B observed
-/// processes (empty skips the `process_names` module); `profiles` are installed
-/// configuration profiles (empty skips the `profiles` module). `feeds_json`
-/// describes the indicator feeds used (stored on the run for the report header).
-/// `progress` receives `(module, index, total)` before each module runs.
-#[allow(clippy::too_many_arguments)] // a scan genuinely needs all of these inputs
+/// Tier-B inputs a scan draws on beyond the cache DB. Each is optional/empty;
+/// when absent, the module that consumes it is skipped. The command layer fills
+/// these by extracting artifacts from the backup on an Explicit Scan; a Passive
+/// Check leaves them at their defaults.
+#[derive(Default)]
+pub struct ScanInputs<'a> {
+    /// `(domain, relative_path)` for every backup file — enables the `manifest` sweep.
+    pub manifest_entries: Option<&'a mut dyn Iterator<Item = (String, String)>>,
+    /// Observed processes (DataUsage + OSAnalytics) — enables `process_names`.
+    pub processes: &'a [ObservedProcess],
+    /// Installed configuration profiles — enables `profiles`.
+    pub profiles: &'a [ObservedProfile],
+    /// TCC permission grants — enables `tcc`.
+    pub grants: &'a [PermissionGrant],
+    /// Installed Shortcuts — enables `shortcuts`.
+    pub shortcuts: &'a [ObservedShortcut],
+}
+
+/// Run a scan. `inputs` carries the Tier-B artifacts (empty for a Passive
+/// Check); `feeds_json` describes the indicator feeds used (stored on the run
+/// for the report header). `progress` receives `(module, index, total)` before
+/// each module runs.
+#[allow(clippy::too_many_arguments)] // Tier-B inputs are grouped in ScanInputs; the rest are distinct
 pub fn run_scan(
     db: &CacheDb,
     set: &IndicatorSet,
     kind: ScanKind,
     modules: &[&'static str],
-    mut manifest_entries: Option<&mut dyn Iterator<Item = (String, String)>>,
-    processes: &[ObservedProcess],
-    profiles: &[ObservedProfile],
-    grants: &[PermissionGrant],
+    mut inputs: ScanInputs<'_>,
     feeds_json: &str,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str, usize, usize),
@@ -403,10 +429,11 @@ pub fn run_scan(
     let modules: Vec<&'static str> = modules
         .iter()
         .copied()
-        .filter(|m| *m != "manifest" || manifest_entries.is_some())
-        .filter(|m| *m != "process_names" || !processes.is_empty())
-        .filter(|m| *m != "tcc" || !grants.is_empty())
-        .filter(|m| *m != "profiles" || !profiles.is_empty())
+        .filter(|m| *m != "manifest" || inputs.manifest_entries.is_some())
+        .filter(|m| *m != "process_names" || !inputs.processes.is_empty())
+        .filter(|m| *m != "tcc" || !inputs.grants.is_empty())
+        .filter(|m| *m != "profiles" || !inputs.profiles.is_empty())
+        .filter(|m| *m != "shortcuts" || !inputs.shortcuts.is_empty())
         .collect();
     conn.execute(
         "INSERT INTO scan_runs (kind, started_at, status, modules_json, feeds_json, indicator_count)
@@ -661,7 +688,7 @@ pub fn run_scan(
                 }
             }
             "manifest" => {
-                if let Some(entries) = manifest_entries.as_deref_mut() {
+                if let Some(entries) = inputs.manifest_entries.as_deref_mut() {
                     for (domain, rel_path) in entries {
                         if cancel.is_cancelled() {
                             cancelled = true;
@@ -714,7 +741,7 @@ pub fn run_scan(
                 }
             }
             "process_names" => {
-                for p in processes {
+                for p in inputs.processes {
                     // Match the recorded name and its basename (DataUsage stores
                     // a `UUID/bundle` form; malicious daemon names are bare).
                     let base = p.name.rsplit('/').next().unwrap_or(&p.name);
@@ -752,7 +779,7 @@ pub fn run_scan(
                 }
             }
             "profiles" => {
-                for prof in profiles {
+                for prof in inputs.profiles {
                     // Indicator matches on any string the profile carries
                     // (display name, organization, referenced hosts/URLs).
                     let scanned = format!(
@@ -812,7 +839,7 @@ pub fn run_scan(
                 // Aggregate grants by client so a matched app produces one
                 // finding listing all the sensitive permissions it holds.
                 let mut by_client: HashMap<&str, (Vec<&str>, Option<i64>)> = HashMap::new();
-                for g in grants {
+                for g in inputs.grants {
                     let entry = by_client.entry(g.client.as_str()).or_default();
                     if g.sensitive && !entry.0.contains(&g.service.as_str()) {
                         entry.0.push(g.service.as_str());
@@ -840,6 +867,23 @@ pub fn run_scan(
                             event_time: last,
                         });
                     }
+                }
+            }
+            "shortcuts" => {
+                for sc in inputs.shortcuts {
+                    // A shortcut that calls out to an indicator host/URL is an
+                    // exfiltration or C2 automation. Scan the name + referenced
+                    // hosts against domain/url indicators.
+                    let scanned = format!("{} {}", sc.name, sc.hosts.join(" "));
+                    scan_text(
+                        &lookup,
+                        &scanned,
+                        "shortcuts",
+                        "shortcut",
+                        None,
+                        sc.modified,
+                        &mut sink,
+                    );
                 }
             }
             other => {
@@ -1169,6 +1213,49 @@ pub fn parse_tcc(db_path: &std::path::Path) -> Result<Vec<PermissionGrant>> {
 }
 
 // ---------------------------------------------------------------------------
+// Shortcuts extraction (Shortcuts.sqlite)
+// ---------------------------------------------------------------------------
+
+/// Parse installed Shortcuts from `Shortcuts.sqlite` (HomeDomain,
+/// `Library/Shortcuts/Shortcuts.sqlite`). Each `ZSHORTCUTACTIONS.ZDATA` is a
+/// binary plist of workflow actions; their string parameters (e.g. an
+/// `openurl` action's `WFInput`) carry the URLs the scan matches. Errors only
+/// on an unreadable / non-Shortcuts database.
+pub fn parse_shortcuts(db_path: &std::path::Path) -> Result<Vec<ObservedShortcut>> {
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut stmt = conn.prepare(
+        "SELECT s.ZNAME, s.ZMODIFICATIONDATE, a.ZDATA
+         FROM ZSHORTCUT s LEFT JOIN ZSHORTCUTACTIONS a ON a.Z_PK = s.Z_PK",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let name: Option<String> = r.get(0)?;
+        let modified: Option<f64> = r.get(1)?;
+        let data: Option<Vec<u8>> = r.get(2)?;
+        Ok((name, modified, data))
+    })?;
+    let mut out = Vec::new();
+    for row in rows.filter_map(|r| r.ok()) {
+        let (name, modified, data) = row;
+        let mut hosts = Vec::new();
+        if let Some(bytes) = data {
+            if let Ok(value) = plist::Value::from_reader(std::io::Cursor::new(bytes)) {
+                let mut strings = Vec::new();
+                let mut keys = Vec::new();
+                collect_plist(&value, &mut strings, &mut keys);
+                hosts = strings.into_iter().filter(|s| host_like(s)).collect();
+            }
+        }
+        out.push(ObservedShortcut {
+            name: name.unwrap_or_default(),
+            hosts,
+            modified: modified.map(|t| t as i64 + MAC_ABSOLUTE_EPOCH),
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // CSV report export
 // ---------------------------------------------------------------------------
 
@@ -1433,6 +1520,23 @@ mod tests {
         ]
     }
 
+    fn test_shortcuts() -> Vec<ObservedShortcut> {
+        vec![
+            // A shortcut whose action posts to an indicator host → one finding.
+            ObservedShortcut {
+                name: "Backup Photos".into(),
+                hosts: vec!["https://evil.example/upload".into()],
+                modified: Some(1_700_001_000),
+            },
+            // A benign shortcut → no finding.
+            ObservedShortcut {
+                name: "Open URLs".into(),
+                hosts: vec!["https://www.pinterest.se".into()],
+                modified: Some(1_700_001_100),
+            },
+        ]
+    }
+
     fn seeded_db() -> CacheDb {
         let db = CacheDb::open_in_memory().unwrap();
         let c = db.conn();
@@ -1493,16 +1597,20 @@ mod tests {
         let processes = test_processes();
         let profiles = test_profiles();
         let grants = test_grants();
+        let shortcuts = test_shortcuts();
         let mut seen_modules = Vec::new();
         let outcome = run_scan(
             &db,
             &set,
             ScanKind::Explicit,
             MODULES,
-            Some(&mut manifest),
-            &processes,
-            &profiles,
-            &grants,
+            ScanInputs {
+                manifest_entries: Some(&mut manifest),
+                processes: &processes,
+                profiles: &profiles,
+                grants: &grants,
+                shortcuts: &shortcuts,
+            },
             "[]",
             &cancel,
             |m, _, _| seen_modules.push(m.to_string()),
@@ -1558,6 +1666,9 @@ mod tests {
             })
             .unwrap();
         assert!(tcc_ctx.contains("Camera") && tcc_ctx.contains("Microphone"));
+        // shortcuts: the "Backup Photos" action posts to an indicator host; the
+        // benign pinterest shortcut does not match. One finding.
+        assert_eq!(count(&db, "shortcuts"), 1);
 
         // Severity flows from the indicator.
         let critical: i64 = db
@@ -1806,6 +1917,59 @@ mod tests {
     }
 
     #[test]
+    fn parse_shortcuts_extracts_action_urls() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("Shortcuts.sqlite");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ZSHORTCUT (Z_PK INTEGER PRIMARY KEY, ZMODIFICATIONDATE TIMESTAMP, ZNAME VARCHAR);
+             CREATE TABLE ZSHORTCUTACTIONS (Z_PK INTEGER PRIMARY KEY, ZDATA BLOB);
+             INSERT INTO ZSHORTCUT VALUES (1, 700000000.0, 'Exfil');
+             INSERT INTO ZSHORTCUT VALUES (2, 700000000.0, 'Empty');",
+        )
+        .unwrap();
+        // Action blob = a binary plist array with an openurl action.
+        let action = {
+            let mut params = plist::Dictionary::new();
+            params.insert(
+                "WFInput".into(),
+                plist::Value::String("https://evil.example/upload".into()),
+            );
+            let mut act = plist::Dictionary::new();
+            act.insert(
+                "WFWorkflowActionIdentifier".into(),
+                plist::Value::String("is.workflow.actions.openurl".into()),
+            );
+            act.insert(
+                "WFWorkflowActionParameters".into(),
+                plist::Value::Dictionary(params),
+            );
+            let mut bytes = Vec::new();
+            plist::to_writer_binary(
+                &mut bytes,
+                &plist::Value::Array(vec![plist::Value::Dictionary(act)]),
+            )
+            .unwrap();
+            bytes
+        };
+        conn.execute(
+            "INSERT INTO ZSHORTCUTACTIONS (Z_PK, ZDATA) VALUES (1, ?1)",
+            [action],
+        )
+        .unwrap();
+        drop(conn);
+
+        let shortcuts = parse_shortcuts(&path).unwrap();
+        assert_eq!(shortcuts.len(), 2);
+        let exfil = shortcuts.iter().find(|s| s.name == "Exfil").unwrap();
+        assert!(exfil.hosts.iter().any(|h| h.contains("evil.example")));
+        assert_eq!(exfil.modified, Some(700000000 + MAC_ABSOLUTE_EPOCH));
+        // The shortcut with no action data has no hosts.
+        let empty = shortcuts.iter().find(|s| s.name == "Empty").unwrap();
+        assert!(empty.hosts.is_empty());
+    }
+
+    #[test]
     fn clean_cache_yields_zero_findings() {
         let db = CacheDb::open_in_memory().unwrap();
         db.conn()
@@ -1821,10 +1985,7 @@ mod tests {
             &test_set(),
             ScanKind::Explicit,
             MODULES,
-            None,
-            &[],
-            &[],
-            &[],
+            ScanInputs::default(),
             "[]",
             &CancelToken::new(),
             |_, _, _| {},
@@ -1842,10 +2003,7 @@ mod tests {
             &test_set(),
             ScanKind::Passive,
             &modules,
-            None,
-            &[],
-            &[],
-            &[],
+            ScanInputs::default(),
             "[]",
             &CancelToken::new(),
             |_, _, _| {},
@@ -1866,10 +2024,10 @@ mod tests {
             &test_set(),
             ScanKind::Explicit,
             MODULES,
-            Some(&mut manifest),
-            &[],
-            &[],
-            &[],
+            ScanInputs {
+                manifest_entries: Some(&mut manifest),
+                ..Default::default()
+            },
             r#"[{"source":"echap/ioc","class":"stalkerware","count":2746,"skipped":0}]"#,
             &CancelToken::new(),
             |_, _, _| {},
@@ -1913,10 +2071,7 @@ mod tests {
             &test_set(),
             ScanKind::Explicit,
             MODULES,
-            None,
-            &[],
-            &[],
-            &[],
+            ScanInputs::default(),
             "[]",
             &cancel,
             |_, _, _| {},
