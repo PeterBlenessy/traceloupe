@@ -8,8 +8,8 @@
 //! and must never touch the live cache from a test.
 
 use traceloupe_core::analyzer::{
-    parse_addaily, parse_configuration_profiles, parse_datausage, parse_tcc, run_scan, ScanKind,
-    MODULES,
+    parse_addaily, parse_configuration_profiles, parse_datausage, parse_tcc, run_scan, ScanInputs,
+    ScanKind, MODULES,
 };
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::indicators::{bundled_snapshot_dir, load_snapshot_dir};
@@ -76,10 +76,12 @@ fn process_extraction_on_real_mirror() {
         &set,
         ScanKind::Explicit,
         &["process_names", "profiles", "tcc"],
-        None,
-        &processes,
-        &profiles,
-        &grants,
+        ScanInputs {
+            manifest_entries: None,
+            processes: &processes,
+            profiles: &profiles,
+            grants: &grants,
+        },
         "[]",
         &CancelToken::new(),
         |_, _, _| {},
@@ -131,10 +133,7 @@ fn full_tier_a_scan_under_60s() {
         &set,
         ScanKind::Explicit,
         MODULES,
-        None,
-        &[],
-        &[],
-        &[],
+        ScanInputs::default(),
         "[]",
         &CancelToken::new(),
         |m, i, n| eprintln!("  [{}/{}] {m} ({:?} elapsed)", i + 1, n, start.elapsed()),

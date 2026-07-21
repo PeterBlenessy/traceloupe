@@ -700,10 +700,8 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
             &set,
             scan_kind,
             &modules,
-            None,
-            &[], // Passive Check never does Tier-B process extraction.
-            &[], // …nor configuration-profile extraction.
-            &[], // …nor TCC permission extraction.
+            // Passive Check does no Tier-B artifact extraction.
+            analyzer::ScanInputs::default(),
             &feeds_json,
             &CancelToken::new(),
             |module, index, total| {
@@ -1308,10 +1306,12 @@ async fn run_security_scan(
             &set,
             scan_kind,
             &modules,
-            sweep_ref,
-            &tierb_processes,
-            &tierb_profiles,
-            &tierb_grants,
+            analyzer::ScanInputs {
+                manifest_entries: sweep_ref,
+                processes: &tierb_processes,
+                profiles: &tierb_profiles,
+                grants: &tierb_grants,
+            },
             &feeds_json,
             &cancel,
             |module, index, total| {
