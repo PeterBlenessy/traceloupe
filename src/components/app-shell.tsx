@@ -35,6 +35,7 @@ import {
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -187,13 +188,18 @@ export function AppShell() {
                   <SidebarMenuButton
                     asChild
                     isActive={pathname === "/safety-scan"}
-                    tooltip="Safety"
+                    tooltip="Safety (experimental)"
                   >
                     <Link to="/safety-scan">
                       <ScanSearch />
                       <span>Safety</span>
                     </Link>
                   </SidebarMenuButton>
+                  {/* Experimental: local-AI classification quality is not yet
+                      validated on real hardware. */}
+                  <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Beta
+                  </SidebarMenuBadge>
                 </SidebarMenuItem>
               </SidebarMenu>
             </SidebarHeader>
