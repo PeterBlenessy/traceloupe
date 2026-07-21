@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { usePersistedState } from "@/lib/use-persisted-state";
 import {
   AlertTriangle,
   Ban,
@@ -105,6 +106,12 @@ export function SafetyScanView() {
   const { scan, startScan, cancelScan, error } = useSafetyScan();
   const [rangeSel, setRangeSel] = useState("all");
   const [showDismissed, setShowDismissed] = useState(false);
+  // Dismissible per-user; the classifier's accuracy is not yet validated on
+  // real hardware, so the disclaimer stays until the user acknowledges it.
+  const [expDismissed, setExpDismissed] = usePersistedState(
+    "safety-scan:experimental-ack",
+    false,
+  );
 
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
@@ -145,6 +152,32 @@ export function SafetyScanView() {
         </span>
       </ViewHeader>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+        {!expDismissed && (
+          <Alert>
+            <ScanSearch className="size-4" />
+            <AlertTitle className="flex items-center gap-2">
+              Experimental feature
+            </AlertTitle>
+            <AlertDescription className="flex flex-col gap-2">
+              <span>
+                Safety Scan is new and its classification accuracy has not yet
+                been validated. Verdicts come from a local AI model and can be
+                wrong in both directions — treat every finding as a prompt to
+                review the actual conversation yourself, and don't rely on a
+                clean result as a guarantee.
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-fit"
+                onClick={() => setExpDismissed(true)}
+              >
+                Got it
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {error && (
           <Alert variant="destructive">
             <AlertTriangle className="size-4" />
