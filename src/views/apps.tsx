@@ -26,6 +26,11 @@ interface AppRow {
   version: string | null;
   genre: string | null;
   released: string | null;
+  /** Per-copy download receipt: when, and which account installed it. */
+  downloaded: string | null;
+  appleId: string | null;
+  contentRating: string | null;
+  subgenre: string | null;
 }
 
 /** A stable, distinct tinted tile for an app without a bundled brand logo —
@@ -48,6 +53,19 @@ function releasedYear(released: string | null): string | null {
   if (!released) return null;
   const d = new Date(released);
   return Number.isNaN(d.getTime()) ? null : String(d.getUTCFullYear());
+}
+
+/** "12 Mar 2024" — full day for a download date (unlike a release year, the
+ *  exact install day matters forensically). */
+function downloadedLabel(downloaded: string): string {
+  const d = new Date(downloaded);
+  return Number.isNaN(d.getTime())
+    ? downloaded
+    : d.toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
 }
 
 export function AppsView() {
@@ -91,6 +109,10 @@ export function AppsView() {
           version: app.version,
           genre: app.genre,
           released: app.released,
+          downloaded: app.downloaded,
+          appleId: app.appleId,
+          contentRating: app.contentRating,
+          subgenre: app.subgenre,
         };
       })
       .sort(
@@ -107,7 +129,8 @@ export function AppsView() {
         a.name.toLowerCase().includes(needle) ||
         a.bundleId.toLowerCase().includes(needle) ||
         (a.seller?.toLowerCase().includes(needle) ?? false) ||
-        (a.genre?.toLowerCase().includes(needle) ?? false),
+        (a.genre?.toLowerCase().includes(needle) ?? false) ||
+        (a.appleId?.toLowerCase().includes(needle) ?? false),
     );
   }, [apps, q]);
 
@@ -128,9 +151,9 @@ export function AppsView() {
         title="Open a backup to inspect installed apps"
         lead="Every app installed on the device — with version, App Store details, bundle id, and the data it left in the backup — a starting point for spotting unfamiliar or hidden apps."
         features={[
-          { label: "Search", detail: "Search by name, bundle id, seller, or genre." },
-          { label: "App Store detail", detail: "Seller, genre, release year, and version for each app." },
-          { label: "Support badges", detail: "See which apps TraceLoupe can extract data from." },
+          { label: "Search", detail: "Search by name, bundle id, seller, genre, or account." },
+          { label: "App Store detail", detail: "Seller, genre, subgenre, age rating, and release year." },
+          { label: "Install receipt", detail: "When each app was downloaded, and the Apple ID that installed it." },
           { label: "Cross-link", detail: "Jump from a supported app to its chats in Messages." },
         ]}
         note="Read locally on this Mac — nothing is uploaded."
@@ -197,13 +220,28 @@ function AppItem({ app }: { app: AppRow }) {
             </Badge>
           )}
         </ItemTitle>
-        {/* Seller · genre · release year from the backup's App Store metadata,
-            when present; otherwise fall back to the bundle id. */}
-        {app.seller || app.genre || app.released ? (
+        {/* Seller · genre · subgenre · age rating · release year, from the
+            backup's App Store metadata, when present. */}
+        {app.seller || app.genre || app.subgenre || app.contentRating || app.released ? (
           <ItemDescription className="truncate">
-            {[app.seller, app.genre, releasedYear(app.released)]
+            {[
+              app.seller,
+              app.genre,
+              app.subgenre,
+              app.contentRating,
+              releasedYear(app.released),
+            ]
               .filter(Boolean)
               .join(" · ")}
+          </ItemDescription>
+        ) : null}
+        {/* The download receipt — device-specific and forensically the most
+            telling: when this copy was installed, and by which Apple ID. */}
+        {app.downloaded || app.appleId ? (
+          <ItemDescription className="truncate text-foreground/70">
+            {app.downloaded && `Downloaded ${downloadedLabel(app.downloaded)}`}
+            {app.downloaded && app.appleId && " · "}
+            {app.appleId && `via ${app.appleId}`}
           </ItemDescription>
         ) : null}
         <ItemDescription className="truncate text-muted-foreground/60">

@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 47;
+const SCHEMA_VERSION: i64 = 48;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -660,6 +660,12 @@ impl CacheDb {
             ensure_column(&conn, "installed_apps", "version", "TEXT")?;
             ensure_column(&conn, "installed_apps", "genre", "TEXT")?;
             ensure_column(&conn, "installed_apps", "released", "TEXT")?;
+            // v48: richer per-app receipt metadata (download date, installing
+            // Apple ID, age rating, subgenre) from iTunesMetadata.
+            ensure_column(&conn, "installed_apps", "downloaded", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "apple_id", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "content_rating", "TEXT")?;
+            ensure_column(&conn, "installed_apps", "subgenre", "TEXT")?;
             // v40: iMessage expressive send effect (Confetti/Slam/Invisible Ink…).
             ensure_column(&conn, "messages", "effect", "TEXT")?;
             // v41: CoreDuet per-app interaction channels (which apps comms went through).
