@@ -1178,6 +1178,7 @@ async fn run_security_scan(
     let mut tierb_processes: Vec<analyzer::ObservedProcess> = Vec::new();
     let mut tierb_profiles: Vec<analyzer::ObservedProfile> = Vec::new();
     let mut tierb_grants: Vec<analyzer::PermissionGrant> = Vec::new();
+    let mut tierb_shortcuts: Vec<analyzer::ObservedShortcut> = Vec::new();
     if scan_kind == ScanKind::Explicit {
         let (backup_id, work_dir) = backup_layout(&cache_path)?;
         let source_dir = {
@@ -1266,16 +1267,30 @@ async fn run_security_scan(
                         let _ = std::fs::remove_file(&dest);
                     }
                 }
-                Ok::<_, traceloupe_core::Error>((out, processes, profiles, grants))
+                // Tier-B Shortcuts: actions can call out to arbitrary URLs.
+                let mut shortcuts: Vec<analyzer::ObservedShortcut> = Vec::new();
+                if let Ok(Some(entry)) =
+                    idx.find("HomeDomain", "Library/Shortcuts/Shortcuts.sqlite")
+                {
+                    let dest = work_dir.join(".security-shortcuts.sqlite");
+                    if idx.extract_db(&entry, decryptor.as_deref(), &dest).is_ok() {
+                        if let Ok(mut sc) = analyzer::parse_shortcuts(&dest) {
+                            shortcuts.append(&mut sc);
+                        }
+                        let _ = std::fs::remove_file(&dest);
+                    }
+                }
+                Ok::<_, traceloupe_core::Error>((out, processes, profiles, grants, shortcuts))
             })
             .await
             .map_err(|e| e.to_string())?;
             match extracted {
-                Ok((e, ps, prof, grants)) => {
+                Ok((e, ps, prof, grants, shortcuts)) => {
                     manifest_entries = Some(e);
                     tierb_processes = ps;
                     tierb_profiles = prof;
                     tierb_grants = grants;
+                    tierb_shortcuts = shortcuts;
                 }
                 Err(e) => logging::warn(
                     &app,
@@ -1311,6 +1326,7 @@ async fn run_security_scan(
                 processes: &tierb_processes,
                 profiles: &tierb_profiles,
                 grants: &tierb_grants,
+                shortcuts: &tierb_shortcuts,
             },
             &feeds_json,
             &cancel,
