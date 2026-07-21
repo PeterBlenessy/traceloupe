@@ -227,6 +227,20 @@ pub struct FindingRow {
     pub created_at: i64,
 }
 
+/// One row of the `scans` table (see SCHEMA_V1 for column semantics).
+#[derive(Debug, Clone)]
+pub struct ScanRow {
+    pub id: i64,
+    pub model: String,
+    pub range_start: Option<i64>,
+    pub range_end: Option<i64>,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub chunks_total: i64,
+    pub chunks_done: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkStatus {
     Done,
@@ -547,6 +561,46 @@ impl AnalysisDb {
             params![fingerprint, source_id],
         )?;
         Ok(())
+    }
+
+    /// The most recent scan row (any status) — the UI's "what happened last".
+    pub fn latest_scan(&self) -> Result<Option<ScanRow>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
+                        chunks_total, chunks_done
+                 FROM scans ORDER BY id DESC LIMIT 1",
+                [],
+                |r| {
+                    Ok(ScanRow {
+                        id: r.get(0)?,
+                        model: r.get(1)?,
+                        range_start: r.get(2)?,
+                        range_end: r.get(3)?,
+                        status: r.get(4)?,
+                        started_at: r.get(5)?,
+                        finished_at: r.get(6)?,
+                        chunks_total: r.get(7)?,
+                        chunks_done: r.get(8)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// All summaries for a scan as (kind, thread_ref, content).
+    pub fn list_summaries(&self, scan_id: i64) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, thread_ref, content FROM summaries
+             WHERE scan_id = ?1 ORDER BY kind, thread_ref",
+        )?;
+        let rows = stmt.query_map(params![scan_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     // ---- summaries ----
