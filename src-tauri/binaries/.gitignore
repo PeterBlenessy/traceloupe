@@ -1,0 +1,4 @@
+# Downloaded llama-server sidecar + its dylibs (fetched via
+# scripts/download-llama-server.sh; too large / platform-specific to commit).
+llama-server-*
+lib/
