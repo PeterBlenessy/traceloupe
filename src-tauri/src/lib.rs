@@ -1179,6 +1179,7 @@ async fn run_security_scan(
     let mut tierb_profiles: Vec<analyzer::ObservedProfile> = Vec::new();
     let mut tierb_grants: Vec<analyzer::PermissionGrant> = Vec::new();
     let mut tierb_shortcuts: Vec<analyzer::ObservedShortcut> = Vec::new();
+    let mut tierb_webkit: Vec<analyzer::ObservedWebDomain> = Vec::new();
     if scan_kind == ScanKind::Explicit {
         let (backup_id, work_dir) = backup_layout(&cache_path)?;
         let source_dir = {
@@ -1280,17 +1281,47 @@ async fn run_security_scan(
                         let _ = std::fs::remove_file(&dest);
                     }
                 }
-                Ok::<_, traceloupe_core::Error>((out, processes, profiles, grants, shortcuts))
+                // Tier-B WebKit: domains each app's webview contacted, from the
+                // per-app observations.db files (across all app domains).
+                let mut webkit: Vec<analyzer::ObservedWebDomain> = Vec::new();
+                if let Ok(entries) =
+                    idx.find_relative_like("%ResourceLoadStatistics/observations.db")
+                {
+                    for (i, entry) in entries.iter().enumerate() {
+                        let app = entry
+                            .domain
+                            .split_once('-')
+                            .filter(|(p, _)| p.starts_with("AppDomain"))
+                            .map(|(_, b)| b.to_string());
+                        let dest = work_dir.join(format!(".security-webkit-{i}.db"));
+                        if idx.extract_db(entry, decryptor.as_deref(), &dest).is_ok() {
+                            if let Ok(domains) = analyzer::parse_webkit_observations(&dest) {
+                                for (domain, last_seen) in domains {
+                                    webkit.push(analyzer::ObservedWebDomain {
+                                        domain,
+                                        app: app.clone(),
+                                        last_seen,
+                                    });
+                                }
+                            }
+                            let _ = std::fs::remove_file(&dest);
+                        }
+                    }
+                }
+                Ok::<_, traceloupe_core::Error>((
+                    out, processes, profiles, grants, shortcuts, webkit,
+                ))
             })
             .await
             .map_err(|e| e.to_string())?;
             match extracted {
-                Ok((e, ps, prof, grants, shortcuts)) => {
+                Ok((e, ps, prof, grants, shortcuts, webkit)) => {
                     manifest_entries = Some(e);
                     tierb_processes = ps;
                     tierb_profiles = prof;
                     tierb_grants = grants;
                     tierb_shortcuts = shortcuts;
+                    tierb_webkit = webkit;
                 }
                 Err(e) => logging::warn(
                     &app,
@@ -1327,6 +1358,7 @@ async fn run_security_scan(
                 profiles: &tierb_profiles,
                 grants: &tierb_grants,
                 shortcuts: &tierb_shortcuts,
+                webkit_domains: &tierb_webkit,
             },
             &feeds_json,
             &cancel,

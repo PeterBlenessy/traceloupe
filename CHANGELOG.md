@@ -32,6 +32,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.22.0` | **Security Check M2 — configuration profiles** — installed profiles (ProfileTruth + PayloadManifest) surfaced for review: indicator matches on profile hosts/names, plus structural flags for hidden profiles (Warning) and device-management profiles (Info). The classic stalkerware install vector. |
 | `0.23.0` | **Security Check M2 — TCC permissions** — TCC.db grants cross-checked against stalkerware bundle IDs: a known monitoring app holding microphone/camera/location access is surfaced with the exact permissions it holds, corroborating a bundle-id match with real capability evidence. |
 | `0.24.0` | **Security Check M2 — Shortcuts** — Shortcuts.sqlite actions scanned for indicator URLs/hosts: a shortcut that quietly calls out to a malicious endpoint (exfiltration/automation) is flagged. Tier-B scan inputs refactored into one `ScanInputs` struct. |
+| `0.25.0` | **Security Check M2 complete — WebKit** — domains each app's webview contacted (per-app `observations.db`) scanned against indicators: a webview loading a known C2 domain is flagged with the apps that saw it. Completes the M2 Tier-B surfaces. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -39,6 +40,29 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.25.0] — 2026-07-21
+
+**Security Check M2 complete — WebKit resource-load statistics.** Adds the last
+Tier-B surface: the domains an app's in-app browser (WebKit) contacted.
+
+- **New parsers** (`analyzer::parse_webkit_observations`,
+  `parse_webkit_session_log`): read each app's
+  `Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db`
+  (`ObservedDomains.registrableDomain`) and the older
+  `full_browsing_session_resourceLog.plist` (`browsingStatistics` origins).
+- **New `webkit` scan module:** aggregates observed domains across all apps and
+  matches them against domain/URL indicators; a matched domain is surfaced once,
+  naming the apps whose webviews contacted it — evidence of in-app spyware C2 or
+  exfiltration traffic.
+- **On-demand extraction** during an Explicit Scan: every per-app
+  `observations.db` is located via the Manifest index and parsed. Passive Check
+  unaffected.
+- Validated against the real dev backup: 2,692 observed domains extracted across
+  34 apps, zero indicator matches (clean). See `docs/security-check-validation.md`.
+
+With WebKit, every MVT iOS module that matches an indicator class our feeds
+carry is now covered by a shipped module — **M2 Tier-B is complete.**
 
 ## [0.24.0] — 2026-07-21
 
