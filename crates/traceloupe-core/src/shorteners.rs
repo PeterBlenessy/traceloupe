@@ -1,11 +1,11 @@
 //! URL-shortener recognition for the Security Check's opt-in de-shortener.
 //!
 //! De-shortening resolves a shortened link to reveal its true destination.
-//! Because that contacts a remote host with a URL taken from the backup — the
-//! sole sanctioned exception to the "nothing leaves the machine" promise (ADR
-//! 0001) — it is a deliberate, per-link, user-approved action. This module only
-//! *recognizes* shortener URLs; the network resolution lives in the shell layer
-//! behind the consent gate, and only ever contacts hosts on this allowlist.
+//! That contacts a remote host with a URL taken from the backup, the sole
+//! sanctioned exception to the "nothing leaves the machine" promise (ADR 0001),
+//! so it is a deliberate, per-link, user-approved action. This module does
+//! recognition only. The network resolution lives in the shell layer behind the
+//! consent gate, and only ever contacts hosts on this allowlist.
 
 /// Known URL-shortener hosts. Kept deliberately to well-known services: the
 /// de-shortener will only make requests to these, never to arbitrary hosts.
@@ -74,8 +74,7 @@ fn url_host(url: &str) -> Option<String> {
 pub fn find_shortener_urls(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for raw in text.split(|c: char| c.is_whitespace() || "<>\"'(){}[]".contains(c)) {
-        let candidate =
-            raw.trim_end_matches(|c: char| matches!(c, '.' | ',' | ';' | ':' | '!' | '?'));
+        let candidate = raw.trim_end_matches(['.', ',', ';', ':', '!', '?']);
         let lower = candidate.to_ascii_lowercase();
         if !(lower.starts_with("http://") || lower.starts_with("https://")) {
             continue;
