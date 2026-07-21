@@ -34,6 +34,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.24.0` | **Security Check M2 — Shortcuts** — Shortcuts.sqlite actions scanned for indicator URLs/hosts: a shortcut that quietly calls out to a malicious endpoint (exfiltration/automation) is flagged. Tier-B scan inputs refactored into one `ScanInputs` struct. |
 | `0.25.0` | **Security Check M2 complete — WebKit** — domains each app's webview contacted (per-app `observations.db`) scanned against indicators: a webview loading a known C2 domain is flagged with the apps that saw it. Completes the M2 Tier-B surfaces. |
 | `0.26.0` | **Security Check M3 — custom indicators** — point the scan at a local folder of `.stix`/`.stix2`/`.yaml` files, merged with the bundled feeds (researcher mode, parity with iMazing). |
+| `0.27.0` | **Security Check M3 — scan-history diffing** — findings new since the previous scan are flagged with a **NEW** badge and a "N new since last scan" count, so a re-scan after an indicator update highlights what changed. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -41,6 +42,18 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.27.0] — 2026-07-21
+
+**Security Check M3 — scan-history diffing.** A re-scan (e.g. after updating
+indicators) now shows what's new.
+
+- `query::list_findings` computes an `is_new` flag per finding by diffing against
+  the previous completed scan of the same backup (matching on module + matched
+  value + source artifact); `previous_completed_run` finds the baseline. The
+  first scan has no baseline, so nothing is marked new.
+- **Security view:** findings new since the last scan carry a **NEW** badge, and
+  the results header shows a "N new since last scan" count.
 
 ## [0.26.0] — 2026-07-21
 
