@@ -8,10 +8,15 @@ iOS backups only *reference* much of their media (Notes images, Photos originals
 Messages attachments); the blobs are offloaded to iCloud. To recover them we will
 offer **two tiers**, on top of a risk-free local Phase 1:
 
-- **Phase 1 (local, no network):** read iOS native download-state flags
-  (`transfer_state`, Notes/Photos download-state columns) so we can honestly
-  distinguish *offloaded (in iCloud)* from *deleted* — sharpening today's
-  blob-absence heuristic.
+- **Phase 1 (local, no network):** sharpen the offloaded-vs-deleted labelling.
+  **Correction (2026-07-21):** `transfer_state` is *not* an offload flag — it is
+  Apple's `IMFileTransferState` completion latch, not rewritten on offload, and
+  deletion removes the row entirely. The authoritative model is **structural**:
+  *row present + blob absent ⇒ offloaded/thinned; row absent ⇒ deleted*. Phase 1
+  ships that, plus two refinements — `transfer_state ∈ {6,7,8}` ⇒ "failed
+  download" (not offloaded), and `ck_record_id`/`ZSERVERRECORDDATA` presence as an
+  (unverified) "synced-to-iCloud, recoverable" hint. See
+  `docs/icloud-offload-flags-findings.md`.
 - **Tier 1 — Sanctioned Export (default):** import the archive from Apple's
   official Data & Privacy portal. ToS-compliant, no credential handling; async
   (~7 days) and bulk.
@@ -19,7 +24,7 @@ offer **two tiers**, on top of a risk-free local Phase 1:
   private iCloud protocol with the account owner's own credentials (pyicloud
   model), re-implemented natively in **Rust** in a **separate repository/crate**
   that TraceLoupe consumes as an optional, feature-flagged dependency. Ships
-  **Notes** first (Photos falls out for free).
+  **Photos** first (proven; Notes is the hard part — see correction below).
 
 ## Why
 
@@ -39,9 +44,13 @@ offer **two tiers**, on top of a risk-free local Phase 1:
   unstable code from TraceLoupe's clean offline core, and lets it ship on its own
   cadence to chase Apple's frequent breakages.
 - **Native Rust over vendoring Python icloudpd** to match the project's
-  fully-native direction; no complete Rust iCloud-Photos/Notes crate exists, so
-  the plan is to build on `SideStore/apple-private-apis` for the Apple-ID auth
-  layer and port pyicloud's data layer. We accept owning that data-layer
+  fully-native direction; no complete Rust iCloud-Photos/Notes crate exists, so we
+  port `icloudpd`'s `pyicloud_ipd` data layer. **Correction (2026-07-21):** the
+  auth layer is the **idmsa web SRP-6a flow** (iCloud.com/pyicloud/icloudpd), which
+  needs **no anisette**; `SideStore/apple-private-apis` is a *different* system
+  (GrandSlam/GSA + anisette, token not valid for `ckdatabasews`) — we reuse only
+  its Rust crate choices, not its auth. Full cited port in
+  `docs/icloud-live-fetch-porting-spec.md`. We accept owning the data-layer
   maintenance.
 
 ## Implementation shape

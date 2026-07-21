@@ -83,18 +83,21 @@ hood; reimplemented by `pyicloud` and its maintained `icloudpd` fork):
 3. Query the CloudKit-backed web endpoints, e.g.
    `ckdatabasews.icloud.com/database/1/com.apple.photos.cloud/production`
    (shard-prefixed in practice), zone-based (`PrimarySync` for the personal Photos
-   library). `pyicloud` also exposes a **Notes** service with attachment
-   extraction.
+   library). **Correction:** neither `pyicloud` nor `icloudpd` exposes a **Notes**
+   service — Photos is the only proven media path; Notes must be reverse-engineered
+   (see §6.3 and the porting spec).
 4. Download the **full-resolution original**, not a thumbnail.
 
-**Available Rust building blocks (partial):** `SideStore/apple-private-apis`
-(+ `omnisette`) implements the hard **Apple-ID auth** layer (GrandSlam/GSA SRP-6a,
-anisette headers, 2FA) but stops at the token; `opendal`'s iCloud **Drive** service
-is a reference for authenticated-web-session handling. No crate does end-to-end
-Photos/Notes fetch — we port pyicloud's data layer ourselves. Caveat: the GSA auth
-those crates target is *related but not identical* to the iCloud web-services login
-(`idmsa.apple.com` SRP → `setup.icloud.com/.../accountLogin` + trust tokens), so
-some auth reverse-engineering remains.
+**Available Rust building blocks.** The auth target is the **idmsa web SRP-6a
+flow** (`idmsa.apple.com` → `setup.icloud.com/.../accountLogin` + trust token) —
+**no anisette required** — assembled from crypto crates (`srp`, `sha2`, `pbkdf2`,
+`hmac`, `reqwest` + `reqwest_cookie_store`, `serde_json`, `base64`, `uuid`).
+`SideStore/apple-private-apis` (+ `omnisette`) implements a **different** Apple-ID
+system (GrandSlam/GSA + anisette) whose token does **not** reach `ckdatabasews`;
+we reuse only its crate choices, not its auth. `opendal`'s iCloud **Drive** service
+is a secondary reference. No crate does end-to-end Photos/Notes — we port
+`icloudpd`'s `pyicloud_ipd` data layer. Full cited spec:
+`docs/icloud-live-fetch-porting-spec.md`.
 
 **Messages is the hardest case and is out of scope for T2 v1.** `pyicloud` has no
 Messages service; Messages in iCloud is **end-to-end encrypted** (its CloudKit
@@ -171,37 +174,51 @@ returns `None`, `resolve_attachment` returns `None`). iOS actually records downl
 state; reading it lets us label *offloaded (fetchable)* vs *deleted/never-present*
 **before** any network call.
 
-| Source | Flag | Meaning |
-|---|---|---|
-| Messages (`sms.db`) | `attachment.transfer_state` | Whether the blob was downloaded to the device |
-| Notes (`ZICCLOUDSYNCINGOBJECT`) | download-state / `ZNEEDSTODOWNLOAD`-style columns | Whether a referenced media object is local |
-| Photos (`Photos.sqlite`) | thumbnail-vs-original indicators (Optimize Storage) | Whether the local asset is a full original or a placeholder |
+> **Design correction (2026-07-21) — `transfer_state` is NOT an offload flag;
+> M0's premise was wrong, and its research question is now resolved
+> authoritatively.** See the citations in
+> [`docs/icloud-offload-flags-findings.md`](./icloud-offload-flags-findings.md).
+> The short version:
+> - `attachment.transfer_state` is Apple's `IMFileTransferState` enum (`5 =
+>   finished`, `6/7 = error/recoverableError`, `0 = waitingForAccept`, …). It is a
+>   **completion latch** recording how a transfer *once* ended; iOS does **not**
+>   rewrite it when the blob is later offloaded to Messages-in-iCloud or thinned.
+>   So `transfer_state = 5` + missing blob is *consistent with* offloading but is
+>   not proof of it — it carries the same information our blob-absence check
+>   already has. iLEAPP itself never reads the column.
+> - **Deletion removes the whole `attachment` row** (recoverable only via
+>   ROWID-gap / WAL / Biome), so "deleted" normally presents as *no row*, while
+>   "offloaded" presents as *a full metadata row with no blob*. That asymmetry —
+>   **row-present + blob-absent = offloaded/thinned; row-absent = deleted** — is
+>   the correct, authoritative model, and it is essentially today's heuristic.
 
-Surfaced as a status on the existing honest UI (`notes.tsx`, `messages.tsx`): the
-"N image(s) not included in this backup" line becomes "…offloaded to iCloud
-(recoverable)" vs "…not available". No schema change beyond adding a nullable
+**Revised local labelling (what M0 actually ships).** Do *not* present
+`transfer_state` as an "offloaded" oracle. Instead:
+
+| Source | Column | What we can honestly say (locally, no network) |
+|---|---|---|
+| Messages (`sms.db`) | `transfer_state ∈ {6,7,8}` | Transfer **failed / was never completed** — surface as "failed to download," *not* "offloaded." |
+| Messages (`sms.db`) | `transfer_state = 5` + blob absent | Was successfully local once → now offloaded/thinned → **recoverable candidate**. |
+| Messages (`sms.db`) | `ck_record_id` populated / `ck_sync_state` ≥ 1 | Attachment is (or was) synced to CloudKit → stronger "recoverable from iCloud" hint. **Semantics undocumented — label as heuristic until validated against a non-offloaded backup.** |
+| Notes (`ZICCLOUDSYNCINGOBJECT`) | `ZFILESIZE` > 0 + `ZSERVERRECORDDATA` present, no blob on disk | Media object exists & synced to iCloud but not in backup → **recoverable candidate** (no dedicated "needs-fetch" boolean exists). |
+
+Surfaced on the existing honest UI (`notes.tsx`, `messages.tsx`): the "N image(s)
+not included in this backup" line splits into "…offloaded to iCloud (recoverable)"
+vs "…failed to download / not available." Schema: add a nullable
 `download_state` to the relevant cache rows (bump `SCHEMA_VERSION` in
 `crates/traceloupe-core/src/cache.rs`; needs a re-import to populate).
 
-> **Validation finding (2026-07-20) — M0 is blocked on test data, and
-> `transfer_state` is not the signal we assumed.** Empirical check against the
-> reference backup mirror (`~/.traceloupe-dev/backup-mirror`):
-> - Messages: **0 of 9,382 attachment blobs are present** — the backup is
->   fully-offloaded for Messages. `attachment.transfer_state` values (0: 5 463,
->   5: 2 102, 6: 896, −1: 3, 7: 1) show **no correlation with on-disk presence**
->   (even `transfer_state=5` has ~nothing on disk). iLEAPP does **not** read
->   `transfer_state`, and public forensic sources don't pin its offloaded-vs-
->   downloaded semantics. So we **cannot** authoritatively label *offloaded vs
->   deleted* for Messages from this flag alone, and there is **no positive ground
->   truth in this backup** to validate against (same for Notes: 2 698 referenced /
->   0 present).
-> - **Consequence:** M0 as specified (use native download-state flags to split
->   offloaded/deleted) cannot be *verified* — which by house rules means it cannot
->   ship — until we have (a) a backup taken with "Optimize Storage" **off** (so
->   some media is actually present, giving present/offloaded ground truth), and
->   (b) an authoritative `transfer_state` (and Notes download-state) mapping, e.g.
->   from Apple's `IMFileTransfer` enum or a domain expert. Until then, honest
->   blob-absence ("not in backup") remains the correct, verifiable behaviour.
+> **Ground-truth status (empirical, `~/.traceloupe-dev/backup-mirror`).** This
+> backup has Messages-in-iCloud on and is **fully offloaded** — the entire
+> `MediaDomain/.../SMS/Attachments` tree holds 7 `.pvt/metadata.plist` files and
+> **zero media blobs**; 0 of 8 465 attachment rows have a blob on disk, across
+> *every* `transfer_state` and `ck_sync_state` value. This confirms the "latch"
+> finding (no column predicts presence when nothing is present) but means the one
+> *positive* signal we'd still like to confirm — that `ck_record_id`-populated
+> rows are the recoverable ones — **cannot be validated here**. That validation
+> (correlating `ck_record_id`/`ck_sync_state` against present blobs on a backup
+> taken with "Optimize Storage" **off**) is now a *nice-to-have refinement*, no
+> longer a blocker: the row-present/row-absent model above ships without it.
 
 ### 6.2 Tier 1 — Sanctioned Export importer (default)
 
@@ -227,20 +244,37 @@ crate that TraceLoupe depends on behind a `live-fetch` Cargo feature. Rationale
 code from the offline core; independent release cadence to chase Apple's changes;
 clean legal/licensing boundary; independently testable.
 
+The full, cited, port-ready protocol is in
+[`docs/icloud-live-fetch-porting-spec.md`](./icloud-live-fetch-porting-spec.md)
+(SRP endpoints, headers, request bodies, download fields, Rust crate stack). Two
+corrections it forces on the earlier plan:
+
+- **Photos is the proven, free part; Notes is the hard part** — the reverse of
+  "Notes first." A maintained reference (`icloudpd`'s `pyicloud_ipd`) implements
+  the whole Photos path; **no open-source project implements Notes over the
+  private protocol**, so Notes is a traffic-capture reverse-engineering spike, not
+  a transcription. Ship/validate **Photos first**.
+- **Auth building block was mis-scoped.** `SideStore/apple-private-apis` is a
+  *different* Apple auth system (GrandSlam/GSA + anisette; its token doesn't reach
+  `ckdatabasews`). The route we need is the **idmsa web SRP-6a flow** used by
+  iCloud.com/pyicloud/icloudpd — **no anisette required**. We assemble it from
+  Rust crypto crates (`srp`, `sha2`, `pbkdf2`, `hmac`, `reqwest` +
+  `reqwest_cookie_store`, `serde_json`, `base64`, `uuid`); we harvest only the
+  *crate choices* from apple-private-apis, not its GSA logic.
+
 **Crate shape (initial):**
 
-- `auth`: Apple ID login → 2FA → trusted session. Build on
-  `SideStore/apple-private-apis`/`omnisette` for the SRP/anisette primitives;
-  implement the iCloud-web-services handshake (`idmsa` → `setup.icloud.com`
-  accountLogin → trust token) on top. Returns a `Session` (cookies + trust token +
-  discovered service endpoints).
-- `photos`: `PrimarySync`-zone record queries + asset download (port of pyicloud
-  `photos.py`).
-- `notes`: note record + attachment retrieval (port of pyicloud's Notes service);
-  **the v1 headline** — validate it fetches *cloud-only* (offloaded) note images,
-  not just locally-cached ones (open question in the research doc).
-- Deliberate rate-limiting / backoff and a single-session reuse policy to reduce
-  the account-lockout surface.
+- `auth`: idmsa SRP-6a login → 2FA → trust-token persistence →
+  `setup.icloud.com/accountLogin` bootstrap → `webservices`/`dsid` discovery.
+  Returns a `Session` (cookiejar + trust token + discovered service endpoints).
+- `photos` **(v1 headline — proven)**: `PrimarySync`-zone `records/query` + full-res
+  `resOriginalRes.downloadURL` download (direct port of `pyicloud_ipd/photos.py`);
+  validate byte-for-byte against real originals.
+- `notes` **(spike — unproven)**: reverse-engineer the `com.apple.notes` container /
+  zone / record types by capturing iCloud.com Notes web traffic; retrieve embedded
+  attachment assets. No reference impl to copy; scope conservatively.
+- Deliberate rate-limiting / backoff and a single-session reuse policy (reuse the
+  30-day trust token) to reduce the account-lockout surface.
 
 **TraceLoupe integration.** The `resolve_*` seam that currently returns `None` on
 absence (`resolve_note_image` `notes.rs:503`, `resolve_attachment` `messages.rs:727`)
@@ -297,20 +331,30 @@ Added to `src-tauri/src/lib.rs` and `src/lib/ipc.ts`, following existing pattern
 
 ## 7. Milestones
 
-**M0 — Download-state flags (Phase 1, local).** Read `transfer_state` / Notes
-download-state / Photos optimize-storage indicators; relabel the existing honest UI
-as *offloaded* vs *deleted*. No network. *Definition of done per house workflow:
-implemented → verified against a real backup → screenshots → review → pushed.*
+**M0 — Offloaded-vs-deleted labelling (Phase 1, local).** Research question now
+**resolved** (§6.1, `docs/icloud-offload-flags-findings.md`): the model is
+structural (row-present+blob-absent ⇒ offloaded; row-absent ⇒ deleted), refined by
+`transfer_state ∈ {6,7,8}` ⇒ "failed download" and `ck_record_id`/`ZSERVERRECORDDATA`
+⇒ "synced-to-iCloud" hint. Add nullable `download_state` to the relevant cache rows,
+compute it in the parsers, relabel the honest UI as *offloaded (recoverable)* vs
+*failed / not available*. No network. *DoD: implemented → verified against a real
+backup → screenshots → review → pushed.* (Positive-ground-truth validation of the
+`ck_record_id` hint awaits a non-offloaded backup and is a follow-up refinement, not
+a gate.)
 
 **M1 — Tier 1 Sanctioned Export importer.** `parsers/data_export.rs`; Notes/Photos
 reconcile against backup rows; `recovered_media` table + augmentation store;
 `import_data_export` command; in-place "Recover from export" UX + provenance
 badges. Fully offline/ToS-clean — the safe default ships first.
 
-**M2 — Tier 2 Live Fetch, Notes-first.** Stand up the separate `icloud-fetch`
-crate (auth + notes + photos); TraceLoupe `live-fetch` feature; Keychain session;
-consent gate; ADP detection; per-item fetch + opt-in bulk; `fetch_runs` log. Ship
-as **experimental**. Validate that Notes fetch returns cloud-only blobs.
+**M2 — Tier 2 Live Fetch, Photos-first.** Stand up the separate `icloud-fetch`
+crate per `docs/icloud-live-fetch-porting-spec.md`: idmsa SRP-6a auth (+ trust-token
+persistence) → `ckdatabasews`/`dsid` discovery → **Photos** `PrimarySync` query +
+`resOriginalRes` download (proven port). TraceLoupe `live-fetch` feature; Keychain
+session; consent gate; ADP detection; per-item fetch + opt-in bulk; `fetch_runs`
+log. Ship as **experimental**. **Notes is a follow-on spike** (M2.5) — no reference
+impl exists; reverse-engineer `com.apple.notes` container/zone from captured
+iCloud.com traffic before scoping.
 
 **M3 — Messages research spike + polish.** Feasibility spike on Messages in iCloud:
 can TraceLoupe's existing encrypted-backup decryptor (crypto ladder + Keychain
@@ -325,29 +369,37 @@ the same columns on a real backup. Tier 1: run a real Data & Privacy export of a
 test account and confirm reconciliation lands media on the right notes/assets.
 Tier 2: test against a **disposable test Apple ID** only (never a primary account),
 measuring how quickly bulk fetch trips a lockout to calibrate backoff; compare
-fetched Notes/Photos against `icloudpd` output for the same account.
+fetched **Photos** byte-for-byte against `icloudpd` output for the same account
+(Notes has no reference tool — validate it by round-tripping known offloaded note
+images end-to-end).
 
 ## 8. Risks & open questions
 
-- **M0 blocked on test data + flag semantics (confirmed 2026-07-20).** The
-  reference backup is fully-offloaded for Messages and Notes (0 present blobs), so
-  it offers no present/offloaded ground truth, and `attachment.transfer_state` does
-  not correlate with presence (see §6.1). M0 needs a backup with "Optimize Storage"
-  **off** and an authoritative flag mapping before its offloaded-vs-deleted labels
-  can be verified — and unverified is unshippable per house rules. **This is the
-  first thing to unblock; everything else in M0 is ready to build once it is.**
+- **M0 flag semantics — RESOLVED (2026-07-21).** The research question is
+  answered authoritatively (§6.1, `docs/icloud-offload-flags-findings.md`):
+  `transfer_state` is a non-updated completion latch, *not* an offload flag; the
+  correct model is structural (row-present+blob-absent ⇒ offloaded; row-absent ⇒
+  deleted). M0 is **buildable now** without new test data. **Residual, non-blocking:**
+  the one *positive* signal we'd still like to confirm — that `ck_record_id`-populated
+  rows are the recoverable ones — can't be validated on the current mirror (100%
+  offloaded, no present blobs); it needs a backup with "Optimize Storage" **off**.
+  M0 ships the structural model and labels that hint "heuristic" until confirmed.
 - **Account lockout (T2).** The defining risk. Mitigations: per-item default,
   bulk-only-on-opt-in with warning, single-session reuse, backoff, and never
   storing the password. The consent copy states it plainly.
 - **Moving target (T2).** The private protocol is undocumented and breaks without
   notice (SRP/anisette/endpoint/session changes). The separate-repo cadence exists
   precisely to absorb this; TraceLoupe pins a known-good crate version.
-- **GSA-vs-iCloud-ws auth gap.** The Rust auth crates target GrandSlam, not the
-  iCloud web-services login exactly. A short auth spike at M2 start de-risks "how
-  much reuse is real."
-- **Does pyicloud's Notes service fetch *offloaded* images?** Documented but not
-  independently verified. If it only returns locally-cached blobs, the Notes
-  headline weakens and Photos leads instead. Validate before committing M2 scope.
+- **Auth path — RESOLVED (2026-07-21).** Earlier worry was "Rust crates target
+  GrandSlam, not iCloud web login." Resolved: the target is the **idmsa web SRP-6a
+  flow** (no anisette), fully specified from `icloudpd` in
+  `docs/icloud-live-fetch-porting-spec.md`; `apple-private-apis` (GrandSlam/GSA) is
+  the *wrong* system and is not used for auth. Residual risk is churn (below), not
+  feasibility.
+- **Notes has no reference implementation (open gap).** No open-source project
+  fetches Notes over the private protocol — pyicloud has no `notes.py`. Notes is a
+  reverse-engineering spike (capture `com.apple.notes` CloudKit traffic), not a
+  port. **Photos leads M2**; Notes scope stays conservative until the spike lands.
 - **Tier 1 fidelity.** The Data & Privacy export's Notes format may not reconstruct
   embedded images the way `NoteStore.sqlite` does; reconciliation may be
   approximate (title/time rather than exact identifier). Unmatched items still
