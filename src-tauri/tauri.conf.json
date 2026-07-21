@@ -29,6 +29,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/llama-server"
+    ],
     "resources": {
       "../crates/traceloupe-core/resources/indicators/": "indicators/"
     },

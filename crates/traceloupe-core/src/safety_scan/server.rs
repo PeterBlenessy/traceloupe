@@ -49,6 +49,23 @@ pub fn resolve_binary() -> Result<PathBuf> {
     // app cannot be pointed at an external binary.
     #[cfg(debug_assertions)]
     {
+        // The staged sidecar from `scripts/download-llama-server.sh`, which
+        // lands in <repo>/src-tauri/binaries/ (with lib/ beside it). Walk up
+        // from the dev executable so this works regardless of where cargo put
+        // the target dir — this is what makes `tauri dev` "just work" after
+        // running the download script once, no env var needed (NoteSage's
+        // dev-source fallback).
+        if let Ok(exe) = std::env::current_exe() {
+            for ancestor in exe.ancestors() {
+                let candidate = ancestor
+                    .join("src-tauri/binaries")
+                    .join(bundled_binary_name());
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
+            }
+        }
+        // Explicit override, then PATH (e.g. `brew install llama.cpp`).
         if let Ok(p) = std::env::var("TRACELOUPE_LLAMA_SERVER") {
             let p = PathBuf::from(p);
             if p.is_file() {
