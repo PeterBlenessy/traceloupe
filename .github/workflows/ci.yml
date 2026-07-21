@@ -52,6 +52,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Stage the llama-server sidecar so `bundle.externalBin` resolves — Tauri
+      # validates it at cargo-check time. The binary is git-ignored (see
+      # docs/safety-scan-sidecar.md); the fast pre-built download satisfies the
+      # compile check (a release build uses build-llama-server.sh for a static
+      # binary instead).
+      - run: bash scripts/download-llama-server.sh
       - run: cargo check -p traceloupe
       # Lint the shell crate too (clippy needs the built `dist/` from pnpm
       # build above, which cargo check also relies on). --all-targets so

@@ -28,12 +28,13 @@ TRIPLE="aarch64-apple-darwin"
 
 mkdir -p "$BINARIES_DIR"
 echo "Downloading llama-server $VERSION (macOS arm64)…"
-URL="https://github.com/ggml-org/llama.cpp/releases/download/${VERSION}/llama-${VERSION}-bin-macos-arm64.zip"
+URL="https://github.com/ggml-org/llama.cpp/releases/download/${VERSION}/llama-${VERSION}-bin-macos-arm64.tar.gz"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-curl -fL -o "$WORK/llama.zip" "$URL"
-unzip -oq "$WORK/llama.zip" -d "$WORK/extract"
+curl -fL -o "$WORK/llama.tar.gz" "$URL"
+mkdir -p "$WORK/extract"
+tar -xzf "$WORK/llama.tar.gz" -C "$WORK/extract"
 
 SERVER="$(find "$WORK/extract" -name llama-server -type f | head -1)"
 if [ -z "$SERVER" ]; then
@@ -47,10 +48,16 @@ chmod +x "$BINARIES_DIR/llama-server-$TRIPLE"
 # Metal shader next to the binary in lib/, and add an rpath so the binary finds
 # them relative to itself. The sandbox allows reads under the binary dir, so
 # lib/ (a subpath of it) is reachable.
+#
+# The dylibs ship as versioned files (libllama.0.0.NNNNN.dylib) plus the
+# major-version SYMLINKS the binary actually links against (libllama.0.dylib →
+# …). Copy with `-a` and WITHOUT `-type f` so the symlinks are preserved — drop
+# them and dyld fails with "Library not loaded: @rpath/libllama.0.dylib".
+SRC_DIR="$(dirname "$SERVER")"
 LIB_DIR="$BINARIES_DIR/lib"
+rm -rf "$LIB_DIR"
 mkdir -p "$LIB_DIR"
-find "$WORK/extract" -name '*.dylib' -type f -exec cp {} "$LIB_DIR/" \;
-find "$WORK/extract" -name '*.metal' -type f -exec cp {} "$LIB_DIR/" \;
+find "$SRC_DIR" \( -name '*.dylib' -o -name '*.metal' \) -maxdepth 1 -exec cp -a {} "$LIB_DIR/" \;
 install_name_tool -add_rpath @executable_path/lib "$BINARIES_DIR/llama-server-$TRIPLE" 2>/dev/null || true
 
 echo "Done."
