@@ -613,6 +613,8 @@ export interface ContentFinding {
   id: number;
   sourceKind: "message" | "note";
   sourceId: number | null;
+  /** Cache thread id for message findings — the Messages deep-link. */
+  threadId: number | null;
   threadIdentifier: string | null;
   /** Unix epoch seconds. */
   occurredAt: number | null;
@@ -2114,6 +2116,7 @@ const mockContentFindings: ContentFinding[] = [
     id: 1,
     sourceKind: "message",
     sourceId: 2,
+    threadId: 1,
     threadIdentifier: "mock-thread-alex",
     occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 12,
     fingerprint: "mockfp-coercive-1",
@@ -2127,6 +2130,7 @@ const mockContentFindings: ContentFinding[] = [
     id: 2,
     sourceKind: "message",
     sourceId: 9,
+    threadId: 4,
     threadIdentifier: "+1 555 0100",
     occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 3,
     fingerprint: "mockfp-scam-1",
