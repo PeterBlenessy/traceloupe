@@ -16,7 +16,9 @@ jobs:
       # The core crate is UI-agnostic by design (architecture.md §2) and
       # builds without Tauri's platform deps — this job stays cheap.
       - run: cargo test -p traceloupe-core
-      - run: cargo clippy -p traceloupe-core -- -D warnings
+      # --all-targets so lints in test code fail CI too (without it, an unused
+      # import inside #[cfg(test)] slips through — see issue #12).
+      - run: cargo clippy -p traceloupe-core --all-targets -- -D warnings
       - run: cargo fmt -p traceloupe-core --check
 
   frontend:
