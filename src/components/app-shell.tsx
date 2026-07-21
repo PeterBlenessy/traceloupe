@@ -66,6 +66,7 @@ import {
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
+import { SafetyScanProvider } from "@/components/safety-scan-provider";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
@@ -118,6 +119,7 @@ export function AppShell() {
     // navigation between views.
     <ImportProvider>
       <ReimportProvider>
+       <SafetyScanProvider>
        <ToolbarProvider>
         {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
         only sets `min-h-svh`, which lets the layout grow with its content — so a
@@ -209,6 +211,7 @@ export function AppShell() {
           </SidebarInset>
         </SidebarProvider>
        </ToolbarProvider>
+       </SafetyScanProvider>
       </ReimportProvider>
     </ImportProvider>
   );
