@@ -5,6 +5,7 @@
 mod biometric;
 mod logging;
 mod media;
+mod safety_scan_cmd;
 mod secret;
 mod signing;
 
@@ -3516,6 +3517,10 @@ pub fn run() {
         .manage(ImportGate::default())
         .manage(ScanCancel::default())
         .manage(ScanGate::default())
+        .manage(safety_scan_cmd::SafetyScanCancel::default())
+        .manage(safety_scan_cmd::SafetyScanGate::default())
+        .manage(safety_scan_cmd::SafetyDownloadCancel::default())
+        .manage(safety_scan_cmd::SafetyDownloadGate::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of
@@ -3662,7 +3667,16 @@ pub fn run() {
             find_shortener_urls,
             expand_short_url,
             deshorten_auto_approve_get,
-            deshorten_auto_approve_set
+            deshorten_auto_approve_set,
+            safety_scan_cmd::get_safety_scan_model_status,
+            safety_scan_cmd::download_safety_scan_model,
+            safety_scan_cmd::cancel_safety_scan_model_download,
+            safety_scan_cmd::run_safety_scan,
+            safety_scan_cmd::cancel_safety_scan,
+            safety_scan_cmd::list_content_findings,
+            safety_scan_cmd::safety_scan_finding_marks,
+            safety_scan_cmd::dismiss_content_finding,
+            safety_scan_cmd::get_safety_scan_report
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

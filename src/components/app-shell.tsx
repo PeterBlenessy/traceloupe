@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import {
   Boxes,
   ShieldAlert,
+  ScanSearch,
   CalendarDays,
   HeartPulse,
   ListTodo,
@@ -34,6 +35,7 @@ import {
   SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -67,6 +69,8 @@ import {
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
+import { SafetyScanProvider } from "@/components/safety-scan-provider";
+import { SafetyModelSettings } from "@/components/safety-model-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
@@ -118,6 +122,7 @@ export function AppShell() {
     // navigation between views.
     <ImportProvider>
       <ReimportProvider>
+       <SafetyScanProvider>
        <ToolbarProvider>
         {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
         only sets `min-h-svh`, which lets the layout grow with its content — so a
@@ -163,9 +168,10 @@ export function AppShell() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                {/* Security sits with Device: both operate on the whole backup
-                    (its identity, and an audit of it), unlike the content views
-                    below which are slices of that content. */}
+                {/* Security and Safety sit with Device: all three operate on
+                    the whole backup (its identity, a spyware audit, a content
+                    scan), unlike the content views below which are slices of
+                    that content. */}
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     asChild
@@ -177,6 +183,23 @@ export function AppShell() {
                       <span>Security</span>
                     </Link>
                   </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/safety-scan"}
+                    tooltip="Safety (experimental)"
+                  >
+                    <Link to="/safety-scan">
+                      <ScanSearch />
+                      <span>Safety</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  {/* Experimental: local-AI classification quality is not yet
+                      validated on real hardware. */}
+                  <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Beta
+                  </SidebarMenuBadge>
                 </SidebarMenuItem>
               </SidebarMenu>
             </SidebarHeader>
@@ -225,6 +248,7 @@ export function AppShell() {
           </SidebarInset>
         </SidebarProvider>
        </ToolbarProvider>
+       </SafetyScanProvider>
       </ReimportProvider>
     </ImportProvider>
   );
@@ -481,6 +505,7 @@ function SettingsMenu() {
                 ["general", "General", SlidersHorizontal],
                 ["media", "Media", Image],
                 ["apps", "Apps", Boxes],
+                ["safety", "Safety", ScanSearch],
                 ["developer", "Developer", Terminal],
               ] as const
             ).map(([value, label, Icon]) => (
@@ -724,6 +749,14 @@ function SettingsMenu() {
                   ))}
                 </select>
               </SettingsRow>
+            </SettingsGroup>
+          </TabsContent>
+
+          <TabsContent value="safety" className="mt-0 flex flex-col gap-6">
+            <SettingsGroup title="Safety Scan model">
+              <div className="p-3">
+                <SafetyModelSettings />
+              </div>
             </SettingsGroup>
           </TabsContent>
           </div>

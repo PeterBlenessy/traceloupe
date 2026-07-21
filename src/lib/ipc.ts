@@ -562,6 +562,101 @@ export interface DetectionSettings {
   customIndicatorDir: string | null;
 }
 
+// --- Safety Scan types (ADR 0002) ---
+
+/** The Forensic 9 category slugs (CONTEXT.md). */
+export type ContentCategory =
+  | "threat-violence"
+  | "harassment-bullying"
+  | "sexual-content"
+  | "grooming-exploitation"
+  | "self-harm"
+  | "hate-identity"
+  | "coercive-control"
+  | "scam-fraud"
+  | "drugs-illegal";
+
+export interface SafetyModelInfo {
+  id: string;
+  displayName: string;
+  sizeBytes: number;
+  installed: boolean;
+  recommended: boolean;
+}
+
+export interface SafetyModelStatus {
+  totalRamBytes: number;
+  models: SafetyModelInfo[];
+  readyModelId: string | null;
+}
+
+export type SafetyModelProgressEvent =
+  | { phase: "downloading"; received: number; total: number }
+  | { phase: "verifying" }
+  | { phase: "done" }
+  | { phase: "error"; message: string };
+
+export type SafetyScanEvent =
+  | { phase: "loading" }
+  | { phase: "classifying"; done: number; total: number; findings: number }
+  | { phase: "summarizing" }
+  | {
+      phase: "done";
+      scanId: number;
+      status: string;
+      findings: number;
+      classified: number;
+      reused: number;
+      skipped: number;
+    }
+  | { phase: "error"; message: string };
+
+/** A Content Finding: one probabilistic model verdict on a message or note. */
+export interface ContentFinding {
+  id: number;
+  sourceKind: "message" | "note";
+  sourceId: number | null;
+  /** Cache thread id for message findings — the Messages deep-link. */
+  threadId: number | null;
+  threadIdentifier: string | null;
+  /** Unix epoch seconds. */
+  occurredAt: number | null;
+  fingerprint: string;
+  category: ContentCategory;
+  /** 1 = concerning, 2 = clearly harmful, 3 = serious/imminent. */
+  severity: 1 | 2 | 3;
+  rationale: string;
+  stale: boolean;
+  dismissed: boolean;
+}
+
+export interface SafetyScanStatus {
+  id: number;
+  model: string;
+  rangeStart: number | null;
+  rangeEnd: number | null;
+  status: "running" | "completed" | "cancelled" | "failed";
+  startedAt: number;
+  finishedAt: number | null;
+  chunksTotal: number;
+  chunksDone: number;
+}
+
+export interface SafetyScanReport {
+  scan: SafetyScanStatus | null;
+  report: string | null;
+  /** [threadIdentifier, summary] per flagged thread. */
+  threadSummaries: [string, string][];
+}
+
+/** Top live-finding severity per flagged thread/note, for inline badges. */
+export interface FindingMarks {
+  /** cache threads.id → highest severity (1|2|3). */
+  threads: Record<number, 1 | 2 | 3>;
+  /** cache notes.id → highest severity (1|2|3). */
+  notes: Record<number, 1 | 2 | 3>;
+}
+
 export interface TraceLoupeClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
@@ -762,6 +857,37 @@ export interface TraceLoupeClient {
   /** Open a save dialog and write a CSV report of the run. Returns the path
    *  written, or null if the user cancelled. */
   exportScanReport(runId: number): Promise<string | null>;
+
+  // --- Safety Scan (local-LLM content analysis; ADR 0002) ---
+  /** Local model catalog + install state + the RAM-gated recommendation. */
+  getSafetyScanModelStatus(): Promise<SafetyModelStatus>;
+  /** Download a catalog model (progress on `safetyscan://model-progress`). */
+  downloadSafetyScanModel(modelId: string): Promise<void>;
+  cancelSafetyScanModelDownload(): Promise<void>;
+  /** Start a Safety Scan over the active backup. Progress arrives on
+   *  `safetyscan://progress`; rejects if one is already running. */
+  runSafetyScan(opts: {
+    modelId?: string | null;
+    rangeStart?: number | null;
+    rangeEnd?: number | null;
+  }): Promise<void>;
+  cancelSafetyScan(): Promise<void>;
+  onSafetyScanProgress(cb: (p: SafetyScanEvent) => void): Promise<UnlistenFn>;
+  onSafetyModelProgress(
+    cb: (p: SafetyModelProgressEvent) => void,
+  ): Promise<UnlistenFn>;
+  /** All Content Findings for the active backup (dismissed included). */
+  listContentFindings(): Promise<ContentFinding[]>;
+  /** Compact per-thread / per-note top severity for inline badges. */
+  safetyScanFindingMarks(): Promise<FindingMarks>;
+  /** Mark/unmark a finding as a false positive (keyed to survive re-scans). */
+  dismissContentFinding(
+    fingerprint: string,
+    category: string,
+    dismissed: boolean,
+  ): Promise<void>;
+  /** Latest scan row + its Scan report and per-thread summaries. */
+  getSafetyScanReport(): Promise<SafetyScanReport>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -1096,6 +1222,34 @@ const tauriClient: TraceLoupeClient = {
       minSeverity: minSeverity ?? null,
       module: module ?? null,
     }),
+  getSafetyScanModelStatus: () =>
+    invoke<SafetyModelStatus>("get_safety_scan_model_status"),
+  downloadSafetyScanModel: (modelId) =>
+    invoke("download_safety_scan_model", { modelId }),
+  cancelSafetyScanModelDownload: () =>
+    invoke("cancel_safety_scan_model_download"),
+  runSafetyScan: (opts) =>
+    invoke("run_safety_scan", {
+      modelId: opts.modelId ?? null,
+      rangeStart: opts.rangeStart ?? null,
+      rangeEnd: opts.rangeEnd ?? null,
+    }),
+  cancelSafetyScan: () => invoke("cancel_safety_scan"),
+  onSafetyScanProgress: (cb) =>
+    listen<SafetyScanEvent>("safetyscan://progress", (e) => cb(e.payload)),
+  onSafetyModelProgress: (cb) =>
+    listen<SafetyModelProgressEvent>("safetyscan://model-progress", (e) =>
+      cb(e.payload),
+    ),
+  listContentFindings: () =>
+    invoke<ContentFinding[]>("list_content_findings"),
+  safetyScanFindingMarks: () =>
+    invoke<FindingMarks>("safety_scan_finding_marks"),
+  dismissContentFinding: (fingerprint, category, dismissed) =>
+    invoke("dismiss_content_finding", { fingerprint, category, dismissed }),
+  getSafetyScanReport: () =>
+    invoke<SafetyScanReport>("get_safety_scan_report"),
+
   getIndicatorInfo: () => invoke<SnapshotInfo>("get_indicator_info"),
   updateIndicators: () => invoke<SnapshotInfo>("update_indicators"),
   getDetectionSettings: () =>
@@ -2001,6 +2155,38 @@ let mockDeshortenAutoApprove = false;
 
 let mockScanRuns: ScanRun[] = [];
 
+let mockSafetyModelInstalled = false;
+const mockContentFindings: ContentFinding[] = [
+  {
+    id: 1,
+    sourceKind: "message",
+    sourceId: 2,
+    threadId: 1,
+    threadIdentifier: "mock-thread-alex",
+    occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 12,
+    fingerprint: "mockfp-coercive-1",
+    category: "coercive-control",
+    severity: 2,
+    rationale: "Demands constant location sharing and account passwords.",
+    stale: false,
+    dismissed: false,
+  },
+  {
+    id: 2,
+    sourceKind: "message",
+    sourceId: 9,
+    threadId: 4,
+    threadIdentifier: "+1 555 0100",
+    occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 3,
+    fingerprint: "mockfp-scam-1",
+    category: "scam-fraud",
+    severity: 2,
+    rationale: "Unsolicited crypto investment pitch pushing urgent transfer.",
+    stale: false,
+    dismissed: false,
+  },
+];
+
 const mockFindings: Finding[] = [
   {
     id: 1,
@@ -2731,6 +2917,88 @@ export const mockClient: TraceLoupeClient = {
     const min = minSeverity ? rank(minSeverity) : 1;
     return mockFindings.filter((f) => rank(f.severity) >= min);
   },
+  getSafetyScanModelStatus: async () => ({
+    totalRamBytes: 16 * 1024 ** 3,
+    models: [
+      {
+        id: "gemma-4-E4B-it-Q4_K_M",
+        displayName: "Gemma 4 E4B (recommended)",
+        sizeBytes: 4_977_171_584,
+        installed: mockSafetyModelInstalled,
+        recommended: true,
+      },
+      {
+        id: "gemma-4-E2B-it-Q4_K_M",
+        displayName: "Gemma 4 E2B (for 8 GB Macs)",
+        sizeBytes: 3_106_738_272,
+        installed: false,
+        recommended: false,
+      },
+    ],
+    readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,
+  }),
+  downloadSafetyScanModel: async () => {
+    mockSafetyModelInstalled = true;
+  },
+  cancelSafetyScanModelDownload: async () => {},
+  runSafetyScan: async () => {
+    if (!mockActive) throw new Error("no backup is open");
+  },
+  cancelSafetyScan: async () => {},
+  onSafetyScanProgress: async () => () => {},
+  onSafetyModelProgress: async () => () => {},
+  listContentFindings: async () => (mockActive ? mockContentFindings : []),
+  safetyScanFindingMarks: async () => {
+    const marks: FindingMarks = { threads: {}, notes: {} };
+    if (!mockActive) return marks;
+    for (const f of mockContentFindings) {
+      if (f.dismissed || f.stale) continue;
+      if (f.sourceKind === "message" && f.threadId != null) {
+        marks.threads[f.threadId] = Math.max(
+          marks.threads[f.threadId] ?? 0,
+          f.severity,
+        ) as 1 | 2 | 3;
+      } else if (f.sourceKind === "note" && f.sourceId != null) {
+        marks.notes[f.sourceId] = Math.max(
+          marks.notes[f.sourceId] ?? 0,
+          f.severity,
+        ) as 1 | 2 | 3;
+      }
+    }
+    return marks;
+  },
+  dismissContentFinding: async (fingerprint, category, dismissed) => {
+    for (const f of mockContentFindings) {
+      if (f.fingerprint === fingerprint && f.category === category) {
+        f.dismissed = dismissed;
+      }
+    }
+  },
+  getSafetyScanReport: async () =>
+    mockActive && mockContentFindings.length
+      ? {
+          scan: {
+            id: 1,
+            model: "gemma-4-E4B-it-Q4_K_M",
+            rangeStart: null,
+            rangeEnd: null,
+            status: "completed",
+            startedAt: Math.floor(Date.now() / 1000) - 3600,
+            finishedAt: Math.floor(Date.now() / 1000),
+            chunksTotal: 42,
+            chunksDone: 42,
+          },
+          report:
+            "Two conversations produced findings. The most serious is an escalating pattern of monitoring demands in “Alex” (coercive-control, severity 2), alongside one severity-2 scam attempt in “+1 555 0100”. Review “Alex” first.",
+          threadSummaries: [
+            [
+              "mock-thread-alex",
+              "Repeated demands for location sharing and account passwords across three weeks; looks like a pattern, peaking at severity 2.",
+            ],
+          ],
+        }
+      : { scan: null, report: null, threadSummaries: [] },
+
   getIndicatorInfo: async () => mockSnapshotInfo,
   updateIndicators: async () => mockSnapshotInfo,
   getDetectionSettings: async () => mockDetectionSettings,
