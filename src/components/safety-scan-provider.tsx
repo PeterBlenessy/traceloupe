@@ -18,6 +18,8 @@ type SafetyScanContextValue = {
   scan: SafetyScanEvent | null;
   /** Latest model-download event, or null when no download is running. */
   download: SafetyModelProgressEvent | null;
+  /** Which model id is downloading (so the UI can show progress in-row). */
+  downloadingModelId: string | null;
   startScan: (opts: {
     modelId?: string | null;
     rangeStart?: number | null;
@@ -41,6 +43,9 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   const qc = useQueryClient();
   const [scan, setScan] = useState<SafetyScanEvent | null>(null);
   const [download, setDownload] = useState<SafetyModelProgressEvent | null>(null);
+  const [downloadingModelId, setDownloadingModelId] = useState<string | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const unlistenScan = useRef<(() => void) | null>(null);
   const unlistenModel = useRef<(() => void) | null>(null);
@@ -51,7 +56,9 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     if (unlistenModel.current) return;
     unlistenModel.current = () => {}; // claim synchronously against a double-call
     unlistenModel.current = await client.onSafetyModelProgress((p) => {
-      setDownload(p.phase === "done" || p.phase === "error" ? null : p);
+      const terminal = p.phase === "done" || p.phase === "error";
+      setDownload(terminal ? null : p);
+      if (terminal) setDownloadingModelId(null);
       if (p.phase === "error") {
         // The listener OWNS download outcome toasts — it's the only handler that
         // survives a webview refresh (the startDownload promise does not), so
@@ -80,6 +87,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     void (async () => {
       const status = await client.getSafetyScanDownloadStatus();
       if (cancelled || !status) return;
+      setDownloadingModelId(status.modelId);
       setDownload(
         status.phase === "verifying"
           ? { phase: "verifying" }
@@ -135,12 +143,14 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     // Already downloading — its progress is already showing and it keeps
     // running in the background; don't start a second one or surface anything.
     if (download) return;
+    setDownloadingModelId(modelId);
     setDownload({ phase: "downloading", received: 0, total: 0 });
     await subscribeModel();
     try {
       await client.downloadSafetyScanModel(modelId);
       // The mock client resolves without emitting events; refresh regardless.
       setDownload(null);
+      setDownloadingModelId(null);
       qc.invalidateQueries({ queryKey: ["safetyScan", "modelStatus"] });
     } catch (e) {
       // Outcome toasts (cancel/fail) are owned by the progress listener, which
@@ -148,7 +158,10 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
       // "already running" means the real download continues, so keep showing
       // its progress; any other rejection clears the pill defensively (the
       // terminal event usually already did).
-      if (!String(e).includes("already running")) setDownload(null);
+      if (!String(e).includes("already running")) {
+        setDownload(null);
+        setDownloadingModelId(null);
+      }
     }
   };
 
@@ -161,6 +174,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
       value={{
         scan,
         download,
+        downloadingModelId,
         startScan,
         cancelScan,
         startDownload,

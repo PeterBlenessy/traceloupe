@@ -80,6 +80,7 @@ import {
   useSafetyScan,
 } from "@/components/safety-scan-provider";
 import { SafetyModelSettings } from "@/components/safety-model-settings";
+import { SecuritySettings } from "@/components/security-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
@@ -571,6 +572,7 @@ function SettingsMenu() {
                 ["general", "General", SlidersHorizontal],
                 ["media", "Media", Image],
                 ["apps", "Apps", Boxes],
+                ["security", "Security", ShieldAlert],
                 ["safety", "Safety", ScanSearch],
                 ["developer", "Developer", Terminal],
               ] as const
@@ -815,6 +817,14 @@ function SettingsMenu() {
                   ))}
                 </select>
               </SettingsRow>
+            </SettingsGroup>
+          </TabsContent>
+
+          <TabsContent value="security" className="mt-0 flex flex-col gap-6">
+            <SettingsGroup title="Security Check">
+              <div className="p-3">
+                <SecuritySettings />
+              </div>
             </SettingsGroup>
           </TabsContent>
 

@@ -106,7 +106,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <SettingsProvider>
         <QueryClientProvider client={queryClient}>
           <RouterProvider router={router} />
-          <Toaster richColors closeButton />
+          {/* No close button: toasts auto-dismiss, and its "x" overlapped modal
+              dialogs — a click there hit the dialog behind it, not the toast. */}
+          <Toaster richColors />
         </QueryClientProvider>
       </SettingsProvider>
     </ThemeProvider>
