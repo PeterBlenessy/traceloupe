@@ -166,9 +166,9 @@ export function SafetyScanView() {
 
         {ms.readyModelId === null ? (
           <NoModelPrompt />
-        ) : running ? (
-          <RunningCard scanEvent={scan} onCancel={cancelScan} />
         ) : (
+          // One stable card — a running scan shows its progress inline below the
+          // button rather than swapping the whole box (which was jumpy).
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -184,30 +184,44 @@ export function SafetyScanView() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <div className="space-y-1.5">
+              <div
+                className={cn(
+                  "space-y-1.5",
+                  running && "pointer-events-none opacity-60",
+                )}
+              >
                 <Label className="text-xs text-muted-foreground">
                   Time range
                 </Label>
+                {/* wrap mode: render every preset as a pill (the toolbar's
+                    overflow measurement collapses in a card context). */}
                 <TimeFilterBar
+                  wrap
                   presets={presets}
                   value={range}
                   onChange={setRange}
                 />
               </div>
               <div className="flex flex-wrap items-center gap-3">
-                <Button
-                  onClick={() =>
-                    void startScan({
-                      modelId: effectiveModelId,
-                      rangeStart: range.lo,
-                      // TimeFilterBar's hi is exclusive; the scan range end is
-                      // inclusive, so step back one second.
-                      rangeEnd: range.hi != null ? range.hi - 1 : null,
-                    })
-                  }
-                >
-                  <Play className="size-4" /> Start Safety Scan
-                </Button>
+                {running ? (
+                  <Button variant="outline" onClick={cancelScan}>
+                    <Ban className="size-4" /> Stop
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() =>
+                      void startScan({
+                        modelId: effectiveModelId,
+                        rangeStart: range.lo,
+                        // TimeFilterBar's hi is exclusive; the scan range end is
+                        // inclusive, so step back one second.
+                        rangeEnd: range.hi != null ? range.hi - 1 : null,
+                      })
+                    }
+                  >
+                    <Play className="size-4" /> Start Safety Scan
+                  </Button>
+                )}
                 <span className="text-xs text-muted-foreground">
                   Model: {effectiveModel?.displayName}
                   {effectiveModel &&
@@ -217,6 +231,7 @@ export function SafetyScanView() {
                     " · change in Settings → Safety"}
                 </span>
               </div>
+              {running && scan && <ScanProgress scanEvent={scan} />}
             </CardContent>
           </Card>
         )}
@@ -296,12 +311,12 @@ function NoModelPrompt() {
   );
 }
 
-function RunningCard({
+/** Inline scan progress shown inside the run card (below the button) so the
+ *  card never gets swapped out mid-scan. */
+function ScanProgress({
   scanEvent,
-  onCancel,
 }: {
   scanEvent: NonNullable<ReturnType<typeof useSafetyScan>["scan"]>;
-  onCancel: () => void;
 }) {
   const label =
     scanEvent.phase === "loading"
@@ -314,30 +329,20 @@ function RunningCard({
       ? (scanEvent.done / scanEvent.total) * 100
       : null;
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Loader2 className="size-4 animate-spin" /> {label}
-        </CardTitle>
-        {scanEvent.phase === "classifying" && (
-          <CardDescription>
-            {scanEvent.done}/{scanEvent.total} chunks ·{" "}
-            {scanEvent.findings} finding{scanEvent.findings === 1 ? "" : "s"} so
-            far — you can leave this page; the scan keeps running.
-          </CardDescription>
-        )}
-      </CardHeader>
-      <CardContent className="flex items-center gap-3">
-        {pct !== null ? (
-          <Progress className="flex-1" value={pct} />
-        ) : (
-          <Progress className="flex-1" />
-        )}
-        <Button variant="outline" size="sm" onClick={onCancel}>
-          <Ban className="size-4" /> Stop
-        </Button>
-      </CardContent>
-    </Card>
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-sm">
+        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        {label}
+      </div>
+      <Progress value={pct ?? undefined} />
+      {scanEvent.phase === "classifying" && (
+        <div className="text-xs text-muted-foreground">
+          {scanEvent.done}/{scanEvent.total} chunks · {scanEvent.findings}{" "}
+          finding{scanEvent.findings === 1 ? "" : "s"} so far — you can leave
+          this page; the scan keeps running.
+        </div>
+      )}
+    </div>
   );
 }
 
