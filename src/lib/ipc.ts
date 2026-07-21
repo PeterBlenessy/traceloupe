@@ -154,6 +154,14 @@ export interface InstalledApp {
   genre: string | null;
   /** App Store release date (RFC-3339 string); format with `new Date(...)`. */
   released: string | null;
+  /** When this copy was downloaded on the account (RFC-3339). */
+  downloaded: string | null;
+  /** The Apple ID (account email) that downloaded the app. */
+  appleId: string | null;
+  /** App Store age rating label, e.g. "17+". */
+  contentRating: string | null;
+  /** Finer App Store category, e.g. "Social". */
+  subgenre: string | null;
 }
 
 export interface Recording {
@@ -2150,16 +2158,17 @@ function mockMediaDataUrl(id: number): string {
 // Metadata mirrors what Info.plist's iTunesMetadata carries (name/seller/
 // version/genre/release date); system apps carry none.
 const mockInstalledApps: InstalledApp[] = [
-  { bundleId: "net.whatsapp.WhatsApp", name: "WhatsApp Messenger", seller: "WhatsApp Inc.", version: "23.24.0", genre: "Social Networking", released: "2009-05-03T00:00:00Z" },
-  { bundleId: "com.burbn.instagram", name: "Instagram", seller: "Instagram, Inc.", version: "436.0.0", genre: "Photo & Video", released: "2010-10-06T08:12:41Z" },
-  { bundleId: "com.toyopagroup.picaboo", name: "Snapchat", seller: "Snap, Inc.", version: "12.80.0", genre: "Photo & Video", released: "2011-07-13T00:00:00Z" },
-  { bundleId: "com.zhiliaoapp.musically", name: "TikTok", seller: "TikTok Ltd.", version: "34.1.0", genre: "Entertainment", released: "2014-04-01T00:00:00Z" },
-  { bundleId: "org.telegram.messenger", name: "Telegram Messenger", seller: "Telegram FZ-LLC", version: "10.5.1", genre: "Social Networking", released: "2013-08-14T00:00:00Z" },
-  { bundleId: "com.spotify.client", name: "Spotify - Music and Podcasts", seller: "Spotify Ltd.", version: "8.9.10", genre: "Music", released: "2011-07-14T00:00:00Z" },
-  { bundleId: "com.google.Gmail", name: "Gmail - Email by Google", seller: "Google LLC", version: "6.0.240107", genre: "Productivity", released: "2011-11-02T00:00:00Z" },
-  { bundleId: "com.tinyspeck.chatlyio", name: "Slack", seller: "Slack Technologies Inc.", version: "23.11.90", genre: "Business", released: "2013-08-21T00:00:00Z" },
-  { bundleId: "com.ubercab.UberClient", name: "Uber - Request a ride", seller: "Uber Technologies, Inc.", version: "3.577.10", genre: "Travel", released: "2010-08-05T00:00:00Z" },
-  { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null },
+  { bundleId: "net.whatsapp.WhatsApp", name: "WhatsApp Messenger", seller: "WhatsApp Inc.", version: "23.24.0", genre: "Social Networking", released: "2009-05-03T00:00:00Z", downloaded: "2023-11-02T09:14:00Z", appleId: "jane.doe@icloud.com", contentRating: "17+", subgenre: null },
+  { bundleId: "com.burbn.instagram", name: "Instagram", seller: "Instagram, Inc.", version: "436.0.0", genre: "Photo & Video", released: "2010-10-06T08:12:41Z", downloaded: "2024-03-12T18:41:00Z", appleId: "jane.doe@icloud.com", contentRating: "12+", subgenre: "Social Networking" },
+  { bundleId: "com.toyopagroup.picaboo", name: "Snapchat", seller: "Snap, Inc.", version: "12.80.0", genre: "Photo & Video", released: "2011-07-13T00:00:00Z", downloaded: "2024-01-20T12:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "12+", subgenre: null },
+  { bundleId: "com.zhiliaoapp.musically", name: "TikTok", seller: "TikTok Ltd.", version: "34.1.0", genre: "Entertainment", released: "2014-04-01T00:00:00Z", downloaded: "2024-05-30T21:05:00Z", appleId: "jane.doe@icloud.com", contentRating: "17+", subgenre: "Social Networking" },
+  { bundleId: "org.telegram.messenger", name: "Telegram Messenger", seller: "Telegram FZ-LLC", version: "10.5.1", genre: "Social Networking", released: "2013-08-14T00:00:00Z", downloaded: "2022-06-15T07:30:00Z", appleId: "jane.doe@icloud.com", contentRating: "17+", subgenre: null },
+  { bundleId: "com.spotify.client", name: "Spotify - Music and Podcasts", seller: "Spotify Ltd.", version: "8.9.10", genre: "Music", released: "2011-07-14T00:00:00Z", downloaded: "2021-02-01T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "12+", subgenre: null },
+  { bundleId: "com.google.Gmail", name: "Gmail - Email by Google", seller: "Google LLC", version: "6.0.240107", genre: "Productivity", released: "2011-11-02T00:00:00Z", downloaded: "2020-09-10T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.tinyspeck.chatlyio", name: "Slack", seller: "Slack Technologies Inc.", version: "23.11.90", genre: "Business", released: "2013-08-21T00:00:00Z", downloaded: "2023-04-18T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.ubercab.UberClient", name: "Uber - Request a ride", seller: "Uber Technologies, Inc.", version: "3.577.10", genre: "Travel", released: "2010-08-05T00:00:00Z", downloaded: "2024-02-02T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.acme.nannycam", name: "Nanny Cam Viewer", seller: "Acme Security", version: "2.1.0", genre: "Utilities", released: "2020-01-01T00:00:00Z", downloaded: "2024-06-01T14:22:00Z", appleId: "unknown-account@outlook.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null, downloaded: null, appleId: null, contentRating: null, subgenre: null },
 ];
 
 const mockSnapshotInfo: SnapshotInfo = {
