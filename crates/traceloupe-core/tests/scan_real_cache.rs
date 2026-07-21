@@ -8,7 +8,8 @@
 //! and must never touch the live cache from a test.
 
 use traceloupe_core::analyzer::{
-    parse_addaily, parse_configuration_profiles, parse_datausage, run_scan, ScanKind, MODULES,
+    parse_addaily, parse_configuration_profiles, parse_datausage, parse_tcc, run_scan, ScanKind,
+    MODULES,
 };
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::indicators::{bundled_snapshot_dir, load_snapshot_dir};
@@ -56,6 +57,17 @@ fn process_extraction_on_real_mirror() {
         );
     }
 
+    // TCC granted permissions.
+    let tcc = format!("{mirror}/HomeDomain/Library/TCC/TCC.db");
+    let grants = parse_tcc(std::path::Path::new(&tcc)).expect("tcc");
+    let clients: std::collections::HashSet<&str> =
+        grants.iter().map(|g| g.client.as_str()).collect();
+    eprintln!(
+        "extracted {} permission grants across {} clients",
+        grants.len(),
+        clients.len()
+    );
+
     // Scan them against the bundled indicators (cache-less: in-memory db).
     let (set, _) = load_snapshot_dir(&bundled_snapshot_dir()).unwrap();
     let db = CacheDb::open_in_memory().unwrap();
@@ -63,10 +75,11 @@ fn process_extraction_on_real_mirror() {
         &db,
         &set,
         ScanKind::Explicit,
-        &["process_names", "profiles"],
+        &["process_names", "profiles", "tcc"],
         None,
         &processes,
         &profiles,
+        &grants,
         "[]",
         &CancelToken::new(),
         |_, _, _| {},
@@ -119,6 +132,7 @@ fn full_tier_a_scan_under_60s() {
         ScanKind::Explicit,
         MODULES,
         None,
+        &[],
         &[],
         &[],
         "[]",

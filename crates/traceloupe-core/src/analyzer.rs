@@ -31,6 +31,7 @@ pub const MODULES: &[&str] = &[
     "manifest",
     "process_names",
     "profiles",
+    "tcc",
 ];
 
 /// A process observed running on the device, from a Tier-B artifact
@@ -65,6 +66,21 @@ pub struct ObservedProfile {
     pub capabilities: Vec<String>,
     /// Hostnames/URLs referenced by the profile, for indicator matching.
     pub hosts: Vec<String>,
+}
+
+/// A permission an app was granted, from `TCC.db` (Transparency, Consent &
+/// Control). A stalkerware app holding microphone/camera/location access is
+/// strong corroborating evidence beyond mere installation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionGrant {
+    /// The app's bundle id (`access.client`).
+    pub client: String,
+    /// Friendly permission name (e.g. "Microphone", "Camera").
+    pub service: String,
+    /// Whether this permission is surveillance-relevant (mic/camera/location/…).
+    pub sensitive: bool,
+    /// Unix seconds the grant was last modified.
+    pub last_modified: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -378,6 +394,7 @@ pub fn run_scan(
     mut manifest_entries: Option<&mut dyn Iterator<Item = (String, String)>>,
     processes: &[ObservedProcess],
     profiles: &[ObservedProfile],
+    grants: &[PermissionGrant],
     feeds_json: &str,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str, usize, usize),
@@ -388,6 +405,7 @@ pub fn run_scan(
         .copied()
         .filter(|m| *m != "manifest" || manifest_entries.is_some())
         .filter(|m| *m != "process_names" || !processes.is_empty())
+        .filter(|m| *m != "tcc" || !grants.is_empty())
         .filter(|m| *m != "profiles" || !profiles.is_empty())
         .collect();
     conn.execute(
@@ -790,6 +808,40 @@ pub fn run_scan(
                     });
                 }
             }
+            "tcc" => {
+                // Aggregate grants by client so a matched app produces one
+                // finding listing all the sensitive permissions it holds.
+                let mut by_client: HashMap<&str, (Vec<&str>, Option<i64>)> = HashMap::new();
+                for g in grants {
+                    let entry = by_client.entry(g.client.as_str()).or_default();
+                    if g.sensitive && !entry.0.contains(&g.service.as_str()) {
+                        entry.0.push(g.service.as_str());
+                    }
+                    entry.1 = entry.1.max(g.last_modified);
+                }
+                for (client, (mut services, last)) in by_client {
+                    // Only a client that matches a stalkerware/watchware
+                    // bundle-id indicator is surfaced — an app holding camera
+                    // access is normal; a *known monitoring app* holding it is
+                    // the signal.
+                    if let Some(ind) = lookup.bundle_ids.get(client.to_ascii_lowercase().as_str()) {
+                        services.sort_unstable();
+                        let perms = if services.is_empty() {
+                            "device permissions".to_string()
+                        } else {
+                            format!("{} access", services.join(", "))
+                        };
+                        sink.push(Hit {
+                            indicator: ind,
+                            module: "tcc",
+                            ref_kind: "permission",
+                            ref_id: None,
+                            context: format!("{client} holds {perms}"),
+                            event_time: last,
+                        });
+                    }
+                }
+            }
             other => {
                 // Unknown module ids are a programming error upstream; skip.
                 let _ = other;
@@ -1051,6 +1103,72 @@ pub fn parse_configuration_profiles(
 }
 
 // ---------------------------------------------------------------------------
+// TCC (permissions) extraction
+// ---------------------------------------------------------------------------
+
+/// Map a `kTCCService*` id to a friendly name and whether it is
+/// surveillance-relevant (microphone, camera, screen, location, photos,
+/// contacts, speech, motion). Unknown services degrade to a de-prefixed name
+/// and non-sensitive (conservative: they won't drive a finding on their own).
+fn friendly_service(service: &str) -> (String, bool) {
+    match service {
+        "kTCCServiceMicrophone" => ("Microphone".into(), true),
+        "kTCCServiceCamera" => ("Camera".into(), true),
+        "kTCCServiceScreenCapture" => ("Screen recording".into(), true),
+        "kTCCServicePhotos" | "kTCCServicePhotosAdd" => ("Photos".into(), true),
+        "kTCCServiceMediaLibrary" => ("Media library".into(), true),
+        "kTCCServiceAddressBook" => ("Contacts".into(), true),
+        "kTCCServiceCalendar" => ("Calendar".into(), true),
+        "kTCCServiceReminders" => ("Reminders".into(), true),
+        "kTCCServiceSpeechRecognition" => ("Speech recognition".into(), true),
+        "kTCCServiceMotion" => ("Motion & fitness".into(), true),
+        "kTCCServiceLocation" => ("Location".into(), true),
+        "kTCCServiceFaceID" => ("Face ID".into(), true),
+        other => (
+            other
+                .strip_prefix("kTCCService")
+                .unwrap_or(other)
+                .to_string(),
+            false,
+        ),
+    }
+}
+
+/// Parse granted permissions from `TCC.db` (HomeDomain,
+/// `Library/TCC/TCC.db`). Only allowed grants (`auth_value` 2/3, or the older
+/// `allowed = 1`) are returned. `access.client` is the app's bundle id.
+pub fn parse_tcc(db_path: &std::path::Path) -> Result<Vec<PermissionGrant>> {
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    // iOS 14+ uses `auth_value` (0=denied, 2=allowed, 3=limited); older builds
+    // use `allowed` (0/1). Try the modern column, fall back to the legacy one.
+    let sql_modern = "SELECT service, client, last_modified FROM access WHERE auth_value IN (2, 3)";
+    let sql_legacy = "SELECT service, client, last_modified FROM access WHERE allowed = 1";
+    let mut stmt = match conn.prepare(sql_modern) {
+        Ok(s) => s,
+        Err(_) => conn.prepare(sql_legacy)?,
+    };
+    let rows = stmt.query_map([], |r| {
+        let service: String = r.get(0)?;
+        let client: String = r.get(1)?;
+        let last_modified: Option<i64> = r.get(2).ok();
+        Ok((service, client, last_modified))
+    })?;
+    let mut out = Vec::new();
+    for row in rows.filter_map(|r| r.ok()) {
+        let (service, client, last_modified) = row;
+        let (friendly, sensitive) = friendly_service(&service);
+        out.push(PermissionGrant {
+            client,
+            service: friendly,
+            sensitive,
+            last_modified,
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // CSV report export
 // ---------------------------------------------------------------------------
 
@@ -1289,6 +1407,32 @@ mod tests {
         ]
     }
 
+    fn test_grants() -> Vec<PermissionGrant> {
+        vec![
+            // The stalkerware app holds two sensitive grants → one aggregated
+            // finding.
+            PermissionGrant {
+                client: "com.evil.tracker".into(),
+                service: "Microphone".into(),
+                sensitive: true,
+                last_modified: Some(1_700_000_700),
+            },
+            PermissionGrant {
+                client: "com.evil.tracker".into(),
+                service: "Camera".into(),
+                sensitive: true,
+                last_modified: Some(1_700_000_800),
+            },
+            // A benign app with camera access → no finding (not an indicator).
+            PermissionGrant {
+                client: "com.burbn.instagram".into(),
+                service: "Camera".into(),
+                sensitive: true,
+                last_modified: Some(1_700_000_900),
+            },
+        ]
+    }
+
     fn seeded_db() -> CacheDb {
         let db = CacheDb::open_in_memory().unwrap();
         let c = db.conn();
@@ -1348,6 +1492,7 @@ mod tests {
         let cancel = CancelToken::new();
         let processes = test_processes();
         let profiles = test_profiles();
+        let grants = test_grants();
         let mut seen_modules = Vec::new();
         let outcome = run_scan(
             &db,
@@ -1357,6 +1502,7 @@ mod tests {
             Some(&mut manifest),
             &processes,
             &profiles,
+            &grants,
             "[]",
             &cancel,
             |m, _, _| seen_modules.push(m.to_string()),
@@ -1402,6 +1548,16 @@ mod tests {
         };
         assert!(profile_sev.iter().any(|s| s == "warning"));
         assert!(profile_sev.iter().any(|s| s == "info"));
+        // tcc: the stalkerware client's two grants aggregate into one finding;
+        // the benign instagram grant does not match. One finding.
+        assert_eq!(count(&db, "tcc"), 1);
+        let tcc_ctx: String = db
+            .conn()
+            .query_row("SELECT context FROM findings WHERE module='tcc'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(tcc_ctx.contains("Camera") && tcc_ctx.contains("Microphone"));
 
         // Severity flows from the indicator.
         let critical: i64 = db
@@ -1412,8 +1568,8 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        // app + attachment + manifest bundle + manifest path + process name.
-        assert_eq!(critical, 5);
+        // app + attachment + manifest bundle + manifest path + process name + tcc.
+        assert_eq!(critical, 6);
 
         // The near-miss host produced nothing.
         let miss: i64 = db
@@ -1604,6 +1760,52 @@ mod tests {
     }
 
     #[test]
+    fn parse_tcc_reads_granted_permissions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("TCC.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE access (service TEXT, client TEXT, client_type INTEGER,
+                auth_value INTEGER, auth_reason INTEGER, auth_version INTEGER, last_modified INTEGER);
+             INSERT INTO access VALUES ('kTCCServiceMicrophone','com.evil.tracker',0,2,0,1,100);
+             INSERT INTO access VALUES ('kTCCServiceCamera','com.evil.tracker',0,3,0,1,200);
+             INSERT INTO access VALUES ('kTCCServiceCamera','com.good.app',0,0,0,1,300);
+             INSERT INTO access VALUES ('kTCCServiceLiverpool','com.apple.x',0,2,0,1,400);",
+        )
+        .unwrap();
+        drop(conn);
+        let grants = parse_tcc(&path).unwrap();
+        // Denied (auth_value 0) row excluded; three granted rows remain.
+        assert_eq!(grants.len(), 3);
+        let mic = grants.iter().find(|g| g.service == "Microphone").unwrap();
+        assert_eq!(mic.client, "com.evil.tracker");
+        assert!(mic.sensitive);
+        assert_eq!(mic.last_modified, Some(100));
+        // A non-surveillance service (Handoff/Liverpool) is not sensitive.
+        assert!(grants
+            .iter()
+            .any(|g| g.service == "Liverpool" && !g.sensitive));
+    }
+
+    #[test]
+    fn parse_tcc_falls_back_to_legacy_allowed_column() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("TCC.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE access (service TEXT, client TEXT, client_type INTEGER,
+                allowed INTEGER, prompt_count INTEGER, last_modified INTEGER);
+             INSERT INTO access VALUES ('kTCCServiceCamera','com.old.app',0,1,1,50);
+             INSERT INTO access VALUES ('kTCCServiceCamera','com.denied.app',0,0,1,60);",
+        )
+        .unwrap();
+        drop(conn);
+        let grants = parse_tcc(&path).unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].client, "com.old.app");
+    }
+
+    #[test]
     fn clean_cache_yields_zero_findings() {
         let db = CacheDb::open_in_memory().unwrap();
         db.conn()
@@ -1620,6 +1822,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             None,
+            &[],
             &[],
             &[],
             "[]",
@@ -1640,6 +1843,7 @@ mod tests {
             ScanKind::Passive,
             &modules,
             None,
+            &[],
             &[],
             &[],
             "[]",
@@ -1663,6 +1867,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             Some(&mut manifest),
+            &[],
             &[],
             &[],
             r#"[{"source":"echap/ioc","class":"stalkerware","count":2746,"skipped":0}]"#,
@@ -1709,6 +1914,7 @@ mod tests {
             ScanKind::Explicit,
             MODULES,
             None,
+            &[],
             &[],
             &[],
             "[]",

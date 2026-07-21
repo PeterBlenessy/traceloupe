@@ -30,6 +30,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.20.0` | **Security Check (M1)** — a spyware/stalkerware indicator scan (MVT-style) over the imported backup: STIX2 + Echap indicator feeds bundled and refreshable, a native Rust scan engine across messages/Safari/apps/contacts/notes/calendar/interactions + a Manifest file sweep, Explicit Scans and a consent-gated Passive Check at import, a Security view with severity-graded findings and CSV export. |
 | `0.21.0` | **Security Check M2 — process-name detection** — the first Tier-B artifact surface: DataUsage.sqlite and OSAnalytics ADDaily process activity scanned against process-name indicators (the class that first exposed Pegasus), extracted on demand during an Explicit Scan. |
 | `0.22.0` | **Security Check M2 — configuration profiles** — installed profiles (ProfileTruth + PayloadManifest) surfaced for review: indicator matches on profile hosts/names, plus structural flags for hidden profiles (Warning) and device-management profiles (Info). The classic stalkerware install vector. |
+| `0.23.0` | **Security Check M2 — TCC permissions** — TCC.db grants cross-checked against stalkerware bundle IDs: a known monitoring app holding microphone/camera/location access is surfaced with the exact permissions it holds, corroborating a bundle-id match with real capability evidence. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -37,6 +38,28 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.23.0] — 2026-07-21
+
+**Security Check M2 — TCC permissions.** Cross-checks which apps hold sensitive
+permissions against the stalkerware bundle-id lists.
+
+- **New parser** (`analyzer::parse_tcc`): reads granted rows from `TCC.db`
+  (HomeDomain, `Library/TCC/TCC.db`) — `auth_value` 2/3 (or the legacy `allowed`
+  column), mapping each `kTCCService*` to a friendly name and a
+  surveillance-relevant flag (microphone, camera, screen, photos, contacts,
+  location, speech, motion).
+- **New `tcc` scan module:** aggregates grants per app; a client that matches a
+  stalkerware/watchware bundle-id indicator is surfaced as one feed-graded
+  finding listing the sensitive permissions it holds ("holds Camera, Microphone
+  access") — turning a bare bundle-id match into concrete capability evidence.
+  A normal app holding camera access is not flagged; only a *known monitoring
+  app* holding it is.
+- **On-demand extraction** during an Explicit Scan via the Manifest index,
+  best-effort. Passive Check unaffected.
+- Validated against the real dev backup: 116 grants across 67 apps extracted,
+  zero stalkerware matches (clean); the positive path is covered by unit tests.
+  See `docs/security-check-validation.md`.
 
 ## [0.22.0] — 2026-07-20
 
