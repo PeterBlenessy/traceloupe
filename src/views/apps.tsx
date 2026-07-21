@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import {
   Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
 import { useViewToolbar } from "@/components/toolbar-context";
+import { useSettings } from "@/components/settings-provider";
 import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
@@ -121,6 +122,25 @@ export function AppsView() {
       );
   }, [installed]);
 
+  // Opt-in real App Store artwork (Settings → Apps). Only fetch for apps
+  // without a bundled brand logo; results are cached on disk by the backend.
+  const { fetchAppIcons } = useSettings();
+  const iconBundleIds = useMemo(
+    () => apps.filter((a) => !hasBrandIcon(a.slug)).map((a) => a.bundleId),
+    [apps],
+  );
+  const { data: iconList } = useQuery({
+    queryKey: ["appIcons", iconBundleIds],
+    queryFn: () => client.getAppIcons(iconBundleIds),
+    enabled: fetchAppIcons && iconBundleIds.length > 0,
+    staleTime: Infinity,
+  });
+  const iconMap = useMemo(() => {
+    const m = new Map<string, string>();
+    iconList?.forEach((i) => m.set(i.bundleId, i.dataUri));
+    return m;
+  }, [iconList]);
+
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return apps;
@@ -170,19 +190,27 @@ export function AppsView() {
       emptyMessage="No installed-app list in this backup."
       items={filtered}
       getKey={(a) => a.bundleId}
-      renderItem={(a) => <AppItem app={a} />}
+      renderItem={(a) => <AppItem app={a} iconUri={iconMap.get(a.bundleId)} />}
     />
   );
 }
 
-function AppItem({ app }: { app: AppRow }) {
+function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
   const navigate = useNavigate();
   const label = SUPPORT_LABEL[app.support];
 
   return (
     <Item>
       <ItemMedia>
-        {hasBrandIcon(app.slug) ? (
+        {iconUri ? (
+          // Real App Store artwork (opt-in fetch); falls through to the tiles
+          // below when not fetched or unresolved.
+          <img
+            src={iconUri}
+            alt={app.name}
+            className="size-9 rounded-lg object-cover"
+          />
+        ) : hasBrandIcon(app.slug) ? (
           <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
             <BrandIcon slug={app.slug} name={app.name} className="size-5" />
           </div>

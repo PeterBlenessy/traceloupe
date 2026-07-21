@@ -164,6 +164,12 @@ export interface InstalledApp {
   subgenre: string | null;
 }
 
+/** A fetched App Store icon as a self-contained data: URI. */
+export interface AppIcon {
+  bundleId: string;
+  dataUri: string;
+}
+
 export interface Recording {
   id: number;
   title: string | null;
@@ -841,6 +847,10 @@ export interface TraceLoupeClient {
   listContacts(): Promise<Contact[]>;
   /** Apps installed on the device, with their App Store metadata. */
   listInstalledApps(): Promise<InstalledApp[]>;
+  /** Fetch real App Store icons (data: URIs) for the given bundle ids from
+   *  Apple's iTunes API. Opt-in — contacts a remote server. Returns only the
+   *  apps it could resolve; cached on disk after the first fetch. */
+  getAppIcons(bundleIds: string[]): Promise<AppIcon[]>;
 
   // --- Security Check ---
   /** Run a scan over the active backup. "explicit" runs all modules (and may
@@ -1240,6 +1250,8 @@ const tauriClient: TraceLoupeClient = {
     }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listInstalledApps: () => invoke<InstalledApp[]>("list_installed_apps"),
+  getAppIcons: (bundleIds) =>
+    invoke<AppIcon[]>("get_app_icons", { bundleIds }),
 
   runSecurityScan: (kind) =>
     invoke<ScanSummary>("run_security_scan", { kind }),
@@ -2920,6 +2932,14 @@ export const mockClient: TraceLoupeClient = {
       : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),
+  // A tiny inline SVG per bundle id so the icon-swap path is exercised in dev
+  // (the real command fetches from Apple).
+  getAppIcons: async (bundleIds) =>
+    bundleIds.map((bundleId) => {
+      const hue = [...bundleId].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><rect width='60' height='60' rx='13' fill='hsl(${hue} 65% 45%)'/><circle cx='30' cy='30' r='12' fill='white' opacity='0.9'/></svg>`;
+      return { bundleId, dataUri: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}` };
+    }),
 
   runSecurityScan: async (kind) => {
     if (!mockActive) throw new Error("no backup is open");

@@ -527,6 +527,8 @@ function SettingsMenu() {
     setShowMediaMetadata,
     recoverFromPhotos,
     setRecoverFromPhotos,
+    fetchAppIcons,
+    setFetchAppIcons,
     importModules,
     setImportModules,
     logLevel,
@@ -772,6 +774,21 @@ function SettingsMenu() {
             value="apps"
             className="mt-0 flex flex-col gap-6"
           >
+            <SettingsGroup
+              title="App details"
+              description="How the Apps view shows each installed app."
+            >
+              <SettingsRow
+                label="Fetch real app icons"
+                description="Look up each app's icon from Apple's App Store. This is the only feature that leaves your Mac — it tells Apple which apps the backup contains. Off by default; apps show a colored initial tile instead."
+              >
+                <Switch
+                  aria-label="Fetch real app icons"
+                  checked={fetchAppIcons}
+                  onCheckedChange={setFetchAppIcons}
+                />
+              </SettingsRow>
+            </SettingsGroup>
             {catalog && catalog.length > 0 ? (
               <SettingsGroup
                 title="Data to import"
