@@ -1,6 +1,10 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
+import {
+  SafetyFlagBadge,
+  useFindingMarks,
+} from "@/components/safety-flag-badge";
 import { useNavigate } from "@tanstack/react-router";
 import {
   ChevronDown,
@@ -168,6 +172,7 @@ export function NotesView() {
   const navigate = useNavigate();
   // Subscribe to the clock preference so times re-render on change.
   const { clockFormat } = useSettings();
+  const marks = useFindingMarks();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -478,6 +483,7 @@ export function NotesView() {
                         note={r.note}
                         active={selected?.id === r.note.id}
                         showFolder={viewMode === "flat"}
+                        flagSeverity={marks.data?.notes[r.note.id]}
                         onClick={() => setSelectedId(r.note.id)}
                       />
                     </div>
@@ -563,12 +569,14 @@ function NoteRow({
   active,
   onClick,
   showFolder = false,
+  flagSeverity,
 }: {
   note: Note;
   active: boolean;
   onClick: () => void;
   /** Show the note's folder as a chip (flat view; redundant under a folder node). */
   showFolder?: boolean;
+  flagSeverity?: 1 | 2 | 3;
 }) {
   return (
     <Item
@@ -587,6 +595,7 @@ function NoteRow({
                 <Lock className="size-3.5 shrink-0 text-muted-foreground" />
               )}
               <span className="truncate">{noteTitle(note)}</span>
+              {flagSeverity && <SafetyFlagBadge severity={flagSeverity} />}
               {note.hasChecklist && (
                 <ListChecks
                   className="size-3.5 shrink-0 text-muted-foreground"
