@@ -14,7 +14,11 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { NoBackupState, ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
-import { TimeFilterBar, useTimePresets } from "@/components/time-filter";
+import {
+  TimeFilterBar,
+  makeYearPresets,
+  useTimePresets,
+} from "@/components/time-filter";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
@@ -56,10 +60,13 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
 export function SafetyScanView() {
   const qc = useQueryClient();
   const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
-  // Same preset chips + custom range as Photos/Messages/etc., over the message
-  // and note timestamps. `TimeFilterBar` emits a half-open [lo, hi); the scan
-  // backend's range end is inclusive, so hi maps to `end = hi - 1`.
-  const { presets } = useTimePresets();
+  // Scan-appropriate time chips: "All history" plus one chip per calendar year
+  // the backup actually spans (from the message date bounds), plus a custom
+  // Range. Unlike a live feed, "last 24h/7d/30d" is meaningless for a static
+  // backup — you scan everything, a whole year, or a chosen span. `TimeFilterBar`
+  // emits a half-open [lo, hi); the scan backend's range end is inclusive, so hi
+  // maps to `end = hi - 1`.
+  const { presets: basePresets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   const [showDismissed, setShowDismissed] = useState(false);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
@@ -73,6 +80,19 @@ export function SafetyScanView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
+  // The [min, max] message timestamps → one chip per year the backup covers.
+  const { data: dateBounds } = useQuery({
+    queryKey: ["messageDateBounds"],
+    queryFn: () => client.messageDateBounds(),
+    enabled: active === true,
+  });
+  const presets = useMemo(() => {
+    const all = basePresets[0]; // the cumulative "All" preset (lo/hi null)
+    if (!dateBounds) return [all];
+    const minYear = new Date(dateBounds[0] * 1000).getFullYear();
+    const maxYear = new Date(dateBounds[1] * 1000).getFullYear();
+    return [all, ...makeYearPresets(minYear, maxYear)];
+  }, [basePresets, dateBounds]);
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -106,7 +126,7 @@ export function SafetyScanView() {
         lead="A local AI model reads messages and notes and flags possible harmful content — a prompt to review conversations yourself, not a verdict."
         features={[
           { label: "Categories", detail: "Threats, harassment, grooming, self-harm, coercive control, scams, and more." },
-          { label: "Time range", detail: "Scan all history, the last 12 months, or a specific year." },
+          { label: "Time range", detail: "Scan all history, a specific year, or a custom date range." },
           { label: "Report & findings", detail: "A narrative report, per-thread summaries, and severity-ranked findings." },
           { label: "Follow through", detail: "Open the source conversation, and dismiss false positives for good." },
         ]}
