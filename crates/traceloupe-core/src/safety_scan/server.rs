@@ -30,6 +30,17 @@ fn bundled_binary_name() -> String {
     format!("llama-server-{}-apple-darwin", std::env::consts::ARCH)
 }
 
+/// Whether a llama-server binary sitting next to the app executable in
+/// `exe_dir` is safe to run. In a `tauri dev` build Tauri drops a bare
+/// `llama-server` into `target/…/` WITHOUT its `lib/` dylibs, and running it
+/// aborts (`dyld: Library not loaded: @rpath/libllama-…`); so under `/target/`
+/// we require a `lib/` beside it. A release bundle (not under `/target/`) is a
+/// static binary with no dylibs, always usable.
+fn next_to_exe_usable(exe_dir: &Path) -> bool {
+    let is_dev_target = exe_dir.to_string_lossy().contains("/target/");
+    !is_dev_target || exe_dir.join("lib").is_dir()
+}
+
 /// Locate the llama-server binary.
 ///
 /// **Security invariant:** a *shipped* build runs ONLY the binary TraceLoupe
@@ -42,14 +53,23 @@ pub fn resolve_binary() -> Result<PathBuf> {
     // Production path: the bundled sidecar next to the executable
     // (Contents/MacOS on macOS). Tauri may keep the target-triple suffix or
     // strip it, so accept both names — mirrors NoteSage.
+    //
+    // BUT: in a `tauri dev` build, Tauri copies the sidecar to `target/debug/`
+    // as a bare `llama-server` WITHOUT its `lib/` dylibs — using it aborts with
+    // `dyld: Library not loaded: @rpath/libllama-…`. So a next-to-exe binary in
+    // a `/target/` dir is only usable if its `lib/` sits beside it; otherwise
+    // fall through to the staged src-tauri/binaries copy (which has `lib/`).
+    // A release build is a static binary with no dylibs, so it's always usable.
     if let Some(exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf))
     {
-        for name in [bundled_binary_name(), "llama-server".to_string()] {
-            let candidate = exe_dir.join(&name);
-            if candidate.is_file() {
-                return Ok(candidate);
+        if next_to_exe_usable(&exe_dir) {
+            for name in [bundled_binary_name(), "llama-server".to_string()] {
+                let candidate = exe_dir.join(&name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
     }
@@ -413,6 +433,26 @@ mod tests {
             sandbox: false,
             scratch_dir: std::env::temp_dir().join("traceloupe-scratch-test"),
         }
+    }
+
+    #[test]
+    fn dev_target_sidecar_needs_lib_beside_it() {
+        // The bug: Tauri drops a dylib-less `llama-server` into target/debug/;
+        // using it SIGABRTs. A /target/ dir with no lib/ must be rejected so
+        // resolution falls through to the staged src-tauri/binaries copy.
+        let tmp = tempfile::tempdir().unwrap();
+        let dev = tmp.path().join("myproj/target/debug");
+        std::fs::create_dir_all(&dev).unwrap();
+        assert!(
+            !next_to_exe_usable(&dev),
+            "dev-target without lib/ must be rejected"
+        );
+        std::fs::create_dir_all(dev.join("lib")).unwrap();
+        assert!(next_to_exe_usable(&dev), "dev-target WITH lib/ is usable");
+        // A release bundle (not under /target/) is a static binary — usable.
+        let rel = tmp.path().join("TraceLoupe.app/Contents/MacOS");
+        std::fs::create_dir_all(&rel).unwrap();
+        assert!(next_to_exe_usable(&rel), "release bundle needs no lib/");
     }
 
     #[test]
