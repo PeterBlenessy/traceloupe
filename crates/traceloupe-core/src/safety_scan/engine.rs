@@ -5,6 +5,7 @@
 //! crash resumes exactly where it stopped.
 
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use super::chunker::{self, Chunk, TimeRange};
 use super::client::LlmClient;
@@ -23,6 +24,9 @@ const MAX_TOKENS: u32 = 1200;
 pub struct ScanProgress {
     pub chunks_done: usize,
     pub chunks_total: usize,
+    /// Running tally for UI feedback. May briefly over-count a message flagged
+    /// by two overlapping windows; the final [`ScanOutcome::findings`] is the
+    /// exact row count.
     pub findings: usize,
 }
 
@@ -38,6 +42,13 @@ pub struct ScanOutcome {
     /// Chunks the model failed on (recorded, scan continued).
     pub skipped: usize,
     pub findings: usize,
+}
+
+/// Chunk keys embed thread identifiers (phone numbers, emails). The audit log
+/// is content-free AND contact-free: it records a short hash of the key, which
+/// still correlates entries per chunk without listing who the user talks to.
+fn audit_key(key: &str) -> String {
+    hex::encode(&Sha256::digest(key.as_bytes())[..6])
 }
 
 fn now() -> i64 {
@@ -125,30 +136,45 @@ pub fn run_scan(
         findings: 0,
     };
 
-    for chunk in &chunks {
-        if cancel.is_cancelled() {
-            outcome.status = ScanStatus::Cancelled;
-            analysis.audit(scan_id, now(), "scan_cancelled", "")?;
-            break;
-        }
-        if analysis.chunk_is_done(&chunk.key, &chunk.fingerprint)? {
-            outcome.reused += 1;
-        } else {
-            match classify_chunk(analysis, client, &schema, scan_id, chunk)? {
-                ChunkResult::Classified(n) => {
-                    outcome.classified += 1;
-                    outcome.findings += n;
-                }
-                ChunkResult::Failed => outcome.skipped += 1,
+    let loop_result = (|| -> Result<()> {
+        for chunk in &chunks {
+            if cancel.is_cancelled() {
+                outcome.status = ScanStatus::Cancelled;
+                analysis.audit(scan_id, now(), "scan_cancelled", "")?;
+                break;
             }
+            if analysis.chunk_is_done(&chunk.key, &chunk.fingerprint)? {
+                outcome.reused += 1;
+                // Persisted progress must count reused chunks too, or a
+                // resumed scan completes with chunks_done < chunks_total.
+                analysis.bump_chunks_done(scan_id)?;
+            } else {
+                match classify_chunk(analysis, client, &schema, scan_id, chunk)? {
+                    ChunkResult::Classified(n) => {
+                        outcome.classified += 1;
+                        outcome.findings += n;
+                    }
+                    ChunkResult::Failed => outcome.skipped += 1,
+                }
+            }
+            on_progress(ScanProgress {
+                chunks_done: outcome.reused + outcome.classified + outcome.skipped,
+                chunks_total: outcome.chunks_total,
+                findings: outcome.findings,
+            });
         }
-        on_progress(ScanProgress {
-            chunks_done: outcome.reused + outcome.classified + outcome.skipped,
-            chunks_total: outcome.chunks_total,
-            findings: outcome.findings,
-        });
+        Ok(())
+    })();
+    if let Err(e) = loop_result {
+        // Best effort: a fatal storage error must not strand the scan row as
+        // 'running' — that reads as a phantom in-flight scan forever.
+        let _ = analysis.finish_scan(scan_id, ScanStatus::Failed, now());
+        return Err(e);
     }
 
+    // Overlapping windows can flag the same message twice in the running
+    // tally; the DB row count for this scan is the truth.
+    outcome.findings = analysis.count_scan_findings(scan_id)? as usize;
     analysis.finish_scan(scan_id, outcome.status, now())?;
     analysis.audit(
         scan_id,
@@ -198,7 +224,7 @@ fn classify_chunk(
                     "chunk_classified",
                     &format!(
                         "chunk={} items={} verdicts={n} rejected={rejected}",
-                        chunk.key,
+                        audit_key(&chunk.key),
                         chunk.items.len()
                     ),
                 )?;
@@ -221,7 +247,7 @@ fn classify_chunk(
         "chunk_skipped",
         &format!(
             "chunk={} reason={}",
-            chunk.key,
+            audit_key(&chunk.key),
             last_err.map(|e| e.to_string()).unwrap_or_default()
         ),
     )?;
@@ -396,6 +422,48 @@ mod tests {
             calls_after_first,
             "no new model calls"
         );
+        // Persisted progress counts reused chunks: a fully-reused scan must
+        // not read as "completed 0 of 2" in the scans table.
+        let (done, total): (i64, i64) = analysis
+            .conn()
+            .query_row(
+                "SELECT chunks_done, chunks_total FROM scans WHERE id = ?1",
+                rusqlite::params![second.scan_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((done, total), (2, 2));
+    }
+
+    #[test]
+    fn overlap_double_flag_counts_as_one_finding() {
+        // 30 messages → windows [0..25] and [20..30]. Message 22 appears in
+        // both (offset 22 and offset 2). Flag it from BOTH windows; the
+        // outcome must count one finding, not two.
+        let v = |idx: u64| {
+            envelope(&serde_json::json!({
+                "verdicts": [
+                    { "index": idx, "category": "harassment-bullying", "severity": 2, "rationale": "insults" }
+                ]
+            }))
+        };
+        let (base, _hits) = mock_server(vec![v(22), v(2)]);
+        let cache = small_cache(30);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let outcome = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.findings, 1,
+            "same message via two windows is one finding"
+        );
+        assert_eq!(analysis.list_findings().unwrap().len(), 1);
     }
 
     #[test]

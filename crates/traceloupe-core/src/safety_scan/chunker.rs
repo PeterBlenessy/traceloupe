@@ -110,9 +110,16 @@ fn note_fingerprint(created_at: Option<i64>, title: &str, text: &str) -> String 
 pub fn strip_html(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
-    for c in html.chars() {
+    let mut chars = html.chars().peekable();
+    while let Some(c) = chars.next() {
         match c {
-            '<' => in_tag = true,
+            // Only a '<' that starts a plausible tag ('<b', '</p', '<!--')
+            // enters tag mode; a stray literal '<' ("3 < 5") must not swallow
+            // the rest of the note.
+            '<' if !in_tag => match chars.peek() {
+                Some(n) if n.is_ascii_alphabetic() || *n == '/' || *n == '!' => in_tag = true,
+                _ => out.push('<'),
+            },
             '>' => {
                 if in_tag {
                     in_tag = false;
@@ -128,13 +135,14 @@ pub fn strip_html(html: &str) -> String {
             _ => {}
         }
     }
+    // `&amp;` last, or a note that literally discusses "&lt;" double-decodes.
     let out = out
         .replace("&nbsp;", " ")
-        .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
-        .replace("&#39;", "'");
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -512,5 +520,9 @@ mod tests {
         assert_eq!(strip_html("<p>a&nbsp;&lt;b&gt;</p><p>c</p>"), "a <b> c");
         assert_eq!(strip_html("plain"), "plain");
         assert_eq!(strip_html(""), "");
+        // A stray literal '<' must not swallow the rest of the note.
+        assert_eq!(strip_html("score was 3 < 5 ok"), "score was 3 < 5 ok");
+        // '&amp;' decodes last: a note discussing "&lt;" must not double-decode.
+        assert_eq!(strip_html("&amp;lt;"), "&lt;");
     }
 }

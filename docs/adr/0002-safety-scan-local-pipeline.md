@@ -31,6 +31,24 @@ verdict counts — never content).
   would destroy hours of LLM compute; hence the sidecar Analysis store with
   text fingerprints for staleness detection.
 
+## Amendments (2026-07-21 review checkpoint)
+
+- **Content identity.** A finding's identity is its text fingerprint
+  (thread + timestamp + sender + body). Byte-identical messages in the same
+  second collapse into one finding, and a dismissal covers all of them — this
+  is accepted as "content identity" semantics, not a defect.
+- **Audit log is contact-free too.** Audit entries reference chunks by a short
+  hash of the chunk key, because raw keys embed thread identifiers (phone
+  numbers/emails) and the audit log must not enumerate the user's contacts.
+- **Rationale relay risk.** Finding rationales are model text over user
+  messages and may quote them; they are embedded in the summary prompts.
+  Mitigation: summary system prompts declare rationales untrusted data.
+  Residual prompt-injection risk (a crafted message skewing the report) is
+  accepted for v1 — output is local and display-only.
+- **The Scan report is a current-state report**: it summarizes all live
+  (non-dismissed, non-stale) findings — the same state the findings UI shows —
+  not only rows written by the triggering run.
+
 ## Consequences
 
 - Adding a new analysis means adding a pipeline stage/prompt, not granting the
