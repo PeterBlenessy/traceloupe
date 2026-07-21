@@ -5,15 +5,9 @@ import { Boxes, Download } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+  Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
+import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
 import { BrandIcon } from "@/lib/brand-icon";
 import { cn } from "@/lib/utils";
@@ -43,7 +37,6 @@ function releasedYear(released: string | null): string | null {
 }
 
 export function AppsView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -116,13 +109,18 @@ export function AppsView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={Boxes}
-        title="No backup open"
-        description="Import a backup to see its apps."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to inspect installed apps"
+        lead="Every app installed on the device — with version, App Store details, bundle id, and the data it left in the backup — a starting point for spotting unfamiliar or hidden apps."
+        features={[
+          { label: "Search", detail: "Search by name, bundle id, seller, or genre." },
+          { label: "App Store detail", detail: "Seller, genre, release year, and version for each app." },
+          { label: "Support badges", detail: "See which apps TraceLoupe can extract data from." },
+          { label: "Cross-link", detail: "Jump from a supported app to its chats in Messages." },
+        ]}
+        note="Read locally on this Mac — nothing is uploaded."
+      />
     );
   }
 

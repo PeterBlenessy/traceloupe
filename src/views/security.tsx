@@ -2,44 +2,19 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ShieldAlert,
-  ShieldCheck,
-  ShieldQuestion,
-  RefreshCw,
-  Loader2,
-  AlertTriangle,
-  Info,
-  ExternalLink,
-  Download,
-  Link2,
-} from "lucide-react";
+  ShieldAlert, ShieldCheck, ShieldQuestion, RefreshCw, Loader2, AlertTriangle, Info, ExternalLink, Download, Link2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Card, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, } from "@/components/ui/sheet";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { ViewHeader, EmptyView, ErrorState, ListSkeleton } from "@/components/view";
+import { NoBackupState, ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
 import { formatListTime } from "@/lib/format";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -186,14 +161,18 @@ export function SecurityView() {
 
   if (!enabled) {
     return (
-      <>
-        <ViewHeader title="Security Check" icon={<ShieldAlert className="size-4" />} />
-        <EmptyView
-          icon={ShieldQuestion}
-          title="Open a backup to run a Security Check"
-          description="The Security Check scans an imported iPhone backup for traces of known spyware and stalkerware."
-        />
-      </>
+      <NoBackupState
+        icon={ShieldQuestion}
+        title="Open a backup to run a Security Check"
+        lead="Scans an imported iPhone backup for traces of known spyware and stalkerware, matching it against curated threat feeds — entirely on this Mac."
+        features={[
+          { label: "What it checks", detail: "Installed apps, configuration profiles, and network indicators against known-threat feeds." },
+          { label: "Ranked results", detail: "Findings graded Critical, Warning, or Info, with what matched and where." },
+          { label: "Fresh indicators", detail: "Update the threat feeds, or load your own STIX/YAML indicators." },
+          { label: "Follow through", detail: "Export a report, open each finding in its source view, and see safety guidance." },
+        ]}
+        note="Nothing is uploaded, and the check never modifies the backup."
+      />
     );
   }
 

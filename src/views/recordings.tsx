@@ -1,9 +1,7 @@
 import { useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { Mic } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Item,
   ItemContent,
@@ -16,7 +14,7 @@ import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { timeGroup, type FilterGroup } from "@/components/filter-groups";
-import {
+import { NoBackupState,
   EmptyView,
   ErrorState,
   ListDetail,
@@ -28,7 +26,6 @@ import { formatDateTime, formatDuration, formatListTime } from "@/lib/format";
 import { client, type Recording, type TimeRange } from "@/lib/ipc";
 
 export function RecordingsView() {
-  const navigate = useNavigate();
   // Subscribe to the clock preference so times re-render on change.
   const { clockFormat } = useSettings();
   const { data: active } = useQuery({
@@ -131,13 +128,18 @@ export function RecordingsView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={Mic}
-        title="No backup open"
-        description="Import a backup to see recordings."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to hear voice memos"
+        lead="The device's Voice Memos, restored from the backup and playable right here with an inline audio player."
+        features={[
+          { label: "Search", detail: "Search recordings by title." },
+          { label: "Time range", detail: "Narrow to any date range." },
+          { label: "Sort", detail: "Order by date, title, or duration." },
+          { label: "Playback", detail: "Play any memo inline and see its folder, date, and length." },
+        ]}
+        note="Audio is read directly from the backup on this Mac."
+      />
     );
   }
 

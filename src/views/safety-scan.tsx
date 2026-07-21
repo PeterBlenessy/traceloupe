@@ -3,40 +3,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Ban,
-  ExternalLink,
-  EyeOff,
-  HeartPulse,
-  Loader2,
-  MessageSquareWarning,
-  NotebookText,
-  Play,
-  RotateCcw,
-  ShieldUser,
-  ShieldQuestion,
-} from "lucide-react";
+  Ban, ExternalLink, EyeOff, HeartPulse, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Card, CardContent, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue, } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { ViewHeader, ErrorState, ListSkeleton, EmptyView } from "@/components/view";
+import { NoBackupState, ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
@@ -102,7 +81,6 @@ function rangeFor(selection: string): {
 
 export function SafetyScanView() {
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
   const [rangeSel, setRangeSel] = useState("all");
   const [showDismissed, setShowDismissed] = useState(false);
@@ -144,13 +122,18 @@ export function SafetyScanView() {
   // without one.
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={ShieldUser}
-        title="No backup open"
-        description="Import a backup to scan its messages and notes."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to run a Safety Scan"
+        lead="A local AI model reads messages and notes and flags possible harmful content — a prompt to review conversations yourself, not a verdict."
+        features={[
+          { label: "Categories", detail: "Threats, harassment, grooming, self-harm, coercive control, scams, and more." },
+          { label: "Time range", detail: "Scan all history, the last 12 months, or a specific year." },
+          { label: "Report & findings", detail: "A narrative report, per-thread summaries, and severity-ranked findings." },
+          { label: "Follow through", detail: "Open the source conversation, and dismiss false positives for good." },
+        ]}
+        note="The model runs sandboxed on this Mac — nothing is uploaded, and the backup text never touches disk."
+      />
     );
   }
   if (modelStatus.isPending) return <ListSkeleton />;
