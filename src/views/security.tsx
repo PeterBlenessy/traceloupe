@@ -580,10 +580,10 @@ function ShortLinkExpander({ text }: { text: string }) {
               destination.
             </DialogDescription>
           </DialogHeader>
-          <Alert className="border-amber-500/40 text-amber-700 dark:text-amber-400 [&>svg]:text-amber-600 dark:[&>svg]:text-amber-400">
+          <Alert className="[&>svg]:text-amber-500">
             <AlertTriangle className="size-4" />
             <AlertTitle>This sends data from your backup</AlertTitle>
-            <AlertDescription className="text-amber-700/90 dark:text-amber-400/90">
+            <AlertDescription>
               This is the one time information from your backup leaves your Mac.
               If the link was sent by someone monitoring this device, resolving
               it can signal that the device is being examined.
