@@ -7,3 +7,6 @@
 //! ever gives the model tools, queries, or memory across calls.
 
 pub mod chunker;
+pub mod client;
+pub mod engine;
+pub mod prompt;
