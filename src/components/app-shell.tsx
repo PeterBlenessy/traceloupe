@@ -226,7 +226,7 @@ export function AppShell() {
               </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
-              <SidebarSeparator className="mx-0" />
+              <SidebarSeparator />
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
