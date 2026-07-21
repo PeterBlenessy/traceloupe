@@ -46,11 +46,12 @@ pub struct DetectionSettings {
     /// Consent for network fetches of indicator feeds (asked before the first
     /// fetch). Fetching only happens once this is `Granted`.
     pub fetch_consent: Consent,
-    /// Opt-in (default off) to expanding shortened URLs during a scan — the
-    /// sole sanctioned exception to the no-backup-data-leaves rule (ADR 0001).
-    pub expand_short_urls: bool,
     /// Optional local folder of custom indicator files (`.stix`/`.stix2`/`.yaml`)
     /// merged into the scan alongside the bundled feeds (researcher mode).
+    ///
+    /// (Shortened-URL expansion is deliberately NOT a setting here: it is a
+    /// per-link, per-use action with a per-backup opt-out stored in the backup's
+    /// own cache, so it never lives in these global settings.)
     pub custom_indicator_dir: Option<String>,
 }
 
@@ -62,7 +63,6 @@ impl Default for DetectionSettings {
             passive_consent: Consent::Unasked,
             auto_update_indicators: true,
             fetch_consent: Consent::Unasked,
-            expand_short_urls: false,
             custom_indicator_dir: None,
         }
     }
@@ -117,7 +117,6 @@ mod tests {
         assert!(!s.passive_active());
         assert!(s.auto_update_indicators);
         assert!(!s.may_fetch());
-        assert!(!s.expand_short_urls);
         assert_eq!(s.passive_scope, PassiveScope::AppsOnly);
     }
 

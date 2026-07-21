@@ -558,7 +558,6 @@ export interface DetectionSettings {
   passiveConsent: Consent;
   autoUpdateIndicators: boolean;
   fetchConsent: Consent;
-  expandShortUrls: boolean;
   /** Optional local folder of custom indicator files merged into scans. */
   customIndicatorDir: string | null;
 }
@@ -1995,7 +1994,6 @@ let mockDetectionSettings: DetectionSettings = {
   passiveConsent: "unasked",
   autoUpdateIndicators: true,
   fetchConsent: "unasked",
-  expandShortUrls: false,
   customIndicatorDir: null,
 };
 
