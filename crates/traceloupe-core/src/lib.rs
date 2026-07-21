@@ -4,6 +4,7 @@
 //! shell calls over IPC: backup discovery, import orchestration, and cached
 //! artifact queries. See architecture.md §5.
 
+pub mod analysis;
 pub mod analyzer;
 pub mod cache;
 pub mod crypto;
@@ -19,6 +20,7 @@ pub mod normalize;
 pub mod nska;
 pub mod parsers;
 pub mod query;
+pub mod safety_scan;
 pub mod shorteners;
 pub mod sidecar;
 

@@ -56,6 +56,17 @@ pub enum Error {
     #[error("parse error: {0}")]
     Parse(String),
 
+    /// A local-inference call failed (transport, HTTP status, or unparseable
+    /// output). Deliberately content-free: never carries prompt/completion
+    /// text (ADR 0002 leakage rule).
+    #[error("inference failed: {0}")]
+    Inference(String),
+
+    /// A caller passed a value outside its documented domain (bad severity,
+    /// unknown category slug, wrong-state transition). Analysis-store layer.
+    #[error("invalid argument: {0}")]
+    Invalid(String),
+
     /// An indicator feed (STIX2 bundle or Echap YAML) could not be parsed at
     /// all. Individual unrecognized patterns inside a feed are skipped and
     /// reported, not errors.

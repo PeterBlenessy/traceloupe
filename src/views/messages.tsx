@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
+import {
+  SafetyFlagBadge,
+  useFindingMarks,
+} from "@/components/safety-flag-badge";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowDownToLine,
@@ -445,6 +449,7 @@ function Conversations({
   });
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
+  const marks = useFindingMarks();
 
   const [sort, setSort] = usePersistedState<SortState>("messages:sort", {
     by: "recent",
@@ -523,6 +528,7 @@ function Conversations({
                     showContactNames={showContactNames}
                     showAvatars={showAvatars}
                     active={selected?.id === t.id}
+                    flagSeverity={marks.data?.threads[t.id]}
                     onClick={() => onSelect(t.id)}
                   />
                 </div>
@@ -975,6 +981,7 @@ function ThreadRow({
   showContactNames,
   showAvatars,
   active,
+  flagSeverity,
   onClick,
 }: {
   thread: ThreadSummary;
@@ -982,6 +989,7 @@ function ThreadRow({
   showContactNames: boolean;
   showAvatars: boolean;
   active: boolean;
+  flagSeverity?: 1 | 2 | 3;
   onClick: () => void;
 }) {
   const name = threadLabel(thread, resolve, showContactNames);
@@ -1018,6 +1026,7 @@ function ThreadRow({
                 />
               )}
               <span className="truncate">{name}</span>
+              {flagSeverity && <SafetyFlagBadge severity={flagSeverity} />}
             </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatListTime(thread.lastMessageAt)}

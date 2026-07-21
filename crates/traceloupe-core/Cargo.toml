@@ -25,6 +25,7 @@ cipher = { workspace = true }
 zeroize = { workspace = true }
 aes-kw = { workspace = true, features = ["alloc"] }
 flate2 = { workspace = true }
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"

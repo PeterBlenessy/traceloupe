@@ -122,9 +122,11 @@ mod tests {
 
     #[test]
     fn consent_unlocks_behavior() {
-        let mut s = DetectionSettings::default();
-        s.passive_consent = Consent::Granted;
-        s.fetch_consent = Consent::Granted;
+        let mut s = DetectionSettings {
+            passive_consent: Consent::Granted,
+            fetch_consent: Consent::Granted,
+            ..Default::default()
+        };
         assert!(s.passive_active());
         assert!(s.may_fetch());
         // Master switches still win.
@@ -137,9 +139,11 @@ mod tests {
     #[test]
     fn round_trips_through_disk() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut s = DetectionSettings::default();
-        s.passive_scope = PassiveScope::Full;
-        s.passive_consent = Consent::Denied;
+        let s = DetectionSettings {
+            passive_scope: PassiveScope::Full,
+            passive_consent: Consent::Denied,
+            ..Default::default()
+        };
         s.save(tmp.path()).unwrap();
         let loaded = DetectionSettings::load(tmp.path()).unwrap();
         assert_eq!(loaded, s);
