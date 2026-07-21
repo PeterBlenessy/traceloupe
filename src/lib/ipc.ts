@@ -533,6 +533,8 @@ export interface Finding {
   refKind: string | null;
   refId: number | null;
   eventTime: number | null;
+  /** New since the previous completed scan of this backup (false on first scan). */
+  isNew: boolean;
 }
 
 export interface FeedInfo {
@@ -1995,6 +1997,7 @@ const mockFindings: Finding[] = [
     refKind: "app",
     refId: null,
     eventTime: null,
+    isNew: false,
   },
   {
     id: 2,
@@ -2008,6 +2011,7 @@ const mockFindings: Finding[] = [
     refKind: "safari_history",
     refId: 42,
     eventTime: 1700001000,
+    isNew: true,
   },
 ];
 
