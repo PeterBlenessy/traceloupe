@@ -4514,7 +4514,7 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "traceloupe"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "base64 0.22.1",
  "keyring",
@@ -4534,7 +4534,7 @@ dependencies = [
 
 [[package]]
 name = "traceloupe-core"
-version = "0.27.1"
+version = "0.28.0"
 dependencies = [
  "aes",
  "aes-gcm",
