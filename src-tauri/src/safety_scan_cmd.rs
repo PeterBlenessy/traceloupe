@@ -338,6 +338,8 @@ pub struct ContentFindingDto {
     pub id: i64,
     pub source_kind: String,
     pub source_id: Option<i64>,
+    /// The cache `threads.id` for message findings — the Messages deep-link.
+    pub thread_id: Option<i64>,
     pub thread_identifier: Option<String>,
     pub occurred_at: Option<i64>,
     pub fingerprint: String,
@@ -352,11 +354,24 @@ pub struct ContentFindingDto {
 pub fn list_content_findings(
     active: State<'_, ActiveBackup>,
 ) -> Result<Vec<ContentFindingDto>, String> {
-    let path = analysis_path(&active.path()?)?;
+    let cache_path = active.path()?;
+    let path = analysis_path(&cache_path)?;
     if !path.exists() {
         return Ok(Vec::new());
     }
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    // Resolve message → thread ids for deep-links (best effort; a stale
+    // source_id after re-import simply yields no link).
+    let cache = CacheDb::open(&cache_path).ok();
+    let thread_of = |source_id: Option<i64>| -> Option<i64> {
+        let (cache, id) = (cache.as_ref()?, source_id?);
+        cache
+            .conn()
+            .query_row("SELECT thread_id FROM messages WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .ok()
+    };
     Ok(db
         .list_findings()
         .map_err(|e| e.to_string())?
@@ -364,6 +379,11 @@ pub fn list_content_findings(
         .map(|f| ContentFindingDto {
             id: f.id,
             source_kind: f.source_kind.as_str().into(),
+            thread_id: if f.source_kind == traceloupe_core::analysis::SourceKind::Message {
+                thread_of(f.source_id)
+            } else {
+                None
+            },
             source_id: f.source_id,
             thread_identifier: f.thread_identifier,
             occurred_at: f.occurred_at,

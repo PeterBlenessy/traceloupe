@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import {
   Boxes,
   ShieldAlert,
+  ScanSearch,
   CalendarDays,
   HeartPulse,
   ListTodo,
@@ -90,6 +91,7 @@ const nav = [
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
   { to: "/security", label: "Security", icon: ShieldAlert },
+  { to: "/safety-scan", label: "Safety Scan", icon: ScanSearch },
 ] as const;
 
 export function AppShell() {
