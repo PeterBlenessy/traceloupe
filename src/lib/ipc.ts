@@ -56,7 +56,7 @@ export interface SigningStatus {
   identity: string | null;
 }
 
-/** A selectable data type for import (maps to iLEAPP modules behind the scenes). */
+/** A selectable data type for import (maps to a native Rust parser). */
 export interface ImportModule {
   id: string;
   label: string;
