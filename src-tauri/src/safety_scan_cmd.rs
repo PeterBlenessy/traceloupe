@@ -152,7 +152,7 @@ pub async fn download_safety_scan_model(
     let app2 = app.clone();
     let status_w = status.clone();
     let model_id_c = model_id.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let join = tauri::async_runtime::spawn_blocking(move || {
         let mut last_emit = std::time::Instant::now();
         models::download_model(spec, &dir, &cancel, |p| {
             let ev = match p {
@@ -182,11 +182,14 @@ pub async fn download_safety_scan_model(
             let _ = app2.emit("safetyscan://model-progress", ev);
         })
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
 
-    // The download is over (success or failure) — clear the live snapshot.
+    // Clear the live snapshot on EVERY exit path — including a panicked task
+    // (a JoinError from `?` below would otherwise skip this and wedge the UI
+    // into a permanent, non-cancellable "downloading" state).
     *status.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    let result = join.map_err(|e| e.to_string())?;
 
     match result {
         Ok(_) => Ok(()),
@@ -293,7 +296,7 @@ pub async fn run_safety_scan(
     let app2 = app.clone();
     let spec_id = spec.id.to_string();
     let ctx_size = spec.ctx_size;
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
         // Start from a clean scratch dir; spawn() re-creates it.
         let _ = std::fs::remove_dir_all(&scratch_dir);
@@ -385,9 +388,24 @@ pub async fn run_safety_scan(
         );
         Ok(())
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
 
+    // Surface an error event on BOTH a normal Err and a panicked task, so the
+    // UI never sits waiting on a "loading" scan that silently died. (A stranded
+    // `running` scan row is repaired by the next begin_scan.)
+    let result = match join {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("scan task failed: {e}");
+            let _ = app.emit(
+                "safetyscan://progress",
+                ScanEvent::Error {
+                    message: msg.clone(),
+                },
+            );
+            return Err(msg);
+        }
+    };
     if let Err(msg) = &result {
         let _ = app.emit(
             "safetyscan://progress",

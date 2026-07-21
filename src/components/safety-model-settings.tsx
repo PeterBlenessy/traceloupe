@@ -17,7 +17,7 @@ function gb(bytes: number) {
 }
 
 export function SafetyModelSettings() {
-  const { download, startDownload, cancelDownload, error } = useSafetyScan();
+  const { download, startDownload, cancelDownload } = useSafetyScan();
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -48,8 +48,8 @@ export function SafetyModelSettings() {
         network access, and your data never leaves this Mac.
       </p>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
+      {/* Download outcomes are toasts (see the provider); the shared `error`
+          state belongs to scans and must not bleed red text into this pane. */}
       {downloading && download.phase === "downloading" ? (
         <div className="space-y-2">
           <Progress
