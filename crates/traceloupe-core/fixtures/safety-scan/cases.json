@@ -1,0 +1,206 @@
+{
+  "_comment": "Hand-labeled Safety Scan eval fixtures (plan T10). Each case is a short synthetic conversation with the Forensic 9 categories it SHOULD produce (empty = hard negative that must stay clean). Synthetic text written for classifier testing; no real people. `minSeverity` is the lowest acceptable severity for a correct flag. Keep positives unambiguous and negatives genuinely tricky — the negatives are what stop the model crying wolf.",
+  "cases": [
+    {
+      "id": "threat-explicit",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "you think you can just ignore me" },
+        { "sender": "me", "text": "please stop messaging me" },
+        { "sender": "them", "text": "i know where you live and im going to make you regret this" }
+      ],
+      "expect": [{ "category": "threat-violence", "minSeverity": 3 }]
+    },
+    {
+      "id": "threat-intimidation",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "be careful walking home tonight" },
+        { "sender": "them", "text": "accidents happen to people who talk too much" }
+      ],
+      "expect": [{ "category": "threat-violence", "minSeverity": 2 }]
+    },
+    {
+      "id": "harassment-sustained",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "youre pathetic" },
+        { "sender": "them", "text": "everyone thinks youre a joke" },
+        { "sender": "them", "text": "worthless as always" },
+        { "sender": "me", "text": "why are you like this" },
+        { "sender": "them", "text": "because youre garbage and everyone knows it" }
+      ],
+      "expect": [{ "category": "harassment-bullying", "minSeverity": 2 }]
+    },
+    {
+      "id": "grooming-secrecy",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "youre so mature for 13, not like other kids" },
+        { "sender": "them", "text": "this can be our little secret ok? dont tell your mum" },
+        { "sender": "them", "text": "delete these messages after you read them" }
+      ],
+      "expect": [{ "category": "grooming-exploitation", "minSeverity": 3 }]
+    },
+    {
+      "id": "sextortion",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "i have the photos you sent" },
+        { "sender": "them", "text": "send more or i post them to your whole school" }
+      ],
+      "expect": [
+        { "category": "grooming-exploitation", "minSeverity": 3 },
+        { "category": "threat-violence", "minSeverity": 2 }
+      ]
+    },
+    {
+      "id": "sexual-explicit-unsolicited",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "stop being a prude and send me a nude already" },
+        { "sender": "me", "text": "i said im not comfortable with that" },
+        { "sender": "them", "text": "come on, describe what youre wearing, ill tell you what id do to you" }
+      ],
+      "expect": [{ "category": "sexual-content", "minSeverity": 2 }]
+    },
+    {
+      "id": "self-harm-intent",
+      "kind": "positive",
+      "messages": [
+        { "sender": "me", "text": "i dont want to be here anymore" },
+        { "sender": "me", "text": "i have the pills and ive decided tonight is the night" }
+      ],
+      "expect": [{ "category": "self-harm", "minSeverity": 3 }]
+    },
+    {
+      "id": "self-harm-ed",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "skipped meals for 3 days straight, down another kilo" },
+        { "sender": "them", "text": "you should try it, hunger is just weakness leaving" }
+      ],
+      "expect": [{ "category": "self-harm", "minSeverity": 2 }]
+    },
+    {
+      "id": "hate-slur",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "people like you dont belong in this country" },
+        { "sender": "them", "text": "your kind ruins everything, go back where you came from" }
+      ],
+      "expect": [{ "category": "hate-identity", "minSeverity": 2 }]
+    },
+    {
+      "id": "coercive-monitoring",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "send me your location right now" },
+        { "sender": "them", "text": "why didnt you reply in 5 minutes, who are you with" },
+        { "sender": "them", "text": "i need your phone password, we shouldnt have secrets" },
+        { "sender": "them", "text": "stop seeing your sister, she turns you against me" }
+      ],
+      "expect": [{ "category": "coercive-control", "minSeverity": 2 }]
+    },
+    {
+      "id": "coercive-financial",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "you dont need your own bank account, ill handle the money" },
+        { "sender": "them", "text": "if you leave youll have nothing and no one will believe you" }
+      ],
+      "expect": [{ "category": "coercive-control", "minSeverity": 2 }]
+    },
+    {
+      "id": "scam-romance",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "my love, im stuck at the airport and my card was declined" },
+        { "sender": "them", "text": "can you send 500 to this account, ill pay you back when i land, we're meant to be" }
+      ],
+      "expect": [{ "category": "scam-fraud", "minSeverity": 2 }]
+    },
+    {
+      "id": "scam-phishing",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "URGENT: your bank account is locked. verify now at secure-bank-verify.link or lose access" },
+        { "sender": "them", "text": "reply with your card number and pin to restore access immediately" }
+      ],
+      "expect": [{ "category": "scam-fraud", "minSeverity": 3 }]
+    },
+    {
+      "id": "drugs-sale",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "got the good stuff back in, same price per gram" },
+        { "sender": "me", "text": "grab me an 8ball, usual spot at 9" }
+      ],
+      "expect": [{ "category": "drugs-illegal", "minSeverity": 2 }]
+    },
+    {
+      "id": "neg-song-lyrics",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "this song is stuck in my head" },
+        { "sender": "me", "text": "\"i'll kill for you, i'd die for you\" lol classic line" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-quoted-abuse",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "so then my ex texted me saying 'youre worthless and no one will ever love you'" },
+        { "sender": "them", "text": "thats awful, im so sorry he said that to you. you deserve so much better" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-banter",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "if you eat my leftovers again im going to end you" },
+        { "sender": "them", "text": "lmaooo come at me, they were delicious" },
+        { "sender": "me", "text": "youre the worst, love you" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-clinical",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "my therapist and i talked about my history of self-harm today" },
+        { "sender": "them", "text": "im 8 months clean and the coping strategies are really helping" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-gaming",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "just dropped into the map, grab a weapon" },
+        { "sender": "them", "text": "headshot lol, i killed the whole squad, we win" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-news-discussion",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "did you see the article about that drug trafficking bust downtown" },
+        { "sender": "me", "text": "yeah wild, they seized a huge amount. glad they caught them" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-pharmacy",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "picking up my prescription, the pharmacist said take one pill twice a day" },
+        { "sender": "them", "text": "hope you feel better soon!" }
+      ],
+      "expect": []
+    }
+  ]
+}
