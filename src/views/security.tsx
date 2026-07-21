@@ -343,6 +343,7 @@ function ResultSummary({
   onSelect: (f: Finding) => void;
 }) {
   const total = run.critical + run.warning + run.info;
+  const newCount = findings.filter((f) => f.isNew).length;
 
   if (total === 0) {
     return (
@@ -387,6 +388,11 @@ function ResultSummary({
         <span className="text-xs text-muted-foreground">
           scanned {formatListTime(run.startedAt)}
         </span>
+        {newCount > 0 && (
+          <span className="text-xs font-medium text-sky-600 dark:text-sky-400">
+            {newCount} new since last scan
+          </span>
+        )}
         <Button
           variant="ghost"
           size="sm"
@@ -421,7 +427,19 @@ function ResultSummary({
                   <td className="px-3 py-2">
                     <SeverityBadge severity={f.severity} />
                   </td>
-                  <td className="px-3 py-2 font-medium">{f.malware}</td>
+                  <td className="px-3 py-2 font-medium">
+                    <span className="inline-flex items-center gap-1.5">
+                      {f.malware}
+                      {f.isNew && (
+                        <Badge
+                          variant="outline"
+                          className="border-sky-500/40 px-1.5 py-0 text-[10px] font-semibold text-sky-600 dark:text-sky-400"
+                        >
+                          NEW
+                        </Badge>
+                      )}
+                    </span>
+                  </td>
                   <td className="max-w-[16rem] truncate px-3 py-2 font-mono text-xs text-muted-foreground">
                     {f.matchedValue}
                   </td>
