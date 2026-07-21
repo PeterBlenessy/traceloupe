@@ -43,9 +43,8 @@ export function SafetyModelSettings() {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-sm text-muted-foreground">
-        Safety Scan runs a local language model to analyze your messages and
-        notes. It is downloaded once (checksum-verified), runs sandboxed with no
-        network access, and your data never leaves this Mac.
+        Downloaded once and checksum-verified. The model runs sandboxed with no
+        network access — your data never leaves this Mac.
       </p>
 
       {/* The list is always rendered so it never jumps; progress appears inside
