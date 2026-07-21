@@ -9,11 +9,33 @@
 
 use traceloupe_core::analyzer::{
     parse_addaily, parse_configuration_profiles, parse_datausage, parse_shortcuts, parse_tcc,
-    run_scan, ScanInputs, ScanKind, MODULES,
+    parse_webkit_observations, run_scan, ObservedWebDomain, ScanInputs, ScanKind, MODULES,
 };
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::indicators::{bundled_snapshot_dir, load_snapshot_dir};
 use traceloupe_core::sidecar::CancelToken;
+
+/// Recursively find every `ResourceLoadStatistics/observations.db` under `root`.
+fn glob_observations(root: &str) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![std::path::PathBuf::from(root)];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.file_name().is_some_and(|n| n == "observations.db")
+                && p.to_string_lossy().contains("ResourceLoadStatistics")
+            {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
 
 /// Verify Tier-B process extraction against the real decrypted dev mirror
 /// (~/.traceloupe-dev/backup-mirror). Ignored; run with:
@@ -77,6 +99,25 @@ fn process_extraction_on_real_mirror() {
         shortcuts.len()
     );
 
+    // WebKit observed domains across every app's observations.db.
+    let mut webkit_domains = Vec::new();
+    for entry in glob_observations(&mirror) {
+        let app = entry
+            .to_string_lossy()
+            .split('/')
+            .find_map(|c| c.strip_prefix("AppDomain-").map(|s| s.to_string()));
+        if let Ok(domains) = parse_webkit_observations(&entry) {
+            for (domain, last_seen) in domains {
+                webkit_domains.push(ObservedWebDomain {
+                    domain,
+                    app: app.clone(),
+                    last_seen,
+                });
+            }
+        }
+    }
+    eprintln!("extracted {} WebKit observed domains", webkit_domains.len());
+
     // Scan them against the bundled indicators (cache-less: in-memory db).
     let (set, _) = load_snapshot_dir(&bundled_snapshot_dir()).unwrap();
     let db = CacheDb::open_in_memory().unwrap();
@@ -84,13 +125,14 @@ fn process_extraction_on_real_mirror() {
         &db,
         &set,
         ScanKind::Explicit,
-        &["process_names", "profiles", "tcc", "shortcuts"],
+        &["process_names", "profiles", "tcc", "shortcuts", "webkit"],
         ScanInputs {
             manifest_entries: None,
             processes: &processes,
             profiles: &profiles,
             grants: &grants,
             shortcuts: &shortcuts,
+            webkit_domains: &webkit_domains,
         },
         "[]",
         &CancelToken::new(),
