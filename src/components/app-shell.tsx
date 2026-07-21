@@ -38,6 +38,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarSeparator,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
@@ -91,8 +92,6 @@ const nav = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
-  { to: "/security", label: "Security", icon: ShieldAlert },
-  { to: "/safety-scan", label: "Safety", icon: ScanSearch },
 ] as const;
 
 export function AppShell() {
@@ -168,9 +167,38 @@ export function AppShell() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {/* Security and Safety sit with Device: all three operate on
+                    the whole backup (its identity, a spyware audit, a content
+                    scan), unlike the content views below which are slices of
+                    that content. */}
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/security"}
+                    tooltip="Security"
+                  >
+                    <Link to="/security">
+                      <ShieldAlert />
+                      <span>Security</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/safety-scan"}
+                    tooltip="Safety"
+                  >
+                    <Link to="/safety-scan">
+                      <ScanSearch />
+                      <span>Safety</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
+              <SidebarSeparator className="mx-0" />
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>

@@ -688,11 +688,12 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
         traceloupe_core::detection_settings::PassiveScope::Full => analyzer::MODULES.to_vec(),
     };
     let snapshot_dir = active_indicators_dir(app);
+    let custom_dir = settings.custom_indicator_dir.clone().map(PathBuf::from);
     let cp = cache_path.to_path_buf();
     let app2 = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let db = CacheDb::open(&cp)?;
-        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let (set, info) = indicators::load_indicators(&snapshot_dir, custom_dir.as_deref())?;
         let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
         analyzer::run_scan(
             &db,
@@ -1174,6 +1175,7 @@ async fn run_security_scan(
     let mut tierb_profiles: Vec<analyzer::ObservedProfile> = Vec::new();
     let mut tierb_grants: Vec<analyzer::PermissionGrant> = Vec::new();
     let mut tierb_shortcuts: Vec<analyzer::ObservedShortcut> = Vec::new();
+    let mut tierb_webkit: Vec<analyzer::ObservedWebDomain> = Vec::new();
     if scan_kind == ScanKind::Explicit {
         let (backup_id, work_dir) = backup_layout(&cache_path)?;
         let source_dir = {
@@ -1273,17 +1275,47 @@ async fn run_security_scan(
                         let _ = std::fs::remove_file(&dest);
                     }
                 }
-                Ok::<_, traceloupe_core::Error>((out, processes, profiles, grants, shortcuts))
+                // Tier-B WebKit: domains each app's webview contacted, from the
+                // per-app observations.db files (across all app domains).
+                let mut webkit: Vec<analyzer::ObservedWebDomain> = Vec::new();
+                if let Ok(entries) =
+                    idx.find_relative_like("%ResourceLoadStatistics/observations.db")
+                {
+                    for (i, entry) in entries.iter().enumerate() {
+                        let app = entry
+                            .domain
+                            .split_once('-')
+                            .filter(|(p, _)| p.starts_with("AppDomain"))
+                            .map(|(_, b)| b.to_string());
+                        let dest = work_dir.join(format!(".security-webkit-{i}.db"));
+                        if idx.extract_db(entry, decryptor.as_deref(), &dest).is_ok() {
+                            if let Ok(domains) = analyzer::parse_webkit_observations(&dest) {
+                                for (domain, last_seen) in domains {
+                                    webkit.push(analyzer::ObservedWebDomain {
+                                        domain,
+                                        app: app.clone(),
+                                        last_seen,
+                                    });
+                                }
+                            }
+                            let _ = std::fs::remove_file(&dest);
+                        }
+                    }
+                }
+                Ok::<_, traceloupe_core::Error>((
+                    out, processes, profiles, grants, shortcuts, webkit,
+                ))
             })
             .await
             .map_err(|e| e.to_string())?;
             match extracted {
-                Ok((e, ps, prof, grants, shortcuts)) => {
+                Ok((e, ps, prof, grants, shortcuts, webkit)) => {
                     manifest_entries = Some(e);
                     tierb_processes = ps;
                     tierb_profiles = prof;
                     tierb_grants = grants;
                     tierb_shortcuts = shortcuts;
+                    tierb_webkit = webkit;
                 }
                 Err(e) => logging::warn(
                     &app,
@@ -1304,9 +1336,10 @@ async fn run_security_scan(
     let app_progress = app.clone();
     let cp = cache_path.clone();
     let modules: Vec<&'static str> = scan_kind.default_modules();
+    let custom_dir = settings.custom_indicator_dir.clone().map(PathBuf::from);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let db = CacheDb::open(&cp)?;
-        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let (set, info) = indicators::load_indicators(&snapshot_dir, custom_dir.as_deref())?;
         let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
         let mut sweep = manifest_entries.map(|v| v.into_iter());
         let sweep_ref = sweep
@@ -1323,6 +1356,7 @@ async fn run_security_scan(
                 profiles: &tierb_profiles,
                 grants: &tierb_grants,
                 shortcuts: &tierb_shortcuts,
+                webkit_domains: &tierb_webkit,
             },
             &feeds_json,
             &cancel,
@@ -1423,12 +1457,20 @@ async fn list_findings(
     .map_err(|e| e.to_string())
 }
 
-/// Load info about the active indicator snapshot (feed counts + freshness).
+/// Load info about the active indicator snapshot (feed counts + freshness),
+/// including any custom indicator folder the user configured.
 #[tauri::command]
 async fn get_indicator_info(app: AppHandle) -> Result<SnapshotInfo, String> {
     let dir = active_indicators_dir(&app);
+    let custom_dir = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|d| DetectionSettings::load(&d).ok())
+        .and_then(|s| s.custom_indicator_dir)
+        .map(PathBuf::from);
     tauri::async_runtime::spawn_blocking(move || {
-        indicators::load_snapshot_dir(&dir).map(|(_, info)| info)
+        indicators::load_indicators(&dir, custom_dir.as_deref()).map(|(_, info)| info)
     })
     .await
     .map_err(|e| e.to_string())?

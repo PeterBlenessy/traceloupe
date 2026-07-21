@@ -51,7 +51,7 @@ MVT modules that evaluate indicators (from the installed package):
 | `net_datausage` | process names with network usage | **Shipped (M2, v0.21.0)** — `parse_datausage` scans `ZPROCESS` names + bundle names |
 | `tcc` | apps holding mic/camera/location grants | **Shipped (M2, v0.23.0)** — `parse_tcc` cross-checks granted permissions against stalkerware bundle IDs |
 | `shortcuts` | automation-based surveillance | **Shipped (M2, v0.24.0)** — `parse_shortcuts` scans action URLs against indicators |
-| `webkit_resource_load_statistics` / `webkit_session_resource_log` | in-app webview domains | **Tier B (M2)** |
+| `webkit_resource_load_statistics` / `webkit_session_resource_log` | in-app webview domains | **Shipped (M2, v0.25.0)** — `parse_webkit_observations` / `parse_webkit_session_log` scan observed domains |
 | `locationd` / `idstatuscache` / `global_preferences` | supporting artifacts, mostly timeline context | **Out of scope M1** — low-signal / no indicator surface for our feeds |
 | `whatsapp` | links in WhatsApp messages | **Partial** — WhatsApp chats are parsed; indicator scan of app-chat bodies is a later enhancement |
 | `backup_info` | device metadata (no indicators) | N/A |
@@ -60,8 +60,8 @@ MVT modules that evaluate indicators (from the installed package):
 (domains, URLs, emails, bundle IDs, file names/paths, **process names**) is now
 covered by a shipped module — Tier A plus the Tier-B process-activity extraction
 added in M2 (v0.21.0). The remaining MVT modules match Tier-B artifacts still
-scheduled for M2 (WebKit) — named in the
-PRD, not unexplained gaps.
+shipped as M2 completes. Every MVT module that matches an indicator class
+our feeds carry is now covered.
 
 ## Indicator-kind parity
 
