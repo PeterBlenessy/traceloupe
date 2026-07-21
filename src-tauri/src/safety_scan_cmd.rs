@@ -397,6 +397,60 @@ pub fn list_content_findings(
         .collect())
 }
 
+/// Compact per-source severity marks for inline badges (plan T9): the top
+/// live-finding severity per flagged thread and per flagged note, so the
+/// Messages/Notes lists can badge rows with a single cheap query.
+#[derive(Clone, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingMarks {
+    /// cache `threads.id` → highest severity among that thread's live findings.
+    pub threads: std::collections::HashMap<i64, u8>,
+    /// cache `notes.id` → highest severity among that note's live findings.
+    pub notes: std::collections::HashMap<i64, u8>,
+}
+
+#[tauri::command]
+pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<FindingMarks, String> {
+    let cache_path = active.path()?;
+    let path = analysis_path(&cache_path)?;
+    let mut marks = FindingMarks::default();
+    if !path.exists() {
+        return Ok(marks);
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    let cache = CacheDb::open(&cache_path).ok();
+    for f in db.list_findings().map_err(|e| e.to_string())? {
+        // Dismissed and stale findings must not badge a row — the list should
+        // match what the Safety Scan page shows by default.
+        if f.dismissed || f.stale {
+            continue;
+        }
+        let map = match f.source_kind {
+            traceloupe_core::analysis::SourceKind::Message => {
+                let Some(cache) = cache.as_ref() else {
+                    continue;
+                };
+                let Some(id) = f.source_id else { continue };
+                let thread_id: Option<i64> = cache
+                    .conn()
+                    .query_row("SELECT thread_id FROM messages WHERE id = ?1", [id], |r| {
+                        r.get(0)
+                    })
+                    .ok();
+                let Some(thread_id) = thread_id else { continue };
+                marks.threads.entry(thread_id)
+            }
+            traceloupe_core::analysis::SourceKind::Note => {
+                let Some(id) = f.source_id else { continue };
+                marks.notes.entry(id)
+            }
+        };
+        map.and_modify(|s| *s = (*s).max(f.severity))
+            .or_insert(f.severity);
+    }
+    Ok(marks)
+}
+
 #[tauri::command]
 pub fn dismiss_content_finding(
     active: State<'_, ActiveBackup>,

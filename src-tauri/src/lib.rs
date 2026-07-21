@@ -3510,6 +3510,7 @@ pub fn run() {
             safety_scan_cmd::run_safety_scan,
             safety_scan_cmd::cancel_safety_scan,
             safety_scan_cmd::list_content_findings,
+            safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
             safety_scan_cmd::get_safety_scan_report
         ])

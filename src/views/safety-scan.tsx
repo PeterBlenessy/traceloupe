@@ -4,7 +4,6 @@ import { useNavigate } from "@tanstack/react-router";
 import {
   AlertTriangle,
   Ban,
-  Download,
   ExternalLink,
   EyeOff,
   HeartPulse,
@@ -44,7 +43,6 @@ import {
   client,
   type ContentCategory,
   type ContentFinding,
-  type SafetyModelStatus,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -76,10 +74,6 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   },
 };
 
-function gb(bytes: number) {
-  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-}
-
 /** Year options for the time-range picker: this year back to 2007 (iPhone 1). */
 function yearOptions(): number[] {
   const current = new Date().getFullYear();
@@ -108,8 +102,7 @@ function rangeFor(selection: string): {
 
 export function SafetyScanView() {
   const qc = useQueryClient();
-  const { scan, download, startScan, cancelScan, startDownload, cancelDownload, error } =
-    useSafetyScan();
+  const { scan, startScan, cancelScan, error } = useSafetyScan();
   const [rangeSel, setRangeSel] = useState("all");
   const [showDismissed, setShowDismissed] = useState(false);
 
@@ -129,8 +122,11 @@ export function SafetyScanView() {
   const dismiss = useMutation({
     mutationFn: (f: { fingerprint: string; category: string; dismissed: boolean }) =>
       client.dismissContentFinding(f.fingerprint, f.category, f.dismissed),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] }),
+    onSuccess: () => {
+      // Refresh both the findings list and the inline badges (marks).
+      qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
+      qc.invalidateQueries({ queryKey: ["safetyScan", "marks"] });
+    },
   });
 
   if (modelStatus.isPending) return <ListSkeleton />;
@@ -158,12 +154,7 @@ export function SafetyScanView() {
         )}
 
         {ms.readyModelId === null ? (
-          <ModelSetup
-            ms={ms}
-            download={download}
-            startDownload={startDownload}
-            cancelDownload={cancelDownload}
-          />
+          <NoModelPrompt />
         ) : running ? (
           <RunningCard scanEvent={scan} onCancel={cancelScan} />
         ) : (
@@ -262,85 +253,23 @@ export function SafetyScanView() {
   );
 }
 
-function ModelSetup({
-  ms,
-  download,
-  startDownload,
-  cancelDownload,
-}: {
-  ms: SafetyModelStatus;
-  download: ReturnType<typeof useSafetyScan>["download"];
-  startDownload: (id: string) => Promise<void>;
-  cancelDownload: () => void;
-}) {
-  const downloading = download !== null;
+/** The scan view can't run without a model. Model download lives in Settings →
+ *  Safety (a one-time multi-GB setup, not per-scan content), so here we just
+ *  point there. */
+function NoModelPrompt() {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ShieldQuestion className="size-4" /> Set up the local model
+          <ShieldQuestion className="size-4" /> A local model is required
         </CardTitle>
         <CardDescription>
-          Safety Scan needs a local language model. It is downloaded once
-          (checksum-verified), runs sandboxed without network access, and your
-          data never leaves this Mac.
+          Safety Scan analyzes your messages and notes with a local language
+          model that runs entirely on this Mac. Download it once from{" "}
+          <span className="font-medium text-foreground">Settings → Safety</span>{" "}
+          (bottom-left), then come back here to run a scan.
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {downloading && download.phase === "downloading" ? (
-          <div className="space-y-2">
-            <Progress
-              value={
-                download.total > 0
-                  ? (download.received / download.total) * 100
-                  : 0
-              }
-            />
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>
-                {gb(download.received)} / {download.total ? gb(download.total) : "…"}
-              </span>
-              <Button variant="ghost" size="sm" onClick={cancelDownload}>
-                <Ban className="size-4" /> Cancel
-              </Button>
-            </div>
-          </div>
-        ) : downloading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> Verifying…
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {ms.models.map((m) => (
-              <div
-                key={m.id}
-                className="flex items-center justify-between rounded-md border p-3"
-              >
-                <div>
-                  <div className="text-sm font-medium">
-                    {m.displayName}{" "}
-                    {m.recommended && (
-                      <Badge variant="secondary" className="ml-1">
-                        Recommended for this Mac
-                      </Badge>
-                    )}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {gb(m.sizeBytes)} download
-                  </div>
-                </div>
-                <Button
-                  variant={m.recommended ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => void startDownload(m.id)}
-                >
-                  <Download className="size-4" /> Download
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-      </CardContent>
     </Card>
   );
 }

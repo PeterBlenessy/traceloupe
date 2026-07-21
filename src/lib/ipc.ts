@@ -646,6 +646,14 @@ export interface SafetyScanReport {
   threadSummaries: [string, string][];
 }
 
+/** Top live-finding severity per flagged thread/note, for inline badges. */
+export interface FindingMarks {
+  /** cache threads.id → highest severity (1|2|3). */
+  threads: Record<number, 1 | 2 | 3>;
+  /** cache notes.id → highest severity (1|2|3). */
+  notes: Record<number, 1 | 2 | 3>;
+}
+
 export interface TraceLoupeClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
@@ -854,6 +862,8 @@ export interface TraceLoupeClient {
   ): Promise<UnlistenFn>;
   /** All Content Findings for the active backup (dismissed included). */
   listContentFindings(): Promise<ContentFinding[]>;
+  /** Compact per-thread / per-note top severity for inline badges. */
+  safetyScanFindingMarks(): Promise<FindingMarks>;
   /** Mark/unmark a finding as a false positive (keyed to survive re-scans). */
   dismissContentFinding(
     fingerprint: string,
@@ -1209,6 +1219,8 @@ const tauriClient: TraceLoupeClient = {
     ),
   listContentFindings: () =>
     invoke<ContentFinding[]>("list_content_findings"),
+  safetyScanFindingMarks: () =>
+    invoke<FindingMarks>("safety_scan_finding_marks"),
   dismissContentFinding: (fingerprint, category, dismissed) =>
     invoke("dismiss_content_finding", { fingerprint, category, dismissed }),
   getSafetyScanReport: () =>
@@ -2900,6 +2912,25 @@ export const mockClient: TraceLoupeClient = {
   onSafetyScanProgress: async () => () => {},
   onSafetyModelProgress: async () => () => {},
   listContentFindings: async () => (mockActive ? mockContentFindings : []),
+  safetyScanFindingMarks: async () => {
+    const marks: FindingMarks = { threads: {}, notes: {} };
+    if (!mockActive) return marks;
+    for (const f of mockContentFindings) {
+      if (f.dismissed || f.stale) continue;
+      if (f.sourceKind === "message" && f.threadId != null) {
+        marks.threads[f.threadId] = Math.max(
+          marks.threads[f.threadId] ?? 0,
+          f.severity,
+        ) as 1 | 2 | 3;
+      } else if (f.sourceKind === "note" && f.sourceId != null) {
+        marks.notes[f.sourceId] = Math.max(
+          marks.notes[f.sourceId] ?? 0,
+          f.severity,
+        ) as 1 | 2 | 3;
+      }
+    }
+    return marks;
+  },
   dismissContentFinding: async (fingerprint, category, dismissed) => {
     for (const f of mockContentFindings) {
       if (f.fingerprint === fingerprint && f.category === category) {
