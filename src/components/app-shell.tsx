@@ -642,7 +642,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Show contact photos"
-                description="Show contact avatars where available."
+                description="Use each contact's saved photo as their avatar in lists and chats."
               >
                 <Switch
                   aria-label="Show contact photos"
@@ -652,7 +652,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Link previews"
-                description="How links in messages preview. Off keeps raw URLs (no network). On hover fetches a preview only when you hover a link. Inline unfurls every link in the bubble — both hover and inline contact the linked websites."
+                description="Off keeps raw URLs and never touches the network. On hover fetches a preview only when you point at a link; Inline unfurls every link in the bubble — both reach out to the linked sites."
               >
                 <select
                   value={linkPreviewMode}
@@ -669,7 +669,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Time format"
-                description="How clock times are shown."
+                description="12-hour, 24-hour, or match your system."
               >
                 <select
                   value={clockFormat}
@@ -686,7 +686,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Density"
-                description="How tightly lists and controls pack together."
+                description="Comfortable, cozy, or compact row and control spacing."
               >
                 <select
                   value={density}
@@ -759,7 +759,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Recover attachments from Photos"
-                description="When a message photo/video isn't in the backup, show a camera-roll item with the same file name instead. Best-effort — it matches by name and can occasionally show the wrong photo, so recovered media is labelled. Off by default."
+                description="When a message photo or video is missing, show the same-named camera-roll item instead. Best-effort name matching — it can occasionally show the wrong photo, so recovered media is labelled."
               >
                 <Switch
                   aria-label="Recover attachments from Photos"
@@ -780,7 +780,7 @@ function SettingsMenu() {
             >
               <SettingsRow
                 label="Fetch real app icons"
-                description="Look up each app's icon from Apple's App Store. This is the only feature that leaves your Mac — it tells Apple which apps the backup contains. Off by default; apps show a colored initial tile instead."
+                description="Look up each app's real icon from Apple's App Store. The only feature that leaves your Mac — it tells Apple which apps the backup contains — so it's off by default; otherwise apps show a colored initial tile."
               >
                 <Switch
                   aria-label="Fetch real app icons"
