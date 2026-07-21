@@ -35,6 +35,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.25.0` | **Security Check M2 complete — WebKit** — domains each app's webview contacted (per-app `observations.db`) scanned against indicators: a webview loading a known C2 domain is flagged with the apps that saw it. Completes the M2 Tier-B surfaces. |
 | `0.26.0` | **Security Check M3 — custom indicators** — point the scan at a local folder of `.stix`/`.stix2`/`.yaml` files, merged with the bundled feeds (researcher mode, parity with iMazing). |
 | `0.27.0` | **Security Check M3 — scan-history diffing** — findings new since the previous scan are flagged with a **NEW** badge and a "N new since last scan" count, so a re-scan after an indicator update highlights what changed. |
+| `0.28.0` | **Security Check M3 complete — opt-in de-shortener** — reveal where a shortened link points, as a deliberate per-link action gated by a per-use approval prompt (with a per-backup, never global, "don't ask again"). Only allowlisted shorteners are contacted, and the destination is revealed without visiting it. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -42,6 +43,30 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.28.0] — 2026-07-21
+
+**Security Check M3 complete — opt-in de-shortener.** Reveal where a shortened
+link in a finding points. Resolving a link contacts a remote host with a URL
+from the backup — the sole sanctioned exception to "nothing leaves the machine"
+(ADR 0001) — so it is strictly opt-in and deliberate.
+
+- **Per-link, user-approved:** never automatic and never during a Passive Check.
+  A "Reveal destination" button on a finding's shortened links opens an approval
+  dialog that names the real risk (resolving can signal that the device is being
+  examined). Every use prompts by default.
+- **Per-backup opt-out (not global):** the dialog carries a "don't ask again for
+  this backup" switch, stored in that backup's own cache — it never applies to
+  other backups, resets on re-import, and clears when the backup is forgotten.
+- **Safe resolution:** only known-shortener hosts (an allowlist) are ever
+  contacted; the destination is read from the redirect `Location` **without
+  visiting it**, so the final target is never contacted. SSRF-guarded by the same
+  public-only DNS resolver as link previews (private/loopback/metadata addresses
+  refused, rebind-proof).
+- New `shorteners` core module; `expand_short_url` / `find_shortener_urls` /
+  `deshorten_auto_approve_get`/`set` commands.
+
+With the de-shortener, **M3 — and the Security Check as a whole — is complete.**
 
 ## [0.27.0] — 2026-07-21
 
