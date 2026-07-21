@@ -3403,6 +3403,7 @@ pub fn run() {
         .manage(safety_scan_cmd::SafetyScanCancel::default())
         .manage(safety_scan_cmd::SafetyScanGate::default())
         .manage(safety_scan_cmd::SafetyDownloadCancel::default())
+        .manage(safety_scan_cmd::SafetyDownloadGate::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of

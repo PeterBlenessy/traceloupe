@@ -59,6 +59,9 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     setError(null);
     setScan({ phase: "loading" });
     if (!unlistenScan.current) {
+      // Claim the slot synchronously (before the await) so a second call in
+      // the same tick can't register a duplicate listener.
+      unlistenScan.current = () => {};
       unlistenScan.current = await client.onSafetyScanProgress((p) => {
         setScan(scanIsTerminal(p) ? null : p);
         if (p.phase === "error") setError(p.message);
@@ -84,6 +87,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     setError(null);
     setDownload({ phase: "downloading", received: 0, total: 0 });
     if (!unlistenModel.current) {
+      unlistenModel.current = () => {};
       unlistenModel.current = await client.onSafetyModelProgress((p) => {
         setDownload(p.phase === "done" || p.phase === "error" ? null : p);
         if (p.phase === "error") setError(p.message);

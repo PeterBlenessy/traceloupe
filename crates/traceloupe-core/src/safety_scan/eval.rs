@@ -101,17 +101,19 @@ pub struct ScoreReport {
     /// Hard-negative cases that were (wrongly) flagged with any category.
     pub false_alarms: Vec<String>,
     pub cases_scored: usize,
+    /// Count of hard-negative (expect-nothing) cases — the clean-rate divisor.
+    pub negatives_scored: usize,
 }
 
 impl ScoreReport {
-    /// Case-level: a hard negative is "clean" only if it produced no category.
-    pub fn negative_precision(&self) -> f64 {
-        // 1 - (false alarms / negatives) is folded into per-category FP; this
-        // is a quick headline for the report table.
-        self.cases_scored
-            .checked_sub(self.false_alarms.len())
-            .map(|clean| clean as f64 / self.cases_scored.max(1) as f64)
-            .unwrap_or(0.0)
+    /// Fraction of hard negatives that stayed clean (no category flagged).
+    /// Divides by negatives only — a diluted "of all cases" rate would flatter
+    /// the model.
+    pub fn negative_clean_rate(&self) -> f64 {
+        if self.negatives_scored == 0 {
+            return 1.0;
+        }
+        (self.negatives_scored - self.false_alarms.len()) as f64 / self.negatives_scored as f64
     }
 
     pub fn table(&self) -> String {
@@ -126,10 +128,10 @@ impl ScoreReport {
             ));
         }
         out.push_str(&format!(
-            "\nhard-negative clean rate: {:.2} ({} false alarms of {} cases)\n",
-            self.negative_precision(),
+            "\nhard-negative clean rate: {:.2} ({} false alarms of {} negatives)\n",
+            self.negative_clean_rate(),
             self.false_alarms.len(),
-            self.cases_scored
+            self.negatives_scored
         ));
         if !self.false_alarms.is_empty() {
             out.push_str(&format!("false alarms: {}\n", self.false_alarms.join(", ")));
@@ -160,8 +162,11 @@ pub fn score_against(
                 (false, false) => {}
             }
         }
-        if expected.is_empty() && !predicted.is_empty() {
-            report.false_alarms.push(case.id.clone());
+        if expected.is_empty() {
+            report.negatives_scored += 1;
+            if !predicted.is_empty() {
+                report.false_alarms.push(case.id.clone());
+            }
         }
         report.cases_scored += 1;
     }
@@ -257,7 +262,8 @@ mod tests {
             );
         }
         assert!(report.false_alarms.is_empty());
-        assert!((report.negative_precision() - 1.0).abs() < 1e-9);
+        assert!((report.negative_clean_rate() - 1.0).abs() < 1e-9);
+        assert!(report.negatives_scored >= 5);
     }
 
     /// A cry-wolf classifier that flags harassment on everything tanks
