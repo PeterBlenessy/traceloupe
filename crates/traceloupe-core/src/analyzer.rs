@@ -1379,7 +1379,7 @@ pub fn export_report_csv(db: &CacheDb, run_id: i64, app_version: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indicators::{FeedClass, IndicatorSet, LoadedFeed, Severity};
+    use crate::indicators::{IndicatorSet, LoadedFeed, Severity};
 
     fn ind(kind: IndicatorKind, value: &str, malware: &str, severity: Severity) -> Indicator {
         Indicator {
