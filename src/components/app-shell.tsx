@@ -37,6 +37,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarSeparator,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
@@ -88,7 +89,6 @@ const nav = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
-  { to: "/security", label: "Security", icon: ShieldAlert },
 ] as const;
 
 export function AppShell() {
@@ -163,9 +163,25 @@ export function AppShell() {
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {/* Security sits with Device: both operate on the whole backup
+                    (its identity, and an audit of it), unlike the content views
+                    below which are slices of that content. */}
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname === "/security"}
+                    tooltip="Security"
+                  >
+                    <Link to="/security">
+                      <ShieldAlert />
+                      <span>Security</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
+              <SidebarSeparator className="mx-0" />
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
