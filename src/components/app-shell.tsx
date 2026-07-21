@@ -4,6 +4,7 @@ import {
   Boxes,
   ShieldAlert,
   ScanSearch,
+  X,
   CalendarDays,
   HeartPulse,
   ListTodo,
@@ -69,7 +70,10 @@ import {
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
-import { SafetyScanProvider } from "@/components/safety-scan-provider";
+import {
+  SafetyScanProvider,
+  useSafetyScan,
+} from "@/components/safety-scan-provider";
 import { SafetyModelSettings } from "@/components/safety-model-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
@@ -316,6 +320,7 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
       trailing={
         // App-wide controls, rightmost.
         <>
+          <ModelDownloadIndicator />
           <ImportIndicator />
           <ToolbarGroup>
             <DensityToggle />
@@ -398,6 +403,41 @@ function ImportIndicator() {
         Importing {active.backup.deviceName ?? active.backup.id} · {detail}
       </span>
     </button>
+  );
+}
+
+/** A pill shown while the Safety Scan model downloads in the background — so
+ *  the ~5 GB download is visible and cancelable from anywhere, not only inside
+ *  the Settings dialog (which is modal). The download itself already runs in
+ *  the SafetyScanProvider, above the routes, so it keeps going as you navigate
+ *  or close Settings; this just surfaces it. */
+function ModelDownloadIndicator() {
+  const { download, cancelDownload } = useSafetyScan();
+  if (!download) return null;
+  const pct =
+    download.phase === "downloading" && download.total > 0
+      ? Math.round((download.received / download.total) * 100)
+      : null;
+  const label =
+    download.phase === "verifying"
+      ? "Verifying model…"
+      : pct !== null
+        ? `Downloading model · ${pct}%`
+        : "Downloading model…";
+  return (
+    <span className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
+      <Loader2 className="size-3 animate-spin" />
+      <span className="max-w-[14rem] truncate">{label}</span>
+      {download.phase === "downloading" && (
+        <button
+          onClick={cancelDownload}
+          title="Cancel model download"
+          className="ml-0.5 rounded-full p-0.5 hover:bg-accent hover:text-foreground"
+        >
+          <X className="size-3" />
+        </button>
+      )}
+    </span>
   );
 }
 

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import {
   client,
   type SafetyModelProgressEvent,
@@ -44,11 +45,50 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   const unlistenScan = useRef<(() => void) | null>(null);
   const unlistenModel = useRef<(() => void) | null>(null);
 
+  // Subscribe to model-download progress exactly once. Shared by startDownload
+  // and the rehydration effect below.
+  const subscribeModel = async () => {
+    if (unlistenModel.current) return;
+    unlistenModel.current = () => {}; // claim synchronously against a double-call
+    unlistenModel.current = await client.onSafetyModelProgress((p) => {
+      setDownload(p.phase === "done" || p.phase === "error" ? null : p);
+      if (p.phase === "error") {
+        // A failure is a toast, not red text wedged into the Settings UI.
+        toast.error(`Model download failed: ${p.message}`);
+      }
+      if (p.phase === "done") {
+        toast.success("Model ready");
+        qc.invalidateQueries({ queryKey: ["safetyScan", "modelStatus"] });
+      }
+    });
+  };
+
   useEffect(() => {
+    let cancelled = false;
+    // A download runs in the Rust process and survives a webview refresh, but
+    // this React state doesn't — so on mount, rehydrate any in-flight download
+    // from the backend and re-attach to its progress. Without this, a refresh
+    // goes blank and re-clicking Download collides with the download gate.
+    void (async () => {
+      const status = await client.getSafetyScanDownloadStatus();
+      if (cancelled || !status) return;
+      setDownload(
+        status.phase === "verifying"
+          ? { phase: "verifying" }
+          : {
+              phase: "downloading",
+              received: status.received,
+              total: status.total,
+            },
+      );
+      await subscribeModel();
+    })();
     return () => {
+      cancelled = true;
       unlistenScan.current?.();
       unlistenModel.current?.();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startScan = async (opts: {
@@ -84,26 +124,29 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   };
 
   const startDownload = async (modelId: string) => {
-    setError(null);
+    // Already downloading — its progress is already showing and it keeps
+    // running in the background; don't start a second one or surface anything.
+    if (download) return;
     setDownload({ phase: "downloading", received: 0, total: 0 });
-    if (!unlistenModel.current) {
-      unlistenModel.current = () => {};
-      unlistenModel.current = await client.onSafetyModelProgress((p) => {
-        setDownload(p.phase === "done" || p.phase === "error" ? null : p);
-        if (p.phase === "error") setError(p.message);
-        if (p.phase === "done") {
-          qc.invalidateQueries({ queryKey: ["safetyScan", "modelStatus"] });
-        }
-      });
-    }
+    await subscribeModel();
     try {
       await client.downloadSafetyScanModel(modelId);
       // The mock client resolves without emitting events; refresh regardless.
       setDownload(null);
       qc.invalidateQueries({ queryKey: ["safetyScan", "modelStatus"] });
     } catch (e) {
+      const msg = String(e);
+      // "already running" — a duplicate start; the real one is still going, so
+      // leave its progress visible and say nothing.
+      if (msg.includes("already running")) return;
       setDownload(null);
-      setError(String(e));
+      // Cancelling is a user action, not a failure — a quiet toast, no red.
+      // (The shared cancel error reads "import cancelled".)
+      if (msg.toLowerCase().includes("cancel")) {
+        toast("Model download cancelled");
+        return;
+      }
+      toast.error(`Model download failed: ${msg}`);
     }
   };
 
