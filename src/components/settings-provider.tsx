@@ -40,6 +40,11 @@ type SettingsProviderState = {
    *  camera-roll photo instead. Best-effort (can mismatch); off by default. */
   recoverFromPhotos: boolean;
   setRecoverFromPhotos: (v: boolean) => void;
+  /** Fetch real App Store icons for the Apps view from Apple's iTunes API.
+   *  Off by default: it's the only feature that sends data off-device (it tells
+   *  Apple which apps a backup contains), against the local-only guarantee. */
+  fetchAppIcons: boolean;
+  setFetchAppIcons: (v: boolean) => void;
   /** Import module ids the user chose, or null to use the catalog defaults. */
   importModules: string[] | null;
   setImportModules: (ids: string[]) => void;
@@ -68,6 +73,7 @@ const LEGACY_LINK_PREVIEWS_HOVER_KEY = "traceloupe-link-previews-hover";
 const LIGHTBOX_STYLE_KEY = "traceloupe-lightbox-style";
 const MEDIA_META_KEY = "traceloupe-media-metadata";
 const RECOVER_PHOTOS_KEY = "traceloupe-recover-from-photos";
+const FETCH_APP_ICONS_KEY = "traceloupe-fetch-app-icons";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
@@ -152,6 +158,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   // Off by default (opt-in): filename matching can be wrong.
   const [recoverFromPhotos, setRecoverFromPhotosState] = useState<boolean>(
     () => localStorage.getItem(RECOVER_PHOTOS_KEY) === "true",
+  );
+  // Off by default (opt-in): the only feature that contacts a remote server.
+  const [fetchAppIcons, setFetchAppIconsState] = useState<boolean>(
+    () => localStorage.getItem(FETCH_APP_ICONS_KEY) === "true",
   );
   const [importModules, setImportModulesState] = useState<string[] | null>(() =>
     readStringArray(IMPORT_MODULES_KEY),
@@ -252,6 +262,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(RECOVER_PHOTOS_KEY, String(v));
     setRecoverFromPhotosState(v);
   };
+  const setFetchAppIcons = (v: boolean) => {
+    localStorage.setItem(FETCH_APP_ICONS_KEY, String(v));
+    setFetchAppIconsState(v);
+  };
   const setShowMediaMetadata = (v: boolean) => {
     localStorage.setItem(MEDIA_META_KEY, String(v));
     setShowMediaMetadataState(v);
@@ -293,6 +307,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setShowMediaMetadata,
         recoverFromPhotos,
         setRecoverFromPhotos,
+        fetchAppIcons,
+        setFetchAppIcons,
         importModules,
         setImportModules,
         logLevel,
