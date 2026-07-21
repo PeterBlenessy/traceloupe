@@ -49,7 +49,7 @@ MVT modules that evaluate indicators (from the installed package):
 | `profile_events` | profile install/remove events | **Partial** — installed profiles are surfaced via ProfileTruth; per-event install/remove history is a later addition |
 | `osanalytics_addaily` | malicious **process names** | **Shipped (M2, v0.21.0)** — `parse_addaily` scans `netUsageBaseline` process names |
 | `net_datausage` | process names with network usage | **Shipped (M2, v0.21.0)** — `parse_datausage` scans `ZPROCESS` names + bundle names |
-| `tcc` | apps holding mic/camera/location grants | **Tier B (M2)** |
+| `tcc` | apps holding mic/camera/location grants | **Shipped (M2, v0.23.0)** — `parse_tcc` cross-checks granted permissions against stalkerware bundle IDs |
 | `shortcuts` | automation-based surveillance | **Tier B (M2)** |
 | `webkit_resource_load_statistics` / `webkit_session_resource_log` | in-app webview domains | **Tier B (M2)** |
 | `locationd` / `idstatuscache` / `global_preferences` | supporting artifacts, mostly timeline context | **Out of scope M1** — low-signal / no indicator surface for our feeds |
@@ -60,7 +60,7 @@ MVT modules that evaluate indicators (from the installed package):
 (domains, URLs, emails, bundle IDs, file names/paths, **process names**) is now
 covered by a shipped module — Tier A plus the Tier-B process-activity extraction
 added in M2 (v0.21.0). The remaining MVT modules match Tier-B artifacts still
-scheduled for M2 (TCC, Shortcuts, WebKit) — named in the
+scheduled for M2 (Shortcuts, WebKit) — named in the
 PRD, not unexplained gaps.
 
 ## Indicator-kind parity
