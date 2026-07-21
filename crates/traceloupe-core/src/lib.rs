@@ -20,6 +20,7 @@ pub mod normalize;
 pub mod nska;
 pub mod parsers;
 pub mod query;
+pub mod safety_scan;
 pub mod sidecar;
 
 pub use error::{Error, Result};
