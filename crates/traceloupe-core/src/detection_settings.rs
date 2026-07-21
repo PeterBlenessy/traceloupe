@@ -49,6 +49,9 @@ pub struct DetectionSettings {
     /// Opt-in (default off) to expanding shortened URLs during a scan — the
     /// sole sanctioned exception to the no-backup-data-leaves rule (ADR 0001).
     pub expand_short_urls: bool,
+    /// Optional local folder of custom indicator files (`.stix`/`.stix2`/`.yaml`)
+    /// merged into the scan alongside the bundled feeds (researcher mode).
+    pub custom_indicator_dir: Option<String>,
 }
 
 impl Default for DetectionSettings {
@@ -60,6 +63,7 @@ impl Default for DetectionSettings {
             auto_update_indicators: true,
             fetch_consent: Consent::Unasked,
             expand_short_urls: false,
+            custom_indicator_dir: None,
         }
     }
 }

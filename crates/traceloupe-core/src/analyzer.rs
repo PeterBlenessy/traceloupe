@@ -33,6 +33,7 @@ pub const MODULES: &[&str] = &[
     "profiles",
     "tcc",
     "shortcuts",
+    "webkit",
 ];
 
 /// A process observed running on the device, from a Tier-B artifact
@@ -79,6 +80,18 @@ pub struct ObservedShortcut {
     pub hosts: Vec<String>,
     /// Unix seconds the shortcut was last modified, if known.
     pub modified: Option<i64>,
+}
+
+/// A domain an app's WebKit webview contacted (from per-app
+/// `ResourceLoadStatistics/observations.db` or `full_browsing_session_resourceLog.plist`).
+/// A webview loading a known C2 domain is evidence of in-app spyware activity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedWebDomain {
+    pub domain: String,
+    /// The app whose webview observed the domain (bundle id), when known.
+    pub app: Option<String>,
+    /// Unix seconds last seen, if recorded (WebKit often stores 0).
+    pub last_seen: Option<i64>,
 }
 
 /// A permission an app was granted, from `TCC.db` (Transparency, Consent &
@@ -408,6 +421,8 @@ pub struct ScanInputs<'a> {
     pub grants: &'a [PermissionGrant],
     /// Installed Shortcuts — enables `shortcuts`.
     pub shortcuts: &'a [ObservedShortcut],
+    /// Domains observed by app webviews (WebKit) — enables `webkit`.
+    pub webkit_domains: &'a [ObservedWebDomain],
 }
 
 /// Run a scan. `inputs` carries the Tier-B artifacts (empty for a Passive
@@ -434,6 +449,7 @@ pub fn run_scan(
         .filter(|m| *m != "tcc" || !inputs.grants.is_empty())
         .filter(|m| *m != "profiles" || !inputs.profiles.is_empty())
         .filter(|m| *m != "shortcuts" || !inputs.shortcuts.is_empty())
+        .filter(|m| *m != "webkit" || !inputs.webkit_domains.is_empty())
         .collect();
     conn.execute(
         "INSERT INTO scan_runs (kind, started_at, status, modules_json, feeds_json, indicator_count)
@@ -886,6 +902,39 @@ pub fn run_scan(
                     );
                 }
             }
+            "webkit" => {
+                // Aggregate observations by domain: many apps observe the same
+                // domain, and one matched domain should be a single finding
+                // that names the apps whose webviews saw it.
+                let mut by_domain: HashMap<&str, (Vec<&str>, Option<i64>)> = HashMap::new();
+                for d in inputs.webkit_domains {
+                    let entry = by_domain.entry(d.domain.as_str()).or_default();
+                    if let Some(app) = &d.app {
+                        if !entry.0.contains(&app.as_str()) {
+                            entry.0.push(app.as_str());
+                        }
+                    }
+                    entry.1 = entry.1.max(d.last_seen);
+                }
+                for (domain, (mut apps, last)) in by_domain {
+                    if let Some(ind) = lookup.match_host(&domain.to_ascii_lowercase()) {
+                        apps.sort_unstable();
+                        let by = if apps.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (seen by {})", apps.join(", "))
+                        };
+                        sink.push(Hit {
+                            indicator: ind,
+                            module: "webkit",
+                            ref_kind: "web_domain",
+                            ref_id: None,
+                            context: format!("{domain}{by}"),
+                            event_time: last,
+                        });
+                    }
+                }
+            }
             other => {
                 // Unknown module ids are a programming error upstream; skip.
                 let _ = other;
@@ -1256,6 +1305,57 @@ pub fn parse_shortcuts(db_path: &std::path::Path) -> Result<Vec<ObservedShortcut
 }
 
 // ---------------------------------------------------------------------------
+// WebKit resource-load statistics extraction
+// ---------------------------------------------------------------------------
+
+/// Parse observed domains from a per-app WebKit `observations.db`
+/// (`Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db`). The
+/// `ObservedDomains.registrableDomain` rows are the domains the app's webview
+/// contacted; `lastSeen` is Unix seconds when non-zero (WebKit often stores 0).
+pub fn parse_webkit_observations(db_path: &std::path::Path) -> Result<Vec<(String, Option<i64>)>> {
+    let conn =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let mut stmt = conn.prepare("SELECT registrableDomain, lastSeen FROM ObservedDomains")?;
+    let rows = stmt.query_map([], |r| {
+        let domain: String = r.get(0)?;
+        let last_seen: Option<f64> = r.get(1).ok();
+        Ok((domain, last_seen))
+    })?;
+    Ok(rows
+        .filter_map(|r| r.ok())
+        .map(|(domain, ls)| {
+            let last = ls.filter(|t| *t > 0.0).map(|t| t as i64);
+            (domain, last)
+        })
+        .collect())
+}
+
+/// Parse prevalent-resource origins from a `full_browsing_session_resourceLog.plist`
+/// (older iOS). The `browsingStatistics` array's `PrevalentResourceOrigin`
+/// entries are the observed origins. Empty/malformed logs yield no domains.
+pub fn parse_webkit_session_log(plist_bytes: &[u8]) -> Result<Vec<String>> {
+    let root = plist::Value::from_reader(std::io::Cursor::new(plist_bytes))
+        .map_err(|e| crate::error::Error::Parse(format!("resourceLog plist: {e}")))?;
+    let Some(stats) = root
+        .as_dictionary()
+        .and_then(|d| d.get("browsingStatistics"))
+        .and_then(|v| v.as_array())
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(stats
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .as_dictionary()
+                .and_then(|d| d.get("PrevalentResourceOrigin"))
+                .and_then(|v| v.as_string())
+                .map(str::to_string)
+        })
+        .collect())
+}
+
+// ---------------------------------------------------------------------------
 // CSV report export
 // ---------------------------------------------------------------------------
 
@@ -1537,6 +1637,29 @@ mod tests {
         ]
     }
 
+    fn test_webkit_domains() -> Vec<ObservedWebDomain> {
+        vec![
+            // Two apps' webviews both observed the indicator domain → one
+            // aggregated finding naming both apps.
+            ObservedWebDomain {
+                domain: "evil.example".into(),
+                app: Some("com.evil.tracker".into()),
+                last_seen: Some(1_700_002_000),
+            },
+            ObservedWebDomain {
+                domain: "evil.example".into(),
+                app: Some("com.burbn.instagram".into()),
+                last_seen: Some(1_700_002_100),
+            },
+            // A benign ad domain → no finding.
+            ObservedWebDomain {
+                domain: "adition.com".into(),
+                app: Some("com.burbn.instagram".into()),
+                last_seen: None,
+            },
+        ]
+    }
+
     fn seeded_db() -> CacheDb {
         let db = CacheDb::open_in_memory().unwrap();
         let c = db.conn();
@@ -1598,6 +1721,7 @@ mod tests {
         let profiles = test_profiles();
         let grants = test_grants();
         let shortcuts = test_shortcuts();
+        let webkit_domains = test_webkit_domains();
         let mut seen_modules = Vec::new();
         let outcome = run_scan(
             &db,
@@ -1610,6 +1734,7 @@ mod tests {
                 profiles: &profiles,
                 grants: &grants,
                 shortcuts: &shortcuts,
+                webkit_domains: &webkit_domains,
             },
             "[]",
             &cancel,
@@ -1669,6 +1794,20 @@ mod tests {
         // shortcuts: the "Backup Photos" action posts to an indicator host; the
         // benign pinterest shortcut does not match. One finding.
         assert_eq!(count(&db, "shortcuts"), 1);
+        // webkit: the indicator domain observed by two apps' webviews aggregates
+        // into one finding naming both apps; the benign ad domain does not match.
+        assert_eq!(count(&db, "webkit"), 1);
+        let webkit_ctx: String = db
+            .conn()
+            .query_row(
+                "SELECT context FROM findings WHERE module='webkit'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            webkit_ctx.contains("com.evil.tracker") && webkit_ctx.contains("com.burbn.instagram")
+        );
 
         // Severity flows from the indicator.
         let critical: i64 = db
@@ -1967,6 +2106,51 @@ mod tests {
         // The shortcut with no action data has no hosts.
         let empty = shortcuts.iter().find(|s| s.name == "Empty").unwrap();
         assert!(empty.hosts.is_empty());
+    }
+
+    #[test]
+    fn parse_webkit_observations_reads_domains() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("observations.db");
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ObservedDomains (domainID INTEGER PRIMARY KEY,
+                registrableDomain TEXT NOT NULL, lastSeen REAL NOT NULL, hadUserInteraction INTEGER);
+             INSERT INTO ObservedDomains VALUES (1, 'evil.example', 1700000000.0, 1);
+             INSERT INTO ObservedDomains VALUES (2, 'adition.com', 0.0, 0);",
+        )
+        .unwrap();
+        drop(conn);
+        let domains = parse_webkit_observations(&path).unwrap();
+        assert_eq!(domains.len(), 2);
+        let evil = domains.iter().find(|(d, _)| d == "evil.example").unwrap();
+        assert_eq!(evil.1, Some(1700000000));
+        // lastSeen 0 → None.
+        let ad = domains.iter().find(|(d, _)| d == "adition.com").unwrap();
+        assert_eq!(ad.1, None);
+    }
+
+    #[test]
+    fn parse_webkit_session_log_reads_origins() {
+        let mut entry = plist::Dictionary::new();
+        entry.insert(
+            "PrevalentResourceOrigin".into(),
+            plist::Value::String("evil.example".into()),
+        );
+        let mut root = plist::Dictionary::new();
+        root.insert(
+            "browsingStatistics".into(),
+            plist::Value::Array(vec![plist::Value::Dictionary(entry)]),
+        );
+        let mut bytes = Vec::new();
+        plist::to_writer_binary(&mut bytes, &plist::Value::Dictionary(root)).unwrap();
+        let origins = parse_webkit_session_log(&bytes).unwrap();
+        assert_eq!(origins, vec!["evil.example".to_string()]);
+        // A plist without browsingStatistics yields nothing, not an error.
+        let empty = plist::Value::Dictionary(plist::Dictionary::new());
+        let mut eb = Vec::new();
+        plist::to_writer_binary(&mut eb, &empty).unwrap();
+        assert!(parse_webkit_session_log(&eb).unwrap().is_empty());
     }
 
     #[test]

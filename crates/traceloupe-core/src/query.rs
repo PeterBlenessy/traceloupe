@@ -2186,6 +2186,10 @@ pub struct Finding {
     pub ref_kind: Option<String>,
     pub ref_id: Option<i64>,
     pub event_time: Option<i64>,
+    /// True when this finding did not appear in the previous completed scan of
+    /// this backup — i.e. it is new since the last scan. False on the first
+    /// scan (no baseline to diff against).
+    pub is_new: bool,
 }
 
 pub fn list_scan_runs(cache: &CacheDb) -> Result<Vec<ScanRun>> {
@@ -2233,8 +2237,26 @@ pub fn latest_scan_run(cache: &CacheDb) -> Result<Option<i64>> {
         .optional()?)
 }
 
+/// The completed run immediately before `run_id` (by start time), for diffing.
+pub fn previous_completed_run(cache: &CacheDb, run_id: i64) -> Result<Option<i64>> {
+    Ok(cache
+        .conn()
+        .query_row(
+            "SELECT id FROM scan_runs
+             WHERE status = 'done'
+               AND started_at < (SELECT started_at FROM scan_runs WHERE id = ?1)
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+            [run_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// Findings for a run, most severe first. `min_severity` filters (info counts
-/// everything). `module` optionally restricts to one analyzer module.
+/// everything). `module` optionally restricts to one analyzer module. Each
+/// finding's `is_new` flag is set by diffing against the previous completed
+/// scan (same module + matched value + source artifact) — false when there is
+/// no earlier scan to compare against.
 pub fn list_findings(
     cache: &CacheDb,
     run_id: i64,
@@ -2247,16 +2269,29 @@ pub fn list_findings(
         _ => 1,
     };
     let min = min_severity.map(rank).unwrap_or(1);
+    let prev = previous_completed_run(cache, run_id)?;
     let conn = cache.conn();
+    // A finding is "new" when there is a previous run AND no finding in it
+    // shares this one's (module, matched_value, ref_kind, ref_id). `IS` treats
+    // NULL ref_kind/ref_id as equal so structural findings match correctly.
     let mut stmt = conn.prepare(
-        "SELECT id, run_id, severity, kind, module, malware, matched_value, context,
-                ref_kind, ref_id, event_time,
-                CASE severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END AS rank
-         FROM findings
-         WHERE run_id = ?1 AND rank >= ?2 AND (?3 IS NULL OR module = ?3)
-         ORDER BY rank DESC, module, id",
+        "SELECT f.id, f.run_id, f.severity, f.kind, f.module, f.malware, f.matched_value,
+                f.context, f.ref_kind, f.ref_id, f.event_time,
+                CASE f.severity WHEN 'critical' THEN 3 WHEN 'warning' THEN 2 ELSE 1 END AS rank,
+                CASE
+                  WHEN ?4 IS NULL THEN 0
+                  WHEN EXISTS (
+                    SELECT 1 FROM findings p
+                    WHERE p.run_id = ?4 AND p.module = f.module
+                      AND p.matched_value = f.matched_value
+                      AND p.ref_kind IS f.ref_kind AND p.ref_id IS f.ref_id
+                  ) THEN 0 ELSE 1
+                END AS is_new
+         FROM findings f
+         WHERE f.run_id = ?1 AND rank >= ?2 AND (?3 IS NULL OR f.module = ?3)
+         ORDER BY rank DESC, f.module, f.id",
     )?;
-    let rows = stmt.query_map(rusqlite::params![run_id, min, module], |r| {
+    let rows = stmt.query_map(rusqlite::params![run_id, min, module, prev], |r| {
         Ok(Finding {
             id: r.get(0)?,
             run_id: r.get(1)?,
@@ -2269,6 +2304,7 @@ pub fn list_findings(
             ref_kind: r.get(8)?,
             ref_id: r.get(9)?,
             event_time: r.get(10)?,
+            is_new: r.get::<_, i64>(12)? != 0,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2412,5 +2448,44 @@ mod tests {
         );
         assert_eq!(media_blob(&cache, 3).unwrap(), None);
         assert_eq!(media_blob(&cache, 999).unwrap(), None);
+    }
+
+    #[test]
+    fn findings_diff_flags_new_since_previous_scan() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let c = cache.conn();
+        // Older run (id 1) with one finding; newer run (id 2) with the same
+        // finding plus a new one.
+        c.execute_batch(
+            "INSERT INTO scan_runs (id, kind, started_at, status) VALUES (1, 'explicit', 100, 'done');
+             INSERT INTO scan_runs (id, kind, started_at, status) VALUES (2, 'explicit', 200, 'done');
+             INSERT INTO findings (run_id, severity, kind, module, malware, matched_value, ref_kind, ref_id)
+                VALUES (1, 'warning', 'domain', 'safari', 'M', 'evil.example', 'safari_history', 7);
+             INSERT INTO findings (run_id, severity, kind, module, malware, matched_value, ref_kind, ref_id)
+                VALUES (2, 'warning', 'domain', 'safari', 'M', 'evil.example', 'safari_history', 7);
+             INSERT INTO findings (run_id, severity, kind, module, malware, matched_value, ref_kind, ref_id)
+                VALUES (2, 'critical', 'bundle_id', 'apps', 'Stalk', 'com.evil.app', 'app', NULL);",
+        )
+        .unwrap();
+
+        // First run: no baseline → nothing is "new".
+        let first = list_findings(&cache, 1, None, None).unwrap();
+        assert!(first.iter().all(|f| !f.is_new));
+
+        // Second run: the carried-over safari finding is not new; the app one is.
+        let second = list_findings(&cache, 2, None, None).unwrap();
+        let carried = second
+            .iter()
+            .find(|f| f.matched_value == "evil.example")
+            .unwrap();
+        assert!(!carried.is_new);
+        let fresh = second
+            .iter()
+            .find(|f| f.matched_value == "com.evil.app")
+            .unwrap();
+        assert!(fresh.is_new);
+
+        assert_eq!(previous_completed_run(&cache, 2).unwrap(), Some(1));
+        assert_eq!(previous_completed_run(&cache, 1).unwrap(), None);
     }
 }

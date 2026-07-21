@@ -85,22 +85,30 @@ impl IndicatorSet {
     /// the union of sources and the highest severity (the same domain can be
     /// both a vendor website and a C2 endpoint).
     pub fn from_feeds(feeds: Vec<LoadedFeed>) -> Self {
+        Self::dedupe(feeds.into_iter().flat_map(|f| f.indicators))
+    }
+
+    /// Combine two sets (e.g. the bundled snapshot plus a user's custom
+    /// indicators), re-deduplicating so a value present in both collapses.
+    pub fn merged_with(self, other: IndicatorSet) -> IndicatorSet {
+        Self::dedupe(self.indicators.into_iter().chain(other.indicators))
+    }
+
+    fn dedupe(indicators: impl Iterator<Item = Indicator>) -> Self {
         let mut by_key: HashMap<(IndicatorKind, String, String), Indicator> = HashMap::new();
-        for feed in feeds {
-            for ind in feed.indicators {
-                let key = (ind.kind, ind.value.clone(), ind.malware.clone());
-                match by_key.get_mut(&key) {
-                    Some(existing) => {
-                        existing.severity = existing.severity.max(ind.severity);
-                        for s in ind.sources {
-                            if !existing.sources.contains(&s) {
-                                existing.sources.push(s);
-                            }
+        for ind in indicators {
+            let key = (ind.kind, ind.value.clone(), ind.malware.clone());
+            match by_key.get_mut(&key) {
+                Some(existing) => {
+                    existing.severity = existing.severity.max(ind.severity);
+                    for s in ind.sources {
+                        if !existing.sources.contains(&s) {
+                            existing.sources.push(s);
                         }
                     }
-                    None => {
-                        by_key.insert(key, ind);
-                    }
+                }
+                None => {
+                    by_key.insert(key, ind);
                 }
             }
         }
@@ -552,6 +560,107 @@ pub fn load_snapshot_dir(dir: &std::path::Path) -> Result<(IndicatorSet, Snapsho
     ))
 }
 
+/// Load user-supplied indicator files from a custom folder (researcher mode,
+/// parity with iMazing). Files are matched by extension — `.stix`/`.stix2`
+/// parse as STIX2 bundles, `.yaml`/`.yml` as Echap-format YAML — with no
+/// manifest required. A file that fails to parse is reported (count 0) and
+/// skipped, never failing the whole load. A missing directory yields an empty
+/// set, not an error, so a stale settings path degrades gracefully.
+pub fn load_custom_dir(dir: &std::path::Path) -> Result<(IndicatorSet, SnapshotInfo)> {
+    let mut feeds = Vec::new();
+    let mut infos = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((
+                IndicatorSet::default(),
+                SnapshotInfo {
+                    generated_at: String::new(),
+                    feeds: Vec::new(),
+                },
+            ));
+        }
+        Err(e) => return Err(Error::io(dir, e)),
+    };
+
+    let mut files: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+
+    for path in files {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        // `class` is the researcher's threat framing; a custom STIX bundle is
+        // graded by indicator kind (Mercenary), custom YAML as Stalkerware.
+        let (is_stix, class) = match ext.as_str() {
+            "stix" | "stix2" | "json" => (true, FeedClass::Mercenary),
+            "yaml" | "yml" => (false, FeedClass::Stalkerware),
+            _ => continue,
+        };
+        let source = format!(
+            "custom/{}",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("?")
+        );
+        let loaded = std::fs::read_to_string(&path)
+            .map_err(|e| Error::io(&path, e))
+            .and_then(|text| {
+                if is_stix {
+                    load_stix_bundle(&text, &source, class)
+                } else {
+                    load_echap_yaml(&text, &source, class)
+                }
+            });
+        match loaded {
+            Ok(feed) => {
+                infos.push(FeedInfo {
+                    source,
+                    class: "custom".into(),
+                    count: feed.indicators.len(),
+                    skipped: feed.skipped.len(),
+                });
+                feeds.push(feed);
+            }
+            Err(e) => infos.push(FeedInfo {
+                source: format!("{source} (failed: {e})"),
+                class: "custom".into(),
+                count: 0,
+                skipped: 0,
+            }),
+        }
+    }
+    Ok((
+        IndicatorSet::from_feeds(feeds),
+        SnapshotInfo {
+            generated_at: String::new(),
+            feeds: infos,
+        },
+    ))
+}
+
+/// Load the scan's full indicator set: the bundled/fetched snapshot, plus a
+/// user's custom folder when configured, merged and re-deduplicated. The
+/// returned `SnapshotInfo` lists both the snapshot feeds and any custom feeds.
+pub fn load_indicators(
+    snapshot_dir: &std::path::Path,
+    custom_dir: Option<&std::path::Path>,
+) -> Result<(IndicatorSet, SnapshotInfo)> {
+    let (set, mut info) = load_snapshot_dir(snapshot_dir)?;
+    if let Some(custom) = custom_dir {
+        let (custom_set, custom_info) = load_custom_dir(custom)?;
+        if !custom_set.is_empty() {
+            info.feeds.extend(custom_info.feeds);
+            return Ok((set.merged_with(custom_set), info));
+        }
+    }
+    Ok((set, info))
+}
+
 /// The snapshot directory vendored into the repo (and bundled as an app
 /// resource). Callers with a Tauri resource dir should prefer that path;
 /// this constant serves tests and dev builds running from the workspace.
@@ -762,5 +871,87 @@ mod tests {
             set.indicators[0].sources,
             vec!["a".to_string(), "b".to_string()]
         );
+    }
+
+    fn one(kind: IndicatorKind, value: &str, sev: Severity) -> LoadedFeed {
+        LoadedFeed {
+            source: "s".into(),
+            indicators: vec![Indicator {
+                kind,
+                value: value.into(),
+                malware: "M".into(),
+                sources: vec!["s".into()],
+                severity: sev,
+            }],
+            skipped: vec![],
+        }
+    }
+
+    #[test]
+    fn merged_with_rededupes_across_sets() {
+        let a = IndicatorSet::from_feeds(vec![
+            one(IndicatorKind::Domain, "x.com", Severity::Info),
+            one(IndicatorKind::Domain, "a.com", Severity::Warning),
+        ]);
+        let b = IndicatorSet::from_feeds(vec![
+            one(IndicatorKind::Domain, "x.com", Severity::Critical),
+            one(IndicatorKind::Domain, "b.com", Severity::Info),
+        ]);
+        let merged = a.merged_with(b);
+        // x.com deduped (max severity Critical); a.com + b.com distinct → 3.
+        assert_eq!(merged.len(), 3);
+        let x = merged
+            .indicators
+            .iter()
+            .find(|i| i.value == "x.com")
+            .unwrap();
+        assert_eq!(x.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn load_custom_dir_reads_stix_and_yaml_by_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("mine.stix2"),
+            r#"{"type":"bundle","objects":[
+                {"type":"malware","id":"malware--1","name":"MyThreat"},
+                {"type":"indicator","id":"indicator--1","pattern":"[domain-name:value = 'bad.example']"}
+            ]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("apps.yaml"),
+            "- name: MyStalker\n  type: stalkerware\n  packages: [com.my.stalker]\n",
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("readme.txt"), "ignored").unwrap();
+
+        let (set, info) = load_custom_dir(tmp.path()).unwrap();
+        assert_eq!(info.feeds.len(), 2); // stix + yaml, not the .txt
+        assert!(set.indicators.iter().any(|i| i.value == "bad.example"));
+        assert!(set.indicators.iter().any(|i| i.value == "com.my.stalker"));
+        assert!(info.feeds.iter().all(|f| f.class == "custom"));
+    }
+
+    #[test]
+    fn load_custom_dir_missing_is_empty_not_error() {
+        let (set, info) = load_custom_dir(std::path::Path::new("/no/such/dir/xyz")).unwrap();
+        assert!(set.is_empty());
+        assert!(info.feeds.is_empty());
+    }
+
+    #[test]
+    fn load_custom_dir_bad_file_is_reported_not_fatal() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("broken.stix2"), "not json").unwrap();
+        std::fs::write(
+            tmp.path().join("good.yaml"),
+            "- name: Ok\n  type: stalkerware\n  packages: [com.ok.app]\n",
+        )
+        .unwrap();
+        let (set, info) = load_custom_dir(tmp.path()).unwrap();
+        assert_eq!(info.feeds.len(), 2);
+        assert!(info.feeds.iter().any(|f| f.source.contains("failed")));
+        assert!(set.indicators.iter().any(|i| i.value == "com.ok.app"));
     }
 }
