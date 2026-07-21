@@ -1533,6 +1533,123 @@ fn set_detection_settings(app: AppHandle, settings: DetectionSettings) -> Result
     settings.save(&data).map_err(|e| e.to_string())
 }
 
+// --- Opt-in shortened-URL de-shortener (ADR 0001 exception) ----------------
+//
+// Resolving a shortened link contacts a remote host with a URL from the backup
+// — the sole sanctioned exception to "nothing leaves the machine". It is a
+// deliberate, per-link, user-approved action (never automatic, never during a
+// Passive Check). Resolution only ever connects to allowlisted shortener hosts
+// and reveals the destination from the redirect `Location` WITHOUT connecting
+// to it, so the final (possibly attacker-controlled) target is never contacted.
+
+const DESHORTEN_META_KEY: &str = "security_deshorten_auto_approve";
+
+/// Whether the user has opted out of the per-use approval prompt *for this
+/// backup* (stored in the backup's own cache; never global). Resets on
+/// re-import and clears when the backup is forgotten.
+#[tauri::command]
+async fn deshorten_auto_approve_get(active: State<'_, ActiveBackup>) -> Result<bool, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        Ok::<bool, traceloupe_core::Error>(
+            cache.get_meta(DESHORTEN_META_KEY)?.as_deref() == Some("1"),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn deshorten_auto_approve_set(
+    active: State<'_, ActiveBackup>,
+    enabled: bool,
+) -> Result<(), String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path)?;
+        cache.set_meta(DESHORTEN_META_KEY, if enabled { "1" } else { "0" })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Find known shortener URLs in text (a finding's context/value), so the UI can
+/// offer to expand them. Pure and local — no network.
+#[tauri::command]
+fn find_shortener_urls(text: String) -> Vec<String> {
+    traceloupe_core::shorteners::find_shortener_urls(&text)
+}
+
+/// Reveal a shortened URL's destination. The input must be a known shortener;
+/// only shortener hosts are ever contacted, and the revealed target is read
+/// from the redirect Location without being visited. SSRF-guarded by the same
+/// `PublicOnlyResolver` as link previews.
+#[tauri::command]
+async fn expand_short_url(url: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || resolve_short_url(&url))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn resolve_short_url(input: &str) -> Result<String, String> {
+    use traceloupe_core::shorteners::is_shortener_host;
+    // Refuse anything that isn't a known shortener — we never fetch arbitrary
+    // hosts, only the allowlisted resolvers the user approved.
+    let start_host = url_host(input).ok_or("malformed URL")?;
+    if !is_shortener_host(&start_host) {
+        return Err("not a recognized shortened link".into());
+    }
+    let agent = ureq::builder()
+        .redirects(0)
+        .resolver(PublicOnlyResolver)
+        .timeout(std::time::Duration::from_secs(8))
+        .build();
+
+    let mut current = input.to_string();
+    for _hop in 0..6 {
+        let lower = current.to_ascii_lowercase();
+        if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+            return Err("unsupported URL scheme".into());
+        }
+        let host = url_host(&current).ok_or("malformed URL")?;
+        // Only ever contact shortener hosts; a non-shortener is the revealed
+        // destination and must be returned without a request.
+        if !is_shortener_host(&host) {
+            return Ok(current);
+        }
+        if !host_is_public(&host) {
+            return Err("refusing to fetch a private or loopback host".into());
+        }
+        let resp = match agent
+            .get(&current)
+            .set("User-Agent", "Mozilla/5.0 TraceLoupe/deshorten")
+            .call()
+        {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, r)) if (300..400).contains(&code) => r,
+            Err(e) => return Err(format!("request failed: {e}")),
+        };
+        if (300..400).contains(&resp.status()) {
+            let loc = resp.header("Location").ok_or("redirect without Location")?;
+            let next = absolutize(&current, loc);
+            // If it points off the shortener, that's the answer — return it
+            // without visiting. If it's another shortener, follow that hop.
+            let next_host = url_host(&next).ok_or("malformed redirect target")?;
+            if !is_shortener_host(&next_host) {
+                return Ok(next);
+            }
+            current = next;
+            continue;
+        }
+        // A shortener that returns 2xx (no redirect) reveals nothing to follow.
+        return Err("the link did not redirect to a destination".into());
+    }
+    Err("too many redirects".into())
+}
+
 /// Forget an imported backup: delete its cache DB and all derived caches
 /// (media/thumbs), its work dir, and its stored password. Does not touch the
 /// original backup on disk. Re-importing recreates everything.
@@ -3547,6 +3664,10 @@ pub fn run() {
             set_detection_settings,
             run_passive_check_now,
             export_scan_report,
+            find_shortener_urls,
+            expand_short_url,
+            deshorten_auto_approve_get,
+            deshorten_auto_approve_set,
             safety_scan_cmd::get_safety_scan_model_status,
             safety_scan_cmd::download_safety_scan_model,
             safety_scan_cmd::cancel_safety_scan_model_download,
@@ -3597,5 +3718,22 @@ mod tests {
 
         let ok = PublicOnlyResolver.resolve("8.8.8.8:80").unwrap();
         assert_eq!(ok, vec!["8.8.8.8:80".parse().unwrap()]);
+    }
+
+    #[test]
+    fn deshorten_refuses_non_shortener_without_network() {
+        // A non-shortener host is rejected before any request is made.
+        let err = resolve_short_url("https://example.com/whatever").unwrap_err();
+        assert!(err.contains("not a recognized shortened link"));
+        // Malformed input, likewise no network.
+        assert!(resolve_short_url("not a url").is_err());
+    }
+
+    #[test]
+    fn deshorten_rejects_unsupported_scheme_on_shortener() {
+        // Host is a shortener, but the scheme isn't http(s) → rejected in-loop,
+        // still no outbound request.
+        let err = resolve_short_url("ftp://bit.ly/abc").unwrap_err();
+        assert!(err.contains("unsupported URL scheme"));
     }
 }
