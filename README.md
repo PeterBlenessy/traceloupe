@@ -22,6 +22,12 @@ cargo test -p traceloupe-core   # core tests
 pnpm dev              # frontend only, in a browser with mocked IPC
 ```
 
+**Safety Scan (experimental).** The local-AI content scan runs llama.cpp's
+`llama-server` as a sandboxed sidecar. For local runs, `pnpm setup:llama`
+stages a pre-built binary; a release `.app` builds it statically from source
+(`pnpm build:llama`). The dev/prod split and the sandbox are documented in
+[docs/safety-scan-sidecar.md](docs/safety-scan-sidecar.md).
+
 **Imports are fully native.** TraceLoupe parses backups with its own Rust
 parsers (~35s for a full import) — no iLEAPP, no Python, no engine download,
 and no network access required. iLEAPP is used only as a *development-time
