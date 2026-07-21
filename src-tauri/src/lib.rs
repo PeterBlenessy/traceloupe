@@ -689,11 +689,12 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
         }
     };
     let snapshot_dir = active_indicators_dir(app);
+    let custom_dir = settings.custom_indicator_dir.clone().map(PathBuf::from);
     let cp = cache_path.to_path_buf();
     let app2 = app.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let db = CacheDb::open(&cp)?;
-        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let (set, info) = indicators::load_indicators(&snapshot_dir, custom_dir.as_deref())?;
         let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
         analyzer::run_scan(
             &db,
@@ -1339,9 +1340,10 @@ async fn run_security_scan(
     let app_progress = app.clone();
     let cp = cache_path.clone();
     let modules: Vec<&'static str> = scan_kind.default_modules();
+    let custom_dir = settings.custom_indicator_dir.clone().map(PathBuf::from);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let db = CacheDb::open(&cp)?;
-        let (set, info) = indicators::load_snapshot_dir(&snapshot_dir)?;
+        let (set, info) = indicators::load_indicators(&snapshot_dir, custom_dir.as_deref())?;
         let feeds_json = serde_json::to_string(&info.feeds).unwrap_or_else(|_| "[]".into());
         let mut sweep = manifest_entries.map(|v| v.into_iter());
         let sweep_ref = sweep
@@ -1457,12 +1459,20 @@ async fn list_findings(
     .map_err(|e| e.to_string())
 }
 
-/// Load info about the active indicator snapshot (feed counts + freshness).
+/// Load info about the active indicator snapshot (feed counts + freshness),
+/// including any custom indicator folder the user configured.
 #[tauri::command]
 async fn get_indicator_info(app: AppHandle) -> Result<SnapshotInfo, String> {
     let dir = active_indicators_dir(&app);
+    let custom_dir = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|d| DetectionSettings::load(&d).ok())
+        .and_then(|s| s.custom_indicator_dir)
+        .map(PathBuf::from);
     tauri::async_runtime::spawn_blocking(move || {
-        indicators::load_snapshot_dir(&dir).map(|(_, info)| info)
+        indicators::load_indicators(&dir, custom_dir.as_deref()).map(|(_, info)| info)
     })
     .await
     .map_err(|e| e.to_string())?
