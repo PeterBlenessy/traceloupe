@@ -9,7 +9,7 @@
 //!   summarizing → done/error/cancelled)
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -33,6 +33,22 @@ pub struct SafetyScanGate(pub tauri::async_runtime::Mutex<()>);
 /// would race on the temp file.
 #[derive(Default)]
 pub struct SafetyDownloadGate(pub tauri::async_runtime::Mutex<()>);
+
+/// Live snapshot of the in-flight model download, so the UI can rehydrate after
+/// a refresh (the download runs in this process and survives a webview reload,
+/// but the frontend loses its state). `None` when no download is running.
+#[derive(Default, Clone)]
+pub struct SafetyDownloadStatus(pub Arc<Mutex<Option<DownloadSnapshot>>>);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadSnapshot {
+    pub model_id: String,
+    pub received: u64,
+    pub total: u64,
+    /// "downloading" | "verifying"
+    pub phase: String,
+}
 
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
 fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
@@ -112,6 +128,7 @@ pub async fn download_safety_scan_model(
     app: AppHandle,
     gate: State<'_, SafetyDownloadGate>,
     cancel_state: State<'_, SafetyDownloadCancel>,
+    status_state: State<'_, SafetyDownloadStatus>,
     model_id: String,
 ) -> Result<(), String> {
     let _guard = gate
@@ -123,20 +140,43 @@ pub async fn download_safety_scan_model(
     let cancel = CancelToken::new();
     *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
 
+    // Publish a live snapshot so a refreshed UI can rehydrate this download.
+    let status = status_state.0.clone();
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = Some(DownloadSnapshot {
+        model_id: model_id.clone(),
+        received: 0,
+        total: spec.size_bytes,
+        phase: "downloading".into(),
+    });
+
     let app2 = app.clone();
+    let status_w = status.clone();
+    let model_id_c = model_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut last_emit = std::time::Instant::now();
         models::download_model(spec, &dir, &cancel, |p| {
             let ev = match p {
                 InstallProgress::Downloading { received, total } => {
-                    // ~5 GB at 256 KiB per callback: throttle to ~5 events/s.
+                    // Status is cheap to update every tick (drives rehydration);
+                    // the event is throttled (~5/s) to keep the UI light.
+                    *status_w.lock().unwrap_or_else(|e| e.into_inner()) = Some(DownloadSnapshot {
+                        model_id: model_id_c.clone(),
+                        received,
+                        total,
+                        phase: "downloading".into(),
+                    });
                     if last_emit.elapsed() < Duration::from_millis(200) {
                         return;
                     }
                     last_emit = std::time::Instant::now();
                     ModelProgressEvent::Downloading { received, total }
                 }
-                InstallProgress::Verifying => ModelProgressEvent::Verifying,
+                InstallProgress::Verifying => {
+                    if let Some(s) = status_w.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                        s.phase = "verifying".into();
+                    }
+                    ModelProgressEvent::Verifying
+                }
                 InstallProgress::Done => ModelProgressEvent::Done,
             };
             let _ = app2.emit("safetyscan://model-progress", ev);
@@ -144,6 +184,9 @@ pub async fn download_safety_scan_model(
     })
     .await
     .map_err(|e| e.to_string())?;
+
+    // The download is over (success or failure) — clear the live snapshot.
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     match result {
         Ok(_) => Ok(()),
@@ -158,6 +201,19 @@ pub async fn download_safety_scan_model(
             Err(msg)
         }
     }
+}
+
+/// The in-flight model download, if any — lets a refreshed UI rehydrate its
+/// progress instead of going blank (and then colliding with the download gate).
+#[tauri::command]
+pub fn get_safety_scan_download_status(
+    status_state: State<'_, SafetyDownloadStatus>,
+) -> Option<DownloadSnapshot> {
+    status_state
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 #[tauri::command]

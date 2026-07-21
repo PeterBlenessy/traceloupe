@@ -596,6 +596,14 @@ export type SafetyModelProgressEvent =
   | { phase: "done" }
   | { phase: "error"; message: string };
 
+/** In-flight model download snapshot, for rehydrating the UI after a refresh. */
+export interface SafetyModelDownloadStatus {
+  modelId: string;
+  received: number;
+  total: number;
+  phase: "downloading" | "verifying";
+}
+
 export type SafetyScanEvent =
   | { phase: "loading" }
   | { phase: "classifying"; done: number; total: number; findings: number }
@@ -864,6 +872,8 @@ export interface TraceLoupeClient {
   /** Download a catalog model (progress on `safetyscan://model-progress`). */
   downloadSafetyScanModel(modelId: string): Promise<void>;
   cancelSafetyScanModelDownload(): Promise<void>;
+  /** The in-flight download, if any — lets the UI rehydrate after a refresh. */
+  getSafetyScanDownloadStatus(): Promise<SafetyModelDownloadStatus | null>;
   /** Start a Safety Scan over the active backup. Progress arrives on
    *  `safetyscan://progress`; rejects if one is already running. */
   runSafetyScan(opts: {
@@ -1226,6 +1236,8 @@ const tauriClient: TraceLoupeClient = {
     invoke<SafetyModelStatus>("get_safety_scan_model_status"),
   downloadSafetyScanModel: (modelId) =>
     invoke("download_safety_scan_model", { modelId }),
+  getSafetyScanDownloadStatus: () =>
+    invoke<SafetyModelDownloadStatus | null>("get_safety_scan_download_status"),
   cancelSafetyScanModelDownload: () =>
     invoke("cancel_safety_scan_model_download"),
   runSafetyScan: (opts) =>
@@ -2937,6 +2949,7 @@ export const mockClient: TraceLoupeClient = {
     ],
     readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,
   }),
+  getSafetyScanDownloadStatus: async () => null,
   downloadSafetyScanModel: async () => {
     mockSafetyModelInstalled = true;
   },
