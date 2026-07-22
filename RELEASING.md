@@ -16,8 +16,9 @@ release is a normal commit + PR — there is no separate publish step.
    `src-tauri/tauri.conf.json`, and refreshes `Cargo.lock`.
 
 2. **Write the CHANGELOG.** Add a `## [0.30.0] — YYYY-MM-DD` section describing
-   what shipped, and — for a **new minor** — a row in the milestone table at the
-   top. Reset `## [Unreleased]` to `_Nothing yet._`.
+   what shipped — for a **new minor**, open it with a one-line **bold milestone
+   summary** so the section headers read as a milestone index. Reset
+   `## [Unreleased]` to `_Nothing yet._`.
 
    > Tip: `git log <last-release-commit>..origin/main` shows everything that has
    > accumulated since the previous version bump — the raw material for the entry.

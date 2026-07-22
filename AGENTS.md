@@ -168,7 +168,8 @@ create a worktree instead.
 - **Cutting a release: follow [`RELEASING.md`](RELEASING.md).** Never bump the
   version by hand-editing one manifest — run `scripts/release.sh X.Y.Z` (bumps
   `package.json` + workspace `Cargo.toml` + `tauri.conf.json` + `Cargo.lock`
-  together), add the `## [X.Y.Z]` CHANGELOG section (+ a milestone-table row for
-  a new minor), and run `scripts/check-releases.sh`. The `vX.Y.Z` tag is created
+  together), add the `## [X.Y.Z]` CHANGELOG section (a new minor opens with a
+  one-line bold milestone summary), and run `scripts/check-releases.sh`. The
+  `vX.Y.Z` tag is created
   automatically on merge to main — don't tag by hand. CI fails a bump that has
   no CHANGELOG entry.

@@ -4,8 +4,9 @@
 #
 #   scripts/release.sh 0.30.0
 #
-# Then: add a CHANGELOG "## [X.Y.Z] — <date>" section (and, for a new minor, a
-# milestone-table row), commit as "Release vX.Y.Z — <theme>", and open a PR.
+# Then: add a CHANGELOG "## [X.Y.Z] — <date>" section (open a new minor with a
+# one-line bold milestone summary), commit as "Release vX.Y.Z — <theme>", and
+# open a PR.
 # The git tag is created automatically when it lands on main
 # (.github/workflows/release-tag.yml). Run scripts/check-releases.sh to verify.
 set -euo pipefail
@@ -33,8 +34,8 @@ esc=${new//./\\.}
 if grep -qE "^## \[$esc\]" CHANGELOG.md; then
   echo "✓ CHANGELOG already has a [$new] section."
 else
-  echo "⚠  CHANGELOG.md has no '## [$new]' section yet — add one (and a"
-  echo "   milestone-table row if this is a new minor) before committing."
+  echo "⚠  CHANGELOG.md has no '## [$new]' section yet — add one (open a new"
+  echo "   minor with a one-line bold milestone summary) before committing."
 fi
 echo "Next: edit CHANGELOG.md, commit as 'Release v$new — <theme>', open a PR."
 echo "Verify with: scripts/check-releases.sh"

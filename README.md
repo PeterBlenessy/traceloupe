@@ -4,7 +4,7 @@ A privacy-first macOS app that opens, decrypts, and lets you browse the
 contents of your own iPhone backup — photos, messages, contacts, calls,
 Safari history, and Notes. All processing is local; nothing leaves your Mac.
 
-- **Product description:** [docs/product-architecture-description.md](docs/product-architecture-description.md)
+- **Product description:** [docs/product-overview.md](docs/product-overview.md)
 - **Architecture:** [docs/architecture.md](docs/architecture.md)
 - **All documentation:** [docs/](docs/)
 

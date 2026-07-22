@@ -176,7 +176,7 @@ Offloaded media:
 
 ## Flagged ambiguities
 
-- "Fully local / offline" was used to mean both "backup data stays local" and "the app never touches the network" — resolved: the **Privacy promise** covers backup-derived data only; disclosed operational traffic is allowed. Existing docs (docs/product-architecture-description.md §5, PRD §8) use the overstated phrasing and should be updated.
+- "Fully local / offline" was used to mean both "backup data stays local" and "the app never touches the network" — resolved: the **Privacy promise** covers backup-derived data only; disclosed operational traffic is allowed. Existing docs (docs/product-overview.md §5, PRD §8) use the overstated phrasing and should be updated.
 - "iCloud access" was used to mean both the sanctioned Data & Privacy export and
   the private authenticated protocol — resolved: these are **Sanctioned Export**
   (T1) and **Live Fetch** (T2), materially different in legality, risk, and UX.

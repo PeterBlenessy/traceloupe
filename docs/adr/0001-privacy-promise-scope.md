@@ -4,6 +4,6 @@ TraceLoupe's public positioning said "fully local, offline, no cloud." With the 
 
 ## Consequences
 
-- docs/product-architecture-description.md §5 ("no telemetry, no cloud", "fully local, offline") and the Spyware Analyzer PRD §8 must be reworded to the scoped promise.
+- docs/product-overview.md §5 ("no telemetry, no cloud", "fully local, offline") and the Spyware Analyzer PRD §8 must be reworded to the scoped promise.
 - Any future operational fetch must be disclosed and controllable in Settings; backup-derived data in a request is forbidden by default. Narrow exceptions require explicit, informed, per-feature opt-in (default off, separately explained). Currently the only sanctioned exception is shortened-URL expansion during an Explicit Scan, which sends URLs found in the backup to resolver hosts.
 - Disclosure for indicator updates is: first-run consent dialog, permanent inline note on the scan screen, Settings toggle (default on).
