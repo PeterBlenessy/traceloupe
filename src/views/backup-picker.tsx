@@ -18,6 +18,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { useImport } from "@/components/import-provider";
 
@@ -319,30 +320,42 @@ function BackupCard({
             </>
           ) : imported ? (
             <>
-              <Button
-                variant="ghost"
-                size="sm"
-                title="Parse this backup again (updates data, e.g. contact photos)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onReimport();
-                }}
-              >
-                <RotateCw className="size-4" />
-                Re-import
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Remove imported data"
-                title="Remove this backup's imported data (keeps the original backup)"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirming(true);
-                }}
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onReimport();
+                    }}
+                  >
+                    <RotateCw className="size-4" />
+                    Re-import
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Parse this backup again (updates data, e.g. contact photos)
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Remove imported data"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConfirming(true);
+                    }}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Remove this backup's imported data (keeps the original backup)
+                </TooltipContent>
+              </Tooltip>
               <Button
                 size="sm"
                 onClick={(e) => {

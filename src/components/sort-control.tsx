@@ -1,5 +1,10 @@
 import { ArrowDownWideNarrow, ArrowUpNarrowWide } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 /** One selectable sort field: the value sent to the backend + its label. */
 export interface SortField {
@@ -69,23 +74,27 @@ export function SortControl({
           </option>
         ))}
       </select>
-      <button
-        type="button"
-        onClick={() => onChange({ ...value, desc: !value.desc })}
-        aria-label={value.desc ? "Sort descending" : "Sort ascending"}
-        title={
-          value.desc
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => onChange({ ...value, desc: !value.desc })}
+            aria-label={value.desc ? "Sort descending" : "Sort ascending"}
+            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          >
+            {value.desc ? (
+              <ArrowDownWideNarrow className="size-4" />
+            ) : (
+              <ArrowUpNarrowWide className="size-4" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {value.desc
             ? "Descending — click for ascending"
-            : "Ascending — click for descending"
-        }
-        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      >
-        {value.desc ? (
-          <ArrowDownWideNarrow className="size-4" />
-        ) : (
-          <ArrowUpNarrowWide className="size-4" />
-        )}
-      </button>
+            : "Ascending — click for descending"}
+        </TooltipContent>
+      </Tooltip>
     </div>
   );
 }

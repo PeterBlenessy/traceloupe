@@ -2,6 +2,7 @@ import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, ChevronDown, Droplet, Footprints, Globe, HeartPulse, MapPin, Moon, Trophy } from "lucide-react";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
@@ -179,16 +180,20 @@ function WorkoutRow({ workout }: { workout: Workout }) {
   return (
     <div className="px-2 py-0.5">
       {workout.hasRoute ? (
-        <Item asChild className="rounded-md transition-colors hover:bg-accent/50">
-          <button
-            type="button"
-            onClick={() => setExpanded((e) => !e)}
-            title={expanded ? "Hide route" : "Show route"}
-            className="w-full text-left"
-          >
-            {inner}
-          </button>
-        </Item>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Item asChild className="rounded-md transition-colors hover:bg-accent/50">
+              <button
+                type="button"
+                onClick={() => setExpanded((e) => !e)}
+                className="w-full text-left"
+              >
+                {inner}
+              </button>
+            </Item>
+          </TooltipTrigger>
+          <TooltipContent>{expanded ? "Hide route" : "Show route"}</TooltipContent>
+        </Tooltip>
       ) : (
         <Item>{inner}</Item>
       )}
