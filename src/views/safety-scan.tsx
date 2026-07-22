@@ -13,7 +13,8 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { NoBackupState, ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
+import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
+import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { FilterControl } from "@/components/filter-control";
 import { timeGroup } from "@/components/filter-groups";
@@ -128,6 +129,13 @@ export function SafetyScanView() {
     },
   });
 
+  // Publish just the title to the shared top toolbar (like every other view);
+  // the scan's own controls stay in the run card since they're inputs to the
+  // Run action, not filters over displayed content.
+  useViewToolbar(
+    useMemo(() => (active === true ? { title: "Safety Scan" } : null), [active]),
+  );
+
   // Gate on an open backup, like every content view — there is nothing to scan
   // without one.
   if (active === false) {
@@ -161,14 +169,6 @@ export function SafetyScanView() {
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader
-        icon={<ShieldUser className="size-4 text-muted-foreground" />}
-        title="Safety Scan"
-      >
-        <span className="text-xs text-muted-foreground">
-          Local analysis of messages and notes for harmful content
-        </span>
-      </ViewHeader>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         {!expDismissed && (
           <Alert>
