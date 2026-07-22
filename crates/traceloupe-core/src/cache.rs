@@ -702,7 +702,7 @@ impl CacheDb {
                 "private",
                 "INTEGER NOT NULL DEFAULT 0",
             )?;
-            // v47: Security Check scan runs + findings (see docs/spyware-analyzer-prd.md §6.3).
+            // v47: Security Check scan runs + findings (see docs/plans/spyware-analyzer-prd.md §6.3).
             conn.execute_batch(
                 "CREATE TABLE IF NOT EXISTS scan_runs (
                     id              INTEGER PRIMARY KEY,

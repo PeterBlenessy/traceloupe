@@ -1,6 +1,6 @@
 # Local iOS Backup Browser
 
-**Product & Architecture Description**
+**Product Overview**
 
 *Working codename: TraceLoupe · Platform: macOS (desktop, Tauri v2)*
 
@@ -14,9 +14,9 @@
 
 ## 1. Executive summary
 
-A privacy-first application that lets people open, decrypt, and read the contents of their own iPhone backup — photos, messages, contacts, call history, Safari history, and Notes — through a clean, native-feeling interface. All processing happens locally; no data leaves the machine.
+A privacy-first application that lets people open, decrypt, and read the contents of their own iPhone backup — photos, messages, contacts, call history, Safari history, Notes, and much more — through a clean, native-feeling interface. It also helps people who fear their device has been compromised or abused: a **Security Check** that scans for spyware/stalkerware indicators, and an experimental **Safety Scan** that uses a local AI model to review message and note content for threats, harassment, grooming, and other harms. Backup-derived data never leaves the machine by default; the only network traffic is disclosed operational fetches (threat-indicator feeds, an on-device AI model download) plus one opt-in exception (see §10).
 
-It is a native macOS desktop app built on Tauri v2, with all parsing/decryption logic in a UI-agnostic Rust core reached over Tauri IPC. The MVP is powered by iLEAPP as a headless parsing engine — reusing its hundreds of maintained artifact parsers — with a native lazy-decryption core introduced as a later performance evolution. The product targets the gap between forensic command-line tools (powerful but unfriendly and investigator-oriented) and commercial closed-source utilities (convenient but subscription-based and requiring you to hand device data to a third party).
+It is a native macOS desktop app built on Tauri v2, with all parsing/decryption logic in a UI-agnostic Rust core reached over Tauri IPC. Imports are fully native Rust — a one-time offline pass (~35s) over the backup — with lazy, on-demand decryption of high-traffic artifacts. (The retired 0.1–0.2 MVP was powered by iLEAPP as a headless parsing engine; iLEAPP was removed at runtime in 0.7.0 and is now a development-time reference only.) The product targets the gap between forensic command-line tools (powerful but unfriendly and investigator-oriented) and commercial closed-source utilities (convenient but subscription-based and requiring you to hand device data to a third party).
 
 ## 2. Problem & opportunity
 
@@ -39,9 +39,10 @@ The application ingests an encrypted iOS backup (created by Finder or by an incl
 **Goals**
 
 - Read the substantive contents of an encrypted iOS backup through a friendly UI.
-- **Ship broad coverage fast** by reusing an existing parsing engine (iLEAPP) rather than hand-writing parsers for the MVP.
-- **Feel fast:** after a one-time import, browsing is instant; the later native core adds on-demand decryption so first-open of high-traffic artifacts is quick too.
-- Keep 100% of processing local — no telemetry, no cloud.
+- **Broad native coverage** of first-party artifacts plus a pluggable framework for third-party app chats, hand-written in Rust.
+- Help users **assess whether a device has been compromised or abused** — Security Check for spyware/stalkerware indicators, Safety Scan for AI-assisted content review.
+- **Feel fast:** a one-time native import, then browsing is instant; on-demand decryption keeps first-open of high-traffic artifacts quick too.
+- **Keep backup-derived data on the machine** (ADR 0001): the contents of a user's backup never leave the device. Disclosed operational traffic — threat-indicator feed refreshes and the AI model download — is permitted, and there is one opt-in exception (the shortened-URL de-shortener, off by default). No telemetry or analytics.
 - A single, self-contained native macOS app (Tauri v2) — no web/server tier.
 - Reuse proven, auditable parsing rather than reinventing fragile format logic.
 
@@ -58,11 +59,14 @@ The application ingests an encrypted iOS backup (created by Finder or by an incl
 - Photo and video gallery from the media domains.
 - Message threads (SMS/iMessage) from `sms.db`.
 - Contacts, call history, and Safari history.
-- Notes rendered with formatting and embedded media (protobuf-aware).
-- Broad third-party app coverage via the iLEAPP engine (see §8).
+- Notes rendered with formatting and embedded media (protobuf-aware); locked Apple Notes decrypted on demand.
+- Additional first-party views: Recordings, Calendar, Reminders, Health, Interactions, Apps, and Device info.
+- Native third-party app-chat coverage via a pluggable framework (WhatsApp, Messenger, Instagram, TikTok, Telegram, Kik, imo, Threema, Viber, Teams, LinkedIn; see §8).
+- **Security Check** — scan for spyware/stalkerware indicators (MVT-style) against bundled and refreshable feeds, with severity-graded findings and CSV export.
+- **Safety Scan** (experimental) — local-AI content review of Messages and Notes for threats, harassment, grooming, self-harm, coercive control, and scams.
 - Per-app data browser for ad-hoc inspection of arbitrary SQLite/plist files.
 - Search across artifacts and export to standard formats.
-- Fully local, offline operation.
+- Native, offline import; backup-derived data stays local (see §10).
 
 ## 7. How it works — data pipeline
 
@@ -84,7 +88,7 @@ For high-traffic artifacts (messages, media, Notes), a native Rust path replaces
 3. **Parse** — SQLite queried directly; media read as-is (thumbnails on demand, full-resolution only on open); Notes decoded by a protobuf-aware parser.
 4. **Cache** — parsed results persist locally, so re-opening a view is a millisecond query.
 
-iLEAPP remains the engine for the long tail of third-party app artifacts not yet hand-written in the native core, running as a background indexer.
+The long tail of third-party app artifacts is now handled by native Rust parsers behind a pluggable app-chat framework — the native-first migration completed in 0.7.0, and iLEAPP no longer runs at any point.
 
 > **Access model.** Phase 1 pays a one-time import cost, then browses instantly. Phase 2 removes even that for the artifacts people open most. See §8.6 and §8.7.
 
@@ -150,7 +154,7 @@ Each decision below is stated with its rationale and its main tradeoff.
 - **Deferred media** — decode thumbnails on demand, full-resolution only on open.
 - **Cache-once ingest** — persist parsed artifacts to a local SQLite store; re-access is a query, not a re-decrypt.
 - **Parallelised native decryption** — Rust across cores for the initial per-artifact hit.
-- **iLEAPP as background indexer** — retained for third-party app artifacts not yet natively parsed.
+- **iLEAPP as background indexer (MVP only)** — the 0.1–0.2 MVP kept iLEAPP running for third-party app artifacts not yet natively parsed; since `0.7.0` those are native and iLEAPP no longer runs.
 
 **Tradeoff.** More moving parts than reading iLEAPP's report alone — an index/cache layer and cache invalidation to manage. The first open of a natively-parsed artifact still costs its decryption; only repeat access is instant. There is no way to read an encrypted backup with zero upfront work.
 
@@ -177,11 +181,13 @@ This split gives dependable automated coverage without depending on a bundled Ch
 
 ## 10. Privacy & security posture
 
-- All processing is local; the application makes no network calls to operate on backup data. Imports are fully native and offline — there is no engine download of any kind. (The retired 0.1–0.2 MVP fetched a pinned iLEAPP engine on first import; that no longer happens.)
+- **Privacy promise (ADR 0001).** Backup-derived data — the contents of the user's backup — never leaves the machine by default. Imports and all parsing are fully native and offline; there is no engine download of any kind. (The retired 0.1–0.2 MVP fetched a pinned iLEAPP engine on first import; that no longer happens.)
+- **Disclosed operational traffic is allowed** and does not carry backup content: Security Check refreshes its spyware/stalkerware indicator feeds, and Safety Scan downloads its GGUF AI model on first use. Both are disclosed in-app.
+- **One opt-in exception.** The shortened-URL de-shortener (Security Check) can send a URL found in the backup to a resolver — it is off by default and clearly labeled as the sole backup-data egress.
 - The backup password is used only in memory to unwrap file keys; it is never persisted or transmitted.
 - No telemetry or analytics.
 - The tool operates on user-provided copies of a backup; the source device is never written to.
-- Dependencies are open and auditable, and third-party parsers can be run with the network disabled to empirically confirm no exfiltration.
+- Dependencies are open and auditable, and the app can be run with the network disabled to empirically confirm no backup-data exfiltration.
 
 ## 11. Known limitations & constraints
 
@@ -202,9 +208,12 @@ This split gives dependable automated coverage without depending on a bundled Ch
 | UI ↔ core | Tauri IPC commands |
 | Core logic | Rust crate (`rusqlite`, plist, decompression/crypto) |
 | Local cache / index | SQLite (manifest file-index + parsed-artifact cache) |
-| Parsing engine (MVP) | iLEAPP (headless sidecar; pinned GitHub release, downloaded on first use) → `_lava_artifacts.db` |
-| Decryption (Phase 2) | iOSbackup approach |
-| Notes parsing (Phase 2) | Maintained Apple Notes protobuf parser |
+| Parsing | Native Rust parsers (first-party artifacts + pluggable app-chat framework for third-party chats) |
+| Parsing engine (historical) | iLEAPP as headless sidecar — retired at 0.7.0; now a development-time reference only, never run or bundled |
+| Decryption | Native, manifest-indexed, on-demand, cached (iOSbackup-style crypto) |
+| Notes parsing | Native protobuf-aware parser; locked Apple Notes decrypted on demand |
+| Security Check | Native Rust indicator engine over bundled + refreshable STIX2 / Échap feeds |
+| Safety Scan | Sandboxed llama-server + Gemma model; results in a per-backup `analysis.db` |
 | Acquisition helper | pymobiledevice3 (fallback: libimobiledevice) |
 | Testing | Playwright (Chromium + WebKit), Rust unit tests, WebdriverIO + tauri-driver, tauri-playwright |
 
@@ -223,7 +232,7 @@ Rollout is tiered by app popularity and by recovery/forensic value:
 | 3 | Top 50 | *adds* Slack, Microsoft Teams, Zoom, Twitch, Tinder/Bumble/Hinge, PayPal/Venmo/Cash App, Uber, Amazon, Strava, Notion, and similar |
 | 4 | Top 100 | *adds* the long tail: regional messengers, banking/fintech, travel, fitness, productivity apps, and popular games |
 
-**Live coverage tracker.** Per-app status and the version each app gains native support are tracked in [`docs/app-support.md`](docs/app-support.md) — the living source of truth, updated as coverage lands.
+**Live coverage tracker.** Per-app status and the version each app gains native support are tracked in [`docs/reference/app-support.md`](reference/app-support.md) — the living source of truth, updated as coverage lands.
 
 **Prioritization criteria** — each tier is ordered by (1) user prevalence, (2) richness of locally stored artifacts, and (3) technical feasibility of parsing.
 
@@ -233,10 +242,16 @@ Rollout is tiered by app popularity and by recovery/forensic value:
 
 ### 13.2 Platform & core
 
-- **`0.1.0` (MVP):** iLEAPP-powered import + native Tauri/shadcn UI over the cached report DB.
-- **`0.2.0` (shipped):** native lazy-decode core for Messages, Notes, Recordings, and Camera roll (on-demand decryption, deferred media, cache-once), wired into the import **alongside** iLEAPP — which still supplies Calls, Safari, Apps, and third-party chats.
-- **`0.3.0`+ native-first migration, in batches** — the plan for progressively replacing iLEAPP:
-  - **Batch 1 (`0.3.0`):** native parsers for the remaining first-party views — Calls (`CallHistory.storedata`), Safari (`History.db`), Apps (app-state plist), and self-extracted Contacts (`AddressBook.sqlitedb`) via the Manifest Index; all built-in views then materialize natively and the redundant iLEAPP sms/notes passes are dropped so import time falls. Plus a first native third-party wave: TikTok (moved off iLEAPP), and Instagram, Facebook, Facebook Messenger, X/Twitter, Snapchat. WhatsApp and Telegram are deferred to `0.4.0` (they already read via iLEAPP). See [`docs/app-support.md`](docs/app-support.md) for per-app status.
-  - **Batch 2 (`0.3.x`):** make iLEAPP **optional** — default install fully offline (no first-import download, no bundled ~222 MB engine); fetched on demand only for deeper third-party coverage. This keeps §8.5's breadth as opt-in rather than a hard dependency.
-  - **Batch 3+ (`0.4.0`+):** native third-party app modules per the §13.1 tiers (Top 10 first), replacing iLEAPP coverage incrementally.
+**Native-first migration — complete (`0.7.0`).** The staged plan to replace the iLEAPP MVP with native Rust parsers landed by `0.7.0`: all built-in views materialize natively, and third-party chats read through a pluggable app-chat framework. iLEAPP is no longer run, downloaded, or bundled at runtime — it survives only as a development-time reference. Imports are fully native and offline (~35s).
+
+Shipped milestones since:
+
+- **Security Check (`0.20.0`–`0.28.0`):** spyware/stalkerware indicator scan (MVT-style) over bundled and refreshable STIX2 / Échap feeds — Explicit and consented Passive scans, severity-graded findings with CSV export, custom indicators, scan-history diffing, and an opt-in URL de-shortener.
+- **Safety Scan (`0.29.0`, experimental/Beta):** local-AI content review of Messages and Notes via a sandboxed llama-server + Gemma model, flagging threats/harassment/grooming/self-harm/coercive-control/scams (Forensic-9 taxonomy) into a per-backup `analysis.db`.
+
+For the full release history see [`CHANGELOG.md`](../CHANGELOG.md); per-app parser status lives in [`docs/reference/app-support.md`](reference/app-support.md).
+
+Ahead:
+
+- Continued native third-party app coverage per the §13.1 tiers.
 - Mobile targets via Tauri v2 (iOS/Android) — considered later, not part of the macOS-first scope.

@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  release-consistency:
-    name: Release invariants (version ↔ CHANGELOG ↔ tags)
+  repo-hygiene:
+    name: Repo hygiene (releases + doc links)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +22,9 @@ jobs:
       # Fails the PR if the current version has no CHANGELOG entry, if the
       # manifests disagree, or if a past documented version lost its tag.
       - run: bash scripts/check-releases.sh
+      # Fails the PR if any relative Markdown link points at a missing file
+      # (catches links left dangling by a doc move or rename).
+      - run: bash scripts/check-doc-links.sh
 
   core:
     name: Core crate (Rust, Linux)
@@ -30,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # The core crate is UI-agnostic by design (architecture.md §2) and
+      # The core crate is UI-agnostic by design (docs/architecture.md §2) and
       # builds without Tauri's platform deps — this job stays cheap.
       - run: cargo test -p traceloupe-core
       # --all-targets so lints in test code fail CI too (without it, an unused
@@ -71,7 +74,7 @@ jobs:
       - run: pnpm build
       # Stage the llama-server sidecar so `bundle.externalBin` resolves — Tauri
       # validates it at cargo-check time. The binary is git-ignored (see
-      # docs/safety-scan-sidecar.md); the fast pre-built download satisfies the
+      # docs/reference/safety-scan-sidecar.md); the fast pre-built download satisfies the
       # compile check (a release build uses build-llama-server.sh for a static
       # binary instead).
       - run: bash scripts/download-llama-server.sh

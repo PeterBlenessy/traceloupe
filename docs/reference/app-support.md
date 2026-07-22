@@ -6,11 +6,11 @@ with no dependency on the iLEAPP sidecar. Update a row the moment its status
 changes; this file is the single source of truth for coverage.
 
 Companion to `../CHANGELOG.md` (milestones) and
-`../product-architecture-description.md` §13 (roadmap rationale). For *field-level*
+`../product-overview.md` §13 (roadmap rationale). For *field-level*
 coverage within each app — everything in its DB and what we surface — see
 [`app-data-coverage.md`](app-data-coverage.md).
 
-**Last updated:** 2026-07-18 · current release **0.12.0**
+**Last updated:** 2026-07-22 · see the CHANGELOG for the current release
 
 ## Status legend
 
@@ -52,7 +52,7 @@ iLEAPP key); it would only re-activate if a future long-tail module opted in.
 
 ## Third-party apps
 
-Tiers mirror the roadmap (`product-architecture-description.md` §13.1), ordered by
+Tiers mirror the roadmap (`docs/product-overview.md` §13.1), ordered by
 prevalence × local-data richness × parse feasibility. Native rollout is by
 **scheduled batch, not strict tier order** — an app can be pulled forward.
 
