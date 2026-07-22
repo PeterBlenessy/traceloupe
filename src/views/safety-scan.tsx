@@ -21,6 +21,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
@@ -556,34 +561,52 @@ function ScanHistory() {
                   ? "no findings"
                   : `${s.findings} finding${s.findings === 1 ? "" : "s"}`}
               </Badge>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5 text-xs"
-                onClick={() => setViewId(s.id)}
-              >
-                <Eye className="size-3.5" /> View
-              </Button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-xs"
+                    onClick={() => setViewId(s.id)}
+                  >
+                    <Eye className="size-3.5" /> View
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Read this scan's full report</TooltipContent>
+              </Tooltip>
               {/* Export is planned; shown disabled so the affordance is
-                  discoverable but clearly not yet available. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="gap-1.5 text-xs"
-                disabled
-                title="Exporting reports is coming soon"
-              >
-                <Download className="size-3.5" /> Export
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-8 text-muted-foreground hover:text-destructive"
-                onClick={() => setConfirmId(s.id)}
-                aria-label="Delete this scan"
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
+                  discoverable but clearly not yet available. A disabled trigger
+                  still needs its tooltip, so wrap a span (disabled buttons don't
+                  fire the hover events Tooltip listens for). */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 text-xs"
+                      disabled
+                    >
+                      <Download className="size-3.5" /> Export
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>Exporting reports is coming soon</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 text-muted-foreground hover:text-destructive"
+                    onClick={() => setConfirmId(s.id)}
+                    aria-label="Delete this scan"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete this scan</TooltipContent>
+              </Tooltip>
             </div>
           </div>
         ))}

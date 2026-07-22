@@ -153,6 +153,11 @@ create a worktree instead.
   filter popovers, time pickers, or pill rows: the shared components already cover
   it (`FilterControl` + `badgeGroup`/`timeGroup`/`multiBadgeGroup`, `SortControl`,
   `ListSearch`, `NoBackupState`, `VirtualListView`/`LazyListView`/`ListDetail`).
+- **Every button gets a tooltip — no exceptions.** Wrap it in the shadcn
+  `Tooltip` (`components/ui/tooltip.tsx`); icon-only buttons especially, and a
+  disabled button's tooltip must say *why* it's disabled. The app is already
+  inside a `TooltipProvider`, so no wiring is needed. See "Buttons always have a
+  tooltip" in `docs/ui.md`.
 - Verify a change builds the **binary**, not just `cargo check`:
   `cargo test -p traceloupe-core && cargo build -p traceloupe && pnpm exec tsc --noEmit`.
 - Parser changes need a **re-import** to populate existing caches (the cache
