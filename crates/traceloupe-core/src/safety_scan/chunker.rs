@@ -63,6 +63,22 @@ pub struct TimeRange {
     pub end: Option<i64>,
 }
 
+/// Which content the scan covers. Both by default.
+#[derive(Debug, Clone, Copy)]
+pub struct ScanSources {
+    pub messages: bool,
+    pub notes: bool,
+}
+
+impl Default for ScanSources {
+    fn default() -> Self {
+        Self {
+            messages: true,
+            notes: true,
+        }
+    }
+}
+
 impl TimeRange {
     fn sql_between(self, col: &str) -> String {
         // Rows with NULL timestamps are only included on an unbounded scan —
@@ -307,9 +323,14 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
 }
 
 /// Full scan order: all message chunks (newest threads first), then notes.
-pub fn chunk_all(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
-    let mut chunks = chunk_messages(cache, range)?;
-    chunks.extend(chunk_notes(cache, range)?);
+pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: ScanSources) -> Result<Vec<Chunk>> {
+    let mut chunks = Vec::new();
+    if sources.messages {
+        chunks.extend(chunk_messages(cache, range)?);
+    }
+    if sources.notes {
+        chunks.extend(chunk_notes(cache, range)?);
+    }
     Ok(chunks)
 }
 
@@ -359,8 +380,8 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "hello world", i % 2 == 0))
             .collect();
         let cache = cache_with(&msgs);
-        let a = chunk_all(&cache, TimeRange::default()).unwrap();
-        let b = chunk_all(&cache, TimeRange::default()).unwrap();
+        let a = chunk_all(&cache, TimeRange::default(), ScanSources::default()).unwrap();
+        let b = chunk_all(&cache, TimeRange::default(), ScanSources::default()).unwrap();
         let keys_a: Vec<_> = a.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         let keys_b: Vec<_> = b.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         assert_eq!(keys_a, keys_b);

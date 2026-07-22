@@ -29,6 +29,7 @@ type SafetyScanContextValue = {
     modelId?: string | null;
     rangeStart?: number | null;
     rangeEnd?: number | null;
+    sources?: string | null;
   }) => Promise<void>;
   cancelScan: () => void;
   startDownload: (modelId: string) => Promise<void>;
@@ -132,6 +133,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     modelId?: string | null;
     rangeStart?: number | null;
     rangeEnd?: number | null;
+    sources?: string | null;
   }) => {
     setScan({ phase: "loading" });
     if (!unlistenScan.current) {

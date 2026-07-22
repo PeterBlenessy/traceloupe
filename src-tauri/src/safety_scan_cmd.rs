@@ -18,7 +18,7 @@ use crate::ActiveBackup;
 use traceloupe_core::analysis::{AnalysisDb, Category};
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::install::InstallProgress;
-use traceloupe_core::safety_scan::chunker::TimeRange;
+use traceloupe_core::safety_scan::chunker::{ScanSources, TimeRange};
 use traceloupe_core::safety_scan::{client, engine, models, server, summary};
 use traceloupe_core::sidecar::CancelToken;
 
@@ -406,6 +406,9 @@ enum ScanEvent {
 }
 
 #[tauri::command]
+// A Tauri command: each param maps to a field of the JS invoke() call, so they
+// stay individual rather than bundled into a struct.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_safety_scan(
     app: AppHandle,
     active: State<'_, ActiveBackup>,
@@ -414,11 +417,25 @@ pub async fn run_safety_scan(
     model_id: Option<String>,
     range_start: Option<i64>,
     range_end: Option<i64>,
+    // Which content to scan: "all" (default), "messages", or "notes".
+    sources: Option<String>,
 ) -> Result<(), String> {
     let _guard = gate
         .0
         .try_lock()
         .map_err(|_| "a Safety Scan is already running")?;
+
+    let scan_sources = match sources.as_deref() {
+        Some("messages") => ScanSources {
+            messages: true,
+            notes: false,
+        },
+        Some("notes") => ScanSources {
+            messages: false,
+            notes: true,
+        },
+        _ => ScanSources::default(),
+    };
 
     let cache_path = active.path()?;
     let analysis_db_path = analysis_path(&cache_path)?;
@@ -560,25 +577,33 @@ pub async fn run_safety_scan(
         };
 
         let mut last_emit = std::time::Instant::now();
-        let outcome = engine::run_scan(&cache, &mut analysis, &llm, range, &cancel, |p| {
-            // Always emit the first (done == 0) tick — it's what flips the UI from
-            // "loading" to "scanning" the instant the model is ready; the 150 ms
-            // throttle only smooths the frequent mid-scan updates.
-            if p.chunks_done == 0
-                || last_emit.elapsed() >= Duration::from_millis(150)
-                || p.chunks_done == p.chunks_total
-            {
-                last_emit = std::time::Instant::now();
-                let _ = app2.emit(
-                    "safetyscan://progress",
-                    ScanEvent::Classifying {
-                        done: p.chunks_done,
-                        total: p.chunks_total,
-                        findings: p.findings,
-                    },
-                );
-            }
-        })
+        let outcome = engine::run_scan(
+            &cache,
+            &mut analysis,
+            &llm,
+            range,
+            scan_sources,
+            &cancel,
+            |p| {
+                // Always emit the first (done == 0) tick — it's what flips the UI from
+                // "loading" to "scanning" the instant the model is ready; the 150 ms
+                // throttle only smooths the frequent mid-scan updates.
+                if p.chunks_done == 0
+                    || last_emit.elapsed() >= Duration::from_millis(150)
+                    || p.chunks_done == p.chunks_total
+                {
+                    last_emit = std::time::Instant::now();
+                    let _ = app2.emit(
+                        "safetyscan://progress",
+                        ScanEvent::Classifying {
+                            done: p.chunks_done,
+                            total: p.chunks_total,
+                            findings: p.findings,
+                        },
+                    );
+                }
+            },
+        )
         .map_err(|e| e.to_string())?;
 
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
