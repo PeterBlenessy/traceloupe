@@ -996,6 +996,16 @@ and the remaining (large-feature / password-blocked) gaps.
   *list* could be sorted. Newest-first pins the newest message to the top;
   oldest-first keeps the chat-like newest-at-bottom layout.
 
+## [0.6.2] — 2026-07-15
+
+**Real brand logos across all app and message surfaces.** Official brand marks
+(simple-icons) replace the placeholder emoji everywhere an app or service is
+shown — Apps rows, Messages filter chips, thread-list rows, the conversation
+header, and per-message service badges — rendered as inline SVG so the
+asset-blocking CSP is satisfied. Near-monochrome marks (X, TikTok, iMessage on
+dark) fall back to `currentColor` to stay visible in both themes; apps without a
+brand mark (imo, Teams, SMS) get a clean monogram tile.
+
 ## [0.6.1] — 2026-07-15
 
 A review-and-hardening point release after LinkedIn (0.6.0).
