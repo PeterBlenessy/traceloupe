@@ -630,8 +630,11 @@ impl AnalysisDb {
     }
 
     /// Remove a scan and everything scoped to it — findings, per-chunk progress,
-    /// and summaries. Dismissals are keyed by fingerprint (not scan) and are
-    /// left intact so a re-scan still honours them.
+    /// summaries, and audit rows. Every child must go before the `scans` row
+    /// itself: `foreign_keys` is ON, and each of these tables (audit_log
+    /// included) has `scan_id REFERENCES scans(id)`, so leaving any behind makes
+    /// the final delete fail. Dismissals are keyed by fingerprint (not scan) and
+    /// are left intact so a re-scan still honours them.
     pub fn delete_scan(&self, id: i64) -> Result<()> {
         self.conn.execute(
             "DELETE FROM content_findings WHERE scan_id = ?1",
@@ -641,6 +644,8 @@ impl AnalysisDb {
             .execute("DELETE FROM chunk_progress WHERE scan_id = ?1", params![id])?;
         self.conn
             .execute("DELETE FROM summaries WHERE scan_id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM audit_log WHERE scan_id = ?1", params![id])?;
         self.conn
             .execute("DELETE FROM scans WHERE id = ?1", params![id])?;
         Ok(())
@@ -885,5 +890,70 @@ mod tests {
             Some("Nothing flagged.")
         );
         assert_eq!(db.get_summary(scan, "thread", "x").unwrap(), None);
+    }
+
+    #[test]
+    fn delete_scan_removes_all_children() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        // A fully-populated scan: a finding, a chunk row, an audit row, and a
+        // summary — one row in every table that references scans(id). With
+        // foreign_keys ON, delete_scan must clear all of them (the audit_log
+        // row is the one that used to be left behind and blocked the delete).
+        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
+            .unwrap();
+        db.audit(scan, 101, "chunk_classified", "chunk=k").unwrap();
+        db.set_summary(scan, "report", "", "Nothing flagged.", 104)
+            .unwrap();
+        db.replace_findings(
+            scan,
+            &[NewFinding {
+                source_kind: SourceKind::Message,
+                source_id: Some(1),
+                thread_identifier: Some("t".into()),
+                occurred_at: Some(100),
+                fingerprint: "fp".into(),
+                category: Category::ScamFraud,
+                severity: 2,
+                rationale: "x".into(),
+            }],
+            105,
+        )
+        .unwrap();
+
+        // A second scan is left untouched, proving the delete is scoped by id.
+        let keep = db.begin_scan("m", (None, None), 200).unwrap();
+        db.audit(keep, 201, "scan_started", "").unwrap();
+
+        db.delete_scan(scan).unwrap();
+
+        assert!(db.scan_by_id(scan).unwrap().is_none());
+        for (table, col) in [
+            ("content_findings", "scan_id"),
+            ("chunk_progress", "scan_id"),
+            ("summaries", "scan_id"),
+            ("audit_log", "scan_id"),
+        ] {
+            let n: i64 = db
+                .conn()
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE {col} = ?1"),
+                    params![scan],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "{table} still had rows for the deleted scan");
+        }
+        // The other scan and its audit row survive.
+        assert!(db.scan_by_id(keep).unwrap().is_some());
+        let kept_audit: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM audit_log WHERE scan_id = ?1",
+                params![keep],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept_audit, 1);
     }
 }
