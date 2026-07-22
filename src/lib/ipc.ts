@@ -682,6 +682,18 @@ export interface SafetyScanReport {
   threadSummaries: [string, string][];
 }
 
+/** One past scan for the history list (no internal "chunks" — just what a user
+ *  cares about: period, when, status, and how many findings it produced). */
+export interface SafetyScanHistoryItem {
+  id: number;
+  rangeStart: number | null;
+  rangeEnd: number | null;
+  status: "running" | "completed" | "cancelled" | "failed";
+  startedAt: number;
+  finishedAt: number | null;
+  findings: number;
+}
+
 /** Top live-finding severity per flagged thread/note, for inline badges. */
 export interface FindingMarks {
   /** cache threads.id → highest severity (1|2|3). */
@@ -930,6 +942,8 @@ export interface TraceLoupeClient {
   ): Promise<void>;
   /** Latest scan row + its Scan report and per-thread summaries. */
   getSafetyScanReport(): Promise<SafetyScanReport>;
+  /** Past scans (newest first) for the history list. */
+  listSafetyScans(): Promise<SafetyScanHistoryItem[]>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -1299,6 +1313,8 @@ const tauriClient: TraceLoupeClient = {
     invoke("dismiss_content_finding", { fingerprint, category, dismissed }),
   getSafetyScanReport: () =>
     invoke<SafetyScanReport>("get_safety_scan_report"),
+  listSafetyScans: () =>
+    invoke<SafetyScanHistoryItem[]>("list_safety_scans"),
 
   getIndicatorInfo: () => invoke<SnapshotInfo>("get_indicator_info"),
   updateIndicators: () => invoke<SnapshotInfo>("update_indicators"),
@@ -3067,6 +3083,38 @@ export const mockClient: TraceLoupeClient = {
           ],
         }
       : { scan: null, report: null, threadSummaries: [] },
+  listSafetyScans: async () =>
+    mockActive && mockContentFindings.length
+      ? [
+          {
+            id: 3,
+            rangeStart: Math.floor(new Date(2024, 0, 1).getTime() / 1000),
+            rangeEnd: Math.floor(new Date(2025, 0, 1).getTime() / 1000) - 1,
+            status: "completed" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 3600,
+            finishedAt: Math.floor(Date.now() / 1000) - 3000,
+            findings: 2,
+          },
+          {
+            id: 2,
+            rangeStart: null,
+            rangeEnd: null,
+            status: "cancelled" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 90000,
+            finishedAt: Math.floor(Date.now() / 1000) - 89700,
+            findings: 0,
+          },
+          {
+            id: 1,
+            rangeStart: null,
+            rangeEnd: null,
+            status: "completed" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 200000,
+            finishedAt: Math.floor(Date.now() / 1000) - 199000,
+            findings: 5,
+          },
+        ]
+      : [],
 
   getIndicatorInfo: async () => mockSnapshotInfo,
   updateIndicators: async () => mockSnapshotInfo,

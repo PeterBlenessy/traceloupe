@@ -810,6 +810,42 @@ pub struct SafetyScanReport {
     pub thread_summaries: Vec<(String, String)>,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanHistoryItem {
+    pub id: i64,
+    pub range_start: Option<i64>,
+    pub range_end: Option<i64>,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub findings: i64,
+}
+
+/// Past scans (newest first) for the history list.
+#[tauri::command]
+pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHistoryItem>, String> {
+    let path = analysis_path(&active.path()?)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    Ok(db
+        .list_scans(50)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| ScanHistoryItem {
+            id: s.id,
+            range_start: s.range_start,
+            range_end: s.range_end,
+            status: s.status,
+            started_at: s.started_at,
+            finished_at: s.finished_at,
+            findings: s.findings,
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub fn get_safety_scan_report(active: State<'_, ActiveBackup>) -> Result<SafetyScanReport, String> {
     let path = analysis_path(&active.path()?)?;

@@ -3762,7 +3762,8 @@ pub fn run() {
             safety_scan_cmd::list_content_findings,
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
-            safety_scan_cmd::get_safety_scan_report
+            safety_scan_cmd::get_safety_scan_report,
+            safety_scan_cmd::list_safety_scans
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
