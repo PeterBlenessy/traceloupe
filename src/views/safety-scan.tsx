@@ -14,11 +14,9 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { NoBackupState, ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
-import {
-  TimeFilterBar,
-  makeYearPresets,
-  useTimePresets,
-} from "@/components/time-filter";
+import { makeYearPresets, useTimePresets } from "@/components/time-filter";
+import { FilterControl } from "@/components/filter-control";
+import { timeGroup } from "@/components/filter-groups";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
@@ -60,13 +58,12 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
 export function SafetyScanView() {
   const qc = useQueryClient();
   const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
-  // Scan-appropriate time chips: "All history" plus one chip per calendar year
-  // the backup actually spans (from the message date bounds), plus a custom
-  // Range. Unlike a live feed, "last 24h/7d/30d" is meaningless for a static
-  // backup — you scan everything, a whole year, or a chosen span. `TimeFilterBar`
-  // emits a half-open [lo, hi); the scan backend's range end is inclusive, so hi
-  // maps to `end = hi - 1`.
-  const { presets: basePresets } = useTimePresets();
+  // Same time filter as the rest of the app: the shared FilterControl popover
+  // with a `timeGroup` — every period shown (24h/7d/30d + a chip per year the
+  // backup spans), empty windows disabled via counts rather than hidden.
+  // `timeGroup` emits a half-open [lo, hi); the scan backend's range end is
+  // inclusive, so hi maps to `end = hi - 1` at start time.
+  const { now, presets: basePresets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   const [showDismissed, setShowDismissed] = useState(false);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
@@ -80,19 +77,34 @@ export function SafetyScanView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  // The [min, max] message timestamps → one chip per year the backup covers.
+  // The [min, max] message timestamps → a chip per year the backup covers,
+  // replacing the single cumulative "this year" preset (as the Messages timeline
+  // does), while keeping the recency windows.
   const { data: dateBounds } = useQuery({
     queryKey: ["messageDateBounds"],
     queryFn: () => client.messageDateBounds(),
     enabled: active === true,
   });
   const presets = useMemo(() => {
-    const all = basePresets[0]; // the cumulative "All" preset (lo/hi null)
-    if (!dateBounds) return [all];
+    if (!dateBounds) return basePresets;
     const minYear = new Date(dateBounds[0] * 1000).getFullYear();
-    const maxYear = new Date(dateBounds[1] * 1000).getFullYear();
-    return [all, ...makeYearPresets(minYear, maxYear)];
-  }, [basePresets, dateBounds]);
+    const maxYear = new Date(now * 1000).getFullYear();
+    return [
+      ...basePresets.filter((p) => p.key !== "year"),
+      ...makeYearPresets(minYear, maxYear),
+    ];
+  }, [basePresets, dateBounds, now]);
+  // Per-window message counts, so empty periods are shown-but-disabled (not
+  // hidden). Counts reflect messages — the bulk of scanned content.
+  const { data: presetCounts } = useQuery({
+    queryKey: ["messageRanges", now, presets.length],
+    queryFn: () =>
+      client.countMessageRanges(
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+        null,
+      ),
+    enabled: active === true,
+  });
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -204,22 +216,28 @@ export function SafetyScanView() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {/* The same Filter popover the toolbars use: click to pick a time
+                  window (empty periods shown but disabled). Right-aligned so its
+                  leftward-morphing popover stays inside the content area. */}
               <div
                 className={cn(
-                  "space-y-1.5",
+                  "flex items-center justify-end gap-2",
                   running && "pointer-events-none opacity-60",
                 )}
               >
                 <Label className="text-xs text-muted-foreground">
                   Time range
                 </Label>
-                {/* wrap mode: render every preset as a pill (the toolbar's
-                    overflow measurement collapses in a card context). */}
-                <TimeFilterBar
-                  wrap
-                  presets={presets}
-                  value={range}
-                  onChange={setRange}
+                <FilterControl
+                  groups={[
+                    timeGroup({
+                      description: "Which messages and notes to scan, by date",
+                      presets,
+                      counts: presetCounts,
+                      value: range,
+                      onChange: setRange,
+                    }),
+                  ]}
                 />
               </div>
               <div className="flex flex-wrap items-center gap-3">
