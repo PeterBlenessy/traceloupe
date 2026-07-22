@@ -98,10 +98,13 @@ Commit the validated module (message: what it reads, schema facts from `<app>.py
 provenance reference §10, validation status). Then cut the app's minor release:
 - Mark it ✅ native in `docs/reference/app-support.md`; add its row to
   `docs/reference/app-data-coverage.md`.
-- **Bump the MINOR version** (`0.5.0 → 0.6.0`): `package.json`, workspace
-  `Cargo.toml`, `src-tauri/tauri.conf.json`, `Cargo.lock` (via `cargo check`).
-- CHANGELOG entry + milestone row; update the `traceloupe-versioning` memory.
-- Commit, `git tag -a vX.Y.0`, `git push origin main && git push origin vX.Y.0`.
+- **Cut the release per [`RELEASING.md`](../../../RELEASING.md):** run
+  `scripts/release.sh X.Y.0` to bump the version across all manifests, add a
+  CHANGELOG `## [X.Y.0]` section (open a new minor with a one-line bold milestone
+  summary), and update the `traceloupe-versioning` memory.
+- Commit as `Release vX.Y.0 — <theme>` and open a PR. The `vX.Y.0` tag is
+  created automatically when it merges to main — never tag or push to main by
+  hand.
 
 **Minor vs patch — an OBJECTIVE rule (don't judge "size").** Whether a change
 "feels big" is subjective and inconsistent, so don't decide the bump that way.
