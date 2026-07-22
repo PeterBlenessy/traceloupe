@@ -168,7 +168,7 @@ export function AppsView() {
     return (
       <NoBackupState
         icon={Boxes}
-        title="Open a backup to inspect installed apps"
+        title="Inspect installed apps"
         lead="Every app installed on the device — with version, App Store details, bundle id, and the data it left in the backup — a starting point for spotting unfamiliar or hidden apps."
         features={[
           { label: "Search", detail: "Search by name, bundle id, seller, genre, or account." },

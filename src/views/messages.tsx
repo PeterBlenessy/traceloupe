@@ -362,7 +362,7 @@ function MessagesViewInner() {
     return (
       <NoBackupState
         icon={MessageSquare}
-        title="Open a backup to read messages"
+        title="Read messages"
         lead="iMessage and SMS conversations reconstructed thread by thread — bubbles, reactions, replies, attachments, and group chats — exactly as they were on the device."
         features={[
           { label: "Two views", detail: "Read conversation by conversation, or scan every message in one Timeline stream." },

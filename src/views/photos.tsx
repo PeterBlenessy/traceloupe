@@ -211,7 +211,7 @@ function PhotosViewInner() {
     return (
       <NoBackupState
         icon={ImageIcon}
-        title="Open a backup to browse photos & videos"
+        title="Browse photos & videos"
         lead="Every photo and video from the iPhone's Camera Roll, restored from the backup and viewable full-size — Live Photos, screenshots, panoramas, and bursts included."
         features={[
           { label: "Search", detail: "Find shots by filename, person, place, or album." },
