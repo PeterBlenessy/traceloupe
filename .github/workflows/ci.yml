@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  release-consistency:
+    name: Release invariants (version ↔ CHANGELOG ↔ tags)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so the "every documented version is tagged"
+          # check can see them.
+          fetch-depth: 0
+      - run: git fetch --tags --force --quiet
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Fails the PR if the current version has no CHANGELOG entry, if the
+      # manifests disagree, or if a past documented version lost its tag.
+      - run: bash scripts/check-releases.sh
+
   core:
     name: Core crate (Rust, Linux)
     runs-on: ubuntu-latest
