@@ -516,6 +516,35 @@ pub async fn run_safety_scan(
             }
         }
 
+        // Cancel-watcher: the engine only checks cancellation *between* chunks,
+        // and one chunk is a single ~1-min blocking LLM request. So on Stop, kill
+        // the model server — that drops the in-flight request immediately (its
+        // retry then fails fast and the between-chunk check breaks the loop),
+        // making Stop felt in a fraction of a second instead of up to a minute.
+        let server_pid = llama.pid();
+        let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let cancel = cancel.clone();
+            let done = watch_done.clone();
+            let app = app2.clone();
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    if cancel.is_cancelled() {
+                        crate::logging::info(
+                            &app,
+                            "Safety Scan: cancel requested — stopping the model server",
+                        );
+                        let _ = std::process::Command::new("/bin/kill")
+                            .arg("-9")
+                            .arg(server_pid.to_string())
+                            .status();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(120));
+                }
+            })
+        };
+
         let llm = client::LlmClient::new(
             llama.base_url(),
             &spec_id,
@@ -555,6 +584,10 @@ pub async fn run_safety_scan(
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
         summary::run_summaries(&mut analysis, &llm, outcome.scan_id, &cancel)
             .map_err(|e| e.to_string())?;
+        // Stop the watcher (it may already have fired on cancel) before we take
+        // the server down ourselves.
+        watch_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = watcher.join();
         llama.shutdown();
         // Wipe scratch now (a crashed run's residue is cleared at the next
         // run's start-of-run wipe; this keeps the happy path tidy).
