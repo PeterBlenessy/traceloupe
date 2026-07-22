@@ -603,6 +603,49 @@ impl AnalysisDb {
             .optional()?)
     }
 
+    /// A specific scan by id, for viewing a past scan's report.
+    pub fn scan_by_id(&self, id: i64) -> Result<Option<ScanRow>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
+                        chunks_total, chunks_done
+                 FROM scans WHERE id = ?1",
+                params![id],
+                |r| {
+                    Ok(ScanRow {
+                        id: r.get(0)?,
+                        model: r.get(1)?,
+                        range_start: r.get(2)?,
+                        range_end: r.get(3)?,
+                        status: r.get(4)?,
+                        started_at: r.get(5)?,
+                        finished_at: r.get(6)?,
+                        chunks_total: r.get(7)?,
+                        chunks_done: r.get(8)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Remove a scan and everything scoped to it — findings, per-chunk progress,
+    /// and summaries. Dismissals are keyed by fingerprint (not scan) and are
+    /// left intact so a re-scan still honours them.
+    pub fn delete_scan(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM content_findings WHERE scan_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM chunk_progress WHERE scan_id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM summaries WHERE scan_id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     /// Past scans, newest first, each with its live (non-stale) finding count —
     /// for the scan-history list.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {

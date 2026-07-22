@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ExternalLink, EyeOff, HeartPulse, History, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
+  Square, Download, ExternalLink, Eye, EyeOff, HeartPulse, History, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,14 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
@@ -130,17 +138,54 @@ export function SafetyScanView() {
       ...makeYearPresets(minYear, maxYear),
     ];
   }, [basePresets, dateBounds, now]);
-  // Per-window message counts, so empty periods are shown-but-disabled (not
-  // hidden). Counts reflect messages — the bulk of scanned content.
-  const { data: presetCounts } = useQuery({
+  // Per-window item counts, so empty periods are shown-but-disabled (not
+  // hidden). Messages and notes are counted separately so each period's number
+  // can follow the selected Content source. These are item counts that match
+  // the Messages / Notes views — never internal chunk counts.
+  const presetRanges = useMemo(
+    () => presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+    [presets],
+  );
+  const { data: presetMsgCounts } = useQuery({
     queryKey: ["messageRanges", now, presets.length],
-    queryFn: () =>
-      client.countMessageRanges(
-        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
-        null,
-      ),
+    queryFn: () => client.countMessageRanges(presetRanges, null),
     enabled: active === true,
   });
+  const { data: presetNoteCounts } = useQuery({
+    queryKey: ["noteRanges", now, presets.length],
+    queryFn: () => client.countNoteRanges(presetRanges),
+    enabled: active === true,
+  });
+  // Counts for the currently-selected period, feeding the Content options
+  // (All = messages + notes, Messages, Notes) for that period.
+  const { data: rangeCounts } = useQuery({
+    queryKey: ["safetyRangeCounts", range.lo, range.hi],
+    queryFn: async () => {
+      const [msg, note] = await Promise.all([
+        client.countMessageRanges([range], null),
+        client.countNoteRanges([range]),
+      ]);
+      return { messages: msg[0] ?? 0, notes: note[0] ?? 0 };
+    },
+    enabled: active === true,
+  });
+  // Each period's count follows the selected source, so the number next to a
+  // period reflects exactly what that scan would cover.
+  const presetCounts = useMemo(() => {
+    if (!presetMsgCounts && !presetNoteCounts) return undefined;
+    return presets.map((_, i) => {
+      const m = presetMsgCounts?.[i] ?? 0;
+      const n = presetNoteCounts?.[i] ?? 0;
+      return source === "messages" ? m : source === "notes" ? n : m + n;
+    });
+  }, [presets, presetMsgCounts, presetNoteCounts, source]);
+  // Item counts (matching the Messages / Notes views) for each Content option,
+  // within the selected period.
+  const sourceCounts = useMemo(() => {
+    const m = rangeCounts?.messages ?? 0;
+    const n = rangeCounts?.notes ?? 0;
+    return { all: m + n, messages: m, notes: n };
+  }, [rangeCounts]);
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -273,9 +318,9 @@ export function SafetyScanView() {
                         label: "Content",
                         description: "What to scan",
                         options: [
-                          { value: "all", label: "Messages & notes" },
-                          { value: "messages", label: "Messages" },
-                          { value: "notes", label: "Notes" },
+                          { value: "all", label: "All", count: sourceCounts.all },
+                          { value: "messages", label: "Messages", count: sourceCounts.messages },
+                          { value: "notes", label: "Notes", count: sourceCounts.notes },
                         ],
                         value: source,
                         onChange: setSource,
@@ -458,10 +503,24 @@ const SCAN_STATUS_LABEL: Record<string, string> = {
 /** Past scans on this backup — period, when, status and how many findings each
  *  produced. Shown only when there's more than the current scan. */
 function ScanHistory() {
+  const qc = useQueryClient();
   const history = useQuery({
     queryKey: ["safetyScan", "history"],
     queryFn: () => client.listSafetyScans(),
   });
+  // Which past scan's report to view, and which to confirm deleting.
+  const [viewId, setViewId] = useState<number | null>(null);
+  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const del = useMutation({
+    mutationFn: (id: number) => client.deleteSafetyScan(id),
+    onSuccess: () => {
+      setConfirmId(null);
+      // Refresh history, the top report card (may have been the latest), and
+      // the live findings list.
+      qc.invalidateQueries({ queryKey: ["safetyScan"] });
+    },
+  });
+
   const items = history.data ?? [];
   if (items.length < 2) return null;
   return (
@@ -488,15 +547,145 @@ function ScanHistory() {
                 {formatListTime(s.finishedAt ?? s.startedAt)}
               </div>
             </div>
-            <Badge variant={s.findings > 0 ? "secondary" : "outline"}>
-              {s.findings === 0
-                ? "no findings"
-                : `${s.findings} finding${s.findings === 1 ? "" : "s"}`}
-            </Badge>
+            <div className="flex shrink-0 items-center gap-1">
+              <Badge
+                variant={s.findings > 0 ? "secondary" : "outline"}
+                className="mr-1"
+              >
+                {s.findings === 0
+                  ? "no findings"
+                  : `${s.findings} finding${s.findings === 1 ? "" : "s"}`}
+              </Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-xs"
+                onClick={() => setViewId(s.id)}
+              >
+                <Eye className="size-3.5" /> View
+              </Button>
+              {/* Export is planned; shown disabled so the affordance is
+                  discoverable but clearly not yet available. */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="gap-1.5 text-xs"
+                disabled
+                title="Exporting reports is coming soon"
+              >
+                <Download className="size-3.5" /> Export
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8 text-muted-foreground hover:text-destructive"
+                onClick={() => setConfirmId(s.id)}
+                aria-label="Delete this scan"
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
           </div>
         ))}
       </CardContent>
+
+      <ScanReportDialog scanId={viewId} onClose={() => setViewId(null)} />
+
+      <Dialog
+        open={confirmId != null}
+        onOpenChange={(o) => !o && setConfirmId(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete this scan?</DialogTitle>
+            <DialogDescription>
+              This scan's findings and report are removed from this backup.
+              Findings you dismissed stay dismissed for future scans. This can't
+              be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmId(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={del.isPending}
+              onClick={() => confirmId != null && del.mutate(confirmId)}
+            >
+              {del.isPending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
+  );
+}
+
+/** The full written report for a past scan, opened from the history list. */
+function ScanReportDialog({
+  scanId,
+  onClose,
+}: {
+  scanId: number | null;
+  onClose: () => void;
+}) {
+  const report = useQuery({
+    queryKey: ["safetyScan", "report", scanId],
+    queryFn: () => client.getSafetyScanReport(scanId ?? undefined),
+    enabled: scanId != null,
+  });
+  const data = report.data;
+  return (
+    <Dialog open={scanId != null} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Scan report</DialogTitle>
+          {data?.scan && (
+            <DialogDescription>
+              {SCAN_STATUS_LABEL[data.scan.status] ?? data.scan.status}
+              {data.scan.finishedAt
+                ? ` ${formatListTime(data.scan.finishedAt)}`
+                : ""}
+              {" · scanned "}
+              {formatScanRange(data.scan.rangeStart, data.scan.rangeEnd)}
+            </DialogDescription>
+          )}
+        </DialogHeader>
+        {report.isPending ? (
+          <p className="text-sm text-muted-foreground">Loading the report…</p>
+        ) : data?.report ? (
+          <div className="space-y-3">
+            <p className="text-sm leading-relaxed">{data.report}</p>
+            {data.threadSummaries.length > 0 && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  {data.threadSummaries.map(([thread, text]) => (
+                    <div key={thread} className="text-sm">
+                      <span className="font-medium">{thread}: </span>
+                      <span className="text-muted-foreground">{text}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This scan didn't produce a written report
+            {data?.scan?.status === "cancelled"
+              ? " — it was stopped before finishing."
+              : "."}
+          </p>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

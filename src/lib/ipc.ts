@@ -837,6 +837,9 @@ export interface TraceLoupeClient {
     search?: string | null,
     kind?: string | null,
   ): Promise<number[]>;
+  /** Notes per time range, dated like the Notes view — so a Safety-Scan filter
+   *  count and the Notes view agree for the same period. */
+  countNoteRanges(ranges: TimeRange[]): Promise<number[]>;
   /** The earliest and latest dated message (Unix seconds), or null if none. */
   messageDateBounds(): Promise<[number, number] | null>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
@@ -942,10 +945,13 @@ export interface TraceLoupeClient {
     category: string,
     dismissed: boolean,
   ): Promise<void>;
-  /** Latest scan row + its Scan report and per-thread summaries. */
-  getSafetyScanReport(): Promise<SafetyScanReport>;
+  /** A scan's report + per-thread summaries. Latest scan when `scanId` is
+   *  omitted, or a specific past scan from the history list. */
+  getSafetyScanReport(scanId?: number): Promise<SafetyScanReport>;
   /** Past scans (newest first) for the history list. */
   listSafetyScans(): Promise<SafetyScanHistoryItem[]>;
+  /** Remove a past scan and everything scoped to it. */
+  deleteSafetyScan(scanId: number): Promise<void>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -1178,6 +1184,8 @@ const tauriClient: TraceLoupeClient = {
       search: search ?? null,
       kind: kind ?? null,
     }),
+  countNoteRanges: (ranges) =>
+    invoke<number[]>("count_note_ranges", { ranges }),
   messageDateBounds: () =>
     invoke<[number, number] | null>("message_date_bounds"),
   getRangeWindow: (
@@ -1314,10 +1322,14 @@ const tauriClient: TraceLoupeClient = {
     invoke<FindingMarks>("safety_scan_finding_marks"),
   dismissContentFinding: (fingerprint, category, dismissed) =>
     invoke("dismiss_content_finding", { fingerprint, category, dismissed }),
-  getSafetyScanReport: () =>
-    invoke<SafetyScanReport>("get_safety_scan_report"),
+  getSafetyScanReport: (scanId) =>
+    invoke<SafetyScanReport>("get_safety_scan_report", {
+      scanId: scanId ?? null,
+    }),
   listSafetyScans: () =>
     invoke<SafetyScanHistoryItem[]>("list_safety_scans"),
+  deleteSafetyScan: (scanId) =>
+    invoke("delete_safety_scan", { scanId }),
 
   getIndicatorInfo: () => invoke<SnapshotInfo>("get_indicator_info"),
   updateIndicators: () => invoke<SnapshotInfo>("update_indicators"),
@@ -2290,6 +2302,8 @@ const mockFindings: Finding[] = [
 
 let mockActive = false;
 const mockImported = new Set<string>();
+// Scan-history rows the browser mock has "deleted", so delete + re-list behaves.
+const mockDeletedScanIds = new Set<number>();
 
 // Mock-side filters mirroring the backend's windowed SQL, so the browser mock
 // behaves like the real windowed/filterable queries.
@@ -2857,6 +2871,15 @@ export const mockClient: TraceLoupeClient = {
     ranges.map((r) =>
       mockActive ? mockFilterTimeline(service, r, search).length : 0,
     ),
+  countNoteRanges: async (ranges) =>
+    ranges.map((r) => {
+      if (!mockActive) return 0;
+      return mockNotes.filter((n) => {
+        const t = n.modifiedAt ?? n.createdAt;
+        if (t == null) return false;
+        return (r.lo == null || t >= r.lo) && (r.hi == null || t < r.hi);
+      }).length;
+    }),
   messageDateBounds: async () => {
     if (!mockActive) return null;
     const ts = Object.values(mockMessages)
@@ -3062,11 +3085,11 @@ export const mockClient: TraceLoupeClient = {
       }
     }
   },
-  getSafetyScanReport: async () =>
+  getSafetyScanReport: async (scanId) =>
     mockActive && mockContentFindings.length
       ? {
           scan: {
-            id: 1,
+            id: scanId ?? 1,
             model: "gemma-4-E4B-it-Q4_K_M",
             rangeStart: null,
             rangeEnd: null,
@@ -3116,8 +3139,11 @@ export const mockClient: TraceLoupeClient = {
             finishedAt: Math.floor(Date.now() / 1000) - 199000,
             findings: 5,
           },
-        ]
+        ].filter((s) => !mockDeletedScanIds.has(s.id))
       : [],
+  deleteSafetyScan: async (scanId) => {
+    mockDeletedScanIds.add(scanId);
+  },
 
   getIndicatorInfo: async () => mockSnapshotInfo,
   updateIndicators: async () => mockSnapshotInfo,
