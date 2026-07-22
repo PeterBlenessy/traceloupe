@@ -1,4 +1,4 @@
-//! Persisted Security Check settings (see CONTEXT.md decisions log).
+//! Persisted Security Check settings (see docs/CONTEXT.md decisions log).
 //!
 //! These are app preferences, not cache data: they must survive a re-import,
 //! so they live in a small JSON file under the app data dir rather than in the

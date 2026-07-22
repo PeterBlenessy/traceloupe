@@ -2,7 +2,12 @@
 
 **Product Requirements Document** *(internal codename: spyware-analyzer)*
 
-*Status: Draft — core design decisions resolved 2026-07-20 (see `CONTEXT.md` and `docs/adr/0001`) · Target: post-0.2.0 feature · Platform: macOS (TraceLoupe, Tauri v2)*
+*Status: Draft — core design decisions resolved 2026-07-20 (see `docs/CONTEXT.md` and `docs/adr/0001`) · Target: post-0.2.0 feature · Platform: macOS (TraceLoupe, Tauri v2)*
+
+> **Shipped.** This PRD is now delivered — Security Check M1 shipped in v0.20.0
+> and M2/M3 through v0.28.0. It is kept as the original design record; the
+> CHANGELOG and `docs/validation/security-check-validation.md` describe what
+> actually shipped.
 
 ---
 
@@ -80,7 +85,7 @@ Stalkerware has a specific safety dynamic the UI must respect: **the abuser may 
 
 ### 6.0 Detection model
 
-Detection runs in two modes (both defined in `CONTEXT.md`):
+Detection runs in two modes (both defined in `docs/CONTEXT.md`):
 
 - **Explicit Scan** — user-initiated from the Security view; evaluates every indicator class against the whole backup. Starts by fetching fresh feeds when the update setting is on.
 - **Passive Check** — runs automatically inside every import, restricted by default to app matching (bundle IDs; configuration profiles once Tier B lands). Requires one-time consent, gathered at the first app launch after the feature ships; on acceptance the check runs immediately against the existing cache, so existing users get coverage without re-importing. Scope and on/off are configurable in Settings.
@@ -150,10 +155,10 @@ Added to `src-tauri/src/lib.rs` and `src/lib/ipc.ts` following existing patterns
 
 - **False positives** are the defining UX risk (visiting a vendor site → domain match). Mitigations: severity tiers, per-finding context, framing copy everywhere. Never a red scare-screen for Info-level matches.
 - **False negatives / stale feeds:** public IOCs lag real campaigns. The clean-result screen must carry the disclaimer; feed timestamps are always visible.
-- **Privacy scoping (resolved — ADR 0001):** the privacy promise covers backup-derived data, not the app's operational traffic. Feed fetches are ordinary, disclosed, setting-governed app behavior; the bundled snapshot preserves an offline path. Public docs still saying "fully offline" (product-architecture-description.md §5) must be reworded.
+- **Privacy scoping (resolved — ADR 0001):** the privacy promise covers backup-derived data, not the app's operational traffic. Feed fetches are ordinary, disclosed, setting-governed app behavior; the bundled snapshot preserves an offline path. Public docs still saying "fully offline" (docs/product-overview.md §5) must be reworded.
 - **Licensing:** MVT's code is under a restricted-use license — we do **not** vendor or port its code, only consume public indicator data (CC-BY 2.0 / 4.0, attribution required in-app and in the report footer). Our engine is an independent Rust implementation. A brief license review before M1 ships.
 - **Legal/ethical copy:** we detect; we don't accuse. Report language mirrors iMazing's ("indicators of compromise were detected") — worth a review pass.
-- **Resolved 2026-07-20** (full decisions log in `CONTEXT.md`): findings live in the cache DB and share its lifecycle (Passive Check repopulates after re-import; UI prompts to re-run the Explicit Scan); detection is Explicit Scan + consented Passive Check (apps-only default, configurable); severity is the 3-level Critical/Warning/Info taxonomy; user-facing name is Security Check.
+- **Resolved 2026-07-20** (full decisions log in `docs/CONTEXT.md`): findings live in the cache DB and share its lifecycle (Passive Check repopulates after re-import; UI prompts to re-run the Explicit Scan); detection is Explicit Scan + consented Passive Check (apps-only default, configurable); severity is the 3-level Critical/Warning/Info taxonomy; user-facing name is Security Check.
 - **Open:** Do we surface Tier B artifacts (profiles, data usage) as first-class browse views later?
 
 ## 9. References

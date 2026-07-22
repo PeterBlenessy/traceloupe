@@ -2,7 +2,7 @@
 //!
 //! iLEAPP writes one table per artifact module (e.g. `sms`) plus engine tables
 //! (`_lava_media_items`, `_lava_media_references`, `itunes_backup_info`). This
-//! module maps those, per the contract verified in `docs/spike-ileapp.md`,
+//! module maps those, per the contract verified in `docs/research/spike-ileapp.md`,
 //! into the engine-neutral cache schema (see `cache.rs`). Phase 2's native
 //! parsers will write the same cache tables through a different front door.
 //!
@@ -369,7 +369,7 @@ fn normalize_media(
     // Same source file checked in more than once (e.g. by two photo modules)
     // should appear once. Keyed on the non-empty source path. Note: this does
     // not merge differently-keyed thumbnails of one asset across modules — see
-    // docs/spike-ileapp.md.
+    // docs/research/spike-ileapp.md.
     let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Batch the inserts: one transaction instead of an fsync per row.
@@ -1327,7 +1327,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("_lava_artifacts.db");
         let conn = Connection::open(&path).unwrap();
-        // Real callhistory lava schema (see docs/spike-ileapp.md).
+        // Real callhistory lava schema (see docs/research/spike-ileapp.md).
         conn.execute_batch(
             "CREATE TABLE callhistory (
                  starting_timestamp INTEGER, ending_timestamp INTEGER, service_provider TEXT,

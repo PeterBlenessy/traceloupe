@@ -123,7 +123,7 @@ impl ScanKind {
         }
     }
 
-    /// The Passive Check is apps-only by default (see CONTEXT.md): presence
+    /// The Passive Check is apps-only by default (see docs/CONTEXT.md): presence
     /// evidence with near-zero false positives, no content scanning.
     pub fn default_modules(self) -> Vec<&'static str> {
         match self {

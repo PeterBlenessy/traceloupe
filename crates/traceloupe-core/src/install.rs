@@ -4,7 +4,7 @@
 //! engine binary, verifies its SHA-256 against a checksum baked into the app,
 //! stores it under the app data dir, and runs it thereafter. The pin matters
 //! because `_lava_artifacts.db` is not a stable API — the normalizer targets a
-//! specific engine version (see docs/spike-ileapp.md).
+//! specific engine version (see docs/research/spike-ileapp.md).
 //!
 //! This module is transport/format agnostic and fully testable: it downloads
 //! from any URL, streams to disk while hashing, and only commits the file if

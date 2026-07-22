@@ -4,39 +4,7 @@ All notable changes to **TraceLoupe** are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
-While pre-1.0, the **minor** version tracks major milestones:
-
-| Version | Milestone |
-|---------|-----------|
-| `0.1.0` | **MVP** — iLEAPP-powered import into a local cache, with a native browsing UI. |
-| `0.2.0` | **Native lazy-decode core, wired in** — Manifest Index + on-demand decryption + native Messages/Notes/Recordings/Camera-roll parsers, running *alongside* iLEAPP (which still supplies Calls, Safari, Apps, third-party chats). |
-| `0.3.0` | **Native-first, Batch 1** — all first-party views native (Calls, Safari, Apps, Contacts); a pluggable native app-chat framework with WhatsApp, Facebook Messenger, Instagram & TikTok. iLEAPP still runs for Telegram, TikTok contacts, and the long tail. |
-| `0.4.0` | **More native chat apps** — Telegram (binary postbox), Kik, imo, Threema, via the app-chat framework. iLEAPP still runs for the long tail. |
-| `0.5.0` | **More native chat apps** — Viber, Microsoft Teams, via the app-chat framework. |
-| `0.6.0` | **LinkedIn** native chat. |
-| `0.7.0` | **Native-first complete** — native TikTok contacts (the last iLEAPP-only artifact); default import fully native (~35s, no engine subprocess); `Photos.sqlite` metadata (people/date/GPS/favorite); native Safari bookmarks, reading list & tabs. |
-| `0.8.0` | **Native TikTok DMs + UI overhaul** — TikTok direct messages (validated) with a message content-kind filter, friendlier voice-memo titles, and message media in the gallery; a shared `PanelHeader`, badge filters, a UI density setting, and persisted per-view state. |
-| `0.9.0` | **Data-coverage pass** — a field-level audit against a real backup, then filling the high-value gaps: Calls FaceTime/location, Photos EXIF/hidden/subtypes, Contacts detail (birthday/note/addresses), Messages receipts/reactions/replies, Safari deleted-history. |
-| `0.10.0` | **Untapped stores surfaced** — five new views (Device, Calendar, Reminders, Health, Interactions), Messages `attributedBody` decode + edited flag, Notes rich-content indicators, and the app-chat attachment-media framework. |
-| `0.11.0` | **Locked-note decryption** — password-protected Apple Notes unlock on demand (PBKDF2 → RFC-3394 key-unwrap → AES-128-GCM), the note password entered in-app and nothing decrypted at rest. Closes the last coverage-audit gap. |
-| `0.12.0` | **Messages & media UX overhaul + hardening** — inline/hover link previews (OpenGraph, single 3-way mode), an in-app image/video lightbox, opt-in recovery of missing attachments from the camera roll, Notes rich-text rendering, persisted scroll/sidebar/window state, and a pre-release review pass that closed a DNS-rebind SSRF hole in link fetching. See "Planned" below for what's next. |
-| `0.13.0` | **Adaptive "islands" toolbar** — every view's filters, sort, and search become segmented, bordered islands in one unified top bar that shares width evenly, reveals more chips as room allows, collapses to representative icons when tight, and expands one island on demand while the others fold. Rolled out across all thirteen views. |
-| `0.14.0` | **Filter · Sort · Search paradigm + window chrome** — the islands give way to one **Filter** button that morphs into a grouped, described filter panel (single- or multi-select), with sort and an expanding search as standalone controls. A full-width HTML title bar that yields the full height to the sidebar when it's open, the sidebar top merged with the Device view, and Settings moved to the sidebar footer. |
-| `0.15.0` | **Data-coverage pass** — surfacing fields already parsed but unshown: all of a note's embedded images (detail gallery), iMessage group-action system rows, Safari reading-list read/last-viewed. |
-| `0.16.0` | **Health deep-dive + contact relationships** — the HealthKit store beyond workouts: daily activity aggregates (steps/distance/energy/flights/heart-rate), sleep sessions, and workout GPS routes with inline previews; plus contact related-names and address-book groups. |
-| `0.17.0` | **Health rings, mobility & the timezone timeline** — Apple activity rings vs goals, walking/audio-exposure daily metrics, and a per-timezone travel timeline from sample provenances; the Health view's sections refactored onto one descriptor-driven pipeline. |
-| `0.18.0` | **Data-coverage pass, recovery-themed** — Recently-Deleted photos (`ZTRASHEDSTATE`) and messages (`chat_recoverable_message_join`), per-app Interaction channels, Messages sticker/effect/app-bubble classification, Health Cycle-Tracking + Awards, Contacts social profiles, and App Store metadata. |
-| `0.19.0` | **Data-coverage close-out** — Safari local open tabs (`BrowserState.db`, with a private-browsing badge), Calls number-country flags, and Photos added-to-library date. Field-level coverage is now closed; remaining gaps are marked won't-implement. |
-| `0.20.0` | **Security Check (M1)** — a spyware/stalkerware indicator scan (MVT-style) over the imported backup: STIX2 + Echap indicator feeds bundled and refreshable, a native Rust scan engine across messages/Safari/apps/contacts/notes/calendar/interactions + a Manifest file sweep, Explicit Scans and a consent-gated Passive Check at import, a Security view with severity-graded findings and CSV export. |
-| `0.21.0` | **Security Check M2 — process-name detection** — the first Tier-B artifact surface: DataUsage.sqlite and OSAnalytics ADDaily process activity scanned against process-name indicators (the class that first exposed Pegasus), extracted on demand during an Explicit Scan. |
-| `0.22.0` | **Security Check M2 — configuration profiles** — installed profiles (ProfileTruth + PayloadManifest) surfaced for review: indicator matches on profile hosts/names, plus structural flags for hidden profiles (Warning) and device-management profiles (Info). The classic stalkerware install vector. |
-| `0.23.0` | **Security Check M2 — TCC permissions** — TCC.db grants cross-checked against stalkerware bundle IDs: a known monitoring app holding microphone/camera/location access is surfaced with the exact permissions it holds, corroborating a bundle-id match with real capability evidence. |
-| `0.24.0` | **Security Check M2 — Shortcuts** — Shortcuts.sqlite actions scanned for indicator URLs/hosts: a shortcut that quietly calls out to a malicious endpoint (exfiltration/automation) is flagged. Tier-B scan inputs refactored into one `ScanInputs` struct. |
-| `0.25.0` | **Security Check M2 complete — WebKit** — domains each app's webview contacted (per-app `observations.db`) scanned against indicators: a webview loading a known C2 domain is flagged with the apps that saw it. Completes the M2 Tier-B surfaces. |
-| `0.26.0` | **Security Check M3 — custom indicators** — point the scan at a local folder of `.stix`/`.stix2`/`.yaml` files, merged with the bundled feeds (researcher mode, parity with iMazing). |
-| `0.27.0` | **Security Check M3 — scan-history diffing** — findings new since the previous scan are flagged with a **NEW** badge and a "N new since last scan" count, so a re-scan after an indicator update highlights what changed. |
-| `0.28.0` | **Security Check M3 complete — opt-in de-shortener** — reveal where a shortened link points, as a deliberate per-link action gated by a per-use approval prompt (with a per-backup, never global, "don't ask again"). Only allowlisted shorteners are contacted, and the destination is revealed without visiting it. |
-| `0.29.0` | **Safety Scan — on-device AI content review (experimental)** — a local Gemma model, run in a sandboxed `llama-server` sidecar with no network beyond loopback and message text never written to disk, reads Messages and Notes in windows and flags possible threats, harassment, grooming, self-harm, coercive control and scams against a Forensic-9 taxonomy. Verdicts land in a per-backup `analysis.db` with a scan report (period + findings), a scan history you can view and delete, Messages/Notes and time-range filters with live item counts, per-finding dismissals, cancellation that actually stops, and a labeled-fixture validation harness gating CI. Shipped behind a Beta badge. Alongside it: the Messages and scan views migrated onto the unified toolbar, rich capability-forward "no backup" empty states across every view, an Apps install-receipt view, Security-Check polish, and an every-button-needs-a-tooltip pass. |
+Pre-1.0, the **minor** version marks a milestone; the per-version entries below give the detail.
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -93,7 +61,7 @@ Mac.
 - **Security Check polish.** The external threat feeds are explained (who
   they're from, what STIX/YAML are, with links); the de-shortener risk reads as
   a warning callout; a dead setting was removed.
-- **Every button has a tooltip.** A new project rule (AGENTS.md + `docs/ui.md`),
+- **Every button has a tooltip.** A new project rule (AGENTS.md + `docs/reference/ui.md`),
   with the existing `title=` buttons swept onto the shadcn Tooltip.
 
 ### Fixed
@@ -183,7 +151,7 @@ Tier-B surface: the domains an app's in-app browser (WebKit) contacted.
   `observations.db` is located via the Manifest index and parsed. Passive Check
   unaffected.
 - Validated against the real dev backup: 2,692 observed domains extracted across
-  34 apps, zero indicator matches (clean). See `docs/security-check-validation.md`.
+  34 apps, zero indicator matches (clean). See `docs/validation/security-check-validation.md`.
 
 With WebKit, every MVT iOS module that matches an indicator class our feeds
 carry is now covered by a shipped module — **M2 Tier-B is complete.**
@@ -205,7 +173,7 @@ vector.
   grants — now plus shortcuts) are grouped into one `ScanInputs` struct,
   replacing a growing positional-argument list.
 - Validated against the real dev backup: 46 shortcuts extracted (44 reference a
-  host), zero indicator matches (clean). See `docs/security-check-validation.md`.
+  host), zero indicator matches (clean). See `docs/validation/security-check-validation.md`.
 
 ## [0.23.0] — 2026-07-21
 
@@ -227,7 +195,7 @@ permissions against the stalkerware bundle-id lists.
   best-effort. Passive Check unaffected.
 - Validated against the real dev backup: 116 grants across 67 apps extracted,
   zero stalkerware matches (clean); the positive path is covered by unit tests.
-  See `docs/security-check-validation.md`.
+  See `docs/validation/security-check-validation.md`.
 
 ## [0.22.0] — 2026-07-20
 
@@ -250,7 +218,7 @@ profile can grant broad control over the device).
   unaffected.
 - Validated against the real dev backup: the one installed profile (a legitimate
   university printer profile) is parsed correctly and surfaced as a single Info
-  review finding — no false alarm. See `docs/security-check-validation.md`.
+  review finding — no false alarm. See `docs/validation/security-check-validation.md`.
 
 ## [0.21.0] — 2026-07-20
 
@@ -272,7 +240,7 @@ against process-name indicators.
 - Validated against the real dev backup: 1,825 processes extracted, no mercenary
   process-name matches; the bundle-name cross-check independently re-surfaced the
   known Kaspersky Safe Kids watchware (Info) found in M1. See
-  `docs/security-check-validation.md`.
+  `docs/validation/security-check-validation.md`.
 
 ## [0.20.0] — 2026-07-20
 
@@ -305,14 +273,14 @@ Echap stalkerware feed).
 - **Privacy (ADR 0001).** Backup-derived data never leaves the machine; feed
   fetches are disclosed, setting-governed, send-nothing operational traffic.
 
-Validated against `mvt-ios check-backup` (see `docs/security-check-validation.md`):
+Validated against `mvt-ios check-backup` (see `docs/validation/security-check-validation.md`):
 every indicator class MVT matches from these feeds is covered by a shipped
 module; the rest maps to the named M2 (Tier B) scope.
 
 ## [0.19.0] — 2026-07-20
 
 **Data-coverage close-out.** The last field-level items, and a line drawn under
-the coverage effort (see `docs/app-data-coverage.md`). Requires a re-import to
+the coverage effort (see `docs/reference/app-data-coverage.md`). Requires a re-import to
 populate for existing caches.
 
 ### Added
@@ -824,7 +792,7 @@ parameters are cached, and the plaintext is derived on demand and discarded.
 
 Follows the 0.9.0 coverage audit by **surfacing the untapped stores** it flagged —
 five new views plus deeper decoding of Messages and Notes. See
-[`docs/app-data-coverage.md`](docs/app-data-coverage.md) for the field-level
+[`docs/reference/app-data-coverage.md`](docs/reference/app-data-coverage.md) for the field-level
 inventory.
 
 ### Added
@@ -861,7 +829,7 @@ inventory.
 A **data-coverage pass**: a field-level audit of the real backup (parser →
 cache → query → UI) followed by filling every high-value, tractable gap it
 found. Each item below is verified end-to-end. See
-[`docs/app-data-coverage.md`](docs/app-data-coverage.md) for the full inventory
+[`docs/reference/app-data-coverage.md`](docs/reference/app-data-coverage.md) for the full inventory
 and the remaining (large-feature / password-blocked) gaps.
 
 ### Added
@@ -1165,8 +1133,8 @@ and the long tail), so this is the first batch of the migration, not its end.
     the automatic iLEAPP fallback.
 - **NSKeyedArchiver decoder** (`crate::nska`) — resolves Apple keyed-archive
   blobs (used by Instagram DMs); a reusable, standalone iOS-forensics primitive.
-- **Living coverage docs** — `docs/app-support.md` (native vs iLEAPP per app) and
-  `docs/app-data-coverage.md` (field-level: what each DB holds vs. what we
+- **Living coverage docs** — `docs/reference/app-support.md` (native vs iLEAPP per app) and
+  `docs/reference/app-data-coverage.md` (field-level: what each DB holds vs. what we
   surface). Includes research notes on Snapchat / X / Facebook local stores.
 
 ### Fixed
@@ -1214,7 +1182,7 @@ the batched 0.3.0+ migration under "Planned" below.
   temp-cache swap).
 - **Touch ID (opt-in) + signing detection.** An encrypted backup's Keychain
   password can be gated behind Touch ID; the app detects whether it's stably
-  signed and enables the toggle accordingly (see `docs/signing.md`).
+  signed and enables the toggle accordingly (see `docs/reference/signing.md`).
 
 ### Notes & caveats
 - Native Messages/Notes/Recordings/Camera-roll run *in addition to* iLEAPP's
@@ -1230,8 +1198,8 @@ third-party, is parsed by an in-house Rust parser, and iLEAPP is no longer run a
 all (kept only as a development-time schema reference; the sidecar path is
 dormant). The earlier "make iLEAPP optional, in batches" plan has therefore been
 fully delivered and superseded; the remaining backlog is about *depth*, not
-removing iLEAPP. Tracked in detail in [`docs/app-data-coverage.md`](docs/app-data-coverage.md)
-(field-level) and [`docs/app-support.md`](docs/app-support.md) (per-app).
+removing iLEAPP. Tracked in detail in [`docs/reference/app-data-coverage.md`](docs/reference/app-data-coverage.md)
+(field-level) and [`docs/reference/app-support.md`](docs/reference/app-support.md) (per-app).
 
 - **Field-level coverage gaps** — the highest-value unsurfaced fields: Messages
   full per-edit history (`message_summary_info`) and group-action rows; Notes

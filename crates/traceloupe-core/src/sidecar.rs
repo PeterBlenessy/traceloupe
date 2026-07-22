@@ -2,7 +2,7 @@
 //!
 //! Spawns iLEAPP as a separate process against an encrypted backup and streams
 //! its progress. iLEAPP decrypts the backup itself (spike finding — see
-//! `docs/spike-ileapp.md`), so the invocation is just:
+//! `docs/research/spike-ileapp.md`), so the invocation is just:
 //!
 //! ```text
 //! ileapp -t itunes -i <backup> -o <out> --itunes_password <pw>

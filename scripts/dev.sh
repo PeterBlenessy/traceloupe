@@ -16,7 +16,7 @@ fi
 
 # Optional: point the app at a local iLEAPP checkout if one exists. iLEAPP is a
 # development-time cross-check reference only — imports are fully native and do
-# NOT need it (see README / docs/native-app-parser.md). Set one up, if you want
+# NOT need it (see README / docs/reference/native-app-parser.md). Set one up, if you want
 # to diff parsers, with: pnpm setup:engine
 ENGINE="$ROOT/engine"
 if [ -x "$ENGINE/venv/bin/python" ] && [ -f "$ENGINE/iLEAPP/ileapp.py" ]; then

@@ -29,6 +29,10 @@ target
 # Local iLEAPP engine (set up via scripts/setup-engine.sh)
 /engine
 
-# agent worktrees (isolated review/dev copies)
-.claude/worktrees/
+# Claude Code local runtime & personal config — agent worktrees, locks, and
+# settings.local.json. Shared, committable agent config lives in .agents/
+# (skills), so the whole .claude/ folder is local-only. If a shared .claude/
+# file is ever needed (e.g. a project settings.json or a /command), add a
+# matching `!.claude/<path>` negation below.
+.claude/
 *.bak

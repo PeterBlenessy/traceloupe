@@ -4,7 +4,7 @@
 # Clones a pinned iLEAPP, slims it (drops .git and the large per-artifact test
 # data), and builds a Python 3.12 venv with iLEAPP's dependencies — pinning
 # pandas/numpy to the versions iLEAPP needs (newer pandas breaks its SMS
-# renderer; see docs/spike-ileapp.md). Requires `uv` and `git`.
+# renderer; see docs/research/spike-ileapp.md). Requires `uv` and `git`.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

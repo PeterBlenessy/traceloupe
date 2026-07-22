@@ -1,4 +1,4 @@
-//! Thin Tauri command layer over traceloupe-core (architecture.md §4).
+//! Thin Tauri command layer over traceloupe-core (docs/architecture.md §4).
 //! Commands translate core results into serializable responses; no parsing
 //! or business logic lives here.
 
@@ -813,7 +813,7 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     // no decryptor, full-resolution photos and native re-imports won't work until
     // the keys load. Point at the likely cause — a cancelled/unavailable Touch ID
     // prompt when biometric unlock is on, otherwise the Keychain-ACL/signing issue
-    // (a rebuilt dev binary loses access; see docs/signing.md).
+    // (a rebuilt dev binary loses access; see docs/reference/signing.md).
     if decryptor.is_none() {
         if let Ok(Some(src)) = CacheDb::open(&cache_path).and_then(|c| c.get_meta("source_dir")) {
             if discovery::read_backup_info(Path::new(&src)).is_encrypted == Some(true) {
@@ -824,7 +824,7 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
                 } else {
                     "Backup is encrypted but its keys couldn't be loaded from the Keychain — \
                      full-resolution photos and native re-imports are unavailable. Re-import with \
-                     the password, or sign the build with a stable identity (docs/signing.md)."
+                     the password, or sign the build with a stable identity (docs/reference/signing.md)."
                 };
                 logging::warn(&app, msg);
             }
@@ -861,7 +861,7 @@ fn set_biometric_required(enabled: bool) {
 
 /// The running app's code-signing status. The UI uses it to decide whether Touch
 /// ID / stable Keychain persistence can work (they need a real, non-adhoc
-/// signature — see docs/signing.md).
+/// signature — see docs/reference/signing.md).
 #[tauri::command]
 async fn app_signing_status() -> signing::SigningStatus {
     tauri::async_runtime::spawn_blocking(signing::status)
@@ -1040,7 +1040,7 @@ fn reimport_count(module_id: &str, r: &traceloupe_core::normalize::ImportReport)
 
 // ---------------------------------------------------------------------------
 // Security Check (spyware/stalkerware indicator scan). See
-// docs/spyware-analyzer-prd.md and docs/security-check-m1-plan.md.
+// docs/plans/spyware-analyzer-prd.md and docs/plans/security-check-m1-plan.md.
 // ---------------------------------------------------------------------------
 
 use traceloupe_core::analyzer::{self, ScanKind};

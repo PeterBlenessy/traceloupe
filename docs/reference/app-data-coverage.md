@@ -244,9 +244,11 @@ iMessage/phone-only); **contacts/social graph** is imported only for TikTok
 
 ## Untouched data (present in backup, not surfaced)
 
-TraceLoupe surfaces Messages, Photos, Contacts, Calls, Safari, Notes, Recordings,
-third-party chats, and an installed-apps list. Everything below exists in this
-backup but has no parser. Ranked by value × feasibility.
+TraceLoupe surfaces most of the backup's high-value data — Messages, Photos,
+Contacts, Calls, Safari, Notes, Recordings, third-party chats, installed apps,
+Health, CoreDuet Interactions, Calendar, Reminders, and device metadata (the ✅
+rows below). The remaining rows exist in this backup but have no parser yet,
+ranked by value × feasibility.
 
 | Domain | Present here? | Rough scale | Value | Notes |
 |--------|:---:|-------|:---:|-------|
