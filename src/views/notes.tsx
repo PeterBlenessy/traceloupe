@@ -31,6 +31,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { VirtualList } from "@/components/virtual-list";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
@@ -387,12 +388,22 @@ export function NotesView() {
           variant="outline"
           size="sm"
         >
-          <ToggleGroupItem value="flat" aria-label="List" title="List">
-            <List className="size-4" />
-          </ToggleGroupItem>
-          <ToggleGroupItem value="tree" aria-label="Folders" title="Folder tree">
-            <FolderTree className="size-4" />
-          </ToggleGroupItem>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <ToggleGroupItem value="flat" aria-label="List">
+                <List className="size-4" />
+              </ToggleGroupItem>
+            </TooltipTrigger>
+            <TooltipContent>List</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <ToggleGroupItem value="tree" aria-label="Folders">
+                <FolderTree className="size-4" />
+              </ToggleGroupItem>
+            </TooltipTrigger>
+            <TooltipContent>Folder tree</TooltipContent>
+          </Tooltip>
         </ToggleGroup>
       ) : undefined,
     [hasNotes, viewMode, setViewMode],

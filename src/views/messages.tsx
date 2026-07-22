@@ -38,6 +38,7 @@ import { MediaLightbox } from "@/components/media-lightbox";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Message as MessageRow,
   MessageContent,
@@ -155,26 +156,38 @@ function JumpButtons({
 }) {
   return (
     <div className="flex shrink-0 items-center">
-      <Button
-        variant="ghost"
-        size="sm"
-        className="size-7 px-0 text-muted-foreground"
-        title="Jump to top"
-        disabled={disabled}
-        onClick={onTop}
-      >
-        <ArrowUpToLine className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="-ml-1 size-7 px-0 text-muted-foreground"
-        title="Jump to bottom"
-        disabled={disabled}
-        onClick={onBottom}
-      >
-        <ArrowDownToLine className="size-4" />
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="size-7 px-0 text-muted-foreground"
+              disabled={disabled}
+              onClick={onTop}
+            >
+              <ArrowUpToLine className="size-4" />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>Jump to top</TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="-ml-1 size-7 px-0 text-muted-foreground"
+              disabled={disabled}
+              onClick={onBottom}
+            >
+              <ArrowDownToLine className="size-4" />
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>Jump to bottom</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -182,20 +195,26 @@ function JumpButtons({
 /** A compact oldest/newest toggle — replaces the single-field "Time" sort picker. */
 function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }) {
   return (
-    <Button
-      variant="ghost"
-      size="sm"
-      onClick={onToggle}
-      className="h-8 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
-      title={desc ? "Newest first — click for oldest" : "Oldest first — click for newest"}
-    >
-      {desc ? (
-        <ArrowDownWideNarrow className="size-4" />
-      ) : (
-        <ArrowUpNarrowWide className="size-4" />
-      )}
-      {desc ? "Newest" : "Oldest"}
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onToggle}
+          className="h-8 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
+        >
+          {desc ? (
+            <ArrowDownWideNarrow className="size-4" />
+          ) : (
+            <ArrowUpNarrowWide className="size-4" />
+          )}
+          {desc ? "Newest" : "Oldest"}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {desc ? "Newest first — click for oldest" : "Oldest first — click for newest"}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -325,12 +344,22 @@ function MessagesViewInner() {
         variant="outline"
         size="sm"
       >
-        <ToggleGroupItem value="conversations" aria-label="Chats" title="Chats">
-          <MessagesSquare className="size-4" />
-        </ToggleGroupItem>
-        <ToggleGroupItem value="timeline" aria-label="Timeline" title="Timeline">
-          <GalleryVerticalEnd className="size-4" />
-        </ToggleGroupItem>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <ToggleGroupItem value="conversations" aria-label="Chats">
+              <MessagesSquare className="size-4" />
+            </ToggleGroupItem>
+          </TooltipTrigger>
+          <TooltipContent>Chats</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <ToggleGroupItem value="timeline" aria-label="Timeline">
+              <GalleryVerticalEnd className="size-4" />
+            </ToggleGroupItem>
+          </TooltipTrigger>
+          <TooltipContent>Timeline</TooltipContent>
+        </Tooltip>
       </ToggleGroup>
     ),
     [mode],
@@ -1686,27 +1715,30 @@ function TimelineThumbs({
   return (
     <span className="ml-2 inline-flex shrink-0 gap-1 align-middle">
       {imgs.slice(0, 3).map((a, i) => (
-        <button
-          key={a.id}
-          type="button"
-          // Stop the row's click (which opens the conversation) so tapping a
-          // thumbnail opens the image in the lightbox instead.
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenImage?.(imgs, i);
-          }}
-          className="block overflow-hidden rounded"
-          title={a.filename ?? "image"}
-        >
-          <img
-            src={client.attachmentUrl(a.id, { thumb: true, cacheKey })}
-            alt=""
-            className="size-9 rounded object-cover"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-            }}
-          />
-        </button>
+        <Tooltip key={a.id}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              // Stop the row's click (which opens the conversation) so tapping a
+              // thumbnail opens the image in the lightbox instead.
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenImage?.(imgs, i);
+              }}
+              className="block overflow-hidden rounded"
+            >
+              <img
+                src={client.attachmentUrl(a.id, { thumb: true, cacheKey })}
+                alt=""
+                className="size-9 rounded object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{a.filename ?? "image"}</TooltipContent>
+        </Tooltip>
       ))}
     </span>
   );
@@ -1799,50 +1831,58 @@ function LinkPreviewCard({
   };
   return (
     <div className="mt-1.5 w-full max-w-[280px] overflow-hidden rounded-xl border">
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          client.openExternal(url);
-        }}
-        className="block w-full text-left transition-colors hover:bg-accent/50"
-        title={url}
-      >
-        {data?.image && (
-          <img
-            src={data.image}
-            alt=""
-            className="h-32 w-full bg-muted object-cover"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              client.openExternal(url);
             }}
-          />
-        )}
-        <div className="min-w-0 px-2.5 py-2">
-          <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
-            {data?.siteName ?? host}
-          </div>
-          <div className="line-clamp-2 text-xs font-medium leading-snug">
-            {data?.title ?? host}
-          </div>
-          {data?.description && (
-            <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
-              {data.description}
+            className="block w-full text-left transition-colors hover:bg-accent/50"
+          >
+            {data?.image && (
+              <img
+                src={data.image}
+                alt=""
+                className="h-32 w-full bg-muted object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
+              />
+            )}
+            <div className="min-w-0 px-2.5 py-2">
+              <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+                {data?.siteName ?? host}
+              </div>
+              <div className="line-clamp-2 text-xs font-medium leading-snug">
+                {data?.title ?? host}
+              </div>
+              {data?.description && (
+                <div className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+                  {data.description}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </button>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{url}</TooltipContent>
+      </Tooltip>
       <div className="flex items-center gap-2 border-t px-2.5 py-1">
         <span className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/70">
           {host}
         </span>
-        <button
-          onClick={copy}
-          className="-mr-1 inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="Copy link"
-        >
-          <Copy className="size-3" />
-          Copy
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={copy}
+              className="-mr-1 inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              <Copy className="size-3" />
+              Copy
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Copy link</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   );
@@ -1871,14 +1911,15 @@ function LinkPreviewContent({ url }: { url: string }) {
     );
   }
   return (
-    <button
-      onClick={(e) => {
-        e.stopPropagation();
-        client.openExternal(url);
-      }}
-      className="flex w-full flex-col text-left transition-colors hover:bg-accent/50"
-      title={url}
-    >
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            client.openExternal(url);
+          }}
+          className="flex w-full flex-col text-left transition-colors hover:bg-accent/50"
+        >
       {data.image && (
         <img
           src={data.image}
@@ -1909,7 +1950,10 @@ function LinkPreviewContent({ url }: { url: string }) {
           {url}
         </div>
       </div>
-    </button>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{url}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -1951,14 +1995,18 @@ function MessageImageLightbox({
               {index + 1} / {images.length}
             </span>
           )}
-          <button
-            onClick={() => openAttachmentFile(att.id)}
-            className="inline-flex items-center gap-1 hover:text-white"
-            title="Open in the default app"
-          >
-            <ExternalLink className="size-3.5" />
-            Open externally
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={() => openAttachmentFile(att.id)}
+                className="inline-flex items-center gap-1 hover:text-white"
+              >
+                <ExternalLink className="size-3.5" />
+                Open externally
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>Open in the default app</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     ) : undefined;
@@ -2023,23 +2071,29 @@ function RecoveredAttachment({
   ) : undefined;
   return (
     <>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(true);
-        }}
-        className="relative block max-w-[240px] overflow-hidden rounded-lg"
-        title={`${att.filename ?? "attachment"} — recovered from Photos (matched by name)`}
-      >
-        <img
-          src={client.mediaUrl(data.id, { thumb: true, cacheKey })}
-          alt=""
-          className="max-h-64 w-full object-cover"
-        />
-        <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
-          <Sparkles className="size-3" /> Photos
-        </span>
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpen(true);
+            }}
+            className="relative block max-w-[240px] overflow-hidden rounded-lg"
+          >
+            <img
+              src={client.mediaUrl(data.id, { thumb: true, cacheKey })}
+              alt=""
+              className="max-h-64 w-full object-cover"
+            />
+            <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
+              <Sparkles className="size-3" /> Photos
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {`${att.filename ?? "attachment"} — recovered from Photos (matched by name)`}
+        </TooltipContent>
+      </Tooltip>
       <MediaLightbox
         open={open}
         onClose={() => setOpen(false)}
@@ -2084,17 +2138,21 @@ function AttachmentView({
 
   if (available && isImageAttachment(mime, att.filename)) {
     return (
-      <button
-        onClick={() => (onOpenImage ? onOpenImage() : openAttachmentFile(att.id))}
-        className="block max-w-[240px] overflow-hidden rounded-lg"
-        title={att.filename ?? "image"}
-      >
-        <img
-          src={client.attachmentUrl(att.id, { thumb: true, cacheKey })}
-          alt={att.filename ?? ""}
-          className="max-h-64 w-full object-cover"
-        />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            onClick={() => (onOpenImage ? onOpenImage() : openAttachmentFile(att.id))}
+            className="block max-w-[240px] overflow-hidden rounded-lg"
+          >
+            <img
+              src={client.attachmentUrl(att.id, { thumb: true, cacheKey })}
+              alt={att.filename ?? ""}
+              className="max-h-64 w-full object-cover"
+            />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>{att.filename ?? "image"}</TooltipContent>
+      </Tooltip>
     );
   }
   if (available && mime.startsWith("video/")) {
@@ -2128,23 +2186,31 @@ function AttachmentView({
       ? FileText
       : Paperclip;
   const chip = (
-    <button
-      onClick={() => available && openAttachmentFile(att.id)}
-      disabled={!available}
-      className={cn(
-        "flex items-center gap-1.5 rounded-md text-xs",
-        available ? "underline-offset-2 hover:underline" : "opacity-60",
-      )}
-      title={available ? "Open attachment" : "This attachment isn't in the backup"}
-    >
-      <Icon className="size-4 shrink-0" />
-      <span className="truncate">{att.filename ?? "attachment"}</span>
-      {!available && (
-        <span className="shrink-0 text-[10px] italic opacity-70">
-          · not in backup
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">
+          <button
+            onClick={() => available && openAttachmentFile(att.id)}
+            disabled={!available}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md text-xs",
+              available ? "underline-offset-2 hover:underline" : "opacity-60",
+            )}
+          >
+            <Icon className="size-4 shrink-0" />
+            <span className="truncate">{att.filename ?? "attachment"}</span>
+            {!available && (
+              <span className="shrink-0 text-[10px] italic opacity-70">
+                · not in backup
+              </span>
+            )}
+          </button>
         </span>
-      )}
-    </button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {available ? "Open attachment" : "This attachment isn't in the backup"}
+      </TooltipContent>
+    </Tooltip>
   );
   // A missing photo/video may still be in the camera roll — try to recover it
   // from Photos (opt-in; falls back to the chip when off or unmatched).

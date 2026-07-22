@@ -19,6 +19,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { formatListTime } from "@/lib/format";
@@ -308,15 +309,19 @@ export function SecurityView() {
                             · {f.count.toLocaleString()} · {f.class}
                           </span>
                           {org && (
-                            <button
-                              type="button"
-                              onClick={() => void client.openExternal(org.url)}
-                              title={org.label}
-                              className="inline-flex shrink-0 items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
-                            >
-                              <ExternalLink className="size-3" />
-                              {org.label}
-                            </button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => void client.openExternal(org.url)}
+                                  className="inline-flex shrink-0 items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
+                                >
+                                  <ExternalLink className="size-3" />
+                                  {org.label}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent>{org.label}</TooltipContent>
+                            </Tooltip>
                           )}
                         </li>
                       );
