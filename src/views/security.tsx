@@ -190,9 +190,11 @@ export function SecurityView() {
   const running = scan.isPending;
 
   return (
-    <>
+    // A self-contained flex-col with `h-full`: the Outlet wrapper isn't a flex
+    // column, so the scroll region needs its own bounded-height parent.
+    <div className="flex h-full flex-col">
       <ConsentDialogs />
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
           {/* What this is / disclaimer — always visible. */}
           <Alert>
@@ -326,7 +328,7 @@ export function SecurityView() {
       </div>
 
       <FindingDetail finding={selected} onClose={() => setSelected(null)} />
-    </>
+    </div>
   );
 }
 
