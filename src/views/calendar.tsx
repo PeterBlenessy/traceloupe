@@ -243,6 +243,7 @@ export function CalendarView() {
       emptyMessage={
         hasEvents ? "No events match these filters." : "No calendar events in this backup."
       }
+      emptyIcon={CalendarDays}
       items={filtered}
       getKey={(e) => e.id}
       renderItem={(e) => <EventRow event={e} />}

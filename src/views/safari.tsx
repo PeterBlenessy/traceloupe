@@ -152,6 +152,7 @@ export function SafariView() {
       error={error}
       resetKey={`${type}:${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matches." : EMPTY[type]}
+      emptyIcon={Globe}
       windowKey={(page) => [
         "safariWindow",
         type,

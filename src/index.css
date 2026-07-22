@@ -44,67 +44,100 @@
   line-height: 1.3;
 }
 
+/* The surface palette is layered tinted neutrals (a whisper of chroma at hue
+   260 — cool, instrument-like) instead of pure white / near-black, so panes
+   read as distinct layers: in light mode the sidebar is a visibly deeper pane
+   and cards float white above an off-white canvas; in dark mode the sidebar is
+   the DARKEST layer so the content pane sits forward as the lit surface.
+
+   Chromatic color comes from ONE source: the host system's accent
+   (`--accent-system-value`, set on <html> by useSystemAccent from
+   NSColor.controlAccentColor, with a macOS-blue fallback baked in below).
+   The accent means *interaction* — active nav, selection, primary buttons,
+   focus rings — never meaning: scan verdicts and destructive stay semantic. */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* The system accent and its derived tints. `--accent-text` is the accent
+     shifted toward the foreground so it stays legible as text/icons on the
+     soft tinted pill (`--accent-soft`). */
+  --accent-color: var(--accent-system-value, oklch(0.6 0.17 252));
+  --accent-soft: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  --accent-text: color-mix(in oklab, var(--accent-color) 82%, black);
+
+  --background: oklch(0.982 0.003 260);
+  --foreground: oklch(0.21 0.012 260);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.21 0.012 260);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.21 0.012 260);
+  --primary: var(--accent-color);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.955 0.005 260);
+  --secondary-foreground: oklch(0.25 0.01 260);
+  --muted: oklch(0.955 0.005 260);
+  --muted-foreground: oklch(0.52 0.015 260);
+  --accent: oklch(0.945 0.006 260);
+  --accent-foreground: oklch(0.25 0.01 260);
   --destructive: oklch(0.577 0.245 27.325);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --border: oklch(0.905 0.006 260);
+  --input: oklch(0.905 0.006 260);
+  --ring: var(--accent-color);
   --radius: 0.625rem;
-  /* Sidebar tokens, kept on the same neutral oklch scale as the rest of the
-     palette so the whole app is one coherent color system. */
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  /* Sidebar tokens: a distinctly deeper pane than the content background. */
+  --sidebar: oklch(0.958 0.005 260);
+  --sidebar-foreground: oklch(0.23 0.012 260);
+  --sidebar-primary: var(--accent-color);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.925 0.007 260);
+  --sidebar-accent-foreground: oklch(0.2 0.012 260);
+  --sidebar-border: oklch(0.897 0.007 260);
+  --sidebar-ring: var(--accent-color);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* The system accent verbatim when present; the fallback brightens so the
+     default blue doesn't muddy on the dark ground. Text mixes toward white. */
+  --accent-color: var(--accent-system-value, oklch(0.68 0.15 252));
+  --accent-text: color-mix(in oklab, var(--accent-color) 72%, white);
+
+  --background: oklch(0.215 0.01 260);
+  --foreground: oklch(0.955 0.005 260);
+  --card: oklch(0.26 0.01 260);
+  --card-foreground: oklch(0.955 0.005 260);
+  --popover: oklch(0.26 0.01 260);
+  --popover-foreground: oklch(0.955 0.005 260);
+  --primary: var(--accent-color);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.3 0.01 260);
+  --secondary-foreground: oklch(0.955 0.005 260);
+  --muted: oklch(0.295 0.01 260);
+  --muted-foreground: oklch(0.7 0.012 260);
+  --accent: oklch(0.31 0.012 260);
+  --accent-foreground: oklch(0.97 0.004 260);
   --destructive: oklch(0.704 0.191 22.216);
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.922 0 0);
-  --sidebar-primary-foreground: oklch(0.205 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --ring: var(--accent-color);
+  /* Inverted layering: the sidebar is the darkest surface, so the content
+     pane reads as the lit layer in front of it. */
+  --sidebar: oklch(0.175 0.01 260);
+  --sidebar-foreground: oklch(0.93 0.006 260);
+  --sidebar-primary: var(--accent-color);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(1 0 0 / 7%);
+  --sidebar-accent-foreground: oklch(0.97 0.004 260);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar-ring: var(--accent-color);
+}
+
+/* The active sidebar item: an accent-tinted pill with accent text/icon.
+   Hover stays the neutral --sidebar-accent (from the cva) — this unlayered
+   rule outranks Tailwind's @layer utilities, so it wins for the active row
+   in both rest and hover states. */
+[data-sidebar="menu-button"][data-active="true"] {
+  background-color: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 @theme inline {

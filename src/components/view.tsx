@@ -294,7 +294,10 @@ export function EmptyView({
     <Empty className={cn("h-full", className)}>
       <EmptyHeader>
         {Icon && (
-          <EmptyMedia variant="icon">
+          <EmptyMedia
+            variant="icon"
+            className="bg-[var(--accent-soft)] text-[var(--accent-text)]"
+          >
             <Icon className="size-6" />
           </EmptyMedia>
         )}
@@ -342,7 +345,7 @@ export function NoBackupState({
     // so a centered hero reads as floating/misaligned next to them.
     <div className="flex h-full items-start justify-center overflow-y-auto p-6">
       <div className="w-full max-w-xl pt-16 pb-8 text-center">
-        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent-text)]">
           <Icon className="size-6" />
         </div>
         <h2 className="text-lg font-semibold">{title}</h2>

@@ -763,6 +763,9 @@ export interface TraceLoupeClient {
   listThreads(): Promise<ThreadSummary[]>;
   /** Device + backup metadata for the active backup, or null if unknown. */
   deviceInfo(): Promise<BackupInfo | null>;
+  /** The macOS accent color as an oklch CSS string, or null when the host has
+   *  no readable accent (non-macOS) — the UI then keeps its baked-in default. */
+  systemAccentColor(): Promise<string | null>;
   listCalendarEvents(): Promise<CalendarEvent[]>;
   listReminders(): Promise<Reminder[]>;
   listWorkouts(): Promise<Workout[]>;
@@ -1117,6 +1120,7 @@ const tauriClient: TraceLoupeClient = {
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
+  systemAccentColor: () => invoke<string | null>("get_system_accent_color"),
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
@@ -2572,6 +2576,7 @@ export const mockClient: TraceLoupeClient = {
           isEncrypted: true,
         }
       : null,
+  systemAccentColor: async () => null,
   listCalendarEvents: async () =>
     mockActive
       ? [
