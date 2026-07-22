@@ -56,6 +56,33 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   },
 };
 
+/** The scanned period, from the stored [start, end] epoch bounds. */
+function formatScanRange(start: number | null, end: number | null): string {
+  if (start == null && end == null) return "all history";
+  const fmt = (t: number) =>
+    new Date(t * 1000).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  if (start != null && end != null) {
+    const s = new Date(start * 1000);
+    const e = new Date(end * 1000);
+    // A whole calendar year (end stored as Dec 31 23:59:59) reads as "2024".
+    if (
+      s.getFullYear() === e.getFullYear() &&
+      s.getMonth() === 0 &&
+      s.getDate() === 1 &&
+      e.getMonth() === 11 &&
+      e.getDate() === 31
+    ) {
+      return String(s.getFullYear());
+    }
+    return `${fmt(start)} – ${fmt(end)}`;
+  }
+  return start != null ? `since ${fmt(start)}` : `until ${fmt(end!)}`;
+}
+
 export function SafetyScanView() {
   const qc = useQueryClient();
   const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
@@ -291,10 +318,17 @@ export function SafetyScanView() {
                 <CardDescription>
                   {report.data.scan.status === "completed"
                     ? "Completed"
-                    : report.data.scan.status}{" "}
+                    : report.data.scan.status === "cancelled"
+                      ? "Stopped"
+                      : report.data.scan.status}{" "}
                   {report.data.scan.finishedAt
                     ? formatListTime(report.data.scan.finishedAt)
                     : ""}
+                  {" · scanned "}
+                  {formatScanRange(
+                    report.data.scan.rangeStart,
+                    report.data.scan.rangeEnd,
+                  )}
                   {" · "}
                   {report.data.scan.chunksDone}/{report.data.scan.chunksTotal}{" "}
                   chunks
