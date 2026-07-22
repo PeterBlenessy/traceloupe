@@ -115,10 +115,11 @@ option with a zero count is **disabled** (greyed), never hidden. Pass per-option
 `counts` to get this. Hiding options because they're empty reads as a bug — don't.
 
 Active selections surface as removable chips on the funnel's island when closed;
-"Clear all" resets them. The popover animates width/height (WebKit-safe); it
-anchors to a **top-right funnel and morphs leftward**, so it's built for the
-toolbar. If you ever reuse `FilterControl` inside content (rare — e.g. Safety
-Scan's run card), right-align it so the popover stays on-screen.
+"Clear all" resets them. The popover animates width/height (WebKit-safe). By
+default it anchors the funnel's right edge and morphs **leftward** (for the
+right-aligned toolbar). If you reuse `FilterControl` inside content with the
+funnel on the left (e.g. Safety Scan's run card), pass **`align="right"`** so it
+morphs rightward into the content instead of over the sidebar.
 
 **Time presets** live in `components/time-filter.tsx`: `useTimePresets()`
 (All/24h/7d/30d/year, anchored to a stable `now`) and `makeYearPresets(min, max)`
