@@ -1,8 +1,8 @@
 /**
- * A reusable time-filter toolbar: quick-preset chips (All · 24h · 7d · 30d ·
- * <year>, each with an optional count) plus a custom from–to date range. Emits a
- * half-open [lo, hi) epoch-second `TimeRange`. Shared by Timeline, Photos, and
- * Notes so they all filter by time the same way.
+ * Time-filter building blocks for the shared toolbar filter: the quick presets
+ * (`useTimePresets` / `makeTimePresets` / `makeYearPresets`) fed into `timeGroup`
+ * (see `filter-groups.tsx`), and the custom from–to `DateRangeFilter` it renders.
+ * All emit a half-open [lo, hi) epoch-second `TimeRange`.
  */
 import { useMemo, useState } from "react";
 import { CalendarRange } from "lucide-react";
@@ -12,11 +12,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { OverflowRow, type OverflowItem } from "@/components/overflow-row";
-import { filterPillClass, filterPillCount } from "@/components/filter-pill";
-import { formatCount } from "@/lib/format";
+import { filterPillClass } from "@/components/filter-pill";
 import type { TimeRange } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
 
 /** A cumulative quick-filter: everything since `lo` (null = no lower bound). */
 export type TimePreset = {
@@ -67,85 +64,6 @@ export function useTimePresets(): { now: number; presets: TimePreset[] } {
   const [now] = useState(() => Math.floor(Date.now() / 1000));
   const presets = useMemo(() => makeTimePresets(now), [now]);
   return { now, presets };
-}
-
-/** The whole toolbar: preset chips + custom range, left-aligned. */
-export function TimeFilterBar({
-  presets,
-  value,
-  onChange,
-  counts,
-  className,
-}: {
-  presets: TimePreset[];
-  value: TimeRange;
-  onChange: (r: TimeRange) => void;
-  /** Per-preset message/item counts, aligned to `presets`; optional. */
-  counts?: (number | undefined)[];
-  className?: string;
-}) {
-  // Which chip (if any) matches the active range; a custom range matches none.
-  const activeKey =
-    presets.find((p) => p.lo === value.lo && p.hi === value.hi)?.key ?? null;
-
-  // The preset chips overflow into a "⋮" menu when they don't fit (rather than
-  // scrolling). The custom-range button always stays visible after them.
-  const items = useMemo<OverflowItem[]>(
-    () =>
-      presets.map((p, i) => ({
-        key: p.key,
-        active: activeKey === p.key,
-        render: (inMenu: boolean) => (
-          <FilterChip
-            label={p.label}
-            count={counts?.[i]}
-            active={activeKey === p.key}
-            onClick={() => onChange({ lo: p.lo, hi: p.hi })}
-            className={inMenu ? "w-full justify-between" : undefined}
-          />
-        ),
-      })),
-    [presets, counts, activeKey, onChange],
-  );
-
-  return (
-    // Keep the preset chips and the custom-range button together as one time
-    // filter unit: the chips size to content (shrinking into the "⋮" overflow
-    // only when the row is narrow) so Range sits right after them, instead of a
-    // flex-1 that would stretch the chips and shove Range over next to the sort.
-    <div className={cn("flex min-w-0 items-center gap-1", className)}>
-      <OverflowRow items={items} gapPx={4} className="min-w-0 shrink" title="More time filters" />
-      <DateRangeFilter
-        value={value}
-        active={activeKey === null}
-        onChange={onChange}
-      />
-    </div>
-  );
-}
-
-/** A pill toggle for a quick time filter, showing its count. */
-function FilterChip({
-  label,
-  count,
-  active,
-  onClick,
-  className,
-}: {
-  label: string;
-  count: number | undefined;
-  active: boolean;
-  onClick: () => void;
-  className?: string;
-}) {
-  return (
-    <button type="button" onClick={onClick} className={filterPillClass(active, className)}>
-      {label}
-      {count !== undefined && (
-        <span className={filterPillCount}>{formatCount(count)}</span>
-      )}
-    </button>
-  );
 }
 
 /** Epoch seconds → a `yyyy-mm-dd` string for a native date input (local time). */
