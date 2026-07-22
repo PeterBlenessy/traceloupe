@@ -36,6 +36,7 @@ While pre-1.0, the **minor** version tracks major milestones:
 | `0.26.0` | **Security Check M3 — custom indicators** — point the scan at a local folder of `.stix`/`.stix2`/`.yaml` files, merged with the bundled feeds (researcher mode, parity with iMazing). |
 | `0.27.0` | **Security Check M3 — scan-history diffing** — findings new since the previous scan are flagged with a **NEW** badge and a "N new since last scan" count, so a re-scan after an indicator update highlights what changed. |
 | `0.28.0` | **Security Check M3 complete — opt-in de-shortener** — reveal where a shortened link points, as a deliberate per-link action gated by a per-use approval prompt (with a per-backup, never global, "don't ask again"). Only allowlisted shorteners are contacted, and the destination is revealed without visiting it. |
+| `0.29.0` | **Safety Scan — on-device AI content review (experimental)** — a local Gemma model, run in a sandboxed `llama-server` sidecar with no network beyond loopback and message text never written to disk, reads Messages and Notes in windows and flags possible threats, harassment, grooming, self-harm, coercive control and scams against a Forensic-9 taxonomy. Verdicts land in a per-backup `analysis.db` with a scan report (period + findings), a scan history you can view and delete, Messages/Notes and time-range filters with live item counts, per-finding dismissals, cancellation that actually stops, and a labeled-fixture validation harness gating CI. Shipped behind a Beta badge. Alongside it: the Messages and scan views migrated onto the unified toolbar, rich capability-forward "no backup" empty states across every view, an Apps install-receipt view, Security-Check polish, and an every-button-needs-a-tooltip pass. |
 
 > The single source of truth for the version is `package.json`; keep the
 > workspace `Cargo.toml` and `src-tauri/tauri.conf.json` in step when it changes.
@@ -43,6 +44,69 @@ While pre-1.0, the **minor** version tracks major milestones:
 ## [Unreleased]
 
 _Nothing yet._
+
+## [0.29.0] — 2026-07-22
+
+**Safety Scan — on-device AI content review.** A new capability alongside
+Security Check: a local large-language model reads your Messages and Notes and
+flags conversations worth a human look — threats and violence, harassment,
+grooming, self-harm, coercive control, scams, and more. It runs entirely on this
+Mac.
+
+- **Local and sandboxed by construction.** Classification runs a Gemma model
+  through a bundled `llama-server` sidecar under a Seatbelt sandbox: no network
+  except loopback, no filesystem writes outside a scratch dir, and message/note
+  text lives only in the prompt — never written to disk. Release builds run only
+  the bundled binary, never one from `PATH`.
+- **Deterministic pipeline, resumable.** Messages are windowed and Notes chunked
+  with stable keys and fingerprints; each chunk is classified against a fixed
+  Forensic-9 taxonomy and validated. Findings, per-chunk progress, and summaries
+  persist in a per-backup `analysis.db` that survives re-import, so a re-scan
+  skips unchanged content.
+- **The scan you can steer.** Choose what to scan (Messages, Notes, or both) and
+  the time range, with live item counts that match the Messages and Notes views.
+  Progress flips to "Scanning" the moment the model is ready; Stop aborts the
+  in-flight request within about a second.
+- **Results you can act on.** A scan report names the period scanned and the
+  finding count; findings are severity-graded with the model's one-line
+  rationale and can be dismissed as false positives (dismissals persist across
+  re-scans). A scan history lists past runs — view any run's report, or delete a
+  run.
+- **Model provisioning + health.** A two-entry Gemma catalog with a RAM gate and
+  a verified background download, plus an on-demand health check that proves the
+  local model actually runs on this Mac.
+- **Shipped experimental.** A Beta badge and a disclaimer make clear the
+  classifier's accuracy is not yet validated on real hardware — every finding is
+  a prompt to review the actual conversation, not a verdict. A labeled-fixture
+  validation harness and scorer gate this in CI.
+
+### Also in this release
+
+- **Unified toolbar, everywhere.** Messages (both Chats and Timeline) and the
+  scan views publish their title and filters into the one shared top toolbar;
+  the dead in-view headers and the old `TimeFilterBar` are gone.
+- **Capability-forward empty states.** Every view's "no backup" state now leads
+  with what the view can do and moves the "open a backup" ask onto the button.
+- **Apps view.** The App Store install receipt (download date, installing Apple
+  ID, age rating, subgenre), colored per-app icon tiles, and opt-in real App
+  Store artwork (off by default).
+- **Security Check polish.** The external threat feeds are explained (who
+  they're from, what STIX/YAML are, with links); the de-shortener risk reads as
+  a warning callout; a dead setting was removed.
+- **Every button has a tooltip.** A new project rule (AGENTS.md + `docs/ui.md`),
+  with the existing `title=` buttons swept onto the shadcn Tooltip.
+
+### Fixed
+
+- **Scan Delete did nothing.** Deleting a scan left its `audit_log` rows behind;
+  with foreign keys on, the `scans` delete failed and the confirm dialog just
+  sat there. It now clears every child table (regression-tested), and a failed
+  delete surfaces a toast.
+- **Sidebar scrolled horizontally.** The group separator, inset with `mx-2` but
+  100% wide, overflowed its container by 16px; the divider now auto-sizes to fit.
+- **Safety Scan dev-run crashes.** Fixed a SIGABRT from Tauri's dylib-less dev
+  sidecar copy, and captured `llama-server` output to the logs with errors
+  surfaced as toasts.
 
 ## [0.28.0] — 2026-07-21
 
