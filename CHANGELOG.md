@@ -13,6 +13,32 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.29.1] — 2026-07-22
+
+**Housekeeping — repository, documentation, and release process.** No
+app-behavior changes; the built app is unchanged from 0.29.0.
+
+### Release process
+- Version bumps are scripted across all manifests (`scripts/release.sh`), and the
+  `vX.Y.Z` tag is now created automatically when a release lands on main
+  (`.github/workflows/release-tag.yml`). A CI job (`scripts/check-releases.sh`)
+  fails any PR that bumps the version without a CHANGELOG entry, whose manifests
+  disagree, or whose history lost a tag. Backfilled the git tags `v0.1.0`–`v0.28.0`
+  (including `v0.6.2`) and the missing `0.6.2` CHANGELOG entry.
+
+### Documentation
+- Reorganized `docs/` into `adr/ plans/ research/ reference/ validation/` and moved
+  the architecture docs out of the repo root; renamed the product doc to
+  `docs/product-overview.md`. Removed the redundant CHANGELOG milestone table.
+  Brought `architecture.md`, `product-overview.md`, and the README current with
+  0.29.0 — native-first imports, Security Check and Safety Scan, and privacy
+  claims scoped to backup-derived data. New `scripts/check-doc-links.sh`
+  (CI-enforced) verifies every relative Markdown link.
+
+### Repository
+- Deleted a duplicate `THIRD-PARTY-NOTICES` file; renumbered a duplicated ADR; and
+  gitignore the whole `.claude/` local-runtime folder.
+
 ## [0.29.0] — 2026-07-22
 
 **Safety Scan — on-device AI content review.** A new capability alongside
