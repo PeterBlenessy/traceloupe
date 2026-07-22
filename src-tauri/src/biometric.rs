@@ -9,7 +9,7 @@
 //!
 //! Note: biometric-protected *Keychain* items (OS-enforced) are a later hardening
 //! — this is an app-level gate in front of the existing Keychain read, which
-//! still needs a properly signed build to work (see docs/signing.md).
+//! still needs a properly signed build to work (see docs/reference/signing.md).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

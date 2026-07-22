@@ -2,7 +2,7 @@
 //!
 //! Keychain items are ACL-bound to the app's signing identity; an adhoc/unsigned
 //! dev build gets a fresh identity every rebuild and loses access to them (see
-//! docs/signing.md). Both stable Keychain persistence and Touch ID need a real
+//! docs/reference/signing.md). Both stable Keychain persistence and Touch ID need a real
 //! signature, so the UI uses this to decide whether to offer/enable the biometric
 //! gate rather than letting the user turn on something that can't work.
 

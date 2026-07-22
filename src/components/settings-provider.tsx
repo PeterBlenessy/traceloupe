@@ -57,7 +57,7 @@ type SettingsProviderState = {
   /** Require Touch ID before releasing an encrypted backup's keys (opt-in). */
   biometricUnlock: boolean;
   setBiometricUnlock: (v: boolean) => void;
-  /** Whether Touch ID can work — the app is stably signed (see docs/signing.md). */
+  /** Whether Touch ID can work — the app is stably signed (see docs/reference/signing.md). */
   biometricAvailable: boolean;
   /** How tightly the UI packs (rows, headers, controls). */
   density: Density;

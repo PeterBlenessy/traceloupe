@@ -1,6 +1,6 @@
 # Safety Scan — v1 implementation plan
 
-Executable breakdown of the Safety Scan design (terms per `CONTEXT.md` §Safety
+Executable breakdown of the Safety Scan design (terms per `docs/CONTEXT.md` §Safety
 Scan; architecture per ADR 0002). Tasks are dependency-ordered; each has
 acceptance criteria (AC). NoteSage (`../note-sage`) is the reference
 implementation for T1/T2 — borrow, don't re-derive.
@@ -168,7 +168,7 @@ precision/recall against a live local model; fixture set doubles as the CI
 regression gate for prompt changes (CI runs the deterministic parts:
 chunking, schema validation, prompt snapshot). Offline scripts evaluate
 Jigsaw (hate/harassment), PAN12 (grooming), and a threat corpus; results
-recorded in `docs/safety-scan-validation.md`.
+recorded in `docs/validation/safety-scan-validation.md`.
 
 **AC**
 - Eval runner outputs a per-category precision/recall table; baseline

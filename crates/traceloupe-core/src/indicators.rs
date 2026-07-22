@@ -1,6 +1,6 @@
 //! Indicator-of-compromise model and feed loaders for the Security Check.
 //!
-//! Two feed formats are supported (see docs/spyware-analyzer-prd.md §6.2):
+//! Two feed formats are supported (see docs/plans/spyware-analyzer-prd.md §6.2):
 //! - STIX2 JSON bundles (Amnesty investigations, mvt-indicators, iMazing IOC
 //!   repo): `malware` objects name the threat, `indicator` objects carry a
 //!   pattern string, `relationship` objects tie them together.

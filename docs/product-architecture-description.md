@@ -223,7 +223,7 @@ Rollout is tiered by app popularity and by recovery/forensic value:
 | 3 | Top 50 | *adds* Slack, Microsoft Teams, Zoom, Twitch, Tinder/Bumble/Hinge, PayPal/Venmo/Cash App, Uber, Amazon, Strava, Notion, and similar |
 | 4 | Top 100 | *adds* the long tail: regional messengers, banking/fintech, travel, fitness, productivity apps, and popular games |
 
-**Live coverage tracker.** Per-app status and the version each app gains native support are tracked in [`docs/app-support.md`](docs/app-support.md) — the living source of truth, updated as coverage lands.
+**Live coverage tracker.** Per-app status and the version each app gains native support are tracked in [`docs/reference/app-support.md`](reference/app-support.md) — the living source of truth, updated as coverage lands.
 
 **Prioritization criteria** — each tier is ordered by (1) user prevalence, (2) richness of locally stored artifacts, and (3) technical feasibility of parsing.
 
@@ -236,7 +236,7 @@ Rollout is tiered by app popularity and by recovery/forensic value:
 - **`0.1.0` (MVP):** iLEAPP-powered import + native Tauri/shadcn UI over the cached report DB.
 - **`0.2.0` (shipped):** native lazy-decode core for Messages, Notes, Recordings, and Camera roll (on-demand decryption, deferred media, cache-once), wired into the import **alongside** iLEAPP — which still supplies Calls, Safari, Apps, and third-party chats.
 - **`0.3.0`+ native-first migration, in batches** — the plan for progressively replacing iLEAPP:
-  - **Batch 1 (`0.3.0`):** native parsers for the remaining first-party views — Calls (`CallHistory.storedata`), Safari (`History.db`), Apps (app-state plist), and self-extracted Contacts (`AddressBook.sqlitedb`) via the Manifest Index; all built-in views then materialize natively and the redundant iLEAPP sms/notes passes are dropped so import time falls. Plus a first native third-party wave: TikTok (moved off iLEAPP), and Instagram, Facebook, Facebook Messenger, X/Twitter, Snapchat. WhatsApp and Telegram are deferred to `0.4.0` (they already read via iLEAPP). See [`docs/app-support.md`](docs/app-support.md) for per-app status.
+  - **Batch 1 (`0.3.0`):** native parsers for the remaining first-party views — Calls (`CallHistory.storedata`), Safari (`History.db`), Apps (app-state plist), and self-extracted Contacts (`AddressBook.sqlitedb`) via the Manifest Index; all built-in views then materialize natively and the redundant iLEAPP sms/notes passes are dropped so import time falls. Plus a first native third-party wave: TikTok (moved off iLEAPP), and Instagram, Facebook, Facebook Messenger, X/Twitter, Snapchat. WhatsApp and Telegram are deferred to `0.4.0` (they already read via iLEAPP). See [`docs/reference/app-support.md`](reference/app-support.md) for per-app status.
   - **Batch 2 (`0.3.x`):** make iLEAPP **optional** — default install fully offline (no first-import download, no bundled ~222 MB engine); fetched on demand only for deeper third-party coverage. This keeps §8.5's breadth as opt-in rather than a hard dependency.
   - **Batch 3+ (`0.4.0`+):** native third-party app modules per the §13.1 tiers (Top 10 first), replacing iLEAPP coverage incrementally.
 - Mobile targets via Tauri v2 (iOS/Android) — considered later, not part of the macOS-first scope.

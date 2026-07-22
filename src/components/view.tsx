@@ -1,7 +1,7 @@
 /**
  * Shared view primitives — the design base every artifact view builds on, so
  * Messages / Contacts / Calls / Safari are consistent by construction rather
- * than by copy-paste. See docs/ui.md.
+ * than by copy-paste. See docs/reference/ui.md.
  *
  * These compose shadcn primitives (Empty, Item, ScrollArea); they add layout,
  * not new styling systems. If a view needs something bespoke, prefer adding a
@@ -312,7 +312,7 @@ export function EmptyView({
  * paragraph, a grid of capabilities, a privacy note — and only then, as a helper
  * line on the CTA, asks the user to open a backup. (Leading with "open a backup"
  * front-loads a chore before any value.) Kept here so all views stay consistent
- * by construction. See docs/ui.md.
+ * by construction. See docs/reference/ui.md.
  */
 export function NoBackupState({
   icon: Icon,

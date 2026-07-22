@@ -8,7 +8,7 @@ description: >-
   correctness review-loop until clean (each fix round a PATCH release) →
   completeness review (measure surfaced-vs-available fields into the coverage doc)
   → self-improve the checklist when review bites. Picks the next app from
-  docs/app-support.md when
+  docs/reference/app-support.md when
   none is named. Invoke as `/create-native-app-parser <app>` (e.g. `discord`). To
   work through many apps toward the top-50 list, wrap it with the built-in `/loop`
   (this skill does one app end-to-end; `/loop` handles the repetition).
@@ -39,7 +39,7 @@ If a schema fact can't be resolved from the reference, validate against real dat
 ### 0a. Select the app
 - **If an app was named** (`/create-native-app-parser discord`), use it.
 - **If not** (e.g. running under `/loop`), pick the next one from
-  **`docs/app-support.md`** — the worklist and single source of truth for status.
+  **`docs/reference/app-support.md`** — the worklist and single source of truth for status.
   Choose the highest-value app that is **not yet ✅ native** and has a **clean
   groupable store** (an iLEAPP module + SQLite with a thread key + author column):
   prefer higher tiers (Top 10 → 25 → 50) and clean SQLite over heavy-machinery
@@ -96,8 +96,8 @@ decoder. Break the circularity:
 ### 4. Commit + MINOR release (the app lands)
 Commit the validated module (message: what it reads, schema facts from `<app>.py`,
 provenance reference §10, validation status). Then cut the app's minor release:
-- Mark it ✅ native in `docs/app-support.md`; add its row to
-  `docs/app-data-coverage.md`.
+- Mark it ✅ native in `docs/reference/app-support.md`; add its row to
+  `docs/reference/app-data-coverage.md`.
 - **Bump the MINOR version** (`0.5.0 → 0.6.0`): `package.json`, workspace
   `Cargo.toml`, `src-tauri/tauri.conf.json`, `Cargo.lock` (via `cargo check`).
 - CHANGELOG entry + milestone row; update the `traceloupe-versioning` memory.
@@ -144,7 +144,7 @@ feel:
 Run a completeness pass (a `general-purpose` subagent, or an inline field-by-field
 walk): enumerate every message-relevant field the app persists, and mark each
 **surfaced ✅ / present-but-not-surfaced ⬜ / not-in-backup —**. Then:
-- **Record the result in `docs/app-data-coverage.md`** — this review *is* what
+- **Record the result in `docs/reference/app-data-coverage.md`** — this review *is* what
   fills that table honestly (reactions, edits, read receipts, replies, media
   payloads, location, forwarded-from, etc.).
 - **Implement a gap now** only if it's **high-value AND cheap** (another column on
@@ -187,7 +187,7 @@ checklist should get *stronger* every time review catches something.
 ### 7. Next app
 That completes one app. Under the built-in **`/loop`**, go straight to the next
 (step 0a) — **don't stop to ask whether to continue**. Stop only when the top-50
-list (`docs/app-support.md`) is covered or the next app needs new machinery (a
+list (`docs/reference/app-support.md`) is covered or the next app needs new machinery (a
 generic `Cache.db` reader, a YapDatabase decoder) that warrants a fresh, focused
 effort — split that machinery out as its own sub-skill.
 
