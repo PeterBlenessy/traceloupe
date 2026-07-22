@@ -76,7 +76,6 @@ export function TimeFilterBar({
   onChange,
   counts,
   className,
-  wrap = false,
 }: {
   presets: TimePreset[];
   value: TimeRange;
@@ -84,36 +83,10 @@ export function TimeFilterBar({
   /** Per-preset message/item counts, aligned to `presets`; optional. */
   counts?: (number | undefined)[];
   className?: string;
-  /** Render every chip in a plain wrapping row instead of the toolbar's
-   *  measure-and-overflow "⋮" behaviour. Use when there's room for all chips
-   *  (e.g. a full-width card) — the overflow measurement collapses in a
-   *  non-toolbar flex context. */
-  wrap?: boolean;
 }) {
   // Which chip (if any) matches the active range; a custom range matches none.
   const activeKey =
     presets.find((p) => p.lo === value.lo && p.hi === value.hi)?.key ?? null;
-
-  if (wrap) {
-    return (
-      <div className={cn("flex flex-wrap items-center gap-1", className)}>
-        {presets.map((p, i) => (
-          <FilterChip
-            key={p.key}
-            label={p.label}
-            count={counts?.[i]}
-            active={activeKey === p.key}
-            onClick={() => onChange({ lo: p.lo, hi: p.hi })}
-          />
-        ))}
-        <DateRangeFilter
-          value={value}
-          active={activeKey === null}
-          onChange={onChange}
-        />
-      </div>
-    );
-  }
 
   // The preset chips overflow into a "⋮" menu when they don't fit (rather than
   // scrolling). The custom-range button always stays visible after them.
