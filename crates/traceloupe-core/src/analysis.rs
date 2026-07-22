@@ -242,6 +242,19 @@ pub struct ScanRow {
     pub chunks_done: i64,
 }
 
+/// A scan for the history list: the fields a user cares about (period, when,
+/// status) plus its live finding count. No `chunks` — that's internal.
+#[derive(Debug, Clone)]
+pub struct ScanListRow {
+    pub id: i64,
+    pub range_start: Option<i64>,
+    pub range_end: Option<i64>,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub findings: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkStatus {
     Done,
@@ -588,6 +601,30 @@ impl AnalysisDb {
                 },
             )
             .optional()?)
+    }
+
+    /// Past scans, newest first, each with its live (non-stale) finding count —
+    /// for the scan-history list.
+    pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.range_start, s.range_end, s.status, s.started_at, s.finished_at,
+                    (SELECT COUNT(*) FROM content_findings f
+                       WHERE f.scan_id = s.id AND f.stale = 0)
+             FROM scans s ORDER BY s.id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], |r| {
+            Ok(ScanListRow {
+                id: r.get(0)?,
+                range_start: r.get(1)?,
+                range_end: r.get(2)?,
+                status: r.get(3)?,
+                started_at: r.get(4)?,
+                finished_at: r.get(5)?,
+                findings: r.get(6)?,
+            })
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     /// All summaries for a scan as (kind, thread_ref, content).

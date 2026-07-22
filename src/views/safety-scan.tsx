@@ -1,49 +1,30 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  AlertTriangle,
-  Ban,
-  ExternalLink,
-  EyeOff,
-  HeartPulse,
-  Loader2,
-  MessageSquareWarning,
-  NotebookText,
-  Play,
-  RotateCcw,
-  ScanSearch,
-  ShieldQuestion,
-} from "lucide-react";
+  Square, ExternalLink, EyeOff, HeartPulse, History, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Card, CardContent, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { ViewHeader, ErrorState, ListSkeleton } from "@/components/view";
+import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
+import { useViewToolbar } from "@/components/toolbar-context";
+import { makeYearPresets, useTimePresets } from "@/components/time-filter";
+import { FilterControl } from "@/components/filter-control";
+import { timeGroup } from "@/components/filter-groups";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
   client,
   type ContentCategory,
   type ContentFinding,
+  type TimeRange,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -75,37 +56,50 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   },
 };
 
-/** Year options for the time-range picker: this year back to 2007 (iPhone 1). */
-function yearOptions(): number[] {
-  const current = new Date().getFullYear();
-  const years: number[] = [];
-  for (let y = current; y >= 2007; y--) years.push(y);
-  return years;
-}
-
-function rangeFor(selection: string): {
-  rangeStart: number | null;
-  rangeEnd: number | null;
-} {
-  if (selection === "all") return { rangeStart: null, rangeEnd: null };
-  if (selection === "12m") {
-    return {
-      rangeStart: Math.floor(Date.now() / 1000) - 365 * 86_400,
-      rangeEnd: null,
-    };
+/** The scanned period, from the stored [start, end] epoch bounds. */
+function formatScanRange(start: number | null, end: number | null): string {
+  if (start == null && end == null) return "all history";
+  const fmt = (t: number) =>
+    new Date(t * 1000).toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  if (start != null && end != null) {
+    const s = new Date(start * 1000);
+    const e = new Date(end * 1000);
+    // A whole calendar year (end stored as Dec 31 23:59:59) reads as "2024".
+    if (
+      s.getFullYear() === e.getFullYear() &&
+      s.getMonth() === 0 &&
+      s.getDate() === 1 &&
+      e.getMonth() === 11 &&
+      e.getDate() === 31
+    ) {
+      return String(s.getFullYear());
+    }
+    return `${fmt(start)} – ${fmt(end)}`;
   }
-  const year = Number(selection);
-  return {
-    rangeStart: Math.floor(Date.UTC(year, 0, 1) / 1000),
-    rangeEnd: Math.floor(Date.UTC(year + 1, 0, 1) / 1000) - 1,
-  };
+  return start != null ? `since ${fmt(start)}` : `until ${fmt(end!)}`;
 }
 
 export function SafetyScanView() {
   const qc = useQueryClient();
-  const { scan, startScan, cancelScan, error } = useSafetyScan();
-  const [rangeSel, setRangeSel] = useState("all");
+  const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
+  // Same time filter as the rest of the app: the shared FilterControl popover
+  // with a `timeGroup` — every period shown (24h/7d/30d + a chip per year the
+  // backup spans), empty windows disabled via counts rather than hidden.
+  // `timeGroup` emits a half-open [lo, hi); the scan backend's range end is
+  // inclusive, so hi maps to `end = hi - 1` at start time.
+  const { now, presets: basePresets } = useTimePresets();
+  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   const [showDismissed, setShowDismissed] = useState(false);
+  // Immediate feedback for Stop: the backend aborts within ~1s, but reflect the
+  // click at once. Reset when the scan actually clears.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!scan) setStopping(false);
+  }, [scan]);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
   // real hardware, so the disclaimer stays until the user acknowledges it.
   const [expDismissed, setExpDismissed] = usePersistedState(
@@ -113,6 +107,38 @@ export function SafetyScanView() {
     false,
   );
 
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
+  // The [min, max] message timestamps → a chip per year the backup covers,
+  // replacing the single cumulative "this year" preset (as the Messages timeline
+  // does), while keeping the recency windows.
+  const { data: dateBounds } = useQuery({
+    queryKey: ["messageDateBounds"],
+    queryFn: () => client.messageDateBounds(),
+    enabled: active === true,
+  });
+  const presets = useMemo(() => {
+    if (!dateBounds) return basePresets;
+    const minYear = new Date(dateBounds[0] * 1000).getFullYear();
+    const maxYear = new Date(now * 1000).getFullYear();
+    return [
+      ...basePresets.filter((p) => p.key !== "year"),
+      ...makeYearPresets(minYear, maxYear),
+    ];
+  }, [basePresets, dateBounds, now]);
+  // Per-window message counts, so empty periods are shown-but-disabled (not
+  // hidden). Counts reflect messages — the bulk of scanned content.
+  const { data: presetCounts } = useQuery({
+    queryKey: ["messageRanges", now, presets.length],
+    queryFn: () =>
+      client.countMessageRanges(
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+        null,
+      ),
+    enabled: active === true,
+  });
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -136,32 +162,59 @@ export function SafetyScanView() {
     },
   });
 
+  // Publish just the title to the shared top toolbar (like every other view);
+  // the scan's own controls stay in the run card since they're inputs to the
+  // Run action, not filters over displayed content.
+  useViewToolbar(
+    useMemo(() => (active === true ? { title: "Safety Scan" } : null), [active]),
+  );
+
+  // Gate on an open backup, like every content view — there is nothing to scan
+  // without one.
+  if (active === false) {
+    return (
+      <NoBackupState
+        icon={ShieldUser}
+        title="Open a backup to run a Safety Scan"
+        lead="A local AI reads messages and notes and flags possible harmful content — a prompt to review conversations yourself, not a verdict."
+        features={[
+          { label: "Categories", detail: "Threats, harassment, grooming, self-harm, coercive control, scams, and more." },
+          { label: "Time range", detail: "Scan all history, a specific year, or a custom date range." },
+          { label: "Report & findings", detail: "A narrative report, per-thread summaries, and severity-ranked findings." },
+          { label: "Follow through", detail: "Open the source conversation, and dismiss false positives for good." },
+        ]}
+        note="The model runs sandboxed on this Mac — nothing is uploaded, and the backup text never touches disk."
+      />
+    );
+  }
   if (modelStatus.isPending) return <ListSkeleton />;
   if (modelStatus.isError) return <ErrorState error={modelStatus.error} />;
   const ms = modelStatus.data;
   const running = scan !== null;
+  // Which model this scan will use: the user's Settings pick when it's still
+  // installed, otherwise the recommended installed tier the backend reports.
+  const installedIds = ms.models.filter((m) => m.installed).map((m) => m.id);
+  const effectiveModelId =
+    preferredModelId && installedIds.includes(preferredModelId)
+      ? preferredModelId
+      : ms.readyModelId;
+  // Live findings for the latest scan — the meaningful number to show in the
+  // report header instead of the internal "chunks" count.
+  const findingCount = (findings.data ?? []).filter((f) => !f.dismissed).length;
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader
-        icon={<ScanSearch className="size-4 text-muted-foreground" />}
-        title="Safety Scan"
-      >
-        <span className="text-xs text-muted-foreground">
-          Local analysis of messages and notes for harmful content
-        </span>
-      </ViewHeader>
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         {!expDismissed && (
           <Alert>
-            <ScanSearch className="size-4" />
+            <ShieldUser className="size-4" />
             <AlertTitle className="flex items-center gap-2">
               Experimental feature
             </AlertTitle>
             <AlertDescription className="flex flex-col gap-2">
               <span>
                 Safety Scan is new and its classification accuracy has not yet
-                been validated. Verdicts come from a local AI model and can be
+                been validated. Verdicts come from a local AI and can be
                 wrong in both directions — treat every finding as a prompt to
                 review the actual conversation yourself, and don't rely on a
                 clean result as a guarantee.
@@ -178,26 +231,18 @@ export function SafetyScanView() {
           </Alert>
         )}
 
-        {error && (
-          <Alert variant="destructive">
-            <AlertTriangle className="size-4" />
-            <AlertTitle>Safety Scan error</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
         {ms.readyModelId === null ? (
           <NoModelPrompt />
-        ) : running ? (
-          <RunningCard scanEvent={scan} onCancel={cancelScan} />
         ) : (
+          // One stable card — a running scan shows its progress inline below the
+          // button rather than swapping the whole box (which was jumpy).
           <Card>
+            {/* No card title — the view is already titled "Safety Scan" in the
+                toolbar, and a "Run a scan" heading next to the Start button read
+                as a second button. */}
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Play className="size-4" /> Run a scan
-              </CardTitle>
               <CardDescription>
-                The scan runs entirely on this Mac: a local model reads your
+                The scan runs entirely on this Mac: a local AI reads your
                 messages and notes in small windows and flags possible threats,
                 harassment, grooming, self-harm, coercive control, scams and
                 more. Verdicts are probabilistic — treat each flag as something
@@ -205,29 +250,65 @@ export function SafetyScanView() {
                 automatically.
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex flex-wrap items-center gap-3">
-              <Select value={rangeSel} onValueChange={setRangeSel}>
-                <SelectTrigger className="w-44">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All history</SelectItem>
-                  <SelectItem value="12m">Last 12 months</SelectItem>
-                  {yearOptions().map((y) => (
-                    <SelectItem key={y} value={String(y)}>
-                      {y}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={() => void startScan({ ...rangeFor(rangeSel) })}
-              >
-                <Play className="size-4" /> Start Safety Scan
-              </Button>
-              <span className="text-xs text-muted-foreground">
-                Model: {ms.models.find((m) => m.id === ms.readyModelId)?.displayName}
-              </span>
+            <CardContent className="space-y-3">
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Time range left of the button (same row); the Filter popover
+                    morphs rightward so it opens into the card, not the sidebar. */}
+                <div
+                  className={cn(
+                    "flex items-center gap-2",
+                    running && "pointer-events-none opacity-60",
+                  )}
+                >
+                  <Label className="text-xs text-muted-foreground">
+                    Time range
+                  </Label>
+                  <FilterControl
+                    align="right"
+                    groups={[
+                      timeGroup({
+                        description: "Which messages and notes to scan, by date",
+                        presets,
+                        counts: presetCounts,
+                        value: range,
+                        onChange: setRange,
+                      }),
+                    ]}
+                  />
+                </div>
+                {running ? (
+                  <Button
+                    variant="outline"
+                    disabled={stopping}
+                    onClick={() => {
+                      setStopping(true);
+                      cancelScan();
+                    }}
+                  >
+                    {stopping ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Square className="size-4" />
+                    )}
+                    {stopping ? "Stopping…" : "Stop"}
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={() =>
+                      void startScan({
+                        modelId: effectiveModelId,
+                        rangeStart: range.lo,
+                        // timeGroup's hi is exclusive; the scan range end is
+                        // inclusive, so step back one second.
+                        rangeEnd: range.hi != null ? range.hi - 1 : null,
+                      })
+                    }
+                  >
+                    <Play className="size-4" /> Start Safety Scan
+                  </Button>
+                )}
+              </div>
+              {running && scan && <ScanProgress scanEvent={scan} />}
             </CardContent>
           </Card>
         )}
@@ -240,13 +321,21 @@ export function SafetyScanView() {
                 <CardDescription>
                   {report.data.scan.status === "completed"
                     ? "Completed"
-                    : report.data.scan.status}{" "}
+                    : report.data.scan.status === "cancelled"
+                      ? "Stopped"
+                      : report.data.scan.status}{" "}
                   {report.data.scan.finishedAt
                     ? formatListTime(report.data.scan.finishedAt)
                     : ""}
+                  {" · scanned "}
+                  {formatScanRange(
+                    report.data.scan.rangeStart,
+                    report.data.scan.rangeEnd,
+                  )}
                   {" · "}
-                  {report.data.scan.chunksDone}/{report.data.scan.chunksTotal}{" "}
-                  chunks
+                  {findingCount === 0
+                    ? "no findings"
+                    : `${findingCount} finding${findingCount === 1 ? "" : "s"}`}
                 </CardDescription>
               )}
             </CardHeader>
@@ -268,6 +357,8 @@ export function SafetyScanView() {
             </CardContent>
           </Card>
         )}
+
+        <ScanHistory />
 
         <FindingsList
           findings={findings.data ?? []}
@@ -294,11 +385,10 @@ function NoModelPrompt() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ShieldQuestion className="size-4" /> A local model is required
+          <ShieldQuestion className="size-4" /> A local AI is required
         </CardTitle>
         <CardDescription>
-          Safety Scan analyzes your messages and notes with a local language
-          model that runs entirely on this Mac. Download it once from{" "}
+          Safety Scan analyzes your messages and notes with a local AI that runs entirely on this Mac. Download it once from{" "}
           <span className="font-medium text-foreground">Settings → Safety</span>{" "}
           (bottom-left), then come back here to run a scan.
         </CardDescription>
@@ -307,12 +397,12 @@ function NoModelPrompt() {
   );
 }
 
-function RunningCard({
+/** Inline scan progress shown inside the run card (below the button) so the
+ *  card never gets swapped out mid-scan. */
+function ScanProgress({
   scanEvent,
-  onCancel,
 }: {
   scanEvent: NonNullable<ReturnType<typeof useSafetyScan>["scan"]>;
-  onCancel: () => void;
 }) {
   const label =
     scanEvent.phase === "loading"
@@ -325,28 +415,71 @@ function RunningCard({
       ? (scanEvent.done / scanEvent.total) * 100
       : null;
   return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 text-sm">
+        <Loader2 className="size-4 animate-spin text-muted-foreground" />
+        {label}
+      </div>
+      <Progress value={pct ?? undefined} />
+      {scanEvent.phase === "classifying" && scanEvent.total > 0 && (
+        <div className="text-xs text-muted-foreground">
+          {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
+          {scanEvent.findings} finding{scanEvent.findings === 1 ? "" : "s"} so
+          far — you can leave this page; the scan keeps running.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A label for a scan's status, in user terms. */
+const SCAN_STATUS_LABEL: Record<string, string> = {
+  completed: "Completed",
+  cancelled: "Stopped",
+  failed: "Failed",
+  running: "Running",
+};
+
+/** Past scans on this backup — period, when, status and how many findings each
+ *  produced. Shown only when there's more than the current scan. */
+function ScanHistory() {
+  const history = useQuery({
+    queryKey: ["safetyScan", "history"],
+    queryFn: () => client.listSafetyScans(),
+  });
+  const items = history.data ?? [];
+  if (items.length < 2) return null;
+  return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Loader2 className="size-4 animate-spin" /> {label}
+          <History className="size-4" /> Scan history
         </CardTitle>
-        {scanEvent.phase === "classifying" && (
-          <CardDescription>
-            {scanEvent.done}/{scanEvent.total} chunks ·{" "}
-            {scanEvent.findings} finding{scanEvent.findings === 1 ? "" : "s"} so
-            far — you can leave this page; the scan keeps running.
-          </CardDescription>
-        )}
+        <CardDescription>Every Safety Scan run on this backup.</CardDescription>
       </CardHeader>
-      <CardContent className="flex items-center gap-3">
-        {pct !== null ? (
-          <Progress className="flex-1" value={pct} />
-        ) : (
-          <Progress className="flex-1" />
-        )}
-        <Button variant="outline" size="sm" onClick={onCancel}>
-          <Ban className="size-4" /> Stop
-        </Button>
+      <CardContent className="space-y-1.5">
+        {items.map((s) => (
+          <div
+            key={s.id}
+            className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+          >
+            <div className="min-w-0">
+              <div className="text-sm font-medium">
+                {formatScanRange(s.rangeStart, s.rangeEnd)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {SCAN_STATUS_LABEL[s.status] ?? s.status}
+                {" · "}
+                {formatListTime(s.finishedAt ?? s.startedAt)}
+              </div>
+            </div>
+            <Badge variant={s.findings > 0 ? "secondary" : "outline"}>
+              {s.findings === 0
+                ? "no findings"
+                : `${s.findings} finding${s.findings === 1 ? "" : "s"}`}
+            </Badge>
+          </div>
+        ))}
       </CardContent>
     </Card>
   );
@@ -404,7 +537,9 @@ function FindingsList({
       </CardHeader>
       <CardContent className="space-y-2">
         {visible.map((f) => {
-          const sev = SEVERITY_META[f.severity];
+          // severity is a u8 at the IPC seam, not really typed 1|2|3 — guard so
+          // an out-of-range value can't blank the whole Findings card.
+          const sev = SEVERITY_META[f.severity] ?? SEVERITY_META[1];
           return (
             <div
               key={`${f.fingerprint}:${f.category}`}

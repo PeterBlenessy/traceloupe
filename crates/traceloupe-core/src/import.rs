@@ -480,8 +480,9 @@ pub fn import_backup(
         for app in &apps {
             tx.execute(
                 "INSERT OR REPLACE INTO installed_apps
-                     (bundle_id, name, seller, version, genre, released)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                     (bundle_id, name, seller, version, genre, released,
+                      downloaded, apple_id, content_rating, subgenre)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 rusqlite::params![
                     app.bundle_id,
                     app.name,
@@ -489,6 +490,10 @@ pub fn import_backup(
                     app.version,
                     app.genre,
                     app.released,
+                    app.downloaded,
+                    app.apple_id,
+                    app.content_rating,
+                    app.subgenre,
                 ],
             )?;
         }

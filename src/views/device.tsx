@@ -4,6 +4,11 @@ import { useNavigate } from "@tanstack/react-router";
 import { FolderOpen, Lock, LockOpen, LogOut, RotateCw, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { useImport } from "@/components/import-provider";
 import { EmptyView, ErrorState } from "@/components/view";
@@ -53,32 +58,54 @@ export function DeviceView() {
   // "TraceLoupe" header now opens this Device view instead of the picker).
   const actions = useMemo(
     () => (
+      // Icon-only, matching the other views' toolbar controls (Messages/Notes,
+      // the density/theme toggles); labels move into shadcn tooltips.
       <div className="flex items-center gap-1 rounded-lg border border-border/70 bg-muted/40 p-0.5">
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!info}
-          title="Parse this backup again (updates data, e.g. new fields)"
-          onClick={() => info && imp.open(info)}
-        >
-          <RotateCw className="size-4" /> Re-import
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          title="Open a different backup"
-          onClick={() => navigate({ to: "/" })}
-        >
-          <FolderOpen className="size-4" /> Open other…
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          title="Close this backup (its imported data is kept)"
-          onClick={() => void closeBackup()}
-        >
-          <LogOut className="size-4" /> Close
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              disabled={!info}
+              aria-label="Re-import backup"
+              onClick={() => info && imp.open(info)}
+            >
+              <RotateCw className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            Re-import (parse this backup again — updates data, e.g. new fields)
+          </TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              aria-label="Open a different backup"
+              onClick={() => navigate({ to: "/" })}
+            >
+              <FolderOpen className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Open a different backup</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              aria-label="Close backup"
+              onClick={() => void closeBackup()}
+            >
+              <LogOut className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Close this backup (its imported data is kept)</TooltipContent>
+        </Tooltip>
       </div>
     ),
     // closeBackup is stable enough for this view; deps kept minimal.

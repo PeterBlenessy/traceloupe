@@ -5,8 +5,9 @@ import { cn } from "@/lib/utils";
  * chips, the custom-range trigger, and single-select badge filters (service,
  * source, Safari type, note lock, message content-kind). A subtle bordered pill
  * that tints toward `primary` when active (macOS-style selection, not a loud
- * solid fill). `BadgeFilter`, `TimeFilterBar`, and the `OverflowRow` "⋮" trigger
- * all route through this so their selected/hover states can't drift apart.
+ * solid fill). The `filter-groups` pills (`timeGroup`/`badgeGroup`), `BadgeFilter`,
+ * and the `DateRangeFilter` trigger all route through this so their selected/hover
+ * states can't drift apart.
  */
 export function filterPillClass(active: boolean, extra?: string): string {
   return cn(

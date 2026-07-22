@@ -3,7 +3,8 @@ import { cn } from "@/lib/utils";
 import {
   Boxes,
   ShieldAlert,
-  ScanSearch,
+  ShieldUser,
+  X,
   CalendarDays,
   HeartPulse,
   ListTodo,
@@ -59,6 +60,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -69,8 +75,12 @@ import {
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
 import { ImportProvider, useImport } from "@/components/import-provider";
-import { SafetyScanProvider } from "@/components/safety-scan-provider";
+import {
+  SafetyScanProvider,
+  useSafetyScan,
+} from "@/components/safety-scan-provider";
 import { SafetyModelSettings } from "@/components/safety-model-settings";
+import { SecuritySettings } from "@/components/security-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
@@ -115,6 +125,12 @@ export function AppShell() {
     queryKey: ["deviceInfo"],
     queryFn: () => client.deviceInfo(),
   });
+  // With no backup open there is no Device view to show — the header must lead
+  // back to the backup picker instead.
+  const { data: hasBackup } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
 
   return (
     // ImportProvider / ReimportProvider live above the routes so an import — and a
@@ -157,10 +173,16 @@ export function AppShell() {
                       shows the open device's name and opens the Device view. */}
                   <SidebarMenuButton
                     asChild
-                    isActive={pathname === "/device"}
-                    tooltip={deviceInfo?.deviceName ?? "Device"}
+                    isActive={
+                      hasBackup === true ? pathname === "/device" : pathname === "/"
+                    }
+                    tooltip={
+                      hasBackup === true
+                        ? (deviceInfo?.deviceName ?? "Device")
+                        : "Your iPhone backups"
+                    }
                   >
-                    <Link to="/device">
+                    <Link to={hasBackup === true ? "/device" : "/"}>
                       <Smartphone />
                       <span className="truncate font-semibold group-data-[collapsible=icon]:hidden">
                         {deviceInfo?.deviceName ?? "TraceLoupe"}
@@ -191,7 +213,7 @@ export function AppShell() {
                     tooltip="Safety (experimental)"
                   >
                     <Link to="/safety-scan">
-                      <ScanSearch />
+                      <ShieldUser />
                       <span>Safety</span>
                     </Link>
                   </SidebarMenuButton>
@@ -204,7 +226,7 @@ export function AppShell() {
               </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
-              <SidebarSeparator className="mx-0" />
+              <SidebarSeparator />
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
@@ -316,6 +338,8 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
       trailing={
         // App-wide controls, rightmost.
         <>
+          <SafetyScanIndicator />
+          <ModelDownloadIndicator />
           <ImportIndicator />
           <ToolbarGroup>
             <DensityToggle />
@@ -364,15 +388,21 @@ function ReimportAction({ module, label }: { module: string; label: string }) {
   if (active !== true) return null;
   const running = isRunning(module);
   return (
-    <SidebarMenuAction
-      showOnHover={!running}
-      disabled={running}
-      onClick={() => reimport(module)}
-      title={running ? `Re-importing ${label}…` : `Re-import ${label}`}
-      aria-label={running ? `Re-importing ${label}` : `Re-import ${label}`}
-    >
-      {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-    </SidebarMenuAction>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <SidebarMenuAction
+          showOnHover={!running}
+          disabled={running}
+          onClick={() => reimport(module)}
+          aria-label={running ? `Re-importing ${label}` : `Re-import ${label}`}
+        >
+          {running ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+        </SidebarMenuAction>
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        {running ? `Re-importing ${label}…` : `Re-import ${label}`}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -388,16 +418,88 @@ function ImportIndicator() {
         ? `Reading ${p.artifact}…`
         : "starting…";
   return (
-    <button
-      onClick={reopen}
-      title="Reopen import"
-      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          onClick={reopen}
+          className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
+        >
+          <Loader2 className="size-3 animate-spin" />
+          <span className="max-w-[16rem] truncate">
+            Importing {active.backup.deviceName ?? active.backup.id} · {detail}
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Reopen import</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A pill shown while the Safety Scan model downloads in the background — so
+ *  the ~5 GB download is visible and cancelable from anywhere, not only inside
+ *  the Settings dialog (which is modal). The download itself already runs in
+ *  the SafetyScanProvider, above the routes, so it keeps going as you navigate
+ *  or close Settings; this just surfaces it. */
+function ModelDownloadIndicator() {
+  const { download, cancelDownload } = useSafetyScan();
+  if (!download) return null;
+  const pct =
+    download.phase === "downloading" && download.total > 0
+      ? Math.round((download.received / download.total) * 100)
+      : null;
+  const label =
+    download.phase === "verifying"
+      ? "Verifying model…"
+      : pct !== null
+        ? `Downloading model · ${pct}%`
+        : "Downloading model…";
+  return (
+    <span className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
+      <Loader2 className="size-3 animate-spin" />
+      <span className="max-w-[14rem] truncate">{label}</span>
+      {download.phase === "downloading" && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={cancelDownload}
+              aria-label="Cancel model download"
+              className="ml-0.5 rounded-full p-0.5 hover:bg-accent hover:text-foreground"
+            >
+              <X className="size-3" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Cancel model download</TooltipContent>
+        </Tooltip>
+      )}
+    </span>
+  );
+}
+
+/** A Safety Scan runs in the SafetyScanProvider (above the routes), so it keeps
+ *  going after you leave the Safety view. This pill surfaces it in the title bar
+ *  — spinner + progress — and jumps back to the view on click. Hidden while the
+ *  Safety view is open (it's redundant there). */
+function SafetyScanIndicator() {
+  const { scan } = useSafetyScan();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  if (!scan || pathname === "/safety-scan") return null;
+  const label =
+    scan.phase === "loading"
+      ? "Loading model…"
+      : scan.phase === "summarizing"
+        ? "Writing report…"
+        : scan.phase === "classifying" && scan.total > 0
+          ? `Scanning · ${scan.done}/${scan.total}`
+          : "Scanning…";
+  return (
+    <Link
+      to="/safety-scan"
+      title="Go to Safety Scan"
+      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
     >
       <Loader2 className="size-3 animate-spin" />
-      <span className="max-w-[16rem] truncate">
-        Importing {active.backup.deviceName ?? active.backup.id} · {detail}
-      </span>
-    </button>
+      <span className="max-w-[14rem] truncate">{label}</span>
+    </Link>
   );
 }
 
@@ -418,18 +520,24 @@ function DensityToggle() {
   const next = DENSITIES[(DENSITIES.indexOf(density) + 1) % DENSITIES.length];
   const { icon: Icon, label } = DENSITY_META[density];
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-7"
-      onClick={() => setDensity(next)}
-      title={`Density: ${label} — click for ${DENSITY_META[next].label}`}
-    >
-      <Icon className="size-4" />
-      <span className="sr-only">
-        Density: {label}. Switch to {DENSITY_META[next].label}.
-      </span>
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={() => setDensity(next)}
+        >
+          <Icon className="size-4" />
+          <span className="sr-only">
+            Density: {label}. Switch to {DENSITY_META[next].label}.
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        Density: {label} — click for {DENSITY_META[next].label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -448,6 +556,8 @@ function SettingsMenu() {
     setShowMediaMetadata,
     recoverFromPhotos,
     setRecoverFromPhotos,
+    fetchAppIcons,
+    setFetchAppIcons,
     importModules,
     setImportModules,
     logLevel,
@@ -505,7 +615,8 @@ function SettingsMenu() {
                 ["general", "General", SlidersHorizontal],
                 ["media", "Media", Image],
                 ["apps", "Apps", Boxes],
-                ["safety", "Safety", ScanSearch],
+                ["security", "Security", ShieldAlert],
+                ["safety", "Safety", ShieldUser],
                 ["developer", "Developer", Terminal],
               ] as const
             ).map(([value, label, Icon]) => (
@@ -529,7 +640,10 @@ function SettingsMenu() {
             value="general"
             className="mt-0 flex flex-col gap-6"
           >
-            <SettingsGroup title="Display">
+            <SettingsGroup
+              title="Display"
+              description="Appearance, contact display, and how lists and links are shown."
+            >
               <SettingsRow
                 label="Appearance"
                 description="Light, dark, or follow the system."
@@ -557,7 +671,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Show contact photos"
-                description="Show contact avatars where available."
+                description="Use each contact's saved photo as their avatar in lists and chats."
               >
                 <Switch
                   aria-label="Show contact photos"
@@ -567,7 +681,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Link previews"
-                description="How links in messages preview. Off keeps raw URLs (no network). On hover fetches a preview only when you hover a link. Inline unfurls every link in the bubble — both hover and inline contact the linked websites."
+                description="Off keeps raw URLs and never touches the network. On hover fetches a preview only when you point at a link; Inline unfurls every link in the bubble — both reach out to the linked sites."
               >
                 <select
                   value={linkPreviewMode}
@@ -584,7 +698,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Time format"
-                description="How clock times are shown."
+                description="12-hour, 24-hour, or match your system."
               >
                 <select
                   value={clockFormat}
@@ -601,7 +715,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Density"
-                description="How tightly lists and controls pack together."
+                description="Comfortable, cozy, or compact row and control spacing."
               >
                 <select
                   value={density}
@@ -674,7 +788,7 @@ function SettingsMenu() {
               </SettingsRow>
               <SettingsRow
                 label="Recover attachments from Photos"
-                description="When a message photo/video isn't in the backup, show a camera-roll item with the same file name instead. Best-effort — it matches by name and can occasionally show the wrong photo, so recovered media is labelled. Off by default."
+                description="When a message photo or video is missing, show the same-named camera-roll item instead. Best-effort name matching — it can occasionally show the wrong photo, so recovered media is labelled."
               >
                 <Switch
                   aria-label="Recover attachments from Photos"
@@ -689,6 +803,21 @@ function SettingsMenu() {
             value="apps"
             className="mt-0 flex flex-col gap-6"
           >
+            <SettingsGroup
+              title="App details"
+              description="How the Apps view shows each installed app."
+            >
+              <SettingsRow
+                label="Fetch real app icons"
+                description="Look up each app's real icon from Apple's App Store. The only feature that leaves your Mac — it tells Apple which apps the backup contains — so it's off by default; otherwise apps show a colored initial tile."
+              >
+                <Switch
+                  aria-label="Fetch real app icons"
+                  checked={fetchAppIcons}
+                  onCheckedChange={setFetchAppIcons}
+                />
+              </SettingsRow>
+            </SettingsGroup>
             {catalog && catalog.length > 0 ? (
               <SettingsGroup
                 title="Data to import"
@@ -752,8 +881,22 @@ function SettingsMenu() {
             </SettingsGroup>
           </TabsContent>
 
+          <TabsContent value="security" className="mt-0 flex flex-col gap-6">
+            <SettingsGroup
+              title="Security Check"
+              description="How TraceLoupe checks your backups against public spyware and stalkerware lists."
+            >
+              <div className="p-3">
+                <SecuritySettings />
+              </div>
+            </SettingsGroup>
+          </TabsContent>
+
           <TabsContent value="safety" className="mt-0 flex flex-col gap-6">
-            <SettingsGroup title="Safety Scan model">
+            <SettingsGroup
+              title="Safety Scan model"
+              description="The local AI model that powers Safety Scan's on-device content analysis."
+            >
               <div className="p-3">
                 <SafetyModelSettings />
               </div>

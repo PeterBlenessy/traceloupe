@@ -9,7 +9,6 @@ import {
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-key";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Camera,
@@ -39,7 +38,6 @@ const SUBTYPE_LABELS: Record<string, string> = {
   live: "Live Photo",
   burst: "Burst",
 };
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useSettings } from "@/components/settings-provider";
@@ -47,7 +45,7 @@ import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
-import { EmptyView, ErrorState, ListSearch } from "@/components/view";
+import { NoBackupState, EmptyView, ErrorState, ListSearch } from "@/components/view";
 import { useDebounced } from "@/lib/use-debounced";
 import { formatCount, formatDateTime } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
@@ -66,7 +64,6 @@ export function PhotosView() {
 }
 
 function PhotosViewInner() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -212,13 +209,18 @@ function PhotosViewInner() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={ImageIcon}
-        title="No backup open"
-        description="Import a backup to see photos and videos."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to browse photos & videos"
+        lead="Every photo and video from the iPhone's Camera Roll, restored from the backup and viewable full-size — Live Photos, screenshots, panoramas, and bursts included."
+        features={[
+          { label: "Search", detail: "Find shots by filename, person, place, or album." },
+          { label: "Filter & time range", detail: "Narrow by source album and jump to any date range, with live counts." },
+          { label: "Sort", detail: "Order by date or source, ascending or descending." },
+          { label: "Full detail", detail: "Open a lightbox with EXIF, camera settings, people, and a map pin for where it was taken." },
+        ]}
+        note="Everything is read locally on this Mac — nothing is uploaded, and the backup is never modified."
+      />
     );
   }
 

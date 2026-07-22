@@ -1,21 +1,16 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Boxes, Download } from "lucide-react";
+import { Boxes } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+  Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
+import { useSettings } from "@/components/settings-provider";
+import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
-import { BrandIcon } from "@/lib/brand-icon";
+import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { cn } from "@/lib/utils";
 import { client } from "@/lib/ipc";
 
@@ -32,6 +27,25 @@ interface AppRow {
   version: string | null;
   genre: string | null;
   released: string | null;
+  /** Per-copy download receipt: when, and which account installed it. */
+  downloaded: string | null;
+  appleId: string | null;
+  contentRating: string | null;
+  subgenre: string | null;
+}
+
+/** A stable, distinct tinted tile for an app without a bundled brand logo —
+ *  hue derived from its bundle id, so each app reads as its own icon rather
+ *  than a uniform grey monogram. (Real App Store artwork can't be used: the
+ *  webview CSP blocks remote images and the backup carries no icon bitmap.) */
+function appTile(bundleId: string): { backgroundColor: string; color: string } {
+  let h = 0;
+  for (let i = 0; i < bundleId.length; i++)
+    h = (h * 31 + bundleId.charCodeAt(i)) % 360;
+  return {
+    backgroundColor: `hsl(${h} 55% 50% / 0.16)`,
+    color: `hsl(${h} 60% 62%)`,
+  };
 }
 
 /** "2018" — just the year of an RFC-3339 release date (the day/time is noise
@@ -42,8 +56,20 @@ function releasedYear(released: string | null): string | null {
   return Number.isNaN(d.getTime()) ? null : String(d.getUTCFullYear());
 }
 
+/** "12 Mar 2024" — full day for a download date (unlike a release year, the
+ *  exact install day matters forensically). */
+function downloadedLabel(downloaded: string): string {
+  const d = new Date(downloaded);
+  return Number.isNaN(d.getTime())
+    ? downloaded
+    : d.toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      });
+}
+
 export function AppsView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -84,6 +110,10 @@ export function AppsView() {
           version: app.version,
           genre: app.genre,
           released: app.released,
+          downloaded: app.downloaded,
+          appleId: app.appleId,
+          contentRating: app.contentRating,
+          subgenre: app.subgenre,
         };
       })
       .sort(
@@ -91,6 +121,25 @@ export function AppsView() {
           rank[a.support] - rank[b.support] || a.name.localeCompare(b.name),
       );
   }, [installed]);
+
+  // Opt-in real App Store artwork (Settings → Apps). Only fetch for apps
+  // without a bundled brand logo; results are cached on disk by the backend.
+  const { fetchAppIcons } = useSettings();
+  const iconBundleIds = useMemo(
+    () => apps.filter((a) => !hasBrandIcon(a.slug)).map((a) => a.bundleId),
+    [apps],
+  );
+  const { data: iconList } = useQuery({
+    queryKey: ["appIcons", iconBundleIds],
+    queryFn: () => client.getAppIcons(iconBundleIds),
+    enabled: fetchAppIcons && iconBundleIds.length > 0,
+    staleTime: Infinity,
+  });
+  const iconMap = useMemo(() => {
+    const m = new Map<string, string>();
+    iconList?.forEach((i) => m.set(i.bundleId, i.dataUri));
+    return m;
+  }, [iconList]);
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -100,7 +149,8 @@ export function AppsView() {
         a.name.toLowerCase().includes(needle) ||
         a.bundleId.toLowerCase().includes(needle) ||
         (a.seller?.toLowerCase().includes(needle) ?? false) ||
-        (a.genre?.toLowerCase().includes(needle) ?? false),
+        (a.genre?.toLowerCase().includes(needle) ?? false) ||
+        (a.appleId?.toLowerCase().includes(needle) ?? false),
     );
   }, [apps, q]);
 
@@ -116,13 +166,18 @@ export function AppsView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={Boxes}
-        title="No backup open"
-        description="Import a backup to see its apps."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to inspect installed apps"
+        lead="Every app installed on the device — with version, App Store details, bundle id, and the data it left in the backup — a starting point for spotting unfamiliar or hidden apps."
+        features={[
+          { label: "Search", detail: "Search by name, bundle id, seller, genre, or account." },
+          { label: "App Store detail", detail: "Seller, genre, subgenre, age rating, and release year." },
+          { label: "Install receipt", detail: "When each app was downloaded, and the Apple ID that installed it." },
+          { label: "Cross-link", detail: "Jump from a supported app to its chats in Messages." },
+        ]}
+        note="Read locally on this Mac — nothing is uploaded."
+      />
     );
   }
 
@@ -135,24 +190,39 @@ export function AppsView() {
       emptyMessage="No installed-app list in this backup."
       items={filtered}
       getKey={(a) => a.bundleId}
-      renderItem={(a) => <AppItem app={a} />}
+      renderItem={(a) => <AppItem app={a} iconUri={iconMap.get(a.bundleId)} />}
     />
   );
 }
 
-function AppItem({ app }: { app: AppRow }) {
+function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
   const navigate = useNavigate();
   const label = SUPPORT_LABEL[app.support];
-  // Only the "coming soon" placeholder — never for apps we already parse natively
-  // (their chats show in Messages) or that keep no local data.
-  const canExtract = app.support === "planned";
 
   return (
     <Item>
       <ItemMedia>
-        <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
-          <BrandIcon slug={app.slug} name={app.name} className="size-5" />
-        </div>
+        {iconUri ? (
+          // Real App Store artwork (opt-in fetch); falls through to the tiles
+          // below when not fetched or unresolved.
+          <img
+            src={iconUri}
+            alt={app.name}
+            className="size-9 rounded-lg object-cover"
+          />
+        ) : hasBrandIcon(app.slug) ? (
+          <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+            <BrandIcon slug={app.slug} name={app.name} className="size-5" />
+          </div>
+        ) : (
+          <div
+            className="flex size-9 items-center justify-center rounded-lg text-sm font-semibold"
+            style={appTile(app.bundleId)}
+            aria-label={app.name}
+          >
+            {app.name.slice(0, 1).toUpperCase()}
+          </div>
+        )}
       </ItemMedia>
       <ItemContent>
         <ItemTitle className="flex items-center gap-2">
@@ -178,20 +248,35 @@ function AppItem({ app }: { app: AppRow }) {
             </Badge>
           )}
         </ItemTitle>
-        {/* Seller · genre · release year from the backup's App Store metadata,
-            when present; otherwise fall back to the bundle id. */}
-        {app.seller || app.genre || app.released ? (
+        {/* Seller · genre · subgenre · age rating · release year, from the
+            backup's App Store metadata, when present. */}
+        {app.seller || app.genre || app.subgenre || app.contentRating || app.released ? (
           <ItemDescription className="truncate">
-            {[app.seller, app.genre, releasedYear(app.released)]
+            {[
+              app.seller,
+              app.genre,
+              app.subgenre,
+              app.contentRating,
+              releasedYear(app.released),
+            ]
               .filter(Boolean)
               .join(" · ")}
+          </ItemDescription>
+        ) : null}
+        {/* The download receipt — device-specific and forensically the most
+            telling: when this copy was installed, and by which Apple ID. */}
+        {app.downloaded || app.appleId ? (
+          <ItemDescription className="truncate text-foreground/70">
+            {app.downloaded && `Downloaded ${downloadedLabel(app.downloaded)}`}
+            {app.downloaded && app.appleId && " · "}
+            {app.appleId && `via ${app.appleId}`}
           </ItemDescription>
         ) : null}
         <ItemDescription className="truncate text-muted-foreground/60">
           {app.bundleId}
         </ItemDescription>
       </ItemContent>
-      {app.support === "native" ? (
+      {app.support === "native" && (
         <ItemActions>
           <Button
             variant="ghost"
@@ -204,19 +289,7 @@ function AppItem({ app }: { app: AppRow }) {
             Chats in Messages →
           </Button>
         </ItemActions>
-      ) : canExtract ? (
-        <ItemActions>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled
-            title="Per-app extraction is coming soon"
-          >
-            <Download className="size-4" />
-            Extract data
-          </Button>
-        </ItemActions>
-      ) : null}
+      )}
     </Item>
   );
 }

@@ -36,7 +36,7 @@ import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeGroup, type FilterGroup } from "@/components/filter-groups";
+import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Message as MessageRow,
@@ -44,7 +44,7 @@ import {
   MessageHeader,
 } from "@/components/ui/message";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
-import {
+import { NoBackupState,
   EmptyView,
   ErrorState,
   ListDetail,
@@ -62,7 +62,6 @@ import {
 import { useSettings } from "@/components/settings-provider";
 import { cn } from "@/lib/utils";
 import {
-  formatCount,
   formatDateHeader,
   formatTimelineTime,
   formatDateTime,
@@ -71,11 +70,7 @@ import {
 } from "@/lib/format";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-key";
-import {
-  TimeFilterBar,
-  makeYearPresets,
-  useTimePresets,
-} from "@/components/time-filter";
+import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
 import { useDebounced } from "@/lib/use-debounced";
 import { serviceSlug } from "@/lib/apps";
@@ -216,7 +211,6 @@ export function MessagesView() {
 }
 
 function MessagesViewInner() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -361,21 +355,23 @@ function MessagesViewInner() {
       badgeGroup({ key: "service", label: "App", description: "Which messaging app", options: serviceOptions, value: service ?? "all", onChange: setServiceFilter }),
     ];
   }, [services, totalCount, serviceCounts, service, setServiceFilter]);
-  const toolbar = useMemo(
-    () => (active === true ? { title: "Messages", filter: filterGroups, modes: modesNode } : null),
-    [active, filterGroups, modesNode],
-  );
-  useViewToolbar(toolbar);
-
+  // Each mode publishes the shared toolbar itself (title, mode toggle, the app
+  // filter passed down here, plus its own search/time/kind/sort) — so only one
+  // useViewToolbar is live at a time and Messages matches every other view.
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={MessageSquare}
-        title="No backup open"
-        description="Import a backup to read its messages."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to read messages"
+        lead="iMessage and SMS conversations reconstructed thread by thread — bubbles, reactions, replies, attachments, and group chats — exactly as they were on the device."
+        features={[
+          { label: "Two views", detail: "Read conversation by conversation, or scan every message in one Timeline stream." },
+          { label: "Search", detail: "Search the timeline across messages, senders, and conversations." },
+          { label: "Filters", detail: "Filter by app (iMessage, SMS, TikTok…), content type, or time range." },
+          { label: "Attachments & links", detail: "Open images in a lightbox, view link previews, and jump to a contact." },
+        ]}
+        note="All parsed locally on this Mac; nothing leaves the machine."
+      />
     );
   }
 
@@ -389,6 +385,8 @@ function MessagesViewInner() {
             service={service}
             kindValue={contentKind}
             onKindChange={setContentKind}
+            serviceGroups={filterGroups}
+            modesNode={modesNode}
             onBack={openedFrom ? () => setMode(openedFrom) : undefined}
             backLabel="Timeline"
             scrollToMessage={scrollToMessage}
@@ -402,6 +400,8 @@ function MessagesViewInner() {
             service={service}
             kindValue={contentKind}
             onKindChange={setContentKind}
+            serviceGroups={filterGroups}
+            modesNode={modesNode}
           />
         )}
       </div>
@@ -416,6 +416,8 @@ function Conversations({
   service,
   kindValue,
   onKindChange,
+  serviceGroups,
+  modesNode,
   onBack,
   backLabel,
   scrollToMessage,
@@ -426,6 +428,9 @@ function Conversations({
   service: string | null;
   kindValue: string;
   onKindChange: (v: string) => void;
+  /** The shared app-filter group(s) + mode toggle from the parent. */
+  serviceGroups: FilterGroup[];
+  modesNode: React.ReactNode;
   onBack?: () => void;
   backLabel?: string;
   /** A message id to scroll the open conversation to (from a Timeline jump). */
@@ -479,30 +484,40 @@ function Conversations({
     visibleThreads?.[0] ??
     null;
 
+  // Publish the shared toolbar: title + mode toggle + app filter (from the
+  // parent) + this mode's sort. Search/kind stay per-conversation in the detail
+  // pane. So Chats matches every other view's single top toolbar.
+  const sortNode = useMemo(
+    () => (
+      <SortControl
+        fields={[
+          { value: "recent", label: "Recent" },
+          { value: "name", label: "Name" },
+          { value: "count", label: "Messages" },
+        ]}
+        value={sort}
+        onChange={setSort}
+      />
+    ),
+    [sort, setSort],
+  );
+  useViewToolbar(
+    useMemo(
+      () => ({
+        title: "Messages",
+        count: visibleThreads?.length,
+        modes: modesNode,
+        filter: serviceGroups,
+        sort: sortNode,
+      }),
+      [visibleThreads?.length, modesNode, serviceGroups, sortNode],
+    ),
+  );
+
   return (
     <ListDetail
       master={
         <>
-          {/* No "Conversations" title here — the mode toggle above already says
-              it. Just the count + sort in one slim row. */}
-          {(threads?.length ?? 0) > 0 && (
-            // h-14 px-4 matches the detail pane's ViewHeader so the two top rows
-            // line up in height.
-            <div className="flex h-14 shrink-0 items-center justify-between gap-2 border-b px-4">
-              <span className="text-xs tabular-nums text-muted-foreground/60">
-                {formatCount(visibleThreads?.length ?? 0)}
-              </span>
-              <SortControl
-                fields={[
-                  { value: "recent", label: "Recent" },
-                  { value: "name", label: "Name" },
-                  { value: "count", label: "Messages" },
-                ]}
-                value={sort}
-                onChange={setSort}
-              />
-            </div>
-          )}
           {error ? (
             <ErrorState error={error} />
           ) : isPending ? (
@@ -617,11 +632,16 @@ function Timeline({
   service,
   kindValue,
   onKindChange,
+  serviceGroups,
+  modesNode,
 }: {
   onOpenThread: (threadId: number, messageId?: number) => void;
   service: string | null;
   kindValue: string;
   onKindChange: (v: string) => void;
+  /** The shared app-filter group(s) from the parent, added to this mode's own. */
+  serviceGroups: FilterGroup[];
+  modesNode: React.ReactNode;
 }) {
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
@@ -635,7 +655,16 @@ function Timeline({
     queryFn: () => client.messageKinds(null, service),
     enabled: active === true,
   });
-  const available = (kindsData ?? []).map(([k]) => k);
+  // Memoized (stable identity) so the toolbar config below doesn't re-publish
+  // every render.
+  const available = useMemo(
+    () => (kindsData ?? []).map(([k]) => k),
+    [kindsData],
+  );
+  const kinds = useMemo(
+    () => KIND_ORDER.filter((k) => available.includes(k)),
+    [available],
+  );
   // A selection that isn't present in this scope filters nothing.
   const kind = kindValue !== "all" && available.includes(kindValue) ? kindValue : null;
   // Anchor "now" once so preset bounds and query keys stay stable.
@@ -702,36 +731,67 @@ function Timeline({
   });
   const { scrollEnd, toTop, toBottom } = useScrollEnds();
 
+  // Publish this mode's controls to the shared top toolbar (search, time, kind,
+  // sort) alongside the app filter + mode toggle — instead of hand-rolled rows.
+  const searchNode = useMemo(
+    () => (
+      <ListSearch value={q} onChange={setQ} placeholder="Search messages, sender…" />
+    ),
+    [q],
+  );
+  const sortNode = useMemo(
+    () => (
+      <OrderToggle
+        desc={order.desc}
+        onToggle={() => setOrder({ by: "time", desc: !order.desc })}
+      />
+    ),
+    [order.desc, setOrder],
+  );
+  const filterGroups = useMemo<FilterGroup[]>(
+    () => [
+      ...serviceGroups,
+      timeGroup({
+        description: "When the message was sent",
+        presets,
+        counts: presetCounts,
+        value: range,
+        onChange: setRange,
+      }),
+      ...(kinds.length >= 2
+        ? [
+            badgeGroup({
+              key: "kind",
+              label: "Type",
+              description: "Message content type",
+              options: [
+                { value: "all", label: "All" },
+                ...kinds.map((k) => ({ value: k, label: KIND_LABELS[k] })),
+              ],
+              value: kinds.includes(kindValue) ? kindValue : "all",
+              onChange: onKindChange,
+            }),
+          ]
+        : []),
+    ],
+    [serviceGroups, presets, presetCounts, range, setRange, kinds, kindValue, onKindChange],
+  );
+  useViewToolbar(
+    useMemo(
+      () => ({
+        title: "Messages",
+        count: total,
+        modes: modesNode,
+        search: searchNode,
+        filter: filterGroups,
+        sort: sortNode,
+      }),
+      [total, modesNode, searchNode, filterGroups, sortNode],
+    ),
+  );
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="shrink-0 border-b px-3 py-1.5">
-        <ListSearch
-          value={q}
-          onChange={setQ}
-          placeholder="Search messages, sender…"
-        />
-      </div>
-      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-1.5">
-        <TimeFilterBar
-          className="flex-1"
-          presets={presets}
-          value={range}
-          onChange={setRange}
-          counts={presetCounts}
-        />
-        <MessageKindFilter
-          available={available}
-          value={kindValue}
-          onChange={onKindChange}
-        />
-        <div className="flex shrink-0 items-center">
-          <OrderToggle
-            desc={order.desc}
-            onToggle={() => setOrder({ by: "time", desc: !order.desc })}
-          />
-          <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
-        </div>
-      </div>
+    <div className="relative flex h-full flex-col">
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
         startAtBottom={!order.desc}
@@ -775,6 +835,13 @@ function Timeline({
           />
         )}
       />
+      {/* Jump-to-top/bottom is list navigation, not a toolbar control — float it
+          over the list's bottom-right so it stays near the content. */}
+      {(total ?? 0) > 0 && (
+        <div className="absolute bottom-3 right-3 rounded-full border bg-background/90 shadow-sm backdrop-blur">
+          <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
+        </div>
+      )}
       <MessageImageLightbox
         images={lb?.images ?? []}
         index={lb?.index ?? null}

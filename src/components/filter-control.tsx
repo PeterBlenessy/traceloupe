@@ -29,10 +29,20 @@ const PANEL_W = 416;
  * Only groups the view actually has are passed in, so an absent facet never
  * appears as an empty row.
  */
-export function FilterControl({ groups }: { groups: FilterGroup[] }) {
+export function FilterControl({
+  groups,
+  align = "left",
+}: {
+  groups: FilterGroup[];
+  /** Which way the popover morphs open: `"left"` anchors the funnel's right edge
+   *  and grows **leftward** (the default — for a right-aligned toolbar funnel);
+   *  `"right"` anchors the left edge and grows **rightward** (for a left-placed
+   *  funnel, e.g. beside a button in a card, so it doesn't cover the sidebar). */
+  align?: "left" | "right";
+}) {
   const [mounted, setMounted] = useState(false); // overlay is in the tree
   const [expanded, setExpanded] = useState(false); // morph target (full panel)
-  const [rect, setRect] = useState({ top: 0, right: 0, w: 32, h: 32 });
+  const [rect, setRect] = useState({ top: 0, right: 0, left: 0, w: 32, h: 32 });
   const [contentH, setContentH] = useState(0);
   // Chips mid-removal: kept in the DOM while they collapse (width→0) before the
   // filter is actually cleared, so the island shrinks smoothly.
@@ -75,7 +85,14 @@ export function FilterControl({ groups }: { groups: FilterGroup[] }) {
   // growing width pushes its left edge out and growing height drops its bottom.
   const measureButton = () => {
     const r = btnRef.current?.getBoundingClientRect();
-    if (r) setRect({ top: r.top, right: window.innerWidth - r.right, w: r.width, h: r.height });
+    if (r)
+      setRect({
+        top: r.top,
+        right: window.innerWidth - r.right,
+        left: r.left,
+        w: r.width,
+        h: r.height,
+      });
   };
 
   const open = () => {
@@ -229,7 +246,12 @@ export function FilterControl({ groups }: { groups: FilterGroup[] }) {
               tabIndex={-1}
               style={{
                 top: rect.top,
-                right: rect.right,
+                // Anchor the fixed edge; growing width then morphs the box away
+                // from it — leftward from the right edge, or rightward from the
+                // left edge.
+                ...(align === "right"
+                  ? { left: rect.left }
+                  : { right: rect.right }),
                 width: expanded ? PANEL_W : rect.w,
                 height: expanded ? contentH : rect.h,
               }}

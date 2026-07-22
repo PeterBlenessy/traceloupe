@@ -9,7 +9,7 @@
 //!   summarizing → done/error/cancelled)
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -34,6 +34,22 @@ pub struct SafetyScanGate(pub tauri::async_runtime::Mutex<()>);
 #[derive(Default)]
 pub struct SafetyDownloadGate(pub tauri::async_runtime::Mutex<()>);
 
+/// Live snapshot of the in-flight model download, so the UI can rehydrate after
+/// a refresh (the download runs in this process and survives a webview reload,
+/// but the frontend loses its state). `None` when no download is running.
+#[derive(Default, Clone)]
+pub struct SafetyDownloadStatus(pub Arc<Mutex<Option<DownloadSnapshot>>>);
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadSnapshot {
+    pub model_id: String,
+    pub received: u64,
+    pub total: u64,
+    /// "downloading" | "verifying"
+    pub phase: String,
+}
+
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
 fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_path
@@ -56,6 +72,8 @@ fn models_dir(app: &AppHandle) -> Result<PathBuf, String> {
 pub struct ModelInfo {
     pub id: String,
     pub display_name: String,
+    /// One-line role blurb (why you'd pick this model).
+    pub note: String,
     pub size_bytes: u64,
     pub installed: bool,
     pub recommended: bool,
@@ -81,6 +99,7 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
         .map(|s| ModelInfo {
             id: s.id.into(),
             display_name: s.display_name.into(),
+            note: s.note.into(),
             size_bytes: s.size_bytes,
             installed: s.installed_at(&dir).is_some(),
             recommended: s.id == rec.id,
@@ -98,6 +117,149 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
     })
 }
 
+/// Result of a one-shot server health check (NoteSage-style "is it actually
+/// running and is the model loaded?"). Our sidecar is per-scan, not persistent,
+/// so this spins one up, waits for `/health`, then shuts it down.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthReport {
+    pub ok: bool,
+    pub model_id: String,
+    pub display_name: String,
+    /// Time from spawn to a healthy `/health` (only meaningful when `ok`).
+    pub startup_ms: u64,
+    /// Human-readable outcome — the success line, or the failure reason.
+    pub message: String,
+}
+
+/// Spin the sandboxed llama-server up for `model_id` (or the recommended tier),
+/// confirm the model loads and `/health` goes green, then tear it down. Gives
+/// the user on-demand proof the local model actually runs on this Mac.
+#[tauri::command]
+pub async fn safety_scan_health_check(
+    app: AppHandle,
+    gate: State<'_, SafetyScanGate>,
+    model_id: Option<String>,
+) -> Result<HealthReport, String> {
+    // Share the scan gate: never boot a second 5 GB server while a scan (which
+    // owns the GPU/RAM budget) is in flight.
+    let _guard = gate
+        .0
+        .try_lock()
+        .map_err(|_| "a Safety Scan is already running")?;
+
+    let dir = models_dir(&app)?;
+    let spec = match model_id.as_deref() {
+        Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
+        None => models::recommended(models::total_ram_bytes()),
+    };
+    let model_path = spec
+        .installed_at(&dir)
+        .ok_or("model not installed — download it first")?;
+    let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+    let scratch_dir = dir.join("healthcheck-scratch");
+
+    let spec_id = spec.id.to_string();
+    let display_name = spec.display_name.to_string();
+    let ctx_size = spec.ctx_size;
+    let app2 = app.clone();
+
+    let report = tauri::async_runtime::spawn_blocking(move || -> HealthReport {
+        let fail = |message: String| HealthReport {
+            ok: false,
+            model_id: spec_id.clone(),
+            display_name: display_name.clone(),
+            startup_ms: 0,
+            message,
+        };
+
+        crate::logging::info(&app2, format!("Safety Scan health check: model={spec_id}"));
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+        let port = match server::pick_port() {
+            Ok(p) => p,
+            Err(e) => return fail(e.to_string()),
+        };
+
+        // Forward llama-server output to the dev log, same as a real scan.
+        let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+        let app_log = app2.clone();
+        std::thread::spawn(move || {
+            while let Ok(line) = log_rx.recv() {
+                crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let mut llama = match server::LlamaServer::spawn(
+            &server::ServerConfig {
+                binary,
+                model_path,
+                port,
+                ctx_size,
+                gpu_layers: -1,
+                sandbox: true,
+                scratch_dir,
+            },
+            Some(log_tx),
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                crate::logging::error(
+                    &app2,
+                    format!("Safety Scan health check: spawn failed: {e}"),
+                );
+                return fail(e.to_string());
+            }
+        };
+
+        // Bounded wait — a health check should fail fast, not hang for the full
+        // 180s scan budget. A cold 5 GB load + Metal warmup fits in ~90s.
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        loop {
+            match llama.wait_healthy(Duration::from_secs(2)) {
+                Ok(()) => {
+                    let startup_ms = started.elapsed().as_millis() as u64;
+                    llama.shutdown();
+                    crate::logging::info(
+                        &app2,
+                        format!("Safety Scan health check: healthy in {startup_ms} ms"),
+                    );
+                    return HealthReport {
+                        ok: true,
+                        model_id: spec_id.clone(),
+                        display_name: display_name.clone(),
+                        startup_ms,
+                        message: format!(
+                            "Server started and {display_name} loaded in {:.1}s.",
+                            startup_ms as f64 / 1000.0
+                        ),
+                    };
+                }
+                Err(e) => {
+                    if llama.has_exited() {
+                        let tail = llama.output_tail();
+                        crate::logging::error(
+                            &app2,
+                            format!("Safety Scan health check: {e}\n{tail}"),
+                        );
+                        return fail(e.to_string());
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        llama.shutdown();
+                        crate::logging::error(&app2, format!("Safety Scan health check: {e}"));
+                        return fail("timed out waiting for the model to load".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            }
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    Ok(report)
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
 enum ModelProgressEvent {
@@ -112,6 +274,7 @@ pub async fn download_safety_scan_model(
     app: AppHandle,
     gate: State<'_, SafetyDownloadGate>,
     cancel_state: State<'_, SafetyDownloadCancel>,
+    status_state: State<'_, SafetyDownloadStatus>,
     model_id: String,
 ) -> Result<(), String> {
     let _guard = gate
@@ -123,27 +286,56 @@ pub async fn download_safety_scan_model(
     let cancel = CancelToken::new();
     *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
 
+    // Publish a live snapshot so a refreshed UI can rehydrate this download.
+    let status = status_state.0.clone();
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = Some(DownloadSnapshot {
+        model_id: model_id.clone(),
+        received: 0,
+        total: spec.size_bytes,
+        phase: "downloading".into(),
+    });
+
     let app2 = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let status_w = status.clone();
+    let model_id_c = model_id.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || {
         let mut last_emit = std::time::Instant::now();
         models::download_model(spec, &dir, &cancel, |p| {
             let ev = match p {
                 InstallProgress::Downloading { received, total } => {
-                    // ~5 GB at 256 KiB per callback: throttle to ~5 events/s.
+                    // Status is cheap to update every tick (drives rehydration);
+                    // the event is throttled (~5/s) to keep the UI light.
+                    *status_w.lock().unwrap_or_else(|e| e.into_inner()) = Some(DownloadSnapshot {
+                        model_id: model_id_c.clone(),
+                        received,
+                        total,
+                        phase: "downloading".into(),
+                    });
                     if last_emit.elapsed() < Duration::from_millis(200) {
                         return;
                     }
                     last_emit = std::time::Instant::now();
                     ModelProgressEvent::Downloading { received, total }
                 }
-                InstallProgress::Verifying => ModelProgressEvent::Verifying,
+                InstallProgress::Verifying => {
+                    if let Some(s) = status_w.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                        s.phase = "verifying".into();
+                    }
+                    ModelProgressEvent::Verifying
+                }
                 InstallProgress::Done => ModelProgressEvent::Done,
             };
             let _ = app2.emit("safetyscan://model-progress", ev);
         })
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
+
+    // Clear the live snapshot on EVERY exit path — including a panicked task
+    // (a JoinError from `?` below would otherwise skip this and wedge the UI
+    // into a permanent, non-cancellable "downloading" state).
+    *status.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    let result = join.map_err(|e| e.to_string())?;
 
     match result {
         Ok(_) => Ok(()),
@@ -158,6 +350,19 @@ pub async fn download_safety_scan_model(
             Err(msg)
         }
     }
+}
+
+/// The in-flight model download, if any — lets a refreshed UI rehydrate its
+/// progress instead of going blank (and then colliding with the download gate).
+#[tauri::command]
+pub fn get_safety_scan_download_status(
+    status_state: State<'_, SafetyDownloadStatus>,
+) -> Option<DownloadSnapshot> {
+    status_state
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
 }
 
 #[tauri::command]
@@ -237,27 +442,59 @@ pub async fn run_safety_scan(
     let app2 = app.clone();
     let spec_id = spec.id.to_string();
     let ctx_size = spec.ctx_size;
-    let result = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+    let binary_log = binary.display().to_string();
+    let model_log = model_path.display().to_string();
+    let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
+        crate::logging::info(
+            &app2,
+            format!("Safety Scan: starting (model={spec_id}, sandbox=on)"),
+        );
+        crate::logging::debug(&app2, format!("Safety Scan: binary={binary_log}"));
+        crate::logging::debug(&app2, format!("Safety Scan: model={model_log}"));
         // Start from a clean scratch dir; spawn() re-creates it.
         let _ = std::fs::remove_dir_all(&scratch_dir);
         let port = server::pick_port().map_err(|e| e.to_string())?;
-        let mut llama = server::LlamaServer::spawn(&server::ServerConfig {
-            binary,
-            model_path,
-            port,
-            ctx_size,
-            gpu_layers: -1,
-            sandbox: true,
-            scratch_dir: scratch_dir.clone(),
-        })
-        .map_err(|e| e.to_string())?;
+        crate::logging::debug(&app2, format!("Safety Scan: llama-server port={port}"));
+
+        // Forward every llama-server output line to the app log (dev console).
+        let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+        let app_log = app2.clone();
+        std::thread::spawn(move || {
+            while let Ok(line) = log_rx.recv() {
+                crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+            }
+        });
+
+        let mut llama = server::LlamaServer::spawn(
+            &server::ServerConfig {
+                binary,
+                model_path,
+                port,
+                ctx_size,
+                gpu_layers: -1,
+                sandbox: true,
+                scratch_dir: scratch_dir.clone(),
+            },
+            Some(log_tx),
+        )
+        .map_err(|e| {
+            crate::logging::error(&app2, format!("Safety Scan: spawn failed: {e}"));
+            e.to_string()
+        })?;
+        crate::logging::info(
+            &app2,
+            "Safety Scan: llama-server spawned, waiting for /health…",
+        );
         // 4–5 GB GGUF load + Metal warmup: allow generous startup time, but
         // poll so cancellation during load still works.
         let deadline = std::time::Instant::now() + Duration::from_secs(180);
         loop {
             match llama.wait_healthy(Duration::from_secs(2)) {
-                Ok(()) => break,
+                Ok(()) => {
+                    crate::logging::info(&app2, "Safety Scan: llama-server healthy — model loaded");
+                    break;
+                }
                 Err(e) => {
                     if cancel.is_cancelled() {
                         return Err("cancelled".into());
@@ -266,9 +503,11 @@ pub async fn run_safety_scan(
                     // surface the failure now instead of tight-spinning to the
                     // 180s deadline (e.g. an OOM-kill during a forced-E4B load).
                     if llama.has_exited() {
+                        crate::logging::error(&app2, format!("Safety Scan: {e}"));
                         return Err(e.to_string());
                     }
                     if std::time::Instant::now() >= deadline {
+                        crate::logging::error(&app2, format!("Safety Scan: {e}"));
                         return Err(e.to_string());
                     }
                     // Backstop so a fast-returning error never busy-loops.
@@ -276,6 +515,35 @@ pub async fn run_safety_scan(
                 }
             }
         }
+
+        // Cancel-watcher: the engine only checks cancellation *between* chunks,
+        // and one chunk is a single ~1-min blocking LLM request. So on Stop, kill
+        // the model server — that drops the in-flight request immediately (its
+        // retry then fails fast and the between-chunk check breaks the loop),
+        // making Stop felt in a fraction of a second instead of up to a minute.
+        let server_pid = llama.pid();
+        let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let cancel = cancel.clone();
+            let done = watch_done.clone();
+            let app = app2.clone();
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    if cancel.is_cancelled() {
+                        crate::logging::info(
+                            &app,
+                            "Safety Scan: cancel requested — stopping the model server",
+                        );
+                        let _ = std::process::Command::new("/bin/kill")
+                            .arg("-9")
+                            .arg(server_pid.to_string())
+                            .status();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(120));
+                }
+            })
+        };
 
         let llm = client::LlmClient::new(
             llama.base_url(),
@@ -293,7 +561,12 @@ pub async fn run_safety_scan(
 
         let mut last_emit = std::time::Instant::now();
         let outcome = engine::run_scan(&cache, &mut analysis, &llm, range, &cancel, |p| {
-            if last_emit.elapsed() >= Duration::from_millis(150) || p.chunks_done == p.chunks_total
+            // Always emit the first (done == 0) tick — it's what flips the UI from
+            // "loading" to "scanning" the instant the model is ready; the 150 ms
+            // throttle only smooths the frequent mid-scan updates.
+            if p.chunks_done == 0
+                || last_emit.elapsed() >= Duration::from_millis(150)
+                || p.chunks_done == p.chunks_total
             {
                 last_emit = std::time::Instant::now();
                 let _ = app2.emit(
@@ -311,6 +584,10 @@ pub async fn run_safety_scan(
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
         summary::run_summaries(&mut analysis, &llm, outcome.scan_id, &cancel)
             .map_err(|e| e.to_string())?;
+        // Stop the watcher (it may already have fired on cancel) before we take
+        // the server down ourselves.
+        watch_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = watcher.join();
         llama.shutdown();
         // Wipe scratch now (a crashed run's residue is cleared at the next
         // run's start-of-run wipe; this keeps the happy path tidy).
@@ -329,9 +606,24 @@ pub async fn run_safety_scan(
         );
         Ok(())
     })
-    .await
-    .map_err(|e| e.to_string())?;
+    .await;
 
+    // Surface an error event on BOTH a normal Err and a panicked task, so the
+    // UI never sits waiting on a "loading" scan that silently died. (A stranded
+    // `running` scan row is repaired by the next begin_scan.)
+    let result = match join {
+        Ok(r) => r,
+        Err(e) => {
+            let msg = format!("scan task failed: {e}");
+            let _ = app.emit(
+                "safetyscan://progress",
+                ScanEvent::Error {
+                    message: msg.clone(),
+                },
+            );
+            return Err(msg);
+        }
+    };
     if let Err(msg) = &result {
         let _ = app.emit(
             "safetyscan://progress",
@@ -516,6 +808,42 @@ pub struct SafetyScanReport {
     pub report: Option<String>,
     /// (thread_identifier, summary) for each flagged thread.
     pub thread_summaries: Vec<(String, String)>,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanHistoryItem {
+    pub id: i64,
+    pub range_start: Option<i64>,
+    pub range_end: Option<i64>,
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub findings: i64,
+}
+
+/// Past scans (newest first) for the history list.
+#[tauri::command]
+pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHistoryItem>, String> {
+    let path = analysis_path(&active.path()?)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    Ok(db
+        .list_scans(50)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| ScanHistoryItem {
+            id: s.id,
+            range_start: s.range_start,
+            range_end: s.range_end,
+            status: s.status,
+            started_at: s.started_at,
+            finished_at: s.finished_at,
+            findings: s.findings,
+        })
+        .collect())
 }
 
 #[tauri::command]

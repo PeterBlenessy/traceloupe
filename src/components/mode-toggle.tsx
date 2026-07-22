@@ -1,5 +1,10 @@
 import { Moon, Sun, SunMoon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useTheme, type Theme } from "@/components/theme-provider";
 
 // Cycle order and per-theme presentation. Clicking advances to the next theme.
@@ -17,17 +22,23 @@ export function ModeToggle() {
   const next = ORDER[(ORDER.indexOf(theme) + 1) % ORDER.length];
 
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="size-7"
-      onClick={() => setTheme(next)}
-      title={`Theme: ${META[theme].label} — click for ${META[next].label}`}
-    >
-      <Icon className="size-4" />
-      <span className="sr-only">
-        Theme: {META[theme].label}. Switch to {META[next].label}.
-      </span>
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7"
+          onClick={() => setTheme(next)}
+        >
+          <Icon className="size-4" />
+          <span className="sr-only">
+            Theme: {META[theme].label}. Switch to {META[next].label}.
+          </span>
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        Theme: {META[theme].label} — click for {META[next].label}
+      </TooltipContent>
+    </Tooltip>
   );
 }

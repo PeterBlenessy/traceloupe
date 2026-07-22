@@ -2131,13 +2131,22 @@ pub struct InstalledApp {
     pub genre: Option<String>,
     /// The app's App Store release date (RFC-3339); the UI formats it.
     pub released: Option<String>,
+    /// When this copy was downloaded on the account (RFC-3339).
+    pub downloaded: Option<String>,
+    /// The Apple ID (account email) that downloaded the app.
+    pub apple_id: Option<String>,
+    /// App Store age rating label, e.g. "17+".
+    pub content_rating: Option<String>,
+    /// Finer App Store category, e.g. "Social".
+    pub subgenre: Option<String>,
 }
 
 /// Apps installed on the device with their metadata, sorted by bundle id.
 pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<InstalledApp>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT bundle_id, name, seller, version, genre, released
+        "SELECT bundle_id, name, seller, version, genre, released,
+                downloaded, apple_id, content_rating, subgenre
          FROM installed_apps ORDER BY bundle_id",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -2148,6 +2157,10 @@ pub fn list_installed_apps(cache: &CacheDb) -> Result<Vec<InstalledApp>> {
             version: r.get(3)?,
             genre: r.get(4)?,
             released: r.get(5)?,
+            downloaded: r.get(6)?,
+            apple_id: r.get(7)?,
+            content_rating: r.get(8)?,
+            subgenre: r.get(9)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

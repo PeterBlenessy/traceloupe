@@ -6,19 +6,39 @@
 //! own loopback listen socket, and no file reads under /Users except the model
 //! directory (and, for dev builds, the directory the binary lives in). System
 //! frameworks, dyld caches, and Metal shader caches live outside /Users, so
-//! GPU inference works untouched. Logging is silenced by wiring the child's
-//! stdio to /dev/null — prompt text must never reach a log file.
+//! GPU inference works untouched. The child's stdout/stderr are captured (ring
+//! buffer + optional live sink) so a startup abort is diagnosable; they are
+//! never written to disk, and llama-server does not print prompt bodies to its
+//! output by default.
 
-use std::io::Write as _;
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::{Error, Result};
 
+/// How many recent llama-server output lines to keep for diagnostics (e.g. to
+/// show why it aborted during startup).
+const LOG_RING: usize = 500;
+
 /// The sidecar binary name Tauri bundles per-target, mirroring NoteSage.
 fn bundled_binary_name() -> String {
     format!("llama-server-{}-apple-darwin", std::env::consts::ARCH)
+}
+
+/// Whether a llama-server binary sitting next to the app executable in
+/// `exe_dir` is safe to run. In a `tauri dev` build Tauri drops a bare
+/// `llama-server` into `target/…/` WITHOUT its `lib/` dylibs, and running it
+/// aborts (`dyld: Library not loaded: @rpath/libllama-…`); so under `/target/`
+/// we require a `lib/` beside it. A release bundle (not under `/target/`) is a
+/// static binary with no dylibs, always usable.
+fn next_to_exe_usable(exe_dir: &Path) -> bool {
+    let is_dev_target = exe_dir.to_string_lossy().contains("/target/");
+    !is_dev_target || exe_dir.join("lib").is_dir()
 }
 
 /// Locate the llama-server binary.
@@ -33,14 +53,23 @@ pub fn resolve_binary() -> Result<PathBuf> {
     // Production path: the bundled sidecar next to the executable
     // (Contents/MacOS on macOS). Tauri may keep the target-triple suffix or
     // strip it, so accept both names — mirrors NoteSage.
+    //
+    // BUT: in a `tauri dev` build, Tauri copies the sidecar to `target/debug/`
+    // as a bare `llama-server` WITHOUT its `lib/` dylibs — using it aborts with
+    // `dyld: Library not loaded: @rpath/libllama-…`. So a next-to-exe binary in
+    // a `/target/` dir is only usable if its `lib/` sits beside it; otherwise
+    // fall through to the staged src-tauri/binaries copy (which has `lib/`).
+    // A release build is a static binary with no dylibs, so it's always usable.
     if let Some(exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(Path::to_path_buf))
     {
-        for name in [bundled_binary_name(), "llama-server".to_string()] {
-            let candidate = exe_dir.join(&name);
-            if candidate.is_file() {
-                return Ok(candidate);
+        if next_to_exe_usable(&exe_dir) {
+            for name in [bundled_binary_name(), "llama-server".to_string()] {
+                let candidate = exe_dir.join(&name);
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
     }
@@ -184,10 +213,54 @@ pub struct LlamaServer {
     base_url: String,
     /// Temp profile file kept alive for the child's lifetime.
     _profile: Option<tempfile::NamedTempFile>,
+    /// Recent stdout/stderr lines (ring, capped at `LOG_RING`) — the model-load
+    /// and abort messages that tell us *why* a startup failed.
+    logs: Arc<Mutex<VecDeque<String>>>,
+}
+
+/// Read a child pipe line-by-line into the ring buffer and, if a sink is
+/// provided, forward each line live (dev logging).
+fn pump(
+    reader: impl Read + Send + 'static,
+    logs: Arc<Mutex<VecDeque<String>>>,
+    sink: Option<Sender<String>>,
+) {
+    std::thread::spawn(move || {
+        let mut r = BufReader::new(reader);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match r.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let l = line.trim_end().to_string();
+                    if l.is_empty() {
+                        continue;
+                    }
+                    {
+                        let mut buf = logs.lock().unwrap_or_else(|e| e.into_inner());
+                        if buf.len() >= LOG_RING {
+                            buf.pop_front();
+                        }
+                        buf.push_back(l.clone());
+                    }
+                    if let Some(sink) = &sink {
+                        let _ = sink.send(l);
+                    }
+                }
+            }
+        }
+    });
 }
 
 impl LlamaServer {
-    pub fn spawn(cfg: &ServerConfig) -> Result<Self> {
+    /// Spawn llama-server. `log_sink`, if given, receives every stdout/stderr
+    /// line live (the command layer forwards it to the app log). Output is also
+    /// retained in a ring buffer for the failure tail. NOTE: llama-server does
+    /// not print prompt/message bodies to its output by default — only load and
+    /// timing logs — so this never persists backup text (and nothing is written
+    /// to disk regardless; the ADR's on-disk guarantee is unaffected).
+    pub fn spawn(cfg: &ServerConfig, log_sink: Option<Sender<String>>) -> Result<Self> {
         let model_dir = cfg
             .model_path
             .parent()
@@ -231,23 +304,44 @@ impl LlamaServer {
         };
         cmd.args(server_args)
             .stdin(Stdio::null())
-            // Silence, not log files: server output can echo prompt text.
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            // Capture (don't discard) output so a startup abort is diagnosable.
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             // Point every path the runtime might write at the one allowed
             // location, so denying writes elsewhere doesn't break GPU init:
             // Metal's compiled-shader cache and any temp files land in scratch.
             .env("MTL_SHADER_CACHE_PATH", &cfg.scratch_dir)
             .env("TMPDIR", &cfg.scratch_dir);
 
-        let child = cmd
+        let mut child = cmd
             .spawn()
             .map_err(|e| Error::Inference(format!("spawning llama-server: {}", e.kind())))?;
+
+        let logs: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        if let Some(out) = child.stdout.take() {
+            pump(out, logs.clone(), log_sink.clone());
+        }
+        if let Some(err) = child.stderr.take() {
+            pump(err, logs.clone(), log_sink);
+        }
+
         Ok(Self {
             child,
             base_url: format!("http://127.0.0.1:{}", cfg.port),
             _profile: profile_file,
+            logs,
         })
+    }
+
+    /// The last ~40 captured output lines — for surfacing why startup failed.
+    pub fn output_tail(&self) -> String {
+        let buf = self.logs.lock().unwrap_or_else(|e| e.into_inner());
+        let start = buf.len().saturating_sub(40);
+        buf.iter()
+            .skip(start)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn base_url(&self) -> &str {
@@ -274,8 +368,14 @@ impl LlamaServer {
                 .try_wait()
                 .map_err(|e| Error::Inference(format!("try_wait: {}", e.kind())))?
             {
+                let tail = self.output_tail();
                 return Err(Error::Inference(format!(
-                    "llama-server exited during startup ({status})"
+                    "llama-server exited during startup ({status}){}",
+                    if tail.is_empty() {
+                        " — no output captured".into()
+                    } else {
+                        format!("\n--- llama-server output ---\n{tail}")
+                    }
                 )));
             }
             if agent.get(&url).call().is_ok() {
@@ -336,6 +436,26 @@ mod tests {
     }
 
     #[test]
+    fn dev_target_sidecar_needs_lib_beside_it() {
+        // The bug: Tauri drops a dylib-less `llama-server` into target/debug/;
+        // using it SIGABRTs. A /target/ dir with no lib/ must be rejected so
+        // resolution falls through to the staged src-tauri/binaries copy.
+        let tmp = tempfile::tempdir().unwrap();
+        let dev = tmp.path().join("myproj/target/debug");
+        std::fs::create_dir_all(&dev).unwrap();
+        assert!(
+            !next_to_exe_usable(&dev),
+            "dev-target without lib/ must be rejected"
+        );
+        std::fs::create_dir_all(dev.join("lib")).unwrap();
+        assert!(next_to_exe_usable(&dev), "dev-target WITH lib/ is usable");
+        // A release bundle (not under /target/) is a static binary — usable.
+        let rel = tmp.path().join("TraceLoupe.app/Contents/MacOS");
+        std::fs::create_dir_all(&rel).unwrap();
+        assert!(next_to_exe_usable(&rel), "release bundle needs no lib/");
+    }
+
+    #[test]
     fn bundled_binary_name_is_target_scoped() {
         // The sidecar name Tauri's externalBin produces per target. The full
         // resolve_binary() flow (next to current_exe, dev-only fallbacks) is
@@ -350,7 +470,7 @@ mod tests {
     fn drop_kills_the_child() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
+        let server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
         let pid = server.pid();
         drop(server);
         // kill -0: succeeds only if the process still exists.
@@ -366,7 +486,7 @@ mod tests {
     fn wait_healthy_detects_early_exit() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "exit 7");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
+        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
         let err = server.wait_healthy(Duration::from_secs(5)).unwrap_err();
         assert!(err.to_string().contains("exited during startup"), "{err}");
     }
@@ -376,7 +496,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // A child that exits immediately; give it a beat to actually die.
         let bin = fake_binary(tmp.path(), "exit 0");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
+        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
         let _ = server.wait_healthy(Duration::from_secs(2)); // reaps the exit
         assert!(server.has_exited(), "a dead child must report exited");
         // Idempotent on a reaped child — this is what stops the poll loop
@@ -388,7 +508,7 @@ mod tests {
     fn has_exited_false_while_running() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap())).unwrap();
+        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
         assert!(!server.has_exited());
         server.shutdown();
     }
@@ -410,7 +530,7 @@ mod tests {
         });
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let mut server = LlamaServer::spawn(&cfg(bin, port)).unwrap();
+        let mut server = LlamaServer::spawn(&cfg(bin, port), None).unwrap();
         server.wait_healthy(Duration::from_secs(5)).unwrap();
         server.shutdown();
     }

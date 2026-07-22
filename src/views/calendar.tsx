@@ -1,9 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { CalendarDays, Clock, MapPin, Repeat } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
@@ -11,11 +9,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
-import {
-  EmptyView,
-  ListSearch,
-  VirtualListView,
-} from "@/components/view";
+import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { useSettings } from "@/components/settings-provider";
 import { formatDate, formatDateTime, formatTime } from "@/lib/format";
 import { client, type CalendarEvent, type TimeRange } from "@/lib/ipc";
@@ -81,7 +75,6 @@ function inWindow(at: number | null, lo: number | null, hi: number | null) {
 }
 
 export function CalendarView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -224,13 +217,18 @@ export function CalendarView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={CalendarDays}
-        title="No backup open"
-        description="Import a backup to see calendar events."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to see calendar events"
+        lead="Events and appointments across every calendar on the device — with dates, times, locations, invitees, and recurrence — as they were scheduled."
+        features={[
+          { label: "Search", detail: "Search titles, notes, and locations." },
+          { label: "Filters", detail: "Filter by calendar, free/busy availability, or time range." },
+          { label: "Sort", detail: "Order by date or title." },
+          { label: "At a glance", detail: "All-day and multi-day events, calendar badges, and repeat markers." },
+        ]}
+        note="Reconstructed locally from the backup on this Mac."
+      />
     );
   }
 
