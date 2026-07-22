@@ -1,0 +1,727 @@
+<title>TraceLoupe UI Refresh — Mockups</title>
+
+<style>
+  /* ---------- page chrome tokens ---------- */
+  :root {
+    --pg-bg: oklch(0.972 0.003 260);
+    --pg-card: oklch(1 0 0);
+    --pg-fg: oklch(0.22 0.012 260);
+    --pg-muted: oklch(0.52 0.015 260);
+    --pg-border: oklch(0.9 0.006 260);
+    --pg-code-bg: oklch(0.945 0.004 260);
+
+    /* the accent — swapped live by the picker; in the real app this comes
+       from NSColor.controlAccentColor via a Tauri command (see notes) */
+    --acc: #0a7aff;
+    --acc-ink: #fff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --pg-bg: oklch(0.185 0.008 260);
+      --pg-card: oklch(0.235 0.009 260);
+      --pg-fg: oklch(0.95 0.005 260);
+      --pg-muted: oklch(0.68 0.01 260);
+      --pg-border: oklch(1 0 0 / 12%);
+      --pg-code-bg: oklch(0.27 0.009 260);
+    }
+  }
+  :root[data-theme="light"] {
+    --pg-bg: oklch(0.972 0.003 260);
+    --pg-card: oklch(1 0 0);
+    --pg-fg: oklch(0.22 0.012 260);
+    --pg-muted: oklch(0.52 0.015 260);
+    --pg-border: oklch(0.9 0.006 260);
+    --pg-code-bg: oklch(0.945 0.004 260);
+  }
+  :root[data-theme="dark"] {
+    --pg-bg: oklch(0.185 0.008 260);
+    --pg-card: oklch(0.235 0.009 260);
+    --pg-fg: oklch(0.95 0.005 260);
+    --pg-muted: oklch(0.68 0.01 260);
+    --pg-border: oklch(1 0 0 / 12%);
+    --pg-code-bg: oklch(0.27 0.009 260);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--pg-bg);
+    color: var(--pg-fg);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 56px 28px 96px; }
+
+  h1 { font-size: 30px; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 10px; text-wrap: balance; }
+  h2 { font-size: 20px; letter-spacing: -0.01em; margin: 64px 0 6px; }
+  h3 { font-size: 15px; margin: 24px 0 8px; }
+  p  { margin: 8px 0; max-width: 68ch; }
+  .lede { font-size: 16.5px; color: var(--pg-muted); max-width: 62ch; }
+  .sub { color: var(--pg-muted); font-size: 13.5px; max-width: 68ch; margin-bottom: 18px; }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--acc) 75%, var(--pg-fg));
+    margin: 0 0 6px;
+  }
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.86em;
+    background: var(--pg-code-bg);
+    padding: 1px 5px; border-radius: 5px;
+  }
+  a { color: var(--acc); }
+
+  ul.moves { padding-left: 0; list-style: none; max-width: 70ch; margin: 14px 0 0; }
+  ul.moves li { padding: 9px 0 9px 30px; position: relative; border-top: 1px solid var(--pg-border); }
+  ul.moves li:first-child { border-top: 0; }
+  ul.moves li::before {
+    content: ""; position: absolute; left: 4px; top: 16px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--acc);
+  }
+  ul.moves b { font-weight: 600; }
+
+  /* ---------- shared frame scaffolding ---------- */
+  .scroller { overflow-x: auto; margin: 18px -28px 0; padding: 0 28px 8px; }
+  .window {
+    min-width: 860px; width: 100%; max-width: 980px;
+    height: 745px;
+    display: flex;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--pg-border);
+    box-shadow: 0 18px 45px -18px rgb(0 0 0 / 0.35);
+    font-size: 13px;
+  }
+  .caption { font-size: 12.5px; color: var(--pg-muted); margin-top: 10px; }
+
+  /* per-frame surface tokens */
+  .f-light {
+    --f-bg: oklch(0.982 0.003 260);
+    --f-sb: oklch(0.958 0.005 260);
+    --f-card: oklch(1 0 0);
+    --f-fg: oklch(0.23 0.012 260);
+    --f-fg-strong: oklch(0.17 0.012 260);
+    --f-muted: oklch(0.52 0.015 260);
+    --f-border: oklch(0.9 0.006 260);
+    --f-hover: oklch(0.93 0.006 260);
+    --acc-text: color-mix(in oklab, var(--acc) 82%, black);
+    color: var(--f-fg);
+  }
+  .f-dark {
+    --f-bg: oklch(0.215 0.01 260);
+    --f-sb: oklch(0.175 0.01 260);
+    --f-card: oklch(0.26 0.01 260);
+    --f-fg: oklch(0.93 0.006 260);
+    --f-fg-strong: oklch(0.97 0.004 260);
+    --f-muted: oklch(0.66 0.012 260);
+    --f-border: oklch(1 0 0 / 10%);
+    --f-hover: oklch(1 0 0 / 6%);
+    --acc-text: color-mix(in oklab, var(--acc) 72%, white);
+    color: var(--f-fg);
+  }
+
+  /* ---------- sidebar ---------- */
+  .sb {
+    width: 234px; flex-shrink: 0;
+    background: var(--f-sb);
+    border-right: 1px solid var(--f-border);
+    display: flex; flex-direction: column;
+    padding: 0 10px 10px;
+  }
+  .sb.rail { width: 64px; padding: 0 8px 10px; align-items: center; }
+  .lights { display: flex; gap: 7px; padding: 13px 4px 0; align-self: flex-start; }
+  .lights i { width: 11px; height: 11px; border-radius: 50%; }
+  .lights i:nth-child(1) { background: #ff5f57; }
+  .lights i:nth-child(2) { background: #febc2e; }
+  .lights i:nth-child(3) { background: #28c840; }
+
+  /* stroke-icon plumbing: <use> icons inherit these instead of default black fill */
+  .item svg, .tbtn svg, .hero .chip svg, .feed .ok svg,
+  .etile svg, .sec-hero .tile svg {
+    fill: none; stroke: currentColor; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+
+  .hero { text-align: center; padding: 18px 6px 16px; }
+  .hero svg { width: 96px; height: 96px; display: block; margin: 0 auto 10px; }
+  .rail .hero { padding: 18px 0 12px; }
+  .rail .hero svg { width: 40px; height: 40px; margin-bottom: 0; }
+  .hero .name { font-size: 13.5px; font-weight: 600; color: var(--f-fg-strong); }
+  .hero .meta { font-size: 11.5px; color: var(--f-muted); margin-top: 2px; }
+  .hero .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 8px; padding: 2.5px 9px;
+    font-size: 10.5px; font-weight: 500;
+    border-radius: 999px;
+    color: var(--acc-text);
+    background: color-mix(in srgb, var(--acc) 12%, transparent);
+  }
+  .hero .chip svg { width: 11px; height: 11px; margin: 0; }
+  .hero .cta {
+    display: inline-block; margin-top: 10px; padding: 5px 13px;
+    font-size: 12px; font-weight: 500;
+    color: var(--acc-ink); background: var(--acc);
+    border-radius: 7px;
+  }
+
+  .sb-label {
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    color: var(--f-muted);
+    padding: 14px 10px 5px;
+  }
+  .sb hr { border: 0; border-top: 1px solid var(--f-border); margin: 2px 4px; }
+  .item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 7px 10px; margin: 1px 0;
+    border-radius: 8px;
+    font-size: 13px; font-weight: 450;
+    color: var(--f-fg);
+  }
+  .item svg { width: 20px; height: 20px; flex-shrink: 0; color: var(--f-muted); }
+  .item.sm svg { width: 16px; height: 16px; }
+  .item.active {
+    background: color-mix(in srgb, var(--acc) 14%, transparent);
+    color: var(--acc-text); font-weight: 600;
+  }
+  .item.active svg { color: var(--acc-text); }
+  .item .dot { margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: #30b558; }
+  .item .beta {
+    margin-left: auto; font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--f-muted); border: 1px solid var(--f-border); border-radius: 4px; padding: 1px 5px;
+  }
+  .sb .spacer { flex: 1; }
+  .rail .item { padding: 8px; justify-content: center; }
+  .rail .item span, .rail .item .beta, .rail .item .dot, .rail .sb-label { display: none; }
+  .rail .sb-label-line { border-top: 1px solid var(--f-border); width: 28px; margin: 10px auto 6px; }
+
+  /* ---------- main pane ---------- */
+  .main { flex: 1; display: flex; flex-direction: column; background: var(--f-bg); min-width: 0; }
+  .tbar {
+    height: 44px; flex-shrink: 0;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--f-border);
+  }
+  .tbar .t { font-size: 14px; font-weight: 600; color: var(--f-fg-strong); }
+  .tbar .n { font-size: 11.5px; color: var(--f-muted); font-variant-numeric: tabular-nums; }
+  .tbar .grow { flex: 1; }
+  .tbtn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 28px; padding: 0 9px;
+    border: 1px solid var(--f-border); border-radius: 8px;
+    background: color-mix(in srgb, var(--f-card) 55%, transparent);
+    color: var(--f-muted); font-size: 12px;
+  }
+  .tbtn svg { width: 15px; height: 15px; }
+  .tbtn.icon { padding: 0; width: 28px; justify-content: center; }
+
+  .content { flex: 1; display: flex; min-height: 0; }
+
+  /* messages mock */
+  .threads { width: 258px; flex-shrink: 0; border-right: 1px solid var(--f-border); overflow: hidden; padding: 8px; }
+  .thread { display: flex; gap: 10px; padding: 9px 10px; border-radius: 9px; align-items: flex-start; }
+  .thread .av {
+    width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+    background: color-mix(in srgb, var(--acc) 18%, var(--f-hover));
+    color: var(--acc-text);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+  }
+  .thread .tx { min-width: 0; flex: 1; }
+  .thread .nm { font-weight: 600; font-size: 12.5px; color: var(--f-fg-strong); display: flex; justify-content: space-between; gap: 6px; }
+  .thread .nm time { font-weight: 400; font-size: 10.5px; color: var(--f-muted); }
+  .thread .pv { font-size: 11.5px; color: var(--f-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .thread.sel { background: color-mix(in srgb, var(--acc) 13%, transparent); }
+
+  .convo { flex: 1; display: flex; flex-direction: column; padding: 18px 20px; gap: 10px; overflow: hidden; min-width: 0; }
+  .day { text-align: center; font-size: 10.5px; color: var(--f-muted); margin: 4px 0; }
+  .bubble { max-width: 62%; padding: 7px 12px; border-radius: 16px; font-size: 12.5px; line-height: 1.45; }
+  .bubble.in  { align-self: flex-start; background: var(--f-hover); border-bottom-left-radius: 5px; color: var(--f-fg); }
+  .bubble.out { align-self: flex-end; background: var(--acc); color: var(--acc-ink); border-bottom-right-radius: 5px; }
+  .stamp { font-size: 10px; color: var(--f-muted); align-self: flex-end; }
+  .stamp.l { align-self: flex-start; }
+
+  /* security mock */
+  .sec { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 44px 24px 24px; gap: 22px; overflow: hidden; }
+  .sec-hero { text-align: center; }
+  .sec-hero .tile {
+    width: 64px; height: 64px; border-radius: 18px; margin: 0 auto 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, #30b558 16%, transparent);
+    color: #30b558;
+  }
+  .sec-hero .tile svg { width: 32px; height: 32px; }
+  .sec-hero h4 { margin: 0; font-size: 17px; color: var(--f-fg-strong); }
+  .sec-hero p { margin: 5px 0 0; font-size: 12.5px; color: var(--f-muted); }
+  .sec-hero .go {
+    display: inline-block; margin-top: 14px; padding: 6px 16px;
+    background: var(--acc); color: var(--acc-ink);
+    font-size: 12.5px; font-weight: 500; border-radius: 8px;
+  }
+  .feeds { display: flex; gap: 12px; }
+  .feed {
+    width: 172px; padding: 12px 14px;
+    background: var(--f-card); border: 1px solid var(--f-border); border-radius: 11px;
+  }
+  .feed b { display: block; font-size: 12.5px; color: var(--f-fg-strong); }
+  .feed span { font-size: 11px; color: var(--f-muted); }
+  .feed .ok { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 11px; color: #30b558; }
+  .feed .ok svg { width: 13px; height: 13px; }
+
+  /* ---------- device hero triptych ---------- */
+  .trip { display: flex; gap: 18px; margin-top: 18px; flex-wrap: wrap; }
+  .trip .col { flex: 1; min-width: 220px; }
+  .trip .sb {
+    border: 1px solid var(--pg-border); border-right: 1px solid var(--pg-border);
+    border-radius: 12px; height: 430px; width: 100%;
+  }
+  .trip .col.narrow { flex: 0 0 96px; min-width: 96px; }
+  .trip .sb.rail { width: 64px; margin: 0 auto; }
+  .trip .cap { font-size: 12px; color: var(--pg-muted); margin-top: 8px; text-align: center; }
+
+  /* ---------- icon size compare ---------- */
+  .cmp { display: flex; gap: 18px; margin-top: 18px; flex-wrap: wrap; }
+  .cmp .panel {
+    flex: 1; min-width: 250px;
+    border: 1px solid var(--pg-border); border-radius: 12px;
+    padding: 12px;
+  }
+  .cmp .hd { font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--pg-muted); padding: 2px 8px 10px; }
+  .cmp .item { color: var(--f-fg); }
+
+  /* ---------- empty states ---------- */
+  .empties { display: flex; gap: 18px; margin-top: 18px; flex-wrap: wrap; }
+  .empty-card {
+    flex: 1; min-width: 280px;
+    border: 1px solid var(--pg-border); border-radius: 12px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 40px 26px; min-height: 260px;
+  }
+  .etile {
+    width: 52px; height: 52px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: color-mix(in srgb, var(--acc) 11%, transparent);
+    color: var(--acc-text);
+    margin-bottom: 14px;
+  }
+  .etile svg { width: 26px; height: 26px; }
+  .empty-card h4 { margin: 0; font-size: 15px; color: var(--f-fg-strong); }
+  .empty-card p { margin: 5px 0 0; font-size: 12.5px; color: var(--f-muted); max-width: 30ch; }
+  .empty-card .feat {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; width: 100%;
+  }
+  .empty-card .feat div {
+    text-align: left; padding: 9px 11px;
+    border: 1px solid var(--f-border); border-radius: 9px;
+    background: color-mix(in srgb, var(--f-card) 45%, transparent);
+  }
+  .empty-card .feat b { display: block; font-size: 11.5px; color: var(--f-fg-strong); }
+  .empty-card .feat span { font-size: 10.5px; color: var(--f-muted); }
+  .empty-card .go {
+    margin-top: 16px; padding: 6px 15px;
+    background: var(--acc); color: var(--acc-ink);
+    font-size: 12.5px; font-weight: 500; border-radius: 8px;
+  }
+
+  /* ---------- accent picker ---------- */
+  .picker { display: flex; gap: 10px; align-items: center; margin: 16px 0 4px; flex-wrap: wrap; }
+  .sw {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 2px solid transparent;
+    outline: 2px solid transparent; outline-offset: 2px;
+    cursor: pointer; padding: 0;
+    transition: transform 0.12s ease;
+  }
+  .sw:hover { transform: scale(1.12); }
+  .sw:focus-visible { outline-color: var(--pg-fg); }
+  .sw.sel { outline-color: var(--acc); }
+  @media (prefers-reduced-motion: reduce) { .sw, .sw:hover { transition: none; transform: none; } }
+
+  /* ---------- token table ---------- */
+  table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--pg-border); }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--pg-muted); font-weight: 600; }
+  td .chiplet {
+    display: inline-block; width: 13px; height: 13px; border-radius: 4px;
+    border: 1px solid var(--pg-border); vertical-align: -2px; margin-right: 7px;
+  }
+  .tablewrap { overflow-x: auto; }
+</style>
+
+<!-- ======================= icon symbols ======================= -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="d">
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></symbol>
+      <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+      <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+      <symbol id="i-note" viewBox="0 0 24 24"><rect x="5" y="2" width="15" height="20" rx="2"/><path d="M2 6h3M2 10h3M2 14h3M2 18h3"/><path d="M9.5 7h6M9.5 11h6M9.5 15h4"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></symbol>
+      <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"/></symbol>
+      <symbol id="i-todo" viewBox="0 0 24 24"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/></symbol>
+      <symbol id="i-heart" viewBox="0 0 24 24"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/><path d="M3.2 12h5.3l.5-1 2 4.5 2-7 1.5 3.5h5.3"/></symbol>
+      <symbol id="i-way" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2.5"/><path d="m10.2 6.3-3.9 3.9"/><circle cx="4.5" cy="12" r="2.5"/><path d="M7 12h10"/><circle cx="19.5" cy="12" r="2.5"/><path d="m13.8 17.7 3.9-3.9"/><circle cx="12" cy="19.5" r="2.5"/></symbol>
+      <symbol id="i-boxes" viewBox="0 0 24 24"><path d="m12 2-5 2.7v5l5 2.7 5-2.7v-5L12 2z"/><path d="m6.5 13.2-4.5 2.4v4.6l4.5 2.4 4.5-2.4v-4.6l-4.5-2.4z"/><path d="m17.5 13.2-4.5 2.4v4.6l4.5 2.4 4.5-2.4v-4.6l-4.5-2.4z"/></symbol>
+      <symbol id="i-shield-a" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4M12 16h.01"/></symbol>
+      <symbol id="i-shield-u" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><circle cx="12" cy="10" r="2.5"/><path d="M8.7 16.5a3.5 3.5 0 0 1 6.6 0"/></symbol>
+      <symbol id="i-shield-ok" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></symbol>
+      <symbol id="i-rows" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18"/></symbol>
+      <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M3 5h8M15 5h6M3 12h4M11 12h10M3 19h10M17 19h4"/><path d="M11 3v4M7 10v4M13 17v4"/></symbol>
+      <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></symbol>
+    </g>
+  </defs>
+</svg>
+
+<div class="wrap">
+
+  <p class="eyebrow">Design proposal · branch ux-refresh-mockups</p>
+  <h1>TraceLoupe UI refresh</h1>
+  <p class="lede">Six coordinated moves: a device hero that shows <em>what you're looking at</em>, a sidebar reorganized around scans vs. content, bigger icons, layered tinted surfaces instead of pure black &amp; white, the macOS system accent woven through every interactive state, and empty states that always carry an icon.</p>
+
+  <p class="picker" id="picker" role="group" aria-label="Try a system accent color">
+    <span class="sub" style="margin:0">Try a system accent → </span>
+  </p>
+  <p class="sub">Every mockup on this page re-tints live. In the real app this is read from macOS (<span class="mono">NSColor.controlAccentColor</span>) the way NoteSage does it — no picker needed, it just follows System Settings.</p>
+
+  <h2>What changes</h2>
+  <ul class="moves">
+    <li><b>Device hero.</b> The top of the sidebar stops being an app-name row. A large centered illustration — the phone under TraceLoupe's loupe — with generous air above and below, device name, model + iOS version, and an Encrypted chip. With no backup open it becomes a dashed "ghost" phone with a Choose-a-backup action.</li>
+    <li><b>Scans get their own group.</b> Security and Safety move out of the header into a labeled <b>Scans</b> group. They still read as whole-backup operations, but no longer crowd the device identity. Security carries a green status dot when the last scan was clean.</li>
+    <li><b>Bigger sidebar icons.</b> 16&nbsp;px → 20&nbsp;px, with slightly taller rows. The icon set stays lucide — no re-drawing needed, just a size bump in <span class="mono">SidebarMenuButton</span>.</li>
+    <li><b>Layered surfaces.</b> Light mode drops pure white for a soft cool-tinted off-white with a distinctly deeper sidebar; dark mode lifts off near-black and makes the sidebar the <em>darkest</em> layer so content sits forward. Cards float above both.</li>
+    <li><b>System accent.</b> Active nav item, selection, sent bubbles, primary buttons, focus rings — all keyed to the macOS accent color, with per-theme mixing so it stays legible on both grounds.</li>
+    <li><b>Empty states with icons.</b> Every <span class="mono">EmptyView</span> gets an accent-tinted icon tile — including the plain list-empty ones (Calls, Safari, Apps…) that today render text only.</li>
+  </ul>
+
+  <h2>The app, light</h2>
+  <p class="sub">Messages view. Sidebar: hero on top, Scans group, Content group, Settings pinned at the bottom. Note the accent in the active item, selected thread, avatar tint, and outgoing bubbles.</p>
+  <div class="scroller"><div class="window f-light">
+    <div class="sb">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="hero">
+        <svg viewBox="0 0 104 104" aria-hidden="true">
+          <rect x="26" y="4" width="46" height="82" rx="10" fill="var(--f-card)" stroke="var(--f-fg-strong)" stroke-width="2.5"/>
+          <rect x="32" y="10" width="34" height="70" rx="5" fill="color-mix(in srgb, var(--acc) 9%, transparent)"/>
+          <rect x="42" y="13" width="14" height="4" rx="2" fill="var(--f-fg-strong)" opacity="0.65"/>
+          <g stroke="color-mix(in srgb, var(--acc) 45%, transparent)" stroke-width="3" stroke-linecap="round">
+            <path d="M38 27h13M38 35h20M38 43h10"/>
+          </g>
+          <clipPath id="lens-a"><circle cx="66" cy="66" r="16"/></clipPath>
+          <circle cx="66" cy="66" r="19" fill="var(--f-card)" stroke="var(--acc)" stroke-width="3.5"/>
+          <g clip-path="url(#lens-a)" stroke="var(--acc)" stroke-width="4" stroke-linecap="round">
+            <path d="M55 60h15M55 68h22M55 76h11"/>
+          </g>
+          <line x1="80" y1="80" x2="91" y2="91" stroke="var(--acc)" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+        <div class="name">Peter's iPhone</div>
+        <div class="meta">iPhone 15 Pro · iOS 17.5</div>
+        <span class="chip"><svg><use href="#i-lock"/></svg>Encrypted</span>
+      </div>
+      <div class="sb-label">Scans</div>
+      <div class="item"><svg><use href="#i-shield-a"/></svg><span>Security</span><span class="dot" title="Last scan clean"></span></div>
+      <div class="item"><svg><use href="#i-shield-u"/></svg><span>Safety</span><span class="beta">Beta</span></div>
+      <div class="sb-label">Content</div>
+      <div class="item"><svg><use href="#i-image"/></svg><span>Photos</span></div>
+      <div class="item active"><svg><use href="#i-msg"/></svg><span>Messages</span></div>
+      <div class="item"><svg><use href="#i-users"/></svg><span>Contacts</span></div>
+      <div class="item"><svg><use href="#i-phone"/></svg><span>Calls</span></div>
+      <div class="item"><svg><use href="#i-globe"/></svg><span>Safari</span></div>
+      <div class="item"><svg><use href="#i-note"/></svg><span>Notes</span></div>
+      <div class="item"><svg><use href="#i-mic"/></svg><span>Recordings</span></div>
+      <div class="item"><svg><use href="#i-cal"/></svg><span>Calendar</span></div>
+      <div class="item"><svg><use href="#i-heart"/></svg><span>Health</span></div>
+      <div class="item"><svg><use href="#i-boxes"/></svg><span>Apps</span></div>
+      <div class="spacer"></div>
+      <div class="item"><svg><use href="#i-gear"/></svg><span>Settings</span></div>
+    </div>
+    <div class="main">
+      <div class="tbar">
+        <span class="tbtn icon"><svg><use href="#i-panel"/></svg></span>
+        <span class="t">Messages</span><span class="n">12,482</span>
+        <span class="grow"></span>
+        <span class="tbtn"><svg><use href="#i-sliders"/></svg>Filter</span>
+        <span class="tbtn"><svg><use href="#i-search"/></svg>Search</span>
+        <span class="tbtn icon"><svg><use href="#i-rows"/></svg></span>
+        <span class="tbtn icon"><svg><use href="#i-sun"/></svg></span>
+      </div>
+      <div class="content">
+        <div class="threads">
+          <div class="thread sel"><span class="av">AL</span><div class="tx"><div class="nm">Anna Lindqvist <time>14:32</time></div><div class="pv">Perfect, see you at the station then!</div></div></div>
+          <div class="thread"><span class="av">F</span><div class="tx"><div class="nm">Family <time>12:05</time></div><div class="pv">Mom: Don't forget Sunday 🎂</div></div></div>
+          <div class="thread"><span class="av">MB</span><div class="tx"><div class="nm">Marcus Berg <time>Mon</time></div><div class="pv">The tickets are booked 🎿</div></div></div>
+          <div class="thread"><span class="av">+4</span><div class="tx"><div class="nm">+46 70 123 45 67 <time>Mon</time></div><div class="pv">Your package is ready for pickup</div></div></div>
+          <div class="thread"><span class="av">SJ</span><div class="tx"><div class="nm">Sara Johansson <time>Sun</time></div><div class="pv">Photos from the weekend 📷</div></div></div>
+          <div class="thread"><span class="av">D</span><div class="tx"><div class="nm">Dentist <time>Jun 12</time></div><div class="pv">Reminder: appointment Jun 14, 09:40</div></div></div>
+        </div>
+        <div class="convo">
+          <div class="day">Today, 21 May 2024</div>
+          <div class="bubble in">Are you still coming by later? I found those old photos you asked about.</div>
+          <div class="stamp l">14:02</div>
+          <div class="bubble out">Yes! Leaving in 20 — want me to bring anything?</div>
+          <div class="bubble in">Just yourself 🙂 Train gets in at 15:10, right?</div>
+          <div class="bubble out">15:10 exactly. Meet at the north entrance?</div>
+          <div class="bubble in">Perfect, see you at the station then!</div>
+          <div class="stamp l">14:32</div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">Light: background <span class="mono">oklch(0.982 0.003 260)</span>, sidebar <span class="mono">oklch(0.958 0.005 260)</span> — a real pane, not a hairline apart from white.</p>
+
+  <h2>The app, dark</h2>
+  <p class="sub">Security view. The sidebar is now the darkest layer, so the content pane reads as the lit surface. Semantic green is reserved for scan results — it is not the accent.</p>
+  <div class="scroller"><div class="window f-dark">
+    <div class="sb">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="hero">
+        <svg viewBox="0 0 104 104" aria-hidden="true">
+          <rect x="26" y="4" width="46" height="82" rx="10" fill="var(--f-card)" stroke="var(--f-fg-strong)" stroke-width="2.5"/>
+          <rect x="32" y="10" width="34" height="70" rx="5" fill="color-mix(in srgb, var(--acc) 12%, transparent)"/>
+          <rect x="42" y="13" width="14" height="4" rx="2" fill="var(--f-fg-strong)" opacity="0.65"/>
+          <g stroke="color-mix(in srgb, var(--acc) 55%, transparent)" stroke-width="3" stroke-linecap="round">
+            <path d="M38 27h13M38 35h20M38 43h10"/>
+          </g>
+          <clipPath id="lens-b"><circle cx="66" cy="66" r="16"/></clipPath>
+          <circle cx="66" cy="66" r="19" fill="var(--f-card)" stroke="var(--acc)" stroke-width="3.5"/>
+          <g clip-path="url(#lens-b)" stroke="var(--acc)" stroke-width="4" stroke-linecap="round">
+            <path d="M55 60h15M55 68h22M55 76h11"/>
+          </g>
+          <line x1="80" y1="80" x2="91" y2="91" stroke="var(--acc)" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+        <div class="name">Peter's iPhone</div>
+        <div class="meta">iPhone 15 Pro · iOS 17.5</div>
+        <span class="chip"><svg><use href="#i-lock"/></svg>Encrypted</span>
+      </div>
+      <div class="sb-label">Scans</div>
+      <div class="item active"><svg><use href="#i-shield-a"/></svg><span>Security</span><span class="dot"></span></div>
+      <div class="item"><svg><use href="#i-shield-u"/></svg><span>Safety</span><span class="beta">Beta</span></div>
+      <div class="sb-label">Content</div>
+      <div class="item"><svg><use href="#i-image"/></svg><span>Photos</span></div>
+      <div class="item"><svg><use href="#i-msg"/></svg><span>Messages</span></div>
+      <div class="item"><svg><use href="#i-users"/></svg><span>Contacts</span></div>
+      <div class="item"><svg><use href="#i-phone"/></svg><span>Calls</span></div>
+      <div class="item"><svg><use href="#i-globe"/></svg><span>Safari</span></div>
+      <div class="item"><svg><use href="#i-note"/></svg><span>Notes</span></div>
+      <div class="item"><svg><use href="#i-mic"/></svg><span>Recordings</span></div>
+      <div class="item"><svg><use href="#i-cal"/></svg><span>Calendar</span></div>
+      <div class="item"><svg><use href="#i-heart"/></svg><span>Health</span></div>
+      <div class="item"><svg><use href="#i-boxes"/></svg><span>Apps</span></div>
+      <div class="spacer"></div>
+      <div class="item"><svg><use href="#i-gear"/></svg><span>Settings</span></div>
+    </div>
+    <div class="main">
+      <div class="tbar">
+        <span class="tbtn icon"><svg><use href="#i-panel"/></svg></span>
+        <span class="t">Security</span>
+        <span class="grow"></span>
+        <span class="tbtn icon"><svg><use href="#i-rows"/></svg></span>
+        <span class="tbtn icon"><svg><use href="#i-sun"/></svg></span>
+      </div>
+      <div class="sec">
+        <div class="sec-hero">
+          <div class="tile"><svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-shield-ok"/></svg></div>
+          <h4>No threats found</h4>
+          <p>4,182 files checked against 3 threat feeds · finished today at 14:32</p>
+          <span class="go">Scan again</span>
+        </div>
+        <div class="feeds">
+          <div class="feed"><b>MVT indicators</b><span>Updated 19 May 2024</span><div class="ok"><svg><use href="#i-check"/></svg>0 matches</div></div>
+          <div class="feed"><b>Stalkerware list</b><span>Updated 17 May 2024</span><div class="ok"><svg><use href="#i-check"/></svg>0 matches</div></div>
+          <div class="feed"><b>Configuration profiles</b><span>Checked on device</span><div class="ok"><svg><use href="#i-check"/></svg>Nothing unusual</div></div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">Dark: background lifts to <span class="mono">oklch(0.215 0.01 260)</span>, sidebar drops to <span class="mono">oklch(0.175 0.01 260)</span> — inverted layering, no pure black anywhere.</p>
+
+  <h2>Device hero, three states</h2>
+  <p class="sub">The same slot works with a backup open, with none, and collapsed to the icon rail — where the illustration shrinks to become the rail's identity mark.</p>
+  <div class="trip">
+    <div class="col">
+      <div class="sb f-light">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="hero">
+          <svg viewBox="0 0 104 104" aria-hidden="true">
+            <rect x="26" y="4" width="46" height="82" rx="10" fill="var(--f-card)" stroke="var(--f-fg-strong)" stroke-width="2.5"/>
+            <rect x="32" y="10" width="34" height="70" rx="5" fill="color-mix(in srgb, var(--acc) 9%, transparent)"/>
+            <rect x="42" y="13" width="14" height="4" rx="2" fill="var(--f-fg-strong)" opacity="0.65"/>
+            <g stroke="color-mix(in srgb, var(--acc) 45%, transparent)" stroke-width="3" stroke-linecap="round"><path d="M38 27h13M38 35h20M38 43h10"/></g>
+            <clipPath id="lens-c"><circle cx="66" cy="66" r="16"/></clipPath>
+            <circle cx="66" cy="66" r="19" fill="var(--f-card)" stroke="var(--acc)" stroke-width="3.5"/>
+            <g clip-path="url(#lens-c)" stroke="var(--acc)" stroke-width="4" stroke-linecap="round"><path d="M55 60h15M55 68h22M55 76h11"/></g>
+            <line x1="80" y1="80" x2="91" y2="91" stroke="var(--acc)" stroke-width="6" stroke-linecap="round"/>
+          </svg>
+          <div class="name">Peter's iPhone</div>
+          <div class="meta">iPhone 15 Pro · iOS 17.5</div>
+          <span class="chip"><svg><use href="#i-lock"/></svg>Encrypted</span>
+        </div>
+        <div class="sb-label">Scans</div>
+        <div class="item"><svg><use href="#i-shield-a"/></svg><span>Security</span><span class="dot"></span></div>
+        <div class="item"><svg><use href="#i-shield-u"/></svg><span>Safety</span><span class="beta">Beta</span></div>
+      </div>
+      <div class="cap">Backup open — identity, not app name</div>
+    </div>
+    <div class="col">
+      <div class="sb f-light">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="hero">
+          <svg viewBox="0 0 104 104" aria-hidden="true">
+            <rect x="26" y="4" width="46" height="82" rx="10" fill="none" stroke="var(--f-muted)" stroke-width="2.5" stroke-dasharray="7 7"/>
+            <circle cx="66" cy="66" r="19" fill="var(--f-card)" stroke="var(--acc)" stroke-width="3.5"/>
+            <g stroke="var(--f-muted)" stroke-width="3.5" stroke-linecap="round"><path d="M66 58v16M58 66h16"/></g>
+            <line x1="80" y1="80" x2="91" y2="91" stroke="var(--acc)" stroke-width="6" stroke-linecap="round"/>
+          </svg>
+          <div class="name">TraceLoupe</div>
+          <div class="meta">No backup open</div>
+          <span class="cta">Choose a backup</span>
+        </div>
+        <div class="sb-label">Scans</div>
+        <div class="item" style="opacity:.45"><svg><use href="#i-shield-a"/></svg><span>Security</span></div>
+        <div class="item" style="opacity:.45"><svg><use href="#i-shield-u"/></svg><span>Safety</span><span class="beta">Beta</span></div>
+      </div>
+      <div class="cap">No backup — ghost phone, loupe stays as brand mark</div>
+    </div>
+    <div class="col narrow">
+      <div class="sb rail f-light">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="hero">
+          <svg viewBox="0 0 104 104" aria-hidden="true">
+            <rect x="26" y="4" width="46" height="82" rx="10" fill="var(--f-card)" stroke="var(--f-fg-strong)" stroke-width="4"/>
+            <circle cx="66" cy="66" r="20" fill="var(--f-card)" stroke="var(--acc)" stroke-width="6"/>
+            <line x1="81" y1="81" x2="93" y2="93" stroke="var(--acc)" stroke-width="8" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="sb-label-line"></div>
+        <div class="item"><svg><use href="#i-shield-a"/></svg></div>
+        <div class="item"><svg><use href="#i-shield-u"/></svg></div>
+        <div class="sb-label-line"></div>
+        <div class="item"><svg><use href="#i-image"/></svg></div>
+        <div class="item active"><svg><use href="#i-msg"/></svg></div>
+        <div class="item"><svg><use href="#i-users"/></svg></div>
+        <div class="item"><svg><use href="#i-phone"/></svg></div>
+      </div>
+      <div class="cap">Collapsed rail</div>
+    </div>
+  </div>
+
+  <h2>Icon size: 16 px today → 20 px proposed</h2>
+  <p class="sub">One-line change in the <span class="mono">SidebarMenuButton</span> cva (<span class="mono">[&amp;>svg]:size-4</span> → <span class="mono">size-5</span>) plus ~2 px more row padding. Labels bump from 13 to 13.5 px so the ratio holds.</p>
+  <div class="cmp f-light" style="color:var(--f-fg)">
+    <div class="panel" style="background:var(--f-sb)">
+      <div class="hd">Today — 16 px, tight rows</div>
+      <div class="item sm" style="padding:5px 10px"><svg><use href="#i-image"/></svg><span style="font-size:12.5px">Photos</span></div>
+      <div class="item sm active" style="padding:5px 10px"><svg><use href="#i-msg"/></svg><span style="font-size:12.5px">Messages</span></div>
+      <div class="item sm" style="padding:5px 10px"><svg><use href="#i-users"/></svg><span style="font-size:12.5px">Contacts</span></div>
+      <div class="item sm" style="padding:5px 10px"><svg><use href="#i-phone"/></svg><span style="font-size:12.5px">Calls</span></div>
+    </div>
+    <div class="panel" style="background:var(--f-sb)">
+      <div class="hd">Proposed — 20 px, room to breathe</div>
+      <div class="item"><svg><use href="#i-image"/></svg><span>Photos</span></div>
+      <div class="item active"><svg><use href="#i-msg"/></svg><span>Messages</span></div>
+      <div class="item"><svg><use href="#i-users"/></svg><span>Contacts</span></div>
+      <div class="item"><svg><use href="#i-phone"/></svg><span>Calls</span></div>
+    </div>
+  </div>
+
+  <h2>Empty states</h2>
+  <p class="sub">Three tiers, all with an icon tile tinted by the accent. The bare text-only empties (Calls, Safari, Apps list-empties) are the ones gaining the most.</p>
+  <div class="empties">
+    <div class="empty-card f-light" style="background:var(--f-bg)">
+      <div class="etile"><svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-msg"/></svg></div>
+      <h4>No conversation selected</h4>
+      <p>Pick a thread on the left to read it.</p>
+    </div>
+    <div class="empty-card f-light" style="background:var(--f-bg)">
+      <div class="etile"><svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-phone"/></svg></div>
+      <h4>No calls in this backup</h4>
+      <p>This iPhone had no call history when the backup was made.</p>
+    </div>
+    <div class="empty-card f-dark" style="background:var(--f-bg)">
+      <div class="etile"><svg fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#i-heart"/></svg></div>
+      <h4>Explore health data</h4>
+      <p>Steps, workouts, heart rate and sleep — parsed locally from an encrypted backup.</p>
+      <div class="feat">
+        <div><b>Activity rings</b><span>Move, exercise, stand</span></div>
+        <div><b>Vitals</b><span>Heart rate, HRV, SpO₂</span></div>
+      </div>
+      <span class="go">Choose a backup</span>
+    </div>
+  </div>
+
+  <h2>Surface tokens, current → proposed</h2>
+  <p class="sub">Everything stays oklch; the only real change is a whisper of chroma (0.003–0.01 at hue 260) and re-spaced lightness steps. <span class="mono">--destructive</span> and semantic scan colors are untouched.</p>
+  <div class="tablewrap"><table>
+    <tr><th>Token</th><th>Light today</th><th>Light proposed</th><th>Dark today</th><th>Dark proposed</th></tr>
+    <tr><td><span class="mono">--background</span></td>
+      <td><span class="chiplet" style="background:oklch(1 0 0)"></span>1 0 0 (pure white)</td>
+      <td><span class="chiplet" style="background:oklch(0.982 0.003 260)"></span>0.982 0.003 260</td>
+      <td><span class="chiplet" style="background:oklch(0.145 0 0)"></span>0.145 0 0</td>
+      <td><span class="chiplet" style="background:oklch(0.215 0.01 260)"></span>0.215 0.01 260</td></tr>
+    <tr><td><span class="mono">--sidebar</span></td>
+      <td><span class="chiplet" style="background:oklch(0.985 0 0)"></span>0.985 0 0</td>
+      <td><span class="chiplet" style="background:oklch(0.958 0.005 260)"></span>0.958 0.005 260</td>
+      <td><span class="chiplet" style="background:oklch(0.205 0 0)"></span>0.205 0 0</td>
+      <td><span class="chiplet" style="background:oklch(0.175 0.01 260)"></span>0.175 0.01 260</td></tr>
+    <tr><td><span class="mono">--card</span></td>
+      <td><span class="chiplet" style="background:oklch(1 0 0)"></span>1 0 0</td>
+      <td><span class="chiplet" style="background:oklch(1 0 0)"></span>1 0 0 (now floats)</td>
+      <td><span class="chiplet" style="background:oklch(0.205 0 0)"></span>0.205 0 0</td>
+      <td><span class="chiplet" style="background:oklch(0.26 0.01 260)"></span>0.26 0.01 260</td></tr>
+    <tr><td><span class="mono">--sidebar-accent</span> (active item)</td>
+      <td colspan="2">neutral grey → <span class="mono">color-mix(accent 14%, transparent)</span></td>
+      <td colspan="2">neutral grey → <span class="mono">color-mix(accent 14%, transparent)</span></td></tr>
+    <tr><td><span class="mono">--ring</span>, <span class="mono">--primary</span> (buttons)</td>
+      <td colspan="2">near-black → accent</td>
+      <td colspan="2">near-white → accent (mixed 72% toward white for text)</td></tr>
+  </table></div>
+
+  <h2>Implementation notes</h2>
+  <ul class="moves">
+    <li><b>System accent, the NoteSage way.</b> A Tauri command reads <span class="mono">NSColor.controlAccentColor</span>, converts to oklch in Rust, and the frontend sets <span class="mono">--accent-system-value</span> on <span class="mono">&lt;html&gt;</span>, re-fetching on window focus. Non-macOS and error paths fall back to a baked-in default. The whole mechanism is ~150 lines and can be ported nearly verbatim from <span class="mono">note-sage/src-tauri/src/commands/theme.rs</span> + <span class="mono">useAccent.ts</span>.</li>
+    <li><b>Where accent must NOT go.</b> Scan verdicts stay semantic (green clean / red threat), destructive stays red, and body text stays neutral — the accent is for interaction, never for meaning.</li>
+    <li><b>Hero SVG is one component.</b> <span class="mono">&lt;DeviceHero state="open|empty|rail" /&gt;</span> — plain inline SVG driven by the same CSS variables, so it re-tints with theme and accent for free. The loupe is constant across states; only the phone changes.</li>
+    <li><b>Scans group styling.</b> Moving Security/Safety from <span class="mono">SidebarHeader</span> into a <span class="mono">SidebarGroup</span> with a label is a small app-shell.tsx refactor; reimport actions and badges carry over unchanged.</li>
+    <li><b>Icon size.</b> One cva edit in <span class="mono">sidebar.tsx</span> plus row-padding; the density system (comfortable/cozy/compact) can also scale sidebar rows if you want it to.</li>
+    <li><b>Later, if it earns its keep:</b> per-view counts in the sidebar (Messages 12,482), a subtle scan-status ring around the hero loupe, and accent-tinted selection in list rows.</li>
+  </ul>
+
+</div>
+
+<script>
+  (function () {
+    var ACCENTS = [
+      { name: "Blue (macOS default)", v: "#0a7aff", ink: "#fff" },
+      { name: "Purple", v: "#a550a7", ink: "#fff" },
+      { name: "Pink", v: "#f74f9e", ink: "#fff" },
+      { name: "Red", v: "#e0383e", ink: "#fff" },
+      { name: "Orange", v: "#f7821b", ink: "#fff" },
+      { name: "Yellow", v: "#f5b900", ink: "#3b2f00" },
+      { name: "Green", v: "#57a33d", ink: "#fff" },
+      { name: "Graphite", v: "#797982", ink: "#fff" }
+    ];
+    var picker = document.getElementById("picker");
+    var root = document.documentElement;
+    ACCENTS.forEach(function (a, i) {
+      var b = document.createElement("button");
+      b.className = "sw" + (i === 0 ? " sel" : "");
+      b.style.background = a.v;
+      b.title = a.name;
+      b.setAttribute("aria-label", "Accent: " + a.name);
+      b.addEventListener("click", function () {
+        root.style.setProperty("--acc", a.v);
+        root.style.setProperty("--acc-ink", a.ink);
+        picker.querySelectorAll(".sw").forEach(function (x) { x.classList.remove("sel"); });
+        b.classList.add("sel");
+      });
+      picker.appendChild(b);
+    });
+  })();
+</script>
