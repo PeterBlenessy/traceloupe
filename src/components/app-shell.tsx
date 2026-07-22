@@ -338,6 +338,7 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
       trailing={
         // App-wide controls, rightmost.
         <>
+          <SafetyScanIndicator />
           <ModelDownloadIndicator />
           <ImportIndicator />
           <ToolbarGroup>
@@ -471,6 +472,34 @@ function ModelDownloadIndicator() {
         </Tooltip>
       )}
     </span>
+  );
+}
+
+/** A Safety Scan runs in the SafetyScanProvider (above the routes), so it keeps
+ *  going after you leave the Safety view. This pill surfaces it in the title bar
+ *  — spinner + progress — and jumps back to the view on click. Hidden while the
+ *  Safety view is open (it's redundant there). */
+function SafetyScanIndicator() {
+  const { scan } = useSafetyScan();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  if (!scan || pathname === "/safety-scan") return null;
+  const label =
+    scan.phase === "loading"
+      ? "Loading model…"
+      : scan.phase === "summarizing"
+        ? "Writing report…"
+        : scan.phase === "classifying" && scan.total > 0
+          ? `Scanning · ${scan.done}/${scan.total}`
+          : "Scanning…";
+  return (
+    <Link
+      to="/safety-scan"
+      title="Go to Safety Scan"
+      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+    >
+      <Loader2 className="size-3 animate-spin" />
+      <span className="max-w-[14rem] truncate">{label}</span>
+    </Link>
   );
 }
 
