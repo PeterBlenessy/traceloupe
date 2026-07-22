@@ -198,7 +198,7 @@ function AppFeatures() {
     {
       label: "Safety Scan",
       detail:
-        "A local AI model flags harmful content in messages and notes — threats, harassment, grooming and more.",
+        "A local AI flags harmful content in messages and notes — threats, harassment, grooming and more.",
     },
     {
       label: "Private by design",

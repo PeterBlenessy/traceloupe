@@ -143,7 +143,7 @@ export function SafetyScanView() {
       <NoBackupState
         icon={ShieldUser}
         title="Open a backup to run a Safety Scan"
-        lead="A local AI model reads messages and notes and flags possible harmful content — a prompt to review conversations yourself, not a verdict."
+        lead="A local AI reads messages and notes and flags possible harmful content — a prompt to review conversations yourself, not a verdict."
         features={[
           { label: "Categories", detail: "Threats, harassment, grooming, self-harm, coercive control, scams, and more." },
           { label: "Time range", detail: "Scan all history, a specific year, or a custom date range." },
@@ -178,7 +178,7 @@ export function SafetyScanView() {
             <AlertDescription className="flex flex-col gap-2">
               <span>
                 Safety Scan is new and its classification accuracy has not yet
-                been validated. Verdicts come from a local AI model and can be
+                been validated. Verdicts come from a local AI and can be
                 wrong in both directions — treat every finding as a prompt to
                 review the actual conversation yourself, and don't rely on a
                 clean result as a guarantee.
@@ -206,7 +206,7 @@ export function SafetyScanView() {
                 as a second button. */}
             <CardHeader>
               <CardDescription>
-                The scan runs entirely on this Mac: a local model reads your
+                The scan runs entirely on this Mac: a local AI reads your
                 messages and notes in small windows and flags possible threats,
                 harassment, grooming, self-harm, coercive control, scams and
                 more. Verdicts are probabilistic — treat each flag as something
@@ -327,11 +327,10 @@ function NoModelPrompt() {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <ShieldQuestion className="size-4" /> A local model is required
+          <ShieldQuestion className="size-4" /> A local AI is required
         </CardTitle>
         <CardDescription>
-          Safety Scan analyzes your messages and notes with a local language
-          model that runs entirely on this Mac. Download it once from{" "}
+          Safety Scan analyzes your messages and notes with a local AI that runs entirely on this Mac. Download it once from{" "}
           <span className="font-medium text-foreground">Settings → Safety</span>{" "}
           (bottom-left), then come back here to run a scan.
         </CardDescription>
