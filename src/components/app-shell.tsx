@@ -172,10 +172,7 @@ export function AppShell() {
             >
               {/* The device identity as a hero: what backup you're looking at,
                   not the app's name. Doubles as the Device-info entry. */}
-              <DeviceHero
-                deviceInfo={deviceInfo ?? null}
-                hasBackup={hasBackup === true}
-              />
+              <DeviceHero deviceInfo={deviceInfo ?? null} hasBackup={hasBackup} />
             </SidebarHeader>
             <SidebarContent>
               {/* Security and Safety get their own group: both operate on the

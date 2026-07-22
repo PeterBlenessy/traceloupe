@@ -14,7 +14,7 @@
  * light/dark theme and the system accent for free.
  */
 import { useId } from "react";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { Lock } from "lucide-react";
 import { useSidebar } from "@/components/ui/sidebar";
 import {
@@ -31,14 +31,21 @@ export function DeviceHero({
   hasBackup,
 }: {
   deviceInfo: BackupInfo | null;
-  hasBackup: boolean;
+  /** undefined while the hasActiveBackup query is still pending — the hero
+   *  stays neutral instead of flashing the "Choose a backup" ask. */
+  hasBackup: boolean | undefined;
 }) {
   const { state } = useSidebar();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
   const collapsed = state === "collapsed";
-  const to = hasBackup ? "/device" : "/";
-  const name = hasBackup
-    ? (deviceInfo?.deviceName ?? "Device")
-    : "TraceLoupe";
+  const pending = hasBackup === undefined;
+  const to = hasBackup === true ? "/device" : "/";
+  // The hero doubles as the Device-view (or backup-picker) nav entry, so it
+  // carries the active treatment those routes would otherwise lack.
+  const active =
+    hasBackup === true ? pathname === "/device" : pathname === "/";
+  const name = hasBackup === true ? (deviceInfo?.deviceName ?? "Device") : "TraceLoupe";
+  const label = hasBackup === true ? name : "Your iPhone backups";
   const meta = [
     modelName(deviceInfo?.productType ?? null),
     deviceInfo?.productVersion ? `iOS ${deviceInfo.productVersion}` : null,
@@ -52,14 +59,17 @@ export function DeviceHero({
         <TooltipTrigger asChild>
           <Link
             to={to}
-            className="mx-auto flex size-9 items-center justify-center rounded-md hover:bg-sidebar-accent"
+            aria-label={label}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "mx-auto flex size-9 items-center justify-center rounded-md outline-hidden ring-sidebar-ring hover:bg-sidebar-accent focus-visible:ring-2",
+              active && "bg-sidebar-accent",
+            )}
           >
             <PhoneLoupeMark className="size-7" />
           </Link>
         </TooltipTrigger>
-        <TooltipContent side="right">
-          {hasBackup ? name : "Your iPhone backups"}
-        </TooltipContent>
+        <TooltipContent side="right">{label}</TooltipContent>
       </Tooltip>
     );
   }
@@ -67,13 +77,18 @@ export function DeviceHero({
   return (
     <Link
       to={to}
-      className="group/hero mx-1 flex flex-col items-center rounded-xl px-2 pb-4 pt-3 text-center transition-colors hover:bg-sidebar-accent/50"
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "group/hero mx-1 flex flex-col items-center rounded-xl px-2 pb-4 pt-3 text-center outline-hidden ring-sidebar-ring transition-colors hover:bg-sidebar-accent/50 focus-visible:ring-2",
+        active && "bg-sidebar-accent/50",
+      )}
     >
-      <PhoneLoupeArt ghost={!hasBackup} className="size-24" />
+      <PhoneLoupeArt ghost={hasBackup !== true} className="size-24" />
       <div className="mt-2 w-full truncate text-[13.5px] font-semibold">
         {name}
       </div>
-      {hasBackup ? (
+      {hasBackup === true ? (
         <>
           {meta && (
             <div className="mt-0.5 w-full truncate text-[11px] text-sidebar-foreground/60">
@@ -87,7 +102,7 @@ export function DeviceHero({
             </span>
           )}
         </>
-      ) : (
+      ) : pending ? null : (
         <>
           <div className="mt-0.5 text-[11px] text-sidebar-foreground/60">
             No backup open
