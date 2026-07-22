@@ -158,9 +158,9 @@ export function RecordingsView() {
             ) : isPending ? (
               <ListSkeleton rows={6} />
             ) : (recordings?.length ?? 0) === 0 ? (
-              <EmptyView title="No voice recordings in this backup." />
+              <EmptyView icon={Mic} title="No voice recordings in this backup." />
             ) : (sortedRecordings?.length ?? 0) === 0 ? (
-              <EmptyView title="No recordings match the current search or time range." />
+              <EmptyView icon={Mic} title="No recordings match the current search or time range." />
             ) : (
               <VirtualList
                 key={clockFormat}

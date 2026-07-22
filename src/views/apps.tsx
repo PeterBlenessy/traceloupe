@@ -188,6 +188,7 @@ export function AppsView() {
       isPending={isPending}
       error={error}
       emptyMessage="No installed-app list in this backup."
+      emptyIcon={Boxes}
       items={filtered}
       getKey={(a) => a.bundleId}
       renderItem={(a) => <AppItem app={a} iconUri={iconMap.get(a.bundleId)} />}

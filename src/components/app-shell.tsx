@@ -8,7 +8,6 @@ import {
   CalendarDays,
   HeartPulse,
   ListTodo,
-  Smartphone,
   Waypoints,
   Globe,
   Image,
@@ -32,6 +31,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -40,10 +40,11 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarSeparator,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { DeviceHero } from "@/components/device-hero";
+import { useSystemAccent } from "@/lib/use-system-accent";
 import { useResizableWidth } from "@/components/resize";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -107,6 +108,8 @@ const nav = [
 
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Follow the macOS accent color (System Settings → Appearance).
+  useSystemAccent();
   // Drag-resizable, persisted sidebar width (applies only when expanded; the
   // icon rail uses the fixed --sidebar-width-icon).
   const { width: sidebarWidth, startResize } = useResizableWidth(
@@ -167,71 +170,55 @@ export function AppShell() {
               className="pt-10 group-data-[collapsible=icon]:pt-14"
               data-tauri-drag-region
             >
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  {/* The device/backup identity doubles as the Device-info entry:
-                      shows the open device's name and opens the Device view. */}
-                  <SidebarMenuButton
-                    asChild
-                    isActive={
-                      hasBackup === true ? pathname === "/device" : pathname === "/"
-                    }
-                    tooltip={
-                      hasBackup === true
-                        ? (deviceInfo?.deviceName ?? "Device")
-                        : "Your iPhone backups"
-                    }
-                  >
-                    <Link to={hasBackup === true ? "/device" : "/"}>
-                      <Smartphone />
-                      <span className="truncate font-semibold group-data-[collapsible=icon]:hidden">
-                        {deviceInfo?.deviceName ?? "TraceLoupe"}
-                      </span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {/* Security and Safety sit with Device: all three operate on
-                    the whole backup (its identity, a spyware audit, a content
-                    scan), unlike the content views below which are slices of
-                    that content. */}
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === "/security"}
-                    tooltip="Security"
-                  >
-                    <Link to="/security">
-                      <ShieldAlert />
-                      <span>Security</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === "/safety-scan"}
-                    tooltip="Safety (experimental)"
-                  >
-                    <Link to="/safety-scan">
-                      <ShieldUser />
-                      <span>Safety</span>
-                    </Link>
-                  </SidebarMenuButton>
-                  {/* Experimental: local-AI classification quality is not yet
-                      validated on real hardware. */}
-                  <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Beta
-                  </SidebarMenuBadge>
-                </SidebarMenuItem>
-              </SidebarMenu>
+              {/* The device identity as a hero: what backup you're looking at,
+                  not the app's name. Doubles as the Device-info entry. */}
+              <DeviceHero
+                deviceInfo={deviceInfo ?? null}
+                hasBackup={hasBackup === true}
+              />
             </SidebarHeader>
             <SidebarContent>
-              {/* w-auto! beats the Separator primitive's higher-specificity
-                  data-[orientation=horizontal]:w-full — without it the mx-2
-                  inset makes the divider 100%+16px wide and the sidebar scrolls
-                  horizontally. */}
-              <SidebarSeparator className="w-auto!" />
+              {/* Security and Safety get their own group: both operate on the
+                  WHOLE backup (a spyware audit, a content scan), unlike the
+                  content views below which are slices of its content. */}
               <SidebarGroup>
+                <SidebarGroupLabel>Scans</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === "/security"}
+                        tooltip="Security"
+                      >
+                        <Link to="/security">
+                          <ShieldAlert />
+                          <span>Security</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === "/safety-scan"}
+                        tooltip="Safety (experimental)"
+                      >
+                        <Link to="/safety-scan">
+                          <ShieldUser />
+                          <span>Safety</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {/* Experimental: local-AI classification quality is not yet
+                          validated on real hardware. */}
+                      <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Beta
+                      </SidebarMenuBadge>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+              <SidebarGroup>
+                <SidebarGroupLabel>Content</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {nav.map((item) => (
@@ -597,7 +584,7 @@ function SettingsMenu() {
     <Dialog>
       <DialogTrigger asChild>
         <SidebarMenuButton tooltip="Settings">
-          <Settings className="size-4" />
+          <Settings />
           <span>Settings</span>
         </SidebarMenuButton>
       </DialogTrigger>

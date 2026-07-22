@@ -11,7 +11,30 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
-_Nothing yet._
+**UI refresh — device hero, Scans group, system accent, layered surfaces.**
+
+### Added
+
+- **Device hero**: the sidebar's top item is now a large phone-under-the-loupe
+  illustration showing the open backup's identity (device name, model, iOS
+  version, Encrypted chip) — or a dashed ghost phone with a Choose-a-backup
+  action when nothing is open. Collapses to a compact mark on the icon rail.
+- **System accent color**: the UI follows the macOS accent set in System
+  Settings (read via `NSColor.controlAccentColor`, re-checked on window focus).
+  Active nav, selection, sent bubbles, primary buttons, and focus rings all
+  tint with it; scan verdicts and destructive actions stay semantic.
+
+### Changed
+
+- Security and Safety moved from the sidebar header into their own labeled
+  **Scans** group; the content views sit under a **Content** label.
+- Sidebar icons grew from 16 px to 20 px with slightly taller rows.
+- The surface palette moved from pure white / near-black to layered tinted
+  neutrals: light mode gets an off-white canvas with a deeper sidebar pane;
+  dark mode lifts off near-black with the sidebar as the darkest layer.
+- Every empty state now carries an accent-tinted icon tile, including the
+  previously text-only ones (Calls, Safari, Apps, Notes, Recordings, Contacts,
+  Calendar, Reminders, Interactions).
 
 ## [0.29.1] — 2026-07-22
 
