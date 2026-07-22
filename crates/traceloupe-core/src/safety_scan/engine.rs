@@ -143,6 +143,16 @@ pub fn run_scan(
         findings: 0,
     };
 
+    // An initial tick with the real chunk total, so the UI flips from "loading"
+    // to "scanning" the moment classification begins — otherwise the first
+    // progress event only lands after the first (slow ~1 min) chunk completes,
+    // leaving the model-loaded server looking like it's still starting up.
+    on_progress(ScanProgress {
+        chunks_done: 0,
+        chunks_total: chunks.len(),
+        findings: 0,
+    });
+
     let loop_result = (|| -> Result<()> {
         for chunk in &chunks {
             if cancel.is_cancelled() {
@@ -512,6 +522,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(seen, vec![(1, 2), (2, 2)]);
+        // (0, 2) is the initial "starting to scan" tick before any chunk runs.
+        assert_eq!(seen, vec![(0, 2), (1, 2), (2, 2)]);
     }
 }
