@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ExternalLink, EyeOff, HeartPulse, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
+  Square, ExternalLink, EyeOff, HeartPulse, History, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -198,6 +198,9 @@ export function SafetyScanView() {
     preferredModelId && installedIds.includes(preferredModelId)
       ? preferredModelId
       : ms.readyModelId;
+  // Live findings for the latest scan — the meaningful number to show in the
+  // report header instead of the internal "chunks" count.
+  const findingCount = (findings.data ?? []).filter((f) => !f.dismissed).length;
 
   return (
     <div className="flex h-full flex-col">
@@ -330,8 +333,9 @@ export function SafetyScanView() {
                     report.data.scan.rangeEnd,
                   )}
                   {" · "}
-                  {report.data.scan.chunksDone}/{report.data.scan.chunksTotal}{" "}
-                  chunks
+                  {findingCount === 0
+                    ? "no findings"
+                    : `${findingCount} finding${findingCount === 1 ? "" : "s"}`}
                 </CardDescription>
               )}
             </CardHeader>
@@ -353,6 +357,8 @@ export function SafetyScanView() {
             </CardContent>
           </Card>
         )}
+
+        <ScanHistory />
 
         <FindingsList
           findings={findings.data ?? []}
@@ -417,12 +423,65 @@ function ScanProgress({
       <Progress value={pct ?? undefined} />
       {scanEvent.phase === "classifying" && scanEvent.total > 0 && (
         <div className="text-xs text-muted-foreground">
-          {scanEvent.done}/{scanEvent.total} chunks · {scanEvent.findings}{" "}
-          finding{scanEvent.findings === 1 ? "" : "s"} so far — you can leave
-          this page; the scan keeps running.
+          {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
+          {scanEvent.findings} finding{scanEvent.findings === 1 ? "" : "s"} so
+          far — you can leave this page; the scan keeps running.
         </div>
       )}
     </div>
+  );
+}
+
+/** A label for a scan's status, in user terms. */
+const SCAN_STATUS_LABEL: Record<string, string> = {
+  completed: "Completed",
+  cancelled: "Stopped",
+  failed: "Failed",
+  running: "Running",
+};
+
+/** Past scans on this backup — period, when, status and how many findings each
+ *  produced. Shown only when there's more than the current scan. */
+function ScanHistory() {
+  const history = useQuery({
+    queryKey: ["safetyScan", "history"],
+    queryFn: () => client.listSafetyScans(),
+  });
+  const items = history.data ?? [];
+  if (items.length < 2) return null;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <History className="size-4" /> Scan history
+        </CardTitle>
+        <CardDescription>Every Safety Scan run on this backup.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {items.map((s) => (
+          <div
+            key={s.id}
+            className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+          >
+            <div className="min-w-0">
+              <div className="text-sm font-medium">
+                {formatScanRange(s.rangeStart, s.rangeEnd)}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {SCAN_STATUS_LABEL[s.status] ?? s.status}
+                {" · "}
+                {formatListTime(s.finishedAt ?? s.startedAt)}
+              </div>
+            </div>
+            <Badge variant={s.findings > 0 ? "secondary" : "outline"}>
+              {s.findings === 0
+                ? "no findings"
+                : `${s.findings} finding${s.findings === 1 ? "" : "s"}`}
+            </Badge>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
