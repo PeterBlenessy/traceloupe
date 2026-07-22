@@ -532,7 +532,12 @@ pub async fn run_safety_scan(
 
         let mut last_emit = std::time::Instant::now();
         let outcome = engine::run_scan(&cache, &mut analysis, &llm, range, &cancel, |p| {
-            if last_emit.elapsed() >= Duration::from_millis(150) || p.chunks_done == p.chunks_total
+            // Always emit the first (done == 0) tick — it's what flips the UI from
+            // "loading" to "scanning" the instant the model is ready; the 150 ms
+            // throttle only smooths the frequent mid-scan updates.
+            if p.chunks_done == 0
+                || last_emit.elapsed() >= Duration::from_millis(150)
+                || p.chunks_done == p.chunks_total
             {
                 last_emit = std::time::Instant::now();
                 let _ = app2.emit(

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Ban, ExternalLink, EyeOff, HeartPulse, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
+  Square, ExternalLink, EyeOff, HeartPulse, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -242,7 +242,7 @@ export function SafetyScanView() {
                 </div>
                 {running ? (
                   <Button variant="outline" onClick={cancelScan}>
-                    <Ban className="size-4" /> Stop
+                    <Square className="size-4" /> Stop
                   </Button>
                 ) : (
                   <Button
@@ -349,7 +349,7 @@ function ScanProgress({
 }) {
   const label =
     scanEvent.phase === "loading"
-      ? "Starting the local model server…"
+      ? "Loading the model…"
       : scanEvent.phase === "summarizing"
         ? "Writing the scan report…"
         : "Scanning…";
@@ -364,7 +364,7 @@ function ScanProgress({
         {label}
       </div>
       <Progress value={pct ?? undefined} />
-      {scanEvent.phase === "classifying" && (
+      {scanEvent.phase === "classifying" && scanEvent.total > 0 && (
         <div className="text-xs text-muted-foreground">
           {scanEvent.done}/{scanEvent.total} chunks · {scanEvent.findings}{" "}
           finding{scanEvent.findings === 1 ? "" : "s"} so far — you can leave
