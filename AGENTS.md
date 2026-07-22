@@ -80,6 +80,18 @@ force.
   `checkout -f`, or `reset --hard` outside your worktree.
 - **Base off `origin/main`** (or the agreed integration branch), not off whatever
   the shared checkout happens to be sitting on.
+- **Don't reinvent shared components; build on what's in flight.** Before writing
+  a new view, a UI control, or a shared helper, check whether it already exists:
+  grep `src/components/`, and read the relevant doc (**`docs/ui.md`** for anything
+  with a header, filter, sort, search, or a new view). Then `git fetch` and skim
+  `origin/main` **and open PRs** (`gh pr list`) for related work — a big pattern
+  may be mid-migration on another branch, and you want to adopt/extend it, not
+  re-create the old thing beside it. (This is exactly how the two scan views ended
+  up hand-rolling their own header bar while every other view moved to the shared
+  toolbar: they were built while that migration was still on a separate branch.)
+- **Rebase on `origin/main` before you finish** a longer-lived branch, and
+  re-check that any shared pattern you touched hasn't changed on main since you
+  branched — if it has, migrate onto it rather than shipping the stale shape.
 - **Commit early and often**, and **push right after your first commit**
   (`git push -u origin <slug>`). A branch that lives only on this laptop is
   unbacked-up — if the folder is clobbered it's gone. Everything on GitHub is
@@ -135,6 +147,12 @@ create a worktree instead.
 ## Project-specific notes
 
 - Stack: Tauri + Rust (`crates/traceloupe-core`, `src-tauri`) + React (`src/`).
+- **UI / views: read `docs/ui.md` before building or changing any view.** Every
+  view surfaces its title, filters, sort and search through ONE shared top toolbar
+  (`useViewToolbar`) — there are no per-view header bars. Don't hand-roll headers,
+  filter popovers, time pickers, or pill rows: the shared components already cover
+  it (`FilterControl` + `badgeGroup`/`timeGroup`/`multiBadgeGroup`, `SortControl`,
+  `ListSearch`, `NoBackupState`, `VirtualListView`/`LazyListView`/`ListDetail`).
 - Verify a change builds the **binary**, not just `cargo check`:
   `cargo test -p traceloupe-core && cargo build -p traceloupe && pnpm exec tsc --noEmit`.
 - Parser changes need a **re-import** to populate existing caches (the cache
