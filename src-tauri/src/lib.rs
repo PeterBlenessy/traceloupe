@@ -1923,6 +1923,20 @@ async fn count_message_ranges(
 }
 
 #[tauri::command]
+async fn count_note_ranges(
+    active: State<'_, ActiveBackup>,
+    ranges: Vec<query::TimeRange>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_note_ranges(&cache, &ranges).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri command: time range + service + search + paging + dir.
 async fn get_range_window(
     active: State<'_, ActiveBackup>,
@@ -3712,6 +3726,7 @@ pub fn run() {
             count_timeline_messages,
             get_timeline_window,
             count_message_ranges,
+            count_note_ranges,
             message_date_bounds,
             get_range_window,
             open_attachment,
@@ -3763,7 +3778,8 @@ pub fn run() {
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
             safety_scan_cmd::get_safety_scan_report,
-            safety_scan_cmd::list_safety_scans
+            safety_scan_cmd::list_safety_scans,
+            safety_scan_cmd::delete_safety_scan
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

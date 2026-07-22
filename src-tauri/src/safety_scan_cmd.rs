@@ -847,6 +847,18 @@ pub struct ScanHistoryItem {
     pub findings: i64,
 }
 
+/// Remove a past scan and everything scoped to it (findings, progress,
+/// summaries). Dismissals survive so a re-scan still honours them.
+#[tauri::command]
+pub fn delete_safety_scan(active: State<'_, ActiveBackup>, scan_id: i64) -> Result<(), String> {
+    let path = analysis_path(&active.path()?)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    db.delete_scan(scan_id).map_err(|e| e.to_string())
+}
+
 /// Past scans (newest first) for the history list.
 #[tauri::command]
 pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHistoryItem>, String> {
@@ -872,7 +884,10 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
 }
 
 #[tauri::command]
-pub fn get_safety_scan_report(active: State<'_, ActiveBackup>) -> Result<SafetyScanReport, String> {
+pub fn get_safety_scan_report(
+    active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
+) -> Result<SafetyScanReport, String> {
     let path = analysis_path(&active.path()?)?;
     if !path.exists() {
         return Ok(SafetyScanReport {
@@ -882,7 +897,12 @@ pub fn get_safety_scan_report(active: State<'_, ActiveBackup>) -> Result<SafetyS
         });
     }
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
-    let Some(scan) = db.latest_scan().map_err(|e| e.to_string())? else {
+    // A specific past scan when the history list asks for one; otherwise latest.
+    let looked_up = match scan_id {
+        Some(id) => db.scan_by_id(id).map_err(|e| e.to_string())?,
+        None => db.latest_scan().map_err(|e| e.to_string())?,
+    };
+    let Some(scan) = looked_up else {
         return Ok(SafetyScanReport {
             scan: None,
             report: None,
