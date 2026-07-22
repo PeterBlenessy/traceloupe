@@ -61,7 +61,9 @@
      soft tinted pill (`--accent-soft`). */
   --accent-color: var(--accent-system-value, oklch(0.6 0.17 252));
   --accent-soft: color-mix(in srgb, var(--accent-color) 12%, transparent);
-  --accent-text: color-mix(in oklab, var(--accent-color) 82%, black);
+  /* The accent as text: clamp its lightness DOWN so light accents (macOS
+     Yellow/Orange/Green) stay readable on the soft tinted pill. */
+  --accent-text: oklch(from var(--accent-color) min(l, 0.5) c h);
 
   --background: oklch(0.982 0.003 260);
   --foreground: oklch(0.21 0.012 260);
@@ -70,7 +72,10 @@
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.21 0.012 260);
   --primary: var(--accent-color);
-  --primary-foreground: oklch(1 0 0);
+  /* White on dark accents, near-black on light ones (macOS Yellow ≈ L 0.87
+     would make white text ~1.6:1) — the steep clamp snaps to one or the other
+     at accent lightness 0.66, mirroring how macOS itself labels its accents. */
+  --primary-foreground: oklch(from var(--accent-color) clamp(0.145, (0.66 - l) * 1000, 1) 0 h);
   --secondary: oklch(0.955 0.005 260);
   --secondary-foreground: oklch(0.25 0.01 260);
   --muted: oklch(0.955 0.005 260);
@@ -87,7 +92,7 @@
   --sidebar: oklch(0.958 0.005 260);
   --sidebar-foreground: oklch(0.23 0.012 260);
   --sidebar-primary: var(--accent-color);
-  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: oklch(0.925 0.007 260);
   --sidebar-accent-foreground: oklch(0.2 0.012 260);
   --sidebar-border: oklch(0.897 0.007 260);
@@ -98,7 +103,9 @@
   /* The system accent verbatim when present; the fallback brightens so the
      default blue doesn't muddy on the dark ground. Text mixes toward white. */
   --accent-color: var(--accent-system-value, oklch(0.68 0.15 252));
-  --accent-text: color-mix(in oklab, var(--accent-color) 72%, white);
+  /* Clamp the accent's lightness UP for dark ground, easing chroma slightly
+     so saturated accents don't vibrate as text. */
+  --accent-text: oklch(from var(--accent-color) max(l, 0.78) calc(c * 0.9) h);
 
   --background: oklch(0.215 0.01 260);
   --foreground: oklch(0.955 0.005 260);
@@ -107,7 +114,8 @@
   --popover: oklch(0.26 0.01 260);
   --popover-foreground: oklch(0.955 0.005 260);
   --primary: var(--accent-color);
-  --primary-foreground: oklch(1 0 0);
+  /* No override: :root's lightness-adaptive formula re-resolves against the
+     dark --accent-color on the same element. */
   --secondary: oklch(0.3 0.01 260);
   --secondary-foreground: oklch(0.955 0.005 260);
   --muted: oklch(0.295 0.01 260);
@@ -124,7 +132,7 @@
   --sidebar: oklch(0.175 0.01 260);
   --sidebar-foreground: oklch(0.93 0.006 260);
   --sidebar-primary: var(--accent-color);
-  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: oklch(1 0 0 / 7%);
   --sidebar-accent-foreground: oklch(0.97 0.004 260);
   --sidebar-border: oklch(1 0 0 / 10%);

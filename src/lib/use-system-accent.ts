@@ -15,6 +15,10 @@
 import { useEffect } from "react";
 import { client } from "@/lib/ipc";
 
+/** Last accent seen, reapplied synchronously on mount so the first paint
+ *  doesn't flash the baked-in fallback blue before the invoke round-trips. */
+const STORAGE_KEY = "traceloupe-system-accent";
+
 export function useSystemAccent() {
   useEffect(() => {
     let cancelled = false;
@@ -23,6 +27,12 @@ export function useSystemAccent() {
       const root = document.documentElement;
       if (value) root.style.setProperty("--accent-system-value", value);
       else root.style.removeProperty("--accent-system-value");
+      try {
+        if (value) localStorage.setItem(STORAGE_KEY, value);
+        else localStorage.removeItem(STORAGE_KEY);
+      } catch {
+        // Storage unavailable — the accent still applies for this session.
+      }
     };
 
     const fetchAndApply = async () => {
@@ -34,6 +44,17 @@ export function useSystemAccent() {
       }
     };
 
+    try {
+      const cached = localStorage.getItem(STORAGE_KEY);
+      if (cached) {
+        document.documentElement.style.setProperty(
+          "--accent-system-value",
+          cached,
+        );
+      }
+    } catch {
+      // Storage unavailable — fall through to the fetch.
+    }
     void fetchAndApply();
 
     const onFocusOrVisible = () => {
