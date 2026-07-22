@@ -226,7 +226,11 @@ export function AppShell() {
               </SidebarMenu>
             </SidebarHeader>
             <SidebarContent>
-              <SidebarSeparator />
+              {/* w-auto! beats the Separator primitive's higher-specificity
+                  data-[orientation=horizontal]:w-full — without it the mx-2
+                  inset makes the divider 100%+16px wide and the sidebar scrolls
+                  horizontally. */}
+              <SidebarSeparator className="w-auto!" />
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
@@ -492,14 +496,18 @@ function SafetyScanIndicator() {
           ? `Scanning · ${scan.done}/${scan.total}`
           : "Scanning…";
   return (
-    <Link
-      to="/safety-scan"
-      title="Go to Safety Scan"
-      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-    >
-      <Loader2 className="size-3 animate-spin" />
-      <span className="max-w-[14rem] truncate">{label}</span>
-    </Link>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Link
+          to="/safety-scan"
+          className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Loader2 className="size-3 animate-spin" />
+          <span className="max-w-[14rem] truncate">{label}</span>
+        </Link>
+      </TooltipTrigger>
+      <TooltipContent>Go to Safety Scan</TooltipContent>
+    </Tooltip>
   );
 }
 

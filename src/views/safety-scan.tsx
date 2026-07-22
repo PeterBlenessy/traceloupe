@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
+import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
   Square, Download, ExternalLink, Eye, EyeOff, HeartPulse, History, Loader2, MessageSquareWarning, NotebookText, Play, RotateCcw, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
@@ -523,6 +524,14 @@ function ScanHistory() {
       // Refresh history, the top report card (may have been the latest), and
       // the live findings list.
       qc.invalidateQueries({ queryKey: ["safetyScan"] });
+    },
+    onError: (e) => {
+      // Never fail silently — a dead confirm dialog reads as "the button is
+      // broken". Close it and say what went wrong.
+      setConfirmId(null);
+      toast.error("Couldn't delete the scan", {
+        description: e instanceof Error ? e.message : String(e),
+      });
     },
   });
 
