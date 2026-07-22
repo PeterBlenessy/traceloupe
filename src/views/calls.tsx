@@ -93,7 +93,7 @@ export function CallsView() {
     return (
       <NoBackupState
         icon={PhoneCall}
-        title="Open a backup to see call history"
+        title="See call history"
         lead="Incoming, outgoing, and missed calls — FaceTime and cellular — with durations, timestamps, and the country each number belongs to. Numbers are resolved to saved contacts."
         features={[
           { label: "Search", detail: "Search across the whole call log." },

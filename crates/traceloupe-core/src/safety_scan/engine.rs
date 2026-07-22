@@ -113,10 +113,11 @@ pub fn run_scan(
     analysis: &mut AnalysisDb,
     client: &LlmClient,
     range: TimeRange,
+    sources: chunker::ScanSources,
     cancel: &CancelToken,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanOutcome> {
-    let chunks = chunker::chunk_all(cache, range)?;
+    let chunks = chunker::chunk_all(cache, range, sources)?;
     let scan_id = analysis.begin_scan(client.model(), (range.start, range.end), now())?;
     analysis.set_chunks_total(scan_id, chunks.len() as i64)?;
     analysis.audit(
@@ -368,6 +369,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &CancelToken::new(),
             |_| {},
         )
@@ -396,6 +398,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &CancelToken::new(),
             |_| {},
         )
@@ -417,6 +420,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &CancelToken::new(),
             |_| {},
         )
@@ -428,6 +432,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &CancelToken::new(),
             |_| {},
         )
@@ -472,6 +477,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &CancelToken::new(),
             |_| {},
         )
@@ -496,6 +502,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &cancel,
             |_| {},
         )
@@ -516,6 +523,7 @@ mod tests {
             &mut analysis,
             &client_for(&base),
             TimeRange::default(),
+            chunker::ScanSources::default(),
             &CancelToken::new(),
             |p| {
                 seen.push((p.chunks_done, p.chunks_total));

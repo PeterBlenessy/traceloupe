@@ -219,7 +219,7 @@ export function CalendarView() {
     return (
       <NoBackupState
         icon={CalendarDays}
-        title="Open a backup to see calendar events"
+        title="See calendar events"
         lead="Events and appointments across every calendar on the device — with dates, times, locations, invitees, and recurrence — as they were scheduled."
         features={[
           { label: "Search", detail: "Search titles, notes, and locations." },

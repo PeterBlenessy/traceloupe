@@ -160,6 +160,34 @@ List rows use shadcn **`Item`** (`ItemMedia`/`ItemContent`/`ItemTitle`/…), ava
 from `lib/contact.ts`, timestamps via `lib/format.ts`. Selected/hovered rows show
 an inset, rounded, full-width highlight, matching the sidebar.
 
+## Buttons always have a tooltip
+
+**Every button gets a tooltip. No exceptions** — text buttons and icon-only
+buttons alike. Icon-only buttons are unreadable without one; even labelled
+buttons benefit from a one-line "what this does", which doubles as the
+accessible name.
+
+- Use the shadcn `Tooltip` (`components/ui/tooltip.tsx`), not a bare `title=`:
+
+  ```tsx
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button variant="ghost" size="icon" aria-label="Delete this scan">
+        <Trash2 className="size-3.5" />
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent>Delete this scan</TooltipContent>
+  </Tooltip>
+  ```
+
+- No provider wiring needed inside views: the whole app already sits inside a
+  `TooltipProvider` (mounted by `SidebarProvider` in `ui/sidebar.tsx`).
+- Icon-only buttons keep an `aria-label` **as well as** the tooltip.
+- A **disabled** button keeps its tooltip — and it should explain *why* it's
+  disabled (e.g. "Exporting reports is coming soon").
+- Existing `title="…"` attributes are legacy; prefer the `Tooltip` component for
+  anything new, and upgrade `title=` to it when you touch a button.
+
 ## What may stay custom
 
 A few things have no primitive and are legitimately bespoke — keep them as single,
@@ -185,7 +213,10 @@ documented components, not inlined markup:
 3. **Promote, don't inline.** If a genuinely new shared control is needed, add it
    under `components/` (or a shadcn primitive in `components/ui/`) and document it
    here — never inline it in one view.
-4. **Build on what's in flight.** These shared components arrived via a large
+4. **Every button gets a tooltip.** Wrap it in the shadcn `Tooltip` (see
+   "Buttons always have a tooltip" above) — icon-only buttons especially, and
+   disabled buttons must say why they're disabled.
+5. **Build on what's in flight.** These shared components arrived via a large
    migration. Before starting UI work on a branch, `git fetch` and skim
    `origin/main` and open PRs (`gh pr list`) for related UI changes, so you adopt
    the current pattern and migrate alongside it — not around it. (The scan views

@@ -5,6 +5,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 /** One item in an {@link OverflowRow}. `render` is called for the inline row and
@@ -106,17 +111,21 @@ export function OverflowRow({
         ))}
         {hidden.length > 0 && (
           <Popover>
-            <PopoverTrigger asChild>
-              <button
-                type="button"
-                data-active={hiddenActive}
-                title={title}
-                aria-label={title}
-                className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
-              >
-                <MoreVertical className="size-4" />
-              </button>
-            </PopoverTrigger>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <PopoverTrigger asChild>
+                  <button
+                    type="button"
+                    data-active={hiddenActive}
+                    aria-label={title}
+                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
+                  >
+                    <MoreVertical className="size-4" />
+                  </button>
+                </PopoverTrigger>
+              </TooltipTrigger>
+              <TooltipContent>{title}</TooltipContent>
+            </Tooltip>
             <PopoverContent
               align="end"
               className={cn(
