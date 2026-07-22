@@ -1,0 +1,42 @@
+name: Tag release
+
+# When a version bump lands on main, create the matching git tag automatically —
+# so a release can never again ship without its tag (the failure that left the
+# repo untagged from v0.16.0 through v0.28.0). The CHANGELOG entry is enforced
+# separately by the "Release invariants" job in ci.yml before merge.
+on:
+  push:
+    branches: [main]
+    paths:
+      - package.json
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Auto-tag the current version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create and push v<version> if it doesn't exist
+        run: |
+          set -euo pipefail
+          v=$(node -p "require('./package.json').version")
+          tag="v$v"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists — nothing to do."
+            exit 0
+          fi
+          esc=${v//./\\.}
+          if ! grep -qE "^## \[$esc\]" CHANGELOG.md; then
+            echo "::error::package.json is $v but CHANGELOG.md has no '## [$v]' section. Not tagging — add the CHANGELOG entry."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag"
+          git push origin "$tag"
+          echo "Created and pushed $tag."
