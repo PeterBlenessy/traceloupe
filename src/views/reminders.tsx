@@ -1,9 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { Circle, CircleCheck, Flag, ListTodo } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
@@ -11,7 +9,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
-import { EmptyView, ListSearch, VirtualListView } from "@/components/view";
+import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { client, type Reminder, type TimeRange } from "@/lib/ipc";
@@ -73,7 +71,6 @@ function ReminderRow({ reminder }: { reminder: Reminder }) {
 }
 
 export function RemindersView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -209,13 +206,18 @@ export function RemindersView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={ListTodo}
-        title="No backup open"
-        description="Import a backup to see reminders."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to see reminders"
+        lead="Reminders and to-dos from every list — with due dates, flags, notes, and completion state — captured from the device."
+        features={[
+          { label: "Search", detail: "Search titles, notes, and lists." },
+          { label: "Filters", detail: "Filter by status (open, completed, flagged), list, or time range." },
+          { label: "Sort", detail: "Order by title, created, or due date." },
+          { label: "At a glance", detail: "Completion checkmarks, flags, and list badges on every row." },
+        ]}
+        note="Read straight from the backup on this Mac."
+      />
     );
   }
 

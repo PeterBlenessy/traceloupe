@@ -154,6 +154,20 @@ export interface InstalledApp {
   genre: string | null;
   /** App Store release date (RFC-3339 string); format with `new Date(...)`. */
   released: string | null;
+  /** When this copy was downloaded on the account (RFC-3339). */
+  downloaded: string | null;
+  /** The Apple ID (account email) that downloaded the app. */
+  appleId: string | null;
+  /** App Store age rating label, e.g. "17+". */
+  contentRating: string | null;
+  /** Finer App Store category, e.g. "Social". */
+  subgenre: string | null;
+}
+
+/** A fetched App Store icon as a self-contained data: URI. */
+export interface AppIcon {
+  bundleId: string;
+  dataUri: string;
 }
 
 export interface Recording {
@@ -579,6 +593,8 @@ export type ContentCategory =
 export interface SafetyModelInfo {
   id: string;
   displayName: string;
+  /** One-line role blurb (why you'd pick this model). */
+  note: string;
   sizeBytes: number;
   installed: boolean;
   recommended: boolean;
@@ -590,11 +606,28 @@ export interface SafetyModelStatus {
   readyModelId: string | null;
 }
 
+/** Result of a one-shot llama-server health check. */
+export interface SafetyHealthReport {
+  ok: boolean;
+  modelId: string;
+  displayName: string;
+  startupMs: number;
+  message: string;
+}
+
 export type SafetyModelProgressEvent =
   | { phase: "downloading"; received: number; total: number }
   | { phase: "verifying" }
   | { phase: "done" }
   | { phase: "error"; message: string };
+
+/** In-flight model download snapshot, for rehydrating the UI after a refresh. */
+export interface SafetyModelDownloadStatus {
+  modelId: string;
+  received: number;
+  total: number;
+  phase: "downloading" | "verifying";
+}
 
 export type SafetyScanEvent =
   | { phase: "loading" }
@@ -647,6 +680,18 @@ export interface SafetyScanReport {
   report: string | null;
   /** [threadIdentifier, summary] per flagged thread. */
   threadSummaries: [string, string][];
+}
+
+/** One past scan for the history list (no internal "chunks" — just what a user
+ *  cares about: period, when, status, and how many findings it produced). */
+export interface SafetyScanHistoryItem {
+  id: number;
+  rangeStart: number | null;
+  rangeEnd: number | null;
+  status: "running" | "completed" | "cancelled" | "failed";
+  startedAt: number;
+  finishedAt: number | null;
+  findings: number;
 }
 
 /** Top live-finding severity per flagged thread/note, for inline badges. */
@@ -814,6 +859,10 @@ export interface TraceLoupeClient {
   listContacts(): Promise<Contact[]>;
   /** Apps installed on the device, with their App Store metadata. */
   listInstalledApps(): Promise<InstalledApp[]>;
+  /** Fetch real App Store icons (data: URIs) for the given bundle ids from
+   *  Apple's iTunes API. Opt-in — contacts a remote server. Returns only the
+   *  apps it could resolve; cached on disk after the first fetch. */
+  getAppIcons(bundleIds: string[]): Promise<AppIcon[]>;
 
   // --- Security Check ---
   /** Run a scan over the active backup. "explicit" runs all modules (and may
@@ -861,9 +910,14 @@ export interface TraceLoupeClient {
   // --- Safety Scan (local-LLM content analysis; ADR 0002) ---
   /** Local model catalog + install state + the RAM-gated recommendation. */
   getSafetyScanModelStatus(): Promise<SafetyModelStatus>;
+  /** Spin the sandboxed server up for a model, confirm it loads, tear it down.
+   *  On-demand proof the local model actually runs on this Mac. */
+  safetyScanHealthCheck(modelId?: string | null): Promise<SafetyHealthReport>;
   /** Download a catalog model (progress on `safetyscan://model-progress`). */
   downloadSafetyScanModel(modelId: string): Promise<void>;
   cancelSafetyScanModelDownload(): Promise<void>;
+  /** The in-flight download, if any — lets the UI rehydrate after a refresh. */
+  getSafetyScanDownloadStatus(): Promise<SafetyModelDownloadStatus | null>;
   /** Start a Safety Scan over the active backup. Progress arrives on
    *  `safetyscan://progress`; rejects if one is already running. */
   runSafetyScan(opts: {
@@ -888,6 +942,8 @@ export interface TraceLoupeClient {
   ): Promise<void>;
   /** Latest scan row + its Scan report and per-thread summaries. */
   getSafetyScanReport(): Promise<SafetyScanReport>;
+  /** Past scans (newest first) for the history list. */
+  listSafetyScans(): Promise<SafetyScanHistoryItem[]>;
   listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
@@ -1208,6 +1264,8 @@ const tauriClient: TraceLoupeClient = {
     }),
   listContacts: () => invoke<Contact[]>("list_contacts"),
   listInstalledApps: () => invoke<InstalledApp[]>("list_installed_apps"),
+  getAppIcons: (bundleIds) =>
+    invoke<AppIcon[]>("get_app_icons", { bundleIds }),
 
   runSecurityScan: (kind) =>
     invoke<ScanSummary>("run_security_scan", { kind }),
@@ -1224,8 +1282,14 @@ const tauriClient: TraceLoupeClient = {
     }),
   getSafetyScanModelStatus: () =>
     invoke<SafetyModelStatus>("get_safety_scan_model_status"),
+  safetyScanHealthCheck: (modelId) =>
+    invoke<SafetyHealthReport>("safety_scan_health_check", {
+      modelId: modelId ?? null,
+    }),
   downloadSafetyScanModel: (modelId) =>
     invoke("download_safety_scan_model", { modelId }),
+  getSafetyScanDownloadStatus: () =>
+    invoke<SafetyModelDownloadStatus | null>("get_safety_scan_download_status"),
   cancelSafetyScanModelDownload: () =>
     invoke("cancel_safety_scan_model_download"),
   runSafetyScan: (opts) =>
@@ -1249,6 +1313,8 @@ const tauriClient: TraceLoupeClient = {
     invoke("dismiss_content_finding", { fingerprint, category, dismissed }),
   getSafetyScanReport: () =>
     invoke<SafetyScanReport>("get_safety_scan_report"),
+  listSafetyScans: () =>
+    invoke<SafetyScanHistoryItem[]>("list_safety_scans"),
 
   getIndicatorInfo: () => invoke<SnapshotInfo>("get_indicator_info"),
   updateIndicators: () => invoke<SnapshotInfo>("update_indicators"),
@@ -2120,16 +2186,17 @@ function mockMediaDataUrl(id: number): string {
 // Metadata mirrors what Info.plist's iTunesMetadata carries (name/seller/
 // version/genre/release date); system apps carry none.
 const mockInstalledApps: InstalledApp[] = [
-  { bundleId: "net.whatsapp.WhatsApp", name: "WhatsApp Messenger", seller: "WhatsApp Inc.", version: "23.24.0", genre: "Social Networking", released: "2009-05-03T00:00:00Z" },
-  { bundleId: "com.burbn.instagram", name: "Instagram", seller: "Instagram, Inc.", version: "436.0.0", genre: "Photo & Video", released: "2010-10-06T08:12:41Z" },
-  { bundleId: "com.toyopagroup.picaboo", name: "Snapchat", seller: "Snap, Inc.", version: "12.80.0", genre: "Photo & Video", released: "2011-07-13T00:00:00Z" },
-  { bundleId: "com.zhiliaoapp.musically", name: "TikTok", seller: "TikTok Ltd.", version: "34.1.0", genre: "Entertainment", released: "2014-04-01T00:00:00Z" },
-  { bundleId: "org.telegram.messenger", name: "Telegram Messenger", seller: "Telegram FZ-LLC", version: "10.5.1", genre: "Social Networking", released: "2013-08-14T00:00:00Z" },
-  { bundleId: "com.spotify.client", name: "Spotify - Music and Podcasts", seller: "Spotify Ltd.", version: "8.9.10", genre: "Music", released: "2011-07-14T00:00:00Z" },
-  { bundleId: "com.google.Gmail", name: "Gmail - Email by Google", seller: "Google LLC", version: "6.0.240107", genre: "Productivity", released: "2011-11-02T00:00:00Z" },
-  { bundleId: "com.tinyspeck.chatlyio", name: "Slack", seller: "Slack Technologies Inc.", version: "23.11.90", genre: "Business", released: "2013-08-21T00:00:00Z" },
-  { bundleId: "com.ubercab.UberClient", name: "Uber - Request a ride", seller: "Uber Technologies, Inc.", version: "3.577.10", genre: "Travel", released: "2010-08-05T00:00:00Z" },
-  { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null },
+  { bundleId: "net.whatsapp.WhatsApp", name: "WhatsApp Messenger", seller: "WhatsApp Inc.", version: "23.24.0", genre: "Social Networking", released: "2009-05-03T00:00:00Z", downloaded: "2023-11-02T09:14:00Z", appleId: "jane.doe@icloud.com", contentRating: "17+", subgenre: null },
+  { bundleId: "com.burbn.instagram", name: "Instagram", seller: "Instagram, Inc.", version: "436.0.0", genre: "Photo & Video", released: "2010-10-06T08:12:41Z", downloaded: "2024-03-12T18:41:00Z", appleId: "jane.doe@icloud.com", contentRating: "12+", subgenre: "Social Networking" },
+  { bundleId: "com.toyopagroup.picaboo", name: "Snapchat", seller: "Snap, Inc.", version: "12.80.0", genre: "Photo & Video", released: "2011-07-13T00:00:00Z", downloaded: "2024-01-20T12:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "12+", subgenre: null },
+  { bundleId: "com.zhiliaoapp.musically", name: "TikTok", seller: "TikTok Ltd.", version: "34.1.0", genre: "Entertainment", released: "2014-04-01T00:00:00Z", downloaded: "2024-05-30T21:05:00Z", appleId: "jane.doe@icloud.com", contentRating: "17+", subgenre: "Social Networking" },
+  { bundleId: "org.telegram.messenger", name: "Telegram Messenger", seller: "Telegram FZ-LLC", version: "10.5.1", genre: "Social Networking", released: "2013-08-14T00:00:00Z", downloaded: "2022-06-15T07:30:00Z", appleId: "jane.doe@icloud.com", contentRating: "17+", subgenre: null },
+  { bundleId: "com.spotify.client", name: "Spotify - Music and Podcasts", seller: "Spotify Ltd.", version: "8.9.10", genre: "Music", released: "2011-07-14T00:00:00Z", downloaded: "2021-02-01T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "12+", subgenre: null },
+  { bundleId: "com.google.Gmail", name: "Gmail - Email by Google", seller: "Google LLC", version: "6.0.240107", genre: "Productivity", released: "2011-11-02T00:00:00Z", downloaded: "2020-09-10T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.tinyspeck.chatlyio", name: "Slack", seller: "Slack Technologies Inc.", version: "23.11.90", genre: "Business", released: "2013-08-21T00:00:00Z", downloaded: "2023-04-18T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.ubercab.UberClient", name: "Uber - Request a ride", seller: "Uber Technologies, Inc.", version: "3.577.10", genre: "Travel", released: "2010-08-05T00:00:00Z", downloaded: "2024-02-02T00:00:00Z", appleId: "jane.doe@icloud.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.acme.nannycam", name: "Nanny Cam Viewer", seller: "Acme Security", version: "2.1.0", genre: "Utilities", released: "2020-01-01T00:00:00Z", downloaded: "2024-06-01T14:22:00Z", appleId: "unknown-account@outlook.com", contentRating: "4+", subgenre: null },
+  { bundleId: "com.apple.mobilesafari", name: null, seller: null, version: null, genre: null, released: null, downloaded: null, appleId: null, contentRating: null, subgenre: null },
 ];
 
 const mockSnapshotInfo: SnapshotInfo = {
@@ -2881,6 +2948,14 @@ export const mockClient: TraceLoupeClient = {
       : [],
   listContacts: async () => (mockActive ? mockContacts : []),
   listInstalledApps: async () => (mockActive ? mockInstalledApps : []),
+  // A tiny inline SVG per bundle id so the icon-swap path is exercised in dev
+  // (the real command fetches from Apple).
+  getAppIcons: async (bundleIds) =>
+    bundleIds.map((bundleId) => {
+      const hue = [...bundleId].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 0);
+      const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60'><rect width='60' height='60' rx='13' fill='hsl(${hue} 65% 45%)'/><circle cx='30' cy='30' r='12' fill='white' opacity='0.9'/></svg>`;
+      return { bundleId, dataUri: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}` };
+    }),
 
   runSecurityScan: async (kind) => {
     if (!mockActive) throw new Error("no backup is open");
@@ -2922,14 +2997,16 @@ export const mockClient: TraceLoupeClient = {
     models: [
       {
         id: "gemma-4-E4B-it-Q4_K_M",
-        displayName: "Gemma 4 E4B (recommended)",
+        displayName: "Gemma 4 E4B",
+        note: "Best accuracy — the default classifier.",
         sizeBytes: 4_977_171_584,
         installed: mockSafetyModelInstalled,
         recommended: true,
       },
       {
         id: "gemma-4-E2B-it-Q4_K_M",
-        displayName: "Gemma 4 E2B (for 8 GB Macs)",
+        displayName: "Gemma 4 E2B",
+        note: "Lighter fallback — smaller and faster; use it if the larger model is slow or won't load on this Mac.",
         sizeBytes: 3_106_738_272,
         installed: false,
         recommended: false,
@@ -2937,6 +3014,14 @@ export const mockClient: TraceLoupeClient = {
     ],
     readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,
   }),
+  safetyScanHealthCheck: async (modelId) => ({
+    ok: true,
+    modelId: modelId ?? "gemma-4-E4B-it-Q4_K_M",
+    displayName: "Gemma 4 E4B",
+    startupMs: 4200,
+    message: "Server started and Gemma 4 E4B loaded in 4.2s.",
+  }),
+  getSafetyScanDownloadStatus: async () => null,
   downloadSafetyScanModel: async () => {
     mockSafetyModelInstalled = true;
   },
@@ -2998,6 +3083,38 @@ export const mockClient: TraceLoupeClient = {
           ],
         }
       : { scan: null, report: null, threadSummaries: [] },
+  listSafetyScans: async () =>
+    mockActive && mockContentFindings.length
+      ? [
+          {
+            id: 3,
+            rangeStart: Math.floor(new Date(2024, 0, 1).getTime() / 1000),
+            rangeEnd: Math.floor(new Date(2025, 0, 1).getTime() / 1000) - 1,
+            status: "completed" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 3600,
+            finishedAt: Math.floor(Date.now() / 1000) - 3000,
+            findings: 2,
+          },
+          {
+            id: 2,
+            rangeStart: null,
+            rangeEnd: null,
+            status: "cancelled" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 90000,
+            finishedAt: Math.floor(Date.now() / 1000) - 89700,
+            findings: 0,
+          },
+          {
+            id: 1,
+            rangeStart: null,
+            rangeEnd: null,
+            status: "completed" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 200000,
+            finishedAt: Math.floor(Date.now() / 1000) - 199000,
+            findings: 5,
+          },
+        ]
+      : [],
 
   getIndicatorInfo: async () => mockSnapshotInfo,
   updateIndicators: async () => mockSnapshotInfo,

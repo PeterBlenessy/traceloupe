@@ -1,22 +1,15 @@
 import { useCallback, useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { Bookmark, BookOpen, EyeOff, Globe, SquareStack, Trash2 } from "lucide-react";
 import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
-import { Button } from "@/components/ui/button";
+  Item, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
-import { EmptyView, LazyListView, ListSearch } from "@/components/view";
+import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatCount, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
@@ -43,7 +36,6 @@ const EMPTY: Record<SafariType, string> = {
 };
 
 export function SafariView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -137,13 +129,18 @@ export function SafariView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={Globe}
-        title="No backup open"
-        description="Import a backup to see Safari data."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to see Safari activity"
+        lead="The device's web activity — history, bookmarks, reading list, and open tabs — reconstructed from the backup, with each entry opening in your browser."
+        features={[
+          { label: "Search", detail: "Search across all Safari data." },
+          { label: "Filter by type", detail: "Switch between History, Bookmarks, Reading List, and Tabs." },
+          { label: "Time range", detail: "Limit to any date range." },
+          { label: "Sort & detail", detail: "Sort by date, title, or visit count; see folders and Private/Read state." },
+        ]}
+        note="Everything stays on this Mac."
+      />
     );
   }
 

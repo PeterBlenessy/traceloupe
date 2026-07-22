@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog,
@@ -8,14 +9,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { client, type DetectionSettings } from "@/lib/ipc";
 
 /**
- * The two one-time consent prompts (decisions log, CONTEXT.md):
- *  1. Passive Check — asked at first launch after the feature ships.
- *  2. Indicator fetch — asked before the first network fetch of feeds.
- * Each is shown until the corresponding consent leaves "unasked". Both write
- * through DetectionSettings so they never reappear once answered.
+ * One-time Security Check onboarding. A SINGLE dialog with two switches (was
+ * two stacked modals) — the user sets both consents at once, and the choices
+ * are genuinely changeable later in Settings → Security.
  */
 export function ConsentDialogs() {
   const qc = useQueryClient();
@@ -24,103 +24,97 @@ export function ConsentDialogs() {
     queryFn: () => client.getDetectionSettings(),
   });
 
-  async function save(next: DetectionSettings, runPassive: boolean) {
+  // Recommended defaults; the switches are pre-checked so "Save" is the easy path.
+  const [autoCheck, setAutoCheck] = useState(true);
+  const [autoUpdate, setAutoUpdate] = useState(true);
+
+  if (!settings) return null;
+  // Show until both consents have been answered.
+  const open =
+    settings.passiveConsent === "unasked" ||
+    settings.fetchConsent === "unasked";
+  if (!open) return null;
+
+  async function apply(check: boolean, update: boolean) {
+    const next: DetectionSettings = {
+      ...settings!,
+      passiveConsent: check ? "granted" : "denied",
+      passiveEnabled: check,
+      fetchConsent: update ? "granted" : "denied",
+      autoUpdateIndicators: update,
+    };
     await client.setDetectionSettings(next);
     qc.setQueryData(["detectionSettings"], next);
-    if (runPassive) {
+    if (check) {
       await client.runPassiveCheckNow().catch(() => null);
       qc.invalidateQueries({ queryKey: ["scanRuns"] });
       qc.invalidateQueries({ queryKey: ["findings"] });
     }
   }
 
-  if (!settings) return null;
-
-  const askPassive = settings.passiveConsent === "unasked";
-  const askFetch =
-    !askPassive &&
-    settings.autoUpdateIndicators &&
-    settings.fetchConsent === "unasked";
-
   return (
-    <>
-      <Dialog open={askPassive}>
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Check backups for spyware automatically?</DialogTitle>
-            <DialogDescription>
-              TraceLoupe can quietly check each imported backup against public
-              lists of known stalkerware apps, and flag anything it finds in the
-              Security section. It looks only at which apps were installed —
-              nothing about your data leaves your Mac. You can change this any
-              time in Settings.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() =>
-                save({ ...settings, passiveConsent: "denied" }, false)
-              }
-            >
-              Not now
-            </Button>
-            <Button
-              onClick={() =>
-                save(
-                  {
-                    ...settings,
-                    passiveConsent: "granted",
-                    passiveEnabled: true,
-                  },
-                  true,
-                )
-              }
-            >
-              Yes, check automatically
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+    <Dialog open>
+      <DialogContent showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle>Set up Security Check</DialogTitle>
+          <DialogDescription>
+            Security Check compares your backup against public lists of known
+            spyware and stalkerware. Choose how it runs — you can change these
+            anytime in Settings → Security.
+          </DialogDescription>
+        </DialogHeader>
 
-      <Dialog open={askFetch}>
-        <DialogContent showCloseButton={false}>
-          <DialogHeader>
-            <DialogTitle>Keep spyware indicators up to date?</DialogTitle>
-            <DialogDescription>
-              To catch the latest threats, TraceLoupe can fetch updated
-              indicator lists from public security repositories (Amnesty
-              International, the MVT project, and Echap) over HTTPS at the start
-              of a scan. Nothing about you or your backup is ever sent — only the
-              lists are downloaded. You can turn this off in Settings.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() =>
-                save(
-                  {
-                    ...settings,
-                    fetchConsent: "denied",
-                    autoUpdateIndicators: false,
-                  },
-                  false,
-                )
-              }
-            >
-              Use bundled lists only
-            </Button>
-            <Button
-              onClick={() =>
-                save({ ...settings, fetchConsent: "granted" }, false)
-              }
-            >
-              Allow updates
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+        <div className="flex flex-col gap-4 py-2">
+          <label
+            htmlFor="consent-auto-check"
+            className="flex items-start justify-between gap-4"
+          >
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">
+                Check each imported backup automatically
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Looks only at which apps were installed. Nothing about your data
+                leaves your Mac.
+              </span>
+            </span>
+            <Switch
+              id="consent-auto-check"
+              checked={autoCheck}
+              onCheckedChange={setAutoCheck}
+            />
+          </label>
+
+          <label
+            htmlFor="consent-auto-update"
+            className="flex items-start justify-between gap-4"
+          >
+            <span className="space-y-0.5">
+              <span className="block text-sm font-medium">
+                Download the latest indicator lists
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                Fetches updated lists from Amnesty International, the MVT project,
+                and Echap over HTTPS. Only the lists are downloaded.
+              </span>
+            </span>
+            <Switch
+              id="consent-auto-update"
+              checked={autoUpdate}
+              onCheckedChange={setAutoUpdate}
+            />
+          </label>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => apply(false, false)}>
+            Not now
+          </Button>
+          <Button onClick={() => apply(autoCheck, autoUpdate)}>
+            {autoCheck ? "Save & run first check" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

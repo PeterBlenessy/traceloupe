@@ -174,6 +174,17 @@ pub struct AppInfo {
     /// This is the app's original release, not the install/update date (which
     /// the backup doesn't expose) — labelled accordingly in the UI.
     pub released: Option<String>,
+    /// When this copy was downloaded/purchased on the account
+    /// (`com.apple.iTunesStore.downloadInfo` → `purchaseDate`), an RFC-3339
+    /// string. Unlike `released`, this is device-specific — a forensic anchor.
+    pub downloaded: Option<String>,
+    /// The Apple ID (account email) that downloaded the app
+    /// (`…downloadInfo` → `accountInfo` → `AppleID`). Ties an app to a person.
+    pub apple_id: Option<String>,
+    /// App Store age rating label (`rating` → `label`), e.g. "17+".
+    pub content_rating: Option<String>,
+    /// Finer App Store category (`subgenres[0]` → `genre`), e.g. "Social".
+    pub subgenre: Option<String>,
 }
 
 /// Installed apps with their per-app App Store metadata, read from
@@ -238,6 +249,28 @@ pub fn installed_apps_meta(dir: &Path) -> Vec<AppInfo> {
                 app.version = str_field(&md, "bundleShortVersionString");
                 app.genre = str_field(&md, "genre");
                 app.released = str_field(&md, "releaseDate");
+                app.content_rating = md
+                    .get("rating")
+                    .and_then(|v| v.as_dictionary())
+                    .and_then(|r| str_field(r, "label"));
+                app.subgenre = md
+                    .get("subgenres")
+                    .and_then(|v| v.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_dictionary())
+                    .and_then(|d| str_field(d, "genre"));
+                // The purchase/download receipt: which account installed this
+                // copy, and when.
+                let dl = md
+                    .get("com.apple.iTunesStore.downloadInfo")
+                    .and_then(|v| v.as_dictionary());
+                if let Some(dl) = dl {
+                    app.downloaded = str_field(dl, "purchaseDate");
+                    app.apple_id = dl
+                        .get("accountInfo")
+                        .and_then(|v| v.as_dictionary())
+                        .and_then(|a| str_field(a, "AppleID"));
+                }
             }
             app
         })
@@ -408,6 +441,29 @@ mod tests {
             "releaseDate".into(),
             Value::String("2010-10-06T08:12:41Z".into()),
         );
+        // Age rating (nested dict → label) and finer category (subgenres array).
+        let mut rating = Dictionary::new();
+        rating.insert("label".into(), Value::String("12+".into()));
+        md.insert("rating".into(), Value::Dictionary(rating));
+        let mut sub = Dictionary::new();
+        sub.insert("genre".into(), Value::String("Social Networking".into()));
+        md.insert(
+            "subgenres".into(),
+            Value::Array(vec![Value::Dictionary(sub)]),
+        );
+        // The download receipt: purchase date + installing Apple ID.
+        let mut account = Dictionary::new();
+        account.insert("AppleID".into(), Value::String("jane@icloud.com".into()));
+        let mut download = Dictionary::new();
+        download.insert(
+            "purchaseDate".into(),
+            Value::String("2024-03-12T18:41:00Z".into()),
+        );
+        download.insert("accountInfo".into(), Value::Dictionary(account));
+        md.insert(
+            "com.apple.iTunesStore.downloadInfo".into(),
+            Value::Dictionary(download),
+        );
         let mut md_bytes: Vec<u8> = Vec::new();
         Value::Dictionary(md)
             .to_writer_binary(&mut md_bytes)
@@ -447,6 +503,10 @@ mod tests {
         assert_eq!(ig.version.as_deref(), Some("436.0.0"));
         assert_eq!(ig.genre.as_deref(), Some("Photo & Video"));
         assert_eq!(ig.released.as_deref(), Some("2010-10-06T08:12:41Z"));
+        assert_eq!(ig.content_rating.as_deref(), Some("12+"));
+        assert_eq!(ig.subgenre.as_deref(), Some("Social Networking"));
+        assert_eq!(ig.downloaded.as_deref(), Some("2024-03-12T18:41:00Z"));
+        assert_eq!(ig.apple_id.as_deref(), Some("jane@icloud.com"));
         // The system app (in the array, absent from Applications) still appears,
         // with only its bundle id.
         let safari = out

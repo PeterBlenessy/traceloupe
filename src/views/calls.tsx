@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import {
   PhoneCall,
   PhoneIncoming,
@@ -16,13 +15,12 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
-import { Button } from "@/components/ui/button";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { timeGroup, type FilterGroup } from "@/components/filter-groups";
-import { EmptyView, LazyListView, ListSearch } from "@/components/view";
+import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
@@ -30,7 +28,6 @@ import { cn } from "@/lib/utils";
 import { client, type Call, type TimeRange } from "@/lib/ipc";
 
 export function CallsView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -94,9 +91,18 @@ export function CallsView() {
 
   if (active === false) {
     return (
-      <EmptyView icon={PhoneCall} title="No backup open" description="Import a backup to see call history.">
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+      <NoBackupState
+        icon={PhoneCall}
+        title="Open a backup to see call history"
+        lead="Incoming, outgoing, and missed calls — FaceTime and cellular — with durations, timestamps, and the country each number belongs to. Numbers are resolved to saved contacts."
+        features={[
+          { label: "Search", detail: "Search across the whole call log." },
+          { label: "Time range", detail: "Focus on any date range with preset or custom windows." },
+          { label: "Sort", detail: "Order by date, name, or duration." },
+          { label: "At a glance", detail: "Direction and call-type icons plus a country flag on every row." },
+        ]}
+        note="Parsed locally from the backup on this Mac."
+      />
     );
   }
 

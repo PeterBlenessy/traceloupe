@@ -1,8 +1,6 @@
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
 import { Activity, ChevronDown, Droplet, Footprints, Globe, HeartPulse, MapPin, Moon, Trophy } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
@@ -11,7 +9,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
-import { EmptyView, VirtualListView } from "@/components/view";
+import { NoBackupState, VirtualListView } from "@/components/view";
 import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { modelName } from "@/lib/device-names";
@@ -428,7 +426,6 @@ function defineSection<T>(def: SectionDef<T>): SectionDef {
 }
 
 export function HealthView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -794,13 +791,18 @@ export function HealthView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={HeartPulse}
-        title="No backup open"
-        description="Import a backup to see health data."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to explore health data"
+        lead="The Health app's records — workouts, daily activity, sleep, awards, and more — summarized and charted over time. Requires an encrypted backup, the only kind that includes Health data."
+        features={[
+          { label: "Sections", detail: "Switch between Workouts, Daily activity, Sleep, Timezones, Awards, and Cycle tracking." },
+          { label: "Filters", detail: "Filter by activity type and time range within each section." },
+          { label: "Sort", detail: "Order by date, duration, distance, steps, and more." },
+          { label: "Rich detail", detail: "Workout GPS route maps, activity rings, heart-rate ranges, and sleep stages." },
+        ]}
+        note="Everything is processed locally on this Mac."
+      />
     );
   }
 

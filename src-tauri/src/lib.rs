@@ -3393,6 +3393,88 @@ fn proxy_image(url: &str) -> Option<String> {
     Some(format!("data:{mime};base64,{b64}"))
 }
 
+/// One app's fetched App Store artwork, as a self-contained data: URI.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppIcon {
+    bundle_id: String,
+    data_uri: String,
+}
+
+/// Fetch real App Store icons for `bundle_ids` via Apple's public iTunes lookup
+/// API, caching each as a data: URI on disk so it's a one-time cost. Opt-in
+/// (Settings → Apps): this is the only feature that sends data off-device — it
+/// tells Apple which apps a backup contains — so the caller gates it on the
+/// user's setting. Best-effort: apps with no store match are silently skipped
+/// (and negatively cached so they aren't retried every visit).
+#[tauri::command]
+async fn get_app_icons(app: AppHandle, bundle_ids: Vec<String>) -> Result<Vec<AppIcon>, String> {
+    let cache_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("app-icons");
+    let _ = std::fs::create_dir_all(&cache_dir);
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = Vec::new();
+        // Cap per call so a huge app list can't spin up an unbounded fetch storm;
+        // the disk cache means subsequent visits resolve instantly anyway.
+        for id in bundle_ids.iter().take(120) {
+            if let Some(data_uri) = app_icon_cached_or_fetch(&cache_dir, id) {
+                out.push(AppIcon {
+                    bundle_id: id.clone(),
+                    data_uri,
+                });
+            }
+        }
+        out
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// A cached data: URI for `bundle_id`, or a fresh fetch from the iTunes lookup
+/// API. A cached empty file is a negative result (no store match) — respected
+/// so we don't re-hit Apple for it every time.
+fn app_icon_cached_or_fetch(cache_dir: &std::path::Path, bundle_id: &str) -> Option<String> {
+    // Reject anything that isn't a plain bundle id, both to build a safe cache
+    // filename and to keep it out of the query string unescaped.
+    if bundle_id.is_empty()
+        || !bundle_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return None;
+    }
+    let cache_file = cache_dir.join(format!("{bundle_id}.datauri"));
+    if let Ok(s) = std::fs::read_to_string(&cache_file) {
+        return if s.is_empty() { None } else { Some(s) };
+    }
+
+    let url = format!("https://itunes.apple.com/lookup?bundleId={bundle_id}");
+    let Ok((_final, bytes)) = safe_http_get(&url, 1024 * 1024, None) else {
+        // Network/transient error: don't negatively cache — retry next time.
+        return None;
+    };
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let art = parsed["results"]
+        .get(0)
+        .and_then(|r| {
+            r.get("artworkUrl100")
+                .or_else(|| r.get("artworkUrl60"))
+                .or_else(|| r.get("artworkUrl512"))
+        })
+        .and_then(|v| v.as_str());
+    let Some(art) = art else {
+        // Definitive "no store match": negatively cache so we skip it next time.
+        let _ = std::fs::write(&cache_file, b"");
+        return None;
+    };
+    let uri = proxy_image(art)?;
+    let _ = std::fs::write(&cache_file, &uri);
+    Some(uri)
+}
+
 /// Recognize a preview image by magic bytes (only these are embedded).
 fn sniff_image_mime(b: &[u8]) -> Option<&'static str> {
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
@@ -3521,6 +3603,7 @@ pub fn run() {
         .manage(safety_scan_cmd::SafetyScanGate::default())
         .manage(safety_scan_cmd::SafetyDownloadCancel::default())
         .manage(safety_scan_cmd::SafetyDownloadGate::default())
+        .manage(safety_scan_cmd::SafetyDownloadStatus::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of
@@ -3639,6 +3722,7 @@ pub fn run() {
             list_safari_history,
             list_contacts,
             list_installed_apps,
+            get_app_icons,
             list_media,
             media_sources,
             count_media,
@@ -3669,14 +3753,17 @@ pub fn run() {
             deshorten_auto_approve_get,
             deshorten_auto_approve_set,
             safety_scan_cmd::get_safety_scan_model_status,
+            safety_scan_cmd::safety_scan_health_check,
             safety_scan_cmd::download_safety_scan_model,
+            safety_scan_cmd::get_safety_scan_download_status,
             safety_scan_cmd::cancel_safety_scan_model_download,
             safety_scan_cmd::run_safety_scan,
             safety_scan_cmd::cancel_safety_scan,
             safety_scan_cmd::list_content_findings,
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
-            safety_scan_cmd::get_safety_scan_report
+            safety_scan_cmd::get_safety_scan_report,
+            safety_scan_cmd::list_safety_scans
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

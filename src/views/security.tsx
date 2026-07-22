@@ -2,44 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ShieldAlert,
-  ShieldCheck,
-  ShieldQuestion,
-  RefreshCw,
-  Loader2,
-  AlertTriangle,
-  Info,
-  ExternalLink,
-  Download,
-  Link2,
-} from "lucide-react";
+  ShieldAlert, ShieldCheck, ShieldQuestion, RefreshCw, Loader2, AlertTriangle, Info, ExternalLink, Download, Link2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  Card, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, } from "@/components/ui/sheet";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { ViewHeader, EmptyView, ErrorState, ListSkeleton } from "@/components/view";
+import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
+import { useViewToolbar } from "@/components/toolbar-context";
 import { formatListTime } from "@/lib/format";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -184,47 +160,41 @@ export function SecurityView() {
     [info.data],
   );
 
+  // Publish the title to the shared top toolbar (like every other view). The
+  // scan actions live in the content — the toolbar has no actions slot and
+  // they belong next to the indicator status they act on.
+  useViewToolbar(
+    useMemo(
+      () => (enabled ? { title: "Security Check" } : null),
+      [enabled],
+    ),
+  );
+
   if (!enabled) {
     return (
-      <>
-        <ViewHeader title="Security Check" icon={<ShieldAlert className="size-4" />} />
-        <EmptyView
-          icon={ShieldQuestion}
-          title="Open a backup to run a Security Check"
-          description="The Security Check scans an imported iPhone backup for traces of known spyware and stalkerware."
-        />
-      </>
+      <NoBackupState
+        icon={ShieldQuestion}
+        title="Open a backup to run a Security Check"
+        lead="Scans an imported iPhone backup for traces of known spyware and stalkerware, matching it against curated threat feeds — entirely on this Mac."
+        features={[
+          { label: "What it checks", detail: "Installed apps, configuration profiles, and network indicators against known-threat feeds." },
+          { label: "Ranked results", detail: "Findings graded Critical, Warning, or Info, with what matched and where." },
+          { label: "Fresh indicators", detail: "Update the threat feeds, or load your own STIX/YAML indicators." },
+          { label: "Follow through", detail: "Export a report, open each finding in its source view, and see safety guidance." },
+        ]}
+        note="Nothing is uploaded, and the check never modifies the backup."
+      />
     );
   }
 
   const running = scan.isPending;
 
   return (
-    <>
+    // A self-contained flex-col with `h-full`: the Outlet wrapper isn't a flex
+    // column, so the scroll region needs its own bounded-height parent.
+    <div className="flex h-full flex-col">
       <ConsentDialogs />
-      <ViewHeader title="Security Check" icon={<ShieldAlert className="size-4" />}>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => update.mutate()}
-          disabled={update.isPending || running}
-        >
-          <RefreshCw
-            className={cn("size-4", update.isPending && "animate-spin")}
-          />
-          Update indicators
-        </Button>
-        <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
-          {running ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <ShieldAlert className="size-4" />
-          )}
-          {running ? "Scanning…" : "Run scan"}
-        </Button>
-      </ViewHeader>
-
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
           {/* What this is / disclaimer — always visible. */}
           <Alert>
@@ -240,20 +210,41 @@ export function SecurityView() {
             </AlertDescription>
           </Alert>
 
-          {/* Indicator freshness. */}
-          <div className="flex items-center justify-between rounded-lg border px-4 py-2.5 text-sm">
-            <div className="text-muted-foreground">
+          {/* Indicator freshness + the scan actions (which act on it). */}
+          <div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 text-sm">
+            <div className="min-w-0 text-muted-foreground">
               {info.data ? (
                 <>
                   <span className="font-medium text-foreground">
                     {totalIndicators.toLocaleString()}
                   </span>{" "}
                   indicators from {info.data.feeds.length} feeds · updated{" "}
-                  {info.data.generatedAt.slice(0, 10)}
+                  {info.data.generatedAt ? info.data.generatedAt.slice(0, 10) : "—"}
                 </>
               ) : (
                 "Loading indicator feeds…"
               )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => update.mutate()}
+                disabled={update.isPending || running}
+              >
+                <RefreshCw
+                  className={cn("size-4", update.isPending && "animate-spin")}
+                />
+                Update indicators
+              </Button>
+              <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
+                {running ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <ShieldAlert className="size-4" />
+                )}
+                {running ? "Scanning…" : "Run scan"}
+              </Button>
             </div>
           </div>
 
@@ -337,7 +328,7 @@ export function SecurityView() {
       </div>
 
       <FindingDetail finding={selected} onClose={() => setSelected(null)} />
-    </>
+    </div>
   );
 }
 

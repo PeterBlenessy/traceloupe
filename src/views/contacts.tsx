@@ -16,7 +16,6 @@ import {
   Users,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { type BadgeFilterOption } from "@/components/badge-filter";
@@ -25,7 +24,7 @@ import { useSettings } from "@/components/settings-provider";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, type FilterGroup } from "@/components/filter-groups";
-import {
+import { NoBackupState,
   EmptyView,
   ErrorState,
   ListDetail,
@@ -40,7 +39,6 @@ import { client, type Contact } from "@/lib/ipc";
 import { formatDate } from "@/lib/format";
 
 export function ContactsView() {
-  const navigate = useNavigate();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -154,9 +152,18 @@ export function ContactsView() {
 
   if (active === false) {
     return (
-      <EmptyView icon={Users} title="No backup open" description="Import a backup to see contacts.">
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+      <NoBackupState
+        icon={Users}
+        title="Open a backup to see contacts"
+        lead="The device's address book — phone numbers, emails, addresses, social handles, birthdays, and saved photos — laid out in a searchable directory."
+        features={[
+          { label: "Search", detail: "Search by name, organization, phone, or email." },
+          { label: "Filter & sort", detail: "Filter by source and sort by name or organization." },
+          { label: "Cross-linked", detail: "Jump straight to a person's message threads from their card." },
+          { label: "Full card", detail: "See related names, groups, job title, nickname, and notes." },
+        ]}
+        note="Read straight from the backup on this Mac — nothing is uploaded."
+      />
     );
   }
 

@@ -5,7 +5,6 @@ import {
   SafetyFlagBadge,
   useFindingMarks,
 } from "@/components/safety-flag-badge";
-import { useNavigate } from "@tanstack/react-router";
 import {
   ChevronDown,
   ChevronRight,
@@ -39,7 +38,7 @@ import { useTimePresets } from "@/components/time-filter";
 import { type BadgeFilterOption } from "@/components/badge-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, multiBadgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
-import {
+import { NoBackupState,
   EmptyView,
   ErrorState,
   ListDetail,
@@ -169,7 +168,6 @@ function groupNotes(notes: Note[], sort: SortState, now: Date): NoteRowItem[] {
 }
 
 export function NotesView() {
-  const navigate = useNavigate();
   // Subscribe to the clock preference so times re-render on change.
   const { clockFormat } = useSettings();
   const marks = useFindingMarks();
@@ -435,13 +433,18 @@ export function NotesView() {
 
   if (active === false) {
     return (
-      <EmptyView
+      <NoBackupState
         icon={NotebookText}
-        title="No backup open"
-        description="Import a backup to see notes."
-      >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
-      </EmptyView>
+        title="Open a backup to read notes"
+        lead="The Notes app's contents — rich text, checklists, and embedded images — organized just as they were on the device, with locked notes decrypted on demand."
+        features={[
+          { label: "Search", detail: "Search titles, snippets, and folders." },
+          { label: "List or folders", detail: "Browse a dated list or the full folder tree." },
+          { label: "Filters", detail: "Filter by folder, tag, lock state, images, or time range." },
+          { label: "Locked notes", detail: "Unlock password-protected notes to read them." },
+        ]}
+        note="Parsed locally on this Mac; nothing is uploaded."
+      />
     );
   }
 
