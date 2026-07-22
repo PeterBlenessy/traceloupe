@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
@@ -67,6 +67,12 @@ export function SafetyScanView() {
   const { now, presets: basePresets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   const [showDismissed, setShowDismissed] = useState(false);
+  // Immediate feedback for Stop: the backend aborts within ~1s, but reflect the
+  // click at once. Reset when the scan actually clears.
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => {
+    if (!scan) setStopping(false);
+  }, [scan]);
   // Dismissible per-user; the classifier's accuracy is not yet validated on
   // real hardware, so the disclaimer stays until the user acknowledges it.
   const [expDismissed, setExpDismissed] = usePersistedState(
@@ -241,8 +247,20 @@ export function SafetyScanView() {
                   />
                 </div>
                 {running ? (
-                  <Button variant="outline" onClick={cancelScan}>
-                    <Square className="size-4" /> Stop
+                  <Button
+                    variant="outline"
+                    disabled={stopping}
+                    onClick={() => {
+                      setStopping(true);
+                      cancelScan();
+                    }}
+                  >
+                    {stopping ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Square className="size-4" />
+                    )}
+                    {stopping ? "Stopping…" : "Stop"}
                   </Button>
                 ) : (
                   <Button
