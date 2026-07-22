@@ -224,7 +224,7 @@ export function SafetyModelSettings() {
             </Tooltip>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-            The local model starts on demand for each scan and stops when it
+            The local AI starts on demand for each scan and stops when it
             finishes. Run a check to confirm it loads and responds on this Mac.
           </p>
           {health.isPending && (

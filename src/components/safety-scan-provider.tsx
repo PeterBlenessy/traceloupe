@@ -49,7 +49,7 @@ function toastScanError(message: string) {
   const title =
     message.includes("exited during startup") ||
     message.includes("model not installed")
-      ? "Safety Scan couldn't start the local model"
+      ? "Safety Scan couldn't start the local AI"
       : "Safety Scan failed";
   toast.error(title, {
     description: message.split("\n")[0].slice(0, 200),
