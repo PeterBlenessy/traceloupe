@@ -1,5 +1,12 @@
 # Accessing iCloud-offloaded media — research & options
 
+> **Superseded in part (as of v0.29.0).** This spike's claim that "there is no
+> networking code… the app is otherwise fully offline" was true on 2026-07-20 but
+> no longer holds: Security Check fetches indicator feeds, Safety Scan downloads a
+> local model, and an opt-in URL de-shortener exists. Per ADR 0001 the privacy
+> promise is scoped to *backup-derived* data. The iCloud-media analysis below
+> still stands.
+
 **Status:** research spike (branch `research/icloud-offloaded-media`, 2026-07-20)
 **Question:** iOS backup data references media that the device never stored
 locally — Notes embedded images, Messages attachments, iCloud Photos originals.

@@ -2,6 +2,12 @@
 
 *Milestone 1 · de-risk the engine boundary before building the import pipeline.*
 
+> **Historical.** This spike is from the 0.1–0.2 MVP, when iLEAPP was the runtime
+> parsing engine. **iLEAPP was removed as a runtime engine at v0.7.0** — imports
+> are now fully native Rust, and iLEAPP is a development-time reference only. The
+> findings and decisions below (e.g. hosting our own frozen iLEAPP build) are
+> kept as a record of that era.
+
 This records what we verified by running iLEAPP against a synthetic encrypted
 backup, and the decisions that follow. Reproduce it with the commands in
 [§ Reproducing](#reproducing).
