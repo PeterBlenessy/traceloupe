@@ -11,7 +11,7 @@ fresh Rust (provenance: reference, architecture §10).
 ## Steps
 
 0. **Select + scout.** If no app is named (e.g. under `/loop`), pick the next one
-   from `docs/app-support.md` — highest-value app not yet ✅ native with a clean
+   from `docs/reference/app-support.md` — highest-value app not yet ✅ native with a clean
    groupable store; skip ⚪ (no local store) and defer machinery-heavy ones. Then
    read the iLEAPP module (`engine/iLEAPP/scripts/artifacts/<app>*.py`); confirm a
    thread key + per-message author; note from `sample_data` which public test
@@ -25,14 +25,14 @@ fresh Rust (provenance: reference, architecture §10).
    (Hickman/CTF — no need for the app in your own backup), diff, and keep a real
    fixture. Only then drop the "unvalidated" caveat.
 4. **Commit.**
-4b. **Commit + MINOR release** — mark ✅ in `docs/app-support.md`, bump the minor
+4b. **Commit + MINOR release** — mark ✅ in `docs/reference/app-support.md`, bump the minor
    version (`0.6.0`), CHANGELOG + tag `vX.Y.0`, push. One app = one minor release.
 5. **Correctness review loop** — subagent review, varying the lens each round; fix
    real findings; each fix round is a **PATCH release** (`vX.Y.1`, `vX.Y.2`…). Keep
    iterating **until a round finds nothing** (min 2 rounds), not just twice.
 5b. **Completeness review** — objectively (vs the schema + iLEAPP) list every field
    the app stores as surfaced ✅ / not-surfaced ⬜ / not-in-backup —, and record it
-   in `docs/app-data-coverage.md`. Implement a gap now only if high-value + cheap
+   in `docs/reference/app-data-coverage.md`. Implement a gap now only if high-value + cheap
    (a patch); else leave a ⬜ follow-up. Doesn't block release — correctness does.
 5c. **UI/UX check** — usually a no-op (apps add no UI; they flow into the shared
    Messages view). Only when the app brings a *new rendering shape* (no sender,

@@ -16,6 +16,20 @@ and `license-checker` (npm).
   or its Python dependencies. This acknowledgment is a courtesy, not a license
   obligation.
 
+## Parser provenance policy
+
+TraceLoupe's data parsers follow the parser-provenance rules in
+`docs/architecture.md` §10:
+
+- Native parsers written from reverse-engineered facts ("reference" provenance)
+  carry no third-party notice and are not listed here.
+- Any parser ported from iLEAPP or another project ("port" provenance) must add
+  the upstream copyright line and license text to this file, and mark its source
+  header `// provenance: port of <module> — see THIRD-PARTY-NOTICES.md`.
+
+No parsers are currently ported — all are clean-room "reference" implementations,
+so there are no port entries.
+
 ## Rust (application core)
 
 - **Tauri** and plugins — MIT OR Apache-2.0 — https://tauri.app

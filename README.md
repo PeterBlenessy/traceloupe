@@ -4,8 +4,9 @@ A privacy-first macOS app that opens, decrypts, and lets you browse the
 contents of your own iPhone backup — photos, messages, contacts, calls,
 Safari history, and Notes. All processing is local; nothing leaves your Mac.
 
-- **Product description:** [product-architecture-description.md](product-architecture-description.md)
-- **Architecture:** [architecture.md](architecture.md)
+- **Product description:** [docs/product-architecture-description.md](docs/product-architecture-description.md)
+- **Architecture:** [docs/architecture.md](docs/architecture.md)
+- **All documentation:** [docs/](docs/)
 
 ## Layout
 
@@ -26,7 +27,7 @@ pnpm dev              # frontend only, in a browser with mocked IPC
 `llama-server` as a sandboxed sidecar. For local runs, `pnpm setup:llama`
 stages a pre-built binary; a release `.app` builds it statically from source
 (`pnpm build:llama`). The dev/prod split and the sandbox are documented in
-[docs/safety-scan-sidecar.md](docs/safety-scan-sidecar.md).
+[docs/reference/safety-scan-sidecar.md](docs/reference/safety-scan-sidecar.md).
 
 **Imports are fully native.** TraceLoupe parses backups with its own Rust
 parsers (~35s for a full import) — no iLEAPP, no Python, no engine download,
@@ -34,8 +35,8 @@ and no network access required. iLEAPP is used only as a *development-time
 reference* for cross-checking those native parsers: `pnpm setup:engine`
 installs a pinned iLEAPP + Python venv into the git-ignored `./engine`, which
 you only need if you're diffing a parser against iLEAPP's output. See
-`docs/native-app-parser.md` for the parser workflow and `docs/spike-ileapp.md`
-for the history.
+`docs/reference/native-app-parser.md` for the parser workflow and
+`docs/research/spike-ileapp.md` for the history.
 
 ## License
 

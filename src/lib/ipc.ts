@@ -578,7 +578,7 @@ export interface DetectionSettings {
 
 // --- Safety Scan types (ADR 0002) ---
 
-/** The Forensic 9 category slugs (CONTEXT.md). */
+/** The Forensic 9 category slugs (docs/CONTEXT.md). */
 export type ContentCategory =
   | "threat-violence"
   | "harassment-bullying"

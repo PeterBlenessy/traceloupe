@@ -84,7 +84,7 @@ JSON responses.
 
 1. **Cache is PARTIAL and EPHEMERAL** — it holds only what was recently fetched
    and not yet evicted, not the full conversation. Never present it as complete.
-   Note the coverage limit in `docs/app-data-coverage.md`.
+   Note the coverage limit in `docs/reference/app-data-coverage.md`.
 2. **Dedup** — the same message can appear in multiple cached responses (paginated
    fetches overlap). Dedup by the app's message id, not by cache entry.
 3. **`isDataOnFS`** — half the bodies are on disk in `fsCachedData`; a reader that

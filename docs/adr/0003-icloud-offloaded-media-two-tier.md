@@ -26,7 +26,7 @@ offer **two tiers**, on top of a risk-free local Phase 1:
 - **Sanctioned CloudKit Web Services cannot reach Apple's first-party
   Notes/Photos/Messages containers** — verified dead end. The only programmatic
   routes to this data are the sanctioned *export* (T1) or the *private* protocol
-  (T2). See `docs/icloud-offloaded-media-research.md`.
+  (T2). See `docs/research/icloud-offloaded-media-research.md`.
 - **The real risk of T2 is automated account lockout, not legal action.** Apple
   has no track record of pursuing individuals for own-account use, but tool-driven
   access "usually" trips an automated security lock (recoverable). That concrete,

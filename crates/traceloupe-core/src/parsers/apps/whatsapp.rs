@@ -15,7 +15,7 @@
 //! author, so in a GROUP chat every inbound message is attributed to the session
 //! partner (the real author lives in a member/jid table, e.g. `ZGROUPMEMBER`).
 //! 1:1 attribution is correct. Resolving group members needs validation against a
-//! real backup — tracked in docs/app-data-coverage.md.
+//! real backup — tracked in docs/reference/app-data-coverage.md.
 
 use std::path::Path;
 

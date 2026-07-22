@@ -1,5 +1,5 @@
 //! Analysis store: the per-backup sidecar SQLite DB (`analysis.db`) for Safety
-//! Scan (CONTEXT.md §Safety Scan, ADR 0002, docs/safety-scan-plan.md T3).
+//! Scan (docs/CONTEXT.md §Safety Scan, ADR 0002, docs/plans/safety-scan-plan.md T3).
 //!
 //! Lives beside the parse cache (`caches/<backup_id>/analysis.db`) but has a
 //! deliberately separate lifecycle: re-import atomically replaces `cache.db`,
@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_scan ON audit_log(scan_id, at);
 "#;
 
-/// The Forensic 9 taxonomy (CONTEXT.md). Slugs are the wire/storage format.
+/// The Forensic 9 taxonomy (docs/CONTEXT.md). Slugs are the wire/storage format.
 /// `Ord` follows declaration order, used only to key eval score maps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {

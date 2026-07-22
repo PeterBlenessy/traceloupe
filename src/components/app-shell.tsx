@@ -747,7 +747,7 @@ function SettingsMenu() {
                 description={
                   biometricAvailable
                     ? "Ask for Touch ID before unlocking an encrypted backup's keys."
-                    : "Unavailable on an unsigned build — sign the app (docs/signing.md) to use Touch ID."
+                    : "Unavailable on an unsigned build — sign the app (docs/reference/signing.md) to use Touch ID."
                 }
               >
                 <Switch

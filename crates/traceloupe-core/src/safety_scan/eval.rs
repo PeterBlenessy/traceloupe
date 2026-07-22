@@ -10,7 +10,7 @@
 //!   the fixtures and returns per-category precision/recall. The
 //!   `eval_against_live_model` test drives a running llama-server when
 //!   `TRACELOUPE_EVAL_MODEL` points at a GGUF; it is `#[ignore]` so CI skips
-//!   it. See `docs/safety-scan-validation.md`.
+//!   it. See `docs/validation/safety-scan-validation.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
 

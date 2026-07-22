@@ -217,7 +217,7 @@ Rationale: keeps licensing clean (no copyleft linking), isolates crashes, and le
 
 **Sidecar acquisition — download-on-first-use, not bundled.** The iLEAPP sidecar is not shipped inside the app bundle. On first import, the app downloads a **pinned, re-frozen iLEAPP build** (hosted as our own release asset — see note), verifies its SHA-256 against a checksum pinned in the app, stores it under Application Support, and runs it from there. The download is shown to the user with version and source information before it happens. Rationale: keeps the .app small, avoids notarizing a frozen Python blob inside our bundle, and lets the pinned iLEAPP version be bumped without an app release. The pin matters because `_lava_artifacts.db` is not a stable public API — the core's normalizer is written against a specific iLEAPP version. A settings escape hatch lets power users point at their own iLEAPP binary instead. Cost: the first import requires network access — a one-time, user-visible exception to the otherwise fully-offline operation.
 
-> **Note (Milestone 1 spike finding).** The upstream `ileapp-…-macOS_Apple_Silicon` release binary for v2026.1.0 is broken — it crashes on startup with a Pillow `ImageDraw` import error from its PyInstaller freeze, before parsing anything. Running iLEAPP from a source checkout works. We therefore host our **own** re-frozen iLEAPP build (upstream source, our freeze with Pillow correctly bundled) as the pinned download, rather than depending on upstream's macOS asset. This also strengthens the SHA-pinning story: the download source is under our control. See `docs/spike-ileapp.md`.
+> **Note (Milestone 1 spike finding).** The upstream `ileapp-…-macOS_Apple_Silicon` release binary for v2026.1.0 is broken — it crashes on startup with a Pillow `ImageDraw` import error from its PyInstaller freeze, before parsing anything. Running iLEAPP from a source checkout works. We therefore host our **own** re-frozen iLEAPP build (upstream source, our freeze with Pillow correctly bundled) as the pinned download, rather than depending on upstream's macOS asset. This also strengthens the SHA-pinning story: the download source is under our control. See `docs/research/spike-ileapp.md`.
 
 > **MVP decryption (spike finding).** iLEAPP decrypts encrypted backups itself via `--itunes_password` (full keybag → per-file AES path). So the MVP needs **no** native Decryptor; the Decryptor and Manifest Index (§5) are Phase-2-only.
 
@@ -250,9 +250,9 @@ Rationale: keeps licensing clean (no copyleft linking), isolates crashes, and le
 
 **Rules for this project.**
 - Prefer (1). It keeps the codebase free of copied source and attribution obligations, and makes the eventual pure-Rust parsers genuinely ours.
-- Where (2) is unavoidable, add the iLEAPP copyright notice and MIT permission text to a `THIRD-PARTY-NOTICES` file. MIT is permissive but **not** obligation-free — the notice must travel with distribution.
+- Where (2) is unavoidable, add the iLEAPP copyright notice and MIT permission text to a `THIRD-PARTY-NOTICES.md` file. MIT is permissive but **not** obligation-free — the notice must travel with distribution.
 - Verify the license **per module**, not once. iLEAPP is MIT overall, but it is community-contributed; a specific parser could carry a different header or contain lifted logic. Check the actual file being learned from.
-- Record the chosen path in each parser's source header (e.g. `// provenance: reference (own implementation)` or `// provenance: port of iLEAPP <module> — see THIRD-PARTY-NOTICES`).
+- Record the chosen path in each parser's source header (e.g. `// provenance: reference (own implementation)` or `// provenance: port of iLEAPP <module> — see THIRD-PARTY-NOTICES.md`).
 
 ## 11. Data stores
 

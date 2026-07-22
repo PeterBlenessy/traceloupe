@@ -459,7 +459,7 @@ mod tests {
     fn bundled_binary_name_is_target_scoped() {
         // The sidecar name Tauri's externalBin produces per target. The full
         // resolve_binary() flow (next to current_exe, dev-only fallbacks) is
-        // exercised by a real bundled build — see docs/safety-scan-plan.md.
+        // exercised by a real bundled build — see docs/plans/safety-scan-plan.md.
         let name = bundled_binary_name();
         assert!(name.starts_with("llama-server-"));
         assert!(name.ends_with("-apple-darwin"));

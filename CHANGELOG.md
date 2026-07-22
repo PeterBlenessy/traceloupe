@@ -93,7 +93,7 @@ Mac.
 - **Security Check polish.** The external threat feeds are explained (who
   they're from, what STIX/YAML are, with links); the de-shortener risk reads as
   a warning callout; a dead setting was removed.
-- **Every button has a tooltip.** A new project rule (AGENTS.md + `docs/ui.md`),
+- **Every button has a tooltip.** A new project rule (AGENTS.md + `docs/reference/ui.md`),
   with the existing `title=` buttons swept onto the shadcn Tooltip.
 
 ### Fixed
@@ -183,7 +183,7 @@ Tier-B surface: the domains an app's in-app browser (WebKit) contacted.
   `observations.db` is located via the Manifest index and parsed. Passive Check
   unaffected.
 - Validated against the real dev backup: 2,692 observed domains extracted across
-  34 apps, zero indicator matches (clean). See `docs/security-check-validation.md`.
+  34 apps, zero indicator matches (clean). See `docs/validation/security-check-validation.md`.
 
 With WebKit, every MVT iOS module that matches an indicator class our feeds
 carry is now covered by a shipped module — **M2 Tier-B is complete.**
@@ -205,7 +205,7 @@ vector.
   grants — now plus shortcuts) are grouped into one `ScanInputs` struct,
   replacing a growing positional-argument list.
 - Validated against the real dev backup: 46 shortcuts extracted (44 reference a
-  host), zero indicator matches (clean). See `docs/security-check-validation.md`.
+  host), zero indicator matches (clean). See `docs/validation/security-check-validation.md`.
 
 ## [0.23.0] — 2026-07-21
 
@@ -227,7 +227,7 @@ permissions against the stalkerware bundle-id lists.
   best-effort. Passive Check unaffected.
 - Validated against the real dev backup: 116 grants across 67 apps extracted,
   zero stalkerware matches (clean); the positive path is covered by unit tests.
-  See `docs/security-check-validation.md`.
+  See `docs/validation/security-check-validation.md`.
 
 ## [0.22.0] — 2026-07-20
 
@@ -250,7 +250,7 @@ profile can grant broad control over the device).
   unaffected.
 - Validated against the real dev backup: the one installed profile (a legitimate
   university printer profile) is parsed correctly and surfaced as a single Info
-  review finding — no false alarm. See `docs/security-check-validation.md`.
+  review finding — no false alarm. See `docs/validation/security-check-validation.md`.
 
 ## [0.21.0] — 2026-07-20
 
@@ -272,7 +272,7 @@ against process-name indicators.
 - Validated against the real dev backup: 1,825 processes extracted, no mercenary
   process-name matches; the bundle-name cross-check independently re-surfaced the
   known Kaspersky Safe Kids watchware (Info) found in M1. See
-  `docs/security-check-validation.md`.
+  `docs/validation/security-check-validation.md`.
 
 ## [0.20.0] — 2026-07-20
 
@@ -305,14 +305,14 @@ Echap stalkerware feed).
 - **Privacy (ADR 0001).** Backup-derived data never leaves the machine; feed
   fetches are disclosed, setting-governed, send-nothing operational traffic.
 
-Validated against `mvt-ios check-backup` (see `docs/security-check-validation.md`):
+Validated against `mvt-ios check-backup` (see `docs/validation/security-check-validation.md`):
 every indicator class MVT matches from these feeds is covered by a shipped
 module; the rest maps to the named M2 (Tier B) scope.
 
 ## [0.19.0] — 2026-07-20
 
 **Data-coverage close-out.** The last field-level items, and a line drawn under
-the coverage effort (see `docs/app-data-coverage.md`). Requires a re-import to
+the coverage effort (see `docs/reference/app-data-coverage.md`). Requires a re-import to
 populate for existing caches.
 
 ### Added
@@ -824,7 +824,7 @@ parameters are cached, and the plaintext is derived on demand and discarded.
 
 Follows the 0.9.0 coverage audit by **surfacing the untapped stores** it flagged —
 five new views plus deeper decoding of Messages and Notes. See
-[`docs/app-data-coverage.md`](docs/app-data-coverage.md) for the field-level
+[`docs/reference/app-data-coverage.md`](docs/reference/app-data-coverage.md) for the field-level
 inventory.
 
 ### Added
@@ -861,7 +861,7 @@ inventory.
 A **data-coverage pass**: a field-level audit of the real backup (parser →
 cache → query → UI) followed by filling every high-value, tractable gap it
 found. Each item below is verified end-to-end. See
-[`docs/app-data-coverage.md`](docs/app-data-coverage.md) for the full inventory
+[`docs/reference/app-data-coverage.md`](docs/reference/app-data-coverage.md) for the full inventory
 and the remaining (large-feature / password-blocked) gaps.
 
 ### Added
@@ -1165,8 +1165,8 @@ and the long tail), so this is the first batch of the migration, not its end.
     the automatic iLEAPP fallback.
 - **NSKeyedArchiver decoder** (`crate::nska`) — resolves Apple keyed-archive
   blobs (used by Instagram DMs); a reusable, standalone iOS-forensics primitive.
-- **Living coverage docs** — `docs/app-support.md` (native vs iLEAPP per app) and
-  `docs/app-data-coverage.md` (field-level: what each DB holds vs. what we
+- **Living coverage docs** — `docs/reference/app-support.md` (native vs iLEAPP per app) and
+  `docs/reference/app-data-coverage.md` (field-level: what each DB holds vs. what we
   surface). Includes research notes on Snapchat / X / Facebook local stores.
 
 ### Fixed
@@ -1214,7 +1214,7 @@ the batched 0.3.0+ migration under "Planned" below.
   temp-cache swap).
 - **Touch ID (opt-in) + signing detection.** An encrypted backup's Keychain
   password can be gated behind Touch ID; the app detects whether it's stably
-  signed and enables the toggle accordingly (see `docs/signing.md`).
+  signed and enables the toggle accordingly (see `docs/reference/signing.md`).
 
 ### Notes & caveats
 - Native Messages/Notes/Recordings/Camera-roll run *in addition to* iLEAPP's
@@ -1230,8 +1230,8 @@ third-party, is parsed by an in-house Rust parser, and iLEAPP is no longer run a
 all (kept only as a development-time schema reference; the sidecar path is
 dormant). The earlier "make iLEAPP optional, in batches" plan has therefore been
 fully delivered and superseded; the remaining backlog is about *depth*, not
-removing iLEAPP. Tracked in detail in [`docs/app-data-coverage.md`](docs/app-data-coverage.md)
-(field-level) and [`docs/app-support.md`](docs/app-support.md) (per-app).
+removing iLEAPP. Tracked in detail in [`docs/reference/app-data-coverage.md`](docs/reference/app-data-coverage.md)
+(field-level) and [`docs/reference/app-support.md`](docs/reference/app-support.md) (per-app).
 
 - **Field-level coverage gaps** — the highest-value unsurfaced fields: Messages
   full per-edit history (`message_summary_info`) and group-action rows; Notes

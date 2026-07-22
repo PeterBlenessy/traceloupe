@@ -32,3 +32,6 @@ target
 # agent worktrees (isolated review/dev copies)
 .claude/worktrees/
 *.bak
+
+# Claude Code runtime state
+.claude/scheduled_tasks.lock

@@ -52,7 +52,7 @@ iLEAPP key); it would only re-activate if a future long-tail module opted in.
 
 ## Third-party apps
 
-Tiers mirror the roadmap (`product-architecture-description.md` §13.1), ordered by
+Tiers mirror the roadmap (`docs/product-architecture-description.md` §13.1), ordered by
 prevalence × local-data richness × parse feasibility. Native rollout is by
 **scheduled batch, not strict tier order** — an app can be pulled forward.
 

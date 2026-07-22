@@ -82,7 +82,7 @@ force.
   the shared checkout happens to be sitting on.
 - **Don't reinvent shared components; build on what's in flight.** Before writing
   a new view, a UI control, or a shared helper, check whether it already exists:
-  grep `src/components/`, and read the relevant doc (**`docs/ui.md`** for anything
+  grep `src/components/`, and read the relevant doc (**`docs/reference/ui.md`** for anything
   with a header, filter, sort, search, or a new view). Then `git fetch` and skim
   `origin/main` **and open PRs** (`gh pr list`) for related work — a big pattern
   may be mid-migration on another branch, and you want to adopt/extend it, not
@@ -147,7 +147,7 @@ create a worktree instead.
 ## Project-specific notes
 
 - Stack: Tauri + Rust (`crates/traceloupe-core`, `src-tauri`) + React (`src/`).
-- **UI / views: read `docs/ui.md` before building or changing any view.** Every
+- **UI / views: read `docs/reference/ui.md` before building or changing any view.** Every
   view surfaces its title, filters, sort and search through ONE shared top toolbar
   (`useViewToolbar`) — there are no per-view header bars. Don't hand-roll headers,
   filter popovers, time pickers, or pill rows: the shared components already cover
@@ -157,14 +157,14 @@ create a worktree instead.
   `Tooltip` (`components/ui/tooltip.tsx`); icon-only buttons especially, and a
   disabled button's tooltip must say *why* it's disabled. The app is already
   inside a `TooltipProvider`, so no wiring is needed. See "Buttons always have a
-  tooltip" in `docs/ui.md`.
+  tooltip" in `docs/reference/ui.md`.
 - Verify a change builds the **binary**, not just `cargo check`:
   `cargo test -p traceloupe-core && cargo build -p traceloupe && pnpm exec tsc --noEmit`.
 - Parser changes need a **re-import** to populate existing caches (the cache
   migration only creates the empty structures; bump `SCHEMA_VERSION` in
   `crates/traceloupe-core/src/cache.rs`).
-- Domain glossary: `CONTEXT.md`. Field-level data-coverage roadmap:
-  `docs/app-data-coverage.md`.
+- Domain glossary: `docs/CONTEXT.md`. Field-level data-coverage roadmap:
+  `docs/reference/app-data-coverage.md`.
 - **Cutting a release: follow [`RELEASING.md`](RELEASING.md).** Never bump the
   version by hand-editing one manifest — run `scripts/release.sh X.Y.Z` (bumps
   `package.json` + workspace `Cargo.toml` + `tauri.conf.json` + `Cargo.lock`

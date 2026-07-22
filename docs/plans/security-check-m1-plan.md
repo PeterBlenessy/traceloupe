@@ -1,6 +1,6 @@
 # Security Check — M1 implementation plan
 
-Executable breakdown of PRD milestone M1 (`docs/spyware-analyzer-prd.md` §7). Tasks are dependency-ordered; each has acceptance criteria (AC). Terms per `CONTEXT.md`; privacy rules per ADR 0001. All work happens on `feature/spyware-analyzer`.
+Executable breakdown of PRD milestone M1 (`docs/plans/spyware-analyzer-prd.md` §7). Tasks are dependency-ordered; each has acceptance criteria (AC). Terms per `docs/CONTEXT.md`; privacy rules per ADR 0001. All work happens on `feature/spyware-analyzer`.
 
 **Definition of done for every task:** implemented → unit/integration tests green → verified against the real dev backup (`~/.traceloupe-dev` mirror where applicable) → committed and pushed.
 
