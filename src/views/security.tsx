@@ -174,7 +174,7 @@ export function SecurityView() {
     return (
       <NoBackupState
         icon={ShieldQuestion}
-        title="Open a backup to run a Security Check"
+        title="Run a Security Check"
         lead="Scans an imported iPhone backup for traces of known spyware and stalkerware, matching it against curated threat feeds — entirely on this Mac."
         features={[
           { label: "What it checks", detail: "Installed apps, configuration profiles, and network indicators against known-threat feeds." },

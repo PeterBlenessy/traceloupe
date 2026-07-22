@@ -308,10 +308,11 @@ export function EmptyView({
 
 /**
  * The rich "no backup open" state every content view shows before a backup is
- * loaded. Doubles as onboarding: an action-oriented title, a lead paragraph, a
- * grid of the capabilities the view offers (search, filters, time range…), a
- * privacy note, and a one-click CTA back to the backup picker. Kept here so all
- * views stay consistent by construction. See docs/ui.md.
+ * loaded. Doubles as onboarding: it leads with the VALUE — a value title, a lead
+ * paragraph, a grid of capabilities, a privacy note — and only then, as a helper
+ * line on the CTA, asks the user to open a backup. (Leading with "open a backup"
+ * front-loads a chore before any value.) Kept here so all views stay consistent
+ * by construction. See docs/ui.md.
  */
 export function NoBackupState({
   icon: Icon,
@@ -319,9 +320,11 @@ export function NoBackupState({
   lead,
   features,
   note,
+  cta = "You'll need to open an iPhone backup to get started — TraceLoupe reads it once, then everything above is here.",
 }: {
   icon: React.ComponentType<{ className?: string }>;
-  /** Action/value title, e.g. "Open a backup to browse photos & videos". */
+  /** Value title — what the view gives you, NOT "Open a backup to …"
+   *  (e.g. "Browse photos & videos"). The backup ask lives in `cta`. */
   title: string;
   /** One or two sentences on what the view is. */
   lead: string;
@@ -329,6 +332,9 @@ export function NoBackupState({
   features?: { label: string; detail: string }[];
   /** Closing line, typically the local/privacy assurance. */
   note?: string;
+  /** The helper line directly above the "Choose a backup" button — where the
+   *  "open a backup" ask belongs, tied to the action rather than the headline. */
+  cta?: string;
 }) {
   const navigate = useNavigate();
   return (
@@ -360,7 +366,10 @@ export function NoBackupState({
             {note}
           </p>
         )}
-        <div className="mt-6">
+        <p className="mx-auto mt-8 max-w-prose text-sm text-muted-foreground">
+          {cta}
+        </p>
+        <div className="mt-3">
           <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
         </div>
       </div>

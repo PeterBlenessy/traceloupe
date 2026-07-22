@@ -131,7 +131,7 @@ export function SafariView() {
     return (
       <NoBackupState
         icon={Globe}
-        title="Open a backup to see Safari activity"
+        title="See Safari activity"
         lead="The device's web activity — history, bookmarks, reading list, and open tabs — reconstructed from the backup, with each entry opening in your browser."
         features={[
           { label: "Search", detail: "Search across all Safari data." },

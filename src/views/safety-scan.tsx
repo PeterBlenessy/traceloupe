@@ -177,7 +177,7 @@ export function SafetyScanView() {
     return (
       <NoBackupState
         icon={ShieldUser}
-        title="Open a backup to run a Safety Scan"
+        title="Run a Safety Scan"
         lead="A local AI reads messages and notes and flags possible harmful content — a prompt to review conversations yourself, not a verdict."
         features={[
           { label: "Categories", detail: "Threats, harassment, grooming, self-harm, coercive control, scams, and more." },

@@ -435,7 +435,7 @@ export function NotesView() {
     return (
       <NoBackupState
         icon={NotebookText}
-        title="Open a backup to read notes"
+        title="Read notes"
         lead="The Notes app's contents — rich text, checklists, and embedded images — organized just as they were on the device, with locked notes decrypted on demand."
         features={[
           { label: "Search", detail: "Search titles, snippets, and folders." },

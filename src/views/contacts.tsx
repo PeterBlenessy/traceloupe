@@ -154,7 +154,7 @@ export function ContactsView() {
     return (
       <NoBackupState
         icon={Users}
-        title="Open a backup to see contacts"
+        title="See contacts"
         lead="The device's address book — phone numbers, emails, addresses, social handles, birthdays, and saved photos — laid out in a searchable directory."
         features={[
           { label: "Search", detail: "Search by name, organization, phone, or email." },

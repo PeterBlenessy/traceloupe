@@ -793,7 +793,7 @@ export function HealthView() {
     return (
       <NoBackupState
         icon={HeartPulse}
-        title="Open a backup to explore health data"
+        title="Explore health data"
         lead="The Health app's records — workouts, daily activity, sleep, awards, and more — summarized and charted over time. Requires an encrypted backup, the only kind that includes Health data."
         features={[
           { label: "Sections", detail: "Switch between Workouts, Daily activity, Sleep, Timezones, Awards, and Cycle tracking." },
