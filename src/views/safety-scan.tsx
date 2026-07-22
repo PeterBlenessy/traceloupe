@@ -165,7 +165,6 @@ export function SafetyScanView() {
     preferredModelId && installedIds.includes(preferredModelId)
       ? preferredModelId
       : ms.readyModelId;
-  const effectiveModel = ms.models.find((m) => m.id === effectiveModelId);
 
   return (
     <div className="flex h-full flex-col">
@@ -202,10 +201,10 @@ export function SafetyScanView() {
           // One stable card — a running scan shows its progress inline below the
           // button rather than swapping the whole box (which was jumpy).
           <Card>
+            {/* No card title — the view is already titled "Safety Scan" in the
+                toolbar, and a "Run a scan" heading next to the Start button read
+                as a second button. */}
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Play className="size-4" /> Run a scan
-              </CardTitle>
               <CardDescription>
                 The scan runs entirely on this Mac: a local model reads your
                 messages and notes in small windows and flags possible threats,
@@ -216,31 +215,31 @@ export function SafetyScanView() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              {/* The same Filter popover the toolbars use: click to pick a time
-                  window (empty periods shown but disabled). Right-aligned so its
-                  leftward-morphing popover stays inside the content area. */}
-              <div
-                className={cn(
-                  "flex items-center justify-end gap-2",
-                  running && "pointer-events-none opacity-60",
-                )}
-              >
-                <Label className="text-xs text-muted-foreground">
-                  Time range
-                </Label>
-                <FilterControl
-                  groups={[
-                    timeGroup({
-                      description: "Which messages and notes to scan, by date",
-                      presets,
-                      counts: presetCounts,
-                      value: range,
-                      onChange: setRange,
-                    }),
-                  ]}
-                />
-              </div>
               <div className="flex flex-wrap items-center gap-3">
+                {/* Time range left of the button (same row); the Filter popover
+                    morphs rightward so it opens into the card, not the sidebar. */}
+                <div
+                  className={cn(
+                    "flex items-center gap-2",
+                    running && "pointer-events-none opacity-60",
+                  )}
+                >
+                  <Label className="text-xs text-muted-foreground">
+                    Time range
+                  </Label>
+                  <FilterControl
+                    align="right"
+                    groups={[
+                      timeGroup({
+                        description: "Which messages and notes to scan, by date",
+                        presets,
+                        counts: presetCounts,
+                        value: range,
+                        onChange: setRange,
+                      }),
+                    ]}
+                  />
+                </div>
                 {running ? (
                   <Button variant="outline" onClick={cancelScan}>
                     <Ban className="size-4" /> Stop
@@ -251,7 +250,7 @@ export function SafetyScanView() {
                       void startScan({
                         modelId: effectiveModelId,
                         rangeStart: range.lo,
-                        // TimeFilterBar's hi is exclusive; the scan range end is
+                        // timeGroup's hi is exclusive; the scan range end is
                         // inclusive, so step back one second.
                         rangeEnd: range.hi != null ? range.hi - 1 : null,
                       })
@@ -260,14 +259,6 @@ export function SafetyScanView() {
                     <Play className="size-4" /> Start Safety Scan
                   </Button>
                 )}
-                <span className="text-xs text-muted-foreground">
-                  Model: {effectiveModel?.displayName}
-                  {effectiveModel &&
-                    !effectiveModel.recommended &&
-                    " (fallback)"}
-                  {installedIds.length >= 2 &&
-                    " · change in Settings → Safety"}
-                </span>
               </div>
               {running && scan && <ScanProgress scanEvent={scan} />}
             </CardContent>
