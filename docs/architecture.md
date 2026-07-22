@@ -2,12 +2,16 @@
 
 *Working codename: TraceLoupe · Companion to the Product & Architecture Description*
 
-> **Status update (0.7.0+).** iLEAPP was removed as a runtime engine — all
-> imports are native Rust (~35s), fully offline, with no engine download. The
-> sidecar/download machinery described below (§6, §9 acquisition, and the §11
-> tables) is dormant and dev-reference only; it describes the historical
-> 0.1–0.2 MVP. The parser-provenance rules in §10 remain the governing policy.
-> This document is otherwise frozen at the 0.2.0 design.
+> **Current as of v0.29.0.** Imports are fully native Rust (~35s per backup,
+> offline) and decryption is native, manifest-indexed, and on-demand. iLEAPP was
+> retired as a runtime engine at v0.7.0 and is now a *development-time reference
+> only* — cross-checking native parsers, never run, downloaded, or bundled. The
+> **iLEAPP-sidecar import** described in §6 and the sidecar-acquisition machinery
+> in §9 were the **retired 0.1–0.2 MVP** and are kept here as history; they are
+> clearly marked. The only sidecar that runs today is the Safety Scan
+> `llama-server` (§9). The parser-provenance rules in §10 remain the governing
+> policy for how iLEAPP may inform a native parser. For milestone history see the
+> [CHANGELOG](../CHANGELOG.md).
 
 ---
 
@@ -18,14 +22,14 @@ This document describes the technical architecture: the components, their bounda
 Three principles shape everything below:
 
 1. **Native macOS only.** A single Tauri v2 app. No web tier, no server, no cross-platform abstraction. The frontend calls the Rust backend directly over Tauri IPC.
-2. **Engine first, then native.** The MVP reuses iLEAPP as a headless parsing engine (broad coverage, zero parsers to write). A native lazy-decode core is added later for the artifacts people open most.
-3. **Decode on demand (Phase 2).** The native path never bulk-extracts: the manifest is indexed once; individual files are decrypted lazily on access and cached thereafter.
+2. **Native parsing.** All artifacts are parsed by original Rust parsers. The 0.1–0.2 MVP reused iLEAPP as a headless parsing engine to bootstrap coverage; that engine was retired at v0.7.0 and the native-first path is now the only one. iLEAPP survives only as a development-time reference for reverse-engineered facts (§10).
+3. **Decode on demand.** The native path never bulk-extracts: the manifest is indexed once; individual files are decrypted lazily on access and cached thereafter. This is the only decryption path today.
 
 ## 2. Architectural style
 
 - **Single native app** — React UI in a Tauri webview, Rust backend, one IPC boundary between them.
 - **UI-agnostic core** — all parsing/decryption logic sits in a standalone Rust crate with no Tauri or UI dependency, so it unit-tests on any CI. The Tauri command layer is a thin wrapper over it.
-- **Two-phase parsing** — Phase 1 imports via the iLEAPP sidecar into a cache DB; Phase 2 adds native manifest-indexed, on-demand decryption for hot artifacts. Both feed the same cache and UI.
+- **Native manifest-indexed parsing** — the core indexes the manifest once, then decrypts and parses files on demand into a per-backup cache DB. (Historically the 0.1–0.2 MVP populated that cache via a one-time iLEAPP sidecar import, §6; that path is retired.)
 - **Lazy pipeline with a cache** — an index/cache layer sits between the backup and the UI so repeat access is a query, not a re-parse or re-decrypt.
 
 ## 3. System context (C4 level 1)
@@ -55,7 +59,9 @@ Three principles shape everything below:
                                                   │  (broken screen OK)      │
                                                   └──────────────────────────┘
 
-   No network dependency for operation. Nothing leaves the machine.
+   Backup-derived data never leaves the machine (ADR 0001). Disclosed
+   operational traffic is allowed: indicator-feed fetches (Security Check),
+   the Safety Scan model download, and the opt-in de-shortener (§12).
 ```
 
 ## 4. Container view (C4 level 2)
@@ -64,8 +70,10 @@ Three principles shape everything below:
 ┌───────────────────────────────────────────────────────────────────────────┐
 │                            PRESENTATION                                     │
 │                                                                             │
-│   React + shadcn/ui + Tailwind v4 (Vite, TypeScript) — in Tauri webview     │
-│   Views: Gallery │ Messages │ Contacts │ Calls │ Safari │ Notes │ Browser   │
+│   React 19 + shadcn/ui + Tailwind v4 · TanStack Router/Query — Tauri webview │
+│   Views (one unified toolbar): Photos · Messages · Contacts · Calls · Safari │
+│     · Notes · Recordings · Calendar · Reminders · Health · Interactions      │
+│     · Apps · Device · Security · Safety                                      │
 └───────────────────────────────┬─────────────────────────────────────────────┘
                                 │ @tauri-apps/api  invoke(command)
                                 ▼
@@ -78,15 +86,16 @@ Three principles shape everything below:
         │                    CORE (Rust crate)                       │
         │              no UI / no shell dependencies                 │
         │                                                            │
-        │   Manifest Index · Decryptor · Parsers · Cache · Search    │
+        │   Manifest Index · Decryptor · Native Parsers · Cache ·    │
+        │   Search · Security Check (analyzer) · Safety Scan         │
         └───────────────────────────────────────────────────────────┘
                                  │
              ┌───────────────────┼───────────────────────┐
              ▼                   ▼                        ▼
    ┌──────────────────┐ ┌──────────────────┐  ┌──────────────────────────┐
-   │ Encrypted backup │ │ Local cache DB   │  │  Sidecar processes       │
-   │ (read-only)      │ │ (SQLite: index + │  │  iLEAPP (MVP engine),    │
-   │                  │ │  parsed cache)   │  │  Notes parser (later)    │
+   │ Encrypted backup │ │ Per-backup DBs   │  │  Safety Scan sidecar     │
+   │ (read-only)      │ │ cache.db +       │  │  llama-server (Gemma,    │
+   │                  │ │ analysis.db      │  │  Seatbelt-sandboxed)     │
    └──────────────────┘ └──────────────────┘  └──────────────────────────┘
 ```
 
@@ -94,7 +103,7 @@ The only platform-specific code on the read path is the Tauri command layer. Eve
 
 ## 5. The core (C4 level 3)
 
-The core crate has no knowledge of Tauri or the UI. It exposes use-cases (`import_backup`, `open_backup`, `list_threads`, `get_note`, `get_media`, `search`, `export`) and is organized into components:
+The core crate has no knowledge of Tauri or the UI. It exposes use-cases (`open_backup`, `list_threads`, `get_note`, `get_media`, `search`, `export`, plus the Security Check scan and Safety Scan use-cases) and is organized into components:
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -102,26 +111,24 @@ The core crate has no knowledge of Tauri or the UI. It exposes use-cases (`impor
 │                                                                        │
 │  ┌────────────────┐   unlocks    ┌──────────────────┐                  │
 │  │ Manifest Index │◀─────────────│    Decryptor     │                  │
-│  │ (Phase 2)      │  file keys   │  (keybag / AES)  │                  │
+│  │ (indexed once) │  file keys   │  (keybag / AES)  │                  │
 │  │ domain+path →  │─────────────▶│  decrypt 1 file  │                  │
 │  │ fileID + key   │   locate     └───────┬──────────┘                  │
 │  └───────┬────────┘                      │ plaintext bytes             │
 │          │                               ▼                             │
 │          │                       ┌──────────────────┐                  │
-│          │                       │     Parsers      │                  │
-│          │                       │  native: SQLite, │                  │
-│          │                       │  plist, Notes,   │                  │
-│          │                       │  media/thumbs    │                  │
+│          │                       │  Native Parsers  │                  │
+│          │                       │  SQLite, plist,  │                  │
+│          │                       │  Notes protobuf, │                  │
+│          │                       │  media/thumbs,   │                  │
+│          │                       │  app-chat plugins│                  │
 │          │                       └───────┬──────────┘                  │
 │          │                               │                             │
-│          │        ┌──────────────────────┘                             │
-│          │        │   iLEAPP sidecar (MVP): whole-backup parse         │
-│          │        │   ──▶ _lava_artifacts.db ──┐                       │
-│          ▼        ▼                            ▼                       │
+│          ▼                               ▼                             │
 │  ┌──────────────────────────────────────────────────┐                 │
 │  │                   Cache / Index                    │                │
-│  │   SQLite: file index, parsed artifacts, thumbs     │                │
-│  │   populated once · read on every access            │                │
+│  │   cache.db: file index, parsed artifacts, thumbs,  │                │
+│  │   Security Check findings + scan-runs · read often │                │
 │  └───────────────────────┬────────────────────────────┘                │
 │                          │ feeds                                       │
 │                          ▼                                             │
@@ -133,13 +140,19 @@ The core crate has no knowledge of Tauri or the UI. It exposes use-cases (`impor
 
 **Component responsibilities**
 
-- **Manifest Index** *(Phase 2)* — decrypts only `Manifest.db` once; maps every `domain/relativePath` to its `fileID` and per-file key. The backbone of lazy access.
-- **Decryptor** *(Phase 2)* — unwraps the keybag with the backup password and decrypts a *single* requested file to bytes. Never walks the whole backup.
-- **Parsers** — native parsers turn plaintext bytes into structured records (SQLite via `rusqlite`, plist, Notes protobuf, media/thumbnails). In the MVP most parsing is delegated to the iLEAPP sidecar instead.
-- **Cache / Index** — a local SQLite store holding the file index, parsed artifacts, and thumbnails. Populated by the iLEAPP import (MVP) or by native lazy parsing (Phase 2); read on every access.
+- **Manifest Index** — decrypts only `Manifest.db` once; maps every `domain/relativePath` to its `fileID` and per-file key. The backbone of lazy access.
+- **Decryptor** — unwraps the keybag with the backup password and decrypts a *single* requested file to bytes on demand, caching the result. Never walks the whole backup. Locked Apple Notes are decrypted on demand the same way.
+- **Native Parsers** — original Rust parsers turn plaintext bytes into structured records: first-party artifacts (Messages, Notes, Contacts, Calls, Safari, Recordings, Photos/camera-roll, Calendar, Reminders, Health, Interactions, Apps) plus a pluggable app-chat framework for third-party chats (WhatsApp, Messenger, Instagram, TikTok, Telegram, Kik, imo, Threema, Viber, Teams, LinkedIn). SQLite via `rusqlite`, plist, Notes protobuf, media/thumbnails. (The retired MVP delegated parsing to an iLEAPP sidecar; see §6.)
+- **Cache / Index** — the per-backup `cache.db` (SQLite) holding the file index, parsed artifacts, thumbnails, and Security Check findings/scan-runs; populated by native lazy parsing and read on every access.
 - **Search** — full-text index built over cached artifacts.
+- **Security Check (`analyzer`)** — native Rust spyware/stalkerware indicator engine (v0.20.0–0.28.0). Runs Explicit Scans and a consent-gated Passive Check over messages/Safari/apps/contacts/notes/calendar/interactions, a Manifest file sweep, and Tier-B artifacts; matches bundled + refreshable STIX2/Échap indicator feeds; writes severity-graded findings and scan-runs to `cache.db`.
+- **Safety Scan** — local-AI content review of Messages & Notes (v0.29.0, Beta). Drives the sandboxed `llama-server` sidecar (§9) and persists findings, chunk progress, and summaries to the per-backup `analysis.db`.
 
-## 6. MVP flow — iLEAPP import, then instant browse
+## 6. MVP flow — iLEAPP import, then instant browse *(retired at v0.7.0)*
+
+> **Historical.** This describes the 0.1–0.2 MVP. It was replaced by the native
+> on-demand path in §7, which is the only import path today. iLEAPP is no longer
+> run, downloaded, or bundled (see the status note at the top).
 
 ```
  First open of a backup (one time):
@@ -162,9 +175,9 @@ The core crate has no knowledge of Tauri or the UI. It exposes use-cases (`impor
 
 The import is the one eager, whole-backup pass. It is bounded by running only the modules the product surfaces. After import, every view is a cache query.
 
-## 7. Phase 2 flow — on-demand decode (native hot path)
+## 7. Native flow — on-demand decode (the current path)
 
-Example: user opens the **Messages** view, native path enabled.
+Example: user opens the **Messages** view.
 
 ```
  UI ──invoke(list_threads)──▶ Core: list_threads
@@ -186,9 +199,9 @@ Example: user opens the **Messages** view, native path enabled.
           return threads ──▶ UI    ⟵ first time only
 ```
 
-Only `Manifest.db` + `sms.db` are decrypted for this view; media is untouched; the second visit is a cache hit. This removes the MVP's one-time import wait for the artifacts people open most.
+Only `Manifest.db` + `sms.db` are decrypted for this view; media is untouched; the second visit is a cache hit. This is what let the native path replace the MVP's one-time whole-backup import.
 
-## 8. Media flow — deferred resolution (Phase 2)
+## 8. Media flow — deferred resolution
 
 ```
  Gallery view                 open one item
@@ -206,24 +219,20 @@ Thumbnails are generated and cached on first gallery paint; full-resolution byte
 
 ## 9. Sidecar boundary
 
-Some parsing is cleanest to reuse rather than reimplement. In the MVP this is the whole parsing engine; later it narrows to the long tail and the Notes protobuf. Sidecars run as **separate processes** invoked by the core, exchanging files/JSON/SQLite — never linked into the binary.
+Sidecars run as **separate processes** invoked by the core, exchanging files/JSON/SQLite over a controlled boundary — never linked into the binary. The rationale is unchanged: clean licensing (no copyleft linking), crash isolation, and — for Safety Scan — the ability to confine the process in an OS sandbox. **Today the only sidecar is the Safety Scan `llama-server`.** The iLEAPP parsing sidecar below is historical.
 
 ```
-   Core ──spawn──▶ Sidecar (frozen binary, headless)
-        ◀─SQLite/JSON──  iLEAPP (MVP engine) · apple-notes-parser (later)
+   Core ──spawn──▶ Safety Scan sidecar: llama-server (Gemma GGUF)
+        ◀─loopback HTTP──  under a macOS Seatbelt (sandbox-exec) profile
 ```
 
-Rationale: keeps licensing clean (no copyleft linking), isolates crashes, and lets iLEAPP act as a headless engine whose `_lava_artifacts.db` the core reads like any other SQLite source. The roadmap progressively replaces sidecar parsing with native Rust where instant first-open matters, and replaces the Notes sidecar with a pure-Rust parser.
+**Safety Scan `llama-server` (current).** Safety Scan runs local inference in llama.cpp's `llama-server`, bundled as a Tauri sidecar (`bundle.externalBin`) and always spawned inside a TraceLoupe-controlled **Seatbelt sandbox** (`sandbox-exec`). The profile denies all network except the loopback listen socket and denies `file-write*` everywhere except a per-run scratch dir that is wiped before/after each run — so message/note text has nowhere on disk to land. A shipped `.app` resolves *only* the bundled, statically-linked binary; env-override and `$PATH` fallbacks are compiled out of release builds. See [ADR 0002](adr/0002-safety-scan-local-pipeline.md) for the threat model and [the sidecar reference](reference/safety-scan-sidecar.md) for the dev/prod build split and the live sandbox test.
 
-**Sidecar acquisition — download-on-first-use, not bundled.** The iLEAPP sidecar is not shipped inside the app bundle. On first import, the app downloads a **pinned, re-frozen iLEAPP build** (hosted as our own release asset — see note), verifies its SHA-256 against a checksum pinned in the app, stores it under Application Support, and runs it from there. The download is shown to the user with version and source information before it happens. Rationale: keeps the .app small, avoids notarizing a frozen Python blob inside our bundle, and lets the pinned iLEAPP version be bumped without an app release. The pin matters because `_lava_artifacts.db` is not a stable public API — the core's normalizer is written against a specific iLEAPP version. A settings escape hatch lets power users point at their own iLEAPP binary instead. Cost: the first import requires network access — a one-time, user-visible exception to the otherwise fully-offline operation.
-
-> **Note (Milestone 1 spike finding).** The upstream `ileapp-…-macOS_Apple_Silicon` release binary for v2026.1.0 is broken — it crashes on startup with a Pillow `ImageDraw` import error from its PyInstaller freeze, before parsing anything. Running iLEAPP from a source checkout works. We therefore host our **own** re-frozen iLEAPP build (upstream source, our freeze with Pillow correctly bundled) as the pinned download, rather than depending on upstream's macOS asset. This also strengthens the SHA-pinning story: the download source is under our control. See `docs/research/spike-ileapp.md`.
-
-> **MVP decryption (spike finding).** iLEAPP decrypts encrypted backups itself via `--itunes_password` (full keybag → per-file AES path). So the MVP needs **no** native Decryptor; the Decryptor and Manifest Index (§5) are Phase-2-only.
+**iLEAPP parsing sidecar (retired at v0.7.0).** In the 0.1–0.2 MVP the core spawned a **pinned, re-frozen iLEAPP build**, downloaded on first import (SHA-256-pinned, stored under Application Support), and read its `_lava_artifacts.db` like any other SQLite source. That download was the one-time, user-visible network exception of the MVP. It has been fully replaced by native Rust parsers (§5): iLEAPP is no longer downloaded, bundled, or run — it remains a *development-time reference* only (§10). The historical spike findings (upstream macOS binary broken; iLEAPP self-decrypts via `--itunes_password`, so the MVP needed no native Decryptor) are recorded in `docs/research/spike-ileapp.md`.
 
 ## 10. Parser provenance
 
-"Hand-written native parser" (Phase 2) means original Rust that reads an artifact — **not** a copy of iLEAPP's source pasted into this codebase. There are three distinct ways iLEAPP can contribute to a native parser, with different legal weight. Contributors must be explicit about which one applies to each parser.
+"Hand-written native parser" means original Rust that reads an artifact — **not** a copy of iLEAPP's source pasted into this codebase. There are three distinct ways iLEAPP can contribute to a native parser, with different legal weight. Contributors must be explicit about which one applies to each parser.
 
 ```
   ┌────────────────────────────────────────────────────────────────┐
@@ -242,7 +251,7 @@ Rationale: keeps licensing clean (no copyleft linking), isolates crashes, and le
   │  (3) SIDECAR  → run iLEAPP as a separate process, read output   │
   │      what's used: nothing of theirs is *in* the binary          │
   │      copyright: no combination, no derivative-work question     │
-  │      → this is the MVP model                                    │
+  │      → was the MVP model; retired at v0.7.0 (no longer used)     │
   └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -259,24 +268,23 @@ Rationale: keeps licensing clean (no copyleft linking), isolates crashes, and le
 | Store | Type | Access | Contents |
 |---|---|---|---|
 | Encrypted backup | On-disk bundle | Read-only | `Manifest.db`, per-file blobs |
-| iLEAPP report DB | SQLite (transient) | Read (MVP) | `_lava_artifacts.db` from a sidecar run |
-| Manifest index | In-memory + cached | R/W (Phase 2) | domain/path → fileID + key |
-| Cache DB | SQLite | R/W | parsed artifacts, thumbnails, FTS |
+| Manifest index | In-memory + cached | R/W | domain/path → fileID + key |
+| `cache.db` (per backup) | SQLite | R/W | parsed artifacts, thumbnails, FTS, Security Check findings + scan-runs |
+| `analysis.db` (per backup) | SQLite | R/W | Safety Scan findings, chunk progress, summaries |
 
-The source backup is always read-only; the app never writes to it and never touches the source device.
+All SQLite access is via `rusqlite`. The source backup is always read-only; the app never writes to it and never touches the source device. *(Historical: the retired MVP also read a transient `_lava_artifacts.db` produced by an iLEAPP sidecar run — §6.)*
 
 ## 12. Cross-cutting concerns
 
-- **Security/privacy** — no network on the read path; the one network exception is the one-time, user-visible, checksum-verified download of the pinned iLEAPP sidecar (§9); the backup password lives only in memory to unwrap keys; source backup is read-only; sidecars are auditable and can run network-disabled.
-- **Performance** — MVP confines cost to a one-time import (limited to needed modules); Phase 2 adds manifest-first indexing, single-file lazy decryption, deferred media, cache-once, and Rust parallelism for the first-access hit.
+- **Security/privacy** — backup-derived data never leaves the machine by default ([ADR 0001](adr/0001-privacy-promise-scope.md)). The disclosed operational-traffic exceptions are: indicator-feed fetches for Security Check and the GGUF model download for Safety Scan (both setting-governed), plus one opt-in backup-data exception — the shortened-URL de-shortener (default off, per-use consent). The backup password lives only in memory to unwrap keys; the source backup is read-only; the Safety Scan sidecar runs Seatbelt-sandboxed with network denied except loopback (§9).
+- **Performance** — the native path uses manifest-first indexing, single-file lazy decryption, deferred media, cache-once, and Rust parallelism, so cost falls on first access and re-access is a query. (A full native import of a backup runs ~35s.)
 - **Testability** — the core crate is pure logic, unit-tested on any CI (incl. Linux) with no GUI; the frontend is E2E-tested with mocked IPC in Chromium **and** WebKit; native-shell E2E via WebdriverIO + tauri-driver (Win/Linux CI) and the tauri-playwright bridge (macOS).
-- **Extensibility** — third-party app coverage comes from iLEAPP modules in the MVP; native parsers are added behind a common parser interface without touching the pipeline.
+- **Extensibility** — third-party chat coverage comes from native app-chat parser modules behind a pluggable framework; new parsers are added behind a common interface without touching the pipeline. Security Check indicator sources and the Safety Scan taxonomy extend independently of the parsers.
 - **Error isolation** — a single unreadable/corrupt file is logged and skipped, never aborting a view or an import.
 
 ## 13. Key constraints (architecture-relevant)
 
-- **One-time import cost (MVP)** — the iLEAPP pass is eager and whole-backup; browsing is instant only after it completes.
-- **First-access cost (Phase 2)** — the first open of a natively-parsed artifact must decrypt it; only cached re-access is instant. No zero-cost read of an encrypted backup exists.
+- **First-access cost** — the first open of a natively-parsed artifact must decrypt and parse it; only cached re-access is instant. No zero-cost read of an encrypted backup exists.
 - **iOS ceiling** — `.ipa` binaries, `Caches/`, backup-excluded files, and some Secure-Enclave secrets are absent from any backup.
 - **macOS WKWebView** — no WebDriver/CDP for the native shell, shaping the testing approach.
 - **Full Disk Access** — reading the protected `MobileSync` path requires granting the host app FDA, or working from a copied backup.
@@ -285,12 +293,14 @@ The source backup is always read-only; the app never writes to it and never touc
 
 | Component | Technology |
 |---|---|
-| Presentation | React, TypeScript, shadcn/ui, Tailwind v4, Vite |
+| Presentation | React 19, TypeScript, shadcn/ui, Tailwind v4, TanStack Router/Query, Vite |
 | UI ↔ core | `@tauri-apps/api` invoke → Tauri v2 command layer (Rust) |
-| Core | Rust crate: Manifest Index, Decryptor, Parsers, Cache, Search |
+| Core | `crates/traceloupe-core` (Rust): Manifest Index, Decryptor, Native Parsers, Cache, Search, Security Check, Safety Scan |
 | SQLite access | `rusqlite` |
-| Cache / index | SQLite (+ FTS) |
-| Parsing engine (MVP) | iLEAPP (headless sidecar; pinned GitHub release, downloaded on first use) |
-| Notes / native parsing (later) | apple-notes-parser → pure-Rust |
-| Decryption (Phase 2) | iOSbackup approach |
+| Data stores | `cache.db` (+ FTS) and `analysis.db`, per backup |
+| Parsing | native Rust parsers (first-party artifacts + pluggable app-chat framework) |
+| Decryption | native, manifest-indexed, on-demand, cached |
+| Security Check | native Rust `analyzer` engine; bundled + refreshable STIX2 / Échap indicator feeds |
+| Safety Scan | Gemma GGUF via `llama-server` Tauri sidecar under a Seatbelt (`sandbox-exec`) profile |
 | Acquisition | pymobiledevice3 (fallback libimobiledevice) |
+| Reference (dev only) | iLEAPP — cross-checking native parsers; never run/bundled (§10) |

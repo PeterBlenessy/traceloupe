@@ -4,6 +4,11 @@
 
 *Status: Draft — core design decisions resolved 2026-07-20 (see `docs/CONTEXT.md` and `docs/adr/0001`) · Target: post-0.2.0 feature · Platform: macOS (TraceLoupe, Tauri v2)*
 
+> **Shipped.** This PRD is now delivered — Security Check M1 shipped in v0.20.0
+> and M2/M3 through v0.28.0. It is kept as the original design record; the
+> CHANGELOG and `docs/validation/security-check-validation.md` describe what
+> actually shipped.
+
 ---
 
 ## 1. Executive summary

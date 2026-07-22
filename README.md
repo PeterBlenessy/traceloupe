@@ -1,10 +1,14 @@
 # TraceLoupe — Local iOS Backup Browser
 
 A privacy-first macOS app that opens, decrypts, and lets you browse the
-contents of your own iPhone backup — photos, messages, contacts, calls,
-Safari history, and Notes. All processing is local; nothing leaves your Mac.
+contents of your own iPhone backup — photos, messages, contacts, calls, Safari
+history, Notes, health, and more. It also **checks the backup for spyware and
+stalkerware** (Security Check, against public MVT/Échap indicator feeds) and can
+**review message and note content with a local AI** for safety concerns like
+harassment, grooming, and scams (Safety Scan, experimental). Your backup data
+never leaves your Mac.
 
-- **Product description:** [docs/product-overview.md](docs/product-overview.md)
+- **Product overview:** [docs/product-overview.md](docs/product-overview.md)
 - **Architecture:** [docs/architecture.md](docs/architecture.md)
 - **All documentation:** [docs/](docs/)
 
