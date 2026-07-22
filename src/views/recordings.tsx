@@ -130,7 +130,7 @@ export function RecordingsView() {
     return (
       <NoBackupState
         icon={Mic}
-        title="Open a backup to hear voice memos"
+        title="Hear voice memos"
         lead="The device's Voice Memos, restored from the backup and playable right here with an inline audio player."
         features={[
           { label: "Search", detail: "Search recordings by title." },

@@ -18,7 +18,7 @@ use crate::ActiveBackup;
 use traceloupe_core::analysis::{AnalysisDb, Category};
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::install::InstallProgress;
-use traceloupe_core::safety_scan::chunker::TimeRange;
+use traceloupe_core::safety_scan::chunker::{ScanSources, TimeRange};
 use traceloupe_core::safety_scan::{client, engine, models, server, summary};
 use traceloupe_core::sidecar::CancelToken;
 
@@ -406,6 +406,9 @@ enum ScanEvent {
 }
 
 #[tauri::command]
+// A Tauri command: each param maps to a field of the JS invoke() call, so they
+// stay individual rather than bundled into a struct.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_safety_scan(
     app: AppHandle,
     active: State<'_, ActiveBackup>,
@@ -414,11 +417,25 @@ pub async fn run_safety_scan(
     model_id: Option<String>,
     range_start: Option<i64>,
     range_end: Option<i64>,
+    // Which content to scan: "all" (default), "messages", or "notes".
+    sources: Option<String>,
 ) -> Result<(), String> {
     let _guard = gate
         .0
         .try_lock()
         .map_err(|_| "a Safety Scan is already running")?;
+
+    let scan_sources = match sources.as_deref() {
+        Some("messages") => ScanSources {
+            messages: true,
+            notes: false,
+        },
+        Some("notes") => ScanSources {
+            messages: false,
+            notes: true,
+        },
+        _ => ScanSources::default(),
+    };
 
     let cache_path = active.path()?;
     let analysis_db_path = analysis_path(&cache_path)?;
@@ -560,25 +577,33 @@ pub async fn run_safety_scan(
         };
 
         let mut last_emit = std::time::Instant::now();
-        let outcome = engine::run_scan(&cache, &mut analysis, &llm, range, &cancel, |p| {
-            // Always emit the first (done == 0) tick — it's what flips the UI from
-            // "loading" to "scanning" the instant the model is ready; the 150 ms
-            // throttle only smooths the frequent mid-scan updates.
-            if p.chunks_done == 0
-                || last_emit.elapsed() >= Duration::from_millis(150)
-                || p.chunks_done == p.chunks_total
-            {
-                last_emit = std::time::Instant::now();
-                let _ = app2.emit(
-                    "safetyscan://progress",
-                    ScanEvent::Classifying {
-                        done: p.chunks_done,
-                        total: p.chunks_total,
-                        findings: p.findings,
-                    },
-                );
-            }
-        })
+        let outcome = engine::run_scan(
+            &cache,
+            &mut analysis,
+            &llm,
+            range,
+            scan_sources,
+            &cancel,
+            |p| {
+                // Always emit the first (done == 0) tick — it's what flips the UI from
+                // "loading" to "scanning" the instant the model is ready; the 150 ms
+                // throttle only smooths the frequent mid-scan updates.
+                if p.chunks_done == 0
+                    || last_emit.elapsed() >= Duration::from_millis(150)
+                    || p.chunks_done == p.chunks_total
+                {
+                    last_emit = std::time::Instant::now();
+                    let _ = app2.emit(
+                        "safetyscan://progress",
+                        ScanEvent::Classifying {
+                            done: p.chunks_done,
+                            total: p.chunks_total,
+                            findings: p.findings,
+                        },
+                    );
+                }
+            },
+        )
         .map_err(|e| e.to_string())?;
 
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
@@ -822,6 +847,18 @@ pub struct ScanHistoryItem {
     pub findings: i64,
 }
 
+/// Remove a past scan and everything scoped to it (findings, progress,
+/// summaries). Dismissals survive so a re-scan still honours them.
+#[tauri::command]
+pub fn delete_safety_scan(active: State<'_, ActiveBackup>, scan_id: i64) -> Result<(), String> {
+    let path = analysis_path(&active.path()?)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    db.delete_scan(scan_id).map_err(|e| e.to_string())
+}
+
 /// Past scans (newest first) for the history list.
 #[tauri::command]
 pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHistoryItem>, String> {
@@ -847,7 +884,10 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
 }
 
 #[tauri::command]
-pub fn get_safety_scan_report(active: State<'_, ActiveBackup>) -> Result<SafetyScanReport, String> {
+pub fn get_safety_scan_report(
+    active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
+) -> Result<SafetyScanReport, String> {
     let path = analysis_path(&active.path()?)?;
     if !path.exists() {
         return Ok(SafetyScanReport {
@@ -857,7 +897,12 @@ pub fn get_safety_scan_report(active: State<'_, ActiveBackup>) -> Result<SafetyS
         });
     }
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
-    let Some(scan) = db.latest_scan().map_err(|e| e.to_string())? else {
+    // A specific past scan when the history list asks for one; otherwise latest.
+    let looked_up = match scan_id {
+        Some(id) => db.scan_by_id(id).map_err(|e| e.to_string())?,
+        None => db.latest_scan().map_err(|e| e.to_string())?,
+    };
+    let Some(scan) = looked_up else {
         return Ok(SafetyScanReport {
             scan: None,
             report: None,

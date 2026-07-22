@@ -39,6 +39,7 @@ const SUBTYPE_LABELS: Record<string, string> = {
   burst: "Burst",
 };
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
@@ -211,7 +212,7 @@ function PhotosViewInner() {
     return (
       <NoBackupState
         icon={ImageIcon}
-        title="Open a backup to browse photos & videos"
+        title="Browse photos & videos"
         lead="Every photo and video from the iPhone's Camera Roll, restored from the backup and viewable full-size — Live Photos, screenshots, panoramas, and bursts included."
         features={[
           { label: "Search", detail: "Find shots by filename, person, place, or album." },
@@ -443,18 +444,22 @@ function LocationTag({ item }: { item: MediaItem }) {
       }`
     : `https://maps.apple.com/?q=${encodeURIComponent(item.location!)}`;
   return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        void client.openExternal(url);
-      }}
-      className="inline-flex items-center gap-1 hover:text-white hover:underline"
-      title="Open in Maps"
-    >
-      <MapPin className="size-3.5" />
-      <span className="max-w-[12rem] truncate">{label}</span>
-    </button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            void client.openExternal(url);
+          }}
+          className="inline-flex items-center gap-1 hover:text-white hover:underline"
+        >
+          <MapPin className="size-3.5" />
+          <span className="max-w-[12rem] truncate">{label}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>Open in Maps</TooltipContent>
+    </Tooltip>
   );
 }
 

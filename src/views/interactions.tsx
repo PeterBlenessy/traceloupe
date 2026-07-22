@@ -259,7 +259,7 @@ export function InteractionsView() {
     return (
       <NoBackupState
         icon={Waypoints}
-        title="Open a backup to map interactions"
+        title="Map interactions"
         lead="A relationship graph built from the device's CoreDuet activity — who was contacted most, across which apps, and when."
         features={[
           { label: "Search", detail: "Search for a specific person." },

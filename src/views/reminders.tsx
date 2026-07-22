@@ -208,7 +208,7 @@ export function RemindersView() {
     return (
       <NoBackupState
         icon={ListTodo}
-        title="Open a backup to see reminders"
+        title="See reminders"
         lead="Reminders and to-dos from every list — with due dates, flags, notes, and completion state — captured from the device."
         features={[
           { label: "Search", detail: "Search titles, notes, and lists." },

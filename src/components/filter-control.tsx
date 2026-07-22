@@ -8,6 +8,11 @@ import {
   type FilterGroup,
   type FilterSummary,
 } from "@/components/filter-groups";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 /** The open panel's width (matches the inner content's fixed width, 26rem). */
 const PANEL_W = 416;
@@ -174,24 +179,28 @@ export function FilterControl({
           hasActive && "rounded-lg border border-border/70 bg-muted/40 p-0.5",
         )}
       >
-        <button
-          ref={btnRef}
-          type="button"
-          aria-label="Filter"
-          aria-haspopup="dialog"
-          aria-expanded={expanded}
-          title="Filter"
-          onClick={() => (mounted ? close() : open())}
-          data-active={mounted || hasActive}
-          className={cn(
-            "inline-flex shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[active=true]:text-foreground",
-            hasActive
-              ? "size-7 rounded-md"
-              : "size-8 rounded-lg border border-border/70 bg-muted/40 data-[active=true]:bg-accent",
-          )}
-        >
-          <Funnel className="size-4" />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              ref={btnRef}
+              type="button"
+              aria-label="Filter"
+              aria-haspopup="dialog"
+              aria-expanded={expanded}
+              onClick={() => (mounted ? close() : open())}
+              data-active={mounted || hasActive}
+              className={cn(
+                "inline-flex shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[active=true]:text-foreground",
+                hasActive
+                  ? "size-7 rounded-md"
+                  : "size-8 rounded-lg border border-border/70 bg-muted/40 data-[active=true]:bg-accent",
+              )}
+            >
+              <Funnel className="size-4" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Filter</TooltipContent>
+        </Tooltip>
         {summaries.map((s) => (
           // Collapsing wrapper: max-width→0 shrinks the chip (and its leading gap)
           // when it's being removed, so the island narrows smoothly.

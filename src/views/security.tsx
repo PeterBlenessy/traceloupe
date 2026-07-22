@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ShieldAlert, ShieldCheck, ShieldQuestion, RefreshCw, Loader2, AlertTriangle, Info, ExternalLink, Download, Link2, } from "lucide-react";
+  ShieldAlert, ShieldCheck, ShieldQuestion, RefreshCw, Loader2, AlertTriangle, ChevronRight, Info, ExternalLink, Download, Link2, } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +19,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { formatListTime } from "@/lib/format";
@@ -43,6 +49,30 @@ const SEVERITY_META: Record<
     icon: Info,
   },
 };
+
+/** The public research sources the indicator feeds come from — so the named
+ *  orgs and "STIX/YAML" aren't bare jargon but link to who's behind them. */
+const FEED_SOURCES: { match: string; label: string; url: string }[] = [
+  {
+    match: "amnesty",
+    label: "Amnesty International Security Lab",
+    url: "https://securitylab.amnesty.org/",
+  },
+  {
+    match: "mvt",
+    label: "MVT Project — Mobile Verification Toolkit",
+    url: "https://github.com/mvt-project/mvt",
+  },
+  {
+    match: "echap",
+    label: "Échap — anti-stalkerware collective",
+    url: "https://github.com/AssoEchap/stalkerware-indicators",
+  },
+];
+function feedOrg(source: string) {
+  const s = source.toLowerCase();
+  return FEED_SOURCES.find((o) => s.includes(o.match)) ?? null;
+}
 
 const MODULE_LABEL: Record<string, string> = {
   apps: "Installed apps",
@@ -174,7 +204,7 @@ export function SecurityView() {
     return (
       <NoBackupState
         icon={ShieldQuestion}
-        title="Open a backup to run a Security Check"
+        title="Run a Security Check"
         lead="Scans an imported iPhone backup for traces of known spyware and stalkerware, matching it against curated threat feeds — entirely on this Mac."
         features={[
           { label: "What it checks", detail: "Installed apps, configuration profiles, and network indicators against known-threat feeds." },
@@ -247,6 +277,69 @@ export function SecurityView() {
               </Button>
             </div>
           </div>
+
+          {/* Where the feeds come from + what the indicator files are, so the
+              named orgs and "STIX/YAML" aren't unexplained jargon. */}
+          {info.data && info.data.feeds.length > 0 && (
+            <Collapsible>
+              <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
+                Where these indicators come from
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-2 space-y-3 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
+                  <p>
+                    Public threat-intelligence feeds maintained by human-rights
+                    and anti-stalkerware researchers. TraceLoupe downloads only
+                    the indicator lists — nothing about you or your backup is
+                    sent.
+                  </p>
+                  <ul className="space-y-1.5">
+                    {info.data.feeds.map((f) => {
+                      const org = feedOrg(f.source);
+                      return (
+                        <li
+                          key={f.source}
+                          className="flex items-center justify-between gap-3"
+                        >
+                          <span className="min-w-0">
+                            <span className="font-mono text-foreground/80">
+                              {f.source}
+                            </span>{" "}
+                            · {f.count.toLocaleString()} · {f.class}
+                          </span>
+                          {org && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => void client.openExternal(org.url)}
+                                  className="inline-flex shrink-0 items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
+                                >
+                                  <ExternalLink className="size-3" />
+                                  {org.label}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent>{org.label}</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <p>
+                    Indicators are{" "}
+                    <span className="font-medium text-foreground/80">STIX</span>{" "}
+                    or{" "}
+                    <span className="font-medium text-foreground/80">YAML</span>{" "}
+                    files — structured lists of known-bad domains, IP addresses,
+                    files and app IDs. You can point TraceLoupe at your own
+                    folder of them below.
+                  </p>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          )}
 
           {/* Custom indicator folder (researcher mode). */}
           <div className="flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm">

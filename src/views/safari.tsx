@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Bookmark, BookOpen, EyeOff, Globe, SquareStack, Trash2 } from "lucide-react";
 import {
   Item, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
@@ -131,7 +132,7 @@ export function SafariView() {
     return (
       <NoBackupState
         icon={Globe}
-        title="Open a backup to see Safari activity"
+        title="See Safari activity"
         lead="The device's web activity — history, bookmarks, reading list, and open tabs — reconstructed from the backup, with each entry opening in your browser."
         features={[
           { label: "Search", detail: "Search across all Safari data." },
@@ -204,37 +205,41 @@ function hostOf(url: string): string {
 
 function VisitRow({ visit }: { visit: HistoryVisit }) {
   return (
-    <Item
-      asChild
-      className="rounded-md transition-colors hover:bg-accent/50"
-    >
-      <button
-        type="button"
-        onClick={() => void client.openExternal(visit.url)}
-        title={`Open ${visit.url}`}
-        className="w-full text-left"
-      >
-        <ItemMedia>
-          {visit.deleted ? (
-            <Trash2 className="size-5 text-muted-foreground" />
-          ) : (
-            <Globe className="size-5 text-muted-foreground" />
-          )}
-        </ItemMedia>
-        <ItemContent>
-          <ItemTitle className={cn("truncate", visit.deleted && "line-through")}>
-            {visit.title ?? hostOf(visit.url)}
-          </ItemTitle>
-          <ItemDescription className="truncate">{visit.url}</ItemDescription>
-        </ItemContent>
-        <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
-          <span>{visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}</span>
-          {visit.visitCount != null && (
-            <span>{formatCount(visit.visitCount)} visits</span>
-          )}
-        </div>
-      </button>
-    </Item>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Item
+          asChild
+          className="rounded-md transition-colors hover:bg-accent/50"
+        >
+          <button
+            type="button"
+            onClick={() => void client.openExternal(visit.url)}
+            className="w-full text-left"
+          >
+            <ItemMedia>
+              {visit.deleted ? (
+                <Trash2 className="size-5 text-muted-foreground" />
+              ) : (
+                <Globe className="size-5 text-muted-foreground" />
+              )}
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle className={cn("truncate", visit.deleted && "line-through")}>
+                {visit.title ?? hostOf(visit.url)}
+              </ItemTitle>
+              <ItemDescription className="truncate">{visit.url}</ItemDescription>
+            </ItemContent>
+            <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
+              <span>{visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}</span>
+              {visit.visitCount != null && (
+                <span>{formatCount(visit.visitCount)} visits</span>
+              )}
+            </div>
+          </button>
+        </Item>
+      </TooltipTrigger>
+      <TooltipContent>{`Open ${visit.url}`}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -299,15 +304,19 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
   // Openable when it has a URL (bookmarks/tabs/reading list); folders don't.
   if (!url) return <Item>{inner}</Item>;
   return (
-    <Item asChild className="rounded-md transition-colors hover:bg-accent/50">
-      <button
-        type="button"
-        onClick={() => void client.openExternal(url)}
-        title={`Open ${url}`}
-        className="w-full text-left"
-      >
-        {inner}
-      </button>
-    </Item>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Item asChild className="rounded-md transition-colors hover:bg-accent/50">
+          <button
+            type="button"
+            onClick={() => void client.openExternal(url)}
+            className="w-full text-left"
+          >
+            {inner}
+          </button>
+        </Item>
+      </TooltipTrigger>
+      <TooltipContent>{`Open ${url}`}</TooltipContent>
+    </Tooltip>
   );
 }

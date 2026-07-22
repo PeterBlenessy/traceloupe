@@ -525,6 +525,25 @@ pub fn count_message_ranges(
     Ok(out)
 }
 
+/// Notes per time window, dated by last-modified (falling back to created).
+/// Counts every note the Notes view shows — so a Safety-Scan filter count and
+/// the Notes view agree for the same period. Undated notes are excluded from
+/// bounded and open ranges alike (like [`count_message_ranges`]).
+pub fn count_note_ranges(cache: &CacheDb, ranges: &[TimeRange]) -> Result<Vec<i64>> {
+    let conn = cache.conn();
+    let mut out = Vec::with_capacity(ranges.len());
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM notes
+         WHERE COALESCE(modified_at, created_at) IS NOT NULL
+           AND (?1 IS NULL OR COALESCE(modified_at, created_at) >= ?1)
+           AND (?2 IS NULL OR COALESCE(modified_at, created_at) < ?2)",
+    )?;
+    for r in ranges {
+        out.push(stmt.query_row(rusqlite::params![r.lo, r.hi], |row| row.get(0))?);
+    }
+    Ok(out)
+}
+
 /// A window of every message whose timestamp falls in `range`, oldest first,
 /// across all conversations. Backs a selected period bucket.
 #[allow(clippy::too_many_arguments)]
