@@ -17,7 +17,7 @@ import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { FilterControl } from "@/components/filter-control";
-import { timeGroup } from "@/components/filter-groups";
+import { badgeGroup, timeGroup } from "@/components/filter-groups";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { formatListTime } from "@/lib/format";
 import {
@@ -93,6 +93,8 @@ export function SafetyScanView() {
   // inclusive, so hi maps to `end = hi - 1` at start time.
   const { now, presets: basePresets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // Which content to scan: "all" (default), "messages", or "notes".
+  const [source, setSource] = useState("all");
   const [showDismissed, setShowDismissed] = useState(false);
   // Immediate feedback for Stop: the backend aborts within ~1s, but reflect the
   // click at once. Reset when the scan actually clears.
@@ -261,13 +263,25 @@ export function SafetyScanView() {
                   )}
                 >
                   <Label className="text-xs text-muted-foreground">
-                    Time range
+                    Scan
                   </Label>
                   <FilterControl
                     align="right"
                     groups={[
+                      badgeGroup({
+                        key: "source",
+                        label: "Content",
+                        description: "What to scan",
+                        options: [
+                          { value: "all", label: "Messages & notes" },
+                          { value: "messages", label: "Messages" },
+                          { value: "notes", label: "Notes" },
+                        ],
+                        value: source,
+                        onChange: setSource,
+                      }),
                       timeGroup({
-                        description: "Which messages and notes to scan, by date",
+                        description: "Which period to scan, by date",
                         presets,
                         counts: presetCounts,
                         value: range,
@@ -301,6 +315,7 @@ export function SafetyScanView() {
                         // timeGroup's hi is exclusive; the scan range end is
                         // inclusive, so step back one second.
                         rangeEnd: range.hi != null ? range.hi - 1 : null,
+                        sources: source,
                       })
                     }
                   >

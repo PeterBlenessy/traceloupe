@@ -924,6 +924,8 @@ export interface TraceLoupeClient {
     modelId?: string | null;
     rangeStart?: number | null;
     rangeEnd?: number | null;
+    /** Which content to scan: "all" (default), "messages", or "notes". */
+    sources?: string | null;
   }): Promise<void>;
   cancelSafetyScan(): Promise<void>;
   onSafetyScanProgress(cb: (p: SafetyScanEvent) => void): Promise<UnlistenFn>;
@@ -1297,6 +1299,7 @@ const tauriClient: TraceLoupeClient = {
       modelId: opts.modelId ?? null,
       rangeStart: opts.rangeStart ?? null,
       rangeEnd: opts.rangeEnd ?? null,
+      sources: opts.sources ?? null,
     }),
   cancelSafetyScan: () => invoke("cancel_safety_scan"),
   onSafetyScanProgress: (cb) =>
