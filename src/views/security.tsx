@@ -389,6 +389,14 @@ function RunRail({
     return rows;
   }, [runs, outcome, sort]);
 
+  // A filter must never hide the selection: if the selected run gets filtered
+  // out, move the selection to the first visible row so the rail and the
+  // result pane can't disagree about what's shown.
+  useEffect(() => {
+    if (visible.length > 0 && !visible.some((r) => r.id === selectedId))
+      onSelect(visible[0].id);
+  }, [visible, selectedId, onSelect]);
+
   return (
     <Card className="gap-3">
       <CardHeader>

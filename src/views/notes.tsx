@@ -199,6 +199,13 @@ export function NotesView() {
   useEffect(() => {
     if (urlSearch.id != null) setSelectedId(urlSearch.id);
   }, [urlSearch.id]);
+  // Manually picking another note ends the round trip — drop the deep-link
+  // params so the return chip doesn't stay pinned for the rest of the session.
+  const selectNote = (id: number) => {
+    setSelectedId(id);
+    if (urlSearch.from != null && urlSearch.id !== id)
+      void navigate({ to: "/notes", search: {}, replace: true });
+  };
   // Flat list (date sections) vs a folder tree of the notes.
   const [viewMode, setViewMode] = usePersistedState<"flat" | "tree">("notes:view", "flat");
   // Collapsed folders in tree view (a folder is expanded unless listed here).
@@ -491,7 +498,11 @@ export function NotesView() {
             <TooltipContent>Return to the Safety Scan findings</TooltipContent>
           </Tooltip>
           <span className="text-xs text-muted-foreground">
-            Opened from a Safety Scan finding
+            {/* Be honest when a persisted filter (folder, tags, …) hides the
+                flagged note — the fallback selection is NOT the finding. */}
+            {urlSearch.id != null && selected?.id !== urlSearch.id
+              ? "The flagged note isn't visible with the current filters — clear them to see it"
+              : "Opened from a Safety Scan finding"}
           </span>
         </div>
       )}
@@ -530,7 +541,7 @@ export function NotesView() {
                         active={selected?.id === r.note.id}
                         showFolder={viewMode === "flat"}
                         flagSeverity={marks.data?.notes[r.note.id]}
-                        onClick={() => setSelectedId(r.note.id)}
+                        onClick={() => selectNote(r.note.id)}
                       />
                     </div>
                   )
