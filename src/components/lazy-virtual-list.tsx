@@ -61,6 +61,7 @@ export function LazyVirtualList<T>({
   jumpTo,
   scrollEnd,
   onTopIndexChange,
+  underlap = false,
 }: {
   /** Total number of rows (from a cheap COUNT query). */
   count: number;
@@ -86,6 +87,9 @@ export function LazyVirtualList<T>({
   scrollEnd?: { dir: "top" | "bottom"; token: number };
   /** Reports the top-most visible row index as the user scrolls. */
   onTopIndexChange?: (index: number) => void;
+  /** Let this list scroll beneath the translucent title bar (only sensible
+   *  when the list is the view's topmost element; see index.css). */
+  underlap?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -251,6 +255,7 @@ export function LazyVirtualList<T>({
     // fighting the virtualizer when row heights settle after a window loads.
     <div
       ref={scrollRef}
+      data-underlap={underlap ? "" : undefined}
       className="min-h-0 flex-1 overflow-auto [overflow-anchor:none]"
     >
       <div

@@ -232,6 +232,7 @@ export function RemindersView() {
         hasReminders ? "No reminders match these filters." : "No reminders in this backup."
       }
       emptyIcon={ListTodo}
+      underlap
       items={filtered}
       getKey={(r) => r.id}
       renderItem={(r) => <ReminderRow reminder={r} />}

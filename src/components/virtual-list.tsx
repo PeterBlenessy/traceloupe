@@ -18,6 +18,7 @@ export function VirtualList<T>({
   estimateSize = 56,
   getKey,
   className,
+  underlap = false,
 }: {
   items: T[];
   renderItem: (item: T, index: number) => ReactNode;
@@ -26,6 +27,9 @@ export function VirtualList<T>({
   getKey?: (item: T, index: number) => React.Key;
   /** Extra classes for the inner content wrapper (e.g. max-width, padding). */
   className?: string;
+  /** Let this list scroll beneath the translucent title bar (only sensible
+   *  when the list is the view's topmost element; see index.css). */
+  underlap?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -37,7 +41,11 @@ export function VirtualList<T>({
   });
 
   return (
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+    <div
+      ref={scrollRef}
+      data-underlap={underlap ? "" : undefined}
+      className="min-h-0 flex-1 overflow-auto"
+    >
       <div
         className={className}
         style={{ position: "relative", width: "100%", height: virtualizer.getTotalSize() }}

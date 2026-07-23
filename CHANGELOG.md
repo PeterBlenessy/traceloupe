@@ -24,8 +24,21 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
   Active nav, selection, sent bubbles, primary buttons, and focus rings all
   tint with it; scan verdicts and destructive actions stay semantic.
 
+- **Translucent toolbar** (Settings → General, off by default): the title bar
+  goes see-through with a backdrop blur, and the full-bleed list views (Calls,
+  Safari, Apps, Calendar, Reminders) scroll visibly beneath it.
+- "Settings → Safety" in the Safety view's model prompt is now a real link
+  that opens the Settings dialog on the Safety tab (new `SettingsLink` /
+  `useSettingsDialog` deep-linking).
+
 ### Changed
 
+- The sidebar toggle now lives inside the sidebar while it's open (top-right,
+  the native macOS pattern) and moves into the title bar only when the sidebar
+  is hidden — so it no longer reads as belonging to the view title. It also
+  gained a Hide/Show sidebar tooltip.
+- Scrollbars only paint their thumb while actually scrolling; the 12 px gutter
+  stays reserved, so layout never shifts.
 - Security and Safety moved from the sidebar header into their own labeled
   **Scans** group; the content views sit under a **Content** label.
 - Sidebar icons grew from 16 px to 20 px with slightly taller rows.

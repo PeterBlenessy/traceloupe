@@ -114,6 +114,7 @@ export function CallsView() {
       resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matching calls." : "No calls in this backup."}
       emptyIcon={PhoneCall}
+      underlap
       windowKey={(page) => [
         "callsWindow",
         search,

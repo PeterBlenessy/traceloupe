@@ -153,6 +153,7 @@ export function SafariView() {
       resetKey={`${type}:${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={search ? "No matches." : EMPTY[type]}
       emptyIcon={Globe}
+      underlap
       windowKey={(page) => [
         "safariWindow",
         type,

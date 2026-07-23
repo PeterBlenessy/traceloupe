@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
@@ -44,6 +45,11 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { DeviceHero } from "@/components/device-hero";
+import {
+  SettingsDialogProvider,
+  useSettingsDialog,
+  type SettingsTab,
+} from "@/components/settings-dialog-context";
 import { useSystemAccent } from "@/lib/use-system-accent";
 import { useResizableWidth } from "@/components/resize";
 import { usePersistedState } from "@/lib/use-persisted-state";
@@ -110,6 +116,26 @@ export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // Follow the macOS accent color (System Settings → Appearance).
   useSystemAccent();
+  // Scrollbar thumbs paint only while their element scrolls (index.css keys off
+  // `data-scrolling`); the 12px gutter is always reserved, so nothing shifts.
+  useEffect(() => {
+    const timers = new WeakMap<Element, number>();
+    const onScroll = (e: Event) => {
+      const el =
+        e.target === document ? document.documentElement : (e.target as Element);
+      if (!(el instanceof Element)) return;
+      el.setAttribute("data-scrolling", "");
+      const prev = timers.get(el);
+      if (prev !== undefined) window.clearTimeout(prev);
+      timers.set(
+        el,
+        window.setTimeout(() => el.removeAttribute("data-scrolling"), 800),
+      );
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () =>
+      document.removeEventListener("scroll", onScroll, { capture: true });
+  }, []);
   // Drag-resizable, persisted sidebar width (applies only when expanded; the
   // icon rail uses the fixed --sidebar-width-icon).
   const { width: sidebarWidth, startResize } = useResizableWidth(
@@ -142,6 +168,7 @@ export function AppShell() {
     <ImportProvider>
       <ReimportProvider>
        <SafetyScanProvider>
+       <SettingsDialogProvider>
        <ToolbarProvider>
         {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
         only sets `min-h-svh`, which lets the layout grow with its content — so a
@@ -167,9 +194,16 @@ export function AppShell() {
             it sits UNDER the full-width title bar (h-13), so the icon clears the
             bar (pt-16). data-tauri-drag-region makes the band draggable. */}
             <SidebarHeader
-              className="pt-10 group-data-[collapsible=icon]:pt-16"
+              className="relative pt-10 group-data-[collapsible=icon]:pt-16"
               data-tauri-drag-region
             >
+              {/* Native-macOS trigger placement: it lives IN the sidebar while
+                  the sidebar shows (top-right, beside the traffic lights) and
+                  moves out into the title bar when collapsed — so it never
+                  reads as belonging to the content view's title. */}
+              <div className="absolute right-2 top-2 group-data-[collapsible=icon]:hidden">
+                <SidebarTrigger />
+              </div>
               {/* The device identity as a hero: what backup you're looking at,
                   not the app's name. Doubles as the Device-info entry. */}
               <DeviceHero deviceInfo={deviceInfo ?? null} hasBackup={hasBackup} />
@@ -251,13 +285,19 @@ export function AppShell() {
             </SidebarFooter>
           </Sidebar>
           <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
-          <SidebarInset className="pt-13">
-            <div className="min-h-0 flex-1 overflow-hidden">
+          <SidebarInset>
+            {/* The bar clearance lives as PADDING on this clipping wrapper (not
+                on SidebarInset) so its padding-box reaches the window top:
+                overflow clips at the padding box, which lets an opted-in list
+                (data-underlap) rise under the translucent bar while every other
+                view keeps starting below it. */}
+            <div className="min-h-0 flex-1 overflow-hidden pt-13">
               <Outlet />
             </div>
           </SidebarInset>
         </SidebarProvider>
        </ToolbarProvider>
+       </SettingsDialogProvider>
        </SafetyScanProvider>
       </ReimportProvider>
     </ImportProvider>
@@ -279,6 +319,7 @@ function AppTitleBar() {
   return (
     <header
       data-tauri-drag-region
+      data-slot="app-titlebar"
       // Match the sidebar's own width transition so the two edges move together.
       style={{ left: collapsed ? 0 : "var(--sidebar-width)" }}
       className="fixed right-0 top-0 z-20 flex h-13 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
@@ -297,9 +338,13 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
         // traffic lights; when expanded the lights sit over the sidebar (left of
         // this bar), so no extra padding is needed. The toggle is its own island.
         <div className={cn("flex items-center gap-2", collapsed && "pl-20")}>
-          <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
-            <SidebarTrigger />
-          </div>
+          {/* The trigger only joins the title bar when the sidebar is hidden —
+              while it's visible, the trigger sits inside the sidebar itself. */}
+          {collapsed && (
+            <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
+              <SidebarTrigger />
+            </div>
+          )}
           {tb?.title && (
             <div className="flex items-baseline gap-2">
               <h1 className="text-base font-semibold">{tb.title}</h1>
@@ -561,8 +606,12 @@ function SettingsMenu() {
     biometricAvailable,
     density,
     setDensity,
+    translucentToolbar,
+    setTranslucentToolbar,
   } = useSettings();
   const { theme, setTheme } = useTheme();
+  // Lifted open/tab state so views can deep-link (e.g. "Settings → Safety").
+  const { open, setOpen, tab, setTab } = useSettingsDialog();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
     queryFn: () => client.listImportModules(),
@@ -578,7 +627,7 @@ function SettingsMenu() {
   };
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <SidebarMenuButton tooltip="Settings">
           <Settings />
@@ -594,7 +643,12 @@ function SettingsMenu() {
             (its own background, bleeding to the dialog's rounded edges) beside a
             scrolling content pane. `contents` dissolves the Tabs wrapper so its
             children become the dialog's flex items directly. */}
-        <Tabs defaultValue="general" orientation="vertical" className="contents">
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v as SettingsTab)}
+          orientation="vertical"
+          className="contents"
+        >
           {/* The dialog's nav pane mirrors the app sidebar: same surface token,
               same row metrics (h-9, 20px icons), same accent-soft active pill. */}
           <TabsList
@@ -722,6 +776,16 @@ function SettingsMenu() {
                   <option value="cozy">Cozy</option>
                   <option value="compact">Compact</option>
                 </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Translucent toolbar"
+                description="Make the toolbar slightly see-through, with long lists scrolling visibly beneath it."
+              >
+                <Switch
+                  aria-label="Translucent toolbar"
+                  checked={translucentToolbar}
+                  onCheckedChange={setTranslucentToolbar}
+                />
               </SettingsRow>
             </SettingsGroup>
 

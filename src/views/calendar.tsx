@@ -244,6 +244,7 @@ export function CalendarView() {
         hasEvents ? "No events match these filters." : "No calendar events in this backup."
       }
       emptyIcon={CalendarDays}
+      underlap
       items={filtered}
       getKey={(e) => e.id}
       renderItem={(e) => <EventRow event={e} />}
