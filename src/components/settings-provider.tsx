@@ -179,8 +179,10 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
   const [signingChecked, setSigningChecked] = useState<boolean>(false);
   const [density, setDensityState] = useState<Density>(() => readDensity());
+  // Default ON: the frosted bar with content scrolling beneath it is the
+  // intended look; the toggle exists for anyone who prefers a solid bar.
   const [translucentToolbar, setTranslucentToolbarState] = useState<boolean>(
-    () => localStorage.getItem(TRANSLUCENT_KEY) === "true",
+    () => readBool(TRANSLUCENT_KEY),
   );
 
   // Reflect density onto the document root; a CSS rule keyed off `data-density`

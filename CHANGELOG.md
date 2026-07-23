@@ -24,9 +24,10 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
   Active nav, selection, sent bubbles, primary buttons, and focus rings all
   tint with it; scan verdicts and destructive actions stay semantic.
 
-- **Translucent toolbar** (Settings → General, off by default): the title bar
-  goes see-through with a backdrop blur, and the full-bleed list views (Calls,
-  Safari, Apps, Calendar, Reminders) scroll visibly beneath it.
+- **Translucent toolbar** (on by default; Settings → General to opt out): the
+  title bar goes see-through with a backdrop blur, and list content — Calls,
+  Safari, Apps, Calendar, Reminders, Photos, and the Contacts/Messages list
+  panes — scrolls visibly beneath it.
 - "Settings → Safety" in the Safety view's model prompt is now a real link
   that opens the Settings dialog on the Safety tab (new `SettingsLink` /
   `useSettingsDialog` deep-linking).
