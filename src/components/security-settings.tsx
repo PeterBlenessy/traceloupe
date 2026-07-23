@@ -173,18 +173,32 @@ export function SecuritySettings() {
             "Loading indicator feeds…"
           )}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => update.mutate()}
-          disabled={update.isPending}
-        >
-          <RefreshCw
-            className={cn("size-4", update.isPending && "animate-spin")}
-          />
-          Update now
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => update.mutate()}
+              disabled={update.isPending}
+            >
+              <RefreshCw
+                className={cn("size-4", update.isPending && "animate-spin")}
+              />
+              Update now
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {update.isPending
+              ? "Updating the threat feeds…"
+              : "Fetch the latest threat feeds now"}
+          </TooltipContent>
+        </Tooltip>
       </div>
+      {update.isError && (
+        <p className="text-xs text-destructive">
+          Couldn't update the feeds: {String(update.error)}
+        </p>
+      )}
 
       {info.data && info.data.feeds.length > 0 && (
         <div className="space-y-3 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
