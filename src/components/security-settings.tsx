@@ -246,7 +246,7 @@ export function SecuritySettings() {
                         <button
                           type="button"
                           onClick={() => void client.openExternal(org.url)}
-                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate underline underline-offset-2 hover:text-foreground"
+                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate rounded-sm underline underline-offset-2 outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <ExternalLink className="size-3 shrink-0" />
                           <span className="truncate">{org.label}</span>
