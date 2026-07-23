@@ -120,7 +120,10 @@ export function SecurityView() {
   const findings = useQuery({
     queryKey: ["findings", selectedRun?.id],
     queryFn: () => client.listFindings(selectedRun!.id),
-    enabled: enabled && !!selectedRun && selectedRun.status === "done",
+    // Any selectable run, not only completed ones: a cancelled scan keeps the
+    // findings it made before stopping, and gating on "done" would leave its
+    // findings table on a permanent skeleton (the query never resolves).
+    enabled: enabled && !!selectedRun,
   });
 
   const [progress, setProgress] = useState<string | null>(null);
