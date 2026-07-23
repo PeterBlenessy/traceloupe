@@ -322,7 +322,13 @@ function AppTitleBar() {
       data-slot="app-titlebar"
       // Match the sidebar's own width transition so the two edges move together.
       style={{ left: collapsed ? 0 : "var(--sidebar-width)" }}
-      className="fixed right-0 top-0 z-20 flex h-13 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
+      // `absolute` (against the SidebarProvider root), NOT `fixed`: WKWebView
+      // fails to sample async-scrolled content into a fixed element's
+      // backdrop-filter, so the translucent bar read as opaque in the app
+      // while working in Chrome. NoteSage's frosted title bar is absolute for
+      // the same reason. The page never scrolls at the root, so the geometry
+      // is identical.
+      className="absolute right-0 top-0 z-20 flex h-13 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
     >
       <AppToolbar collapsed={collapsed} />
     </header>
@@ -634,7 +640,7 @@ function SettingsMenu() {
           <span>Settings</span>
         </SidebarMenuButton>
       </DialogTrigger>
-      <DialogContent className="flex h-[75vh] gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-2xl">
+      <DialogContent className="flex h-[75vh] gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-3xl">
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
           Display, apps to import, and developer preferences.
