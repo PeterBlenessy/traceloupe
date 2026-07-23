@@ -86,7 +86,7 @@ export function SettingsLink({
         <button
           type="button"
           onClick={() => openSettings(tab)}
-          className="font-medium text-[var(--accent-text)] underline underline-offset-2 decoration-1 hover:opacity-80"
+          className="rounded-sm font-medium text-[var(--accent-text)] underline underline-offset-2 decoration-1 outline-hidden hover:opacity-80 focus-visible:ring-2 focus-visible:ring-ring"
         >
           {children}
         </button>
