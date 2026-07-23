@@ -189,6 +189,7 @@ export function AppsView() {
       error={error}
       emptyMessage="No installed-app list in this backup."
       emptyIcon={Boxes}
+      underlap
       items={filtered}
       getKey={(a) => a.bundleId}
       renderItem={(a) => <AppItem app={a} iconUri={iconMap.get(a.bundleId)} />}

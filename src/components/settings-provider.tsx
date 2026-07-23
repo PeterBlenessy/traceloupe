@@ -62,6 +62,9 @@ type SettingsProviderState = {
   /** How tightly the UI packs (rows, headers, controls). */
   density: Density;
   setDensity: (d: Density) => void;
+  /** See-through toolbar: content scrolls visibly beneath a blurred title bar. */
+  translucentToolbar: boolean;
+  setTranslucentToolbar: (v: boolean) => void;
 };
 
 const NAMES_KEY = "traceloupe-show-names";
@@ -78,6 +81,7 @@ const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
 const DENSITY_KEY = "traceloupe-density";
+const TRANSLUCENT_KEY = "traceloupe-translucent-toolbar";
 
 /** Read the persisted density, defaulting to "comfortable". */
 function readDensity(): Density {
@@ -175,6 +179,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
   const [signingChecked, setSigningChecked] = useState<boolean>(false);
   const [density, setDensityState] = useState<Density>(() => readDensity());
+  const [translucentToolbar, setTranslucentToolbarState] = useState<boolean>(
+    () => localStorage.getItem(TRANSLUCENT_KEY) === "true",
+  );
 
   // Reflect density onto the document root; a CSS rule keyed off `data-density`
   // scales the global Tailwind `--spacing`, so every spacing utility tightens at
@@ -183,6 +190,17 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.density = density;
   }, [density]);
+
+  // Reflect the see-through toolbar onto the document root; CSS keyed off
+  // `data-translucent-bar` blurs the title bar and lets the full-bleed list
+  // views' scroll containers extend beneath it (index.css).
+  useEffect(() => {
+    if (translucentToolbar) {
+      document.documentElement.dataset.translucentBar = "true";
+    } else {
+      delete document.documentElement.dataset.translucentBar;
+    }
+  }, [translucentToolbar]);
 
   // Touch ID only works on a stably-signed build (an adhoc dev binary loses
   // Keychain access on rebuild). Detect it, and: disable the gate when unsigned,
@@ -292,6 +310,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setDensityState(d); // the effect above applies it to the document root
   };
 
+  const setTranslucentToolbar = (v: boolean) => {
+    localStorage.setItem(TRANSLUCENT_KEY, String(v));
+    setTranslucentToolbarState(v); // the effect above applies it to the document root
+  };
+
   return (
     <SettingsProviderContext.Provider
       value={{
@@ -320,6 +343,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         biometricAvailable,
         density,
         setDensity,
+        translucentToolbar,
+        setTranslucentToolbar,
       }}
     >
       {children}

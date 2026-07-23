@@ -28,6 +28,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
+import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { FilterControl } from "@/components/filter-control";
@@ -455,8 +456,7 @@ function NoModelPrompt() {
         </CardTitle>
         <CardDescription>
           Safety Scan analyzes your messages and notes with a local AI that runs entirely on this Mac. Download it once from{" "}
-          <span className="font-medium text-foreground">Settings → Safety</span>{" "}
-          (bottom-left), then come back here to run a scan.
+          <SettingsLink tab="safety">Settings → Safety</SettingsLink>, then come back here to run a scan.
         </CardDescription>
       </CardHeader>
     </Card>

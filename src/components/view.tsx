@@ -97,6 +97,7 @@ export function VirtualListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
+  underlap,
 }: {
   /** Unused now that all list views publish to the unified toolbar; kept so
    *  callers can pass it for readability. */
@@ -110,6 +111,9 @@ export function VirtualListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
+  /** Scroll beneath the translucent title bar. Set only when this list view is
+   *  the view's topmost element (nothing renders above it). */
+  underlap?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -124,6 +128,7 @@ export function VirtualListView<T>({
           items={items}
           estimateSize={estimateSize}
           getKey={getKey}
+          underlap={underlap}
           renderItem={(item) => (
             <div className="px-2 pb-1">{renderItem(item)}</div>
           )}
@@ -150,6 +155,7 @@ export function LazyListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
+  underlap,
 }: {
   /** Unused now that all list views publish to the unified toolbar; kept so
    *  callers can pass it for readability. */
@@ -164,6 +170,9 @@ export function LazyListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
+  /** Scroll beneath the translucent title bar. Set only when this list view is
+   *  the view's topmost element (nothing renders above it). */
+  underlap?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -179,6 +188,7 @@ export function LazyListView<T>({
           key={String(resetKey)}
           count={count}
           estimateSize={estimateSize}
+          underlap={underlap}
           windowKey={windowKey}
           fetchWindow={fetchWindow}
           renderItem={(item) => (
