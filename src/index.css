@@ -154,13 +154,8 @@
    LazyVirtualList): pulled up by the bar height with matching padding, so rows
    scroll visibly through the blur. Overflow clips at the padding box of the
    pt-13 wrapper in app-shell, which is what lets them rise. */
-:root[data-translucent-bar="true"] [data-slot="app-titlebar"] {
-  /* 55% + heavy blur: enough glass that passing content clearly shimmers
-     through (at 72% the effect read as opaque). */
-  background-color: color-mix(in srgb, var(--background) 55%, transparent);
-  -webkit-backdrop-filter: blur(24px) saturate(1.4);
-  backdrop-filter: blur(24px) saturate(1.4);
-}
+/* (The bar's own frosted background lives on the header element in
+   app-shell.tsx, keyed off the same setting — one owner, no cascade fight.) */
 :root[data-translucent-bar="true"] [data-underlap] {
   /* 3.25rem = the title bar's h-13. */
   margin-top: -3.25rem;

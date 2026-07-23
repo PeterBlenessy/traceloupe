@@ -36,6 +36,37 @@ function feedOrg(source: string) {
   return FEED_SOURCES.find((o) => s.includes(o.match)) ?? null;
 }
 
+/** What each feed CLASS means — the "why is this checked" a bare repo path
+ *  can't convey. Keys match the `class` field the indicator loader emits. */
+const CLASS_META: Record<string, { label: string; blurb: string }> = {
+  mercenary: {
+    label: "Mercenary spyware",
+    blurb:
+      "State-grade surveillance tools. Indicators come from forensic investigations of real infections — domains, processes, and file paths the malware leaves behind.",
+  },
+  stalkerware: {
+    label: "Stalkerware",
+    blurb:
+      "Commercial apps sold for covertly monitoring a partner or family member — app IDs, domains, and signing certificates tracked by researchers.",
+  },
+  watchware: {
+    label: "Watchware",
+    blurb:
+      "Consumer tracking apps that report a person's location or activity to someone else. Less covert than stalkerware, still worth flagging.",
+  },
+  custom: {
+    label: "Custom indicators",
+    blurb: "Loaded from your custom indicator folder.",
+  },
+};
+
+/** "AmnestyTech/pegasus" → "Pegasus", "echap/ioc" → null (generic bucket). */
+function feedThreatName(source: string): string | null {
+  const seg = source.split("/").pop() ?? source;
+  if (/^(ioc|iocs|indicators?|feed)s?$/i.test(seg)) return null;
+  return seg.charAt(0).toUpperCase() + seg.slice(1);
+}
+
 /**
  * Security Check settings (Settings → Security): the consents, plus all
  * indicator-feed MANAGEMENT — updating the lists, seeing each feed's source
@@ -162,29 +193,46 @@ export function SecuritySettings() {
             anti-stalkerware researchers. TraceLoupe downloads only the
             indicator lists — nothing about you or your backup is sent.
           </p>
-          <ul className="space-y-2">
+          <ul className="space-y-3">
             {info.data.feeds.map((f) => {
               const org = feedOrg(f.source);
+              const meta = CLASS_META[f.class];
+              const threat = feedThreatName(f.source);
+              // Lead with WHAT the feed detects (threat + class), not its repo
+              // path — the raw source stays available on hover for provenance.
+              const classLabel = meta?.label ?? f.class;
+              const title =
+                threat && threat.toLowerCase() !== classLabel.toLowerCase()
+                  ? `${threat} — ${classLabel}`
+                  : (threat ?? classLabel);
               return (
-                // Two-line row with hard truncation: source + count on the
-                // first line, org attribution below — nothing can wrap into
-                // or overlap its neighbor at any pane width.
                 <li key={f.source} className="min-w-0">
                   <div className="flex items-baseline justify-between gap-3">
-                    <span className="min-w-0 truncate font-mono text-[11px] text-foreground/80">
-                      {f.source}
-                    </span>
-                    <span className="shrink-0 text-[11px] tabular-nums">
-                      {f.count.toLocaleString()} · {f.class}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="min-w-0 truncate font-medium text-foreground/90">
+                          {title}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="font-mono text-xs">
+                        {f.source}
+                      </TooltipContent>
+                    </Tooltip>
+                    <span className="shrink-0 tabular-nums">
+                      {f.count.toLocaleString()} indicators
+                      {f.skipped > 0 && ` · ${f.skipped} skipped`}
                     </span>
                   </div>
+                  {meta && (
+                    <p className="mt-0.5 leading-relaxed">{meta.blurb}</p>
+                  )}
                   {org && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
                           onClick={() => void client.openExternal(org.url)}
-                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11px] underline underline-offset-2 hover:text-foreground"
+                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate underline underline-offset-2 hover:text-foreground"
                         >
                           <ExternalLink className="size-3 shrink-0" />
                           <span className="truncate">{org.label}</span>

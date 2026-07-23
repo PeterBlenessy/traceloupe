@@ -315,6 +315,7 @@ export function AppShell() {
  */
 function AppTitleBar() {
   const { state } = useSidebar();
+  const { translucentToolbar } = useSettings();
   const collapsed = state === "collapsed";
   return (
     <header
@@ -327,8 +328,15 @@ function AppTitleBar() {
       // backdrop-filter, so the translucent bar read as opaque in the app
       // while working in Chrome. NoteSage's frosted title bar is absolute for
       // the same reason. The page never scrolls at the root, so the geometry
-      // is identical.
-      className="absolute right-0 top-0 z-20 flex h-13 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
+      // is identical. The frosted classes live HERE (not a CSS override of
+      // bg-background) so there is exactly one element owning the bar's
+      // background and no cascade fight for it.
+      className={cn(
+        "absolute right-0 top-0 z-20 flex h-13 items-center border-b px-3 transition-[left] duration-200 ease-linear",
+        translucentToolbar
+          ? "bg-background/55 backdrop-blur-xl backdrop-saturate-150"
+          : "bg-background",
+      )}
     >
       <AppToolbar collapsed={collapsed} />
     </header>
