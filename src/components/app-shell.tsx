@@ -595,11 +595,13 @@ function SettingsMenu() {
             scrolling content pane. `contents` dissolves the Tabs wrapper so its
             children become the dialog's flex items directly. */}
         <Tabs defaultValue="general" orientation="vertical" className="contents">
+          {/* The dialog's nav pane mirrors the app sidebar: same surface token,
+              same row metrics (h-9, 20px icons), same accent-soft active pill. */}
           <TabsList
             variant="line"
-            className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-muted/30 !rounded-none !p-3"
+            className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-sidebar !rounded-none !p-3"
           >
-            <div className="mb-1.5 px-2 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1.5 px-2 text-[10.5px] font-medium uppercase tracking-wider text-sidebar-foreground/60">
               TraceLoupe
             </div>
             {(
@@ -615,13 +617,14 @@ function SettingsMenu() {
               <TabsTrigger
                 key={value}
                 value={value}
-                // Sidebar row: icon + label, filled accent pill when active.
-                // `flex-none h-8` stops the trigger's base `flex-1` from stretching
+                // Sidebar row: icon + label, accent-soft pill when active — the
+                // same treatment as the app sidebar's active nav item.
+                // `flex-none h-9` stops the trigger's base `flex-1` from stretching
                 // rows to fill the tall sidebar; `[&::after]:hidden` drops the line
                 // variant's edge bar.
-                className="h-8 flex-none justify-start gap-2.5 rounded-md px-2 text-[13px] hover:bg-muted [&::after]:hidden data-[state=active]:!bg-accent data-[state=active]:!text-accent-foreground data-[state=active]:font-medium data-[state=active]:shadow-sm"
+                className="h-9 flex-none justify-start gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent [&::after]:hidden data-[state=active]:!bg-[var(--accent-soft)] data-[state=active]:!text-[var(--accent-text)] data-[state=active]:font-medium"
               >
-                <Icon className="size-4 shrink-0" />
+                <Icon className="size-5 shrink-0" />
                 <span className="flex-1 truncate text-left">{label}</span>
               </TabsTrigger>
             ))}
