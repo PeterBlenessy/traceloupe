@@ -256,7 +256,7 @@ export function LazyVirtualList<T>({
     <div
       ref={scrollRef}
       data-underlap={underlap ? "" : undefined}
-      className="min-h-0 flex-1 overflow-auto [overflow-anchor:none]"
+      className="min-h-0 flex-1 overflow-auto [overflow-anchor:none] [scrollbar-gutter:stable]"
     >
       <div
         className="relative w-full"

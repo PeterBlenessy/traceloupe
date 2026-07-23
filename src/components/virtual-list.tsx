@@ -44,7 +44,7 @@ export function VirtualList<T>({
     <div
       ref={scrollRef}
       data-underlap={underlap ? "" : undefined}
-      className="min-h-0 flex-1 overflow-auto"
+      className="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]"
     >
       <div
         className={className}

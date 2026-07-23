@@ -564,6 +564,7 @@ function Conversations({
               items={visibleThreads!}
               getKey={(t) => t.id}
               estimateSize={64}
+              underlap
               renderItem={(t) => (
                 <div className="px-2 py-0.5">
                   <ThreadRow
@@ -823,6 +824,7 @@ function Timeline({
     <div className="relative flex h-full flex-col">
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
+        underlap
         startAtBottom={!order.desc}
         resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
         persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
