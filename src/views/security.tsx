@@ -2,12 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ShieldAlert, ShieldCheck, ShieldQuestion, RefreshCw, Loader2, AlertTriangle, ChevronRight, Info, ExternalLink, Download, Link2, } from "lucide-react";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+  ShieldAlert, ShieldCheck, ShieldQuestion, Loader2, AlertTriangle, Info, ExternalLink, Download, Link2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,8 +14,8 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
+import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { formatListTime } from "@/lib/format";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
@@ -49,30 +44,6 @@ const SEVERITY_META: Record<
     icon: Info,
   },
 };
-
-/** The public research sources the indicator feeds come from — so the named
- *  orgs and "STIX/YAML" aren't bare jargon but link to who's behind them. */
-const FEED_SOURCES: { match: string; label: string; url: string }[] = [
-  {
-    match: "amnesty",
-    label: "Amnesty International Security Lab",
-    url: "https://securitylab.amnesty.org/",
-  },
-  {
-    match: "mvt",
-    label: "MVT Project — Mobile Verification Toolkit",
-    url: "https://github.com/mvt-project/mvt",
-  },
-  {
-    match: "echap",
-    label: "Échap — anti-stalkerware collective",
-    url: "https://github.com/AssoEchap/stalkerware-indicators",
-  },
-];
-function feedOrg(source: string) {
-  const s = source.toLowerCase();
-  return FEED_SOURCES.find((o) => s.includes(o.match)) ?? null;
-}
 
 const MODULE_LABEL: Record<string, string> = {
   apps: "Installed apps",
@@ -163,32 +134,22 @@ export function SecurityView() {
     },
   });
 
-  const update = useMutation({
-    mutationFn: () => client.updateIndicators(),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["indicatorInfo"] }),
-  });
-
-  const settings = useQuery({
-    queryKey: ["detectionSettings"],
-    queryFn: () => client.getDetectionSettings(),
-  });
-  const setCustomDir = useMutation({
-    mutationFn: async (dir: string | null) => {
-      const s = settings.data ?? (await client.getDetectionSettings());
-      await client.setDetectionSettings({ ...s, customIndicatorDir: dir });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["detectionSettings"] });
-      qc.invalidateQueries({ queryKey: ["indicatorInfo"] });
-    },
-  });
-
   const [selected, setSelected] = useState<Finding | null>(null);
 
   const totalIndicators = useMemo(
     () => info.data?.feeds.reduce((n, f) => n + f.count, 0) ?? 0,
     [info.data],
   );
+  // Feed staleness, for the update nudge: the verdict is only as good as the
+  // lists it ran against. Management lives in Settings → Security; the view
+  // just points there when it matters.
+  const staleDays = useMemo(() => {
+    if (!info.data?.generatedAt) return null;
+    const at = new Date(info.data.generatedAt).getTime();
+    if (Number.isNaN(at)) return null;
+    return Math.floor((Date.now() - at) / 86_400_000);
+  }, [info.data]);
+  const stale = staleDays !== null && staleDays > 14;
 
   // Publish the title to the shared top toolbar (like every other view). The
   // scan actions live in the content — the toolbar has no actions slot and
@@ -240,7 +201,9 @@ export function SecurityView() {
             </AlertDescription>
           </Alert>
 
-          {/* Indicator freshness + the scan actions (which act on it). */}
+          {/* Provenance + the scan action. This line is the verdict's
+              credibility (what it ran against), not management — updating and
+              configuring the feeds lives in Settings → Security. */}
           <div className="flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 text-sm">
             <div className="min-w-0 text-muted-foreground">
               {info.data ? (
@@ -255,128 +218,26 @@ export function SecurityView() {
                 "Loading indicator feeds…"
               )}
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => update.mutate()}
-                disabled={update.isPending || running}
-              >
-                <RefreshCw
-                  className={cn("size-4", update.isPending && "animate-spin")}
-                />
-                Update indicators
-              </Button>
-              <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
-                {running ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : (
-                  <ShieldAlert className="size-4" />
-                )}
-                {running ? "Scanning…" : "Run scan"}
-              </Button>
-            </div>
-          </div>
-
-          {/* Where the feeds come from + what the indicator files are, so the
-              named orgs and "STIX/YAML" aren't unexplained jargon. */}
-          {info.data && info.data.feeds.length > 0 && (
-            <Collapsible>
-              <CollapsibleTrigger className="group inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-                <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
-                Where these indicators come from
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <div className="mt-2 space-y-3 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-                  <p>
-                    Public threat-intelligence feeds maintained by human-rights
-                    and anti-stalkerware researchers. TraceLoupe downloads only
-                    the indicator lists — nothing about you or your backup is
-                    sent.
-                  </p>
-                  <ul className="space-y-1.5">
-                    {info.data.feeds.map((f) => {
-                      const org = feedOrg(f.source);
-                      return (
-                        <li
-                          key={f.source}
-                          className="flex items-center justify-between gap-3"
-                        >
-                          <span className="min-w-0">
-                            <span className="font-mono text-foreground/80">
-                              {f.source}
-                            </span>{" "}
-                            · {f.count.toLocaleString()} · {f.class}
-                          </span>
-                          {org && (
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={() => void client.openExternal(org.url)}
-                                  className="inline-flex shrink-0 items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
-                                >
-                                  <ExternalLink className="size-3" />
-                                  {org.label}
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent>{org.label}</TooltipContent>
-                            </Tooltip>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  <p>
-                    Indicators are{" "}
-                    <span className="font-medium text-foreground/80">STIX</span>{" "}
-                    or{" "}
-                    <span className="font-medium text-foreground/80">YAML</span>{" "}
-                    files — structured lists of known-bad domains, IP addresses,
-                    files and app IDs. You can point TraceLoupe at your own
-                    folder of them below.
-                  </p>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          )}
-
-          {/* Custom indicator folder (researcher mode). */}
-          <div className="flex items-center justify-between gap-2 rounded-lg border px-4 py-2.5 text-sm">
-            <div className="min-w-0 text-muted-foreground">
-              Custom indicators:{" "}
-              {settings.data?.customIndicatorDir ? (
-                <span className="font-mono text-xs text-foreground">
-                  {settings.data.customIndicatorDir}
-                </span>
+            <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
+              {running ? (
+                <Loader2 className="size-4 animate-spin" />
               ) : (
-                <span>none — add a folder of .stix / .yaml files to scan</span>
+                <ShieldAlert className="size-4" />
               )}
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              {settings.data?.customIndicatorDir && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setCustomDir.mutate(null)}
-                  disabled={setCustomDir.isPending}
-                >
-                  Clear
-                </Button>
-              )}
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={setCustomDir.isPending || running}
-                onClick={async () => {
-                  const dir = await client.pickFolder("Choose a custom indicator folder");
-                  if (dir) setCustomDir.mutate(dir);
-                }}
-              >
-                Choose folder…
-              </Button>
-            </div>
+              {running ? "Scanning…" : "Run scan"}
+            </Button>
           </div>
+
+          {stale && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-400">
+              <AlertTriangle className="size-4 shrink-0" />
+              <span>
+                The threat feeds are {staleDays} days old — update them in{" "}
+                <SettingsLink tab="security">Settings → Security</SettingsLink>{" "}
+                before the next scan.
+              </span>
+            </div>
+          )}
 
           {running && (
             <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-sm">

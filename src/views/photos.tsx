@@ -380,7 +380,11 @@ function MediaGrid({
     // min-h-0 lets this flex child actually scroll; without it the grid grows to
     // its full content height and the virtualizer mounts every row (and spawns a
     // `sips` transcode per thumbnail), freezing the app.
-    <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto p-1">
+    <div
+      ref={scrollRef}
+      data-underlap=""
+      className="min-h-0 flex-1 overflow-auto p-1 [scrollbar-gutter:stable]"
+    >
       <div
         className="relative w-full"
         style={{ height: rowVirtualizer.getTotalSize() }}

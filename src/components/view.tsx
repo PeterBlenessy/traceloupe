@@ -97,6 +97,7 @@ export function VirtualListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
+  underlap,
 }: {
   /** Unused now that all list views publish to the unified toolbar; kept so
    *  callers can pass it for readability. */
@@ -110,6 +111,9 @@ export function VirtualListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
+  /** Scroll beneath the translucent title bar. Set only when this list view is
+   *  the view's topmost element (nothing renders above it). */
+  underlap?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -124,6 +128,7 @@ export function VirtualListView<T>({
           items={items}
           estimateSize={estimateSize}
           getKey={getKey}
+          underlap={underlap}
           renderItem={(item) => (
             <div className="px-2 pb-1">{renderItem(item)}</div>
           )}
@@ -150,6 +155,7 @@ export function LazyListView<T>({
   error,
   emptyMessage = "Nothing here.",
   emptyIcon,
+  underlap,
 }: {
   /** Unused now that all list views publish to the unified toolbar; kept so
    *  callers can pass it for readability. */
@@ -164,6 +170,9 @@ export function LazyListView<T>({
   error?: unknown;
   emptyMessage?: string;
   emptyIcon?: React.ComponentType<{ className?: string }>;
+  /** Scroll beneath the translucent title bar. Set only when this list view is
+   *  the view's topmost element (nothing renders above it). */
+  underlap?: boolean;
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -179,6 +188,7 @@ export function LazyListView<T>({
           key={String(resetKey)}
           count={count}
           estimateSize={estimateSize}
+          underlap={underlap}
           windowKey={windowKey}
           fetchWindow={fetchWindow}
           renderItem={(item) => (
@@ -245,11 +255,11 @@ export function ListSearch({
         }
       }}
       className={cn(
-        "relative flex h-8 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
-        open ? "w-44 sm:w-56" : "w-8 cursor-pointer hover:bg-accent hover:text-foreground",
+        "relative flex h-9 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
+        open ? "w-44 sm:w-56" : "w-9 cursor-pointer hover:bg-accent hover:text-foreground",
       )}
     >
-      <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2" />
+      <Search className="pointer-events-none absolute left-2 top-1/2 size-5 -translate-y-1/2" />
       <input
         ref={inputRef}
         value={value}
@@ -259,7 +269,7 @@ export function ListSearch({
         placeholder={open ? placeholder : ""}
         aria-label={placeholder}
         title={open ? undefined : placeholder}
-        className="h-full w-full select-text bg-transparent pl-8 pr-7 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+        className="h-full w-full select-text bg-transparent pl-9 pr-7 text-sm text-foreground outline-none placeholder:text-muted-foreground"
       />
       {open && value && (
         <button
@@ -294,7 +304,10 @@ export function EmptyView({
     <Empty className={cn("h-full", className)}>
       <EmptyHeader>
         {Icon && (
-          <EmptyMedia variant="icon">
+          <EmptyMedia
+            variant="icon"
+            className="bg-[var(--accent-soft)] text-[var(--accent-text)]"
+          >
             <Icon className="size-6" />
           </EmptyMedia>
         )}
@@ -342,7 +355,7 @@ export function NoBackupState({
     // so a centered hero reads as floating/misaligned next to them.
     <div className="flex h-full items-start justify-center overflow-y-auto p-6">
       <div className="w-full max-w-xl pt-16 pb-8 text-center">
-        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+        <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent-text)]">
           <Icon className="size-6" />
         </div>
         <h2 className="text-lg font-semibold">{title}</h2>

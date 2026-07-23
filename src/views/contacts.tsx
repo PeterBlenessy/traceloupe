@@ -180,6 +180,7 @@ export function ContactsView() {
               <ListSkeleton />
             ) : filtered.length === 0 ? (
               <EmptyView
+                icon={Users}
                 title={
                   (contacts?.length ?? 0) === 0
                     ? "No contacts in this backup."
@@ -191,6 +192,7 @@ export function ContactsView() {
                 items={sorted}
                 getKey={(c) => c.id}
                 estimateSize={56}
+                underlap
                 renderItem={(c) => (
                   <div className="px-2 py-0.5">
                     <ContactRow

@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
@@ -8,7 +9,6 @@ import {
   CalendarDays,
   HeartPulse,
   ListTodo,
-  Smartphone,
   Waypoints,
   Globe,
   Image,
@@ -32,6 +32,7 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -40,10 +41,16 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
-  SidebarSeparator,
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { DeviceHero } from "@/components/device-hero";
+import {
+  SettingsDialogProvider,
+  useSettingsDialog,
+  type SettingsTab,
+} from "@/components/settings-dialog-context";
+import { useSystemAccent } from "@/lib/use-system-accent";
 import { useResizableWidth } from "@/components/resize";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -107,6 +114,28 @@ const nav = [
 
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // Follow the macOS accent color (System Settings → Appearance).
+  useSystemAccent();
+  // Scrollbar thumbs paint only while their element scrolls (index.css keys off
+  // `data-scrolling`); the 12px gutter is always reserved, so nothing shifts.
+  useEffect(() => {
+    const timers = new WeakMap<Element, number>();
+    const onScroll = (e: Event) => {
+      const el =
+        e.target === document ? document.documentElement : (e.target as Element);
+      if (!(el instanceof Element)) return;
+      el.setAttribute("data-scrolling", "");
+      const prev = timers.get(el);
+      if (prev !== undefined) window.clearTimeout(prev);
+      timers.set(
+        el,
+        window.setTimeout(() => el.removeAttribute("data-scrolling"), 800),
+      );
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () =>
+      document.removeEventListener("scroll", onScroll, { capture: true });
+  }, []);
   // Drag-resizable, persisted sidebar width (applies only when expanded; the
   // icon rail uses the fixed --sidebar-width-icon).
   const { width: sidebarWidth, startResize } = useResizableWidth(
@@ -139,6 +168,7 @@ export function AppShell() {
     <ImportProvider>
       <ReimportProvider>
        <SafetyScanProvider>
+       <SettingsDialogProvider>
        <ToolbarProvider>
         {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
         only sets `min-h-svh`, which lets the layout grow with its content — so a
@@ -161,77 +191,65 @@ export function AppShell() {
           <Sidebar collapsible="icon">
             {/* Clear the top chrome: when expanded the sidebar runs full height and
             its header just clears the macOS traffic lights (pt-10); when collapsed
-            it sits UNDER the full-width title bar, so the icon clears the bar
-            (pt-14). data-tauri-drag-region makes the band draggable. */}
+            it sits UNDER the full-width title bar (h-13), so the icon clears the
+            bar (pt-16). data-tauri-drag-region makes the band draggable. */}
             <SidebarHeader
-              className="pt-10 group-data-[collapsible=icon]:pt-14"
+              className="relative pt-10 group-data-[collapsible=icon]:pt-16"
               data-tauri-drag-region
             >
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  {/* The device/backup identity doubles as the Device-info entry:
-                      shows the open device's name and opens the Device view. */}
-                  <SidebarMenuButton
-                    asChild
-                    isActive={
-                      hasBackup === true ? pathname === "/device" : pathname === "/"
-                    }
-                    tooltip={
-                      hasBackup === true
-                        ? (deviceInfo?.deviceName ?? "Device")
-                        : "Your iPhone backups"
-                    }
-                  >
-                    <Link to={hasBackup === true ? "/device" : "/"}>
-                      <Smartphone />
-                      <span className="truncate font-semibold group-data-[collapsible=icon]:hidden">
-                        {deviceInfo?.deviceName ?? "TraceLoupe"}
-                      </span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                {/* Security and Safety sit with Device: all three operate on
-                    the whole backup (its identity, a spyware audit, a content
-                    scan), unlike the content views below which are slices of
-                    that content. */}
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === "/security"}
-                    tooltip="Security"
-                  >
-                    <Link to="/security">
-                      <ShieldAlert />
-                      <span>Security</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    isActive={pathname === "/safety-scan"}
-                    tooltip="Safety (experimental)"
-                  >
-                    <Link to="/safety-scan">
-                      <ShieldUser />
-                      <span>Safety</span>
-                    </Link>
-                  </SidebarMenuButton>
-                  {/* Experimental: local-AI classification quality is not yet
-                      validated on real hardware. */}
-                  <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Beta
-                  </SidebarMenuBadge>
-                </SidebarMenuItem>
-              </SidebarMenu>
+              {/* Native-macOS trigger placement: it lives IN the sidebar while
+                  the sidebar shows (top-right, beside the traffic lights) and
+                  moves out into the title bar when collapsed — so it never
+                  reads as belonging to the content view's title. */}
+              <div className="absolute right-2 top-2 group-data-[collapsible=icon]:hidden">
+                <SidebarTrigger />
+              </div>
+              {/* The device identity as a hero: what backup you're looking at,
+                  not the app's name. Doubles as the Device-info entry. */}
+              <DeviceHero deviceInfo={deviceInfo ?? null} hasBackup={hasBackup} />
             </SidebarHeader>
             <SidebarContent>
-              {/* w-auto! beats the Separator primitive's higher-specificity
-                  data-[orientation=horizontal]:w-full — without it the mx-2
-                  inset makes the divider 100%+16px wide and the sidebar scrolls
-                  horizontally. */}
-              <SidebarSeparator className="w-auto!" />
+              {/* Security and Safety get their own group: both operate on the
+                  WHOLE backup (a spyware audit, a content scan), unlike the
+                  content views below which are slices of its content. */}
               <SidebarGroup>
+                <SidebarGroupLabel>Scans</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === "/security"}
+                        tooltip="Security"
+                      >
+                        <Link to="/security">
+                          <ShieldAlert />
+                          <span>Security</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === "/safety-scan"}
+                        tooltip="Safety (experimental)"
+                      >
+                        <Link to="/safety-scan">
+                          <ShieldUser />
+                          <span>Safety</span>
+                        </Link>
+                      </SidebarMenuButton>
+                      {/* Experimental: local-AI classification quality is not yet
+                          validated on real hardware. */}
+                      <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                        Beta
+                      </SidebarMenuBadge>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+              <SidebarGroup>
+                <SidebarGroupLabel>Content</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {nav.map((item) => (
@@ -267,13 +285,19 @@ export function AppShell() {
             </SidebarFooter>
           </Sidebar>
           <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
-          <SidebarInset className="pt-11">
-            <div className="min-h-0 flex-1 overflow-hidden">
+          <SidebarInset>
+            {/* The bar clearance lives as PADDING on this clipping wrapper (not
+                on SidebarInset) so its padding-box reaches the window top:
+                overflow clips at the padding box, which lets an opted-in list
+                (data-underlap) rise under the translucent bar while every other
+                view keeps starting below it. */}
+            <div className="min-h-0 flex-1 overflow-hidden pt-13">
               <Outlet />
             </div>
           </SidebarInset>
         </SidebarProvider>
        </ToolbarProvider>
+       </SettingsDialogProvider>
        </SafetyScanProvider>
       </ReimportProvider>
     </ImportProvider>
@@ -291,13 +315,28 @@ export function AppShell() {
  */
 function AppTitleBar() {
   const { state } = useSidebar();
+  const { translucentToolbar } = useSettings();
   const collapsed = state === "collapsed";
   return (
     <header
       data-tauri-drag-region
+      data-slot="app-titlebar"
       // Match the sidebar's own width transition so the two edges move together.
       style={{ left: collapsed ? 0 : "var(--sidebar-width)" }}
-      className="fixed right-0 top-0 z-20 flex h-11 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
+      // `absolute` (against the SidebarProvider root), NOT `fixed`: WKWebView
+      // fails to sample async-scrolled content into a fixed element's
+      // backdrop-filter, so the translucent bar read as opaque in the app
+      // while working in Chrome. NoteSage's frosted title bar is absolute for
+      // the same reason. The page never scrolls at the root, so the geometry
+      // is identical. The frosted classes live HERE (not a CSS override of
+      // bg-background) so there is exactly one element owning the bar's
+      // background and no cascade fight for it.
+      className={cn(
+        "absolute right-0 top-0 z-20 flex h-13 items-center border-b px-3 transition-[left] duration-200 ease-linear",
+        translucentToolbar
+          ? "bg-background/55 backdrop-blur-xl backdrop-saturate-150"
+          : "bg-background",
+      )}
     >
       <AppToolbar collapsed={collapsed} />
     </header>
@@ -313,9 +352,13 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
         // traffic lights; when expanded the lights sit over the sidebar (left of
         // this bar), so no extra padding is needed. The toggle is its own island.
         <div className={cn("flex items-center gap-2", collapsed && "pl-20")}>
-          <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
-            <SidebarTrigger />
-          </div>
+          {/* The trigger only joins the title bar when the sidebar is hidden —
+              while it's visible, the trigger sits inside the sidebar itself. */}
+          {collapsed && (
+            <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
+              <SidebarTrigger />
+            </div>
+          )}
           {tb?.title && (
             <div className="flex items-baseline gap-2">
               <h1 className="text-base font-semibold">{tb.title}</h1>
@@ -533,10 +576,10 @@ function DensityToggle() {
         <Button
           variant="ghost"
           size="icon"
-          className="size-7"
+          className="size-8"
           onClick={() => setDensity(next)}
         >
-          <Icon className="size-4" />
+          <Icon className="size-5" />
           <span className="sr-only">
             Density: {label}. Switch to {DENSITY_META[next].label}.
           </span>
@@ -577,8 +620,12 @@ function SettingsMenu() {
     biometricAvailable,
     density,
     setDensity,
+    translucentToolbar,
+    setTranslucentToolbar,
   } = useSettings();
   const { theme, setTheme } = useTheme();
+  // Lifted open/tab state so views can deep-link (e.g. "Settings → Safety").
+  const { open, setOpen, tab, setTab } = useSettingsDialog();
   const { data: catalog } = useQuery({
     queryKey: ["importModules"],
     queryFn: () => client.listImportModules(),
@@ -594,14 +641,14 @@ function SettingsMenu() {
   };
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <SidebarMenuButton tooltip="Settings">
-          <Settings className="size-4" />
+          <Settings />
           <span>Settings</span>
         </SidebarMenuButton>
       </DialogTrigger>
-      <DialogContent className="flex h-[75vh] gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-2xl">
+      <DialogContent className="flex h-[75vh] gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-3xl">
         <DialogTitle className="sr-only">Settings</DialogTitle>
         <DialogDescription className="sr-only">
           Display, apps to import, and developer preferences.
@@ -610,12 +657,19 @@ function SettingsMenu() {
             (its own background, bleeding to the dialog's rounded edges) beside a
             scrolling content pane. `contents` dissolves the Tabs wrapper so its
             children become the dialog's flex items directly. */}
-        <Tabs defaultValue="general" orientation="vertical" className="contents">
+        <Tabs
+          value={tab}
+          onValueChange={(v) => setTab(v as SettingsTab)}
+          orientation="vertical"
+          className="contents"
+        >
+          {/* The dialog's nav pane mirrors the app sidebar: same surface token,
+              same row metrics (h-9, 20px icons), same accent-soft active pill. */}
           <TabsList
             variant="line"
-            className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-muted/30 !rounded-none !p-3"
+            className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-sidebar !rounded-none !p-3"
           >
-            <div className="mb-1.5 px-2 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+            <div className="mb-1.5 px-2 text-[10.5px] font-medium uppercase tracking-wider text-sidebar-foreground/60">
               TraceLoupe
             </div>
             {(
@@ -631,13 +685,14 @@ function SettingsMenu() {
               <TabsTrigger
                 key={value}
                 value={value}
-                // Sidebar row: icon + label, filled accent pill when active.
-                // `flex-none h-8` stops the trigger's base `flex-1` from stretching
+                // Sidebar row: icon + label, accent-soft pill when active — the
+                // same treatment as the app sidebar's active nav item.
+                // `flex-none h-9` stops the trigger's base `flex-1` from stretching
                 // rows to fill the tall sidebar; `[&::after]:hidden` drops the line
                 // variant's edge bar.
-                className="h-8 flex-none justify-start gap-2.5 rounded-md px-2 text-[13px] hover:bg-muted [&::after]:hidden data-[state=active]:!bg-accent data-[state=active]:!text-accent-foreground data-[state=active]:font-medium data-[state=active]:shadow-sm"
+                className="h-9 flex-none justify-start gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent [&::after]:hidden data-[state=active]:!bg-[var(--accent-soft)] data-[state=active]:!text-[var(--accent-text)] data-[state=active]:font-medium"
               >
-                <Icon className="size-4 shrink-0" />
+                <Icon className="size-5 shrink-0" />
                 <span className="flex-1 truncate text-left">{label}</span>
               </TabsTrigger>
             ))}
@@ -735,6 +790,16 @@ function SettingsMenu() {
                   <option value="cozy">Cozy</option>
                   <option value="compact">Compact</option>
                 </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Translucent toolbar"
+                description="Make the toolbar slightly see-through, with long lists scrolling visibly beneath it."
+              >
+                <Switch
+                  aria-label="Translucent toolbar"
+                  checked={translucentToolbar}
+                  onCheckedChange={setTranslucentToolbar}
+                />
               </SettingsRow>
             </SettingsGroup>
 

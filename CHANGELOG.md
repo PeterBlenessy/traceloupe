@@ -11,7 +11,57 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
-_Nothing yet._
+**UI refresh — device hero, Scans group, system accent, layered surfaces.**
+
+### Added
+
+- **Device hero**: the sidebar's top item is now a large phone-under-the-loupe
+  illustration showing the open backup's identity (device name, model, iOS
+  version, Encrypted chip) — or a dashed ghost phone with a Choose-a-backup
+  action when nothing is open. Collapses to a compact mark on the icon rail.
+- **System accent color**: the UI follows the macOS accent set in System
+  Settings (read via `NSColor.controlAccentColor`, re-checked on window focus).
+  Active nav, selection, sent bubbles, primary buttons, and focus rings all
+  tint with it; scan verdicts and destructive actions stay semantic.
+
+- **Translucent toolbar** (on by default; Settings → General to opt out): the
+  title bar goes see-through with a backdrop blur, and list content — Calls,
+  Safari, Apps, Calendar, Reminders, Photos, and the Contacts/Messages list
+  panes — scrolls visibly beneath it.
+- "Settings → Safety" in the Safety view's model prompt is now a real link
+  that opens the Settings dialog on the Safety tab (new `SettingsLink` /
+  `useSettingsDialog` deep-linking).
+- Security view now separates evidence from configuration: the view keeps a
+  read-only provenance line ("N indicators from M feeds · updated …"), the
+  scan action, and a stale-feed nudge that deep-links to Settings; updating
+  feeds, the per-feed source list, and the custom STIX/YAML folder moved to
+  Settings → Security.
+
+### Changed
+
+- The sidebar toggle now lives inside the sidebar while it's open (top-right,
+  the native macOS pattern) and moves into the title bar only when the sidebar
+  is hidden — so it no longer reads as belonging to the view title. It also
+  gained a Hide/Show sidebar tooltip.
+- Scrollbars only paint their thumb while actually scrolling; the 12 px gutter
+  stays reserved, so layout never shifts.
+- Security and Safety moved from the sidebar header into their own labeled
+  **Scans** group; the content views sit under a **Content** label.
+- Sidebar icons grew from 16 px to 20 px with slightly taller rows.
+- The title bar / toolbar grew from 44 px to 52 px with 20 px icons and
+  matching larger controls (sidebar trigger, filter, sort, search, density
+  and theme toggles), so the top chrome breathes like the new sidebar.
+- The Settings dialog's nav pane now mirrors the app sidebar: same surface,
+  row height, icon size, and accent-tinted active pill.
+- The surface palette moved from pure white / near-black to layered tinted
+  neutrals: light mode gets an off-white canvas with a deeper sidebar pane;
+  dark mode lifts off near-black with the sidebar as the darkest layer.
+- Every empty state now carries an accent-tinted icon tile, including the
+  previously text-only ones (Calls, Safari, Apps, Notes, Recordings, Contacts,
+  Calendar, Reminders, Interactions).
+- Apps view rows are now bordered cards with a clear type hierarchy: app name,
+  then App Store metadata, then the download receipt (emphasized date), then
+  the bundle id in small monospace — one size and voice per class of info.
 
 ## [0.29.1] — 2026-07-22
 

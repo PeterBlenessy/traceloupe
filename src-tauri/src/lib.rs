@@ -8,6 +8,7 @@ mod media;
 mod safety_scan_cmd;
 mod secret;
 mod signing;
+mod theme;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
@@ -3779,7 +3780,8 @@ pub fn run() {
             safety_scan_cmd::dismiss_content_finding,
             safety_scan_cmd::get_safety_scan_report,
             safety_scan_cmd::list_safety_scans,
-            safety_scan_cmd::delete_safety_scan
+            safety_scan_cmd::delete_safety_scan,
+            theme::get_system_accent_color
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

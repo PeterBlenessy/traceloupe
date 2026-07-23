@@ -192,11 +192,11 @@ export function FilterControl({
               className={cn(
                 "inline-flex shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[active=true]:text-foreground",
                 hasActive
-                  ? "size-7 rounded-md"
-                  : "size-8 rounded-lg border border-border/70 bg-muted/40 data-[active=true]:bg-accent",
+                  ? "size-8 rounded-md"
+                  : "size-9 rounded-lg border border-border/70 bg-muted/40 data-[active=true]:bg-accent",
               )}
             >
-              <Funnel className="size-4" />
+              <Funnel className="size-5" />
             </button>
           </TooltipTrigger>
           <TooltipContent>Filter</TooltipContent>
