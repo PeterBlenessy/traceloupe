@@ -386,12 +386,11 @@ export function NotesView() {
           value={viewMode}
           onValueChange={(v) => v && setViewMode(v as "flat" | "tree")}
           variant="outline"
-          size="sm"
         >
           <Tooltip>
             <TooltipTrigger asChild>
               <ToggleGroupItem value="flat" aria-label="List">
-                <List className="size-4" />
+                <List className="size-5" />
               </ToggleGroupItem>
             </TooltipTrigger>
             <TooltipContent>List</TooltipContent>
@@ -399,7 +398,7 @@ export function NotesView() {
           <Tooltip>
             <TooltipTrigger asChild>
               <ToggleGroupItem value="tree" aria-label="Folders">
-                <FolderTree className="size-4" />
+                <FolderTree className="size-5" />
               </ToggleGroupItem>
             </TooltipTrigger>
             <TooltipContent>Folder tree</TooltipContent>

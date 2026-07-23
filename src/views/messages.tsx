@@ -162,11 +162,11 @@ function JumpButtons({
             <Button
               variant="ghost"
               size="sm"
-              className="size-7 px-0 text-muted-foreground"
+              className="size-8 px-0 text-muted-foreground"
               disabled={disabled}
               onClick={onTop}
             >
-              <ArrowUpToLine className="size-4" />
+              <ArrowUpToLine className="size-5" />
             </Button>
           </span>
         </TooltipTrigger>
@@ -178,11 +178,11 @@ function JumpButtons({
             <Button
               variant="ghost"
               size="sm"
-              className="-ml-1 size-7 px-0 text-muted-foreground"
+              className="-ml-1 size-8 px-0 text-muted-foreground"
               disabled={disabled}
               onClick={onBottom}
             >
-              <ArrowDownToLine className="size-4" />
+              <ArrowDownToLine className="size-5" />
             </Button>
           </span>
         </TooltipTrigger>
@@ -201,12 +201,12 @@ function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }
           variant="ghost"
           size="sm"
           onClick={onToggle}
-          className="h-8 shrink-0 gap-1.5 px-2 text-xs text-muted-foreground"
+          className="h-9 shrink-0 gap-1.5 px-2 text-sm text-muted-foreground"
         >
           {desc ? (
-            <ArrowDownWideNarrow className="size-4" />
+            <ArrowDownWideNarrow className="size-5" />
           ) : (
-            <ArrowUpNarrowWide className="size-4" />
+            <ArrowUpNarrowWide className="size-5" />
           )}
           {desc ? "Newest" : "Oldest"}
         </Button>
@@ -342,12 +342,11 @@ function MessagesViewInner() {
         value={mode}
         onValueChange={(v) => v && switchMode(v as Mode)}
         variant="outline"
-        size="sm"
       >
         <Tooltip>
           <TooltipTrigger asChild>
             <ToggleGroupItem value="conversations" aria-label="Chats">
-              <MessagesSquare className="size-4" />
+              <MessagesSquare className="size-5" />
             </ToggleGroupItem>
           </TooltipTrigger>
           <TooltipContent>Chats</TooltipContent>
@@ -355,7 +354,7 @@ function MessagesViewInner() {
         <Tooltip>
           <TooltipTrigger asChild>
             <ToggleGroupItem value="timeline" aria-label="Timeline">
-              <GalleryVerticalEnd className="size-4" />
+              <GalleryVerticalEnd className="size-5" />
             </ToggleGroupItem>
           </TooltipTrigger>
           <TooltipContent>Timeline</TooltipContent>
