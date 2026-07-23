@@ -30,6 +30,11 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 - "Settings → Safety" in the Safety view's model prompt is now a real link
   that opens the Settings dialog on the Safety tab (new `SettingsLink` /
   `useSettingsDialog` deep-linking).
+- Security view now separates evidence from configuration: the view keeps a
+  read-only provenance line ("N indicators from M feeds · updated …"), the
+  scan action, and a stale-feed nudge that deep-links to Settings; updating
+  feeds, the per-feed source list, and the custom STIX/YAML folder moved to
+  Settings → Security.
 
 ### Changed
 
