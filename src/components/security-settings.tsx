@@ -162,33 +162,35 @@ export function SecuritySettings() {
             anti-stalkerware researchers. TraceLoupe downloads only the
             indicator lists — nothing about you or your backup is sent.
           </p>
-          <ul className="space-y-1.5">
+          <ul className="space-y-2">
             {info.data.feeds.map((f) => {
               const org = feedOrg(f.source);
               return (
-                <li
-                  key={f.source}
-                  className="flex items-center justify-between gap-3"
-                >
-                  <span className="min-w-0">
-                    <span className="font-mono text-foreground/80">
+                // Two-line row with hard truncation: source + count on the
+                // first line, org attribution below — nothing can wrap into
+                // or overlap its neighbor at any pane width.
+                <li key={f.source} className="min-w-0">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="min-w-0 truncate font-mono text-[11px] text-foreground/80">
                       {f.source}
-                    </span>{" "}
-                    · {f.count.toLocaleString()} · {f.class}
-                  </span>
+                    </span>
+                    <span className="shrink-0 text-[11px] tabular-nums">
+                      {f.count.toLocaleString()} · {f.class}
+                    </span>
+                  </div>
                   {org && (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <button
                           type="button"
                           onClick={() => void client.openExternal(org.url)}
-                          className="inline-flex shrink-0 items-center gap-0.5 underline underline-offset-2 hover:text-foreground"
+                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate text-[11px] underline underline-offset-2 hover:text-foreground"
                         >
-                          <ExternalLink className="size-3" />
-                          {org.label}
+                          <ExternalLink className="size-3 shrink-0" />
+                          <span className="truncate">{org.label}</span>
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent>{org.label}</TooltipContent>
+                      <TooltipContent>Open {org.label}</TooltipContent>
                     </Tooltip>
                   )}
                 </li>
