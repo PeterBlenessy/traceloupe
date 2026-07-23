@@ -472,9 +472,9 @@ export function NotesView() {
             ) : isPending ? (
               <ListSkeleton rows={6} />
             ) : (notes?.length ?? 0) === 0 ? (
-              <EmptyView title="No notes in this backup." />
+              <EmptyView icon={NotebookText} title="No notes in this backup." />
             ) : (sortedNotes?.length ?? 0) === 0 ? (
-              <EmptyView title="No notes match these filters." />
+              <EmptyView icon={NotebookText} title="No notes match these filters." />
             ) : (
               <VirtualList
                 key={clockFormat}

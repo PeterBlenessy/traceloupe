@@ -37,5 +37,11 @@ zeroize = { workspace = true }
 ureq = { workspace = true }
 base64 = "0.22"
 
+# Read the macOS accent color (NSColor.controlAccentColor) so the UI can follow
+# the system accent set in System Settings (theme.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSpace"] }
+
 [dev-dependencies]
 tempfile = "3"

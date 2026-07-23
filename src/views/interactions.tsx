@@ -285,6 +285,7 @@ export function InteractionsView() {
           emptyMessage={
             hasData ? "No contacts match these filters." : "No interaction data in this backup."
           }
+          emptyIcon={Waypoints}
           items={filtered}
           getKey={(i) => i.id}
           renderItem={(i) => <InteractionRow interaction={i} />}
