@@ -376,7 +376,7 @@ mod tests {
         .unwrap();
         assert_eq!(outcome.status, ScanStatus::Completed);
         assert_eq!(outcome.findings, 1, "only the valid verdict survives");
-        let rows = analysis.list_findings().unwrap();
+        let rows = analysis.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].category, Category::ThreatViolence);
         assert_eq!(rows[0].severity, 3);
@@ -486,7 +486,7 @@ mod tests {
             outcome.findings, 1,
             "same message via two windows is one finding"
         );
-        assert_eq!(analysis.list_findings().unwrap().len(), 1);
+        assert_eq!(analysis.list_findings(None).unwrap().len(), 1);
     }
 
     #[test]

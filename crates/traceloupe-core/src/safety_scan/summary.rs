@@ -79,7 +79,7 @@ pub fn run_summaries(
     scan_id: i64,
     cancel: &CancelToken,
 ) -> Result<SummaryOutcome> {
-    let all = analysis.list_findings()?;
+    let all = analysis.list_findings(None)?;
     let live: Vec<&FindingRow> = all.iter().filter(|f| !f.dismissed && !f.stale).collect();
     let mut outcome = SummaryOutcome::default();
 
