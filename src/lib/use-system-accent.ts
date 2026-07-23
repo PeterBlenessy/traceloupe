@@ -19,11 +19,20 @@ import { client } from "@/lib/ipc";
  *  doesn't flash the baked-in fallback blue before the invoke round-trips. */
 const STORAGE_KEY = "traceloupe-system-accent";
 
+/** Only the shape theme.rs emits. An INVALID custom-property value is worse
+ *  than an absent one: `var(--x, fallback)` falls back only when the var is
+ *  unset, so a corrupt cached string would leave --primary/--ring computing
+ *  to nothing (colorless buttons and rings) until the next successful invoke. */
+function isValidAccent(value: string): boolean {
+  return value.startsWith("oklch(") && CSS.supports("color", value);
+}
+
 export function useSystemAccent() {
   useEffect(() => {
     let cancelled = false;
 
     const apply = (value: string | null) => {
+      if (value && !isValidAccent(value)) value = null;
       const root = document.documentElement;
       if (value) root.style.setProperty("--accent-system-value", value);
       else root.style.removeProperty("--accent-system-value");
@@ -46,7 +55,7 @@ export function useSystemAccent() {
 
     try {
       const cached = localStorage.getItem(STORAGE_KEY);
-      if (cached) {
+      if (cached && isValidAccent(cached)) {
         document.documentElement.style.setProperty(
           "--accent-system-value",
           cached,
