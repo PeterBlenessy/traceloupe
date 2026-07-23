@@ -49,7 +49,10 @@ export function useSystemAccent() {
         const value = await client.systemAccentColor();
         if (!cancelled) apply(value ?? null);
       } catch {
-        if (!cancelled) apply(null);
+        // Transient IPC failure ≠ "host has no accent": keep the current value
+        // (and the warm-start cache) rather than flashing the fallback blue.
+        // Only a successful `null` result — a host without a readable accent —
+        // clears it.
       }
     };
 
