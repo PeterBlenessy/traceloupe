@@ -41,7 +41,7 @@ base64 = "0.22"
 # the system accent set in System Settings (theme.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSColor", "NSColorSpace"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSColor", "NSColorSpace", "objc2-core-foundation"] }
 
 [dev-dependencies]
 tempfile = "3"

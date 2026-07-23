@@ -173,18 +173,32 @@ export function SecuritySettings() {
             "Loading indicator feeds…"
           )}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => update.mutate()}
-          disabled={update.isPending}
-        >
-          <RefreshCw
-            className={cn("size-4", update.isPending && "animate-spin")}
-          />
-          Update now
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => update.mutate()}
+              disabled={update.isPending}
+            >
+              <RefreshCw
+                className={cn("size-4", update.isPending && "animate-spin")}
+              />
+              Update now
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {update.isPending
+              ? "Updating the threat feeds…"
+              : "Fetch the latest threat feeds now"}
+          </TooltipContent>
+        </Tooltip>
       </div>
+      {update.isError && (
+        <p className="text-xs text-destructive">
+          Couldn't update the feeds: {String(update.error)}
+        </p>
+      )}
 
       {info.data && info.data.feeds.length > 0 && (
         <div className="space-y-3 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
@@ -232,7 +246,7 @@ export function SecuritySettings() {
                         <button
                           type="button"
                           onClick={() => void client.openExternal(org.url)}
-                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate underline underline-offset-2 hover:text-foreground"
+                          className="mt-0.5 inline-flex max-w-full items-center gap-1 truncate rounded-sm underline underline-offset-2 outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                         >
                           <ExternalLink className="size-3 shrink-0" />
                           <span className="truncate">{org.label}</span>
@@ -262,28 +276,40 @@ export function SecuritySettings() {
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {s.customIndicatorDir && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setCustomDir.mutate(null)}
-              disabled={setCustomDir.isPending}
-            >
-              Clear
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCustomDir.mutate(null)}
+                  disabled={setCustomDir.isPending}
+                >
+                  Clear
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Stop using the custom indicator folder</TooltipContent>
+            </Tooltip>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={setCustomDir.isPending}
-            onClick={async () => {
-              const dir = await client.pickFolder(
-                "Choose a custom indicator folder",
-              );
-              if (dir) setCustomDir.mutate(dir);
-            }}
-          >
-            Choose folder…
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={setCustomDir.isPending}
+                onClick={async () => {
+                  const dir = await client.pickFolder(
+                    "Choose a custom indicator folder",
+                  );
+                  if (dir) setCustomDir.mutate(dir);
+                }}
+              >
+                Choose folder…
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Pick a folder of .stix / .yaml indicator files
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>

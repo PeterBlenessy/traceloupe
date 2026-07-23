@@ -74,8 +74,10 @@
   --primary: var(--accent-color);
   /* White on dark accents, near-black on light ones (macOS Yellow ≈ L 0.87
      would make white text ~1.6:1) — the steep clamp snaps to one or the other
-     at accent lightness 0.66, mirroring how macOS itself labels its accents. */
-  --primary-foreground: oklch(from var(--accent-color) clamp(0.145, (0.66 - l) * 1000, 1) 0 h);
+     at accent lightness 0.62. (0.66 mirrored macOS labeling, but left Graphite
+     — L 0.64 — with 3.4:1 white text; 0.62 sends it to dark text at ~5:1
+     without changing any other stock accent.) */
+  --primary-foreground: oklch(from var(--accent-color) clamp(0.145, (0.62 - l) * 1000, 1) 0 h);
   --secondary: oklch(0.955 0.005 260);
   --secondary-foreground: oklch(0.25 0.01 260);
   --muted: oklch(0.955 0.005 260);
@@ -313,3 +315,13 @@
 .note-rich ul.note-checklist li { display: flex; align-items: baseline; gap: 0.5rem; }
 .note-rich ul.note-checklist li.checked { color: var(--muted-foreground); text-decoration: line-through; }
 .note-rich ul.note-checklist input[type="checkbox"] { position: relative; top: 0.1em; }
+
+/* Scrollbar resting affordance: before any scroll there is otherwise no hint
+   that a pane scrolls nor a thumb to grab — pointer proximity reveals it,
+   like macOS overlay bars. (Class-substring match covers the overflow-auto /
+   overflow-y-auto utilities our scroll containers use.) */
+[class*="overflow-auto"]:hover,
+[class*="overflow-y-auto"]:hover {
+  scrollbar-color: color-mix(in oklab, var(--foreground) 30%, transparent)
+    transparent;
+}
