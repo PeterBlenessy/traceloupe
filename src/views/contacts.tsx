@@ -192,6 +192,7 @@ export function ContactsView() {
                 items={sorted}
                 getKey={(c) => c.id}
                 estimateSize={56}
+                underlap
                 renderItem={(c) => (
                   <div className="px-2 py-0.5">
                     <ContactRow
