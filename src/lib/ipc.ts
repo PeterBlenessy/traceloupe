@@ -530,6 +530,11 @@ export interface ScanRun {
   status: "running" | "done" | "cancelled" | "failed";
   modules: string[];
   indicatorCount: number | null;
+  /** The feeds this run actually ran against (per-run receipt, stamped at
+   *  scan start — independent of later feed updates). */
+  feeds: FeedInfo[];
+  /** Snapshot generated-at (unix seconds) at scan time; null on legacy runs. */
+  feedsGeneratedAt: number | null;
   critical: number;
   warning: number;
   info: number;
@@ -2999,6 +3004,10 @@ export const mockClient: TraceLoupeClient = {
         status: "done",
         modules: kind === "passive" ? ["apps"] : ["apps", "messages", "safari"],
         indicatorCount: 5833,
+        feeds: mockSnapshotInfo.feeds,
+        feedsGeneratedAt: Math.floor(
+          Date.parse(mockSnapshotInfo.generatedAt) / 1000,
+        ),
         critical: kind === "passive" ? 0 : 0,
         warning: kind === "passive" ? 0 : 1,
         info: 1,
