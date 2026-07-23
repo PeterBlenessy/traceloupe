@@ -310,9 +310,10 @@ function FeedReceipt({ run, className }: { run: ScanRun; className?: string }) {
   const parts = run.feeds.map(
     (f) => `${feedDisplayName(f)} ${f.count.toLocaleString()}`,
   );
-  const updated = run.feedsGeneratedAt
-    ? new Date(run.feedsGeneratedAt * 1000).toISOString().slice(0, 10)
-    : null;
+  const updated =
+    run.feedsGeneratedAt !== null
+      ? new Date(run.feedsGeneratedAt * 1000).toISOString().slice(0, 10)
+      : null;
   return (
     <span className={className}>
       Checked against {parts.join(" · ")}
@@ -384,15 +385,22 @@ function ResultSummary({
             {newCount} new since last scan
           </span>
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="ml-auto"
-          onClick={() => client.exportScanReport(run.id)}
-        >
-          <Download className="size-4" />
-          Export CSV
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={() => client.exportScanReport(run.id)}
+            >
+              <Download className="size-4" />
+              Export CSV
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            Save this scan's findings and feed receipt as a CSV report
+          </TooltipContent>
+        </Tooltip>
       </div>
 
       <FeedReceipt run={run} className="text-xs text-muted-foreground" />
