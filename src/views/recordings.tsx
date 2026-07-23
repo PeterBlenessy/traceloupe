@@ -165,6 +165,7 @@ export function RecordingsView() {
               <VirtualList
                 key={clockFormat}
                 items={sortedRecordings!}
+                underlap
                 getKey={(r) => r.id}
                 estimateSize={64}
                 renderItem={(r) => (

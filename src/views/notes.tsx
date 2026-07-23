@@ -479,6 +479,7 @@ export function NotesView() {
               <VirtualList
                 key={clockFormat}
                 items={rows}
+                underlap
                 getKey={(r) => r.key}
                 estimateSize={64}
                 renderItem={(r) =>
