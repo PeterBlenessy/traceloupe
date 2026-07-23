@@ -552,6 +552,7 @@ function Conversations({
             <ListSkeleton rows={6} />
           ) : (visibleThreads?.length ?? 0) === 0 ? (
             <EmptyView
+              icon={MessageSquare}
               title={
                 (threads?.length ?? 0) === 0
                   ? "No messages in this backup."
