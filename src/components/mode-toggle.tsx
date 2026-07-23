@@ -27,10 +27,10 @@ export function ModeToggle() {
         <Button
           variant="ghost"
           size="icon"
-          className="size-7"
+          className="size-8"
           onClick={() => setTheme(next)}
         >
-          <Icon className="size-4" />
+          <Icon className="size-5" />
           <span className="sr-only">
             Theme: {META[theme].label}. Switch to {META[next].label}.
           </span>

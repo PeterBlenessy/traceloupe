@@ -245,11 +245,11 @@ export function ListSearch({
         }
       }}
       className={cn(
-        "relative flex h-8 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
-        open ? "w-44 sm:w-56" : "w-8 cursor-pointer hover:bg-accent hover:text-foreground",
+        "relative flex h-9 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
+        open ? "w-44 sm:w-56" : "w-9 cursor-pointer hover:bg-accent hover:text-foreground",
       )}
     >
-      <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2" />
+      <Search className="pointer-events-none absolute left-2 top-1/2 size-5 -translate-y-1/2" />
       <input
         ref={inputRef}
         value={value}
@@ -259,7 +259,7 @@ export function ListSearch({
         placeholder={open ? placeholder : ""}
         aria-label={placeholder}
         title={open ? undefined : placeholder}
-        className="h-full w-full select-text bg-transparent pl-8 pr-7 text-sm text-foreground outline-none placeholder:text-muted-foreground"
+        className="h-full w-full select-text bg-transparent pl-9 pr-7 text-sm text-foreground outline-none placeholder:text-muted-foreground"
       />
       {open && value && (
         <button

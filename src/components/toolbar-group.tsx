@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 /**
  * A macOS-Notes-style segmented control cluster: a subtly bordered, rounded
  * container that groups related icon buttons into one unit. Buttons placed
- * inside should be borderless/ghost and `size-7` so they read as segments of the
+ * inside should be borderless/ghost and `size-8` so they read as segments of the
  * group rather than separate controls. Use it for toolbar chrome (the top-bar
  * app controls, per-view header actions) to give them the grouped, bordered look
  * Apple uses instead of a row of floating bare icons.
