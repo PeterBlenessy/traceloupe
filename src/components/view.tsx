@@ -12,6 +12,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { Search, TriangleAlert, X } from "lucide-react";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
@@ -383,7 +384,14 @@ export function NoBackupState({
           {cta}
         </p>
         <div className="mt-3">
-          <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button onClick={() => navigate({ to: "/" })}>
+                Choose a backup
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open the backup picker</TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>
