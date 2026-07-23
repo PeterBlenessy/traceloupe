@@ -334,7 +334,7 @@ function AppTitleBar() {
       className={cn(
         "absolute right-0 top-0 z-20 flex h-13 items-center border-b px-3 transition-[left] duration-200 ease-linear",
         translucentToolbar
-          ? "bg-background/55 backdrop-blur-xl backdrop-saturate-150"
+          ? "bg-background/65 backdrop-blur-2xl backdrop-saturate-150"
           : "bg-background",
       )}
     >
@@ -363,7 +363,7 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
             <div className="flex items-baseline gap-2">
               <h1 className="text-base font-semibold">{tb.title}</h1>
               {tb.count !== undefined && (
-                <span className="text-xs tabular-nums text-muted-foreground/60">
+                <span className="text-xs tabular-nums text-muted-foreground">
                   {formatCount(tb.count)}
                 </span>
               )}
