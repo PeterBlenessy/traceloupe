@@ -11,7 +11,34 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
-_Nothing yet._
+**Review round on the 0.30.0 UI refresh** — fixes from a three-lens code
+review (frontend correctness, Rust/IPC robustness, UX/accessibility).
+
+### Fixed
+
+- Toolbar legibility: the view-count label reads at full muted strength (was
+  2.4:1 on the solid bar), and the translucent bar's glass densified (65% +
+  40 px blur) so text stays readable over extreme content.
+- Graphite system accent now gets dark button text (~5:1; white text on
+  Graphite measured 3.4:1). No other stock accent changes.
+- Feed updates are refused while a scan is running (the running scan's
+  stamped counts would otherwise describe replaced files), and a failed
+  update now shows its error instead of failing silently.
+- A corrupt cached accent value can no longer blank `--primary`/`--ring`
+  (values are validated before applying), and a transient IPC failure keeps
+  the last-known accent instead of flashing the fallback blue.
+- Keyboard focus survives the sidebar-trigger swap between sidebar and
+  title bar instead of dropping to the top of the tab order.
+- Every review-flagged button gained its tooltip (Run scan, Update now,
+  Clear/Choose folder, the Choose-a-backup CTAs, the expanded device hero),
+  and the raw link-buttons gained focus-visible rings.
+- Scrollbar thumbs also appear on hover, not only mid-scroll.
+- Consistency sweep: Notes/Recordings lists scroll under the translucent
+  bar like their siblings; Messages/Notes toolbar islands join the new
+  control scale; the device hero's active state uses the accent pill; the
+  Messages conversations empty state got its icon tile.
+- `objc2-app-kit` now builds only the NSColor bindings instead of the whole
+  AppKit surface (missing `default-features = false`).
 
 ## [0.30.0] — 2026-07-23
 
