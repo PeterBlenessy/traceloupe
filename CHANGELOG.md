@@ -11,6 +11,10 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.30.0] — 2026-07-23
+
 **UI refresh — device hero, Scans group, system accent, layered surfaces.**
 
 ### Added
