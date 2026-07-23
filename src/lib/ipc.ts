@@ -3175,10 +3175,13 @@ export const mockClient: TraceLoupeClient = {
             status: "completed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 200000,
             finishedAt: Math.floor(Date.now() / 1000) - 199000,
-            findings: 5,
-            serious: 1,
-            harmful: 3,
-            concerning: 1,
+            // Must match what listContentFindings(1) returns (its first mock
+            // finding, severity 2) — the rail badge and the detail pane must
+            // never disagree.
+            findings: 1,
+            serious: 0,
+            harmful: 1,
+            concerning: 0,
           },
         ].filter((s) => !mockDeletedScanIds.has(s.id))
       : [],

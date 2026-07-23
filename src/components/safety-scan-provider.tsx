@@ -71,6 +71,9 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   >("safety-scan:preferred-model", null);
   const unlistenScan = useRef<(() => void) | null>(null);
   const unlistenModel = useRef<(() => void) | null>(null);
+  // Per-run live-refresh bookkeeping: refresh the history once when the run's
+  // row appears, and the findings each time the live count moves.
+  const runLive = useRef({ historyRefreshed: false, findings: 0 });
 
   // Subscribe to model-download progress exactly once. Shared by startDownload
   // and the rehydration effect below.
@@ -136,6 +139,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     sources?: string | null;
   }) => {
     setScan({ phase: "loading" });
+    runLive.current = { historyRefreshed: false, findings: 0 };
     if (!unlistenScan.current) {
       // Claim the slot synchronously (before the await) so a second call in
       // the same tick can't register a duplicate listener.
@@ -146,6 +150,20 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
         // The full technical detail (incl. llama-server output) is in the dev
         // logs; the toast stays short and readable.
         if (p.phase === "error") toastScanError(p.message);
+        if (p.phase === "classifying") {
+          // The scan row exists once classifying starts: refresh the history
+          // once so the running scan appears in the rail (instead of the rail
+          // silently showing the previous scan as "latest"), and refresh the
+          // findings whenever the live count moves so they stream in.
+          if (!runLive.current.historyRefreshed) {
+            runLive.current.historyRefreshed = true;
+            qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
+          }
+          if (p.findings !== runLive.current.findings) {
+            runLive.current.findings = p.findings;
+            qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
+          }
+        }
         if (p.phase === "done") {
           // New findings and a new report exist; let every consumer refetch.
           qc.invalidateQueries({ queryKey: ["safetyScan"] });

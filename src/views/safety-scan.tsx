@@ -530,13 +530,19 @@ function ScanOutcomeBadge({ scan }: { scan: SafetyScanHistoryItem }) {
         <Loader2 className="size-3 animate-spin" /> running
       </Badge>
     );
+  // "Clean" is a completed scan's verdict — a stopped/failed scan with zero
+  // findings just didn't get to look, so it shows its status instead.
   if (scan.findings === 0)
-    return (
+    return scan.status === "completed" ? (
       <Badge
         variant="outline"
         className="shrink-0 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
       >
         Clean
+      </Badge>
+    ) : (
+      <Badge variant="outline" className="shrink-0 text-muted-foreground">
+        {SCAN_STATUS_LABEL[scan.status] ?? scan.status}
       </Badge>
     );
   const worst = scan.serious > 0 ? 3 : scan.harmful > 0 ? 2 : 1;
@@ -597,6 +603,14 @@ function ScanRail({
     );
     return rows;
   }, [scans, outcome, sort]);
+
+  // A filter must never hide the selection: if the selected scan gets
+  // filtered out, move the selection to the first visible row so the rail
+  // and the detail pane can't disagree about what's shown.
+  useEffect(() => {
+    if (visible.length > 0 && !visible.some((s) => s.id === selectedId))
+      onSelect(visible[0].id);
+  }, [visible, selectedId, onSelect]);
 
   return (
     <Card className="gap-3">
@@ -661,6 +675,10 @@ function ScanRail({
             aria-current={s.id === selectedId}
             onClick={() => onSelect(s.id)}
             onKeyDown={(e) => {
+              // Keydown bubbles up from the nested delete button — only act on
+              // keys pressed on the row itself, or Enter on the button would
+              // select the row instead of deleting.
+              if (e.target !== e.currentTarget) return;
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onSelect(s.id);
@@ -905,6 +923,10 @@ function FindingRow({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
+        // Keydown bubbles up from the nested dismiss button — only act on keys
+        // pressed on the row itself, or Enter on the button would open the
+        // sheet instead of dismissing.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onOpen();
@@ -1208,54 +1230,84 @@ function FindingSheet({
               </p>
               <div className="flex flex-col gap-2">
                 {finding.sourceKind === "message" && finding.threadId != null && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      navigate({
-                        to: "/messages",
-                        search: { thread: finding.threadId! },
-                      });
-                      onClose();
-                    }}
-                  >
-                    <ExternalLink className="size-4" /> Open conversation
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          navigate({
+                            to: "/messages",
+                            search: { thread: finding.threadId! },
+                          });
+                          onClose();
+                        }}
+                      >
+                        <ExternalLink className="size-4" /> Open conversation
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Read the flagged conversation in Messages
+                    </TooltipContent>
+                  </Tooltip>
                 )}
-                {finding.sourceKind === "note" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      navigate({
-                        to: "/notes",
-                        search: {
-                          id: finding.sourceId ?? undefined,
-                          from: "safety",
-                        },
-                      });
-                      onClose();
-                    }}
-                  >
-                    <ExternalLink className="size-4" /> Open note
-                  </Button>
+                {/* Same null-source guard as the conversation button: a stale
+                    finding whose note was removed has no id to open. */}
+                {finding.sourceKind === "note" && finding.sourceId != null && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          navigate({
+                            to: "/notes",
+                            search: {
+                              id: finding.sourceId!,
+                              from: "safety",
+                            },
+                          });
+                          onClose();
+                        }}
+                      >
+                        <ExternalLink className="size-4" /> Open note
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Read the flagged note in Notes
+                    </TooltipContent>
+                  </Tooltip>
                 )}
                 {finding.dismissed ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onDismiss(finding, false)}
-                  >
-                    <RotateCcw className="size-4" /> Restore
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onDismiss(finding, false)}
+                      >
+                        <RotateCcw className="size-4" /> Restore
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Restore — it was not a false positive after all
+                    </TooltipContent>
+                  </Tooltip>
                 ) : (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onDismiss(finding, true)}
-                  >
-                    <EyeOff className="size-4" /> Dismiss as false positive
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onDismiss(finding, true)}
+                      >
+                        <EyeOff className="size-4" /> Dismiss as false positive
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Hide this finding; the dismissal persists across re-scans
+                    </TooltipContent>
+                  </Tooltip>
                 )}
               </div>
             </div>
