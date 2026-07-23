@@ -11,6 +11,10 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.30.1] — 2026-07-23
+
 **Review round on the 0.30.0 UI refresh** — fixes from a three-lens code
 review (frontend correctness, Rust/IPC robustness, UX/accessibility).
 
