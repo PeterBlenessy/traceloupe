@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
+import { feedDisplayName } from "@/lib/feeds";
 import { formatListTime } from "@/lib/format";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -298,6 +299,28 @@ export function SecurityView() {
   );
 }
 
+/**
+ * The per-run receipt: which feeds this verdict actually ran against, read
+ * from the run row itself — so it stays correct after the installed feeds are
+ * updated. Legacy runs (before the date was stamped) list the feeds without
+ * the "updated" segment; runs with no stored feeds render nothing.
+ */
+function FeedReceipt({ run, className }: { run: ScanRun; className?: string }) {
+  if (run.feeds.length === 0) return null;
+  const parts = run.feeds.map(
+    (f) => `${feedDisplayName(f)} ${f.count.toLocaleString()}`,
+  );
+  const updated = run.feedsGeneratedAt
+    ? new Date(run.feedsGeneratedAt * 1000).toISOString().slice(0, 10)
+    : null;
+  return (
+    <span className={className}>
+      Checked against {parts.join(" · ")}
+      {updated ? ` — feeds updated ${updated}` : ""}
+    </span>
+  );
+}
+
 function ResultSummary({
   run,
   findings,
@@ -326,6 +349,7 @@ function ResultSummary({
             result means no traces of spyware <em>known to these feeds</em> were
             found — it does not guarantee the device is uncompromised.
           </CardDescription>
+          <FeedReceipt run={run} className="text-xs text-muted-foreground" />
         </CardHeader>
       </Card>
     );
@@ -370,6 +394,8 @@ function ResultSummary({
           Export CSV
         </Button>
       </div>
+
+      <FeedReceipt run={run} className="text-xs text-muted-foreground" />
 
       {loadingFindings ? (
         <ListSkeleton rows={4} />
