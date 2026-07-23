@@ -489,7 +489,9 @@ struct SnapshotFeedEntry {
 }
 
 /// Per-feed summary reported to the UI (feed freshness screen, scan footer).
-#[derive(Debug, serde::Serialize)]
+/// Deserialize because scan runs store it as `scan_runs.feeds_json` and read
+/// it back for the per-run receipt.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FeedInfo {
     pub source: String,
@@ -506,6 +508,20 @@ pub struct FeedInfo {
 pub struct SnapshotInfo {
     pub generated_at: String,
     pub feeds: Vec<FeedInfo>,
+}
+
+impl SnapshotInfo {
+    /// `generated_at` as unix seconds, for stamping on a scan run. The manifest
+    /// writes RFC 3339; an empty or malformed value (custom-only sets, older
+    /// snapshots) is None rather than an error.
+    pub fn generated_at_unix(&self) -> Option<i64> {
+        time::OffsetDateTime::parse(
+            &self.generated_at,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()
+        .map(|dt| dt.unix_timestamp())
+    }
 }
 
 /// Load every feed listed in a snapshot directory's `manifest.json` (written

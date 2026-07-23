@@ -704,6 +704,7 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
             // Passive Check does no Tier-B artifact extraction.
             analyzer::ScanInputs::default(),
             &feeds_json,
+            info.generated_at_unix(),
             &CancelToken::new(),
             |module, index, total| {
                 let _ = app2.emit(
@@ -1360,6 +1361,7 @@ async fn run_security_scan(
                 webkit_domains: &tierb_webkit,
             },
             &feeds_json,
+            info.generated_at_unix(),
             &cancel,
             |module, index, total| {
                 let _ = app_progress.emit(

@@ -135,6 +135,7 @@ fn process_extraction_on_real_mirror() {
             webkit_domains: &webkit_domains,
         },
         "[]",
+        None,
         &CancelToken::new(),
         |_, _, _| {},
     )
@@ -187,6 +188,7 @@ fn full_tier_a_scan_under_60s() {
         MODULES,
         ScanInputs::default(),
         "[]",
+        None,
         &CancelToken::new(),
         |m, i, n| eprintln!("  [{}/{}] {m} ({:?} elapsed)", i + 1, n, start.elapsed()),
     )
