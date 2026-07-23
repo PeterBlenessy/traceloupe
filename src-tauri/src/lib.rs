@@ -1480,7 +1480,16 @@ async fn get_indicator_info(app: AppHandle) -> Result<SnapshotInfo, String> {
 
 /// Fetch fresh indicator feeds now (user-initiated "Update indicators").
 #[tauri::command]
-async fn update_indicators(app: AppHandle) -> Result<SnapshotInfo, String> {
+async fn update_indicators(
+    app: AppHandle,
+    scan_gate: State<'_, ScanGate>,
+) -> Result<SnapshotInfo, String> {
+    // Refuse while a scan holds the gate: the run loaded its indicators at
+    // start, and swapping the feed directory underneath it would leave the
+    // run's stamped feed counts describing files that no longer exist.
+    let Ok(_gate) = scan_gate.0.try_lock() else {
+        return Err("A scan is running — wait for it to finish, then update.".into());
+    };
     let bundled = bundled_indicators_dir(&app);
     let dest = indicators_data_dir(&app)?;
     let app2 = app.clone();

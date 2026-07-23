@@ -118,7 +118,7 @@ export function OverflowRow({
                     type="button"
                     data-active={hiddenActive}
                     aria-label={title}
-                    className="inline-flex size-7 shrink-0 items-center justify-center rounded-full border text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
+                    className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border text-muted-foreground hover:bg-accent data-[active=true]:border-primary data-[active=true]:bg-primary/10 data-[active=true]:text-foreground"
                   >
                     <MoreVertical className="size-4" />
                   </button>

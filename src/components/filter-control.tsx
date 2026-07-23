@@ -190,7 +190,7 @@ export function FilterControl({
               onClick={() => (mounted ? close() : open())}
               data-active={mounted || hasActive}
               className={cn(
-                "inline-flex shrink-0 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground data-[active=true]:text-foreground",
+                "inline-flex shrink-0 items-center justify-center text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[active=true]:text-foreground",
                 hasActive
                   ? "size-8 rounded-md"
                   : "size-9 rounded-lg border border-border/70 bg-muted/40 data-[active=true]:bg-accent",
