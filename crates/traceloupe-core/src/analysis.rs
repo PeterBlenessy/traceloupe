@@ -243,16 +243,22 @@ pub struct ScanRow {
 }
 
 /// A scan for the history list: the fields a user cares about (period, when,
-/// status) plus its live finding count. No `chunks` — that's internal.
+/// status, model) plus its live finding counts. No `chunks` — that's internal.
 #[derive(Debug, Clone)]
 pub struct ScanListRow {
     pub id: i64,
+    pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub findings: i64,
+    /// Live (non-stale) finding counts split by severity, for the history
+    /// row's badge: 3 = serious, 2 = harmful, 1 = concerning.
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -465,9 +471,10 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// All findings, dismissed included (callers filter); severity-descending
-    /// within category, newest first.
-    pub fn list_findings(&self) -> Result<Vec<FindingRow>> {
+    /// Findings, dismissed included (callers filter); severity-descending
+    /// within category, newest first. `scan_id` restricts to one scan's
+    /// findings (the per-scan history view); None returns every scan's.
+    pub fn list_findings(&self, scan_id: Option<i64>) -> Result<Vec<FindingRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
@@ -475,9 +482,10 @@ impl AnalysisDb {
                     EXISTS(SELECT 1 FROM dismissals d
                            WHERE d.fingerprint = f.fingerprint AND d.category = f.category)
              FROM content_findings f
+             WHERE ?1 IS NULL OR f.scan_id = ?1
              ORDER BY f.severity DESC, f.occurred_at DESC",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![scan_id], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
@@ -651,24 +659,33 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// Past scans, newest first, each with its live (non-stale) finding count —
-    /// for the scan-history list.
+    /// Past scans, newest first, each with its live (non-stale) finding counts
+    /// (total + per severity) — for the scan-history list.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.range_start, s.range_end, s.status, s.started_at, s.finished_at,
-                    (SELECT COUNT(*) FROM content_findings f
-                       WHERE f.scan_id = s.id AND f.stale = 0)
-             FROM scans s ORDER BY s.id DESC LIMIT ?1",
+            "SELECT s.id, s.model, s.range_start, s.range_end, s.status, s.started_at,
+                    s.finished_at,
+                    coalesce(count(f.id), 0),
+                    coalesce(sum(f.severity = 3), 0),
+                    coalesce(sum(f.severity = 2), 0),
+                    coalesce(sum(f.severity = 1), 0)
+             FROM scans s
+             LEFT JOIN content_findings f ON f.scan_id = s.id AND f.stale = 0
+             GROUP BY s.id ORDER BY s.id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
             Ok(ScanListRow {
                 id: r.get(0)?,
-                range_start: r.get(1)?,
-                range_end: r.get(2)?,
-                status: r.get(3)?,
-                started_at: r.get(4)?,
-                finished_at: r.get(5)?,
-                findings: r.get(6)?,
+                model: r.get(1)?,
+                range_start: r.get(2)?,
+                range_end: r.get(3)?,
+                status: r.get(4)?,
+                started_at: r.get(5)?,
+                finished_at: r.get(6)?,
+                findings: r.get(7)?,
+                serious: r.get(8)?,
+                harmful: r.get(9)?,
+                concerning: r.get(10)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -770,7 +787,7 @@ mod tests {
         let scan2 = db.begin_scan("gemma-4-E4B", (None, None), 200).unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 201)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].scan_id, scan2);
         assert_eq!(rows[0].category, Category::ThreatViolence);
@@ -789,16 +806,59 @@ mod tests {
         let scan2 = db.begin_scan("m", (None, None), 200).unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ScamFraud)], 201)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].dismissed);
         // But a different category on the same message is NOT dismissed.
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 202)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         let dismissed: Vec<bool> = rows.iter().map(|r| r.dismissed).collect();
         assert_eq!(rows.len(), 2);
         assert!(dismissed.contains(&true) && dismissed.contains(&false));
+    }
+
+    #[test]
+    fn list_findings_filters_by_scan() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan1 = db.begin_scan("m", (None, None), 100).unwrap();
+        db.replace_findings(scan1, &[finding("fp1", Category::ScamFraud)], 101)
+            .unwrap();
+        let scan2 = db.begin_scan("m", (None, None), 200).unwrap();
+        db.replace_findings(scan2, &[finding("fp2", Category::SelfHarm)], 201)
+            .unwrap();
+        assert_eq!(db.list_findings(None).unwrap().len(), 2);
+        let only1 = db.list_findings(Some(scan1)).unwrap();
+        assert_eq!(only1.len(), 1);
+        assert_eq!(only1[0].fingerprint, "fp1");
+        let only2 = db.list_findings(Some(scan2)).unwrap();
+        assert_eq!(only2.len(), 1);
+        assert_eq!(only2[0].fingerprint, "fp2");
+    }
+
+    #[test]
+    fn list_scans_reports_model_and_severity_split() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("gemma-4-E4B", (None, None), 100).unwrap();
+        let mut serious = finding("fp1", Category::ThreatViolence);
+        serious.severity = 3;
+        let harmful = finding("fp2", Category::ScamFraud); // severity 2
+        let mut concerning = finding("fp3", Category::SelfHarm);
+        concerning.severity = 1;
+        db.replace_findings(scan, &[serious, harmful, concerning], 101)
+            .unwrap();
+        db.finish_scan(scan, ScanStatus::Completed, 102).unwrap();
+        // A stale finding must not count toward any bucket.
+        db.set_stale("fp3", true).unwrap();
+
+        let rows = db.list_scans(50).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "gemma-4-E4B");
+        assert_eq!(rows[0].findings, 2);
+        assert_eq!(
+            (rows[0].serious, rows[0].harmful, rows[0].concerning),
+            (1, 1, 0)
+        );
     }
 
     #[test]
@@ -833,12 +893,12 @@ mod tests {
             .unwrap();
         db.set_stale("fp1", true).unwrap();
         db.set_source_id("fp1", None).unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert!(rows[0].stale);
         assert_eq!(rows[0].source_id, None);
         db.set_source_id("fp1", Some(99)).unwrap();
         db.set_stale("fp1", false).unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert!(!rows[0].stale);
         assert_eq!(rows[0].source_id, Some(99));
     }

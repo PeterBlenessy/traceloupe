@@ -1,4 +1,5 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -6,6 +7,7 @@ import {
   useFindingMarks,
 } from "@/components/safety-flag-badge";
 import {
+  ArrowLeft,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -186,6 +188,17 @@ export function NotesView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Deep link from a Safety Scan finding: ?id=<note id> selects that note, and
+  // ?from=safety adds a return chip so the jump is a round trip (same pattern
+  // as the Timeline → conversation jump in Messages).
+  const navigate = useNavigate();
+  const urlSearch = useSearch({ strict: false }) as {
+    id?: number;
+    from?: string;
+  };
+  useEffect(() => {
+    if (urlSearch.id != null) setSelectedId(urlSearch.id);
+  }, [urlSearch.id]);
   // Flat list (date sections) vs a folder tree of the notes.
   const [viewMode, setViewMode] = usePersistedState<"flat" | "tree">("notes:view", "flat");
   // Collapsed folders in tree view (a folder is expanded unless listed here).
@@ -463,6 +476,25 @@ export function NotesView() {
 
   return (
     <div className="flex h-full flex-col">
+      {urlSearch.from === "safety" && (
+        <div className="flex items-center gap-2 border-b px-3 py-1.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void navigate({ to: "/safety-scan" })}
+              >
+                <ArrowLeft className="size-4" /> Back to Safety Scan
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Return to the Safety Scan findings</TooltipContent>
+          </Tooltip>
+          <span className="text-xs text-muted-foreground">
+            Opened from a Safety Scan finding
+          </span>
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         <ListDetail
           master={

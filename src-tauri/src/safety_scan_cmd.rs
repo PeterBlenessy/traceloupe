@@ -693,9 +693,12 @@ pub struct ContentFindingDto {
     pub dismissed: bool,
 }
 
+/// Findings, newest-severity first. `scan_id` restricts to one scan (the
+/// history view shows the selected scan's findings); None returns all.
 #[tauri::command]
 pub fn list_content_findings(
     active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
 ) -> Result<Vec<ContentFindingDto>, String> {
     let cache_path = active.path()?;
     let path = analysis_path(&cache_path)?;
@@ -716,7 +719,7 @@ pub fn list_content_findings(
             .ok()
     };
     Ok(db
-        .list_findings()
+        .list_findings(scan_id)
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|f| ContentFindingDto {
@@ -762,7 +765,7 @@ pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<Find
     }
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
     let cache = CacheDb::open(&cache_path).ok();
-    for f in db.list_findings().map_err(|e| e.to_string())? {
+    for f in db.list_findings(None).map_err(|e| e.to_string())? {
         // Dismissed and stale findings must not badge a row — the list should
         // match what the Safety Scan page shows by default.
         if f.dismissed || f.stale {
@@ -839,12 +842,17 @@ pub struct SafetyScanReport {
 #[serde(rename_all = "camelCase")]
 pub struct ScanHistoryItem {
     pub id: i64,
+    pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub findings: i64,
+    /// Live finding counts by severity (3=serious, 2=harmful, 1=concerning).
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
 }
 
 /// Remove a past scan and everything scoped to it (findings, progress,
@@ -873,12 +881,16 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
         .into_iter()
         .map(|s| ScanHistoryItem {
             id: s.id,
+            model: s.model,
             range_start: s.range_start,
             range_end: s.range_end,
             status: s.status,
             started_at: s.started_at,
             finished_at: s.finished_at,
             findings: s.findings,
+            serious: s.serious,
+            harmful: s.harmful,
+            concerning: s.concerning,
         })
         .collect())
 }

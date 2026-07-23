@@ -688,15 +688,20 @@ export interface SafetyScanReport {
 }
 
 /** One past scan for the history list (no internal "chunks" — just what a user
- *  cares about: period, when, status, and how many findings it produced). */
+ *  cares about: period, when, status, model, and what it found). */
 export interface SafetyScanHistoryItem {
   id: number;
+  model: string;
   rangeStart: number | null;
   rangeEnd: number | null;
   status: "running" | "completed" | "cancelled" | "failed";
   startedAt: number;
   finishedAt: number | null;
   findings: number;
+  /** Live finding counts by severity for the row badge. */
+  serious: number;
+  harmful: number;
+  concerning: number;
 }
 
 /** Top live-finding severity per flagged thread/note, for inline badges. */
@@ -944,7 +949,8 @@ export interface TraceLoupeClient {
     cb: (p: SafetyModelProgressEvent) => void,
   ): Promise<UnlistenFn>;
   /** All Content Findings for the active backup (dismissed included). */
-  listContentFindings(): Promise<ContentFinding[]>;
+  /** Findings, most severe first; `scanId` restricts to one scan's. */
+  listContentFindings(scanId?: number): Promise<ContentFinding[]>;
   /** Compact per-thread / per-note top severity for inline badges. */
   safetyScanFindingMarks(): Promise<FindingMarks>;
   /** Mark/unmark a finding as a false positive (keyed to survive re-scans). */
@@ -1325,8 +1331,10 @@ const tauriClient: TraceLoupeClient = {
     listen<SafetyModelProgressEvent>("safetyscan://model-progress", (e) =>
       cb(e.payload),
     ),
-  listContentFindings: () =>
-    invoke<ContentFinding[]>("list_content_findings"),
+  listContentFindings: (scanId) =>
+    invoke<ContentFinding[]>("list_content_findings", {
+      scanId: scanId ?? null,
+    }),
   safetyScanFindingMarks: () =>
     invoke<FindingMarks>("safety_scan_finding_marks"),
   dismissContentFinding: (fingerprint, category, dismissed) =>
@@ -3072,7 +3080,14 @@ export const mockClient: TraceLoupeClient = {
   cancelSafetyScan: async () => {},
   onSafetyScanProgress: async () => () => {},
   onSafetyModelProgress: async () => () => {},
-  listContentFindings: async () => (mockActive ? mockContentFindings : []),
+  listContentFindings: async (scanId) => {
+    if (!mockActive) return [];
+    // Mock scan 1 found only the first finding; scan 2 was cancelled early
+    // (none); scan 3 (latest) found everything.
+    if (scanId === 1) return mockContentFindings.slice(0, 1);
+    if (scanId === 2) return [];
+    return mockContentFindings;
+  },
   safetyScanFindingMarks: async () => {
     const marks: FindingMarks = { threads: {}, notes: {} };
     if (!mockActive) return marks;
@@ -3128,30 +3143,42 @@ export const mockClient: TraceLoupeClient = {
       ? [
           {
             id: 3,
+            model: "gemma-4-E4B-it-Q4_K_M",
             rangeStart: Math.floor(new Date(2024, 0, 1).getTime() / 1000),
             rangeEnd: Math.floor(new Date(2025, 0, 1).getTime() / 1000) - 1,
             status: "completed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 3600,
             finishedAt: Math.floor(Date.now() / 1000) - 3000,
             findings: 2,
+            serious: 0,
+            harmful: 2,
+            concerning: 0,
           },
           {
             id: 2,
+            model: "gemma-4-E4B-it-Q4_K_M",
             rangeStart: null,
             rangeEnd: null,
             status: "cancelled" as const,
             startedAt: Math.floor(Date.now() / 1000) - 90000,
             finishedAt: Math.floor(Date.now() / 1000) - 89700,
             findings: 0,
+            serious: 0,
+            harmful: 0,
+            concerning: 0,
           },
           {
             id: 1,
+            model: "gemma-3n-E2B-it-Q4_K_M",
             rangeStart: null,
             rangeEnd: null,
             status: "completed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 200000,
             finishedAt: Math.floor(Date.now() / 1000) - 199000,
             findings: 5,
+            serious: 1,
+            harmful: 3,
+            concerning: 1,
           },
         ].filter((s) => !mockDeletedScanIds.has(s.id))
       : [],

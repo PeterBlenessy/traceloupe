@@ -11,6 +11,23 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+### Changed
+
+- Security Check and Safety Scan are now master–detail views: a scan-history
+  rail (date-led titles, outcome filter, sorting) on the left, and the
+  selected scan's report **and its findings** on the right — a past scan is
+  browsed exactly like the latest one, no report-only dialog. (#25 follow-up,
+  scan-views redesign; mockups in docs/design/scan-views-mockups.html)
+- The Safety Scan report is a structured frame — severity stats, narrative,
+  per-conversation summaries as links into Messages, and a provenance footer
+  (period · model · on-device) — instead of one text block.
+- Safety findings are compact one-line rows (severity · category · source ·
+  date · rationale) with severity filter, sorting, a group-by-conversation
+  toggle, an inline dismiss button, and a full detail sheet naming the scan
+  each finding came from.
+- Jumping from a Safety finding to its note now selects that note in Notes
+  and shows a "Back to Safety Scan" return chip.
+
 ### Added
 
 - Security Check runs now carry a per-run feed receipt: the result cards and
