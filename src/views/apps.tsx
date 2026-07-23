@@ -202,7 +202,10 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
   const label = SUPPORT_LABEL[app.support];
 
   return (
-    <Item>
+    // Card-per-app (outline + soft card fill): with four classes of info per
+    // row, hairline-less rows blurred into one another — the bordered card
+    // gives each app a clear boundary, matching the backup picker's language.
+    <Item variant="outline" className="bg-card/50">
       <ItemMedia>
         {iconUri ? (
           // Real App Store artwork (opt-in fetch); falls through to the tiles
@@ -210,15 +213,15 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
           <img
             src={iconUri}
             alt={app.name}
-            className="size-9 rounded-lg object-cover"
+            className="size-10 rounded-lg object-cover"
           />
         ) : hasBrandIcon(app.slug) ? (
-          <div className="flex size-9 items-center justify-center rounded-lg bg-muted">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-muted">
             <BrandIcon slug={app.slug} name={app.name} className="size-5" />
           </div>
         ) : (
           <div
-            className="flex size-9 items-center justify-center rounded-lg text-sm font-semibold"
+            className="flex size-10 items-center justify-center rounded-lg text-sm font-semibold"
             style={appTile(app.bundleId)}
             aria-label={app.name}
           >
@@ -226,12 +229,16 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
           </div>
         )}
       </ItemMedia>
-      <ItemContent>
+      {/* Type hierarchy, one class of info per size/voice:
+          name (sm/medium) → App Store metadata (xs muted prose) → download
+          receipt (xs, darker — forensically the most telling line) →
+          bundle id (11px mono — an identifier, not prose). */}
+      <ItemContent className="gap-0.5">
         <ItemTitle className="flex items-center gap-2">
           {app.name}
           {app.version && (
-            <span className="text-xs font-normal tabular-nums text-muted-foreground/70">
-              v{app.version}
+            <span className="font-mono text-[11px] font-normal tabular-nums text-muted-foreground/70">
+              {app.version}
             </span>
           )}
           {label && (
@@ -268,13 +275,20 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
         {/* The download receipt — device-specific and forensically the most
             telling: when this copy was installed, and by which Apple ID. */}
         {app.downloaded || app.appleId ? (
-          <ItemDescription className="truncate text-foreground/70">
-            {app.downloaded && `Downloaded ${downloadedLabel(app.downloaded)}`}
+          <ItemDescription className="truncate text-xs text-foreground/80">
+            {app.downloaded && (
+              <>
+                Downloaded{" "}
+                <span className="font-medium">
+                  {downloadedLabel(app.downloaded)}
+                </span>
+              </>
+            )}
             {app.downloaded && app.appleId && " · "}
             {app.appleId && `via ${app.appleId}`}
           </ItemDescription>
         ) : null}
-        <ItemDescription className="truncate text-muted-foreground/60">
+        <ItemDescription className="truncate font-mono text-[11px] text-muted-foreground/60">
           {app.bundleId}
         </ItemDescription>
       </ItemContent>
