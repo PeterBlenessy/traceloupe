@@ -29,6 +29,11 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 - Security and Safety moved from the sidebar header into their own labeled
   **Scans** group; the content views sit under a **Content** label.
 - Sidebar icons grew from 16 px to 20 px with slightly taller rows.
+- The title bar / toolbar grew from 44 px to 52 px with 20 px icons and
+  matching larger controls (sidebar trigger, filter, sort, search, density
+  and theme toggles), so the top chrome breathes like the new sidebar.
+- The Settings dialog's nav pane now mirrors the app sidebar: same surface,
+  row height, icon size, and accent-tinted active pill.
 - The surface palette moved from pure white / near-black to layered tinted
   neutrals: light mode gets an off-white canvas with a deeper sidebar pane;
   dark mode lifts off near-black with the sidebar as the darkest layer.

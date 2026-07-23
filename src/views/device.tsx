@@ -66,12 +66,12 @@ export function DeviceView() {
             <Button
               variant="ghost"
               size="icon"
-              className="size-7"
+              className="size-8"
               disabled={!info}
               aria-label="Re-import backup"
               onClick={() => info && imp.open(info)}
             >
-              <RotateCw className="size-4" />
+              <RotateCw className="size-5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>
@@ -83,11 +83,11 @@ export function DeviceView() {
             <Button
               variant="ghost"
               size="icon"
-              className="size-7"
+              className="size-8"
               aria-label="Open a different backup"
               onClick={() => navigate({ to: "/" })}
             >
-              <FolderOpen className="size-4" />
+              <FolderOpen className="size-5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Open a different backup</TooltipContent>
@@ -97,11 +97,11 @@ export function DeviceView() {
             <Button
               variant="ghost"
               size="icon"
-              className="size-7"
+              className="size-8"
               aria-label="Close backup"
               onClick={() => void closeBackup()}
             >
-              <LogOut className="size-4" />
+              <LogOut className="size-5" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>Close this backup (its imported data is kept)</TooltipContent>

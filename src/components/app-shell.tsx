@@ -164,10 +164,10 @@ export function AppShell() {
           <Sidebar collapsible="icon">
             {/* Clear the top chrome: when expanded the sidebar runs full height and
             its header just clears the macOS traffic lights (pt-10); when collapsed
-            it sits UNDER the full-width title bar, so the icon clears the bar
-            (pt-14). data-tauri-drag-region makes the band draggable. */}
+            it sits UNDER the full-width title bar (h-13), so the icon clears the
+            bar (pt-16). data-tauri-drag-region makes the band draggable. */}
             <SidebarHeader
-              className="pt-10 group-data-[collapsible=icon]:pt-14"
+              className="pt-10 group-data-[collapsible=icon]:pt-16"
               data-tauri-drag-region
             >
               {/* The device identity as a hero: what backup you're looking at,
@@ -251,7 +251,7 @@ export function AppShell() {
             </SidebarFooter>
           </Sidebar>
           <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
-          <SidebarInset className="pt-11">
+          <SidebarInset className="pt-13">
             <div className="min-h-0 flex-1 overflow-hidden">
               <Outlet />
             </div>
@@ -281,7 +281,7 @@ function AppTitleBar() {
       data-tauri-drag-region
       // Match the sidebar's own width transition so the two edges move together.
       style={{ left: collapsed ? 0 : "var(--sidebar-width)" }}
-      className="fixed right-0 top-0 z-20 flex h-11 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
+      className="fixed right-0 top-0 z-20 flex h-13 items-center border-b bg-background px-3 transition-[left] duration-200 ease-linear"
     >
       <AppToolbar collapsed={collapsed} />
     </header>
@@ -517,10 +517,10 @@ function DensityToggle() {
         <Button
           variant="ghost"
           size="icon"
-          className="size-7"
+          className="size-8"
           onClick={() => setDensity(next)}
         >
-          <Icon className="size-4" />
+          <Icon className="size-5" />
           <span className="sr-only">
             Density: {label}. Switch to {DENSITY_META[next].label}.
           </span>
