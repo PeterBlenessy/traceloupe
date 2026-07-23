@@ -63,7 +63,7 @@ export function DeviceHero({
             aria-current={active ? "page" : undefined}
             className={cn(
               "mx-auto flex size-9 items-center justify-center rounded-md outline-hidden ring-sidebar-ring hover:bg-sidebar-accent focus-visible:ring-2",
-              active && "bg-sidebar-accent",
+              active && "bg-[var(--accent-soft)] text-[var(--accent-text)]",
             )}
           >
             <PhoneLoupeMark className="size-7" />
@@ -83,7 +83,7 @@ export function DeviceHero({
           aria-current={active ? "page" : undefined}
           className={cn(
             "group/hero mx-1 flex flex-col items-center rounded-xl px-2 pb-4 pt-3 text-center outline-hidden ring-sidebar-ring transition-colors hover:bg-sidebar-accent/50 focus-visible:ring-2",
-            active && "bg-sidebar-accent/50",
+            active && "bg-[var(--accent-soft)]",
           )}
         >
           <PhoneLoupeArt ghost={hasBackup !== true} className="size-24" />
