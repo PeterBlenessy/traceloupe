@@ -126,7 +126,12 @@ export function DeviceView() {
         title="No backup open"
         description="Import a backup to see its device info."
       >
-        <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button onClick={() => navigate({ to: "/" })}>Choose a backup</Button>
+          </TooltipTrigger>
+          <TooltipContent>Open the backup picker</TooltipContent>
+        </Tooltip>
       </EmptyView>
     );
   }

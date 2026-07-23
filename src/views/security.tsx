@@ -14,6 +14,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
@@ -218,14 +219,25 @@ export function SecurityView() {
                 "Loading indicator feeds…"
               )}
             </div>
-            <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
-              {running ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <ShieldAlert className="size-4" />
-              )}
-              {running ? "Scanning…" : "Run scan"}
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
+                    {running ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <ShieldAlert className="size-4" />
+                    )}
+                    {running ? "Scanning…" : "Run scan"}
+                  </Button>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                {running
+                  ? "A scan is already running"
+                  : "Check this backup against the current indicators"}
+              </TooltipContent>
+            </Tooltip>
           </div>
 
           {stale && (

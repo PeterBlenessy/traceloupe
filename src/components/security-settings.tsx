@@ -276,28 +276,40 @@ export function SecuritySettings() {
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {s.customIndicatorDir && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setCustomDir.mutate(null)}
-              disabled={setCustomDir.isPending}
-            >
-              Clear
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setCustomDir.mutate(null)}
+                  disabled={setCustomDir.isPending}
+                >
+                  Clear
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Stop using the custom indicator folder</TooltipContent>
+            </Tooltip>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={setCustomDir.isPending}
-            onClick={async () => {
-              const dir = await client.pickFolder(
-                "Choose a custom indicator folder",
-              );
-              if (dir) setCustomDir.mutate(dir);
-            }}
-          >
-            Choose folder…
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={setCustomDir.isPending}
+                onClick={async () => {
+                  const dir = await client.pickFolder(
+                    "Choose a custom indicator folder",
+                  );
+                  if (dir) setCustomDir.mutate(dir);
+                }}
+              >
+                Choose folder…
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Pick a folder of .stix / .yaml indicator files
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
     </div>
