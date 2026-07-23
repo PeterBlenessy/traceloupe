@@ -59,6 +59,9 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 - Every empty state now carries an accent-tinted icon tile, including the
   previously text-only ones (Calls, Safari, Apps, Notes, Recordings, Contacts,
   Calendar, Reminders, Interactions).
+- Apps view rows are now bordered cards with a clear type hierarchy: app name,
+  then App Store metadata, then the download receipt (emphasized date), then
+  the bundle id in small monospace — one size and voice per class of info.
 
 ## [0.29.1] — 2026-07-22
 
