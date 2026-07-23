@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
@@ -317,6 +317,31 @@ function AppTitleBar() {
   const { state } = useSidebar();
   const { translucentToolbar } = useSettings();
   const collapsed = state === "collapsed";
+  // Keyboard focus survives the trigger swap: the in-sidebar trigger is
+  // display:none'd on collapse and the title-bar one unmounts on expand, so
+  // the just-activated control vanishes and focus falls to <body>, restarting
+  // tab order from the top. When that happens, hand focus to the visible
+  // counterpart. Skipped on mount (focus starts on <body> without any swap).
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    if (document.activeElement !== document.body) return;
+    const id = requestAnimationFrame(() => {
+      const triggers = document.querySelectorAll<HTMLElement>(
+        '[data-sidebar="trigger"]',
+      );
+      for (const t of triggers) {
+        if (t.offsetParent !== null) {
+          t.focus();
+          break;
+        }
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [collapsed]);
   return (
     <header
       data-tauri-drag-region
