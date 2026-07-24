@@ -11,6 +11,37 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.31.1] — 2026-07-24
+
+### Changed
+
+- The Device view and the home view are now **one view**. `/` is the app's only
+  home: the backup picker before a backup is open, and the full device detail
+  once one is — laid out densely in two columns instead of a tall centred list,
+  with the re-import / open-another / close actions alongside it. The separate
+  `/device` route is gone, and the redundant phone icon with it (the sidebar
+  hero already shows the device icon and name). Opening a backup lands here.
+  ([#39](https://github.com/PeterBlenessy/traceloupe/issues/39))
+- The selected sidebar and Settings item is now a **solid accent fill** instead
+  of a low-opacity tint, matching a native macOS selection. The label keeps its
+  normal color, so a selected row reads like its neighbours — only the
+  background changes.
+  ([#41](https://github.com/PeterBlenessy/traceloupe/issues/41))
+
+### Fixed
+
+- A Safety Scan now **keeps the Mac awake** while it runs (a macOS
+  `PreventUserIdleSystemSleep` assertion held for the scan's lifetime and
+  released on every exit path). Long unattended scans no longer stall when the
+  machine idle-sleeps mid-chunk. The display still sleeps as usual.
+  ([#32](https://github.com/PeterBlenessy/traceloupe/issues/32))
+- A scan with findings never shows "this scan didn't produce a written report"
+  again: when the model returns empty prose, a deterministic overview built from
+  the findings themselves is stored instead — same guard for per-thread
+  summaries. ([#43](https://github.com/PeterBlenessy/traceloupe/issues/43))
+
 ## [0.31.0] — 2026-07-24
 
 **Safety Scan, end to end** — bounded classification you can trust, a styled
