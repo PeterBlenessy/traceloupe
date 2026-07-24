@@ -5,6 +5,7 @@
 mod biometric;
 mod logging;
 mod media;
+mod power;
 mod safety_scan_cmd;
 mod secret;
 mod signing;
