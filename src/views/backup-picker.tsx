@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, ChevronRight, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
+import { Check, ChevronRight, FolderOpen, Lock, LockOpen, LogOut, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -21,16 +21,30 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { useImport } from "@/components/import-provider";
+import { modelName } from "@/lib/device-names";
+import { formatDateTime } from "@/lib/format";
 
 export function BackupPicker() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const imp = useImport();
+  const { choose } = useSearch({ strict: false }) as { choose?: true };
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   const { data: importedIds } = useQuery({
     queryKey: ["importedBackupIds"],
     queryFn: () => client.importedBackupIds(),
   });
   const imported = new Set(importedIds ?? []);
+
+  // `/` is the app's one home. With a backup open it IS the Device view (full
+  // device detail, densely laid out) — the separate /device route is gone.
+  // `?choose` forces the picker back so the user can still switch backups.
+  if (active === true && !choose) {
+    return <DeviceHome onChooseOther={() => navigate({ to: "/", search: { choose: true } })} />;
+  }
 
   // Opening an already-parsed backup is instant (just point at its cache).
   // A never-parsed one needs a first-time read: unencrypted starts straight
@@ -46,7 +60,8 @@ export function BackupPicker() {
         // Drop any cached artifact data from a previously-open backup; with
         // staleTime: Infinity it would otherwise persist across backups.
         await qc.invalidateQueries();
-        navigate({ to: "/messages" });
+        // Land on `/` — now the Device view for the freshly opened backup.
+        navigate({ to: "/" });
       } catch (e) {
         toast.error("Couldn't open backup", {
           description: e instanceof Error ? e.message : String(e),
@@ -176,6 +191,173 @@ export function BackupPicker() {
             />
           ))}
       </div>
+
+      <AppFeatures />
+    </div>
+  );
+}
+
+/** One label/value line of the device detail table. Dense: the pair sits on a
+ *  single row, values right-aligned and selectable. */
+function DeviceRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b px-3 py-1.5 last:border-b-0">
+      <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
+      <span className="select-text truncate text-right text-xs font-medium">
+        {value ?? "—"}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The landing view once a backup is open (#39). This IS the Device view — the
+ * old standalone `/device` route was merged in here, so there is ONE home:
+ * picker before a backup is open, full device detail after.
+ *
+ * "Condensed" means DENSE, not less: every field the old Device view showed is
+ * here, in a tighter two-column table instead of a tall centred list. The
+ * "open a backup" section is dropped (a backup is already open) and the big
+ * phone icon with it — the sidebar hero already shows the device icon + name.
+ * The app-features intro stays below.
+ */
+function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const imp = useImport();
+  const { data: info } = useQuery<BackupInfo | null>({
+    queryKey: ["deviceInfo"],
+    queryFn: () => client.deviceInfo(),
+  });
+  const model = modelName(info?.productType ?? null);
+  const subtitle =
+    [model, info?.productVersion ? `iOS ${info.productVersion}` : null]
+      .filter(Boolean)
+      .join(" · ") || "Backup open";
+
+  // Close the open backup: clear session state, then return to the picker.
+  async function closeBackup() {
+    try {
+      await client.closeBackup();
+      qc.setQueryData(["hasActiveBackup"], false);
+      await qc.invalidateQueries();
+      navigate({ to: "/" });
+    } catch (e) {
+      toast.error("Couldn't close backup", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  const encryption =
+    info?.isEncrypted == null ? (
+      "—"
+    ) : (
+      <span className="inline-flex items-center gap-1.5">
+        {info.isEncrypted ? (
+          <>
+            <Lock className="size-3.5" /> Encrypted
+          </>
+        ) : (
+          <>
+            <LockOpen className="size-3.5" /> Not encrypted
+          </>
+        )}
+      </span>
+    );
+
+  return (
+    <div className="mx-auto max-w-2xl p-8">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-semibold">
+            {info?.deviceName ?? "Device"}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+        </div>
+        {/* The backup-management actions the old /device toolbar carried. */}
+        <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border/70 bg-muted/40 p-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                disabled={!info}
+                aria-label="Re-import backup"
+                onClick={() => info && imp.open(info)}
+              >
+                <RotateCw className="size-5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {info
+                ? "Re-import (parse this backup again — updates data, e.g. new fields)"
+                : "Re-import — waiting for this backup's device info"}
+            </TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="Open a different backup"
+                onClick={onChooseOther}
+              >
+                <FolderOpen className="size-5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Open a different backup</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-8"
+                aria-label="Close backup"
+                onClick={() => void closeBackup()}
+              >
+                <LogOut className="size-5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Close this backup (its imported data is kept)
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* Full device detail, dense: two columns of label/value rows. */}
+      <div className="mt-6 grid gap-x-6 sm:grid-cols-2">
+        <div className="overflow-hidden rounded-lg border">
+          <DeviceRow label="Device name" value={info?.deviceName} />
+          <DeviceRow label="Model" value={model} />
+          <DeviceRow label="Model identifier" value={info?.productType} />
+        </div>
+        <div className="mt-2.5 overflow-hidden rounded-lg border sm:mt-0">
+          <DeviceRow label="iOS version" value={info?.productVersion} />
+          <DeviceRow label="Serial number" value={info?.serialNumber} />
+          <DeviceRow
+            label="Last backup"
+            value={
+              info?.lastBackupDate != null
+                ? formatDateTime(info.lastBackupDate)
+                : null
+            }
+          />
+        </div>
+        <div className="mt-2.5 overflow-hidden rounded-lg border sm:col-span-2">
+          <DeviceRow label="Encryption" value={encryption} />
+        </div>
+      </div>
+      {info?.isEncrypted === false && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Unencrypted — Safari &amp; call history, Health, and passwords are
+          excluded by iOS. Encrypt the backup to include them.
+        </p>
+      )}
 
       <AppFeatures />
     </div>

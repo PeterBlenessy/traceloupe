@@ -23,7 +23,6 @@ import { RecordingsView } from "@/views/recordings";
 import { AppsView } from "@/views/apps";
 import { SecurityView } from "@/views/security";
 import { SafetyScanView } from "@/views/safety-scan";
-import { DeviceView } from "@/views/device";
 import { CalendarView } from "@/views/calendar";
 import { RemindersView } from "@/views/reminders";
 import { HealthView } from "@/views/health";
@@ -32,7 +31,16 @@ import { InteractionsView } from "@/views/interactions";
 const rootRoute = createRootRoute({ component: AppShell });
 
 const routes = [
-  createRoute({ getParentRoute: () => rootRoute, path: "/", component: BackupPicker }),
+  // `/` is the app's one home: the backup picker before a backup is open, and
+  // the Device view (full device detail) once one is. `?choose` forces the
+  // picker back so the user can switch backups.
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    validateSearch: (search: Record<string, unknown>): { choose?: true } =>
+      search.choose ? { choose: true } : {},
+    component: BackupPicker,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/photos", component: PhotosView }),
   createRoute({
     getParentRoute: () => rootRoute,
@@ -83,7 +91,6 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/reminders", component: RemindersView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/health", component: HealthView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/interactions", component: InteractionsView }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/device", component: DeviceView }),
 ];
 
 const router = createRouter({ routeTree: rootRoute.addChildren(routes) });
