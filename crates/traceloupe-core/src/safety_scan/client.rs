@@ -45,21 +45,24 @@ impl LlmClient {
         &self.model
     }
 
-    /// One classification call: system + user message, grammar-constrained by
-    /// `response_format`, temperature 0. Returns the completion content parsed
-    /// as JSON.
+    /// One classification call: system + user message, constrained by a raw
+    /// GBNF `grammar` (temperature 0). Returns the completion content parsed as
+    /// JSON. We pass `grammar` rather than a `response_format` JSON schema
+    /// because the server's schema→grammar path does NOT enforce `maxItems` and
+    /// over-constrains whitespace in a way that suppresses detection — see
+    /// `prompt::verdicts_grammar`.
     pub fn chat_json(
         &self,
         system: &str,
         user: &str,
-        response_format: &Value,
+        grammar: &str,
         max_tokens: u32,
     ) -> Result<Value> {
         let body = json!({
             "model": self.model,
             "temperature": 0,
             "max_tokens": max_tokens,
-            "response_format": response_format,
+            "grammar": grammar,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },

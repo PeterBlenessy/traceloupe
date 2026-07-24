@@ -1,10 +1,8 @@
-//! The Forensic 9 classification prompt and its structured-output schema
-//! (plan T5). The model sees ONE chunk per call and answers in strict JSON —
-//! llama-server converts the JSON schema to a GBNF grammar, so output shape is
-//! enforced at generation time; semantic validation (indexes, slugs) stays in
-//! the engine.
-
-use serde_json::{json, Value};
+//! The Forensic 9 classification prompt and its structured-output grammar
+//! (plan T5). The model sees ONE chunk per call and answers in strict JSON,
+//! constrained by a hand-written GBNF grammar ([`verdicts_grammar`]) passed to
+//! llama-server's `grammar` field, so output shape is enforced at generation
+//! time; semantic validation (indexes, slugs) stays in the engine.
 
 use super::chunker::Chunk;
 use crate::analysis::Category;
@@ -55,46 +53,54 @@ pub fn render_chunk(chunk: &Chunk) -> String {
     out
 }
 
-/// The response_format JSON schema (OpenAI-compatible `json_schema` shape);
-/// llama-server enforces it as a grammar. `max_items` BOUNDS the verdicts
-/// array (one verdict per chunk item is the norm; extra categories are rare) —
-/// without it the grammar lets the model append array elements until it hits
-/// the token cap, which truncates the JSON mid-element into unparseable output
-/// and the chunk is skipped (observed ~15–45% of chunks failing). A bounded
-/// array closes deterministically, so the output stays valid and short.
-pub fn verdicts_schema(max_items: usize) -> Value {
-    let slugs: Vec<&str> = Category::ALL.iter().map(|c| c.as_str()).collect();
-    json!({
-        "type": "json_schema",
-        "json_schema": {
-            "name": "content_verdicts",
-            "strict": true,
-            "schema": {
-                "type": "object",
-                "properties": {
-                    "verdicts": {
-                        "type": "array",
-                        // At least 1 (a single-item note chunk) so the bound is
-                        // never zero, which some grammar backends reject.
-                        "maxItems": max_items.max(1),
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "index": { "type": "integer", "minimum": 0 },
-                                "category": { "type": "string", "enum": slugs },
-                                "severity": { "type": "integer", "minimum": 1, "maximum": 3 },
-                                // Tightened 300→200: one factual sentence fits,
-                                // and it keeps a full array within the budget.
-                                "rationale": { "type": "string", "maxLength": 140 }
-                            },
-                            "required": ["index", "category", "severity", "rationale"]
-                        }
-                    }
-                },
-                "required": ["verdicts"]
-            }
-        }
-    })
+/// A raw GBNF grammar (llama-server `grammar` field) constraining the verdicts
+/// output. We hand-write GBNF rather than pass a JSON schema via `response_format`
+/// because of two behaviours verified empirically against the pinned server
+/// (b10075) with real E2B/E4B calls — see `docs/research/safety-scan-grammar.md`:
+///
+///  1. **`maxItems` is NOT enforced** on the `response_format`/`json_schema`
+///     path. Without a real bound the model keeps appending array elements until
+///     it hits the token cap, truncating the JSON mid-element into unparseable
+///     output — the chunk is then skipped (observed ~15–45% of chunks failing;
+///     a controlled probe hit the token cap with the array still open every
+///     time). GBNF bounded repetition `(...){0,n-1}` *is* enforced, so the array
+///     closes deterministically and the output stays valid and short.
+///
+///  2. **Whitespace must be present but bounded.** Forbidding inter-token
+///     whitespace entirely (compact JSON) collapses the weak sweep tier to an
+///     empty array — it stops detecting harmful content at all. Allowing the
+///     model its natural pretty-print whitespace restores detection; leaving it
+///     *unbounded* (`ws ::= [ \t\n]*`) lets the model loop on newlines until the
+///     token cap. `ws ::= [ \t\n]{0,4}` gives it room without a loop.
+///
+/// `max_items` bounds the array (one verdict per chunk item is the norm; extra
+/// categories are rare). At least 1, so single-item chunks still parse.
+pub fn verdicts_grammar(max_items: usize) -> String {
+    let m = max_items.max(1);
+    let cat_alt = Category::ALL
+        .iter()
+        .map(|c| format!("\"\\\"{}\\\"\"", c.as_str()))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    // A single-item chunk allows exactly one verdict (no repetition suffix);
+    // otherwise 1..=m via `verdict (ws "," ws verdict){0,m-1}`.
+    let rep = if m <= 1 {
+        String::new()
+    } else {
+        format!("(ws \",\" ws verdict){{0,{}}}", m - 1)
+    };
+    const TEMPLATE: &str = r##"root ::= "{" ws "\"verdicts\"" ws ":" ws "[" ws items? ws "]" ws "}"
+items ::= verdict __REP__
+verdict ::= "{" ws "\"index\"" ws ":" ws index ws "," ws "\"category\"" ws ":" ws category ws "," ws "\"severity\"" ws ":" ws severity ws "," ws "\"rationale\"" ws ":" ws rationale ws "}"
+category ::= __CAT__
+severity ::= "1" | "2" | "3"
+index ::= [0-9] | [1-9] [0-9] [0-9]?
+rationale ::= "\"" char{«redacted»} "\""
+char ::= [^"\\\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+ws ::= [ \t\n]{0,4}"##;
+    TEMPLATE
+        .replace("__REP__", &rep)
+        .replace("__CAT__", &cat_alt)
 }
 
 #[cfg(test)]
@@ -135,14 +141,38 @@ mod tests {
     }
 
     #[test]
-    fn schema_lists_all_nine_slugs() {
-        let v = verdicts_schema(25);
-        let slugs = v["json_schema"]["schema"]["properties"]["verdicts"]["items"]["properties"]
-            ["category"]["enum"]
-            .as_array()
-            .unwrap();
-        assert_eq!(slugs.len(), 9);
-        assert!(slugs.iter().any(|s| s == "coercive-control"));
+    fn grammar_lists_all_nine_slugs_and_bounds_the_array() {
+        let g = verdicts_grammar(25);
+        // Every category slug is an allowed literal in the `category` rule.
+        for c in Category::ALL {
+            assert!(
+                g.contains(&format!("\"\\\"{}\\\"\"", c.as_str())),
+                "grammar missing slug {}",
+                c.as_str()
+            );
+        }
+        // The array is bounded (repetition capped at max_items-1) and whitespace
+        // is bounded (present, so detection survives; capped, so it can't loop).
+        assert!(
+            g.contains("(ws \",\" ws verdict){0,24}"),
+            "array not bounded"
+        );
+        assert!(
+            g.contains("ws ::= [ \\t\\n]{0,4}"),
+            "whitespace not bounded"
+        );
+        assert!(!g.contains("ws ::= [ \\t\\n]*"), "unbounded ws would loop");
+    }
+
+    #[test]
+    fn grammar_single_item_allows_exactly_one_verdict() {
+        // A 1-item chunk drops the repetition suffix: `items ::= verdict`.
+        let g = verdicts_grammar(1);
+        assert!(g.contains("items ::= verdict \n") || g.contains("items ::= verdict\n"));
+        assert!(
+            !g.contains("{0,0}"),
+            "empty repetition range is invalid GBNF"
+        );
     }
 
     #[test]
