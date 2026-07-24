@@ -63,6 +63,9 @@ export function DeviceHero({
             aria-current={active ? "page" : undefined}
             className={cn(
               "mx-auto flex size-9 items-center justify-center rounded-md outline-hidden ring-sidebar-ring hover:bg-sidebar-accent focus-visible:ring-2",
+              // The loupe mark draws its magnifier in --accent-color, so it
+              // would vanish on the solid-accent selection fill the plain nav
+              // rows use. The branded device entry keeps the soft accent tint.
               active && "bg-[var(--accent-soft)] text-[var(--accent-text)]",
             )}
           >
