@@ -6,6 +6,7 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::CacheDb;
+use crate::indicators::FeedInfo;
 use crate::Result;
 
 /// One row in the Messages thread list.
@@ -2197,6 +2198,12 @@ pub struct ScanRun {
     pub status: String,
     pub modules: Vec<String>,
     pub indicator_count: Option<i64>,
+    /// The indicator feeds this run actually ran against (the per-run receipt,
+    /// stamped at scan start — independent of later feed updates).
+    pub feeds: Vec<FeedInfo>,
+    /// The snapshot's generated-at (unix seconds) at scan time; None on runs
+    /// recorded before the column existed.
+    pub feeds_generated_at: Option<i64>,
     /// Rollup of this run's findings by severity.
     pub critical: i64,
     pub warning: i64,
@@ -2228,7 +2235,7 @@ pub fn list_scan_runs(cache: &CacheDb) -> Result<Vec<ScanRun>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT r.id, r.kind, r.started_at, r.finished_at, r.status, r.modules_json,
-                r.indicator_count,
+                r.indicator_count, r.feeds_json, r.feeds_generated_at,
                 coalesce(sum(f.severity = 'critical'), 0),
                 coalesce(sum(f.severity = 'warning'), 0),
                 coalesce(sum(f.severity = 'info'), 0)
@@ -2239,6 +2246,7 @@ pub fn list_scan_runs(cache: &CacheDb) -> Result<Vec<ScanRun>> {
     )?;
     let rows = stmt.query_map([], |r| {
         let modules_json: String = r.get(5)?;
+        let feeds_json: String = r.get(7)?;
         Ok(ScanRun {
             id: r.get(0)?,
             kind: r.get(1)?,
@@ -2247,9 +2255,11 @@ pub fn list_scan_runs(cache: &CacheDb) -> Result<Vec<ScanRun>> {
             status: r.get(4)?,
             modules: serde_json::from_str(&modules_json).unwrap_or_default(),
             indicator_count: r.get(6)?,
-            critical: r.get(7)?,
-            warning: r.get(8)?,
-            info: r.get(9)?,
+            feeds: serde_json::from_str(&feeds_json).unwrap_or_default(),
+            feeds_generated_at: r.get(8)?,
+            critical: r.get(9)?,
+            warning: r.get(10)?,
+            info: r.get(11)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2519,5 +2529,52 @@ mod tests {
 
         assert_eq!(previous_completed_run(&cache, 2).unwrap(), Some(1));
         assert_eq!(previous_completed_run(&cache, 1).unwrap(), None);
+    }
+
+    #[test]
+    fn scan_runs_round_trip_feed_receipt() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO scan_runs (id, kind, started_at, status, feeds_json, feeds_generated_at)
+                 VALUES (1, 'explicit', 100, 'done',
+                         '[{\"source\":\"AmnestyTech/pegasus\",\"class\":\"mercenary\",\"count\":1549,\"skipped\":0}]',
+                         1752940800)",
+                [],
+            )
+            .unwrap();
+        let runs = list_scan_runs(&cache).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].feeds_generated_at, Some(1_752_940_800));
+        assert_eq!(
+            runs[0].feeds,
+            vec![FeedInfo {
+                source: "AmnestyTech/pegasus".into(),
+                class: "mercenary".into(),
+                count: 1549,
+                skipped: 0,
+            }]
+        );
+    }
+
+    #[test]
+    fn scan_runs_legacy_row_without_receipt_date() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        // A pre-v49 row: feeds_json populated (since v47), no generated-at.
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO scan_runs (id, kind, started_at, status, feeds_json)
+                 VALUES (1, 'passive', 100, 'done',
+                         '[{\"source\":\"echap/ioc\",\"class\":\"stalkerware\",\"count\":2746,\"skipped\":1}]')",
+                [],
+            )
+            .unwrap();
+        let runs = list_scan_runs(&cache).unwrap();
+        assert_eq!(runs[0].feeds_generated_at, None);
+        assert_eq!(runs[0].feeds.len(), 1);
+        assert_eq!(runs[0].feeds[0].source, "echap/ioc");
+        assert_eq!(runs[0].feeds[0].skipped, 1);
     }
 }
