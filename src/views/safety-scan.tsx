@@ -454,13 +454,18 @@ export function SafetyScanView() {
                 // scans that didn't complete, and never while one is running.
                 onResume={
                   !running && selectedScan.status !== "completed"
-                    ? () =>
+                    ? () => {
+                        // Follow the resumed run: clear the pin so the view
+                        // tracks the new (latest) scan as it appears, instead
+                        // of staying on the old row with a Back-to-latest.
+                        setSelectedScanId(null);
                         void startScan({
                           modelId: effectiveModelId,
                           rangeStart: selectedScan.rangeStart,
                           rangeEnd: selectedScan.rangeEnd,
                           sources: selectedScan.sources,
-                        })
+                        });
+                      }
                     : undefined
                 }
                 report={report.data}
