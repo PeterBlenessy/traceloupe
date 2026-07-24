@@ -625,6 +625,7 @@ async fn import_backup(
 
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
+    repair_stranded_safety_scans(&app_for_passive, &outcome.cache_path);
 
     // Remember the source dir for every backup — a partial re-import needs it to
     // locate the backup's files (encrypted or not).
@@ -833,8 +834,36 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
         }
     }
     app.state::<SessionKeys>().set(decryptor);
-    app.state::<ActiveBackup>().set(cache_path);
+    app.state::<ActiveBackup>().set(cache_path.clone());
+    repair_stranded_safety_scans(&app, &cache_path);
     true
+}
+
+/// Mark Safety Scan rows stranded 'running' as 'interrupted' the moment a
+/// backup becomes active — this process provably has no scan in flight at that
+/// point, so the stored state must not claim one is running. Best-effort: no
+/// analysis DB (never scanned) is fine, and a failure only delays the repair
+/// to the begin-scan backstop.
+fn repair_stranded_safety_scans(app: &AppHandle, cache_path: &Path) {
+    let Ok(path) = safety_scan_cmd::analysis_path(cache_path) else {
+        return;
+    };
+    if !path.exists() {
+        return;
+    }
+    match traceloupe_core::analysis::AnalysisDb::open(&path)
+        .and_then(|db| db.repair_stranded_scans())
+    {
+        Ok(n) if n > 0 => logging::info(
+            app,
+            format!("Safety Scan: marked {n} interrupted scan(s) from a previous session"),
+        ),
+        Ok(_) => {}
+        Err(e) => logging::warn(
+            app,
+            format!("Safety Scan: stranded-scan repair failed: {e}"),
+        ),
+    }
 }
 
 /// Whether a backup is currently open for browsing.

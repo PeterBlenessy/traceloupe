@@ -673,7 +673,8 @@ export interface SafetyScanStatus {
   model: string;
   rangeStart: number | null;
   rangeEnd: number | null;
-  status: "running" | "completed" | "cancelled" | "failed";
+  /** 'interrupted' = a stranded 'running' row repaired at backup open. */
+  status: "running" | "completed" | "cancelled" | "failed" | "interrupted";
   startedAt: number;
   finishedAt: number | null;
   chunksTotal: number;
@@ -696,7 +697,8 @@ export interface SafetyScanHistoryItem {
   rangeEnd: number | null;
   /** Which content the scan covered. */
   sources: "all" | "messages" | "notes" | string;
-  status: "running" | "completed" | "cancelled" | "failed";
+  /** 'interrupted' = a stranded 'running' row repaired at backup open. */
+  status: "running" | "completed" | "cancelled" | "failed" | "interrupted";
   startedAt: number;
   finishedAt: number | null;
   findings: number;

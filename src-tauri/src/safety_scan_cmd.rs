@@ -51,7 +51,7 @@ pub struct DownloadSnapshot {
 }
 
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
-fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_path
         .parent()
         .ok_or("unexpected cache layout")?

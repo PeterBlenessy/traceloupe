@@ -556,6 +556,7 @@ const SCAN_STATUS_LABEL: Record<string, string> = {
   cancelled: "Stopped",
   failed: "Failed",
   running: "Running",
+  interrupted: "Interrupted",
 };
 
 /** Date-led identity for a scan: people remember *when* they scanned; the
@@ -658,7 +659,9 @@ function ScanRail({
         : outcome === "clean"
           ? s.findings === 0 && s.status === "completed"
           : outcome === "stopped"
-            ? s.status === "cancelled" || s.status === "failed"
+            ? s.status === "cancelled" ||
+              s.status === "failed" ||
+              s.status === "interrupted"
             : true,
     );
     rows = sortItems(
@@ -709,7 +712,10 @@ function ScanRail({
                     value: "stopped",
                     label: "Stopped",
                     count: scans.filter(
-                      (s) => s.status === "cancelled" || s.status === "failed",
+                      (s) =>
+                        s.status === "cancelled" ||
+                        s.status === "failed" ||
+                        s.status === "interrupted",
                     ).length,
                   },
                 ],
@@ -937,13 +943,14 @@ function ScanReportCard({
           <p className="text-sm text-muted-foreground">
             {scan.status === "cancelled"
               ? "This scan was stopped before it finished, so it has no written report. Any findings it made before stopping are listed below."
-              : scan.status === "running"
-                ? live
+              : scan.status === "interrupted" ||
+                  (scan.status === "running" && !live)
+                ? "This scan was interrupted before finishing (the app closed mid-scan). Its progress is checkpointed — Resume starts a new scan that skips everything already covered."
+                : scan.status === "running"
                   ? "The scan is still running — findings appear below as they are made."
-                  : "This scan was interrupted before finishing (the app closed mid-scan). Its progress is checkpointed — starting a new scan resumes from where it stopped."
-                : clean
-                  ? "The model flagged nothing in this period. That is not a guarantee — spot-check important conversations yourself."
-                  : "This scan didn't produce a written report."}
+                  : clean
+                    ? "The model flagged nothing in this period. That is not a guarantee — spot-check important conversations yourself."
+                    : "This scan didn't produce a written report."}
           </p>
         )}
 

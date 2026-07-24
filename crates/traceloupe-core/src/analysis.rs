@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS scans (
     range_end    INTEGER,
     sources      TEXT NOT NULL DEFAULT 'all', -- 'all' | 'messages' | 'notes' (v2)
     status       TEXT NOT NULL,             -- 'running' | 'completed' | 'cancelled' | 'failed'
+                                            -- | 'interrupted' (stranded 'running' repaired at open)
     started_at   INTEGER NOT NULL,
     finished_at  INTEGER,
     chunks_total INTEGER NOT NULL DEFAULT 0,
@@ -344,19 +345,33 @@ impl AnalysisDb {
         sources: &str,
         started_at: i64,
     ) -> Result<i64> {
-        // Repair scans stranded 'running' by a crash or fatal error. Safe
-        // here (not at open): the T7 command layer allows one scan at a time,
-        // so any 'running' row at begin is by definition dead.
-        self.conn.execute(
-            "UPDATE scans SET status = 'failed', finished_at = ?1 WHERE status = 'running'",
-            params![started_at],
-        )?;
+        // Backstop repair for scans stranded 'running' (normally already done
+        // at backup open via repair_stranded_scans): one scan at a time means
+        // any 'running' row at begin is by definition dead.
+        self.repair_stranded_scans()?;
         self.conn.execute(
             "INSERT INTO scans (model, range_start, range_end, sources, status, started_at)
              VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
             params![model, range.0, range.1, sources, started_at],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Repair scans stranded 'running' by a crash or kill: mark them
+    /// 'interrupted'. Called when a backup becomes active (this process
+    /// provably has no scan in flight then), so the stored state never claims
+    /// a scan is running longer than necessary. `finished_at` stays NULL —
+    /// the actual death time is unknown and won't be invented. Returns the
+    /// number of rows repaired.
+    ///
+    /// Caveat (accepted, same as the begin-time backstop): a second app
+    /// instance sharing this DB with a genuinely live scan would be
+    /// mislabeled — single-instance is the supported model.
+    pub fn repair_stranded_scans(&self) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE scans SET status = 'interrupted' WHERE status = 'running'",
+            [],
+        )?)
     }
 
     pub fn set_chunks_total(&self, scan_id: i64, total: i64) -> Result<()> {
@@ -841,6 +856,26 @@ mod tests {
     }
 
     #[test]
+    fn repair_marks_stranded_scans_interrupted() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let stranded = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Simulate a kill: the scan never finishes; the app reopens the backup.
+        assert_eq!(db.repair_stranded_scans().unwrap(), 1);
+        let (status, finished): (String, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT status, finished_at FROM scans WHERE id = ?1",
+                params![stranded],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "interrupted");
+        assert_eq!(finished, None);
+        // Idempotent: nothing left to repair.
+        assert_eq!(db.repair_stranded_scans().unwrap(), 0);
+    }
+
+    #[test]
     fn list_findings_filters_by_scan() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan1 = db.begin_scan("m", (None, None), "all", 100).unwrap();
@@ -942,8 +977,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(dead_status, "failed");
-        assert_eq!(dead_finished, Some(200));
+        // Marked 'interrupted', and no invented finish time — when it actually
+        // died is unknown.
+        assert_eq!(dead_status, "interrupted");
+        assert_eq!(dead_finished, None);
         let live_status: String = db
             .conn()
             .query_row(
