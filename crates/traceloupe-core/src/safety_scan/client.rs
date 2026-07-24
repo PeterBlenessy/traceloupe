@@ -17,6 +17,8 @@ pub struct LlmClient {
     agent: ureq::Agent,
     base_url: String,
     model: String,
+    /// Sent as `Authorization: Bearer …` when the server requires `--api-key`.
+    api_key: Option<String>,
 }
 
 impl LlmClient {
@@ -29,7 +31,14 @@ impl LlmClient {
                 .build(),
             base_url: base_url.trim_end_matches('/').to_string(),
             model: model.to_string(),
+            api_key: None,
         }
+    }
+
+    /// Attach the server's per-run bearer token (see `server::generate_api_key`).
+    pub fn with_api_key(mut self, key: Option<String>) -> Self {
+        self.api_key = key;
+        self
     }
 
     pub fn model(&self) -> &str {
@@ -78,19 +87,21 @@ impl LlmClient {
 
     fn post_chat(&self, body: &Value) -> Result<String> {
         let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self
+        let mut req = self
             .agent
             .post(&url)
-            .set("Content-Type", "application/json")
-            .send_string(&body.to_string())
-            .map_err(|e| match e {
-                // Never include the response body: on this endpoint it can
-                // echo prompt content.
-                ureq::Error::Status(code, _) => {
-                    Error::Inference(format!("llama-server returned HTTP {code}"))
-                }
-                ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
-            })?;
+            .set("Content-Type", "application/json");
+        if let Some(key) = &self.api_key {
+            req = req.set("Authorization", &format!("Bearer {key}"));
+        }
+        let resp = req.send_string(&body.to_string()).map_err(|e| match e {
+            // Never include the response body: on this endpoint it can
+            // echo prompt content.
+            ureq::Error::Status(code, _) => {
+                Error::Inference(format!("llama-server returned HTTP {code}"))
+            }
+            ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
+        })?;
         let text = resp
             .into_string()
             .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))?;

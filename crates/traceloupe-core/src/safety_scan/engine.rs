@@ -15,11 +15,15 @@ use crate::cache::CacheDb;
 use crate::sidecar::CancelToken;
 use crate::{Error, Result};
 
-/// Generation budget per chunk: verdicts are short JSON; 800 tokens covers a
-/// pathological all-items-flagged window now that inputs are bounded
-/// (ITEM_MAX_CHARS / NOTE_WINDOW_CHARS), while cutting a runaway generation
-/// off at ~2/3 the previous cost (issue #33: runaways burned 146–212 s each).
-const MAX_TOKENS: u32 = 800;
+/// Generation budget for a chunk with `items` items. The verdicts array is
+/// grammar-bounded to `items` elements (see `verdicts_schema`), each at most a
+/// ~200-char rationale (~55 tokens) plus structure — so this sizes the budget
+/// to fit a legitimately FULL array without truncating it into invalid JSON.
+/// A clean/lightly-flagged chunk stops at EOS well before this. The floor
+/// keeps a tiny single-item note chunk from being starved.
+fn chunk_token_budget(items: usize) -> u32 {
+    (items as u32 * 70 + 200).max(300)
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanProgress {
@@ -353,7 +357,6 @@ fn classify_batch(
     if pending.is_empty() {
         return Ok(());
     }
-    let schema = prompt::verdicts_schema();
     let workers = parallel.max(1).min(pending.len());
     let next = std::sync::atomic::AtomicUsize::new(0);
     let (tx, rx) = std::sync::mpsc::channel::<(usize, std::result::Result<Value, Error>)>();
@@ -361,7 +364,6 @@ fn classify_batch(
         for _ in 0..workers {
             let tx = tx.clone();
             let next = &next;
-            let schema = &schema;
             s.spawn(move || {
                 loop {
                     if cancel.is_cancelled() {
@@ -371,13 +373,21 @@ fn classify_batch(
                     if i >= pending.len() {
                         break;
                     }
-                    let user = prompt::render_chunk(pending[i]);
+                    let chunk = pending[i];
+                    // Schema + budget are PER CHUNK: the verdicts array is
+                    // bounded to this chunk's item count, and the token budget
+                    // is sized to fit that bounded array (so a legitimately
+                    // full array is never truncated into invalid JSON).
+                    let schema = prompt::verdicts_schema(chunk.items.len());
+                    let max_tokens = chunk_token_budget(chunk.items.len());
+                    let user = prompt::render_chunk(chunk);
                     // One retry: a transient failure shouldn't skip a chunk,
                     // a persistent one shouldn't stall it.
                     let mut result =
-                        client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
+                        client.chat_json(prompt::SYSTEM_PROMPT, &user, &schema, max_tokens);
                     if result.is_err() && !cancel.is_cancelled() {
-                        result = client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
+                        result =
+                            client.chat_json(prompt::SYSTEM_PROMPT, &user, &schema, max_tokens);
                     }
                     if tx.send((i, result)).is_err() {
                         break; // receiver gone (fatal storage error path)

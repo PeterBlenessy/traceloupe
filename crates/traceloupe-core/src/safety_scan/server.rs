@@ -187,6 +187,19 @@ pub fn sandbox_profile(model_dir: &Path, binary_dir: &Path, scratch_dir: &Path) 
     )
 }
 
+/// A random per-run bearer token (48 hex chars) for the sidecar's `--api-key`.
+/// Reads the OS CSPRNG (`/dev/urandom`); falls back to None if unavailable so a
+/// scan is never blocked by token generation (the loopback gap it closes is
+/// low-severity — see `ServerConfig::api_key`).
+pub fn generate_api_key() -> Option<String> {
+    use std::io::Read;
+    let mut buf = [0u8; 24];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .ok()?;
+    Some(hex::encode(buf))
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub binary: PathBuf,
@@ -198,6 +211,11 @@ pub struct ServerConfig {
     /// Server slots (`--parallel`); >1 lets the engine classify chunks
     /// concurrently. 1 = today's sequential behavior.
     pub parallel: u32,
+    /// A per-run bearer token required on every request (`--api-key`). Closes
+    /// the loopback server's default "CORS * / no key" gap: a malicious page in
+    /// the user's browser can't drive the local model without this token. The
+    /// app generates it and passes it to the client. None = no auth.
+    pub api_key: Option<String>,
     /// `-1` = offload everything to the GPU (Apple Silicon default).
     pub gpu_layers: i32,
     /// Wrap the process in the Seatbelt profile (macOS only; on other
@@ -292,6 +310,13 @@ impl LlamaServer {
         if cfg.parallel > 1 {
             server_args.push("--parallel".into());
             server_args.push(cfg.parallel.to_string().into());
+        }
+        if let Some(key) = &cfg.api_key {
+            // Loopback-only + per-run + only gates model access (not data), so
+            // passing it on argv is acceptable here (a local process that could
+            // read it via `ps` already has far bigger levers). Never logged.
+            server_args.push("--api-key".into());
+            server_args.push(key.into());
         }
 
         // The scratch dir must exist before the sandbox denies writes
@@ -458,6 +483,7 @@ mod tests {
             port,
             ctx_size: 4096,
             parallel: 1,
+            api_key: None,
             gpu_layers: -1,
             sandbox: false,
             scratch_dir: std::env::temp_dir().join("traceloupe-scratch-test"),
