@@ -85,7 +85,7 @@ pub fn verdicts_schema(max_items: usize) -> Value {
                                 "severity": { "type": "integer", "minimum": 1, "maximum": 3 },
                                 // Tightened 300→200: one factual sentence fits,
                                 // and it keeps a full array within the budget.
-                                "rationale": { "type": "string", "maxLength": 200 }
+                                "rationale": { "type": "string", "maxLength": 140 }
                             },
                             "required": ["index", "category", "severity", "rationale"]
                         }

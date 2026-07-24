@@ -971,6 +971,56 @@ pub fn list_content_findings(
         .collect())
 }
 
+/// The flagged text for a finding, fetched from the cache ON DEMAND (never
+/// stored in analysis.db — ADR 0002 keeps raw text out of the analysis store).
+/// Returns None when the source row is gone or its id is stale after a
+/// re-import, so the UI can say "source no longer available" instead of lying.
+#[tauri::command]
+pub fn content_finding_snippet(
+    active: State<'_, ActiveBackup>,
+    source_kind: String,
+    source_id: Option<i64>,
+) -> Result<Option<String>, String> {
+    let cache_path = active.path()?;
+    let Some(id) = source_id else {
+        return Ok(None);
+    };
+    let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+    let text = match source_kind.as_str() {
+        "message" => cache
+            .conn()
+            .query_row("SELECT body FROM messages WHERE id = ?1", [id], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .ok()
+            .flatten(),
+        "note" => cache
+            .conn()
+            .query_row(
+                "SELECT title, body_html FROM notes WHERE id = ?1 AND locked = 0",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .ok()
+            .map(|(title, body)| {
+                let body = traceloupe_core::safety_scan::chunker::strip_html(
+                    body.as_deref().unwrap_or(""),
+                );
+                match title {
+                    Some(t) if !t.trim().is_empty() => format!("{t}\n{body}"),
+                    _ => body,
+                }
+            }),
+        _ => None,
+    };
+    Ok(text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()))
+}
+
 /// Compact per-source severity marks for inline badges (plan T9): the top
 /// live-finding severity per flagged thread and per flagged note, so the
 /// Messages/Notes lists can badge rows with a single cheap query.
