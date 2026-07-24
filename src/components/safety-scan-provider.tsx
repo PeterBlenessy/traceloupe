@@ -154,10 +154,15 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
         // The full technical detail (incl. llama-server output) is in the dev
         // logs; the toast stays short and readable.
         if (p.phase === "error") toastScanError(p.message);
+        if (p.phase === "loading") {
+          // The command flips the scan row to 'running' before the model
+          // load and then emits Loading — refetch the history now so the
+          // rail's badge changes in step with the Stop button, not a model
+          // load later.
+          qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
+        }
         if (p.phase === "classifying") {
-          // The scan row exists once classifying starts: refresh the history
-          // once so the running scan appears in the rail (instead of the rail
-          // silently showing the previous scan as "latest"), and refresh the
+          // Backstop history refresh once classifying starts, and refresh the
           // findings whenever the live count moves so they stream in.
           if (!runLive.current.historyRefreshed) {
             runLive.current.historyRefreshed = true;
