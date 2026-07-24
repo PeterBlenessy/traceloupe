@@ -465,6 +465,36 @@ pub async fn run_safety_scan(
         .installed_at(&dir)
         .ok_or("model not installed — download it first")?;
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+
+    // Flip the scan row to 'running' NOW — before the slow (30–180 s) model
+    // load — so the stored state and the history rail reflect the user's
+    // action the moment it happens, in step with the Stop button, instead of
+    // a minute later. The engine then continues this same row. If startup
+    // fails below, the error path repairs the row back to 'interrupted'.
+    let scan_row_id = {
+        let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+        match resume_scan_id {
+            Some(id) => {
+                db.resume_scan(id, spec.id).map_err(|e| e.to_string())?;
+                id
+            }
+            None => {
+                let slug = match (scan_sources.messages, scan_sources.notes) {
+                    (true, false) => "messages",
+                    (false, true) => "notes",
+                    _ => "all",
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                db.begin_scan(spec.id, (range_start, range_end), slug, now)
+                    .map_err(|e| e.to_string())?
+            }
+        }
+    };
+    let analysis_db_path_repair = analysis_db_path.clone();
+
     // The sandbox's only writable location — TraceLoupe-owned, wiped each run
     // (see below) so nothing the sidecar writes ever persists or is treated as
     // backup data.
@@ -600,7 +630,9 @@ pub async fn run_safety_scan(
             &llm,
             range,
             scan_sources,
-            resume_scan_id,
+            // The command already created/reopened the row (above) so the UI
+            // saw it flip immediately; the engine continues that same row.
+            Some(scan_row_id),
             &cancel,
             |p| {
                 // Always emit the first (done == 0) tick — it's what flips the UI from
@@ -652,11 +684,19 @@ pub async fn run_safety_scan(
     .await;
 
     // Surface an error event on BOTH a normal Err and a panicked task, so the
-    // UI never sits waiting on a "loading" scan that silently died. (A stranded
-    // `running` scan row is repaired by the next begin_scan.)
+    // UI never sits waiting on a "loading" scan that silently died. The row was
+    // flipped to 'running' before startup, so a failure before/inside the
+    // engine must repair it back to 'interrupted' (best effort; the next
+    // backup open is the backstop).
+    let repair_on_error = || {
+        if let Ok(db) = AnalysisDb::open(&analysis_db_path_repair) {
+            let _ = db.repair_stranded_scans();
+        }
+    };
     let result = match join {
         Ok(r) => r,
         Err(e) => {
+            repair_on_error();
             let msg = format!("scan task failed: {e}");
             let _ = app.emit(
                 "safetyscan://progress",
@@ -668,6 +708,7 @@ pub async fn run_safety_scan(
         }
     };
     if let Err(msg) = &result {
+        repair_on_error();
         let _ = app.emit(
             "safetyscan://progress",
             ScanEvent::Error {
