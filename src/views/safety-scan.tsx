@@ -130,8 +130,9 @@ export function SafetyScanView() {
   // inclusive, so hi maps to `end = hi - 1` at start time.
   const { now, presets: basePresets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
-  // Which content to scan: "all" (default), "messages", or "notes".
-  const [source, setSource] = useState("all");
+  // Which content to scan — a multi-select over the real sources (each message
+  // service present + Notes). null = "all selected" until the user narrows it.
+  const [selectedSources, setSelectedSources] = useState<string[] | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
   // Immediate feedback for Stop: the backend aborts within ~1s, but reflect the
   // click at once. Reset when the scan actually clears.
@@ -150,6 +151,31 @@ export function SafetyScanView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
+  // The real message services in this backup (iMessage/SMS/TikTok/…) + Notes,
+  // as the Content multi-select's options.
+  const { data: threadsForSources } = useQuery({
+    queryKey: ["threads"],
+    queryFn: () => client.listThreads(),
+    enabled: active === true,
+  });
+  const messageServices = useMemo(() => {
+    const set = new Set<string>();
+    for (const t of threadsForSources ?? []) if (t.service) set.add(t.service);
+    return [...set].sort();
+  }, [threadsForSources]);
+  // Selectable tokens: each service, then "notes". Match the backend's
+  // canonical `sources` string ("all" when everything is picked).
+  const sourceTokens = useMemo(
+    () => [...messageServices, "notes"],
+    [messageServices],
+  );
+  const effectiveSelected = selectedSources ?? sourceTokens;
+  const includesNotes = effectiveSelected.includes("notes");
+  const includesMessages = effectiveSelected.some((s) => s !== "notes");
+  const sourcesArg =
+    effectiveSelected.length === sourceTokens.length && sourceTokens.length > 0
+      ? "all"
+      : effectiveSelected.join(",");
   // The [min, max] message timestamps → a chip per year the backup covers,
   // replacing the single cumulative "this year" preset (as the Messages timeline
   // does), while keeping the recency windows.
@@ -185,36 +211,16 @@ export function SafetyScanView() {
     queryFn: () => client.countNoteRanges(presetRanges),
     enabled: active === true,
   });
-  // Counts for the currently-selected period, feeding the Content options
-  // (All = messages + notes, Messages, Notes) for that period.
-  const { data: rangeCounts } = useQuery({
-    queryKey: ["safetyRangeCounts", range.lo, range.hi],
-    queryFn: async () => {
-      const [msg, note] = await Promise.all([
-        client.countMessageRanges([range], null),
-        client.countNoteRanges([range]),
-      ]);
-      return { messages: msg[0] ?? 0, notes: note[0] ?? 0 };
-    },
-    enabled: active === true,
-  });
   // Each period's count follows the selected source, so the number next to a
   // period reflects exactly what that scan would cover.
   const presetCounts = useMemo(() => {
     if (!presetMsgCounts && !presetNoteCounts) return undefined;
     return presets.map((_, i) => {
-      const m = presetMsgCounts?.[i] ?? 0;
-      const n = presetNoteCounts?.[i] ?? 0;
-      return source === "messages" ? m : source === "notes" ? n : m + n;
+      const m = includesMessages ? (presetMsgCounts?.[i] ?? 0) : 0;
+      const n = includesNotes ? (presetNoteCounts?.[i] ?? 0) : 0;
+      return m + n;
     });
-  }, [presets, presetMsgCounts, presetNoteCounts, source]);
-  // Item counts (matching the Messages / Notes views) for each Content option,
-  // within the selected period.
-  const sourceCounts = useMemo(() => {
-    const m = rangeCounts?.messages ?? 0;
-    const n = rangeCounts?.notes ?? 0;
-    return { all: m + n, messages: m, notes: n };
-  }, [rangeCounts]);
+  }, [presets, presetMsgCounts, presetNoteCounts, includesMessages, includesNotes]);
   const modelStatus = useQuery({
     queryKey: ["safetyScan", "modelStatus"],
     queryFn: () => client.getSafetyScanModelStatus(),
@@ -364,21 +370,46 @@ export function SafetyScanView() {
                   <Label className="text-xs text-muted-foreground">
                     Scan
                   </Label>
+                  {/* Content sources: the real message services in this backup +
+                      Notes, multi-select. All picked = scan everything. */}
+                  {sourceTokens.length > 0 && (
+                    <ToggleGroup
+                      type="multiple"
+                      variant="outline"
+                      size="sm"
+                      value={effectiveSelected}
+                      onValueChange={(v) => setSelectedSources(v)}
+                    >
+                      {sourceTokens.map((tok) => {
+                        const isNote = tok === "notes";
+                        const slug = isNote ? null : serviceSlug(tok);
+                        return (
+                          <ToggleGroupItem
+                            key={tok}
+                            value={tok}
+                            aria-label={isNote ? "Notes" : tok}
+                            className="gap-1.5"
+                          >
+                            {isNote ? (
+                              <NotebookText className="size-3.5" />
+                            ) : hasBrandIcon(slug) ? (
+                              <BrandIcon
+                                slug={slug}
+                                name={tok}
+                                className="size-3.5"
+                              />
+                            ) : (
+                              <MessageSquare className="size-3.5" />
+                            )}
+                            {isNote ? "Notes" : tok}
+                          </ToggleGroupItem>
+                        );
+                      })}
+                    </ToggleGroup>
+                  )}
                   <FilterControl
                     align="right"
                     groups={[
-                      badgeGroup({
-                        key: "source",
-                        label: "Content",
-                        description: "What to scan",
-                        options: [
-                          { value: "all", label: "All", count: sourceCounts.all },
-                          { value: "messages", label: "Messages", count: sourceCounts.messages },
-                          { value: "notes", label: "Notes", count: sourceCounts.notes },
-                        ],
-                        value: source,
-                        onChange: setSource,
-                      }),
                       timeGroup({
                         description: "Which period to scan, by date",
                         presets,
@@ -424,6 +455,7 @@ export function SafetyScanView() {
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
+                        disabled={effectiveSelected.length === 0}
                         onClick={() =>
                           void startScan({
                             modelId: effectiveModelId,
@@ -431,7 +463,7 @@ export function SafetyScanView() {
                             // timeGroup's hi is exclusive; the scan range end is
                             // inclusive, so step back one second.
                             rangeEnd: range.hi != null ? range.hi - 1 : null,
-                            sources: source,
+                            sources: sourcesArg,
                           })
                         }
                       >
@@ -593,12 +625,19 @@ function scanTitle(s: SafetyScanHistoryItem): string {
   return formatTimelineTime(s.startedAt);
 }
 
-/** Human label for a scan's content scope. */
-const SOURCES_LABEL: Record<string, string> = {
-  all: "Messages & Notes",
-  messages: "Messages",
-  notes: "Notes",
-};
+/** Human label for a scan's content scope — "all"/"messages"/"notes", or a
+ *  comma-joined set of services + "notes" (e.g. "iMessage,TikTok,notes"). */
+function formatSources(sources: string): string {
+  if (sources === "all") return "Messages & Notes";
+  if (sources === "messages") return "Messages";
+  if (sources === "notes") return "Notes";
+  return sources
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .map((t) => (t === "notes" ? "Notes" : t === "messages" ? "Messages" : t))
+    .join(", ");
+}
 
 /** Turn a stored model id (or an "e2b→e4b" cascade pair) into a readable
  *  label: "Gemma E2B → E4B (re-checked)" for a cascade, "Gemma E4B" otherwise. */
@@ -866,7 +905,7 @@ function ScanRail({
             <div className="min-w-0">
               <div className="text-sm font-medium">{scanTitle(s)}</div>
               <div className="text-xs text-muted-foreground">
-                {SOURCES_LABEL[s.sources] ?? s.sources}
+                {formatSources(s.sources)}
                 {" · "}
                 {formatScanRange(s.rangeStart, s.rangeEnd)}
                 {" · "}
@@ -1078,7 +1117,7 @@ function SafetyReportDocument({
         </div>
         <h1 className="text-2xl font-semibold">{scanTitle(scan)}</h1>
         <p className="text-sm text-muted-foreground">
-          {SOURCES_LABEL[scan.sources] ?? scan.sources} ·{" "}
+          {formatSources(scan.sources)} ·{" "}
           {formatScanRange(scan.rangeStart, scan.rangeEnd)} · {modelLabel(scan.model)} · on-device
         </p>
         <p className="text-sm text-muted-foreground">
