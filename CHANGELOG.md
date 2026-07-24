@@ -11,6 +11,15 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+### Fixed
+
+- Safety Scan no longer chokes on very long notes: a long note is windowed
+  into overlapping segments that each fit the model's context (previously one
+  oversized chunk ran ~10× longer than normal, then failed unclassified —
+  ~45% of a real scan's wall time). A single giant pasted message is truncated
+  for the model with an explicit marker instead of sinking its whole window,
+  and the per-chunk output budget is tightened so runaways cost less. (#33)
+
 ### Changed
 
 - Security Check and Safety Scan are now master–detail views: a scan-history
