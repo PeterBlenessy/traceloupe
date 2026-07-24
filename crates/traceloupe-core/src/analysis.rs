@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS chunk_progress (
     fingerprint   TEXT NOT NULL,             -- sha256 of the chunk's normalized text
     scan_id       INTEGER NOT NULL REFERENCES scans(id),
     status        TEXT NOT NULL,             -- 'done' | 'skipped'
+    flagged       INTEGER NOT NULL DEFAULT 0, -- sweep produced ≥1 finding (v4): the
+                                             -- DURABLE cascade re-check set, immune to
+                                             -- a sibling window's re-check deleting the
+                                             -- shared item's finding
     classified_at INTEGER NOT NULL
 );
 
@@ -338,6 +342,21 @@ impl AnalysisDb {
                     [],
                 )?;
             }
+            // v4: durable "sweep flagged this chunk" marker on chunk_progress,
+            // so the cascade re-check set survives a sibling window's re-check
+            // deleting a shared item's finding (recomputing the set from live
+            // findings could otherwise drop a chunk mid-cascade on resume).
+            let has_flagged = conn
+                .prepare("PRAGMA table_info(chunk_progress)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "flagged");
+            if !has_flagged {
+                conn.execute(
+                    "ALTER TABLE chunk_progress ADD COLUMN flagged INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -440,22 +459,25 @@ impl AnalysisDb {
     // ---- chunk progress / resume ----
 
     /// Record a chunk as classified (or skipped). Upserts on chunk_key so the
-    /// latest fingerprint wins.
+    /// latest fingerprint wins. `flagged` marks that this (sweep) chunk
+    /// produced ≥1 finding — the durable cascade re-check set (see v4 schema).
     pub fn record_chunk(
         &self,
         scan_id: i64,
         chunk_key: &str,
         fingerprint: &str,
         status: ChunkStatus,
+        flagged: bool,
         at: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO chunk_progress (chunk_key, fingerprint, scan_id, status, classified_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO chunk_progress (chunk_key, fingerprint, scan_id, status, flagged, classified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(chunk_key) DO UPDATE SET
                fingerprint = excluded.fingerprint, scan_id = excluded.scan_id,
-               status = excluded.status, classified_at = excluded.classified_at",
-            params![chunk_key, fingerprint, scan_id, status.as_str(), at],
+               status = excluded.status, flagged = excluded.flagged,
+               classified_at = excluded.classified_at",
+            params![chunk_key, fingerprint, scan_id, status.as_str(), flagged, at],
         )?;
         self.conn.execute(
             "UPDATE scans SET chunks_done = chunks_done + 1 WHERE id = ?1",
@@ -618,20 +640,22 @@ impl AnalysisDb {
         Ok(out)
     }
 
-    /// Whether any finding exists for this item fingerprint (any category,
-    /// dismissed included) — the cascade derives its re-check set from this,
-    /// which makes the set resume-safe (recomputed from the DB, not from
-    /// in-run state).
-    pub fn has_finding(&self, fingerprint: &str) -> Result<bool> {
-        Ok(self
+    /// The chunk keys whose SWEEP produced a finding (`flagged = 1`) — the
+    /// cascade's re-check set. Durable and resume-stable: derived from the
+    /// sweep-time marker on chunk_progress, NOT from live findings (which a
+    /// sibling window's re-check can delete), so an interrupted cascade never
+    /// loses a chunk that still needs the strong tier. Only sweep rows carry
+    /// `flagged = 1`; `#recheck` rows are always 0.
+    pub fn flagged_chunk_keys(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self
             .conn
-            .query_row(
-                "SELECT 1 FROM content_findings WHERE fingerprint = ?1 LIMIT 1",
-                params![fingerprint],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some())
+            .prepare("SELECT chunk_key FROM chunk_progress WHERE flagged = 1")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = std::collections::HashSet::new();
+        for k in rows {
+            out.insert(k?);
+        }
+        Ok(out)
     }
 
     /// Update a scan's recorded model — the cascade stamps "e2b→e4b" once the
@@ -1077,6 +1101,40 @@ mod tests {
     }
 
     #[test]
+    fn flagged_chunk_keys_are_durable_across_a_recheck_delete() {
+        // The cascade re-check set must NOT be recomputed from live findings —
+        // a sibling window's re-check can delete a shared item's finding, and
+        // if a crash then interrupts, the still-un-re-checked chunk must remain
+        // in the set (verification Finding A). The durable `flagged` marker on
+        // chunk_progress is what guarantees this.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Sweep flagged chunks X and Y (both produced a finding).
+        db.record_chunk(scan, "X", "fpX", ChunkStatus::Done, true, 101)
+            .unwrap();
+        db.record_chunk(scan, "Y", "fpY", ChunkStatus::Done, true, 101)
+            .unwrap();
+        db.replace_findings(scan, &[finding("shared", Category::ScamFraud)], 101)
+            .unwrap();
+        assert_eq!(
+            db.flagged_chunk_keys().unwrap(),
+            ["X".to_string(), "Y".to_string()].into_iter().collect()
+        );
+        // Y is re-checked and the strong tier clears the shared finding.
+        db.apply_recheck(scan, "Y", "fpY", &["shared".into()], &[], 102)
+            .unwrap();
+        assert!(db.list_findings(None).unwrap().is_empty());
+        // The re-check set is UNCHANGED — X is still flagged, so a resume here
+        // re-checks it (its #recheck checkpoint was never written).
+        assert_eq!(
+            db.flagged_chunk_keys().unwrap(),
+            ["X".to_string(), "Y".to_string()].into_iter().collect()
+        );
+        assert!(db.chunk_is_done("Y#recheck", "fpY").unwrap());
+        assert!(!db.chunk_is_done("X#recheck", "fpX").unwrap());
+    }
+
+    #[test]
     fn repair_marks_stranded_scans_interrupted() {
         let db = AnalysisDb::open_in_memory().unwrap();
         let stranded = db.begin_scan("m", (None, None), "all", 100).unwrap();
@@ -1146,13 +1204,13 @@ mod tests {
     fn chunk_resume_is_fingerprint_sensitive() {
         let db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
-        db.record_chunk(scan, "thread1:0", "abc", ChunkStatus::Done, 101)
+        db.record_chunk(scan, "thread1:0", "abc", ChunkStatus::Done, false, 101)
             .unwrap();
         assert!(db.chunk_is_done("thread1:0", "abc").unwrap());
         // Content changed → chunk must be re-classified.
         assert!(!db.chunk_is_done("thread1:0", "def").unwrap());
         // Skipped chunks never count as done.
-        db.record_chunk(scan, "thread1:1", "xyz", ChunkStatus::Skipped, 102)
+        db.record_chunk(scan, "thread1:1", "xyz", ChunkStatus::Skipped, false, 102)
             .unwrap();
         assert!(!db.chunk_is_done("thread1:1", "xyz").unwrap());
     }
@@ -1220,7 +1278,7 @@ mod tests {
             .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), "all", 100)
             .unwrap();
         db.set_chunks_total(scan, 10).unwrap();
-        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
+        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, false, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k verdicts=0")
             .unwrap();
@@ -1243,7 +1301,7 @@ mod tests {
         // foreign_keys ON, delete_scan must clear all of them (the audit_log
         // row is the one that used to be left behind and blocked the delete).
         let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
-        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
+        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, false, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k").unwrap();
         db.set_summary(scan, "report", "", "Nothing flagged.", 104)
