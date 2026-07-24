@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -103,6 +103,8 @@ CREATE TABLE IF NOT EXISTS summaries (
     thread_ref TEXT NOT NULL DEFAULT '',     -- threads.identifier for kind='thread'
     content    TEXT NOT NULL,
     created_at INTEGER NOT NULL,
+    digest     TEXT NOT NULL DEFAULT '',     -- sha256 of the findings that produced
+                                             -- this text; '' = pre-digest row
     PRIMARY KEY (scan_id, kind, thread_ref)
 );
 
@@ -375,6 +377,22 @@ impl AnalysisDb {
                 .any(|c| c == "service");
             if !has_service {
                 conn.execute("ALTER TABLE content_findings ADD COLUMN service TEXT", [])?;
+            }
+            // v6: a digest of the findings a summary was written from, so a
+            // re-scan can reuse the text when those findings haven't changed
+            // instead of paying a model call per thread every time (#43).
+            // Existing rows keep '' — which never matches a real digest, so
+            // they simply re-summarize once.
+            let has_digest = conn
+                .prepare("PRAGMA table_info(summaries)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "digest");
+            if !has_digest {
+                conn.execute(
+                    "ALTER TABLE summaries ADD COLUMN digest TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
             }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -1011,20 +1029,52 @@ impl AnalysisDb {
 
     // ---- summaries ----
 
+    /// Store a summary. `digest` fingerprints the findings the text was written
+    /// from (see [`Self::find_summary_by_digest`]); pass `""` when there is
+    /// nothing to key on (e.g. the fixed clean-scan report).
     pub fn set_summary(
         &self,
         scan_id: i64,
         kind: &str,
         thread_ref: &str,
         content: &str,
+        digest: &str,
         at: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO summaries (scan_id, kind, thread_ref, content, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![scan_id, kind, thread_ref, content, at],
+            "INSERT OR REPLACE INTO summaries
+                 (scan_id, kind, thread_ref, content, digest, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![scan_id, kind, thread_ref, content, digest, at],
         )?;
         Ok(())
+    }
+
+    /// The most recent summary of `kind`/`thread_ref` written from exactly the
+    /// same findings, from ANY scan — the re-scan cache. Summaries are keyed per
+    /// scan, but the prose only depends on the findings, so an unchanged thread
+    /// can reuse an earlier run's text instead of paying another model call
+    /// (#43). An empty `digest` never matches (that's the "unknown" marker on
+    /// pre-v6 rows and on the fixed clean report).
+    pub fn find_summary_by_digest(
+        &self,
+        kind: &str,
+        thread_ref: &str,
+        digest: &str,
+    ) -> Result<Option<String>> {
+        if digest.is_empty() {
+            return Ok(None);
+        }
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT content FROM summaries
+                 WHERE kind = ?1 AND thread_ref = ?2 AND digest = ?3
+                 ORDER BY created_at DESC LIMIT 1",
+                params![kind, thread_ref, digest],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     pub fn get_summary(
@@ -1059,6 +1109,49 @@ impl AnalysisDb {
 
 #[cfg(test)]
 mod tests {
+    // Kept next to the other migration-sensitive tests: every shipped DB is at
+    // an older user_version, so the ALTER path — not the fresh CREATE — is what
+    // real users run.
+    #[test]
+    fn v5_database_upgrades_and_keeps_its_summaries() {
+        use rusqlite::Connection;
+        let conn = Connection::open_in_memory().unwrap();
+        // A realistic pre-v6 store: the full schema, but `summaries` back in
+        // its old shape (no digest) and the version pinned to 5.
+        conn.execute_batch(super::SCHEMA_V1).unwrap();
+        conn.execute_batch(
+            "DROP TABLE summaries;
+             CREATE TABLE summaries (
+                 scan_id INTEGER NOT NULL REFERENCES scans(id),
+                 kind TEXT NOT NULL,
+                 thread_ref TEXT NOT NULL DEFAULT '',
+                 content TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 PRIMARY KEY (scan_id, kind, thread_ref));
+             INSERT INTO scans (id, model, status, started_at)
+                 VALUES (1, 'm', 'completed', 100);
+             INSERT INTO summaries (scan_id, kind, thread_ref, content, created_at)
+                 VALUES (1, 'report', '', 'An older run''s report.', 101);",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 5i64).unwrap();
+
+        let db = super::AnalysisDb::init(conn).expect("v5 store must migrate");
+        assert_eq!(db.schema_version().unwrap(), super::SCHEMA_VERSION);
+        // The pre-existing summary survives the ALTER…
+        assert_eq!(
+            db.get_summary(1, "report", "").unwrap().as_deref(),
+            Some("An older run's report."),
+        );
+        // …and its blank digest never satisfies a cache lookup, so it simply
+        // re-summarizes once instead of being reused for unrelated findings.
+        assert_eq!(
+            db.find_summary_by_digest("report", "", "any-digest")
+                .unwrap(),
+            None,
+        );
+    }
+
     use super::*;
 
     fn finding(fp: &str, cat: Category) -> NewFinding {
@@ -1411,7 +1504,7 @@ mod tests {
             .unwrap();
         assert!(db.finish_scan(scan, ScanStatus::Running, 102).is_err());
         db.finish_scan(scan, ScanStatus::Completed, 103).unwrap();
-        db.set_summary(scan, "report", "", "Nothing flagged.", 104)
+        db.set_summary(scan, "report", "", "Nothing flagged.", "", 104)
             .unwrap();
         assert_eq!(
             db.get_summary(scan, "report", "").unwrap().as_deref(),
@@ -1431,7 +1524,7 @@ mod tests {
         db.record_chunk(scan, "k", "fp", ChunkStatus::Done, false, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k").unwrap();
-        db.set_summary(scan, "report", "", "Nothing flagged.", 104)
+        db.set_summary(scan, "report", "", "Nothing flagged.", "", 104)
             .unwrap();
         db.replace_findings(
             scan,
