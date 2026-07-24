@@ -448,17 +448,40 @@ pub async fn run_safety_scan(
         None => (range_start, range_end, sources),
     };
 
+    // `sources` is "all", the legacy "messages"/"notes", or a comma-joined set
+    // of the picked message services (e.g. "iMessage,TikTok") plus optionally
+    // "notes" — the multi-select Content filter.
     let scan_sources = match sources.as_deref() {
+        None | Some("all") | Some("") => ScanSources::default(),
         Some("messages") => ScanSources {
-            messages: true,
             notes: false,
+            message_services: None,
         },
         Some("notes") => ScanSources {
-            messages: false,
             notes: true,
+            message_services: Some(Vec::new()),
         },
-        _ => ScanSources::default(),
+        Some(list) => {
+            let tokens: Vec<&str> = list
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let notes = tokens.contains(&"notes");
+            let all_messages = tokens.contains(&"messages");
+            let services: Vec<String> = tokens
+                .iter()
+                .filter(|t| **t != "notes" && **t != "messages")
+                .map(|t| t.to_string())
+                .collect();
+            ScanSources {
+                notes,
+                message_services: if all_messages { None } else { Some(services) },
+            }
+        }
     };
+    // Canonicalise what we store on the row so the scope predicates match it.
+    let sources_slug = scan_sources.slug();
     let dir = models_dir(&app)?;
     let spec = match model_id.as_deref() {
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
@@ -503,17 +526,17 @@ pub async fn run_safety_scan(
                 id
             }
             None => {
-                let slug = match (scan_sources.messages, scan_sources.notes) {
-                    (true, false) => "messages",
-                    (false, true) => "notes",
-                    _ => "all",
-                };
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                db.begin_scan(primary_spec.id, (range_start, range_end), slug, now)
-                    .map_err(|e| e.to_string())?
+                db.begin_scan(
+                    primary_spec.id,
+                    (range_start, range_end),
+                    &sources_slug,
+                    now,
+                )
+                .map_err(|e| e.to_string())?
             }
         }
     };

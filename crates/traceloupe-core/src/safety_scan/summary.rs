@@ -230,6 +230,7 @@ mod tests {
                 category: Category::HarassmentBullying,
                 severity: 2,
                 rationale: "repeated insults".into(),
+                service: None,
             });
         }
         db.replace_findings(scan, &findings, 101).unwrap();

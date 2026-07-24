@@ -113,6 +113,7 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> (Vec<NewFinding>, usiz
             category,
             severity: severity as u8,
             rationale: rationale.to_string(),
+            service: chunk.service.clone(),
         });
     }
     (findings, rejected)
@@ -141,14 +142,10 @@ pub fn run_scan(
     cancel: &CancelToken,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanOutcome> {
-    let chunks = chunker::chunk_all(cache, range, sources)?;
+    let chunks = chunker::chunk_all(cache, range, &sources)?;
     // Stored on the run so the history can label its scope and "Resume" can
     // re-run the same one.
-    let sources_slug = match (sources.messages, sources.notes) {
-        (true, false) => "messages",
-        (false, true) => "notes",
-        _ => "all",
-    };
+    let sources_slug = sources.slug();
     let scan_id = match resume_scan_id {
         Some(id) => {
             analysis.resume_scan(id, client.model())?;
@@ -157,7 +154,7 @@ pub fn run_scan(
         None => analysis.begin_scan(
             client.model(),
             (range.start, range.end),
-            sources_slug,
+            &sources_slug,
             now(),
         )?,
     };

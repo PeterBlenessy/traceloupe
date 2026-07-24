@@ -99,6 +99,9 @@ pub struct Chunk {
     pub thread_identifier: Option<String>,
     /// Human label for prompts/summaries (thread display name or note title).
     pub label: Option<String>,
+    /// The message thread's service (iMessage/SMS/TikTok…); None for notes.
+    /// Flows onto each finding so a service-scoped scan can count/list its own.
+    pub service: Option<String>,
     pub items: Vec<ChunkItem>,
 }
 
@@ -122,18 +125,57 @@ pub struct TimeRange {
     pub end: Option<i64>,
 }
 
-/// Which content the scan covers. Both by default.
-#[derive(Debug, Clone, Copy)]
+/// Which content the scan covers. Everything by default.
+#[derive(Debug, Clone)]
 pub struct ScanSources {
-    pub messages: bool,
     pub notes: bool,
+    /// Which message services to include: `None` = every service (all message
+    /// threads); `Some(list)` = only threads whose service is in `list` (empty
+    /// list = no message threads).
+    pub message_services: Option<Vec<String>>,
 }
 
 impl Default for ScanSources {
     fn default() -> Self {
         Self {
-            messages: true,
             notes: true,
+            message_services: None,
+        }
+    }
+}
+
+impl ScanSources {
+    /// Whether any message threads are in scope.
+    pub fn includes_messages(&self) -> bool {
+        !matches!(&self.message_services, Some(v) if v.is_empty())
+    }
+
+    /// Whether a thread with `service` is in scope for this scan.
+    fn wants_service(&self, service: Option<&str>) -> bool {
+        match &self.message_services {
+            None => true, // all services
+            Some(list) => service.is_some_and(|s| list.iter().any(|w| w == s)),
+        }
+    }
+
+    /// The canonical `sources` string stored on the scan row and matched by the
+    /// scope predicates: "all", "messages" (every service, no notes), or a
+    /// comma-joined list of service names plus optionally "notes".
+    pub fn slug(&self) -> String {
+        match &self.message_services {
+            None if self.notes => "all".to_string(),
+            None => "messages".to_string(),
+            Some(list) => {
+                let mut toks = list.clone();
+                if self.notes {
+                    toks.push("notes".to_string());
+                }
+                if toks.is_empty() {
+                    "all".to_string()
+                } else {
+                    toks.join(",")
+                }
+            }
         }
     }
 }
@@ -223,18 +265,23 @@ pub fn strip_html(html: &str) -> String {
 
 /// Build every message chunk in scan order: threads by most recent activity
 /// first, windows chronological within each thread.
-pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
+pub fn chunk_messages(
+    cache: &CacheDb,
+    range: TimeRange,
+    sources: &ScanSources,
+) -> Result<Vec<Chunk>> {
     let conn = cache.conn();
     let mut threads = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT id, identifier, display_name FROM threads ORDER BY last_message_at DESC, id",
+            "SELECT id, identifier, display_name, service FROM threads ORDER BY last_message_at DESC, id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })?;
         for row in rows {
@@ -245,7 +292,11 @@ pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
     let where_range = range.sql_between("sent_at");
     let range_params = range.params();
     let mut chunks = Vec::new();
-    for (thread_id, identifier, display_name) in threads {
+    for (thread_id, identifier, display_name, service) in threads {
+        // Skip threads whose service the scan didn't select.
+        if !sources.wants_service(service.as_deref()) {
+            continue;
+        }
         let sql = format!(
             "SELECT id, sender, is_from_me, sent_at, body FROM messages
              WHERE thread_id = ?{p} AND body IS NOT NULL AND TRIM(body) != ''
@@ -310,6 +361,7 @@ pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
                 kind: SourceKind::Message,
                 thread_identifier: Some(identifier.clone()),
                 label: display_name.clone(),
+                service: service.clone(),
                 items: window.to_vec(),
             });
             if end == items.len() {
@@ -376,6 +428,7 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
                 } else {
                     Some(title.clone())
                 },
+                service: None,
                 items: vec![ChunkItem {
                     source_id: id,
                     sender: "me".into(),
@@ -401,6 +454,7 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
                     } else {
                         format!("{title} (part {}/{total})", i + 1)
                     }),
+                    service: None,
                     items: vec![ChunkItem {
                         source_id: id,
                         sender: "me".into(),
@@ -415,11 +469,12 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
     Ok(chunks)
 }
 
-/// Full scan order: all message chunks (newest threads first), then notes.
-pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: ScanSources) -> Result<Vec<Chunk>> {
+/// Full scan order: all in-scope message chunks (newest threads first), then
+/// notes. `sources` selects which message services and whether notes are covered.
+pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Result<Vec<Chunk>> {
     let mut chunks = Vec::new();
-    if sources.messages {
-        chunks.extend(chunk_messages(cache, range)?);
+    if sources.includes_messages() {
+        chunks.extend(chunk_messages(cache, range, sources)?);
     }
     if sources.notes {
         chunks.extend(chunk_notes(cache, range)?);
@@ -473,8 +528,8 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "hello world", i % 2 == 0))
             .collect();
         let cache = cache_with(&msgs);
-        let a = chunk_all(&cache, TimeRange::default(), ScanSources::default()).unwrap();
-        let b = chunk_all(&cache, TimeRange::default(), ScanSources::default()).unwrap();
+        let a = chunk_all(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let b = chunk_all(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         let keys_a: Vec<_> = a.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         let keys_b: Vec<_> = b.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         assert_eq!(keys_a, keys_b);
@@ -490,7 +545,7 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "steady text", false))
             .collect();
         let cache = cache_with(&msgs);
-        let before = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let before = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         // Append newer messages (later sent_at) — the realistic re-import delta.
         for i in 0..20 {
             cache
@@ -502,7 +557,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let after = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let after = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert!(after.len() > before.len());
         for (b, a) in before.iter().zip(after.iter()) {
             // Every pre-existing *complete* window is untouched; the final
@@ -520,7 +575,7 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "original", false))
             .collect();
         let cache = cache_with(&msgs);
-        let before = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let before = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         // Edit one message near the start (offset 2 → only window 0 sees it).
         cache
             .conn()
@@ -529,7 +584,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let after = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let after = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert_ne!(before[0].fingerprint, after[0].fingerprint);
         for i in 1..before.len() {
             assert_eq!(
@@ -555,6 +610,7 @@ mod tests {
                 start: Some(1000),
                 end: Some(2000),
             },
+            &ScanSources::default(),
         )
         .unwrap();
         let texts: Vec<_> = chunks[0].items.iter().map(|i| i.text.as_str()).collect();
@@ -566,6 +622,7 @@ mod tests {
                 start: Some(2000),
                 end: None,
             },
+            &ScanSources::default(),
         )
         .unwrap();
         assert_eq!(from_only[0].items.len(), 2);
@@ -575,6 +632,7 @@ mod tests {
                 start: None,
                 end: Some(999),
             },
+            &ScanSources::default(),
         )
         .unwrap();
         assert_eq!(until_only[0].items.len(), 1);
@@ -595,7 +653,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let chunks = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert_eq!(chunks.len(), 2);
         // Newest thread first.
         assert_eq!(chunks[0].thread_identifier.as_deref(), Some("new-chat"));
@@ -692,7 +750,7 @@ mod tests {
         let big = "α".repeat(ITEM_MAX_CHARS + 500);
         let msgs: Vec<(&str, i64, &str, bool)> = vec![("chatA", 1000, big.as_str(), false)];
         let cache = cache_with(&msgs);
-        let chunks = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         let text = &chunks[0].items[0].text;
         assert!(text.ends_with("…[truncated]"));
         assert!(text.chars().count() < ITEM_MAX_CHARS + 20);
