@@ -198,6 +198,7 @@ pub async fn safety_scan_health_check(
                 ctx_size,
                 // The health check probes startup, not throughput.
                 parallel: 1,
+                api_key: None,
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir,
@@ -540,6 +541,12 @@ pub async fn run_safety_scan(
         1
     };
 
+    // One random bearer token for this run's server(s) — closes the loopback
+    // "CORS * / no key" gap (a malicious page in the user's browser can't drive
+    // the local model without it). Both the sweep and cascade-strong servers
+    // use it, and every client sends it.
+    let api_key = server::generate_api_key();
+
     let app2 = app.clone();
     let spec_id = primary_spec.id.to_string();
     // ServerConfig.ctx_size is the TOTAL across slots: keep the full per-slot
@@ -578,6 +585,7 @@ pub async fn run_safety_scan(
                 port,
                 ctx_size,
                 parallel,
+                api_key: api_key.clone(),
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir: scratch_dir.clone(),
@@ -666,7 +674,8 @@ pub async fn run_safety_scan(
             // Per-chunk generation on E2B-class hardware can be slow; the
             // read timeout must comfortably exceed the worst single chunk.
             Duration::from_secs(300),
-        );
+        )
+        .with_api_key(api_key.clone());
         let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
         let mut analysis = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
         let range = TimeRange {
@@ -689,6 +698,7 @@ pub async fn run_safety_scan(
                 binary2.clone(),
             );
             let (cancel2, current_pid2) = (cancel.clone(), current_pid.clone());
+            let api_key2 = api_key.clone();
             move || -> traceloupe_core::Result<client::LlmClient> {
                 use traceloupe_core::Error;
                 let inf = |m: String| Error::Inference(m);
@@ -714,6 +724,7 @@ pub async fn run_safety_scan(
                         port,
                         ctx_size: strong_ctx * parallel,
                         parallel,
+                        api_key: api_key2.clone(),
                         gpu_layers: -1,
                         sandbox: true,
                         scratch_dir: scratch2.clone(),
@@ -755,7 +766,8 @@ pub async fn run_safety_scan(
                     llama_ref.base_url(),
                     &strong_id,
                     Duration::from_secs(300),
-                ))
+                )
+                .with_api_key(api_key2.clone()))
             }
         });
 
@@ -802,7 +814,8 @@ pub async fn run_safety_scan(
         // live now. Without a cascade this is the same server, just rebuilt.
         drop(provider);
         let summary_client =
-            client::LlmClient::new(llama.base_url(), &spec_id, Duration::from_secs(300));
+            client::LlmClient::new(llama.base_url(), &spec_id, Duration::from_secs(300))
+                .with_api_key(api_key.clone());
 
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
         // Best-effort: the classification is done and findings are saved, so a

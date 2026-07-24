@@ -56,8 +56,13 @@ pub fn render_chunk(chunk: &Chunk) -> String {
 }
 
 /// The response_format JSON schema (OpenAI-compatible `json_schema` shape);
-/// llama-server enforces it as a grammar.
-pub fn verdicts_schema() -> Value {
+/// llama-server enforces it as a grammar. `max_items` BOUNDS the verdicts
+/// array (one verdict per chunk item is the norm; extra categories are rare) —
+/// without it the grammar lets the model append array elements until it hits
+/// the token cap, which truncates the JSON mid-element into unparseable output
+/// and the chunk is skipped (observed ~15–45% of chunks failing). A bounded
+/// array closes deterministically, so the output stays valid and short.
+pub fn verdicts_schema(max_items: usize) -> Value {
     let slugs: Vec<&str> = Category::ALL.iter().map(|c| c.as_str()).collect();
     json!({
         "type": "json_schema",
@@ -69,13 +74,18 @@ pub fn verdicts_schema() -> Value {
                 "properties": {
                     "verdicts": {
                         "type": "array",
+                        // At least 1 (a single-item note chunk) so the bound is
+                        // never zero, which some grammar backends reject.
+                        "maxItems": max_items.max(1),
                         "items": {
                             "type": "object",
                             "properties": {
                                 "index": { "type": "integer", "minimum": 0 },
                                 "category": { "type": "string", "enum": slugs },
                                 "severity": { "type": "integer", "minimum": 1, "maximum": 3 },
-                                "rationale": { "type": "string", "maxLength": 300 }
+                                // Tightened 300→200: one factual sentence fits,
+                                // and it keeps a full array within the budget.
+                                "rationale": { "type": "string", "maxLength": 200 }
                             },
                             "required": ["index", "category", "severity", "rationale"]
                         }
@@ -126,7 +136,7 @@ mod tests {
 
     #[test]
     fn schema_lists_all_nine_slugs() {
-        let v = verdicts_schema();
+        let v = verdicts_schema(25);
         let slugs = v["json_schema"]["schema"]["properties"]["verdicts"]["items"]["properties"]
             ["category"]["enum"]
             .as_array()
