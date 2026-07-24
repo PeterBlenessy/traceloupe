@@ -108,17 +108,39 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> (Vec<NewFinding>, usiz
 
 /// Run a full Safety Scan. Progress is reported after every chunk; the scan is
 /// cancellable between chunks and resumable across process restarts.
+/// `resume_scan_id` continues that existing (non-completed) scan row — same
+/// identity, accumulating findings — instead of creating a new one.
+#[allow(clippy::too_many_arguments)] // one scan's distinct inputs, grouped by caller
 pub fn run_scan(
     cache: &CacheDb,
     analysis: &mut AnalysisDb,
     client: &LlmClient,
     range: TimeRange,
     sources: chunker::ScanSources,
+    resume_scan_id: Option<i64>,
     cancel: &CancelToken,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanOutcome> {
     let chunks = chunker::chunk_all(cache, range, sources)?;
-    let scan_id = analysis.begin_scan(client.model(), (range.start, range.end), now())?;
+    // Stored on the run so the history can label its scope and "Resume" can
+    // re-run the same one.
+    let sources_slug = match (sources.messages, sources.notes) {
+        (true, false) => "messages",
+        (false, true) => "notes",
+        _ => "all",
+    };
+    let scan_id = match resume_scan_id {
+        Some(id) => {
+            analysis.resume_scan(id, client.model())?;
+            id
+        }
+        None => analysis.begin_scan(
+            client.model(),
+            (range.start, range.end),
+            sources_slug,
+            now(),
+        )?,
+    };
     analysis.set_chunks_total(scan_id, chunks.len() as i64)?;
     analysis.audit(
         scan_id,
@@ -370,13 +392,14 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &CancelToken::new(),
             |_| {},
         )
         .unwrap();
         assert_eq!(outcome.status, ScanStatus::Completed);
         assert_eq!(outcome.findings, 1, "only the valid verdict survives");
-        let rows = analysis.list_findings().unwrap();
+        let rows = analysis.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].category, Category::ThreatViolence);
         assert_eq!(rows[0].severity, 3);
@@ -399,6 +422,7 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -421,6 +445,7 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -433,6 +458,7 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -478,6 +504,7 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -486,7 +513,7 @@ mod tests {
             outcome.findings, 1,
             "same message via two windows is one finding"
         );
-        assert_eq!(analysis.list_findings().unwrap().len(), 1);
+        assert_eq!(analysis.list_findings(None).unwrap().len(), 1);
     }
 
     #[test]
@@ -503,6 +530,7 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &cancel,
             |_| {},
         )
@@ -524,6 +552,7 @@ mod tests {
             &client_for(&base),
             TimeRange::default(),
             chunker::ScanSources::default(),
+            None,
             &CancelToken::new(),
             |p| {
                 seen.push((p.chunks_done, p.chunks_total));

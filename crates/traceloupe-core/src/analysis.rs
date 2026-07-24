@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS scans (
     model        TEXT NOT NULL,             -- e.g. 'gemma-4-E4B-it-Q4_K_M'
     range_start  INTEGER,                   -- user time-range filter (unix s), NULL = open
     range_end    INTEGER,
+    sources      TEXT NOT NULL DEFAULT 'all', -- 'all' | 'messages' | 'notes' (v2)
     status       TEXT NOT NULL,             -- 'running' | 'completed' | 'cancelled' | 'failed'
+                                            -- | 'interrupted' (stranded 'running' repaired at open)
     started_at   INTEGER NOT NULL,
     finished_at  INTEGER,
     chunks_total INTEGER NOT NULL DEFAULT 0,
@@ -235,6 +237,8 @@ pub struct ScanRow {
     pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
@@ -243,16 +247,24 @@ pub struct ScanRow {
 }
 
 /// A scan for the history list: the fields a user cares about (period, when,
-/// status) plus its live finding count. No `chunks` — that's internal.
+/// status, model) plus its live finding counts. No `chunks` — that's internal.
 #[derive(Debug, Clone)]
 pub struct ScanListRow {
     pub id: i64,
+    pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub findings: i64,
+    /// Live (non-stale) finding counts split by severity, for the history
+    /// row's badge: 3 = serious, 2 = harmful, 1 = concerning.
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +310,19 @@ impl AnalysisDb {
         // Additive migrations go here (mirroring cache.rs); never downgrade a
         // newer store.
         if version < SCHEMA_VERSION {
+            // v2: which content a scan covered ('all'|'messages'|'notes'), so
+            // the history can label it and "Resume" can re-run the same scope.
+            let has_sources = conn
+                .prepare("PRAGMA table_info(scans)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "sources");
+            if !has_sources {
+                conn.execute(
+                    "ALTER TABLE scans ADD COLUMN sources TEXT NOT NULL DEFAULT 'all'",
+                    [],
+                )?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -319,21 +344,59 @@ impl AnalysisDb {
         &self,
         model: &str,
         range: (Option<i64>, Option<i64>),
+        sources: &str,
         started_at: i64,
     ) -> Result<i64> {
-        // Repair scans stranded 'running' by a crash or fatal error. Safe
-        // here (not at open): the T7 command layer allows one scan at a time,
-        // so any 'running' row at begin is by definition dead.
+        // Backstop repair for scans stranded 'running' (normally already done
+        // at backup open via repair_stranded_scans): one scan at a time means
+        // any 'running' row at begin is by definition dead.
+        self.repair_stranded_scans()?;
         self.conn.execute(
-            "UPDATE scans SET status = 'failed', finished_at = ?1 WHERE status = 'running'",
-            params![started_at],
-        )?;
-        self.conn.execute(
-            "INSERT INTO scans (model, range_start, range_end, status, started_at)
-             VALUES (?1, ?2, ?3, 'running', ?4)",
-            params![model, range.0, range.1, started_at],
+            "INSERT INTO scans (model, range_start, range_end, sources, status, started_at)
+             VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
+            params![model, range.0, range.1, sources, started_at],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Reopen a non-completed scan for a resumed run: the SAME row goes back
+    /// to 'running', so one logical scan attempt keeps one identity across
+    /// stops and interruptions — findings and progress accumulate on it
+    /// instead of scattering over a chain of rows. A new row is only ever
+    /// created by an explicit new scan (begin_scan). The model is updated in
+    /// case the user switched tiers between runs.
+    pub fn resume_scan(&self, scan_id: i64, model: &str) -> Result<()> {
+        // One scan at a time: any *other* stranded row is repaired first.
+        self.repair_stranded_scans()?;
+        let n = self.conn.execute(
+            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0,
+                    model = ?2
+             WHERE id = ?1 AND status != 'completed'",
+            params![scan_id, model],
+        )?;
+        if n == 0 {
+            return Err(Error::Invalid(format!(
+                "scan {scan_id} is not resumable (missing or completed)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Repair scans stranded 'running' by a crash or kill: mark them
+    /// 'interrupted'. Called when a backup becomes active (this process
+    /// provably has no scan in flight then), so the stored state never claims
+    /// a scan is running longer than necessary. `finished_at` stays NULL —
+    /// the actual death time is unknown and won't be invented. Returns the
+    /// number of rows repaired.
+    ///
+    /// Caveat (accepted, same as the begin-time backstop): a second app
+    /// instance sharing this DB with a genuinely live scan would be
+    /// mislabeled — single-instance is the supported model.
+    pub fn repair_stranded_scans(&self) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE scans SET status = 'interrupted' WHERE status = 'running'",
+            [],
+        )?)
     }
 
     pub fn set_chunks_total(&self, scan_id: i64, total: i64) -> Result<()> {
@@ -465,9 +528,10 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// All findings, dismissed included (callers filter); severity-descending
-    /// within category, newest first.
-    pub fn list_findings(&self) -> Result<Vec<FindingRow>> {
+    /// Findings, dismissed included (callers filter); severity-descending
+    /// within category, newest first. `scan_id` restricts to one scan's
+    /// findings (the per-scan history view); None returns every scan's.
+    pub fn list_findings(&self, scan_id: Option<i64>) -> Result<Vec<FindingRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
@@ -475,9 +539,10 @@ impl AnalysisDb {
                     EXISTS(SELECT 1 FROM dismissals d
                            WHERE d.fingerprint = f.fingerprint AND d.category = f.category)
              FROM content_findings f
+             WHERE ?1 IS NULL OR f.scan_id = ?1
              ORDER BY f.severity DESC, f.occurred_at DESC",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![scan_id], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
@@ -582,8 +647,8 @@ impl AnalysisDb {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
-                        chunks_total, chunks_done
+                "SELECT id, model, range_start, range_end, sources, status, started_at,
+                        finished_at, chunks_total, chunks_done
                  FROM scans ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -592,11 +657,12 @@ impl AnalysisDb {
                         model: r.get(1)?,
                         range_start: r.get(2)?,
                         range_end: r.get(3)?,
-                        status: r.get(4)?,
-                        started_at: r.get(5)?,
-                        finished_at: r.get(6)?,
-                        chunks_total: r.get(7)?,
-                        chunks_done: r.get(8)?,
+                        sources: r.get(4)?,
+                        status: r.get(5)?,
+                        started_at: r.get(6)?,
+                        finished_at: r.get(7)?,
+                        chunks_total: r.get(8)?,
+                        chunks_done: r.get(9)?,
                     })
                 },
             )
@@ -608,8 +674,8 @@ impl AnalysisDb {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
-                        chunks_total, chunks_done
+                "SELECT id, model, range_start, range_end, sources, status, started_at,
+                        finished_at, chunks_total, chunks_done
                  FROM scans WHERE id = ?1",
                 params![id],
                 |r| {
@@ -618,11 +684,12 @@ impl AnalysisDb {
                         model: r.get(1)?,
                         range_start: r.get(2)?,
                         range_end: r.get(3)?,
-                        status: r.get(4)?,
-                        started_at: r.get(5)?,
-                        finished_at: r.get(6)?,
-                        chunks_total: r.get(7)?,
-                        chunks_done: r.get(8)?,
+                        sources: r.get(4)?,
+                        status: r.get(5)?,
+                        started_at: r.get(6)?,
+                        finished_at: r.get(7)?,
+                        chunks_total: r.get(8)?,
+                        chunks_done: r.get(9)?,
                     })
                 },
             )
@@ -651,24 +718,34 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// Past scans, newest first, each with its live (non-stale) finding count —
-    /// for the scan-history list.
+    /// Past scans, newest first, each with its live (non-stale) finding counts
+    /// (total + per severity) — for the scan-history list.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.range_start, s.range_end, s.status, s.started_at, s.finished_at,
-                    (SELECT COUNT(*) FROM content_findings f
-                       WHERE f.scan_id = s.id AND f.stale = 0)
-             FROM scans s ORDER BY s.id DESC LIMIT ?1",
+            "SELECT s.id, s.model, s.range_start, s.range_end, s.sources, s.status,
+                    s.started_at, s.finished_at,
+                    coalesce(count(f.id), 0),
+                    coalesce(sum(f.severity = 3), 0),
+                    coalesce(sum(f.severity = 2), 0),
+                    coalesce(sum(f.severity = 1), 0)
+             FROM scans s
+             LEFT JOIN content_findings f ON f.scan_id = s.id AND f.stale = 0
+             GROUP BY s.id ORDER BY s.id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
             Ok(ScanListRow {
                 id: r.get(0)?,
-                range_start: r.get(1)?,
-                range_end: r.get(2)?,
-                status: r.get(3)?,
-                started_at: r.get(4)?,
-                finished_at: r.get(5)?,
-                findings: r.get(6)?,
+                model: r.get(1)?,
+                range_start: r.get(2)?,
+                range_end: r.get(3)?,
+                sources: r.get(4)?,
+                status: r.get(5)?,
+                started_at: r.get(6)?,
+                finished_at: r.get(7)?,
+                findings: r.get(8)?,
+                serious: r.get(9)?,
+                harmful: r.get(10)?,
+                concerning: r.get(11)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -763,14 +840,18 @@ mod tests {
     #[test]
     fn finding_roundtrip_and_replacement() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("gemma-4-E4B", (None, None), 100).unwrap();
+        let scan = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 100)
+            .unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ThreatViolence)], 101)
             .unwrap();
         // Re-classifying the same content replaces, never duplicates.
-        let scan2 = db.begin_scan("gemma-4-E4B", (None, None), 200).unwrap();
+        let scan2 = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 200)
+            .unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 201)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].scan_id, scan2);
         assert_eq!(rows[0].category, Category::ThreatViolence);
@@ -780,31 +861,114 @@ mod tests {
     #[test]
     fn dismissal_survives_rescan() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 101)
             .unwrap();
         db.set_dismissed("fp1", Category::ScamFraud, true, 102)
             .unwrap();
         // New scan re-inserts the same finding — dismissal must still apply.
-        let scan2 = db.begin_scan("m", (None, None), 200).unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ScamFraud)], 201)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].dismissed);
         // But a different category on the same message is NOT dismissed.
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 202)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         let dismissed: Vec<bool> = rows.iter().map(|r| r.dismissed).collect();
         assert_eq!(rows.len(), 2);
         assert!(dismissed.contains(&true) && dismissed.contains(&false));
     }
 
     #[test]
+    fn resume_reopens_the_same_row_never_a_new_one() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.finish_scan(scan, ScanStatus::Cancelled, 150).unwrap();
+        // Resume: same row back to running, finish cleared, model updated.
+        db.resume_scan(scan, "m2").unwrap();
+        let row = db.scan_by_id(scan).unwrap().unwrap();
+        assert_eq!(row.status, "running");
+        assert_eq!(row.finished_at, None);
+        assert_eq!(row.model, "m2");
+        // A completed scan is not resumable, and no second row ever appeared.
+        db.finish_scan(scan, ScanStatus::Completed, 200).unwrap();
+        assert!(db.resume_scan(scan, "m2").is_err());
+        assert_eq!(db.list_scans(50).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn repair_marks_stranded_scans_interrupted() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let stranded = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Simulate a kill: the scan never finishes; the app reopens the backup.
+        assert_eq!(db.repair_stranded_scans().unwrap(), 1);
+        let (status, finished): (String, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT status, finished_at FROM scans WHERE id = ?1",
+                params![stranded],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "interrupted");
+        assert_eq!(finished, None);
+        // Idempotent: nothing left to repair.
+        assert_eq!(db.repair_stranded_scans().unwrap(), 0);
+    }
+
+    #[test]
+    fn list_findings_filters_by_scan() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan1 = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.replace_findings(scan1, &[finding("fp1", Category::ScamFraud)], 101)
+            .unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        db.replace_findings(scan2, &[finding("fp2", Category::SelfHarm)], 201)
+            .unwrap();
+        assert_eq!(db.list_findings(None).unwrap().len(), 2);
+        let only1 = db.list_findings(Some(scan1)).unwrap();
+        assert_eq!(only1.len(), 1);
+        assert_eq!(only1[0].fingerprint, "fp1");
+        let only2 = db.list_findings(Some(scan2)).unwrap();
+        assert_eq!(only2.len(), 1);
+        assert_eq!(only2[0].fingerprint, "fp2");
+    }
+
+    #[test]
+    fn list_scans_reports_model_and_severity_split() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 100)
+            .unwrap();
+        let mut serious = finding("fp1", Category::ThreatViolence);
+        serious.severity = 3;
+        let harmful = finding("fp2", Category::ScamFraud); // severity 2
+        let mut concerning = finding("fp3", Category::SelfHarm);
+        concerning.severity = 1;
+        db.replace_findings(scan, &[serious, harmful, concerning], 101)
+            .unwrap();
+        db.finish_scan(scan, ScanStatus::Completed, 102).unwrap();
+        // A stale finding must not count toward any bucket.
+        db.set_stale("fp3", true).unwrap();
+
+        let rows = db.list_scans(50).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "gemma-4-E4B");
+        assert_eq!(rows[0].sources, "all");
+        assert_eq!(rows[0].findings, 2);
+        assert_eq!(
+            (rows[0].serious, rows[0].harmful, rows[0].concerning),
+            (1, 1, 0)
+        );
+    }
+
+    #[test]
     fn chunk_resume_is_fingerprint_sensitive() {
         let db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.record_chunk(scan, "thread1:0", "abc", ChunkStatus::Done, 101)
             .unwrap();
         assert!(db.chunk_is_done("thread1:0", "abc").unwrap());
@@ -819,7 +983,7 @@ mod tests {
     #[test]
     fn severity_range_enforced() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         let mut bad = finding("fp1", Category::SelfHarm);
         bad.severity = 4;
         assert!(db.replace_findings(scan, &[bad], 101).is_err());
@@ -828,17 +992,17 @@ mod tests {
     #[test]
     fn stale_flag_and_source_id_refresh() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::SelfHarm)], 101)
             .unwrap();
         db.set_stale("fp1", true).unwrap();
         db.set_source_id("fp1", None).unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert!(rows[0].stale);
         assert_eq!(rows[0].source_id, None);
         db.set_source_id("fp1", Some(99)).unwrap();
         db.set_stale("fp1", false).unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert!(!rows[0].stale);
         assert_eq!(rows[0].source_id, Some(99));
     }
@@ -846,9 +1010,9 @@ mod tests {
     #[test]
     fn stale_running_scan_repaired_at_next_begin() {
         let db = AnalysisDb::open_in_memory().unwrap();
-        let dead = db.begin_scan("m", (None, None), 100).unwrap();
+        let dead = db.begin_scan("m", (None, None), "all", 100).unwrap();
         // Simulate a crash: never finished. The next begin_scan repairs it.
-        let live = db.begin_scan("m", (None, None), 200).unwrap();
+        let live = db.begin_scan("m", (None, None), "all", 200).unwrap();
         let (dead_status, dead_finished): (String, Option<i64>) = db
             .conn()
             .query_row(
@@ -857,8 +1021,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(dead_status, "failed");
-        assert_eq!(dead_finished, Some(200));
+        // Marked 'interrupted', and no invented finish time — when it actually
+        // died is unknown.
+        assert_eq!(dead_status, "interrupted");
+        assert_eq!(dead_finished, None);
         let live_status: String = db
             .conn()
             .query_row(
@@ -874,7 +1040,7 @@ mod tests {
     fn scan_lifecycle_and_summary() {
         let db = AnalysisDb::open_in_memory().unwrap();
         let scan = db
-            .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), 100)
+            .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), "all", 100)
             .unwrap();
         db.set_chunks_total(scan, 10).unwrap();
         db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
@@ -899,7 +1065,7 @@ mod tests {
         // summary — one row in every table that references scans(id). With
         // foreign_keys ON, delete_scan must clear all of them (the audit_log
         // row is the one that used to be left behind and blocked the delete).
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k").unwrap();
@@ -922,7 +1088,7 @@ mod tests {
         .unwrap();
 
         // A second scan is left untouched, proving the delete is scoped by id.
-        let keep = db.begin_scan("m", (None, None), 200).unwrap();
+        let keep = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.audit(keep, 201, "scan_started", "").unwrap();
 
         db.delete_scan(scan).unwrap();

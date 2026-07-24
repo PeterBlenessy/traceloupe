@@ -51,7 +51,7 @@ pub struct DownloadSnapshot {
 }
 
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
-fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_path
         .parent()
         .ok_or("unexpected cache layout")?
@@ -419,11 +419,31 @@ pub async fn run_safety_scan(
     range_end: Option<i64>,
     // Which content to scan: "all" (default), "messages", or "notes".
     sources: Option<String>,
+    // Resume THIS existing scan (same row, accumulating findings) instead of
+    // creating a new one. Its stored range/sources are authoritative.
+    resume_scan_id: Option<i64>,
 ) -> Result<(), String> {
     let _guard = gate
         .0
         .try_lock()
         .map_err(|_| "a Safety Scan is already running")?;
+
+    let cache_path = active.path()?;
+    let analysis_db_path = analysis_path(&cache_path)?;
+
+    // Resuming: read the scan's own stored scope rather than trusting the UI
+    // to echo it back — resume means "this scan, exactly".
+    let (range_start, range_end, sources) = match resume_scan_id {
+        Some(id) => {
+            let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+            let row = db
+                .scan_by_id(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("scan to resume no longer exists")?;
+            (row.range_start, row.range_end, Some(row.sources))
+        }
+        None => (range_start, range_end, sources),
+    };
 
     let scan_sources = match sources.as_deref() {
         Some("messages") => ScanSources {
@@ -436,9 +456,6 @@ pub async fn run_safety_scan(
         },
         _ => ScanSources::default(),
     };
-
-    let cache_path = active.path()?;
-    let analysis_db_path = analysis_path(&cache_path)?;
     let dir = models_dir(&app)?;
     let spec = match model_id.as_deref() {
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
@@ -448,6 +465,36 @@ pub async fn run_safety_scan(
         .installed_at(&dir)
         .ok_or("model not installed — download it first")?;
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+
+    // Flip the scan row to 'running' NOW — before the slow (30–180 s) model
+    // load — so the stored state and the history rail reflect the user's
+    // action the moment it happens, in step with the Stop button, instead of
+    // a minute later. The engine then continues this same row. If startup
+    // fails below, the error path repairs the row back to 'interrupted'.
+    let scan_row_id = {
+        let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+        match resume_scan_id {
+            Some(id) => {
+                db.resume_scan(id, spec.id).map_err(|e| e.to_string())?;
+                id
+            }
+            None => {
+                let slug = match (scan_sources.messages, scan_sources.notes) {
+                    (true, false) => "messages",
+                    (false, true) => "notes",
+                    _ => "all",
+                };
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                db.begin_scan(spec.id, (range_start, range_end), slug, now)
+                    .map_err(|e| e.to_string())?
+            }
+        }
+    };
+    let analysis_db_path_repair = analysis_db_path.clone();
+
     // The sandbox's only writable location — TraceLoupe-owned, wiped each run
     // (see below) so nothing the sidecar writes ever persists or is treated as
     // backup data.
@@ -583,6 +630,9 @@ pub async fn run_safety_scan(
             &llm,
             range,
             scan_sources,
+            // The command already created/reopened the row (above) so the UI
+            // saw it flip immediately; the engine continues that same row.
+            Some(scan_row_id),
             &cancel,
             |p| {
                 // Always emit the first (done == 0) tick — it's what flips the UI from
@@ -634,11 +684,19 @@ pub async fn run_safety_scan(
     .await;
 
     // Surface an error event on BOTH a normal Err and a panicked task, so the
-    // UI never sits waiting on a "loading" scan that silently died. (A stranded
-    // `running` scan row is repaired by the next begin_scan.)
+    // UI never sits waiting on a "loading" scan that silently died. The row was
+    // flipped to 'running' before startup, so a failure before/inside the
+    // engine must repair it back to 'interrupted' (best effort; the next
+    // backup open is the backstop).
+    let repair_on_error = || {
+        if let Ok(db) = AnalysisDb::open(&analysis_db_path_repair) {
+            let _ = db.repair_stranded_scans();
+        }
+    };
     let result = match join {
         Ok(r) => r,
         Err(e) => {
+            repair_on_error();
             let msg = format!("scan task failed: {e}");
             let _ = app.emit(
                 "safetyscan://progress",
@@ -650,6 +708,7 @@ pub async fn run_safety_scan(
         }
     };
     if let Err(msg) = &result {
+        repair_on_error();
         let _ = app.emit(
             "safetyscan://progress",
             ScanEvent::Error {
@@ -693,9 +752,12 @@ pub struct ContentFindingDto {
     pub dismissed: bool,
 }
 
+/// Findings, newest-severity first. `scan_id` restricts to one scan (the
+/// history view shows the selected scan's findings); None returns all.
 #[tauri::command]
 pub fn list_content_findings(
     active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
 ) -> Result<Vec<ContentFindingDto>, String> {
     let cache_path = active.path()?;
     let path = analysis_path(&cache_path)?;
@@ -716,7 +778,7 @@ pub fn list_content_findings(
             .ok()
     };
     Ok(db
-        .list_findings()
+        .list_findings(scan_id)
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|f| ContentFindingDto {
@@ -762,7 +824,7 @@ pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<Find
     }
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
     let cache = CacheDb::open(&cache_path).ok();
-    for f in db.list_findings().map_err(|e| e.to_string())? {
+    for f in db.list_findings(None).map_err(|e| e.to_string())? {
         // Dismissed and stale findings must not badge a row — the list should
         // match what the Safety Scan page shows by default.
         if f.dismissed || f.stale {
@@ -839,12 +901,19 @@ pub struct SafetyScanReport {
 #[serde(rename_all = "camelCase")]
 pub struct ScanHistoryItem {
     pub id: i64,
+    pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub findings: i64,
+    /// Live finding counts by severity (3=serious, 2=harmful, 1=concerning).
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
 }
 
 /// Remove a past scan and everything scoped to it (findings, progress,
@@ -873,12 +942,17 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
         .into_iter()
         .map(|s| ScanHistoryItem {
             id: s.id,
+            model: s.model,
             range_start: s.range_start,
             range_end: s.range_end,
+            sources: s.sources,
             status: s.status,
             started_at: s.started_at,
             finished_at: s.finished_at,
             findings: s.findings,
+            serious: s.serious,
+            harmful: s.harmful,
+            concerning: s.concerning,
         })
         .collect())
 }

@@ -1,0 +1,668 @@
+<meta charset="utf-8">
+<title>Scan views — mockups</title>
+
+<style>
+  /* ---------- tokens: lifted from docs/design/ux-refresh-mockups.html so the
+     mockups read as TraceLoupe, in both themes ---------- */
+  :root {
+    --bg: oklch(0.972 0.003 260);
+    --card: oklch(1 0 0);
+    --fg: oklch(0.22 0.012 260);
+    --muted: oklch(0.52 0.015 260);
+    --border: oklch(0.9 0.006 260);
+    --code-bg: oklch(0.945 0.004 260);
+    --hover: oklch(0.95 0.004 260);
+    --acc: #0a7aff;
+    --acc-ink: #fff;
+    --danger: oklch(0.55 0.2 25);
+    --danger-bg: oklch(0.55 0.2 25 / 12%);
+    --warn: oklch(0.6 0.14 70);
+    --warn-bg: oklch(0.75 0.15 70 / 15%);
+    --ok: oklch(0.55 0.14 160);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: oklch(0.185 0.008 260);
+      --card: oklch(0.235 0.009 260);
+      --fg: oklch(0.95 0.005 260);
+      --muted: oklch(0.68 0.01 260);
+      --border: oklch(1 0 0 / 12%);
+      --code-bg: oklch(0.27 0.009 260);
+      --hover: oklch(0.28 0.009 260);
+      --danger: oklch(0.68 0.19 25);
+      --warn: oklch(0.78 0.14 75);
+      --ok: oklch(0.75 0.13 160);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: oklch(0.972 0.003 260); --card: oklch(1 0 0); --fg: oklch(0.22 0.012 260);
+    --muted: oklch(0.52 0.015 260); --border: oklch(0.9 0.006 260);
+    --code-bg: oklch(0.945 0.004 260); --hover: oklch(0.95 0.004 260);
+    --danger: oklch(0.55 0.2 25); --warn: oklch(0.6 0.14 70); --ok: oklch(0.55 0.14 160);
+  }
+  :root[data-theme="dark"] {
+    --bg: oklch(0.185 0.008 260); --card: oklch(0.235 0.009 260); --fg: oklch(0.95 0.005 260);
+    --muted: oklch(0.68 0.01 260); --border: oklch(1 0 0 / 12%);
+    --code-bg: oklch(0.27 0.009 260); --hover: oklch(0.28 0.009 260);
+    --danger: oklch(0.68 0.19 25); --warn: oklch(0.78 0.14 75); --ok: oklch(0.75 0.13 160);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 52px 26px 110px; }
+  h1 { font-size: 29px; line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 8px; text-wrap: balance; }
+  h2 { font-size: 19px; letter-spacing: -0.01em; margin: 70px 0 4px; }
+  p { margin: 8px 0; max-width: 70ch; }
+  .lede { font-size: 16px; color: var(--muted); max-width: 64ch; }
+  .sub { color: var(--muted); font-size: 13.5px; max-width: 72ch; margin-bottom: 16px; }
+  .eyebrow {
+    font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+    color: color-mix(in oklab, var(--acc) 75%, var(--fg)); margin: 46px 0 0;
+  }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.88em; }
+  .note { font-size: 12.5px; color: var(--muted); border-left: 2px solid var(--border); padding-left: 12px; margin: 14px 0; max-width: 70ch; }
+
+  /* ---------- app-window stage ---------- */
+  .stage {
+    border: 1px solid var(--border); border-radius: 12px; background: var(--card);
+    margin: 16px 0 8px; overflow: hidden;
+    box-shadow: 0 1px 2px oklch(0 0 0 / 6%), 0 8px 28px oklch(0 0 0 / 5%);
+  }
+  .stage .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px; border-bottom: 1px solid var(--border);
+    background: color-mix(in oklab, var(--card) 70%, var(--bg));
+    font-size: 12.5px; font-weight: 600;
+  }
+  .bar .dots { display: flex; gap: 5px; margin-right: 4px; }
+  .bar .dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+  .stage .body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+
+  /* ---------- primitives mirroring the app ---------- */
+  .card { border: 1px solid var(--border); border-radius: 10px; background: var(--card); padding: 13px 15px; }
+  .card h4 { margin: 0 0 2px; font-size: 14.5px; }
+  .card .desc { font-size: 13px; color: var(--muted); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--card);
+    color: var(--fg); font: 600 12.5px/1 inherit; font-family: inherit;
+    padding: 7px 11px; cursor: pointer;
+  }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--acc); border-color: var(--acc); color: var(--acc-ink); }
+  .btn.primary:hover { filter: brightness(1.07); }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); }
+  .btn.ghost:hover { background: var(--hover); color: var(--fg); }
+  .btn:focus-visible, .chip:focus-visible, .seg button:focus-visible, .runrow:focus-visible, .frow:focus-visible {
+    outline: 2px solid var(--acc); outline-offset: 1px;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 600;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .badge.serious { background: var(--danger); color: #fff; }
+  .badge.harmful { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in oklab, var(--warn) 35%, transparent); }
+  .badge.concerning { background: var(--code-bg); color: var(--muted); }
+  .badge.outline { background: transparent; border-color: var(--border); color: var(--muted); }
+  .badge.ok { background: transparent; border-color: color-mix(in oklab, var(--ok) 45%, transparent); color: var(--ok); }
+  .badge.new { background: transparent; border-color: color-mix(in oklab, var(--acc) 50%, transparent); color: var(--acc); }
+
+  /* segmented alternative switcher (page chrome, not app chrome) */
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; margin: 14px 0 2px; }
+  .seg button {
+    border: 0; background: transparent; color: var(--muted); cursor: pointer;
+    font: 600 12.5px/1 inherit; font-family: inherit; padding: 8px 14px;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--acc); color: var(--acc-ink); }
+
+  /* history rows */
+  .runrow {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
+    background: var(--card); cursor: pointer; width: 100%; text-align: left; font-family: inherit; color: inherit;
+  }
+  .runrow:hover { background: var(--hover); }
+  .runrow[aria-current="true"] { border-color: color-mix(in oklab, var(--acc) 55%, var(--border)); background: color-mix(in oklab, var(--acc) 7%, var(--card)); }
+  .runrow .t { font-size: 13px; font-weight: 600; }
+  .runrow .s { font-size: 11.5px; color: var(--muted); }
+  .runrow .right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+  /* popover */
+  .pop-anchor { position: relative; display: inline-block; }
+  .popover {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; width: 340px;
+    border: 1px solid var(--border); border-radius: 11px; background: var(--card);
+    box-shadow: 0 10px 34px oklch(0 0 0 / 22%); padding: 8px; display: none;
+    flex-direction: column; gap: 6px;
+  }
+  .popover.open { display: flex; }
+  .popover .hd { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding: 4px 6px 0; }
+
+  .banner {
+    display: flex; align-items: center; gap: 10px;
+    border: 1px solid color-mix(in oklab, var(--acc) 40%, var(--border));
+    background: color-mix(in oklab, var(--acc) 9%, var(--card));
+    border-radius: 9px; padding: 8px 12px; font-size: 13px;
+  }
+  .banner b { font-weight: 600; }
+
+  /* findings */
+  .frow {
+    display: grid; grid-template-columns: auto auto 1fr auto; gap: 8px 10px; align-items: center;
+    border: 1px solid var(--border); border-radius: 9px; padding: 8px 12px;
+    background: var(--card); cursor: pointer; width: 100%; text-align: left; font-family: inherit; color: inherit; font-size: 13px;
+  }
+  .frow:hover { background: var(--hover); }
+  .frow .rat { grid-column: 1 / -1; color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fmeta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+  .fcard { border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; display: flex; flex-direction: column; gap: 6px; }
+  .fcard .rowline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .fcard p { margin: 0; font-size: 13px; }
+  .fcard .actions { display: flex; gap: 4px; }
+
+  .group { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .group > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; padding: 10px 13px; font-size: 13.5px; font-weight: 600; background: color-mix(in oklab, var(--card) 75%, var(--bg));
+  }
+  .group > summary::-webkit-details-marker { display: none; }
+  .group > summary .car { transition: transform 0.15s; color: var(--muted); font-size: 11px; }
+  .group[open] > summary .car { transform: rotate(90deg); }
+  .group .items { padding: 8px; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); }
+
+  /* sheet (in-stage) */
+  .stagewrap { position: relative; overflow: hidden; }
+  .sheet {
+    position: absolute; top: 0; right: 0; bottom: 0; width: min(360px, 88%);
+    background: var(--card); border-left: 1px solid var(--border);
+    box-shadow: -12px 0 34px oklch(0 0 0 / 20%);
+    transform: translateX(105%); transition: transform 0.22s ease; z-index: 20;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto;
+  }
+  .sheet.open { transform: translateX(0); }
+  @media (prefers-reduced-motion: reduce) { .sheet { transition: none; } .group > summary .car { transition: none; } }
+  .sheet .field .lab { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+  .sheet .field { font-size: 13px; }
+
+  /* filter / sort chips */
+  .toolrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px; background: transparent;
+    color: var(--muted); font: 600 11.5px/1 inherit; font-family: inherit; padding: 5px 11px; cursor: pointer;
+  }
+  .chip:hover { background: var(--hover); }
+  .chip[aria-pressed="true"] { background: var(--acc); border-color: var(--acc); color: var(--acc-ink); }
+  select.chip { appearance: none; padding-right: 22px; background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position: calc(100% - 13px) 55%, calc(100% - 9px) 55%; background-size: 4px 4px; background-repeat: no-repeat; color: var(--fg); }
+
+  /* comparison grids */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid var(--border); border-radius: 11px; overflow: hidden; background: var(--card); }
+  .panel .ph { padding: 8px 13px; font-size: 12px; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--card) 75%, var(--bg)); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .panel .pb { padding: 12px; display: flex; flex-direction: column; gap: 7px; }
+  .pick { font-size: 10.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--acc); }
+
+  /* report */
+  .stats { display: flex; flex-wrap: wrap; gap: 8px; }
+  .stat { border: 1px solid var(--border); border-radius: 8px; padding: 6px 11px; font-size: 12px; color: var(--muted); }
+  .stat b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .threadrow { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 7px 0; border-top: 1px solid var(--border); }
+  .threadrow a { color: var(--acc); font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .threadrow a:hover { text-decoration: underline; }
+  .threadrow span { color: var(--muted); }
+  .receipt { font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 8px; }
+</style>
+
+<div class="wrap">
+  <p class="eyebrow" style="margin-top:0">TraceLoupe · design exploration</p>
+  <h1>Security &amp; Safety views — scan history, reports, findings</h1>
+  <p class="lede">Interactive mockups for each open decision. Everything below is clickable where it matters — open the history popover, pin a past scan, open a finding's sheet, filter the lists. Data is realistic mock data; both views share the same patterns, shown here on Safety Scan (the richer case) with Security notes where they differ.</p>
+
+  <!-- ============ 1. HISTORY MODEL ============ -->
+  <p class="eyebrow">1 · Scan history — access &amp; viewing model</p>
+  <h2>Where history lives, and how a past scan is viewed</h2>
+  <p class="sub">The core question: is the view "the latest state", or "a selected scan"? Try all three. In every model, viewing a past scan shows its <em>findings</em>, not just the report — and the banner/selection makes it unambiguous which scan you're looking at.</p>
+
+  <div class="seg" role="group" aria-label="History model">
+    <button aria-pressed="true" data-model="pop">A · History button + pinned view</button>
+    <button aria-pressed="false" data-model="inline">B · Inline history card</button>
+    <button aria-pressed="false" data-model="split">C · Master–detail</button>
+  </div>
+
+  <div class="stage">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span> Safety Scan</div>
+    <div class="stagewrap">
+      <div class="body" id="histStage"><!-- rendered --></div>
+    </div>
+  </div>
+  <p class="note" id="histNote"></p>
+
+  <!-- ============ 2. TITLES ============ -->
+  <p class="eyebrow">2 · Scan titles</p>
+  <h2>What a scan is called in a list</h2>
+  <p class="sub">The same four runs, rendered under each naming scheme. "since Jul 22, 2026" today is the <em>scope</em> — a property, not an identity. Security scans would read "Explicit scan · July 22" / "Automatic check · July 20" since their scope is always the whole backup.</p>
+  <div class="grid2" id="titleGrid"><!-- rendered --></div>
+
+  <!-- ============ 3. HISTORY ROW CONTENT + SORT/FILTER ============ -->
+  <p class="eyebrow">3 · History rows — content, sort &amp; filter</p>
+  <h2>What each row shows, and how you narrow the list</h2>
+  <p class="sub">Row anatomy: run date (identity) · scope + sources (what was covered) · status · severity-split findings badge · receipt (model tier / feed date). Filters and sort reuse the app's standard chip controls — try them.</p>
+  <div class="stage">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span> Scan history</div>
+    <div class="body">
+      <div class="toolrow" id="histTools">
+        <button class="chip" data-f="all" aria-pressed="true">All</button>
+        <button class="chip" data-f="findings" aria-pressed="false">With findings</button>
+        <button class="chip" data-f="clean" aria-pressed="false">Clean</button>
+        <button class="chip" data-f="stopped" aria-pressed="false">Stopped</button>
+        <span style="flex:1"></span>
+        <select class="chip" id="histSort" aria-label="Sort history">
+          <option value="date">Newest first</option>
+          <option value="findings">Most findings</option>
+          <option value="oldest">Oldest first</option>
+        </select>
+      </div>
+      <div id="histList" style="display:flex;flex-direction:column;gap:6px"><!-- rendered --></div>
+    </div>
+  </div>
+
+  <!-- ============ 4. REPORT ============ -->
+  <p class="eyebrow">4 · Scan report formatting</p>
+  <h2>From one block of text to a structured report</h2>
+  <p class="sub">Left: today. Right: the same stored data, framed client-side — stats header, narrative, per-conversation summaries as linkable rows, provenance footer. No model or prompt changes; existing reports get this for free. (A later step can have the model emit markdown into the narrative slot.)</p>
+  <div class="grid2">
+    <div class="panel">
+      <div class="ph">Today — one block</div>
+      <div class="pb">
+        <h4 style="margin:0;font-size:14.5px">Scan report</h4>
+        <div style="font-size:12px;color:var(--muted)">Completed Jul 22, 2:05 PM · scanned all history · 4 findings</div>
+        <p style="font-size:13px;margin:4px 0 0">The scan reviewed 1,204 messages and 38 notes. Most conversations are unremarkable. One conversation shows an unsolicited investment pitch escalating into pressure to transfer money urgently, consistent with a scam pattern. A second conversation contains recurring demands for location sharing and account passwords, which fits a coercive-control pattern. One note contains language worth reviewing personally. +1 555 0100: Escalating pressure to move money; classic advance-fee shape. Alex: Recurring demands around location sharing and passwords.</p>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph">Proposed — structured frame <span class="pick">recommended</span></div>
+      <div class="pb">
+        <div class="stats">
+          <span class="stat"><b>1,204</b> messages</span>
+          <span class="stat"><b>38</b> notes</span>
+          <span class="stat"><b>2m 41s</b></span>
+          <span class="stat"><span class="badge serious" style="font-size:10px">1 serious</span>&nbsp;<span class="badge harmful" style="font-size:10px">2 harmful</span>&nbsp;<span class="badge concerning" style="font-size:10px">1 concerning</span></span>
+        </div>
+        <p style="font-size:13px;margin:2px 0">The scan reviewed 1,204 messages and 38 notes. Most conversations are unremarkable. One conversation shows an unsolicited investment pitch escalating into urgent-transfer pressure; another contains recurring demands for location sharing and account passwords. One note contains language worth reviewing personally.</p>
+        <div>
+          <div style="font-size:11px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;color:var(--muted);margin-bottom:2px">Per-conversation</div>
+          <div class="threadrow" style="border-top:0"><a href="#" onclick="return false">+1 555 0100 →</a><span>Escalating pressure to move money; classic advance-fee shape.</span></div>
+          <div class="threadrow"><a href="#" onclick="return false">Alex →</a><span>Recurring demands around location sharing and passwords.</span></div>
+        </div>
+        <div class="receipt">Scanned Jul 22, 2026 2:03–2:05 PM · all history · Messages &amp; Notes · Gemma E4B (on-device)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 5. FINDINGS ============ -->
+  <p class="eyebrow">5 · Safety findings structure</p>
+  <h2>Scannable, sortable, filterable findings</h2>
+  <p class="sub">Security's table works because its findings are one-liners. Safety findings carry a paragraph of rationale plus actions — three ways to handle that. In A, click a row to open its detail sheet (the same interaction Security's table already has); the filter chips work in A and B.</p>
+
+  <div class="seg" role="group" aria-label="Findings layout">
+    <button aria-pressed="true" data-fl="rows">A · Compact rows + detail sheet</button>
+    <button aria-pressed="false" data-fl="grouped">B · Grouped by conversation</button>
+    <button aria-pressed="false" data-fl="cards">C · Today's cards</button>
+  </div>
+
+  <div class="stage">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span> Findings — scan of July 22, 2026</div>
+    <div class="stagewrap">
+      <div class="body">
+        <div class="toolrow" id="findTools">
+          <button class="chip" data-sev="all" aria-pressed="true">All severities</button>
+          <button class="chip" data-sev="3" aria-pressed="false">Serious</button>
+          <button class="chip" data-sev="2" aria-pressed="false">Harmful</button>
+          <button class="chip" data-sev="1" aria-pressed="false">Concerning</button>
+          <span style="flex:1"></span>
+          <select class="chip" id="findSort" aria-label="Sort findings">
+            <option value="sev">Most severe first</option>
+            <option value="date">Newest first</option>
+          </select>
+        </div>
+        <div id="findStage" style="display:flex;flex-direction:column;gap:6px"><!-- rendered --></div>
+      </div>
+      <aside class="sheet" id="sheet" aria-label="Finding detail"><!-- rendered --></aside>
+    </div>
+  </div>
+  <p class="note" id="findNote"></p>
+
+  <!-- ============ 6. BACK FROM NOTES ============ -->
+  <p class="eyebrow">6 · Back from a finding's source</p>
+  <h2>Returning after "Open note"</h2>
+  <p class="sub">Same pattern as the Messages jump: navigating from a finding carries a <span class="mono">from</span> param, and the destination shows a return chip at the top while it's set. One click back to exactly where you were.</p>
+  <div class="stage" style="max-width:660px">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span> Notes</div>
+    <div class="body">
+      <div class="banner" style="border-color:var(--border);background:color-mix(in oklab, var(--card) 75%, var(--bg))">
+        <button class="btn ghost" style="padding:4px 8px">⟵ Back to Safety Scan</button>
+        <span style="font-size:12px;color:var(--muted)">Opened from finding "Self-harm · Journal"</span>
+      </div>
+      <div class="card">
+        <h4>Journal</h4>
+        <div class="desc">May 8, 2026 · Notes</div>
+        <p style="font-size:13px;margin:6px 0 0;color:var(--muted)">…note content with the flagged passage in view…</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ---------- shared mock data ----------
+  const RUNS = [
+    { id: 4, date: "July 22, 2026", time: "2:03 PM", ts: 4, scope: "All history", src: "Messages & Notes",
+      status: "Completed", sev: { s: 1, h: 2, c: 1 }, receipt: "Gemma E4B", findings: [0, 1, 2, 3] },
+    { id: 3, date: "July 20, 2026", time: "9:11 AM", ts: 3, scope: "2026", src: "Messages",
+      status: "Completed", sev: { s: 0, h: 0, c: 0 }, receipt: "Gemma E4B", findings: [] },
+    { id: 2, date: "July 12, 2026", time: "6:40 PM", ts: 2, scope: "Jun 1 – Jul 12", src: "Messages & Notes",
+      status: "Stopped", sev: { s: 0, h: 1, c: 0 }, receipt: "Gemma E4B", findings: [1] },
+    { id: 1, date: "June 30, 2026", time: "8:15 PM", ts: 1, scope: "All history", src: "Messages",
+      status: "Completed", sev: { s: 1, h: 1, c: 0 }, receipt: "Gemma 3n E2B", findings: [0, 2] },
+  ];
+  const FINDINGS = [
+    { sev: 3, sevLabel: "Serious", cls: "serious", cat: "Scam / fraud", where: "+1 555 0100", kind: "conversation",
+      date: "Jul 3", dateN: 703, rat: "Unsolicited crypto investment pitch escalating into pressure to transfer money urgently.", isNew: true },
+    { sev: 2, sevLabel: "Harmful", cls: "harmful", cat: "Coercive control", where: "Alex", kind: "conversation",
+      date: "Jun 12", dateN: 612, rat: "Demands constant location sharing and account passwords across several exchanges.", isNew: false },
+    { sev: 2, sevLabel: "Harmful", cls: "harmful", cat: "Harassment", where: "+1 555 0182", kind: "conversation",
+      date: "May 30", dateN: 530, rat: "Repeated hostile messages continuing after being asked to stop.", isNew: false },
+    { sev: 1, sevLabel: "Concerning", cls: "concerning", cat: "Self-harm", where: "Note “Journal”", kind: "note",
+      date: "May 8", dateN: 508, rat: "Language consistent with self-harm ideation — worth reviewing personally, not a verdict.", isNew: true },
+  ];
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  function sevBadges(sev) {
+    if (sev.s + sev.h + sev.c === 0) return '<span class="badge ok">Clean</span>';
+    const parts = [];
+    if (sev.s) parts.push(`<span class="badge serious">${sev.s} serious</span>`);
+    if (sev.h) parts.push(`<span class="badge harmful">${sev.h} harmful</span>`);
+    if (sev.c) parts.push(`<span class="badge concerning">${sev.c} concerning</span>`);
+    return parts.join(" ");
+  }
+  // Narrow rows (popover, master-detail rail) get one compact badge — the
+  // worst severity carries the color, the number is the total.
+  function sevCompact(sev) {
+    const total = sev.s + sev.h + sev.c;
+    if (total === 0) return '<span class="badge ok">Clean</span>';
+    const cls = sev.s ? "serious" : sev.h ? "harmful" : "concerning";
+    return `<span class="badge ${cls}">${total} finding${total === 1 ? "" : "s"}</span>`;
+  }
+  function runRow(r, { current = false, compact = false, onclickAttr = "" } = {}) {
+    return `<button class="runrow" ${onclickAttr} aria-current="${current}">
+      <span><span class="t">${r.date} · ${r.time}</span><br>
+        <span class="s">${r.src} · ${r.scope} · ${r.status}${compact ? "" : " · " + r.receipt}</span></span>
+      <span class="right">${compact ? sevCompact(r.sev) : sevBadges(r.sev)}</span>
+    </button>`;
+  }
+
+  // ---------- 1. history model ----------
+  const histStage = document.getElementById("histStage");
+  const histNote = document.getElementById("histNote");
+  let model = "pop", pinned = null, popOpen = false;
+
+  const NOTES = {
+    pop: "History stays secondary until asked for. Selecting a run pins the entire view — report and findings both belong to that scan, and the banner names it. Delete/export live on each popover row in the real build. Works identically in Security (History button next to Run scan).",
+    inline: "Most discoverable — history is always on screen — but the page gets long, and the card competes with the latest result. 'View' here pins the run the same way as model A (the dialog is gone in all three models).",
+    split: "Scales best if scans accumulate (dozens+). The run list is the navigation; there is no 'latest vs history' distinction at all. Heaviest change, and the Run-scan action loses prominence.",
+  };
+
+  function reportCard(r, small = false) {
+    if (r.sev.s + r.sev.h + r.sev.c === 0) {
+      return `<div class="card"><h4>No harmful content flagged</h4>
+        <div class="desc">Scanned ${r.date} · ${r.src} · ${r.scope}. The model flagged nothing in this period — not a guarantee; spot-check important conversations yourself.</div></div>`;
+    }
+    return `<div class="card">
+      <h4>Scan report</h4>
+      <div class="desc">Completed ${r.date}, ${r.time} · ${r.src} · ${r.scope}</div>
+      <div class="stats" style="margin-top:8px">
+        <span class="stat"><b>1,204</b> messages</span><span class="stat"><b>38</b> notes</span>
+        <span class="stat">${sevBadges(r.sev)}</span>
+      </div>
+      ${small ? "" : `<p style="font-size:13px;margin:8px 0 0">Most conversations are unremarkable. One shows an unsolicited investment pitch escalating into urgent-transfer pressure…</p>`}
+    </div>`;
+  }
+  function findingRows(r) {
+    if (!r.findings.length)
+      return `<div class="desc" style="font-size:12.5px;color:var(--muted)">No findings in this scan.</div>`;
+    return r.findings.map((i) => {
+      const f = FINDINGS[i];
+      return `<div class="frow" style="cursor:default">
+        <span class="badge ${f.cls}">${f.sevLabel}</span>
+        <span class="badge outline">${f.cat}</span>
+        <span class="fmeta">${esc(f.where)} · ${f.date}</span>
+        <span class="fmeta">→</span>
+        <span class="rat">${esc(f.rat)}</span>
+      </div>`;
+    }).join("");
+  }
+
+  function renderHist() {
+    const cur = pinned ?? RUNS[0];
+    const isLatest = cur.id === RUNS[0].id;
+    if (model === "pop") {
+      histStage.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+          <span style="font-size:13px;color:var(--muted)">Local AI · model installed · <b style="color:var(--fg)">Gemma E4B</b></span>
+          <span style="display:flex;gap:6px">
+            <span class="pop-anchor">
+              <button class="btn" id="histBtn">🕘 History ▾</button>
+              <div class="popover ${popOpen ? "open" : ""}" id="histPop">
+                <div class="hd">Past scans</div>
+                ${RUNS.map((r) => runRow(r, { current: r.id === cur.id, compact: true, onclickAttr: `data-pick="${r.id}"` })).join("")}
+              </div>
+            </span>
+            <button class="btn primary">▶ Run scan</button>
+          </span>
+        </div>
+        ${isLatest ? "" : `<div class="banner">⟵ <b>Viewing scan from ${cur.date}</b> — findings and report below belong to that scan.
+          <button class="btn ghost" data-unpin style="margin-left:auto">Back to latest</button></div>`}
+        ${reportCard(cur)}
+        <div style="display:flex;flex-direction:column;gap:6px">${findingRows(cur)}</div>`;
+    } else if (model === "inline") {
+      histStage.innerHTML = `
+        ${isLatest ? "" : `<div class="banner">⟵ <b>Viewing scan from ${cur.date}</b>
+          <button class="btn ghost" data-unpin style="margin-left:auto">Back to latest</button></div>`}
+        ${reportCard(cur, true)}
+        <div style="display:flex;flex-direction:column;gap:6px">${findingRows(cur)}</div>
+        <div class="card">
+          <h4>🕘 Scan history</h4>
+          <div class="desc" style="margin-bottom:8px">Every Safety Scan run on this backup.</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${RUNS.map((r) => runRow(r, { current: r.id === cur.id, compact: true, onclickAttr: `data-pick="${r.id}"` })).join("")}
+          </div>
+        </div>`;
+    } else {
+      histStage.innerHTML = `
+        <div style="display:grid;grid-template-columns:250px 1fr;gap:12px;align-items:start">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="btn primary" style="justify-content:center">▶ Run scan</button>
+            ${RUNS.map((r) => runRow(r, { current: r.id === cur.id, compact: true, onclickAttr: `data-pick="${r.id}"` })).join("")}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;min-width:0">
+            ${reportCard(cur)}
+            <div style="display:flex;flex-direction:column;gap:6px">${findingRows(cur)}</div>
+          </div>
+        </div>`;
+    }
+    histNote.textContent = NOTES[model];
+    const btn = document.getElementById("histBtn");
+    if (btn) btn.onclick = (e) => { e.stopPropagation(); popOpen = !popOpen; renderHist(); };
+    histStage.querySelectorAll("[data-pick]").forEach((el) => {
+      el.onclick = () => { pinned = RUNS.find((r) => r.id === +el.dataset.pick); popOpen = false; renderHist(); };
+    });
+    histStage.querySelectorAll("[data-unpin]").forEach((el) => {
+      el.onclick = () => { pinned = null; renderHist(); };
+    });
+  }
+  document.addEventListener("click", () => { if (popOpen) { popOpen = false; renderHist(); } });
+  document.querySelectorAll("[data-model]").forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll("[data-model]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      model = b.dataset.model; popOpen = false; renderHist();
+    };
+  });
+  renderHist();
+
+  // ---------- 2. titles ----------
+  const STYLES = [
+    { name: "Run date-led", pick: true,
+      t: (r) => [`${r.date} · ${r.time}`, `${r.src} · ${r.scope} · ${r.status}`] },
+    { name: "Outcome-led", pick: false,
+      t: (r) => {
+        const n = r.sev.s + r.sev.h + r.sev.c;
+        return [n === 0 ? `Clean · ${r.date}` : `${n} finding${n === 1 ? "" : "s"} · ${r.date}`, `${r.src} · ${r.scope}`];
+      } },
+    { name: "Scope-led (closest to today)", pick: false,
+      t: (r) => [`${r.scope} — ${r.src}`, `${r.status} · ${r.date}, ${r.time}`] },
+    { name: "Numbered", pick: false,
+      t: (r) => [`Scan #${r.id} · ${r.date}`, `${r.src} · ${r.scope} · ${r.status}`] },
+  ];
+  document.getElementById("titleGrid").innerHTML = STYLES.map((s) => `
+    <div class="panel">
+      <div class="ph">${s.name}${s.pick ? ' <span class="pick">recommended</span>' : ""}</div>
+      <div class="pb">
+        ${RUNS.slice(0, 3).map((r) => {
+          const [t, sub] = s.t(r);
+          return `<div class="runrow" style="cursor:default">
+            <span><span class="t">${t}</span><br><span class="s">${sub}</span></span>
+            <span class="right">${sevCompact(r.sev)}</span></div>`;
+        }).join("")}
+      </div>
+    </div>`).join("");
+
+  // ---------- 3. history sort/filter ----------
+  let hFilter = "all", hSort = "date";
+  function renderHistList() {
+    let rows = RUNS.slice();
+    if (hFilter === "findings") rows = rows.filter((r) => r.sev.s + r.sev.h + r.sev.c > 0);
+    if (hFilter === "clean") rows = rows.filter((r) => r.sev.s + r.sev.h + r.sev.c === 0);
+    if (hFilter === "stopped") rows = rows.filter((r) => r.status === "Stopped");
+    if (hSort === "date") rows.sort((a, b) => b.ts - a.ts);
+    if (hSort === "oldest") rows.sort((a, b) => a.ts - b.ts);
+    if (hSort === "findings") rows.sort((a, b) => (b.sev.s * 100 + b.sev.h * 10 + b.sev.c) - (a.sev.s * 100 + a.sev.h * 10 + a.sev.c));
+    document.getElementById("histList").innerHTML = rows.length
+      ? rows.map((r) => runRow(r, { onclickAttr: 'style="cursor:default"' })).join("")
+      : '<div class="desc" style="color:var(--muted);font-size:12.5px">No scans match.</div>';
+  }
+  document.querySelectorAll("#histTools .chip[data-f]").forEach((c) => {
+    c.onclick = () => {
+      document.querySelectorAll("#histTools .chip[data-f]").forEach((x) => x.setAttribute("aria-pressed", x === c));
+      hFilter = c.dataset.f; renderHistList();
+    };
+  });
+  document.getElementById("histSort").onchange = (e) => { hSort = e.target.value; renderHistList(); };
+  renderHistList();
+
+  // ---------- 5. findings ----------
+  const findStage = document.getElementById("findStage");
+  const findNote = document.getElementById("findNote");
+  const sheet = document.getElementById("sheet");
+  let flayout = "rows", fsev = "all", fsort = "sev", sheetIdx = null;
+
+  const FNOTES = {
+    rows: "One line per finding: severity, category, source, date, truncated rationale. Click a row — the sheet carries the full rationale and every action, exactly like Security's finding sheet. Both views end up with one shared interaction model.",
+    grouped: "The conversation is the unit — severity rolls up per thread and pairs with the report's per-conversation summaries. Weaker when findings are scattered one-offs across many threads.",
+    cards: "Today's layout with the toolbar added. Everything is visible at once, but four findings already fill the screen — it doesn't scale past a handful.",
+  };
+
+  function visibleFindings() {
+    let f = FINDINGS.map((x, i) => ({ ...x, i }));
+    if (fsev !== "all") f = f.filter((x) => x.sev === +fsev);
+    f.sort(fsort === "sev" ? (a, b) => b.sev - a.sev || b.dateN - a.dateN : (a, b) => b.dateN - a.dateN);
+    return f;
+  }
+  function renderFindings() {
+    const list = visibleFindings();
+    if (flayout === "rows") {
+      findStage.innerHTML = list.map((f) => `
+        <button class="frow" data-open="${f.i}">
+          <span class="badge ${f.cls}">${f.sevLabel}</span>
+          <span class="badge outline">${f.cat}</span>
+          <span class="fmeta">${f.kind === "note" ? "📝 " : ""}${esc(f.where)} · ${f.date}${f.isNew ? ' <span class="badge new">NEW</span>' : ""}</span>
+          <span class="fmeta">→</span>
+          <span class="rat">${esc(f.rat)}</span>
+        </button>`).join("") || '<div class="desc" style="color:var(--muted);font-size:12.5px">No findings at this severity.</div>';
+    } else if (flayout === "grouped") {
+      const groups = {};
+      list.forEach((f) => (groups[f.where] ??= []).push(f));
+      findStage.innerHTML = Object.entries(groups).map(([where, fs], gi) => `
+        <details class="group" ${gi === 0 ? "open" : ""}>
+          <summary><span><span class="car">▶</span> ${esc(where)}</span>
+            <span>${sevBadges({ s: fs.filter((x) => x.sev === 3).length, h: fs.filter((x) => x.sev === 2).length, c: fs.filter((x) => x.sev === 1).length })}</span>
+          </summary>
+          <div class="items">
+            ${fs.map((f) => `<button class="frow" data-open="${f.i}">
+              <span class="badge ${f.cls}">${f.sevLabel}</span>
+              <span class="badge outline">${f.cat}</span>
+              <span class="fmeta">${f.date}</span><span class="fmeta">→</span>
+              <span class="rat">${esc(f.rat)}</span></button>`).join("")}
+          </div>
+        </details>`).join("") || '<div class="desc" style="color:var(--muted);font-size:12.5px">No findings at this severity.</div>';
+    } else {
+      findStage.innerHTML = list.map((f) => `
+        <div class="fcard">
+          <div class="rowline">
+            <span class="badge ${f.cls}">${f.sevLabel}</span>
+            <span class="badge outline">${f.cat}</span>
+            <span class="fmeta">${esc(f.where)}</span><span class="fmeta">${f.date}</span>
+          </div>
+          <p>${esc(f.rat)}</p>
+          <div class="actions">
+            <button class="btn ghost">↗ Open ${f.kind === "note" ? "note" : "conversation"}</button>
+            <button class="btn ghost">🚫 Dismiss</button>
+          </div>
+        </div>`).join("");
+    }
+    findNote.textContent = FNOTES[flayout];
+    findStage.querySelectorAll("[data-open]").forEach((el) => {
+      el.onclick = () => { sheetIdx = +el.dataset.open; renderSheet(); };
+    });
+  }
+  function renderSheet() {
+    const f = sheetIdx != null ? FINDINGS[sheetIdx] : null;
+    sheet.classList.toggle("open", !!f);
+    if (!f) return;
+    sheet.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="badge ${f.cls}">${f.sevLabel}</span>
+        <b style="font-size:14.5px">${f.cat}</b>
+        <button class="btn ghost" id="sheetClose" style="margin-left:auto" aria-label="Close">✕</button>
+      </div>
+      <div class="field"><div class="lab">Where</div>${f.kind === "note" ? "📝 " : "💬 "}${esc(f.where)} · ${f.date}, 2026</div>
+      <div class="field"><div class="lab">Found in scan</div>July 22, 2026 · 2:03 PM ${f.isNew ? '<span class="badge new">NEW since previous scan</span>' : "· also in June 30 scan"}</div>
+      <div class="field"><div class="lab">Model rationale</div>${esc(f.rat)}</div>
+      <div class="field"><div class="lab">Flagged content</div><span style="color:var(--muted)">“…the message excerpt the model saw, in context…”</span></div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:auto">
+        <button class="btn">↗ Open ${f.kind === "note" ? "note" : "conversation"}</button>
+        <button class="btn ghost">🚫 Dismiss — persists across re-scans</button>
+      </div>
+      <div class="receipt">A model verdict is a prompt to review, not proof. False positives are expected.</div>`;
+    document.getElementById("sheetClose").onclick = () => { sheetIdx = null; renderSheet(); };
+  }
+  document.querySelectorAll("[data-fl]").forEach((b) => {
+    b.onclick = () => {
+      document.querySelectorAll("[data-fl]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      flayout = b.dataset.fl; sheetIdx = null; renderSheet(); renderFindings();
+    };
+  });
+  document.querySelectorAll("#findTools .chip[data-sev]").forEach((c) => {
+    c.onclick = () => {
+      document.querySelectorAll("#findTools .chip[data-sev]").forEach((x) => x.setAttribute("aria-pressed", x === c));
+      fsev = c.dataset.sev; renderFindings();
+    };
+  });
+  document.getElementById("findSort").onchange = (e) => { fsort = e.target.value; renderFindings(); };
+  renderFindings();
+</script>
