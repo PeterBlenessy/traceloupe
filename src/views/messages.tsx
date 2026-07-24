@@ -252,6 +252,7 @@ function MessagesViewInner() {
   const [openedFrom, setOpenedFrom] = useState<Mode | null>(null);
   // A message to scroll to after opening a conversation (e.g. the Timeline row
   // that was clicked). Cleared once the conversation has scrolled to it.
+  const navigate = useNavigate();
   const [scrollToMessage, setScrollToMessage] = useState<number | null>(null);
   const openThread = (
     threadId: number,
@@ -314,11 +315,19 @@ function MessagesViewInner() {
   const search = useSearch({ strict: false }) as {
     thread?: number;
     service?: string;
+    from?: "safety";
+    message?: number;
   };
   useEffect(() => {
-    if (search.thread != null) openThread(search.thread);
+    if (search.thread != null) {
+      // A finding deep-links to a specific message (?message=<id>): scroll
+      // straight to it. Reset the content-kind filter so the flagged message
+      // can't be hidden by a persisted filter (e.g. "links only").
+      if (search.message != null) setContentKind("all");
+      openThread(search.thread, null, search.message ?? null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search.thread]);
+  }, [search.thread, search.message]);
   // Apply a `?service=` deep-link ONCE per distinct value — not on every `services`
   // refetch, which would otherwise snap the filter back after the user changed it.
   const appliedServiceRef = useRef<string | null>(null);
@@ -405,6 +414,25 @@ function MessagesViewInner() {
 
   return (
     <div className="flex h-full flex-col">
+      {search.from === "safety" && (
+        <div className="flex items-center gap-2 border-b px-3 py-1.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void navigate({ to: "/safety-scan" })}
+              >
+                <ArrowLeft className="size-4" /> Back to Safety Scan
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Return to the Safety Scan findings</TooltipContent>
+          </Tooltip>
+          <span className="text-xs text-muted-foreground">
+            Opened from a Safety Scan finding
+          </span>
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         {mode === "conversations" ? (
           <Conversations
@@ -1283,6 +1311,11 @@ function Conversation({
     by: "time",
     desc: false,
   });
+  // In-conversation search over message body/sender. Debounced so each keystroke
+  // doesn't refire the windowed count + fetch. Not persisted — search is a
+  // transient lookup within the open thread, cleared when you leave it.
+  const [q, setQ] = useState("");
+  const searchTerm = useDebounced(q.trim()) || null;
   // Content kinds present in THIS conversation (drives the pills below).
   const { data: kindsData } = useQuery({
     queryKey: ["messageKinds", thread.id, null],
@@ -1300,8 +1333,8 @@ function Conversation({
   // A thread can hold tens of thousands of messages; the count sizes the virtual
   // scroller and LazyVirtualList fetches only the windows it renders.
   const { data: total } = useQuery({
-    queryKey: ["messageCount", thread.id, kind],
-    queryFn: () => client.countThreadMessages(thread.id, kind),
+    queryKey: ["messageCount", thread.id, kind, searchTerm],
+    queryFn: () => client.countThreadMessages(thread.id, kind, searchTerm),
   });
 
   // Scroll-to-message (from a Timeline jump): resolve the target's row index in
@@ -1372,6 +1405,11 @@ function Conversation({
             ) : null;
           })()
         )}
+        <ListSearch
+          value={q}
+          onChange={setQ}
+          placeholder="Search this conversation…"
+        />
         <MessageKindFilter
           available={available}
           value={kindValue}
@@ -1385,14 +1423,28 @@ function Conversation({
       </ViewHeader>
       <LazyVirtualList<Message>
         count={total ?? 0}
-        startAtBottom={!order.desc}
-        resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}`}
-        persistKey={`conv:${thread.id}:${kind ?? "all"}:${order.desc}`}
+        startAtBottom={!order.desc && !searchTerm}
+        resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}:${searchTerm ?? ""}`}
+        persistKey={`conv:${thread.id}:${kind ?? "all"}:${order.desc}:${searchTerm ?? ""}`}
         jumpTo={jumpTo}
         scrollEnd={scrollEnd}
-        windowKey={(page) => ["messageWindow", thread.id, kind, order.desc, page]}
+        windowKey={(page) => [
+          "messageWindow",
+          thread.id,
+          kind,
+          order.desc,
+          searchTerm,
+          page,
+        ]}
         fetchWindow={(offset, limit) =>
-          client.getThreadMessageWindow(thread.id, offset, limit, order.desc, kind)
+          client.getThreadMessageWindow(
+            thread.id,
+            offset,
+            limit,
+            order.desc,
+            kind,
+            searchTerm,
+          )
         }
         renderItem={(message, _i, prev) => {
           // In a group, label an incoming message with its sender — but only

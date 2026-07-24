@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS scans (
     model        TEXT NOT NULL,             -- e.g. 'gemma-4-E4B-it-Q4_K_M'
     range_start  INTEGER,                   -- user time-range filter (unix s), NULL = open
     range_end    INTEGER,
+    sources      TEXT NOT NULL DEFAULT 'all', -- 'all' | 'messages' | 'notes' (v2)
     status       TEXT NOT NULL,             -- 'running' | 'completed' | 'cancelled' | 'failed'
+                                            -- | 'interrupted' (stranded 'running' repaired at open)
     started_at   INTEGER NOT NULL,
     finished_at  INTEGER,
     chunks_total INTEGER NOT NULL DEFAULT 0,
@@ -62,6 +64,8 @@ CREATE TABLE IF NOT EXISTS content_findings (
     severity          INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 3),
     rationale         TEXT NOT NULL,        -- the model's one-line justification
     stale             INTEGER NOT NULL DEFAULT 0,  -- fingerprint no longer matches the cache row
+    rechecked         INTEGER NOT NULL DEFAULT 0,  -- 1 = confirmed by the cascade's strong tier (v3)
+    service           TEXT,                 -- message thread's service (iMessage/SMS/TikTok…); NULL for notes/legacy (v5)
     created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON content_findings(scan_id);
@@ -85,6 +89,10 @@ CREATE TABLE IF NOT EXISTS chunk_progress (
     fingerprint   TEXT NOT NULL,             -- sha256 of the chunk's normalized text
     scan_id       INTEGER NOT NULL REFERENCES scans(id),
     status        TEXT NOT NULL,             -- 'done' | 'skipped'
+    flagged       INTEGER NOT NULL DEFAULT 0, -- sweep produced ≥1 finding (v4): the
+                                             -- DURABLE cascade re-check set, immune to
+                                             -- a sibling window's re-check deleting the
+                                             -- shared item's finding
     classified_at INTEGER NOT NULL
 );
 
@@ -209,6 +217,9 @@ pub struct NewFinding {
     pub category: Category,
     pub severity: u8,
     pub rationale: String,
+    /// The message thread's service (iMessage/SMS/TikTok…); None for notes. Lets
+    /// a scan scoped to specific services count/list exactly its findings.
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -225,6 +236,9 @@ pub struct FindingRow {
     pub rationale: String,
     pub stale: bool,
     pub dismissed: bool,
+    /// 1 = confirmed by the cascade's strong tier (E4B re-checked and kept it);
+    /// 0 = seen only by the fast sweep tier (E2B), unconfirmed.
+    pub rechecked: bool,
     pub created_at: i64,
 }
 
@@ -235,6 +249,8 @@ pub struct ScanRow {
     pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
@@ -243,16 +259,24 @@ pub struct ScanRow {
 }
 
 /// A scan for the history list: the fields a user cares about (period, when,
-/// status) plus its live finding count. No `chunks` — that's internal.
+/// status, model) plus its live finding counts. No `chunks` — that's internal.
 #[derive(Debug, Clone)]
 pub struct ScanListRow {
     pub id: i64,
+    pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub findings: i64,
+    /// Live (non-stale) finding counts split by severity, for the history
+    /// row's badge: 3 = serious, 2 = harmful, 1 = concerning.
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +322,60 @@ impl AnalysisDb {
         // Additive migrations go here (mirroring cache.rs); never downgrade a
         // newer store.
         if version < SCHEMA_VERSION {
+            // v2: which content a scan covered ('all'|'messages'|'notes'), so
+            // the history can label it and "Resume" can re-run the same scope.
+            let has_sources = conn
+                .prepare("PRAGMA table_info(scans)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "sources");
+            if !has_sources {
+                conn.execute(
+                    "ALTER TABLE scans ADD COLUMN sources TEXT NOT NULL DEFAULT 'all'",
+                    [],
+                )?;
+            }
+            // v3: the cascade's strong tier marks confirmed findings so a
+            // later chunk's re-check clear can't wipe an earlier chunk's
+            // confirmation of a shared (overlapping) item.
+            let has_rechecked = conn
+                .prepare("PRAGMA table_info(content_findings)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "rechecked");
+            if !has_rechecked {
+                conn.execute(
+                    "ALTER TABLE content_findings ADD COLUMN rechecked INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            // v4: durable "sweep flagged this chunk" marker on chunk_progress,
+            // so the cascade re-check set survives a sibling window's re-check
+            // deleting a shared item's finding (recomputing the set from live
+            // findings could otherwise drop a chunk mid-cascade on resume).
+            let has_flagged = conn
+                .prepare("PRAGMA table_info(chunk_progress)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "flagged");
+            if !has_flagged {
+                conn.execute(
+                    "ALTER TABLE chunk_progress ADD COLUMN flagged INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
+            // v5: the message thread's service on each finding (iMessage/SMS/
+            // TikTok…), so a scan scoped to a subset of services can count/list
+            // exactly its findings. NULL for notes and for findings created
+            // before this column existed (they only match 'all'/'messages').
+            let has_service = conn
+                .prepare("PRAGMA table_info(content_findings)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "service");
+            if !has_service {
+                conn.execute("ALTER TABLE content_findings ADD COLUMN service TEXT", [])?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -319,21 +397,63 @@ impl AnalysisDb {
         &self,
         model: &str,
         range: (Option<i64>, Option<i64>),
+        sources: &str,
         started_at: i64,
     ) -> Result<i64> {
-        // Repair scans stranded 'running' by a crash or fatal error. Safe
-        // here (not at open): the T7 command layer allows one scan at a time,
-        // so any 'running' row at begin is by definition dead.
+        // Backstop repair for scans stranded 'running' (normally already done
+        // at backup open via repair_stranded_scans): one scan at a time means
+        // any 'running' row at begin is by definition dead.
+        self.repair_stranded_scans()?;
         self.conn.execute(
-            "UPDATE scans SET status = 'failed', finished_at = ?1 WHERE status = 'running'",
-            params![started_at],
-        )?;
-        self.conn.execute(
-            "INSERT INTO scans (model, range_start, range_end, status, started_at)
-             VALUES (?1, ?2, ?3, 'running', ?4)",
-            params![model, range.0, range.1, started_at],
+            "INSERT INTO scans (model, range_start, range_end, sources, status, started_at)
+             VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
+            params![model, range.0, range.1, sources, started_at],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Reopen a non-completed scan for a resumed run: the SAME row goes back
+    /// to 'running', so one logical scan attempt keeps one identity across
+    /// stops and interruptions — findings and progress accumulate on it
+    /// instead of scattering over a chain of rows. A new row is only ever
+    /// created by an explicit new scan (begin_scan). The model is updated in
+    /// case the user switched tiers between runs.
+    pub fn resume_scan(&self, scan_id: i64, _model: &str) -> Result<()> {
+        // One scan at a time: any *other* stranded row is repaired first.
+        self.repair_stranded_scans()?;
+        // Deliberately does NOT touch `model`: the row already records what
+        // ran (including a completed cascade's "e2b→e4b" receipt), and
+        // overwriting it with the resume's sweep model would erase that
+        // provenance. Resume continues the same scan, so its recorded tier
+        // stands.
+        let n = self.conn.execute(
+            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0
+             WHERE id = ?1 AND status != 'completed'",
+            params![scan_id],
+        )?;
+        if n == 0 {
+            return Err(Error::Invalid(format!(
+                "scan {scan_id} is not resumable (missing or completed)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Repair scans stranded 'running' by a crash or kill: mark them
+    /// 'interrupted'. Called when a backup becomes active (this process
+    /// provably has no scan in flight then), so the stored state never claims
+    /// a scan is running longer than necessary. `finished_at` stays NULL —
+    /// the actual death time is unknown and won't be invented. Returns the
+    /// number of rows repaired.
+    ///
+    /// Caveat (accepted, same as the begin-time backstop): a second app
+    /// instance sharing this DB with a genuinely live scan would be
+    /// mislabeled — single-instance is the supported model.
+    pub fn repair_stranded_scans(&self) -> Result<usize> {
+        Ok(self.conn.execute(
+            "UPDATE scans SET status = 'interrupted' WHERE status = 'running'",
+            [],
+        )?)
     }
 
     pub fn set_chunks_total(&self, scan_id: i64, total: i64) -> Result<()> {
@@ -358,22 +478,25 @@ impl AnalysisDb {
     // ---- chunk progress / resume ----
 
     /// Record a chunk as classified (or skipped). Upserts on chunk_key so the
-    /// latest fingerprint wins.
+    /// latest fingerprint wins. `flagged` marks that this (sweep) chunk
+    /// produced ≥1 finding — the durable cascade re-check set (see v4 schema).
     pub fn record_chunk(
         &self,
         scan_id: i64,
         chunk_key: &str,
         fingerprint: &str,
         status: ChunkStatus,
+        flagged: bool,
         at: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO chunk_progress (chunk_key, fingerprint, scan_id, status, classified_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO chunk_progress (chunk_key, fingerprint, scan_id, status, flagged, classified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(chunk_key) DO UPDATE SET
                fingerprint = excluded.fingerprint, scan_id = excluded.scan_id,
-               status = excluded.status, classified_at = excluded.classified_at",
-            params![chunk_key, fingerprint, scan_id, status.as_str(), at],
+               status = excluded.status, flagged = excluded.flagged,
+               classified_at = excluded.classified_at",
+            params![chunk_key, fingerprint, scan_id, status.as_str(), flagged, at],
         )?;
         self.conn.execute(
             "UPDATE scans SET chunks_done = chunks_done + 1 WHERE id = ?1",
@@ -445,8 +568,8 @@ impl AnalysisDb {
             tx.execute(
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
-                    fingerprint, category, severity, rationale, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    fingerprint, category, severity, rationale, service, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -457,6 +580,7 @@ impl AnalysisDb {
                     f.category.as_str(),
                     f.severity,
                     f.rationale,
+                    f.service,
                     at
                 ],
             )?;
@@ -465,19 +589,67 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// All findings, dismissed included (callers filter); severity-descending
-    /// within category, newest first.
-    pub fn list_findings(&self) -> Result<Vec<FindingRow>> {
-        let mut stmt = self.conn.prepare(
+    /// Findings, dismissed included (callers filter); severity-descending
+    /// within category, newest first. `scan_id` restricts to one scan's
+    /// findings (the per-scan history view); None returns every scan's.
+    /// How many findings a scan already has. Used to seed the live progress
+    /// tally on resume, so a resumed scan shows its existing findings from the
+    /// first frame instead of counting up from zero.
+    pub fn count_findings(&self, scan_id: i64) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM content_findings WHERE scan_id = ?1",
+            params![scan_id],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    }
+
+    pub fn list_findings(&self, scan_id: Option<i64>) -> Result<Vec<FindingRow>> {
+        self.query_findings("?1 IS NULL OR f.scan_id = ?1", params![scan_id])
+    }
+
+    /// Findings within a scan's SCOPE — its sources ('all'|'messages'|'notes')
+    /// and optional time range — regardless of which run classified them. This
+    /// is what a scan's detail view shows: because classification is cached per
+    /// chunk across scans, a finding "belongs to" the first run that saw it, but
+    /// every scan whose scope covers it must surface it (see [`Self::list_scans`]).
+    /// A finding with a NULL `occurred_at` (e.g. an undated note) is kept — a
+    /// range filter can't place it, and dropping it would hide real findings.
+    pub fn list_findings_in_scope(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+    ) -> Result<Vec<FindingRow>> {
+        self.query_findings(
+            "(?1 = 'all'
+                 OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
+                 OR ((',' || ?1 || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
+                 OR (f.source_kind = 'message' AND f.service IS NOT NULL
+                     AND (',' || ?1 || ',') LIKE ('%,' || f.service || ',%')))
+             AND (?2 IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= ?2)
+             AND (?3 IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= ?3)",
+            params![sources, range_start, range_end],
+        )
+    }
+
+    /// Shared body for the finding-list queries: the same SELECT + severity-desc
+    /// ordering, parameterised only by the WHERE predicate.
+    fn query_findings(
+        &self,
+        where_clause: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<FindingRow>> {
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
-                    f.stale, f.created_at,
+                    f.stale, f.created_at, f.rechecked,
                     EXISTS(SELECT 1 FROM dismissals d
                            WHERE d.fingerprint = f.fingerprint AND d.category = f.category)
              FROM content_findings f
+             WHERE {where_clause}
              ORDER BY f.severity DESC, f.occurred_at DESC",
-        )?;
-        let rows = stmt.query_map([], |r| {
+        ))?;
+        let rows = stmt.query_map(params, |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
@@ -492,6 +664,7 @@ impl AnalysisDb {
                 r.get::<_, bool>(10)?,
                 r.get::<_, i64>(11)?,
                 r.get::<_, bool>(12)?,
+                r.get::<_, bool>(13)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -509,6 +682,7 @@ impl AnalysisDb {
                 rationale,
                 stale,
                 created_at,
+                rechecked,
                 dismissed,
             ) = row?;
             let source_kind = SourceKind::parse(&kind)
@@ -528,10 +702,125 @@ impl AnalysisDb {
                 rationale,
                 stale,
                 dismissed,
+                rechecked,
                 created_at,
             });
         }
         Ok(out)
+    }
+
+    /// The chunk keys whose SWEEP produced a finding (`flagged = 1`) — the
+    /// cascade's re-check set. Durable and resume-stable: derived from the
+    /// sweep-time marker on chunk_progress, NOT from live findings (which a
+    /// sibling window's re-check can delete), so an interrupted cascade never
+    /// loses a chunk that still needs the strong tier. Only sweep rows carry
+    /// `flagged = 1`; `#recheck` rows are always 0.
+    pub fn flagged_chunk_keys(&self) -> Result<std::collections::HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT chunk_key FROM chunk_progress WHERE flagged = 1")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        let mut out = std::collections::HashSet::new();
+        for k in rows {
+            out.insert(k?);
+        }
+        Ok(out)
+    }
+
+    /// Update a scan's recorded model — the cascade stamps "e2b→e4b" once the
+    /// re-check phase actually ran, so the receipt says what judged what.
+    pub fn set_model(&self, scan_id: i64, model: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scans SET model = ?2 WHERE id = ?1",
+            params![scan_id, model],
+        )?;
+        Ok(())
+    }
+
+    /// Apply the cascade strong tier's verdict for one chunk (#35), ATOMICALLY:
+    /// in a single transaction it (1) removes the chunk items' *sweep* findings
+    /// (rechecked = 0) so the strong tier's silence overrules a weak-tier false
+    /// positive, (2) inserts the strong tier's verdicts marked rechecked = 1,
+    /// and (3) records the `<chunk_key>#recheck` checkpoint. All-or-nothing is
+    /// the whole point: a crash mid-way must not leave an item with its sweep
+    /// finding deleted but no checkpoint, which resume would read as "cleared"
+    /// and never re-check — silently dropping a finding the strong tier might
+    /// have confirmed.
+    ///
+    /// The `rechecked = 0` scope on the sweep-clear is what makes overlapping
+    /// windows safe: a later chunk re-checking a shared item deletes only the
+    /// remaining sweep verdicts, never an earlier chunk's confirmation
+    /// (rechecked = 1) of that same item.
+    pub fn apply_recheck(
+        &mut self,
+        scan_id: i64,
+        chunk_key: &str,
+        chunk_fingerprint: &str,
+        item_fingerprints: &[String],
+        findings: &[NewFinding],
+        at: i64,
+    ) -> Result<()> {
+        for f in findings {
+            if !(1..=3).contains(&f.severity) {
+                return Err(Error::Invalid(format!(
+                    "severity {} out of range",
+                    f.severity
+                )));
+            }
+        }
+        let tx = self.conn.transaction()?;
+        // 1. Drop this chunk's items' unconfirmed (sweep) findings.
+        for fp in item_fingerprints {
+            tx.execute(
+                "DELETE FROM content_findings WHERE fingerprint = ?1 AND rechecked = 0",
+                params![fp],
+            )?;
+        }
+        // 2. Insert the strong tier's verdicts (rechecked = 1). Collapse a
+        //    duplicate (kind, fp, category) — including another window's
+        //    confirmation of the same item+category — into one row.
+        for f in findings {
+            tx.execute(
+                "DELETE FROM content_findings
+                 WHERE source_kind = ?1 AND fingerprint = ?2 AND category = ?3",
+                params![f.source_kind.as_str(), f.fingerprint, f.category.as_str()],
+            )?;
+            tx.execute(
+                "INSERT INTO content_findings
+                   (scan_id, source_kind, source_id, thread_identifier, occurred_at,
+                    fingerprint, category, severity, rationale, service, rechecked, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11)",
+                params![
+                    scan_id,
+                    f.source_kind.as_str(),
+                    f.source_id,
+                    f.thread_identifier,
+                    f.occurred_at,
+                    f.fingerprint,
+                    f.category.as_str(),
+                    f.severity,
+                    f.rationale,
+                    f.service,
+                    at
+                ],
+            )?;
+        }
+        // 3. Checkpoint + progress, in the SAME transaction.
+        let recheck_key = format!("{chunk_key}#recheck");
+        tx.execute(
+            "INSERT INTO chunk_progress (chunk_key, fingerprint, scan_id, status, classified_at)
+             VALUES (?1, ?2, ?3, 'done', ?4)
+             ON CONFLICT(chunk_key) DO UPDATE SET
+               fingerprint = excluded.fingerprint, scan_id = excluded.scan_id,
+               status = excluded.status, classified_at = excluded.classified_at",
+            params![recheck_key, chunk_fingerprint, scan_id, at],
+        )?;
+        tx.execute(
+            "UPDATE scans SET chunks_done = chunks_done + 1 WHERE id = ?1",
+            params![scan_id],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Dismiss (or un-dismiss) a finding as a false positive. Keyed by
@@ -582,8 +871,8 @@ impl AnalysisDb {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
-                        chunks_total, chunks_done
+                "SELECT id, model, range_start, range_end, sources, status, started_at,
+                        finished_at, chunks_total, chunks_done
                  FROM scans ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -592,11 +881,12 @@ impl AnalysisDb {
                         model: r.get(1)?,
                         range_start: r.get(2)?,
                         range_end: r.get(3)?,
-                        status: r.get(4)?,
-                        started_at: r.get(5)?,
-                        finished_at: r.get(6)?,
-                        chunks_total: r.get(7)?,
-                        chunks_done: r.get(8)?,
+                        sources: r.get(4)?,
+                        status: r.get(5)?,
+                        started_at: r.get(6)?,
+                        finished_at: r.get(7)?,
+                        chunks_total: r.get(8)?,
+                        chunks_done: r.get(9)?,
                     })
                 },
             )
@@ -608,8 +898,8 @@ impl AnalysisDb {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
-                        chunks_total, chunks_done
+                "SELECT id, model, range_start, range_end, sources, status, started_at,
+                        finished_at, chunks_total, chunks_done
                  FROM scans WHERE id = ?1",
                 params![id],
                 |r| {
@@ -618,11 +908,12 @@ impl AnalysisDb {
                         model: r.get(1)?,
                         range_start: r.get(2)?,
                         range_end: r.get(3)?,
-                        status: r.get(4)?,
-                        started_at: r.get(5)?,
-                        finished_at: r.get(6)?,
-                        chunks_total: r.get(7)?,
-                        chunks_done: r.get(8)?,
+                        sources: r.get(4)?,
+                        status: r.get(5)?,
+                        started_at: r.get(6)?,
+                        finished_at: r.get(7)?,
+                        chunks_total: r.get(8)?,
+                        chunks_done: r.get(9)?,
                     })
                 },
             )
@@ -651,24 +942,53 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// Past scans, newest first, each with its live (non-stale) finding count —
-    /// for the scan-history list.
+    /// Past scans, newest first, each with its live (non-stale) finding counts
+    /// (total + per severity) — for the scan-history list.
+    ///
+    /// Findings are counted by SCOPE (the scan's sources + time range), NOT by
+    /// which run first classified each chunk. Classification is cached per chunk
+    /// across scans, so a re-scan reuses chunks and attributes no new findings to
+    /// its own id — counting by scan_id then makes a re-scan of already-covered
+    /// data look "Clean". Counting by scope means every scan shows the findings
+    /// that fall within it, so two scans over the same data agree.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.range_start, s.range_end, s.status, s.started_at, s.finished_at,
-                    (SELECT COUNT(*) FROM content_findings f
-                       WHERE f.scan_id = s.id AND f.stale = 0)
-             FROM scans s ORDER BY s.id DESC LIMIT ?1",
+            "SELECT s.id, s.model, s.range_start, s.range_end, s.sources, s.status,
+                    s.started_at, s.finished_at,
+                    coalesce(count(f.id), 0),
+                    coalesce(sum(f.severity = 3), 0),
+                    coalesce(sum(f.severity = 2), 0),
+                    coalesce(sum(f.severity = 1), 0)
+             FROM scans s
+             LEFT JOIN content_findings f ON f.stale = 0
+                AND (s.sources = 'all'
+                     OR ((',' || s.sources || ',') LIKE '%,notes,%'
+                         AND f.source_kind = 'note')
+                     OR ((',' || s.sources || ',') LIKE '%,messages,%'
+                         AND f.source_kind = 'message')
+                     OR (f.source_kind = 'message' AND f.service IS NOT NULL
+                         AND (',' || s.sources || ',')
+                             LIKE ('%,' || f.service || ',%')))
+                AND (s.range_start IS NULL OR f.occurred_at IS NULL
+                     OR f.occurred_at >= s.range_start)
+                AND (s.range_end IS NULL OR f.occurred_at IS NULL
+                     OR f.occurred_at <= s.range_end)
+             GROUP BY s.id ORDER BY s.id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
             Ok(ScanListRow {
                 id: r.get(0)?,
-                range_start: r.get(1)?,
-                range_end: r.get(2)?,
-                status: r.get(3)?,
-                started_at: r.get(4)?,
-                finished_at: r.get(5)?,
-                findings: r.get(6)?,
+                model: r.get(1)?,
+                range_start: r.get(2)?,
+                range_end: r.get(3)?,
+                sources: r.get(4)?,
+                status: r.get(5)?,
+                started_at: r.get(6)?,
+                finished_at: r.get(7)?,
+                findings: r.get(8)?,
+                serious: r.get(9)?,
+                harmful: r.get(10)?,
+                concerning: r.get(11)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -751,6 +1071,7 @@ mod tests {
             category: cat,
             severity: 2,
             rationale: "test rationale".into(),
+            service: Some("iMessage".into()),
         }
     }
 
@@ -763,14 +1084,18 @@ mod tests {
     #[test]
     fn finding_roundtrip_and_replacement() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("gemma-4-E4B", (None, None), 100).unwrap();
+        let scan = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 100)
+            .unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ThreatViolence)], 101)
             .unwrap();
         // Re-classifying the same content replaces, never duplicates.
-        let scan2 = db.begin_scan("gemma-4-E4B", (None, None), 200).unwrap();
+        let scan2 = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 200)
+            .unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 201)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].scan_id, scan2);
         assert_eq!(rows[0].category, Category::ThreatViolence);
@@ -780,38 +1105,239 @@ mod tests {
     #[test]
     fn dismissal_survives_rescan() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 101)
             .unwrap();
         db.set_dismissed("fp1", Category::ScamFraud, true, 102)
             .unwrap();
         // New scan re-inserts the same finding — dismissal must still apply.
-        let scan2 = db.begin_scan("m", (None, None), 200).unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ScamFraud)], 201)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert_eq!(rows.len(), 1);
         assert!(rows[0].dismissed);
         // But a different category on the same message is NOT dismissed.
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 202)
             .unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         let dismissed: Vec<bool> = rows.iter().map(|r| r.dismissed).collect();
         assert_eq!(rows.len(), 2);
         assert!(dismissed.contains(&true) && dismissed.contains(&false));
     }
 
     #[test]
+    fn resume_reopens_the_same_row_never_a_new_one() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.finish_scan(scan, ScanStatus::Cancelled, 150).unwrap();
+        // Resume: same row back to running, finish cleared, model PRESERVED
+        // (resume must not overwrite a completed cascade's "e2b→e4b" receipt).
+        db.resume_scan(scan, "m2").unwrap();
+        let row = db.scan_by_id(scan).unwrap().unwrap();
+        assert_eq!(row.status, "running");
+        assert_eq!(row.finished_at, None);
+        assert_eq!(row.model, "m", "resume keeps the recorded model");
+        // A completed scan is not resumable, and no second row ever appeared.
+        db.finish_scan(scan, ScanStatus::Completed, 200).unwrap();
+        assert!(db.resume_scan(scan, "m2").is_err());
+        assert_eq!(db.list_scans(50).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn apply_recheck_overrules_sweep_and_preserves_confirmations() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Sweep flagged fp1 (scam) and fp2 (self-harm); fp1 also dismissed.
+        db.replace_findings(
+            scan,
+            &[
+                finding("fp1", Category::ScamFraud),
+                finding("fp2", Category::SelfHarm),
+            ],
+            101,
+        )
+        .unwrap();
+        db.set_dismissed("fp1", Category::ScamFraud, true, 102)
+            .unwrap();
+
+        // Chunk A (items fp1, fp2): strong tier confirms fp1/scam, clears fp2.
+        db.apply_recheck(
+            scan,
+            "A",
+            "fpA",
+            &["fp1".into(), "fp2".into()],
+            &[finding("fp1", Category::ScamFraud)],
+            103,
+        )
+        .unwrap();
+        let rows = db.list_findings(None).unwrap();
+        assert_eq!(rows.len(), 1, "fp2 sweep finding overruled and removed");
+        assert_eq!(rows[0].fingerprint, "fp1");
+        assert!(rows[0].dismissed, "dismissal survives the re-check");
+        assert!(db.chunk_is_done("A#recheck", "fpA").unwrap());
+
+        // Chunk B shares item fp1 (overlap) and the strong tier is SILENT on
+        // it there — must NOT wipe chunk A's confirmation (rechecked = 1).
+        db.apply_recheck(scan, "B", "fpB", &["fp1".into()], &[], 104)
+            .unwrap();
+        let rows = db.list_findings(None).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "confirmed fp1 survives a sibling window's silence"
+        );
+        assert_eq!(rows[0].fingerprint, "fp1");
+    }
+
+    #[test]
+    fn flagged_chunk_keys_are_durable_across_a_recheck_delete() {
+        // The cascade re-check set must NOT be recomputed from live findings —
+        // a sibling window's re-check can delete a shared item's finding, and
+        // if a crash then interrupts, the still-un-re-checked chunk must remain
+        // in the set (verification Finding A). The durable `flagged` marker on
+        // chunk_progress is what guarantees this.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Sweep flagged chunks X and Y (both produced a finding).
+        db.record_chunk(scan, "X", "fpX", ChunkStatus::Done, true, 101)
+            .unwrap();
+        db.record_chunk(scan, "Y", "fpY", ChunkStatus::Done, true, 101)
+            .unwrap();
+        db.replace_findings(scan, &[finding("shared", Category::ScamFraud)], 101)
+            .unwrap();
+        assert_eq!(
+            db.flagged_chunk_keys().unwrap(),
+            ["X".to_string(), "Y".to_string()].into_iter().collect()
+        );
+        // Y is re-checked and the strong tier clears the shared finding.
+        db.apply_recheck(scan, "Y", "fpY", &["shared".into()], &[], 102)
+            .unwrap();
+        assert!(db.list_findings(None).unwrap().is_empty());
+        // The re-check set is UNCHANGED — X is still flagged, so a resume here
+        // re-checks it (its #recheck checkpoint was never written).
+        assert_eq!(
+            db.flagged_chunk_keys().unwrap(),
+            ["X".to_string(), "Y".to_string()].into_iter().collect()
+        );
+        assert!(db.chunk_is_done("Y#recheck", "fpY").unwrap());
+        assert!(!db.chunk_is_done("X#recheck", "fpX").unwrap());
+    }
+
+    #[test]
+    fn repair_marks_stranded_scans_interrupted() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let stranded = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Simulate a kill: the scan never finishes; the app reopens the backup.
+        assert_eq!(db.repair_stranded_scans().unwrap(), 1);
+        let (status, finished): (String, Option<i64>) = db
+            .conn()
+            .query_row(
+                "SELECT status, finished_at FROM scans WHERE id = ?1",
+                params![stranded],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "interrupted");
+        assert_eq!(finished, None);
+        // Idempotent: nothing left to repair.
+        assert_eq!(db.repair_stranded_scans().unwrap(), 0);
+    }
+
+    #[test]
+    fn list_findings_filters_by_scan() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan1 = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.replace_findings(scan1, &[finding("fp1", Category::ScamFraud)], 101)
+            .unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        db.replace_findings(scan2, &[finding("fp2", Category::SelfHarm)], 201)
+            .unwrap();
+        assert_eq!(db.list_findings(None).unwrap().len(), 2);
+        let only1 = db.list_findings(Some(scan1)).unwrap();
+        assert_eq!(only1.len(), 1);
+        assert_eq!(only1[0].fingerprint, "fp1");
+        let only2 = db.list_findings(Some(scan2)).unwrap();
+        assert_eq!(only2.len(), 1);
+        assert_eq!(only2[0].fingerprint, "fp2");
+    }
+
+    #[test]
+    fn list_scans_reports_model_and_severity_split() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 100)
+            .unwrap();
+        let mut serious = finding("fp1", Category::ThreatViolence);
+        serious.severity = 3;
+        let harmful = finding("fp2", Category::ScamFraud); // severity 2
+        let mut concerning = finding("fp3", Category::SelfHarm);
+        concerning.severity = 1;
+        db.replace_findings(scan, &[serious, harmful, concerning], 101)
+            .unwrap();
+        db.finish_scan(scan, ScanStatus::Completed, 102).unwrap();
+        // A stale finding must not count toward any bucket.
+        db.set_stale("fp3", true).unwrap();
+
+        let rows = db.list_scans(50).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "gemma-4-E4B");
+        assert_eq!(rows[0].sources, "all");
+        assert_eq!(rows[0].findings, 2);
+        assert_eq!(
+            (rows[0].serious, rows[0].harmful, rows[0].concerning),
+            (1, 1, 0)
+        );
+    }
+
+    #[test]
+    fn findings_are_scoped_not_owned_by_scan_id() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        // Scan A (all sources) classifies one MESSAGE and one NOTE finding.
+        let a = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        let msg = finding("fp-msg", Category::ScamFraud); // message, @1_700_000_000
+        let mut note = finding("fp-note", Category::SelfHarm);
+        note.source_kind = SourceKind::Note;
+        note.thread_identifier = None;
+        note.occurred_at = Some(1_700_000_500);
+        db.replace_findings(a, &[msg, note], 101).unwrap();
+
+        // Scan B (notes only) runs later; its chunks were reused from A, so it
+        // owns NO finding rows of its own — the bug this scoping fixes.
+        let b = db.begin_scan("m", (None, None), "notes", 200).unwrap();
+
+        // Scope surfaces findings by sources, regardless of which scan owns them.
+        let in_b = db.list_findings_in_scope("notes", None, None).unwrap();
+        assert_eq!(in_b.len(), 1);
+        assert_eq!(in_b[0].fingerprint, "fp-note");
+        let msgs = db.list_findings_in_scope("messages", None, None).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].fingerprint, "fp-msg");
+
+        // list_scans counts by scope: B (notes) shows the note, A (all) shows
+        // both — even though scan A owns every finding row.
+        let rows = db.list_scans(50).unwrap();
+        assert_eq!(rows.iter().find(|r| r.id == a).unwrap().findings, 2);
+        assert_eq!(rows.iter().find(|r| r.id == b).unwrap().findings, 1);
+
+        // A time range that excludes both keeps them out of scope.
+        let none = db
+            .list_findings_in_scope("all", Some(1_800_000_000), None)
+            .unwrap();
+        assert_eq!(none.len(), 0);
+    }
+
+    #[test]
     fn chunk_resume_is_fingerprint_sensitive() {
         let db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
-        db.record_chunk(scan, "thread1:0", "abc", ChunkStatus::Done, 101)
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.record_chunk(scan, "thread1:0", "abc", ChunkStatus::Done, false, 101)
             .unwrap();
         assert!(db.chunk_is_done("thread1:0", "abc").unwrap());
         // Content changed → chunk must be re-classified.
         assert!(!db.chunk_is_done("thread1:0", "def").unwrap());
         // Skipped chunks never count as done.
-        db.record_chunk(scan, "thread1:1", "xyz", ChunkStatus::Skipped, 102)
+        db.record_chunk(scan, "thread1:1", "xyz", ChunkStatus::Skipped, false, 102)
             .unwrap();
         assert!(!db.chunk_is_done("thread1:1", "xyz").unwrap());
     }
@@ -819,7 +1345,7 @@ mod tests {
     #[test]
     fn severity_range_enforced() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         let mut bad = finding("fp1", Category::SelfHarm);
         bad.severity = 4;
         assert!(db.replace_findings(scan, &[bad], 101).is_err());
@@ -828,17 +1354,17 @@ mod tests {
     #[test]
     fn stale_flag_and_source_id_refresh() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::SelfHarm)], 101)
             .unwrap();
         db.set_stale("fp1", true).unwrap();
         db.set_source_id("fp1", None).unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert!(rows[0].stale);
         assert_eq!(rows[0].source_id, None);
         db.set_source_id("fp1", Some(99)).unwrap();
         db.set_stale("fp1", false).unwrap();
-        let rows = db.list_findings().unwrap();
+        let rows = db.list_findings(None).unwrap();
         assert!(!rows[0].stale);
         assert_eq!(rows[0].source_id, Some(99));
     }
@@ -846,9 +1372,9 @@ mod tests {
     #[test]
     fn stale_running_scan_repaired_at_next_begin() {
         let db = AnalysisDb::open_in_memory().unwrap();
-        let dead = db.begin_scan("m", (None, None), 100).unwrap();
+        let dead = db.begin_scan("m", (None, None), "all", 100).unwrap();
         // Simulate a crash: never finished. The next begin_scan repairs it.
-        let live = db.begin_scan("m", (None, None), 200).unwrap();
+        let live = db.begin_scan("m", (None, None), "all", 200).unwrap();
         let (dead_status, dead_finished): (String, Option<i64>) = db
             .conn()
             .query_row(
@@ -857,8 +1383,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(dead_status, "failed");
-        assert_eq!(dead_finished, Some(200));
+        // Marked 'interrupted', and no invented finish time — when it actually
+        // died is unknown.
+        assert_eq!(dead_status, "interrupted");
+        assert_eq!(dead_finished, None);
         let live_status: String = db
             .conn()
             .query_row(
@@ -874,10 +1402,10 @@ mod tests {
     fn scan_lifecycle_and_summary() {
         let db = AnalysisDb::open_in_memory().unwrap();
         let scan = db
-            .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), 100)
+            .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), "all", 100)
             .unwrap();
         db.set_chunks_total(scan, 10).unwrap();
-        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
+        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, false, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k verdicts=0")
             .unwrap();
@@ -899,8 +1427,8 @@ mod tests {
         // summary — one row in every table that references scans(id). With
         // foreign_keys ON, delete_scan must clear all of them (the audit_log
         // row is the one that used to be left behind and blocked the delete).
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
-        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.record_chunk(scan, "k", "fp", ChunkStatus::Done, false, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k").unwrap();
         db.set_summary(scan, "report", "", "Nothing flagged.", 104)
@@ -916,13 +1444,14 @@ mod tests {
                 category: Category::ScamFraud,
                 severity: 2,
                 rationale: "x".into(),
+                service: Some("iMessage".into()),
             }],
             105,
         )
         .unwrap();
 
         // A second scan is left untouched, proving the delete is scoped by id.
-        let keep = db.begin_scan("m", (None, None), 200).unwrap();
+        let keep = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.audit(keep, 201, "scan_started", "").unwrap();
 
         db.delete_scan(scan).unwrap();

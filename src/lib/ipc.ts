@@ -657,6 +657,9 @@ export interface ContentFinding {
   /** Cache thread id for message findings — the Messages deep-link. */
   threadId: number | null;
   threadIdentifier: string | null;
+  /** Messaging service for the app icon ("iMessage"/"TikTok"/…), "Notes" for
+   * note findings, null when unresolved. */
+  service: string | null;
   /** Unix epoch seconds. */
   occurredAt: number | null;
   fingerprint: string;
@@ -666,6 +669,24 @@ export interface ContentFinding {
   rationale: string;
   stale: boolean;
   dismissed: boolean;
+  /** True when the cascade's strong tier (E4B) re-checked and kept this finding
+   *  — "confirmed" (two models agree) vs a sweep-only (E2B) unconfirmed flag. */
+  rechecked: boolean;
+}
+
+/** The flagged source behind a finding, loaded on demand for the peek popover. */
+export interface FindingSnippet {
+  /** The flagged text (message body, or note title + stripped body). */
+  text: string;
+  /** "Me" for the device owner, else the handle/name; null for notes. */
+  sender: string | null;
+  /** The conversation's name/handle — shown as "Me → recipient" when the
+   *  device owner's own message is flagged; null for notes. */
+  recipient: string | null;
+  /** Unix epoch seconds; null for notes. */
+  occurredAt: number | null;
+  /** Service for the app icon ("iMessage"/"TikTok"/…), "Notes" for notes. */
+  service: string | null;
 }
 
 export interface SafetyScanStatus {
@@ -673,7 +694,8 @@ export interface SafetyScanStatus {
   model: string;
   rangeStart: number | null;
   rangeEnd: number | null;
-  status: "running" | "completed" | "cancelled" | "failed";
+  /** 'interrupted' = a stranded 'running' row repaired at backup open. */
+  status: "running" | "completed" | "cancelled" | "failed" | "interrupted";
   startedAt: number;
   finishedAt: number | null;
   chunksTotal: number;
@@ -688,15 +710,23 @@ export interface SafetyScanReport {
 }
 
 /** One past scan for the history list (no internal "chunks" — just what a user
- *  cares about: period, when, status, and how many findings it produced). */
+ *  cares about: period, when, status, model, and what it found). */
 export interface SafetyScanHistoryItem {
   id: number;
+  model: string;
   rangeStart: number | null;
   rangeEnd: number | null;
-  status: "running" | "completed" | "cancelled" | "failed";
+  /** Which content the scan covered. */
+  sources: "all" | "messages" | "notes" | string;
+  /** 'interrupted' = a stranded 'running' row repaired at backup open. */
+  status: "running" | "completed" | "cancelled" | "failed" | "interrupted";
   startedAt: number;
   finishedAt: number | null;
   findings: number;
+  /** Live finding counts by severity for the row badge. */
+  serious: number;
+  harmful: number;
+  concerning: number;
 }
 
 /** Top live-finding severity per flagged thread/note, for inline badges. */
@@ -797,18 +827,21 @@ export interface TraceLoupeClient {
     service?: string | null,
   ): Promise<[kind: string, count: number][]>;
   /** Total messages in a thread; drives the lazily-loaded virtual scroller.
-   * `kind` filters by content class (null=all). */
+   * `kind` filters by content class (null=all); `search` matches body/sender. */
   countThreadMessages(
     threadId: number,
     kind?: string | null,
+    search?: string | null,
   ): Promise<number>;
-  /** A window of a thread's messages from `offset`; `desc` newest-first. */
+  /** A window of a thread's messages from `offset`; `desc` newest-first.
+   *  `search` matches body/sender (in-conversation search). */
   getThreadMessageWindow(
     threadId: number,
     offset: number,
     limit: number,
     desc?: boolean,
     kind?: string | null,
+    search?: string | null,
   ): Promise<Message[]>;
   /** The 0-based row index of a message within its thread under the given order
    *  and `kind` filter, or null if absent. Used to scroll to a message. */
@@ -937,6 +970,9 @@ export interface TraceLoupeClient {
     rangeEnd?: number | null;
     /** Which content to scan: "all" (default), "messages", or "notes". */
     sources?: string | null;
+    /** Resume THIS scan (same history row, findings accumulate) instead of
+     *  starting a new one; its stored scope is authoritative. */
+    resumeScanId?: number | null;
   }): Promise<void>;
   cancelSafetyScan(): Promise<void>;
   onSafetyScanProgress(cb: (p: SafetyScanEvent) => void): Promise<UnlistenFn>;
@@ -944,7 +980,15 @@ export interface TraceLoupeClient {
     cb: (p: SafetyModelProgressEvent) => void,
   ): Promise<UnlistenFn>;
   /** All Content Findings for the active backup (dismissed included). */
-  listContentFindings(): Promise<ContentFinding[]>;
+  /** Findings, most severe first; `scanId` restricts to one scan's. */
+  listContentFindings(scanId?: number): Promise<ContentFinding[]>;
+  /** The flagged source (text, sender, time, service) for a finding, fetched
+   *  from the backup on demand. Null when the source row is gone or its id is
+   *  stale after a re-import. */
+  contentFindingSnippet(
+    sourceKind: "message" | "note",
+    sourceId: number | null,
+  ): Promise<FindingSnippet | null>;
   /** Compact per-thread / per-note top severity for inline badges. */
   safetyScanFindingMarks(): Promise<FindingMarks>;
   /** Mark/unmark a finding as a false positive (keyed to survive re-scans). */
@@ -1145,15 +1189,27 @@ const tauriClient: TraceLoupeClient = {
       threadId: threadId ?? null,
       service: service ?? null,
     }),
-  countThreadMessages: (threadId, kind = null) =>
-    invoke<number>("count_thread_messages", { threadId, kind: kind ?? null }),
-  getThreadMessageWindow: (threadId, offset, limit, desc = false, kind = null) =>
+  countThreadMessages: (threadId, kind = null, search = null) =>
+    invoke<number>("count_thread_messages", {
+      threadId,
+      kind: kind ?? null,
+      search: search ?? null,
+    }),
+  getThreadMessageWindow: (
+    threadId,
+    offset,
+    limit,
+    desc = false,
+    kind = null,
+    search = null,
+  ) =>
     invoke<Message[]>("get_thread_message_window", {
       threadId,
       offset,
       limit,
       desc,
       kind: kind ?? null,
+      search: search ?? null,
     }),
   threadMessageIndex: (threadId, messageId, kind = null, desc = false) =>
     invoke<number | null>("thread_message_index", {
@@ -1317,6 +1373,7 @@ const tauriClient: TraceLoupeClient = {
       rangeStart: opts.rangeStart ?? null,
       rangeEnd: opts.rangeEnd ?? null,
       sources: opts.sources ?? null,
+      resumeScanId: opts.resumeScanId ?? null,
     }),
   cancelSafetyScan: () => invoke("cancel_safety_scan"),
   onSafetyScanProgress: (cb) =>
@@ -1325,8 +1382,15 @@ const tauriClient: TraceLoupeClient = {
     listen<SafetyModelProgressEvent>("safetyscan://model-progress", (e) =>
       cb(e.payload),
     ),
-  listContentFindings: () =>
-    invoke<ContentFinding[]>("list_content_findings"),
+  listContentFindings: (scanId) =>
+    invoke<ContentFinding[]>("list_content_findings", {
+      scanId: scanId ?? null,
+    }),
+  contentFindingSnippet: (sourceKind, sourceId) =>
+    invoke<FindingSnippet | null>("content_finding_snippet", {
+      sourceKind,
+      sourceId: sourceId ?? null,
+    }),
   safetyScanFindingMarks: () =>
     invoke<FindingMarks>("safety_scan_finding_marks"),
   dismissContentFinding: (fingerprint, category, dismissed) =>
@@ -1451,6 +1515,19 @@ const mockThreads: ThreadSummary[] = [
     participants: ["@hembokke"],
   },
 ];
+
+// A thread's mock messages, optionally filtered by an in-conversation search
+// (body/sender), mirroring the backend's LIKE filter.
+function mockThreadMessages(threadId: number, search?: string | null): Message[] {
+  const all = mockMessages[threadId] ?? [];
+  const q = search?.trim().toLowerCase();
+  if (!q) return all;
+  return all.filter(
+    (m) =>
+      (m.body ?? "").toLowerCase().includes(q) ||
+      (m.sender ?? "").toLowerCase().includes(q),
+  );
+}
 
 const mockMessages: Record<number, Message[]> = {
   1: [
@@ -2254,6 +2331,7 @@ const mockContentFindings: ContentFinding[] = [
     sourceId: 2,
     threadId: 1,
     threadIdentifier: "mock-thread-alex",
+    service: "iMessage",
     occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 12,
     fingerprint: "mockfp-coercive-1",
     category: "coercive-control",
@@ -2261,6 +2339,7 @@ const mockContentFindings: ContentFinding[] = [
     rationale: "Demands constant location sharing and account passwords.",
     stale: false,
     dismissed: false,
+    rechecked: true,
   },
   {
     id: 2,
@@ -2268,6 +2347,7 @@ const mockContentFindings: ContentFinding[] = [
     sourceId: 9,
     threadId: 4,
     threadIdentifier: "+1 555 0100",
+    service: "TikTok",
     occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 3,
     fingerprint: "mockfp-scam-1",
     category: "scam-fraud",
@@ -2275,6 +2355,7 @@ const mockContentFindings: ContentFinding[] = [
     rationale: "Unsolicited crypto investment pitch pushing urgent transfer.",
     stale: false,
     dismissed: false,
+    rechecked: false,
   },
 ];
 
@@ -2840,17 +2921,18 @@ export const mockClient: TraceLoupeClient = {
   // The mock messages carry no `kind`, so no content-kinds are advertised and the
   // filter is a no-op here.
   messageKinds: async () => [],
-  countThreadMessages: async (threadId, _kind = null) =>
-    mockActive ? (mockMessages[threadId]?.length ?? 0) : 0,
+  countThreadMessages: async (threadId, _kind = null, search = null) =>
+    mockActive ? mockThreadMessages(threadId, search).length : 0,
   getThreadMessageWindow: async (
     threadId,
     offset,
     limit,
     desc = false,
     _kind = null,
+    search = null,
   ) => {
     if (!mockActive) return [];
-    const all = mockMessages[threadId] ?? [];
+    const all = mockThreadMessages(threadId, search);
     const ordered = desc ? [...all].reverse() : all;
     return ordered.slice(offset, offset + limit);
   },
@@ -3072,7 +3154,33 @@ export const mockClient: TraceLoupeClient = {
   cancelSafetyScan: async () => {},
   onSafetyScanProgress: async () => () => {},
   onSafetyModelProgress: async () => () => {},
-  listContentFindings: async () => (mockActive ? mockContentFindings : []),
+  listContentFindings: async (scanId) => {
+    if (!mockActive) return [];
+    // Mock scan 1 found only the first finding; scan 2 was cancelled early
+    // (none); scan 3 (latest) found everything.
+    if (scanId === 1) return mockContentFindings.slice(0, 1);
+    if (scanId === 2) return [];
+    return mockContentFindings;
+  },
+  contentFindingSnippet: async (sourceKind, sourceId) => {
+    if (!mockActive || sourceId == null) return null;
+    const finding = mockContentFindings.find((f) => f.sourceId === sourceId);
+    return sourceKind === "note"
+      ? {
+          text: "Journal — Jun 3\nToday was rough. Kept thinking about what they said…",
+          sender: null,
+          recipient: null,
+          occurredAt: null,
+          service: "Notes",
+        }
+      : {
+          text: "you need to send me your location right now, and show me who you were with",
+          sender: "Alex",
+          recipient: "Me",
+          occurredAt: finding?.occurredAt ?? 1717300000,
+          service: finding?.service ?? "iMessage",
+        };
+  },
   safetyScanFindingMarks: async () => {
     const marks: FindingMarks = { threads: {}, notes: {} };
     if (!mockActive) return marks;
@@ -3128,30 +3236,48 @@ export const mockClient: TraceLoupeClient = {
       ? [
           {
             id: 3,
+            model: "gemma-4-E4B-it-Q4_K_M",
+            sources: "messages",
             rangeStart: Math.floor(new Date(2024, 0, 1).getTime() / 1000),
             rangeEnd: Math.floor(new Date(2025, 0, 1).getTime() / 1000) - 1,
             status: "completed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 3600,
             finishedAt: Math.floor(Date.now() / 1000) - 3000,
             findings: 2,
+            serious: 0,
+            harmful: 2,
+            concerning: 0,
           },
           {
             id: 2,
+            model: "gemma-4-E4B-it-Q4_K_M",
+            sources: "all",
             rangeStart: null,
             rangeEnd: null,
             status: "cancelled" as const,
             startedAt: Math.floor(Date.now() / 1000) - 90000,
             finishedAt: Math.floor(Date.now() / 1000) - 89700,
             findings: 0,
+            serious: 0,
+            harmful: 0,
+            concerning: 0,
           },
           {
             id: 1,
+            model: "gemma-3n-E2B-it-Q4_K_M",
+            sources: "all",
             rangeStart: null,
             rangeEnd: null,
             status: "completed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 200000,
             finishedAt: Math.floor(Date.now() / 1000) - 199000,
-            findings: 5,
+            // Must match what listContentFindings(1) returns (its first mock
+            // finding, severity 2) — the rail badge and the detail pane must
+            // never disagree.
+            findings: 1,
+            serious: 0,
+            harmful: 1,
+            concerning: 0,
           },
         ].filter((s) => !mockDeletedScanIds.has(s.id))
       : [],

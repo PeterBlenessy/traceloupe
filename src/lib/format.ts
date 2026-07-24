@@ -105,6 +105,14 @@ export function formatDateTime(epochSeconds: number | null): string {
   return dayTime.format(new Date(epochSeconds * 1000));
 }
 
+/** Full date + time that ALWAYS includes the year, e.g. "Jun 3, 2024, 2:04 PM"
+ *  — for detail views (the finding popover) where the exact date must be
+ *  unambiguous regardless of how long ago it was. */
+export function formatDateTimeYear(epochSeconds: number | null): string {
+  if (epochSeconds == null) return "";
+  return dayTimeYear.format(new Date(epochSeconds * 1000));
+}
+
 /** A date without a time, e.g. "May 15, 1990" — used for birthdays. */
 export function formatDate(epochSeconds: number | null): string {
   if (epochSeconds == null) return "";

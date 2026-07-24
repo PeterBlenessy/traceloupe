@@ -187,12 +187,35 @@ pub fn sandbox_profile(model_dir: &Path, binary_dir: &Path, scratch_dir: &Path) 
     )
 }
 
+/// A random per-run bearer token (48 hex chars) for the sidecar's `--api-key`.
+/// Reads the OS CSPRNG (`/dev/urandom`); falls back to None if unavailable so a
+/// scan is never blocked by token generation (the loopback gap it closes is
+/// low-severity — see `ServerConfig::api_key`).
+pub fn generate_api_key() -> Option<String> {
+    use std::io::Read;
+    let mut buf = [0u8; 24];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .ok()?;
+    Some(hex::encode(buf))
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub binary: PathBuf,
     pub model_path: PathBuf,
     pub port: u16,
+    /// TOTAL context across all slots — with `parallel` slots each request
+    /// gets `ctx_size / parallel`, so callers scale this when raising slots.
     pub ctx_size: u32,
+    /// Server slots (`--parallel`); >1 lets the engine classify chunks
+    /// concurrently. 1 = today's sequential behavior.
+    pub parallel: u32,
+    /// A per-run bearer token required on every request (`--api-key`). Closes
+    /// the loopback server's default "CORS * / no key" gap: a malicious page in
+    /// the user's browser can't drive the local model without this token. The
+    /// app generates it and passes it to the client. None = no auth.
+    pub api_key: Option<String>,
     /// `-1` = offload everything to the GPU (Apple Silicon default).
     pub gpu_layers: i32,
     /// Wrap the process in the Seatbelt profile (macOS only; on other
@@ -270,7 +293,7 @@ impl LlamaServer {
             .parent()
             .ok_or_else(|| Error::Inference("binary path has no parent dir".into()))?;
 
-        let server_args = [
+        let mut server_args: Vec<std::ffi::OsString> = [
             "--model".as_ref(),
             cfg.model_path.as_os_str(),
             "--host".as_ref(),
@@ -282,7 +305,19 @@ impl LlamaServer {
             "--n-gpu-layers".as_ref(),
             cfg.gpu_layers.to_string().as_str().as_ref(),
         ]
-        .map(std::ffi::OsString::from);
+        .map(std::ffi::OsString::from)
+        .to_vec();
+        if cfg.parallel > 1 {
+            server_args.push("--parallel".into());
+            server_args.push(cfg.parallel.to_string().into());
+        }
+        if let Some(key) = &cfg.api_key {
+            // Loopback-only + per-run + only gates model access (not data), so
+            // passing it on argv is acceptable here (a local process that could
+            // read it via `ps` already has far bigger levers). Never logged.
+            server_args.push("--api-key".into());
+            server_args.push(key.into());
+        }
 
         // The scratch dir must exist before the sandbox denies writes
         // everywhere else — it's the process's only writable location.
@@ -423,12 +458,32 @@ mod tests {
         path
     }
 
+    /// Spawn with a brief retry on Linux's ETXTBSY: `cargo test` runs tests in
+    /// parallel threads, and another test's fork can hold a just-written fake
+    /// script's write descriptor across its own exec for a moment — a
+    /// transient "executable file busy". This is a test-harness race only;
+    /// the product path execs a long-existing bundled binary.
+    fn spawn_retrying(cfg: &ServerConfig) -> LlamaServer {
+        for _ in 0..20 {
+            match LlamaServer::spawn(cfg, None) {
+                Ok(s) => return s,
+                Err(e) if e.to_string().contains("busy") => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("spawn failed: {e}"),
+            }
+        }
+        panic!("spawn kept failing with ETXTBSY");
+    }
+
     fn cfg(binary: PathBuf, port: u16) -> ServerConfig {
         ServerConfig {
             binary,
             model_path: PathBuf::from("/tmp/model-dir/model.gguf"),
             port,
             ctx_size: 4096,
+            parallel: 1,
+            api_key: None,
             gpu_layers: -1,
             sandbox: false,
             scratch_dir: std::env::temp_dir().join("traceloupe-scratch-test"),
@@ -470,7 +525,7 @@ mod tests {
     fn drop_kills_the_child() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         let pid = server.pid();
         drop(server);
         // kill -0: succeeds only if the process still exists.
@@ -486,7 +541,7 @@ mod tests {
     fn wait_healthy_detects_early_exit() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "exit 7");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         let err = server.wait_healthy(Duration::from_secs(5)).unwrap_err();
         assert!(err.to_string().contains("exited during startup"), "{err}");
     }
@@ -496,7 +551,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // A child that exits immediately; give it a beat to actually die.
         let bin = fake_binary(tmp.path(), "exit 0");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         let _ = server.wait_healthy(Duration::from_secs(2)); // reaps the exit
         assert!(server.has_exited(), "a dead child must report exited");
         // Idempotent on a reaped child — this is what stops the poll loop
@@ -508,7 +563,7 @@ mod tests {
     fn has_exited_false_while_running() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         assert!(!server.has_exited());
         server.shutdown();
     }
@@ -530,7 +585,7 @@ mod tests {
         });
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let mut server = LlamaServer::spawn(&cfg(bin, port), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, port));
         server.wait_healthy(Duration::from_secs(5)).unwrap();
         server.shutdown();
     }

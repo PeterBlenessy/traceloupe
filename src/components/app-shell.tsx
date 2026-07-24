@@ -647,6 +647,10 @@ function SettingsMenu() {
     setDensity,
     translucentToolbar,
     setTranslucentToolbar,
+    showCascadeConfidence,
+    setShowCascadeConfidence,
+    includeReportSnippets,
+    setIncludeReportSnippets,
   } = useSettings();
   const { theme, setTheme } = useTheme();
   // Lifted open/tab state so views can deep-link (e.g. "Settings → Safety").
@@ -947,7 +951,7 @@ function SettingsMenu() {
             className="mt-0 flex flex-col gap-6"
           >
             <SettingsGroup
-              title="Developer"
+              title="Logging"
               description="Backend logs print to the browser dev-tools console."
             >
               <SettingsRow
@@ -977,6 +981,21 @@ function SettingsMenu() {
                 </select>
               </SettingsRow>
             </SettingsGroup>
+            <SettingsGroup
+              title="Safety Scan classifier"
+              description="Diagnostics for the on-device content classifier."
+            >
+              <SettingsRow
+                label="Show classifier confidence"
+                description="Badge each finding the strong tier (E4B) re-checked and kept as “Confirmed” — the cascade's agreement signal."
+              >
+                <Switch
+                  aria-label="Show classifier confidence"
+                  checked={showCascadeConfidence}
+                  onCheckedChange={setShowCascadeConfidence}
+                />
+              </SettingsRow>
+            </SettingsGroup>
           </TabsContent>
 
           <TabsContent value="security" className="mt-0 flex flex-col gap-6">
@@ -998,6 +1017,21 @@ function SettingsMenu() {
               <div className="p-3">
                 <SafetyModelSettings />
               </div>
+            </SettingsGroup>
+            <SettingsGroup
+              title="Report"
+              description="What a Safety Scan report contains when you view or export it."
+            >
+              <SettingsRow
+                label="Include flagged message text"
+                description="Add the verbatim flagged messages and notes to the report and its PDF export. Off by default — an export is a shareable file, so the report shows structured findings only unless you opt in."
+              >
+                <Switch
+                  aria-label="Include flagged message text in the report"
+                  checked={includeReportSnippets}
+                  onCheckedChange={setIncludeReportSnippets}
+                />
+              </SettingsRow>
             </SettingsGroup>
           </TabsContent>
           </div>
