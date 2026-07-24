@@ -220,6 +220,14 @@ export function SafetyScanView() {
   const scans = history.data ?? [];
   const selectedScan =
     scans.find((s) => s.id === selectedScanId) ?? scans[0] ?? null;
+  // The row genuinely in flight: a resumed run reopens an OLD row, so the live
+  // one is found by status, never assumed to be the newest. During model load
+  // no row is 'running' yet — nothing spins; the progress card covers it.
+  // (`scan` is the provider's live event state — null when nothing runs.)
+  const liveId =
+    scan !== null
+      ? (scans.find((s) => s.status === "running")?.id ?? null)
+      : null;
   const findings = useQuery({
     queryKey: ["safetyScan", "findings", selectedScan?.id ?? null],
     queryFn: () => client.listContentFindings(selectedScan?.id),
@@ -438,32 +446,24 @@ export function SafetyScanView() {
               scans={scans}
               selectedId={selectedScan.id}
               onSelect={setSelectedScanId}
-              // A 'running' DB row is only genuinely live while this app has a
-              // scan in flight — after a crash/kill the row is stranded and
-              // must read "Interrupted", not show a spinner.
-              liveId={running ? (scans[0]?.id ?? null) : null}
+              liveId={liveId}
             />
             <div className="min-w-0 space-y-4">
               <ScanReportCard
                 scan={selectedScan}
                 latest={selectedScan.id === scans[0]?.id}
-                live={running && selectedScan.id === scans[0]?.id}
+                live={selectedScan.id === liveId}
                 onBackToLatest={() => setSelectedScanId(null)}
-                // Resume = start a new scan with this scan's period + content;
-                // checkpointing skips everything already classified. Only for
-                // scans that didn't complete, and never while one is running.
+                // Resume continues THIS scan: the same row goes back to
+                // running and its findings/progress accumulate — so the view
+                // stays pinned right here. Only Start creates a new scan.
                 onResume={
                   !running && selectedScan.status !== "completed"
                     ? () => {
-                        // Follow the resumed run: clear the pin so the view
-                        // tracks the new (latest) scan as it appears, instead
-                        // of staying on the old row with a Back-to-latest.
-                        setSelectedScanId(null);
+                        setSelectedScanId(selectedScan.id);
                         void startScan({
                           modelId: effectiveModelId,
-                          rangeStart: selectedScan.rangeStart,
-                          rangeEnd: selectedScan.rangeEnd,
-                          sources: selectedScan.sources,
+                          resumeScanId: selectedScan.id,
                         });
                       }
                     : undefined
@@ -888,8 +888,8 @@ function ScanReportCard({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Starts a new scan over the same period and content — anything
-                  already scanned is skipped automatically
+                  Continues this scan from where it stopped — content already
+                  covered is skipped
                 </TooltipContent>
               </Tooltip>
             )}
@@ -947,10 +947,10 @@ function ScanReportCard({
         ) : (
           <p className="text-sm text-muted-foreground">
             {scan.status === "cancelled"
-              ? "This scan was stopped before it finished, so it has no written report. Any findings it made before stopping are listed below."
+              ? "This scan was stopped before it finished. Its findings so far are listed below, and Resume continues it from where it stopped."
               : scan.status === "interrupted" ||
                   (scan.status === "running" && !live)
-                ? "This scan was interrupted before finishing (the app closed mid-scan). Its progress is checkpointed — Resume starts a new scan that skips everything already covered."
+                ? "This scan was interrupted before finishing (the app closed mid-scan). Resume continues it from where it stopped."
                 : scan.status === "running"
                   ? "The scan is still running — findings appear below as they are made."
                   : clean

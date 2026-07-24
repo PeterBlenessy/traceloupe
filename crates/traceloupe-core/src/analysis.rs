@@ -237,6 +237,8 @@ pub struct ScanRow {
     pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
@@ -355,6 +357,29 @@ impl AnalysisDb {
             params![model, range.0, range.1, sources, started_at],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Reopen a non-completed scan for a resumed run: the SAME row goes back
+    /// to 'running', so one logical scan attempt keeps one identity across
+    /// stops and interruptions — findings and progress accumulate on it
+    /// instead of scattering over a chain of rows. A new row is only ever
+    /// created by an explicit new scan (begin_scan). The model is updated in
+    /// case the user switched tiers between runs.
+    pub fn resume_scan(&self, scan_id: i64, model: &str) -> Result<()> {
+        // One scan at a time: any *other* stranded row is repaired first.
+        self.repair_stranded_scans()?;
+        let n = self.conn.execute(
+            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0,
+                    model = ?2
+             WHERE id = ?1 AND status != 'completed'",
+            params![scan_id, model],
+        )?;
+        if n == 0 {
+            return Err(Error::Invalid(format!(
+                "scan {scan_id} is not resumable (missing or completed)"
+            )));
+        }
+        Ok(())
     }
 
     /// Repair scans stranded 'running' by a crash or kill: mark them
@@ -622,8 +647,8 @@ impl AnalysisDb {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
-                        chunks_total, chunks_done
+                "SELECT id, model, range_start, range_end, sources, status, started_at,
+                        finished_at, chunks_total, chunks_done
                  FROM scans ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -632,11 +657,12 @@ impl AnalysisDb {
                         model: r.get(1)?,
                         range_start: r.get(2)?,
                         range_end: r.get(3)?,
-                        status: r.get(4)?,
-                        started_at: r.get(5)?,
-                        finished_at: r.get(6)?,
-                        chunks_total: r.get(7)?,
-                        chunks_done: r.get(8)?,
+                        sources: r.get(4)?,
+                        status: r.get(5)?,
+                        started_at: r.get(6)?,
+                        finished_at: r.get(7)?,
+                        chunks_total: r.get(8)?,
+                        chunks_done: r.get(9)?,
                     })
                 },
             )
@@ -648,8 +674,8 @@ impl AnalysisDb {
         Ok(self
             .conn
             .query_row(
-                "SELECT id, model, range_start, range_end, status, started_at, finished_at,
-                        chunks_total, chunks_done
+                "SELECT id, model, range_start, range_end, sources, status, started_at,
+                        finished_at, chunks_total, chunks_done
                  FROM scans WHERE id = ?1",
                 params![id],
                 |r| {
@@ -658,11 +684,12 @@ impl AnalysisDb {
                         model: r.get(1)?,
                         range_start: r.get(2)?,
                         range_end: r.get(3)?,
-                        status: r.get(4)?,
-                        started_at: r.get(5)?,
-                        finished_at: r.get(6)?,
-                        chunks_total: r.get(7)?,
-                        chunks_done: r.get(8)?,
+                        sources: r.get(4)?,
+                        status: r.get(5)?,
+                        started_at: r.get(6)?,
+                        finished_at: r.get(7)?,
+                        chunks_total: r.get(8)?,
+                        chunks_done: r.get(9)?,
                     })
                 },
             )
@@ -853,6 +880,23 @@ mod tests {
         let dismissed: Vec<bool> = rows.iter().map(|r| r.dismissed).collect();
         assert_eq!(rows.len(), 2);
         assert!(dismissed.contains(&true) && dismissed.contains(&false));
+    }
+
+    #[test]
+    fn resume_reopens_the_same_row_never_a_new_one() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.finish_scan(scan, ScanStatus::Cancelled, 150).unwrap();
+        // Resume: same row back to running, finish cleared, model updated.
+        db.resume_scan(scan, "m2").unwrap();
+        let row = db.scan_by_id(scan).unwrap().unwrap();
+        assert_eq!(row.status, "running");
+        assert_eq!(row.finished_at, None);
+        assert_eq!(row.model, "m2");
+        // A completed scan is not resumable, and no second row ever appeared.
+        db.finish_scan(scan, ScanStatus::Completed, 200).unwrap();
+        assert!(db.resume_scan(scan, "m2").is_err());
+        assert_eq!(db.list_scans(50).unwrap().len(), 1);
     }
 
     #[test]
