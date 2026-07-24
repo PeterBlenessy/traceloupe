@@ -11,8 +11,23 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+## [0.31.0] — 2026-07-24
+
+**Safety Scan, end to end** — bounded classification you can trust, a styled
+report you can export to PDF, scanning by source (iMessage/SMS/TikTok/Notes),
+findings scoped correctly across re-scans, and a rebuilt findings + history
+experience.
+
 ### Fixed
 
+- Safety Scan output is bounded by a hand-written GBNF grammar passed to the
+  model server, replacing the JSON-schema `response_format` (whose `maxItems`
+  the pinned server silently ignores). Verdict arrays could grow until they hit
+  the token budget and truncated into unparseable JSON — the whole chunk was
+  then skipped (~15–45% of chunks failing on real scans). The grammar closes the
+  array deterministically, and keeps bounded whitespace so the weak sweep tier
+  still detects reliably (compact JSON collapsed it to empty). Verified against
+  the pinned server with a synthetic classification-fixture eval. (#43)
 - Safety Scan no longer chokes on very long notes: a long note is windowed
   into overlapping segments that each fit the model's context (previously one
   oversized chunk ran ~10× longer than normal, then failed unclassified —
@@ -51,6 +66,24 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
   each finding came from.
 - Jumping from a Safety finding to its note now selects that note in Notes
   and shows a "Back to Safety Scan" return chip.
+- Safety findings are counted and listed by **scope** (a scan's sources + time
+  range) rather than by which run first classified each chunk. Classification is
+  cached per chunk across scans, so re-scanning already-covered data used to
+  report "Clean"; now every scan surfaces the findings that fall within it and
+  overlapping scans agree. (#42)
+- Findings show who and where: the sender, the timestamp (with year), and the
+  source app's real brand icon (iMessage/TikTok/Notes), with phone/handles
+  resolved to contact names; a flagged own-message reads "Me → recipient".
+  Opening a finding jumps to the exact flagged message in the conversation (with
+  a "Back to Safety Scan" chip), and the flagged text peeks in a scrollable
+  popover. The report's per-conversation list shows resolved names too.
+- The scan-history rail is denser and clearer: date-led titles no longer clip,
+  the action buttons (report/resume/delete) hide until hover and float over the
+  card, the findings pill shows just the count with a severity breakdown on
+  hover, an interrupted scan keeps its findings count next to an "Interrupted"
+  label, and Resume lives on the card of the scan it continues.
+- A resumed scan shows its true state (already-scanned chunks and existing
+  findings) from the first frame instead of counting up from zero.
 
 ### Added
 
@@ -59,6 +92,26 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
   ("Checked against Pegasus «redacted» · … — feeds updated 2026-07-20"), even
   after the installed feeds have since been updated. Runs recorded before
   this change list their feeds without the updated-date. (#25)
+- Scan by source: the Content picker is a multi-select of the actual sources in
+  the backup — each message service (iMessage, SMS, TikTok, …) plus Notes — so a
+  scan can target just TikTok, or iMessage + Notes, or any mix (all picked =
+  everything). Findings record their service, so a scoped scan counts and lists
+  exactly what it covered.
+- The Safety Scan report is a styled, printable document opened from each
+  history card's document icon: a mostly-deterministic frame (scope · model ·
+  duration, severity totals, category counts, findings grouped by conversation
+  with resolved contact names) with the model's narrative and per-conversation
+  prose spliced in. It's also the export source — Export renders the same
+  document to PDF. (#43)
+- Report privacy setting (Settings → Safety → Report): include the verbatim
+  flagged message text in the report and its export, **off by default** — the
+  report shows structured findings only unless you opt in, since an export is a
+  shareable file. (#38)
+- In-conversation search: search within a single conversation by message text or
+  sender, from the conversation header.
+- A developer setting (Settings → Developer) surfaces the cascade's confidence
+  signal — a "Confirmed" badge on findings the strong tier (E4B) re-checked and
+  kept — off by default.
 
 ## [0.30.1] — 2026-07-23
 
