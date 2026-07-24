@@ -111,6 +111,9 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> (Vec<NewFinding>, usiz
 /// cancellable between chunks and resumable across process restarts.
 /// `resume_scan_id` continues that existing (non-completed) scan row — same
 /// identity, accumulating findings — instead of creating a new one.
+/// `parallel` chunks are classified concurrently (the server must be started
+/// with at least as many slots); all persistence stays on this thread, so
+/// per-chunk commit/resume semantics are identical at any parallelism.
 #[allow(clippy::too_many_arguments)] // one scan's distinct inputs, grouped by caller
 pub fn run_scan(
     cache: &CacheDb,
@@ -119,6 +122,7 @@ pub fn run_scan(
     range: TimeRange,
     sources: chunker::ScanSources,
     resume_scan_id: Option<i64>,
+    parallel: usize,
     cancel: &CancelToken,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanOutcome> {
@@ -178,11 +182,14 @@ pub fn run_scan(
     });
 
     let loop_result = (|| -> Result<()> {
+        // Settle already-classified chunks first (DB-only, fast), collecting
+        // what actually needs inference.
+        let mut pending: Vec<&chunker::Chunk> = Vec::new();
         for chunk in &chunks {
             if cancel.is_cancelled() {
                 outcome.status = ScanStatus::Cancelled;
                 analysis.audit(scan_id, now(), "scan_cancelled", "")?;
-                break;
+                return Ok(());
             }
             if analysis.chunk_is_done(&chunk.key, &chunk.fingerprint)? {
                 outcome.reused += 1;
@@ -190,19 +197,82 @@ pub fn run_scan(
                 // resumed scan completes with chunks_done < chunks_total.
                 analysis.bump_chunks_done(scan_id)?;
             } else {
-                match classify_chunk(analysis, client, &schema, scan_id, chunk)? {
-                    ChunkResult::Classified(n) => {
+                pending.push(chunk);
+            }
+        }
+        if outcome.reused > 0 {
+            on_progress(ScanProgress {
+                chunks_done: outcome.reused,
+                chunks_total: outcome.chunks_total,
+                findings: 0,
+            });
+        }
+
+        // Classify `parallel` chunks concurrently. Workers do ONLY the HTTP
+        // call (LlmClient is Sync; all its errors are Error::Inference, so a
+        // worker can never surface a fatal storage error); this thread
+        // persists results as they arrive, preserving the exact per-chunk
+        // commit/audit/resume semantics of the sequential engine.
+        let workers = parallel.max(1).min(pending.len().max(1));
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, std::result::Result<Value, Error>)>();
+        std::thread::scope(|s| -> Result<()> {
+            for _ in 0..workers {
+                let tx = tx.clone();
+                let next = &next;
+                let pending = &pending;
+                let schema = &schema;
+                s.spawn(move || {
+                    loop {
+                        if cancel.is_cancelled() {
+                            break;
+                        }
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if i >= pending.len() {
+                            break;
+                        }
+                        let user = prompt::render_chunk(pending[i]);
+                        // One retry, as before: a transient failure shouldn't
+                        // skip a chunk, a persistent one shouldn't stall it.
+                        let mut result =
+                            client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
+                        if result.is_err() && !cancel.is_cancelled() {
+                            result =
+                                client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
+                        }
+                        if tx.send((i, result)).is_err() {
+                            break; // receiver gone (fatal storage error path)
+                        }
+                    }
+                });
+            }
+            drop(tx);
+
+            for (i, result) in rx {
+                let chunk = pending[i];
+                match result {
+                    Ok(output) => {
+                        let n = persist_classified(analysis, scan_id, chunk, &output)?;
                         outcome.classified += 1;
                         outcome.findings += n;
                     }
-                    ChunkResult::Failed => outcome.skipped += 1,
+                    Err(e) => {
+                        persist_failed(analysis, scan_id, chunk, &e)?;
+                        outcome.skipped += 1;
+                    }
                 }
+                on_progress(ScanProgress {
+                    chunks_done: outcome.reused + outcome.classified + outcome.skipped,
+                    chunks_total: outcome.chunks_total,
+                    findings: outcome.findings,
+                });
             }
-            on_progress(ScanProgress {
-                chunks_done: outcome.reused + outcome.classified + outcome.skipped,
-                chunks_total: outcome.chunks_total,
-                findings: outcome.findings,
-            });
+            Ok(())
+        })?;
+
+        if cancel.is_cancelled() {
+            outcome.status = ScanStatus::Cancelled;
+            analysis.audit(scan_id, now(), "scan_cancelled", "")?;
         }
         Ok(())
     })();
@@ -229,52 +299,47 @@ pub fn run_scan(
     Ok(outcome)
 }
 
-enum ChunkResult {
-    Classified(usize),
-    Failed,
-}
-
-/// Classify one chunk with one retry. A model/transport failure records the
-/// chunk as skipped and lets the scan continue — a poisoned window must never
-/// abort hours of work (plan T5 AC).
-fn classify_chunk(
+/// Persist one successfully classified chunk: validated findings, the Done
+/// checkpoint, and the audit row. Returns the finding count. Storage errors
+/// are fatal — never classify into a broken DB (plan T5 AC).
+fn persist_classified(
     analysis: &mut AnalysisDb,
-    client: &LlmClient,
-    schema: &Value,
     scan_id: i64,
     chunk: &Chunk,
-) -> Result<ChunkResult> {
-    let user = prompt::render_chunk(chunk);
-    let mut last_err: Option<Error> = None;
-    for _attempt in 0..2 {
-        match client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS) {
-            Ok(output) => {
-                let (findings, rejected) = verdicts_to_findings(chunk, &output);
-                let n = findings.len();
-                analysis.replace_findings(scan_id, &findings, now())?;
-                analysis.record_chunk(
-                    scan_id,
-                    &chunk.key,
-                    &chunk.fingerprint,
-                    ChunkStatus::Done,
-                    now(),
-                )?;
-                analysis.audit(
-                    scan_id,
-                    now(),
-                    "chunk_classified",
-                    &format!(
-                        "chunk={} items={} verdicts={n} rejected={rejected}",
-                        audit_key(&chunk.key),
-                        chunk.items.len()
-                    ),
-                )?;
-                return Ok(ChunkResult::Classified(n));
-            }
-            Err(e @ Error::Inference(_)) => last_err = Some(e),
-            Err(e) => return Err(e), // storage errors are fatal — never classify into a broken DB
-        }
-    }
+    output: &Value,
+) -> Result<usize> {
+    let (findings, rejected) = verdicts_to_findings(chunk, output);
+    let n = findings.len();
+    analysis.replace_findings(scan_id, &findings, now())?;
+    analysis.record_chunk(
+        scan_id,
+        &chunk.key,
+        &chunk.fingerprint,
+        ChunkStatus::Done,
+        now(),
+    )?;
+    analysis.audit(
+        scan_id,
+        now(),
+        "chunk_classified",
+        &format!(
+            "chunk={} items={} verdicts={n} rejected={rejected}",
+            audit_key(&chunk.key),
+            chunk.items.len()
+        ),
+    )?;
+    Ok(n)
+}
+
+/// Record a chunk whose inference failed (after the worker's retry) as
+/// skipped, so the scan continues — a poisoned window must never abort hours
+/// of work (plan T5 AC).
+fn persist_failed(
+    analysis: &mut AnalysisDb,
+    scan_id: i64,
+    chunk: &Chunk,
+    err: &Error,
+) -> Result<()> {
     analysis.record_chunk(
         scan_id,
         &chunk.key,
@@ -289,14 +354,13 @@ fn classify_chunk(
         // Counts only (never content): enough to diagnose an oversized-input
         // regression straight from the log (issue #33).
         &format!(
-            "chunk={} items={} input_chars={} reason={}",
+            "chunk={} items={} input_chars={} reason={err}",
             audit_key(&chunk.key),
             chunk.items.len(),
             chunk.items.iter().map(|i| i.text.len()).sum::<usize>(),
-            last_err.map(|e| e.to_string()).unwrap_or_default()
         ),
     )?;
-    Ok(ChunkResult::Failed)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -380,6 +444,53 @@ mod tests {
     }
 
     #[test]
+    fn parallel_classification_covers_every_chunk() {
+        // 60 messages → 3 windows; one canned clean response serves them all
+        // (mock_server repeats its last response). Workers race for chunks;
+        // every chunk must still classify exactly once.
+        let clean = serde_json::json!({ "verdicts": [] });
+        let (base, hits) = mock_server(vec![envelope(&clean)]);
+        let cache = small_cache(60);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let outcome = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            3,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(outcome.status, ScanStatus::Completed);
+        assert_eq!(outcome.chunks_total, 3);
+        assert_eq!(outcome.classified, 3);
+        assert_eq!(outcome.skipped, 0);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            3,
+            "each chunk hits the model once"
+        );
+        // Every chunk checkpointed: a re-run reuses all three.
+        let outcome2 = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            3,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(outcome2.reused, 3);
+        assert_eq!(outcome2.classified, 0);
+    }
+
+    #[test]
     fn scan_writes_validated_findings_and_rejects_hallucinated_indexes() {
         let content = serde_json::json!({
             "verdicts": [
@@ -398,6 +509,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &CancelToken::new(),
             |_| {},
         )
@@ -428,6 +540,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &CancelToken::new(),
             |_| {},
         )
@@ -451,6 +564,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &CancelToken::new(),
             |_| {},
         )
@@ -464,6 +578,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &CancelToken::new(),
             |_| {},
         )
@@ -510,6 +625,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &CancelToken::new(),
             |_| {},
         )
@@ -536,6 +652,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &cancel,
             |_| {},
         )
@@ -558,6 +675,7 @@ mod tests {
             TimeRange::default(),
             chunker::ScanSources::default(),
             None,
+            1,
             &CancelToken::new(),
             |p| {
                 seen.push((p.chunks_done, p.chunks_total));
