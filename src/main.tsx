@@ -38,16 +38,26 @@ const routes = [
     getParentRoute: () => rootRoute,
     path: "/messages",
     // `?thread=<id>` deep-links to a conversation (e.g. from a contact);
-    // `?service=<label>` preselects the service filter (e.g. from the Apps view).
+    // `?service=<label>` preselects the service filter (e.g. from the Apps view);
+    // `?from=safety` adds a "Back to Safety Scan" return chip (round-trip from a
+    // finding, mirroring the Notes deep-link).
     validateSearch: (
       search: Record<string, unknown>,
-    ): { thread?: number; service?: string } => {
+    ): {
+      thread?: number;
+      service?: string;
+      from?: "safety";
+      message?: number;
+    } => {
       const t = Number(search.thread);
+      const m = Number(search.message);
       const service =
         typeof search.service === "string" ? search.service : undefined;
       return {
         ...(Number.isFinite(t) ? { thread: t } : {}),
         ...(service ? { service } : {}),
+        ...(search.from === "safety" ? { from: "safety" as const } : {}),
+        ...(Number.isFinite(m) ? { message: m } : {}),
       };
     },
     component: MessagesView,

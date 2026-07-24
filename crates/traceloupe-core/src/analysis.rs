@@ -572,6 +572,17 @@ impl AnalysisDb {
     /// Findings, dismissed included (callers filter); severity-descending
     /// within category, newest first. `scan_id` restricts to one scan's
     /// findings (the per-scan history view); None returns every scan's.
+    /// How many findings a scan already has. Used to seed the live progress
+    /// tally on resume, so a resumed scan shows its existing findings from the
+    /// first frame instead of counting up from zero.
+    pub fn count_findings(&self, scan_id: i64) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM content_findings WHERE scan_id = ?1",
+            params![scan_id],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    }
+
     pub fn list_findings(&self, scan_id: Option<i64>) -> Result<Vec<FindingRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
