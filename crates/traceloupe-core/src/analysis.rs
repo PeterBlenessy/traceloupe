@@ -599,6 +599,24 @@ impl AnalysisDb {
         Ok(out)
     }
 
+    /// Delete every finding attached to `fingerprints` (any category).
+    /// The cascade's stronger-model re-check (#35) runs this on a chunk's
+    /// items before inserting its own verdicts: unlike replace_findings —
+    /// which only deletes what it re-inserts — a re-check must also REMOVE
+    /// findings the stronger model did not confirm, or a weak-tier false
+    /// positive would survive its own overrule. Dismissals are untouched
+    /// (separate table, keyed by fingerprint + category).
+    pub fn clear_findings_for(&self, fingerprints: &[String]) -> Result<usize> {
+        let mut n = 0;
+        for fp in fingerprints {
+            n += self.conn.execute(
+                "DELETE FROM content_findings WHERE fingerprint = ?1",
+                params![fp],
+            )?;
+        }
+        Ok(n)
+    }
+
     /// Dismiss (or un-dismiss) a finding as a false positive. Keyed by
     /// fingerprint + category so it outlives re-scans and re-imports.
     pub fn set_dismissed(
@@ -897,6 +915,35 @@ mod tests {
         db.finish_scan(scan, ScanStatus::Completed, 200).unwrap();
         assert!(db.resume_scan(scan, "m2").is_err());
         assert_eq!(db.list_scans(50).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn clear_findings_removes_unconfirmed_verdicts_but_not_dismissals() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                finding("fp1", Category::ScamFraud),
+                finding("fp1", Category::CoerciveControl),
+                finding("fp2", Category::SelfHarm),
+            ],
+            101,
+        )
+        .unwrap();
+        db.set_dismissed("fp1", Category::ScamFraud, true, 102)
+            .unwrap();
+        // Re-check clears fp1 across ALL categories; fp2 is untouched.
+        assert_eq!(db.clear_findings_for(&["fp1".into()]).unwrap(), 2);
+        let rows = db.list_findings(None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fingerprint, "fp2");
+        // The dismissal survives: if a later scan re-flags fp1/scam-fraud,
+        // it must come back dismissed.
+        db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 103)
+            .unwrap();
+        let rows = db.list_findings(None).unwrap();
+        assert!(rows.iter().any(|r| r.fingerprint == "fp1" && r.dismissed));
     }
 
     #[test]
