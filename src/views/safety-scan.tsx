@@ -470,51 +470,20 @@ export function SafetyScanView() {
               onOpenReport={setReportScan}
             />
             <div className="min-w-0 space-y-4">
-              {/* The report itself now lives behind the doc icon / Report button
-                  as a document; the detail side just needs the scan's identity,
-                  those actions, and its findings. */}
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <h2 className="truncate text-base font-semibold">
-                    {scanTitle(selectedScan)}
-                  </h2>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {SCAN_STATUS_LABEL[selectedScan.status] ??
-                      selectedScan.status}{" "}
-                    · scanned{" "}
-                    {formatScanRange(
-                      selectedScan.rangeStart,
-                      selectedScan.rangeEnd,
-                    )}
-                    {selectedScan.id !== scans[0]?.id && " — a past scan"}
-                  </p>
+              {/* The report lives behind the history card's doc icon; the detail
+                  side is just the findings (open the report from there). Only a
+                  past scan needs the return-to-latest shortcut. */}
+              {selectedScan.id !== scans[0]?.id && (
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSelectedScanId(null)}
+                  >
+                    Back to latest
+                  </Button>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setReportScan(selectedScan)}
-                      >
-                        <FileText className="size-4" /> Report
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Open the full report — view or export as PDF
-                    </TooltipContent>
-                  </Tooltip>
-                  {selectedScan.id !== scans[0]?.id && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setSelectedScanId(null)}
-                    >
-                      Back to latest
-                    </Button>
-                  )}
-                </div>
-              </div>
+              )}
               {(findings.data?.length ?? 0) > 0 ? (
                 <FindingsList
                   scan={selectedScan}
