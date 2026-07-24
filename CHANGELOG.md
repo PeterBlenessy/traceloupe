@@ -27,6 +27,16 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
   batches at near-linear throughput, so scans finish roughly 2× faster on
   typical hardware. Per-chunk checkpointing, resume, and cancellation behave
   exactly as before. (#34)
+- Safety Scan now runs as a two-tier cascade when both models are installed:
+  the fast E2B model sweeps everything, then E4B re-checks only the chunks
+  that got flagged (most content is clean, so most of the slow tier's work
+  was confirming cleanliness). E4B's verdict wins on re-checked items — if it
+  clears a chunk E2B flagged, the finding is removed. Each re-check is applied
+  atomically (clear + confirm + checkpoint in one transaction), so an
+  interrupted cascade never drops a finding and resumes exactly where it
+  stopped; if the E4B model can't load, the E2B verdicts stand and the scan
+  still completes. Near-E4B precision at close to E2B speed; the report footer
+  names both tiers. Single-model machines are unchanged. (#35)
 - Security Check and Safety Scan are now master–detail views: a scan-history
   rail (date-led titles, outcome filter, sorting) on the left, and the
   selected scan's report **and its findings** on the right — a past scan is

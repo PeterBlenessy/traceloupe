@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS content_findings (
     severity          INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 3),
     rationale         TEXT NOT NULL,        -- the model's one-line justification
     stale             INTEGER NOT NULL DEFAULT 0,  -- fingerprint no longer matches the cache row
+    rechecked         INTEGER NOT NULL DEFAULT 0,  -- 1 = confirmed by the cascade's strong tier (v3)
     created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON content_findings(scan_id);
@@ -323,6 +324,20 @@ impl AnalysisDb {
                     [],
                 )?;
             }
+            // v3: the cascade's strong tier marks confirmed findings so a
+            // later chunk's re-check clear can't wipe an earlier chunk's
+            // confirmation of a shared (overlapping) item.
+            let has_rechecked = conn
+                .prepare("PRAGMA table_info(content_findings)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "rechecked");
+            if !has_rechecked {
+                conn.execute(
+                    "ALTER TABLE content_findings ADD COLUMN rechecked INTEGER NOT NULL DEFAULT 0",
+                    [],
+                )?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -365,14 +380,18 @@ impl AnalysisDb {
     /// instead of scattering over a chain of rows. A new row is only ever
     /// created by an explicit new scan (begin_scan). The model is updated in
     /// case the user switched tiers between runs.
-    pub fn resume_scan(&self, scan_id: i64, model: &str) -> Result<()> {
+    pub fn resume_scan(&self, scan_id: i64, _model: &str) -> Result<()> {
         // One scan at a time: any *other* stranded row is repaired first.
         self.repair_stranded_scans()?;
+        // Deliberately does NOT touch `model`: the row already records what
+        // ran (including a completed cascade's "e2b→e4b" receipt), and
+        // overwriting it with the resume's sweep model would erase that
+        // provenance. Resume continues the same scan, so its recorded tier
+        // stands.
         let n = self.conn.execute(
-            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0,
-                    model = ?2
+            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0
              WHERE id = ?1 AND status != 'completed'",
-            params![scan_id, model],
+            params![scan_id],
         )?;
         if n == 0 {
             return Err(Error::Invalid(format!(
@@ -599,22 +618,115 @@ impl AnalysisDb {
         Ok(out)
     }
 
-    /// Delete every finding attached to `fingerprints` (any category).
-    /// The cascade's stronger-model re-check (#35) runs this on a chunk's
-    /// items before inserting its own verdicts: unlike replace_findings —
-    /// which only deletes what it re-inserts — a re-check must also REMOVE
-    /// findings the stronger model did not confirm, or a weak-tier false
-    /// positive would survive its own overrule. Dismissals are untouched
-    /// (separate table, keyed by fingerprint + category).
-    pub fn clear_findings_for(&self, fingerprints: &[String]) -> Result<usize> {
-        let mut n = 0;
-        for fp in fingerprints {
-            n += self.conn.execute(
-                "DELETE FROM content_findings WHERE fingerprint = ?1",
+    /// Whether any finding exists for this item fingerprint (any category,
+    /// dismissed included) — the cascade derives its re-check set from this,
+    /// which makes the set resume-safe (recomputed from the DB, not from
+    /// in-run state).
+    pub fn has_finding(&self, fingerprint: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT 1 FROM content_findings WHERE fingerprint = ?1 LIMIT 1",
+                params![fingerprint],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some())
+    }
+
+    /// Update a scan's recorded model — the cascade stamps "e2b→e4b" once the
+    /// re-check phase actually ran, so the receipt says what judged what.
+    pub fn set_model(&self, scan_id: i64, model: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scans SET model = ?2 WHERE id = ?1",
+            params![scan_id, model],
+        )?;
+        Ok(())
+    }
+
+    /// Apply the cascade strong tier's verdict for one chunk (#35), ATOMICALLY:
+    /// in a single transaction it (1) removes the chunk items' *sweep* findings
+    /// (rechecked = 0) so the strong tier's silence overrules a weak-tier false
+    /// positive, (2) inserts the strong tier's verdicts marked rechecked = 1,
+    /// and (3) records the `<chunk_key>#recheck` checkpoint. All-or-nothing is
+    /// the whole point: a crash mid-way must not leave an item with its sweep
+    /// finding deleted but no checkpoint, which resume would read as "cleared"
+    /// and never re-check — silently dropping a finding the strong tier might
+    /// have confirmed.
+    ///
+    /// The `rechecked = 0` scope on the sweep-clear is what makes overlapping
+    /// windows safe: a later chunk re-checking a shared item deletes only the
+    /// remaining sweep verdicts, never an earlier chunk's confirmation
+    /// (rechecked = 1) of that same item.
+    pub fn apply_recheck(
+        &mut self,
+        scan_id: i64,
+        chunk_key: &str,
+        chunk_fingerprint: &str,
+        item_fingerprints: &[String],
+        findings: &[NewFinding],
+        at: i64,
+    ) -> Result<()> {
+        for f in findings {
+            if !(1..=3).contains(&f.severity) {
+                return Err(Error::Invalid(format!(
+                    "severity {} out of range",
+                    f.severity
+                )));
+            }
+        }
+        let tx = self.conn.transaction()?;
+        // 1. Drop this chunk's items' unconfirmed (sweep) findings.
+        for fp in item_fingerprints {
+            tx.execute(
+                "DELETE FROM content_findings WHERE fingerprint = ?1 AND rechecked = 0",
                 params![fp],
             )?;
         }
-        Ok(n)
+        // 2. Insert the strong tier's verdicts (rechecked = 1). Collapse a
+        //    duplicate (kind, fp, category) — including another window's
+        //    confirmation of the same item+category — into one row.
+        for f in findings {
+            tx.execute(
+                "DELETE FROM content_findings
+                 WHERE source_kind = ?1 AND fingerprint = ?2 AND category = ?3",
+                params![f.source_kind.as_str(), f.fingerprint, f.category.as_str()],
+            )?;
+            tx.execute(
+                "INSERT INTO content_findings
+                   (scan_id, source_kind, source_id, thread_identifier, occurred_at,
+                    fingerprint, category, severity, rationale, rechecked, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)",
+                params![
+                    scan_id,
+                    f.source_kind.as_str(),
+                    f.source_id,
+                    f.thread_identifier,
+                    f.occurred_at,
+                    f.fingerprint,
+                    f.category.as_str(),
+                    f.severity,
+                    f.rationale,
+                    at
+                ],
+            )?;
+        }
+        // 3. Checkpoint + progress, in the SAME transaction.
+        let recheck_key = format!("{chunk_key}#recheck");
+        tx.execute(
+            "INSERT INTO chunk_progress (chunk_key, fingerprint, scan_id, status, classified_at)
+             VALUES (?1, ?2, ?3, 'done', ?4)
+             ON CONFLICT(chunk_key) DO UPDATE SET
+               fingerprint = excluded.fingerprint, scan_id = excluded.scan_id,
+               status = excluded.status, classified_at = excluded.classified_at",
+            params![recheck_key, chunk_fingerprint, scan_id, at],
+        )?;
+        tx.execute(
+            "UPDATE scans SET chunks_done = chunks_done + 1 WHERE id = ?1",
+            params![scan_id],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Dismiss (or un-dismiss) a finding as a false positive. Keyed by
@@ -905,12 +1017,13 @@ mod tests {
         let db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.finish_scan(scan, ScanStatus::Cancelled, 150).unwrap();
-        // Resume: same row back to running, finish cleared, model updated.
+        // Resume: same row back to running, finish cleared, model PRESERVED
+        // (resume must not overwrite a completed cascade's "e2b→e4b" receipt).
         db.resume_scan(scan, "m2").unwrap();
         let row = db.scan_by_id(scan).unwrap().unwrap();
         assert_eq!(row.status, "running");
         assert_eq!(row.finished_at, None);
-        assert_eq!(row.model, "m2");
+        assert_eq!(row.model, "m", "resume keeps the recorded model");
         // A completed scan is not resumable, and no second row ever appeared.
         db.finish_scan(scan, ScanStatus::Completed, 200).unwrap();
         assert!(db.resume_scan(scan, "m2").is_err());
@@ -918,14 +1031,14 @@ mod tests {
     }
 
     #[test]
-    fn clear_findings_removes_unconfirmed_verdicts_but_not_dismissals() {
+    fn apply_recheck_overrules_sweep_and_preserves_confirmations() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        // Sweep flagged fp1 (scam) and fp2 (self-harm); fp1 also dismissed.
         db.replace_findings(
             scan,
             &[
                 finding("fp1", Category::ScamFraud),
-                finding("fp1", Category::CoerciveControl),
                 finding("fp2", Category::SelfHarm),
             ],
             101,
@@ -933,17 +1046,34 @@ mod tests {
         .unwrap();
         db.set_dismissed("fp1", Category::ScamFraud, true, 102)
             .unwrap();
-        // Re-check clears fp1 across ALL categories; fp2 is untouched.
-        assert_eq!(db.clear_findings_for(&["fp1".into()]).unwrap(), 2);
+
+        // Chunk A (items fp1, fp2): strong tier confirms fp1/scam, clears fp2.
+        db.apply_recheck(
+            scan,
+            "A",
+            "fpA",
+            &["fp1".into(), "fp2".into()],
+            &[finding("fp1", Category::ScamFraud)],
+            103,
+        )
+        .unwrap();
         let rows = db.list_findings(None).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].fingerprint, "fp2");
-        // The dismissal survives: if a later scan re-flags fp1/scam-fraud,
-        // it must come back dismissed.
-        db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 103)
+        assert_eq!(rows.len(), 1, "fp2 sweep finding overruled and removed");
+        assert_eq!(rows[0].fingerprint, "fp1");
+        assert!(rows[0].dismissed, "dismissal survives the re-check");
+        assert!(db.chunk_is_done("A#recheck", "fpA").unwrap());
+
+        // Chunk B shares item fp1 (overlap) and the strong tier is SILENT on
+        // it there — must NOT wipe chunk A's confirmation (rechecked = 1).
+        db.apply_recheck(scan, "B", "fpB", &["fp1".into()], &[], 104)
             .unwrap();
         let rows = db.list_findings(None).unwrap();
-        assert!(rows.iter().any(|r| r.fingerprint == "fp1" && r.dismissed));
+        assert_eq!(
+            rows.len(),
+            1,
+            "confirmed fp1 survives a sibling window's silence"
+        );
+        assert_eq!(rows[0].fingerprint, "fp1");
     }
 
     #[test]
