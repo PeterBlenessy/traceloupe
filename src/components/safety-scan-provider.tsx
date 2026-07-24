@@ -30,6 +30,8 @@ type SafetyScanContextValue = {
     rangeStart?: number | null;
     rangeEnd?: number | null;
     sources?: string | null;
+    /** Resume this scan row instead of creating a new one. */
+    resumeScanId?: number | null;
   }) => Promise<void>;
   cancelScan: () => void;
   startDownload: (modelId: string) => Promise<void>;
@@ -137,6 +139,8 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     rangeStart?: number | null;
     rangeEnd?: number | null;
     sources?: string | null;
+    /** Resume this scan row instead of creating a new one. */
+    resumeScanId?: number | null;
   }) => {
     setScan({ phase: "loading" });
     runLive.current = { historyRefreshed: false, findings: 0 };

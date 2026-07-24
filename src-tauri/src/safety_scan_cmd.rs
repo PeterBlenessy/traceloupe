@@ -419,11 +419,31 @@ pub async fn run_safety_scan(
     range_end: Option<i64>,
     // Which content to scan: "all" (default), "messages", or "notes".
     sources: Option<String>,
+    // Resume THIS existing scan (same row, accumulating findings) instead of
+    // creating a new one. Its stored range/sources are authoritative.
+    resume_scan_id: Option<i64>,
 ) -> Result<(), String> {
     let _guard = gate
         .0
         .try_lock()
         .map_err(|_| "a Safety Scan is already running")?;
+
+    let cache_path = active.path()?;
+    let analysis_db_path = analysis_path(&cache_path)?;
+
+    // Resuming: read the scan's own stored scope rather than trusting the UI
+    // to echo it back — resume means "this scan, exactly".
+    let (range_start, range_end, sources) = match resume_scan_id {
+        Some(id) => {
+            let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+            let row = db
+                .scan_by_id(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("scan to resume no longer exists")?;
+            (row.range_start, row.range_end, Some(row.sources))
+        }
+        None => (range_start, range_end, sources),
+    };
 
     let scan_sources = match sources.as_deref() {
         Some("messages") => ScanSources {
@@ -436,9 +456,6 @@ pub async fn run_safety_scan(
         },
         _ => ScanSources::default(),
     };
-
-    let cache_path = active.path()?;
-    let analysis_db_path = analysis_path(&cache_path)?;
     let dir = models_dir(&app)?;
     let spec = match model_id.as_deref() {
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
@@ -583,6 +600,7 @@ pub async fn run_safety_scan(
             &llm,
             range,
             scan_sources,
+            resume_scan_id,
             &cancel,
             |p| {
                 // Always emit the first (done == 0) tick — it's what flips the UI from
