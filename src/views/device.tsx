@@ -85,7 +85,7 @@ export function DeviceView() {
               size="icon"
               className="size-8"
               aria-label="Open a different backup"
-              onClick={() => navigate({ to: "/" })}
+              onClick={() => navigate({ to: "/", search: { choose: true } })}
             >
               <FolderOpen className="size-5" />
             </Button>
