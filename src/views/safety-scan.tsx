@@ -228,6 +228,11 @@ export function SafetyScanView() {
     enabled: active === true,
   });
   const [selectedScanId, setSelectedScanId] = useState<number | null>(null);
+  // Which scan's report document is open (from a history card's doc icon or the
+  // detail header's Report button). Null = closed.
+  const [reportScan, setReportScan] = useState<SafetyScanHistoryItem | null>(
+    null,
+  );
   const scans = history.data ?? [];
   const selectedScan =
     scans.find((s) => s.id === selectedScanId) ?? scans[0] ?? null;
@@ -242,11 +247,6 @@ export function SafetyScanView() {
   const findings = useQuery({
     queryKey: ["safetyScan", "findings", selectedScan?.id ?? null],
     queryFn: () => client.listContentFindings(selectedScan?.id),
-    enabled: selectedScan != null,
-  });
-  const report = useQuery({
-    queryKey: ["safetyScan", "report", selectedScan?.id ?? null],
-    queryFn: () => client.getSafetyScanReport(selectedScan?.id),
     enabled: selectedScan != null,
   });
 
@@ -467,29 +467,83 @@ export function SafetyScanView() {
               liveId={liveId}
               onResume={resumeScan}
               running={running}
+              onOpenReport={setReportScan}
             />
             <div className="min-w-0 space-y-4">
-              <ScanReportCard
-                scan={selectedScan}
-                latest={selectedScan.id === scans[0]?.id}
-                live={selectedScan.id === liveId}
-                onBackToLatest={() => setSelectedScanId(null)}
-                report={report.data}
-                findings={findings.data ?? []}
-              />
-              <FindingsList
-                scan={selectedScan}
-                findings={findings.data ?? []}
-                showDismissed={showDismissed}
-                setShowDismissed={setShowDismissed}
-                onDismiss={(f, dismissed) =>
-                  dismiss.mutate({
-                    fingerprint: f.fingerprint,
-                    category: f.category,
-                    dismissed,
-                  })
-                }
-              />
+              {/* The report itself now lives behind the doc icon / Report button
+                  as a document; the detail side just needs the scan's identity,
+                  those actions, and its findings. */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="truncate text-base font-semibold">
+                    {scanTitle(selectedScan)}
+                  </h2>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {SCAN_STATUS_LABEL[selectedScan.status] ??
+                      selectedScan.status}{" "}
+                    · scanned{" "}
+                    {formatScanRange(
+                      selectedScan.rangeStart,
+                      selectedScan.rangeEnd,
+                    )}
+                    {selectedScan.id !== scans[0]?.id && " — a past scan"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setReportScan(selectedScan)}
+                      >
+                        <FileText className="size-4" /> Report
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Open the full report — view or export as PDF
+                    </TooltipContent>
+                  </Tooltip>
+                  {selectedScan.id !== scans[0]?.id && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setSelectedScanId(null)}
+                    >
+                      Back to latest
+                    </Button>
+                  )}
+                </div>
+              </div>
+              {(findings.data?.length ?? 0) > 0 ? (
+                <FindingsList
+                  scan={selectedScan}
+                  findings={findings.data ?? []}
+                  showDismissed={showDismissed}
+                  setShowDismissed={setShowDismissed}
+                  onDismiss={(f, dismissed) =>
+                    dismiss.mutate({
+                      fingerprint: f.fingerprint,
+                      category: f.category,
+                      dismissed,
+                    })
+                  }
+                />
+              ) : (
+                <Card>
+                  <CardContent className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
+                    {selectedScan.status === "completed" ? (
+                      <>
+                        <ShieldCheck className="size-6 text-emerald-600 dark:text-emerald-400" />
+                        Nothing flagged in this scan's scope. Open the report for
+                        the full summary.
+                      </>
+                    ) : (
+                      "No findings for this scan yet."
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </div>
           </div>
         ) : (
@@ -503,6 +557,12 @@ export function SafetyScanView() {
           </Card>
         )}
       </div>
+      {reportScan && (
+        <SafetyReportDialog
+          scan={reportScan}
+          onOpenChange={(o) => !o && setReportScan(null)}
+        />
+      )}
     </div>
   );
 }
@@ -663,6 +723,7 @@ function ScanRail({
   liveId,
   onResume,
   running,
+  onOpenReport,
 }: {
   scans: SafetyScanHistoryItem[];
   selectedId: number;
@@ -673,14 +734,13 @@ function ScanRail({
   onResume: (id: number) => void;
   /** A scan is already in flight — no other scan can be resumed meanwhile. */
   running: boolean;
+  /** Open the report document for a scan (owned by the parent view). */
+  onOpenReport: (scan: SafetyScanHistoryItem) => void;
 }) {
   const qc = useQueryClient();
   const [outcome, setOutcome] = useState("all");
   const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
   const [confirmId, setConfirmId] = useState<number | null>(null);
-  const [reportScan, setReportScan] = useState<SafetyScanHistoryItem | null>(
-    null,
-  );
   const del = useMutation({
     mutationFn: (id: number) => client.deleteSafetyScan(id),
     onSuccess: (_, id) => {
@@ -830,7 +890,7 @@ function ScanRail({
                     aria-label="Open scan report"
                     onClick={(e) => {
                       e.stopPropagation();
-                      setReportScan(s);
+                      onOpenReport(s);
                     }}
                   >
                     <FileText className="size-3.5" />
@@ -882,13 +942,6 @@ function ScanRail({
         ))}
       </CardContent>
 
-      {reportScan && (
-        <SafetyReportDialog
-          scan={reportScan}
-          onOpenChange={(o) => !o && setReportScan(null)}
-        />
-      )}
-
       <Dialog
         open={confirmId != null}
         onOpenChange={(o) => !o && setConfirmId(null)}
@@ -921,185 +974,6 @@ function ScanRail({
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </Card>
-  );
-}
-
-/** The selected scan's report as a structured frame — stats header, narrative,
- *  per-conversation summaries, provenance footer — instead of one text blob. */
-function ScanReportCard({
-  scan,
-  latest,
-  live,
-  onBackToLatest,
-  report,
-  findings,
-}: {
-  scan: SafetyScanHistoryItem;
-  latest: boolean;
-  /** True while this scan is genuinely in flight (not a stranded row). */
-  live: boolean;
-  onBackToLatest: () => void;
-  report: SafetyScanReport | undefined;
-  findings: ContentFinding[];
-}) {
-  const navigate = useNavigate();
-  const resolve = useContactResolver();
-  // Threads for this backup, so a per-conversation summary can show the
-  // conversation's NAME (resolved to a contact) and deep-link by its id —
-  // instead of the raw chunk thread identifier (a chat ROWID like "135").
-  const { data: threads } = useQuery({
-    queryKey: ["threads"],
-    queryFn: () => client.listThreads(),
-  });
-  const threadByIdent = useMemo(
-    () => new Map((threads ?? []).map((t) => [t.identifier, t])),
-    [threads],
-  );
-  const duration =
-    scan.finishedAt != null ? formatDuration(scan.finishedAt - scan.startedAt) : "";
-  // The cache thread id for a summary's identifier — from the threads map, or
-  // (fallback) a finding that resolved it. Makes every conversation clickable.
-  const threadIdOf = (identifier: string): number | null =>
-    threadByIdent.get(identifier)?.id ??
-    findings.find(
-      (f) => f.threadIdentifier === identifier && f.threadId != null,
-    )?.threadId ??
-    null;
-  // A human label for a summary's identifier: the thread's display name resolved
-  // to a contact, its participants, or the identifier itself as a last resort.
-  const labelOf = (identifier: string): string => {
-    const t = threadByIdent.get(identifier);
-    if (!t) return resolve(identifier)?.name ?? identifier;
-    if (t.displayName) return resolve(t.displayName)?.name ?? t.displayName;
-    const first = t.participants[0];
-    return first ? (resolve(first)?.name ?? first) : identifier;
-  };
-  const clean = scan.findings === 0 && scan.status === "completed";
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2">
-            {clean && (
-              <ShieldCheck className="size-5 text-emerald-600 dark:text-emerald-400" />
-            )}
-            {clean ? "No harmful content flagged" : "Scan report"}
-          </CardTitle>
-          <div className="flex shrink-0 items-center gap-2">
-            {!latest && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="outline" size="sm" onClick={onBackToLatest}>
-                    Back to latest
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>Show the most recent scan again</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-        </div>
-        <CardDescription>
-          {SCAN_STATUS_LABEL[scan.status] ?? scan.status} {scanTitle(scan)}
-          {" · scanned "}
-          {formatScanRange(scan.rangeStart, scan.rangeEnd)}
-          {!latest && " — a past scan; its findings are listed below"}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {/* Stats: what this scan amounted to, at a glance. */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {scan.serious > 0 && (
-            <Badge className={SEVERITY_META[3].badge}>
-              {scan.serious} serious
-            </Badge>
-          )}
-          {scan.harmful > 0 && (
-            <Badge className={SEVERITY_META[2].badge}>
-              {scan.harmful} harmful
-            </Badge>
-          )}
-          {scan.concerning > 0 && (
-            <Badge className={SEVERITY_META[1].badge}>
-              {scan.concerning} concerning
-            </Badge>
-          )}
-          {scan.findings === 0 && (
-            <Badge variant="outline" className="text-muted-foreground">
-              no findings
-            </Badge>
-          )}
-          {duration && (
-            <Badge variant="outline" className="text-muted-foreground">
-              took {duration}
-            </Badge>
-          )}
-        </div>
-
-        {report?.report ? (
-          <p className="text-sm leading-relaxed">{report.report}</p>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {scan.status === "cancelled"
-              ? "This scan was stopped before it finished. Its findings so far are listed below, and Resume continues it from where it stopped."
-              : scan.status === "interrupted" ||
-                  (scan.status === "running" && !live)
-                ? "This scan was interrupted before finishing (the app closed mid-scan). Resume continues it from where it stopped."
-                : scan.status === "running"
-                  ? "The scan is still running — findings appear below as they are made."
-                  : clean
-                    ? "The model flagged nothing in this period. That is not a guarantee — spot-check important conversations yourself."
-                    : "This scan didn't produce a written report."}
-          </p>
-        )}
-
-        {report != null && report.threadSummaries.length > 0 && (
-          <div className="space-y-1">
-            <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Per conversation
-            </div>
-            {report.threadSummaries.map(([thread, text]) => {
-              const threadId = threadIdOf(thread);
-              return (
-                <div
-                  key={thread}
-                  className="flex items-baseline gap-2 border-t py-1.5 text-sm first:border-t-0"
-                >
-                  {threadId != null ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          type="button"
-                          className="shrink-0 rounded-sm font-medium text-primary underline-offset-2 outline-hidden hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                          onClick={() =>
-                            navigate({
-                              to: "/messages",
-                              search: { thread: threadId, from: "safety" },
-                            })
-                          }
-                        >
-                          {labelOf(thread)} →
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent>Open this conversation</TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    <span className="shrink-0 font-medium">{labelOf(thread)}</span>
-                  )}
-                  <span className="text-muted-foreground">{text}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Provenance footer: the receipt this verdict carries. */}
-        <div className="border-t pt-2 text-xs text-muted-foreground">
-          Scanned {formatScanRange(scan.rangeStart, scan.rangeEnd)} ·{" "}
-          {modelLabel(scan.model)} · on-device
-        </div>
-      </CardContent>
     </Card>
   );
 }
