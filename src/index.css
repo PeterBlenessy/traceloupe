@@ -65,6 +65,15 @@
      Yellow/Orange/Green) stay readable on the soft tinted pill. */
   --accent-text: oklch(from var(--accent-color) min(l, 0.5) c h);
 
+  /* SELECTION highlight — a SOLID accent fill (native-macOS style), not the
+     soft tint above. Use for the selected/active nav row, Settings tab, and any
+     equivalent compact selection. The foreground reuses --primary-foreground,
+     whose lightness-adaptive clamp keeps text legible on ANY system accent
+     (white on dark accents, near-black on light ones like Yellow/Green) — and
+     it re-resolves per theme on its own, so no .dark override is needed. */
+  --selected-bg: var(--accent-color);
+  --selected-fg: var(--primary-foreground);
+
   --background: oklch(0.982 0.003 260);
   --foreground: oklch(0.21 0.012 260);
   --card: oklch(1 0 0);
@@ -141,13 +150,13 @@
   --sidebar-ring: var(--accent-color);
 }
 
-/* The active sidebar item: an accent-tinted pill with accent text/icon.
-   Hover stays the neutral --sidebar-accent (from the cva) — this unlayered
-   rule outranks Tailwind's @layer utilities, so it wins for the active row
-   in both rest and hover states. */
+/* The active sidebar item: a SOLID accent pill with contrasting text/icon
+   (native-macOS selection), not a tint. This unlayered rule outranks Tailwind's
+   @layer hover utilities, so the fill stays solid in both rest and hover states
+   — matching how a selected Finder row keeps its selection on hover. */
 [data-sidebar="menu-button"][data-active="true"] {
-  background-color: var(--accent-soft);
-  color: var(--accent-text);
+  background-color: var(--selected-bg);
+  color: var(--selected-fg);
 }
 
 /* See-through toolbar (Settings → General). The bar keeps its border but goes
