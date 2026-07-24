@@ -652,8 +652,14 @@ function ScanOutcomeBadge({
   const worst = scan.serious > 0 ? 3 : scan.harmful > 0 ? 2 : 1;
   const outcome =
     scan.findings > 0 ? (
-      <Badge className={cn("shrink-0", SEVERITY_META[worst as 1 | 2 | 3].badge)}>
-        {scan.findings} finding{scan.findings === 1 ? "" : "s"}
+      <Badge
+        className={cn(
+          "shrink-0 tabular-nums",
+          SEVERITY_META[worst as 1 | 2 | 3].badge,
+        )}
+        title={`${scan.findings} finding${scan.findings === 1 ? "" : "s"}`}
+      >
+        {scan.findings}
       </Badge>
     ) : scan.status === "completed" ? (
       <Badge
@@ -848,14 +854,14 @@ function ScanRail({
                   : (SCAN_STATUS_LABEL[s.status] ?? s.status)}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-1">
+            <div className="flex shrink-0 items-center gap-0.5">
               <ScanOutcomeBadge scan={s} live={s.id === liveId} />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-7 text-muted-foreground hover:text-foreground"
+                    className="size-6 text-muted-foreground hover:text-foreground"
                     aria-label="Open scan report"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -876,7 +882,7 @@ function ScanRail({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="size-7 text-muted-foreground hover:text-foreground"
+                      className="size-6 text-muted-foreground hover:text-foreground"
                       aria-label="Resume this scan"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -894,7 +900,7 @@ function ScanRail({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="size-7 text-muted-foreground hover:text-destructive"
+                    className="size-6 text-muted-foreground hover:text-destructive"
                     aria-label="Delete this scan"
                     onClick={(e) => {
                       e.stopPropagation();
