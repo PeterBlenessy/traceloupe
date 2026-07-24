@@ -669,6 +669,9 @@ export interface ContentFinding {
   rationale: string;
   stale: boolean;
   dismissed: boolean;
+  /** True when the cascade's strong tier (E4B) re-checked and kept this finding
+   *  — "confirmed" (two models agree) vs a sweep-only (E2B) unconfirmed flag. */
+  rechecked: boolean;
 }
 
 /** The flagged source behind a finding, loaded on demand for the peek popover. */
@@ -2336,6 +2339,7 @@ const mockContentFindings: ContentFinding[] = [
     rationale: "Demands constant location sharing and account passwords.",
     stale: false,
     dismissed: false,
+    rechecked: true,
   },
   {
     id: 2,
@@ -2351,6 +2355,7 @@ const mockContentFindings: ContentFinding[] = [
     rationale: "Unsolicited crypto investment pitch pushing urgent transfer.",
     stale: false,
     dismissed: false,
+    rechecked: false,
   },
 ];
 

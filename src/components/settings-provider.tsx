@@ -65,6 +65,11 @@ type SettingsProviderState = {
   /** See-through toolbar: content scrolls visibly beneath a blurred title bar. */
   translucentToolbar: boolean;
   setTranslucentToolbar: (v: boolean) => void;
+  /** Developer: surface the cascade's per-finding confidence signal — a
+   *  "Confirmed" badge on findings the strong tier (E4B) re-checked and kept.
+   *  Off by default; it's a technical detail, not for the default audience. */
+  showCascadeConfidence: boolean;
+  setShowCascadeConfidence: (v: boolean) => void;
 };
 
 const NAMES_KEY = "traceloupe-show-names";
@@ -82,6 +87,7 @@ const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
 const DENSITY_KEY = "traceloupe-density";
 const TRANSLUCENT_KEY = "traceloupe-translucent-toolbar";
+const CASCADE_CONFIDENCE_KEY = "traceloupe-dev-cascade-confidence";
 
 /** Read the persisted density, defaulting to "comfortable". */
 function readDensity(): Density {
@@ -184,6 +190,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [translucentToolbar, setTranslucentToolbarState] = useState<boolean>(
     () => readBool(TRANSLUCENT_KEY),
   );
+  // Off by default (opt-in developer detail).
+  const [showCascadeConfidence, setShowCascadeConfidenceState] =
+    useState<boolean>(
+      () => localStorage.getItem(CASCADE_CONFIDENCE_KEY) === "true",
+    );
 
   // Reflect density onto the document root; a CSS rule keyed off `data-density`
   // scales the global Tailwind `--spacing`, so every spacing utility tightens at
@@ -317,6 +328,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setTranslucentToolbarState(v); // the effect above applies it to the document root
   };
 
+  const setShowCascadeConfidence = (v: boolean) => {
+    localStorage.setItem(CASCADE_CONFIDENCE_KEY, String(v));
+    setShowCascadeConfidenceState(v);
+  };
+
   return (
     <SettingsProviderContext.Provider
       value={{
@@ -347,6 +363,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setDensity,
         translucentToolbar,
         setTranslucentToolbar,
+        showCascadeConfidence,
+        setShowCascadeConfidence,
       }}
     >
       {children}

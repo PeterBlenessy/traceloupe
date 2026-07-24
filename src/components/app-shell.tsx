@@ -647,6 +647,8 @@ function SettingsMenu() {
     setDensity,
     translucentToolbar,
     setTranslucentToolbar,
+    showCascadeConfidence,
+    setShowCascadeConfidence,
   } = useSettings();
   const { theme, setTheme } = useTheme();
   // Lifted open/tab state so views can deep-link (e.g. "Settings → Safety").
@@ -975,6 +977,16 @@ function SettingsMenu() {
                     </option>
                   ))}
                 </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Show classifier confidence"
+                description="Badge each finding the strong tier (E4B) re-checked and kept as “Confirmed” — the cascade's agreement signal."
+              >
+                <Switch
+                  aria-label="Show classifier confidence"
+                  checked={showCascadeConfidence}
+                  onCheckedChange={setShowCascadeConfidence}
+                />
               </SettingsRow>
             </SettingsGroup>
           </TabsContent>
