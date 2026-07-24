@@ -423,6 +423,24 @@ mod tests {
         path
     }
 
+    /// Spawn with a brief retry on Linux's ETXTBSY: `cargo test` runs tests in
+    /// parallel threads, and another test's fork can hold a just-written fake
+    /// script's write descriptor across its own exec for a moment — a
+    /// transient "executable file busy". This is a test-harness race only;
+    /// the product path execs a long-existing bundled binary.
+    fn spawn_retrying(cfg: &ServerConfig) -> LlamaServer {
+        for _ in 0..20 {
+            match LlamaServer::spawn(cfg, None) {
+                Ok(s) => return s,
+                Err(e) if e.to_string().contains("busy") => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("spawn failed: {e}"),
+            }
+        }
+        panic!("spawn kept failing with ETXTBSY");
+    }
+
     fn cfg(binary: PathBuf, port: u16) -> ServerConfig {
         ServerConfig {
             binary,
@@ -470,7 +488,7 @@ mod tests {
     fn drop_kills_the_child() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         let pid = server.pid();
         drop(server);
         // kill -0: succeeds only if the process still exists.
@@ -486,7 +504,7 @@ mod tests {
     fn wait_healthy_detects_early_exit() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "exit 7");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         let err = server.wait_healthy(Duration::from_secs(5)).unwrap_err();
         assert!(err.to_string().contains("exited during startup"), "{err}");
     }
@@ -496,7 +514,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         // A child that exits immediately; give it a beat to actually die.
         let bin = fake_binary(tmp.path(), "exit 0");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         let _ = server.wait_healthy(Duration::from_secs(2)); // reaps the exit
         assert!(server.has_exited(), "a dead child must report exited");
         // Idempotent on a reaped child — this is what stops the poll loop
@@ -508,7 +526,7 @@ mod tests {
     fn has_exited_false_while_running() {
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let mut server = LlamaServer::spawn(&cfg(bin, pick_port().unwrap()), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
         assert!(!server.has_exited());
         server.shutdown();
     }
@@ -530,7 +548,7 @@ mod tests {
         });
         let tmp = tempfile::tempdir().unwrap();
         let bin = fake_binary(tmp.path(), "sleep 30");
-        let mut server = LlamaServer::spawn(&cfg(bin, port), None).unwrap();
+        let mut server = spawn_retrying(&cfg(bin, port));
         server.wait_healthy(Duration::from_secs(5)).unwrap();
         server.shutdown();
     }
