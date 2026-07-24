@@ -90,6 +90,28 @@ export function SafetyModelSettings() {
         network access — your data never leaves this Mac.
       </p>
 
+      {/* The cascade makes both models complementary, not either/or — surface
+          that so it's clear why you'd keep both. */}
+      {installed.length >= 2 ? (
+        <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            Both models installed — scans run as a cascade.
+          </span>{" "}
+          E2B sweeps everything fast, then E4B re-checks only what E2B flagged.
+          You get close to E4B's accuracy at close to E2B's speed, and most
+          content (which is clean) is only ever read by the fast model.
+        </div>
+      ) : (
+        <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            Tip: keep both models for the fastest accurate scan.
+          </span>{" "}
+          With E2B and E4B both installed, scans cascade — E2B sweeps quickly
+          and E4B re-checks only the flagged content, instead of running the
+          slower model over everything.
+        </div>
+      )}
+
       {/* The list is always rendered so it never jumps; progress appears inside
           the downloading model's own row. When two models are installed the
           rows become a picker for which one scans. Download outcomes are toasts

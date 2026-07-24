@@ -468,16 +468,37 @@ pub async fn run_safety_scan(
         .ok_or("model not installed — download it first")?;
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
 
+    // Cascade (#35): when the effective model is E4B and E2B is also
+    // installed, sweep everything with the fast tier and re-check flagged
+    // chunks with the strong one. Single-tier machines keep one-pass behavior.
+    // Computed BEFORE the row is created so the row records the SWEEP model —
+    // stamping the E4B id up front would falsely claim E4B judged content even
+    // when it never re-checked anything (verification Finding B).
+    let cascade_sweep = if spec.id.contains("E4B") {
+        models::spec_by_id("gemma-4-E2B-it-Q4_K_M").filter(|e| e.installed_at(&dir).is_some())
+    } else {
+        None
+    };
+    let primary_spec = cascade_sweep.unwrap_or(spec);
+    let primary_path = primary_spec
+        .installed_at(&dir)
+        .ok_or("model not installed — download it first")?;
+    // The strong tier's identity/path for the re-check phase (None = no cascade).
+    let strong = cascade_sweep.map(|_| (spec.id.to_string(), model_path.clone(), spec.ctx_size));
+
     // Flip the scan row to 'running' NOW — before the slow (30–180 s) model
     // load — so the stored state and the history rail reflect the user's
     // action the moment it happens, in step with the Stop button, instead of
     // a minute later. The engine then continues this same row. If startup
     // fails below, the error path repairs the row back to 'interrupted'.
+    // Seeded with the SWEEP model; a completed cascade upgrades it to
+    // "e2b→e4b" only once the strong tier has actually re-checked.
     let scan_row_id = {
         let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
         match resume_scan_id {
             Some(id) => {
-                db.resume_scan(id, spec.id).map_err(|e| e.to_string())?;
+                db.resume_scan(id, primary_spec.id)
+                    .map_err(|e| e.to_string())?;
                 id
             }
             None => {
@@ -490,7 +511,7 @@ pub async fn run_safety_scan(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs() as i64)
                     .unwrap_or(0);
-                db.begin_scan(spec.id, (range_start, range_end), slug, now)
+                db.begin_scan(primary_spec.id, (range_start, range_end), slug, now)
                     .map_err(|e| e.to_string())?
             }
         }
@@ -518,21 +539,6 @@ pub async fn run_safety_scan(
     } else {
         1
     };
-
-    // Cascade (#35): when the effective model is E4B and E2B is also
-    // installed, sweep everything with the fast tier and re-check flagged
-    // chunks with the strong one. Single-tier machines keep one-pass behavior.
-    let cascade_sweep = if spec.id.contains("E4B") {
-        models::spec_by_id("gemma-4-E2B-it-Q4_K_M").filter(|e| e.installed_at(&dir).is_some())
-    } else {
-        None
-    };
-    let primary_spec = cascade_sweep.unwrap_or(spec);
-    let primary_path = primary_spec
-        .installed_at(&dir)
-        .ok_or("model not installed — download it first")?;
-    // The strong tier's identity/path for the re-check phase (None = no cascade).
-    let strong = cascade_sweep.map(|_| (spec.id.to_string(), model_path.clone(), spec.ctx_size));
 
     let app2 = app.clone();
     let spec_id = primary_spec.id.to_string();
@@ -621,12 +627,17 @@ pub async fn run_safety_scan(
         // the model server — that drops the in-flight request immediately (its
         // retry then fails fast and the between-chunk check breaks the loop),
         // making Stop felt in a fraction of a second instead of up to a minute.
-        let server_pid = llama.pid();
+        //
+        // ONE watcher reads the CURRENT server pid from a shared atomic that the
+        // cascade swap updates — so after the sweep→strong swap it never kills
+        // the retired (possibly OS-reused) sweep pid (verification Finding C).
+        let current_pid = Arc::new(std::sync::atomic::AtomicU32::new(llama.pid()));
         let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let watcher = {
             let cancel = cancel.clone();
             let done = watch_done.clone();
             let app = app2.clone();
+            let current_pid = current_pid.clone();
             std::thread::spawn(move || {
                 while !done.load(std::sync::atomic::Ordering::SeqCst) {
                     if cancel.is_cancelled() {
@@ -636,7 +647,11 @@ pub async fn run_safety_scan(
                         );
                         let _ = std::process::Command::new("/bin/kill")
                             .arg("-9")
-                            .arg(server_pid.to_string())
+                            .arg(
+                                current_pid
+                                    .load(std::sync::atomic::Ordering::SeqCst)
+                                    .to_string(),
+                            )
                             .status();
                         break;
                     }
@@ -673,7 +688,7 @@ pub async fn run_safety_scan(
                 scratch_dir.clone(),
                 binary2.clone(),
             );
-            let (cancel2, done2) = (cancel.clone(), watch_done.clone());
+            let (cancel2, current_pid2) = (cancel.clone(), current_pid.clone());
             move || -> traceloupe_core::Result<client::LlmClient> {
                 use traceloupe_core::Error;
                 let inf = |m: String| Error::Inference(m);
@@ -722,27 +737,20 @@ pub async fn run_safety_scan(
                 }
                 // Strong tier is healthy: NOW retire the sweep server and take
                 // ownership of the strong one.
+                let strong_pid = strong.pid();
                 llama_ref.shutdown();
                 *llama_ref = strong;
-                // Watch the NEW pid for cancel, same as the sweep server.
-                let pid = llama_ref.pid();
-                let (cancel3, done3, app4) = (cancel2.clone(), done2.clone(), app3.clone());
-                std::thread::spawn(move || {
-                    while !done3.load(std::sync::atomic::Ordering::SeqCst) {
-                        if cancel3.is_cancelled() {
-                            crate::logging::info(
-                                &app4,
-                                "Safety Scan: cancel requested — stopping the model server",
-                            );
-                            let _ = std::process::Command::new("/bin/kill")
-                                .arg("-9")
-                                .arg(pid.to_string())
-                                .status();
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_millis(120));
-                    }
-                });
+                // Point the (single) cancel watcher at the strong pid before it
+                // can fire on the now-reaped sweep pid — must happen AFTER the
+                // sweep shutdown so a cancel in this window still hits a live
+                // server, not the gap.
+                current_pid2.store(strong_pid, std::sync::atomic::Ordering::SeqCst);
+                if cancel2.is_cancelled() {
+                    // A cancel that landed during the swap: the watcher may have
+                    // already killed the old pid; make sure the new server dies.
+                    llama_ref.shutdown();
+                    return Err(inf("cancelled".into()));
+                }
                 Ok(client::LlmClient::new(
                     llama_ref.base_url(),
                     &strong_id,

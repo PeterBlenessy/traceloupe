@@ -230,25 +230,18 @@ pub fn run_scan(
         // chunk's `#recheck` checkpoint marks it independently re-checked.
         if let Some(provider) = recheck {
             if !cancel.is_cancelled() {
-                let mut flagged: Vec<&chunker::Chunk> = Vec::new();
-                for chunk in &chunks {
-                    let has = chunk
-                        .items
-                        .iter()
-                        .try_fold(false, |acc, i| -> Result<bool> {
-                            Ok(acc || analysis.has_finding(&i.fingerprint)?)
-                        })?;
-                    if has {
-                        flagged.push(chunk);
-                    }
-                }
-                // A flagged chunk not yet re-checked needs the strong tier.
-                // (One already re-checked keeps its `#recheck` checkpoint even
-                // if the strong tier cleared its finding, so resume skips it.)
+                // The flagged set is the DURABLE sweep-time marker, NOT live
+                // findings — so a sibling window's re-check deleting a shared
+                // item's finding can't drop a chunk that a crash left un-checked
+                // (verification Finding A). A flagged chunk not yet re-checked
+                // needs the strong tier; one already re-checked keeps its
+                // `#recheck` checkpoint even if its finding was cleared.
+                let flagged_keys = analysis.flagged_chunk_keys()?;
                 let mut todo: Vec<&chunker::Chunk> = Vec::new();
-                for chunk in &flagged {
-                    if !analysis
-                        .chunk_is_done(&format!("{}#recheck", chunk.key), &chunk.fingerprint)?
+                for chunk in &chunks {
+                    if flagged_keys.contains(&chunk.key)
+                        && !analysis
+                            .chunk_is_done(&format!("{}#recheck", chunk.key), &chunk.fingerprint)?
                     {
                         todo.push(chunk);
                     }
@@ -475,6 +468,9 @@ fn persist_classified(
         &format!("{}{}", chunk.key, key_suffix),
         &chunk.fingerprint,
         ChunkStatus::Done,
+        // Durable cascade marker: this sweep chunk produced ≥1 finding, so the
+        // strong tier must re-check it (survives a sibling clearing the item).
+        n > 0,
         now(),
     )?;
     analysis.audit(
@@ -505,6 +501,7 @@ fn persist_failed(
         &format!("{}{}", chunk.key, key_suffix),
         &chunk.fingerprint,
         ChunkStatus::Skipped,
+        false, // a failed chunk produced no finding
         now(),
     )?;
     analysis.audit(
