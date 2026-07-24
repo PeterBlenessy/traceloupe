@@ -34,6 +34,42 @@ pub struct SummaryOutcome {
     pub report_written: bool,
     pub thread_summaries: usize,
     pub model_calls: usize,
+    /// Summaries served from an earlier scan's text because the underlying
+    /// findings hadn't changed — the model calls this run avoided (#43).
+    pub cache_hits: usize,
+}
+
+/// A stable fingerprint of the findings a summary is written from. Two runs
+/// over the same unchanged content produce the same digest, which is what lets
+/// the text be reused instead of re-generated (#43).
+///
+/// Covers every field that reaches the prompt — fingerprint, category,
+/// severity, thread and timestamp — so any change the reader would notice
+/// invalidates the cache. Sorted first: `list_findings*` orders by severity then
+/// time, and two equal-severity findings must not flip the digest by tying
+/// differently.
+fn findings_digest(findings: &[&FindingRow]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut lines: Vec<String> = findings
+        .iter()
+        .map(|f| {
+            format!(
+                "{}|{}|{}|{}|{}",
+                f.fingerprint,
+                f.category.as_str(),
+                f.severity,
+                f.thread_identifier.as_deref().unwrap_or(""),
+                f.occurred_at.unwrap_or_default(),
+            )
+        })
+        .collect();
+    lines.sort_unstable();
+    let mut hasher = Sha256::new();
+    for l in &lines {
+        hasher.update(l.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn now() -> i64 {
@@ -125,71 +161,94 @@ fn deterministic_thread_summary(thread: &str, findings: &[&FindingRow]) -> Strin
 }
 
 /// Write the Scan report + per-flagged-thread summaries, stored under
-/// `scan_id`. Deliberately a CURRENT-STATE report: it describes all live
-/// findings (every scan's, since re-confirmed findings migrate to the newest
-/// scan and reused chunks keep their old scan id) — exactly the state the
-/// findings UI shows next to it. Dismissed findings are excluded (the user
-/// ruled them out); stale ones too (their content no longer exists in the
-/// cache).
+/// `scan_id`.
+///
+/// Scoped to THIS scan's own scope — its sources and time range — via
+/// [`AnalysisDb::list_findings_in_scope`], the same predicate the scan's card
+/// and findings list use (#42). Chunk classification is cached across scans, so
+/// a finding "belongs to" whichever run first saw it; scoping by content rather
+/// than by `scan_id` is what keeps the report and the card in agreement (#43).
+/// Dismissed findings are excluded (the user ruled them out); stale ones too
+/// (their content no longer exists in the cache).
+///
+/// Summaries are reused when the findings behind them are unchanged: each is
+/// keyed by a digest of its findings, so a re-scan that adds nothing pays no
+/// model calls at all instead of re-summarizing everything (#43).
 pub fn run_summaries(
     analysis: &mut AnalysisDb,
     client: &LlmClient,
     scan_id: i64,
     cancel: &CancelToken,
 ) -> Result<SummaryOutcome> {
-    let all = analysis.list_findings(None)?;
+    // The scan's stored scope is authoritative. If the row somehow can't be
+    // read, fall back to every live finding rather than failing a scan that has
+    // already done its expensive work.
+    let all = match analysis.scan_by_id(scan_id)? {
+        Some(row) => {
+            analysis.list_findings_in_scope(&row.sources, row.range_start, row.range_end)?
+        }
+        None => analysis.list_findings(None)?,
+    };
     let live: Vec<&FindingRow> = all.iter().filter(|f| !f.dismissed && !f.stale).collect();
     let mut outcome = SummaryOutcome::default();
 
     if live.is_empty() {
-        analysis.set_summary(scan_id, "report", "", CLEAN_REPORT, now())?;
+        // No digest: the clean report is fixed text, nothing to key a cache on.
+        analysis.set_summary(scan_id, "report", "", CLEAN_REPORT, "", now())?;
         analysis.audit(scan_id, now(), "summary_written", "kind=report calls=0")?;
         outcome.report_written = true;
         return Ok(outcome);
     }
 
-    // ---- scan report (1 call) ----
-    // list_findings is already severity-desc ordered; take the top slice.
-    let listed: Vec<String> = live
-        .iter()
-        .take(REPORT_FINDINGS_CAP)
-        .map(|f| finding_line(f))
-        .collect();
-    let user = format!(
-        "Findings: {} total across {} conversations/notes.\nBy category: {}.\n{}{}",
-        live.len(),
-        live.iter()
-            .map(|f| f.thread_identifier.as_deref().unwrap_or("notes"))
-            .collect::<std::collections::BTreeSet<_>>()
-            .len(),
-        category_counts(&live),
-        listed.join("\n"),
-        if live.len() > listed.len() {
-            format!(
-                "\n({} lower-severity findings omitted from this list; they are included in the category totals above)",
-                live.len() - listed.len()
-            )
-        } else {
-            String::new()
-        }
-    );
-    if cancel.is_cancelled() {
-        return Ok(outcome);
-    }
-    let report = client.chat_text(REPORT_SYSTEM, &user, 600)?;
-    let report = report.trim();
-    // Never store an empty narrative when there are findings — fall back to a
-    // deterministic overview built from the finding data itself (#43).
-    let report_text = if report.is_empty() {
-        deterministic_report(&live)
+    // ---- scan report (1 call, or 0 on a cache hit) ----
+    let report_digest = findings_digest(&live);
+    if let Some(cached) = analysis.find_summary_by_digest("report", "", &report_digest)? {
+        analysis.set_summary(scan_id, "report", "", &cached, &report_digest, now())?;
+        outcome.report_written = true;
+        outcome.cache_hits += 1;
     } else {
-        report.to_string()
-    };
-    analysis.set_summary(scan_id, "report", "", &report_text, now())?;
-    outcome.report_written = true;
-    outcome.model_calls += 1;
+        // list_findings is already severity-desc ordered; take the top slice.
+        let listed: Vec<String> = live
+            .iter()
+            .take(REPORT_FINDINGS_CAP)
+            .map(|f| finding_line(f))
+            .collect();
+        let user = format!(
+            "Findings: {} total across {} conversations/notes.\nBy category: {}.\n{}{}",
+            live.len(),
+            live.iter()
+                .map(|f| f.thread_identifier.as_deref().unwrap_or("notes"))
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            category_counts(&live),
+            listed.join("\n"),
+            if live.len() > listed.len() {
+                format!(
+                    "\n({} lower-severity findings omitted from this list; they are included in the category totals above)",
+                    live.len() - listed.len()
+                )
+            } else {
+                String::new()
+            }
+        );
+        if cancel.is_cancelled() {
+            return Ok(outcome);
+        }
+        let report = client.chat_text(REPORT_SYSTEM, &user, 600)?;
+        let report = report.trim();
+        // Never store an empty narrative when there are findings — fall back to
+        // a deterministic overview built from the finding data itself (#43).
+        let report_text = if report.is_empty() {
+            deterministic_report(&live)
+        } else {
+            report.to_string()
+        };
+        analysis.set_summary(scan_id, "report", "", &report_text, &report_digest, now())?;
+        outcome.report_written = true;
+        outcome.model_calls += 1;
+    }
 
-    // ---- per-flagged-thread summaries (1 call each) ----
+    // ---- per-flagged-thread summaries (1 call each, or 0 on a cache hit) ----
     let mut by_thread: BTreeMap<String, Vec<&FindingRow>> = BTreeMap::new();
     for f in &live {
         if let Some(t) = &f.thread_identifier {
@@ -199,6 +258,15 @@ pub fn run_summaries(
     for (thread, findings) in &by_thread {
         if cancel.is_cancelled() {
             break;
+        }
+        // Unchanged thread → reuse the earlier run's text, no model call. This
+        // is where a re-scan that added nothing stops costing minutes (#43).
+        let digest = findings_digest(findings);
+        if let Some(cached) = analysis.find_summary_by_digest("thread", thread, &digest)? {
+            analysis.set_summary(scan_id, "thread", thread, &cached, &digest, now())?;
+            outcome.thread_summaries += 1;
+            outcome.cache_hits += 1;
+            continue;
         }
         let user = format!(
             "Conversation: {thread}\nFindings ({}):\n{}{}",
@@ -225,7 +293,7 @@ pub fn run_summaries(
         } else {
             text.to_string()
         };
-        analysis.set_summary(scan_id, "thread", thread, &text, now())?;
+        analysis.set_summary(scan_id, "thread", thread, &text, &digest, now())?;
         outcome.thread_summaries += 1;
         outcome.model_calls += 1;
     }
@@ -234,8 +302,8 @@ pub fn run_summaries(
         now(),
         "summary_written",
         &format!(
-            "kind=report+threads threads={} calls={}",
-            outcome.thread_summaries, outcome.model_calls
+            "kind=report+threads threads={} calls={} reused={}",
+            outcome.thread_summaries, outcome.model_calls, outcome.cache_hits
         ),
     )?;
     Ok(outcome)
@@ -363,6 +431,96 @@ mod tests {
         assert!(
             !thread.trim().is_empty(),
             "thread summary must not be blank"
+        );
+    }
+
+    #[test]
+    fn unchanged_findings_reuse_summaries_without_model_calls() {
+        // The "slow, uncached" half of #43: a re-scan over content that didn't
+        // change must not re-summarize. Same findings → same digest → the text
+        // is reused and the model is never called again.
+        let (base, hits) = mock_text_server("A concise factual summary.");
+        let (mut db, scan1) = seeded_analysis(&["chatA", "chatB"]);
+        let client = LlmClient::new(&base, "m", Duration::from_secs(5));
+
+        let first = run_summaries(&mut db, &client, scan1, &CancelToken::new()).unwrap();
+        assert_eq!(first.model_calls, 3, "first run: 1 report + 2 threads");
+        assert_eq!(first.cache_hits, 0);
+        let calls_after_first = hits.load(Ordering::SeqCst);
+
+        // A second scan over the same, unchanged findings.
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        let second = run_summaries(&mut db, &client, scan2, &CancelToken::new()).unwrap();
+        assert_eq!(second.model_calls, 0, "nothing changed → no model calls");
+        assert_eq!(second.cache_hits, 3, "report + both threads reused");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            calls_after_first,
+            "the server must not have been hit again"
+        );
+        // The reused text is stored under the NEW scan, so its report renders.
+        assert!(db.get_summary(scan2, "report", "").unwrap().is_some());
+        assert!(db.get_summary(scan2, "thread", "chatA").unwrap().is_some());
+        assert_eq!(
+            db.get_summary(scan1, "thread", "chatA").unwrap(),
+            db.get_summary(scan2, "thread", "chatA").unwrap(),
+        );
+    }
+
+    #[test]
+    fn changed_findings_invalidate_the_cached_summary() {
+        // The cache must not outlive the findings it describes: a new finding
+        // in a thread changes its digest, so that thread re-summarizes.
+        let (base, _hits) = mock_text_server("A concise factual summary.");
+        let (mut db, scan1) = seeded_analysis(&["chatA"]);
+        let client = LlmClient::new(&base, "m", Duration::from_secs(5));
+        run_summaries(&mut db, &client, scan1, &CancelToken::new()).unwrap();
+
+        // Add a second finding to the same thread, then re-summarize.
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        db.replace_findings(
+            scan2,
+            &[NewFinding {
+                source_kind: SourceKind::Message,
+                source_id: Some(99),
+                thread_identifier: Some("chatA".into()),
+                occurred_at: Some(5000),
+                fingerprint: "fp-new".into(),
+                category: Category::ThreatViolence,
+                severity: 3,
+                rationale: "explicit threat".into(),
+                service: None,
+            }],
+            201,
+        )
+        .unwrap();
+        let second = run_summaries(&mut db, &client, scan2, &CancelToken::new()).unwrap();
+        assert!(
+            second.model_calls > 0,
+            "changed findings must re-summarize, got {second:?}"
+        );
+    }
+
+    #[test]
+    fn report_is_scoped_to_the_scans_own_sources() {
+        // #43's "all-scans scope" item, aligned with #42: the report describes
+        // the scan's OWN scope, so it agrees with the scan card beside it.
+        // A notes-only scan must not narrate a message-only finding.
+        let (base, _hits) = mock_text_server("summary");
+        let (mut db, _scan_msgs) = seeded_analysis(&["chatA"]);
+        let client = LlmClient::new(&base, "m", Duration::from_secs(5));
+
+        // A notes-scoped scan, with no note findings anywhere.
+        let notes_scan = db.begin_scan("m", (None, None), "notes", 300).unwrap();
+        let out = run_summaries(&mut db, &client, notes_scan, &CancelToken::new()).unwrap();
+        assert_eq!(
+            out.model_calls, 0,
+            "no in-scope findings → the fixed clean report, no calls"
+        );
+        let report = db.get_summary(notes_scan, "report", "").unwrap().unwrap();
+        assert!(
+            report.contains("Nothing was flagged"),
+            "notes-only scan must not report the message finding, got: {report}"
         );
     }
 
