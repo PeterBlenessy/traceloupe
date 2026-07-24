@@ -625,6 +625,7 @@ async fn import_backup(
 
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
+    repair_stranded_safety_scans(&app_for_passive, &outcome.cache_path);
 
     // Remember the source dir for every backup — a partial re-import needs it to
     // locate the backup's files (encrypted or not).
@@ -833,8 +834,36 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
         }
     }
     app.state::<SessionKeys>().set(decryptor);
-    app.state::<ActiveBackup>().set(cache_path);
+    app.state::<ActiveBackup>().set(cache_path.clone());
+    repair_stranded_safety_scans(&app, &cache_path);
     true
+}
+
+/// Mark Safety Scan rows stranded 'running' as 'interrupted' the moment a
+/// backup becomes active — this process provably has no scan in flight at that
+/// point, so the stored state must not claim one is running. Best-effort: no
+/// analysis DB (never scanned) is fine, and a failure only delays the repair
+/// to the begin-scan backstop.
+fn repair_stranded_safety_scans(app: &AppHandle, cache_path: &Path) {
+    let Ok(path) = safety_scan_cmd::analysis_path(cache_path) else {
+        return;
+    };
+    if !path.exists() {
+        return;
+    }
+    match traceloupe_core::analysis::AnalysisDb::open(&path)
+        .and_then(|db| db.repair_stranded_scans())
+    {
+        Ok(n) if n > 0 => logging::info(
+            app,
+            format!("Safety Scan: marked {n} interrupted scan(s) from a previous session"),
+        ),
+        Ok(_) => {}
+        Err(e) => logging::warn(
+            app,
+            format!("Safety Scan: stranded-scan repair failed: {e}"),
+        ),
+    }
 }
 
 /// Whether a backup is currently open for browsing.
@@ -1768,11 +1797,13 @@ async fn count_thread_messages(
     active: State<'_, ActiveBackup>,
     thread_id: i64,
     kind: Option<String>,
+    search: Option<String>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_messages(&cache, thread_id, kind.as_deref()).map_err(|e| e.to_string())
+        query::count_messages(&cache, thread_id, kind.as_deref(), search.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1786,6 +1817,7 @@ async fn get_thread_message_window(
     limit: i64,
     kind: Option<String>,
     desc: bool,
+    search: Option<String>,
 ) -> Result<Vec<Message>, String> {
     // Async + spawn_blocking: a synchronous command runs on the main thread and
     // would freeze the whole native UI. Only the requested window is read, so
@@ -1793,8 +1825,16 @@ async fn get_thread_message_window(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_message_window(&cache, thread_id, offset, limit, kind.as_deref(), desc)
-            .map_err(|e| e.to_string())
+        query::get_message_window(
+            &cache,
+            thread_id,
+            offset,
+            limit,
+            kind.as_deref(),
+            desc,
+            search.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3787,6 +3827,7 @@ pub fn run() {
             safety_scan_cmd::run_safety_scan,
             safety_scan_cmd::cancel_safety_scan,
             safety_scan_cmd::list_content_findings,
+            safety_scan_cmd::content_finding_snippet,
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
             safety_scan_cmd::get_safety_scan_report,

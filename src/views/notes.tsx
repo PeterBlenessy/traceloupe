@@ -1,4 +1,5 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -6,6 +7,7 @@ import {
   useFindingMarks,
 } from "@/components/safety-flag-badge";
 import {
+  ArrowLeft,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -186,6 +188,24 @@ export function NotesView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Deep link from a Safety Scan finding: ?id=<note id> selects that note, and
+  // ?from=safety adds a return chip so the jump is a round trip (same pattern
+  // as the Timeline → conversation jump in Messages).
+  const navigate = useNavigate();
+  const urlSearch = useSearch({ strict: false }) as {
+    id?: number;
+    from?: string;
+  };
+  useEffect(() => {
+    if (urlSearch.id != null) setSelectedId(urlSearch.id);
+  }, [urlSearch.id]);
+  // Manually picking another note ends the round trip — drop the deep-link
+  // params so the return chip doesn't stay pinned for the rest of the session.
+  const selectNote = (id: number) => {
+    setSelectedId(id);
+    if (urlSearch.from != null && urlSearch.id !== id)
+      void navigate({ to: "/notes", search: {}, replace: true });
+  };
   // Flat list (date sections) vs a folder tree of the notes.
   const [viewMode, setViewMode] = usePersistedState<"flat" | "tree">("notes:view", "flat");
   // Collapsed folders in tree view (a folder is expanded unless listed here).
@@ -463,6 +483,29 @@ export function NotesView() {
 
   return (
     <div className="flex h-full flex-col">
+      {urlSearch.from === "safety" && (
+        <div className="flex items-center gap-2 border-b px-3 py-1.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void navigate({ to: "/safety-scan" })}
+              >
+                <ArrowLeft className="size-4" /> Back to Safety Scan
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Return to the Safety Scan findings</TooltipContent>
+          </Tooltip>
+          <span className="text-xs text-muted-foreground">
+            {/* Be honest when a persisted filter (folder, tags, …) hides the
+                flagged note — the fallback selection is NOT the finding. */}
+            {urlSearch.id != null && selected?.id !== urlSearch.id
+              ? "The flagged note isn't visible with the current filters — clear them to see it"
+              : "Opened from a Safety Scan finding"}
+          </span>
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         <ListDetail
           master={
@@ -498,7 +541,7 @@ export function NotesView() {
                         active={selected?.id === r.note.id}
                         showFolder={viewMode === "flat"}
                         flagSeverity={marks.data?.notes[r.note.id]}
-                        onClick={() => setSelectedId(r.note.id)}
+                        onClick={() => selectNote(r.note.id)}
                       />
                     </div>
                   )

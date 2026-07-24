@@ -313,6 +313,8 @@ mod tests {
                 model_path: model,
                 port,
                 ctx_size: 8192,
+                parallel: 1,
+                api_key: None,
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir: std::env::temp_dir().join("traceloupe-eval-scratch"),
@@ -324,7 +326,6 @@ mod tests {
             .wait_healthy(Duration::from_secs(180))
             .expect("model load");
         let client = LlmClient::new(server.base_url(), "eval", Duration::from_secs(300));
-        let schema = prompt::verdicts_schema();
 
         let fixtures = load_fixtures();
         let report = score_against(&fixtures, |case| {
@@ -352,10 +353,12 @@ mod tests {
                 kind: crate::analysis::SourceKind::Message,
                 thread_identifier: Some(case.id.clone()),
                 label: None,
+                service: None,
                 items,
             };
             let user = prompt::render_chunk(&chunk);
-            match client.chat_json(prompt::SYSTEM_PROMPT, &user, &schema, 1200) {
+            let grammar = prompt::verdicts_grammar(chunk.items.len());
+            match client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, 1200) {
                 Ok(output) => engine::verdicts_to_findings_for_eval(&chunk, &output)
                     .into_iter()
                     .map(|f| f.category)

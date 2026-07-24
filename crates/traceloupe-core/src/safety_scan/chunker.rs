@@ -28,6 +28,65 @@ pub const WINDOW: usize = 25;
 /// appear intact in at least one window.
 pub const OVERLAP: usize = 5;
 
+/// Per-item input cap in chars (~1k tokens). One pasted wall of text must not
+/// blow the whole window past the context budget — the item is truncated with
+/// an explicit marker instead. The item FINGERPRINT still covers the full
+/// text, so finding identity and dismissals are unaffected.
+pub const ITEM_MAX_CHARS: usize = 4_000;
+/// Long notes are windowed into segments of ~this many chars (~2k tokens).
+/// One-chunk-per-note failed in practice: an oversized note runs the model to
+/// its output cap and produces nothing, at 10× the cost of a normal chunk
+/// (issue #33 — audit-log evidence).
+pub const NOTE_WINDOW_CHARS: usize = 8_000;
+/// Chars repeated from the previous note segment so a passage spanning a
+/// boundary is seen whole at least once (mirrors message OVERLAP).
+pub const NOTE_OVERLAP_CHARS: usize = 400;
+
+/// Cap one item's text at [`ITEM_MAX_CHARS`] chars on a char boundary, with a
+/// visible marker so the model (and a reviewer reading the prompt) knows.
+fn cap_item_text(text: String) -> String {
+    // Bytes ≥ chars, so a small byte length can never exceed the char cap.
+    if text.len() <= ITEM_MAX_CHARS {
+        return text;
+    }
+    match text.char_indices().nth(ITEM_MAX_CHARS) {
+        Some((cut, _)) => format!("{} …[truncated]", &text[..cut]),
+        None => text,
+    }
+}
+
+/// Split a long note into windowed segments, preferring a whitespace boundary
+/// near the limit so words stay whole. Notes at or under the window stay as
+/// exactly one segment (the common case — and the existing chunk key shape).
+fn split_note_text(text: &str) -> Vec<String> {
+    if text.len() <= NOTE_WINDOW_CHARS {
+        return vec![text.to_string()];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut segs = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() {
+        let end = usize::min(start + NOTE_WINDOW_CHARS, chars.len());
+        let mut cut = end;
+        if end < chars.len() {
+            // Look for whitespace in the tail 10% of the window.
+            let floor = start + NOTE_WINDOW_CHARS * 9 / 10;
+            if let Some(ws) = (floor..end).rev().find(|&i| chars[i].is_whitespace()) {
+                cut = ws;
+            }
+        }
+        segs.push(chars[start..cut].iter().collect());
+        if cut >= chars.len() {
+            break;
+        }
+        // Overlap backwards from the cut, but always move forward — the cut is
+        // ≥90% of a window past `start`, far beyond the overlap, so this can't
+        // stall; the max() is a belt against future constant changes.
+        start = usize::max(cut.saturating_sub(NOTE_OVERLAP_CHARS), start + 1);
+    }
+    segs
+}
+
 /// One classification unit handed to the model.
 #[derive(Debug, Clone)]
 pub struct Chunk {
@@ -40,6 +99,9 @@ pub struct Chunk {
     pub thread_identifier: Option<String>,
     /// Human label for prompts/summaries (thread display name or note title).
     pub label: Option<String>,
+    /// The message thread's service (iMessage/SMS/TikTok…); None for notes.
+    /// Flows onto each finding so a service-scoped scan can count/list its own.
+    pub service: Option<String>,
     pub items: Vec<ChunkItem>,
 }
 
@@ -63,18 +125,57 @@ pub struct TimeRange {
     pub end: Option<i64>,
 }
 
-/// Which content the scan covers. Both by default.
-#[derive(Debug, Clone, Copy)]
+/// Which content the scan covers. Everything by default.
+#[derive(Debug, Clone)]
 pub struct ScanSources {
-    pub messages: bool,
     pub notes: bool,
+    /// Which message services to include: `None` = every service (all message
+    /// threads); `Some(list)` = only threads whose service is in `list` (empty
+    /// list = no message threads).
+    pub message_services: Option<Vec<String>>,
 }
 
 impl Default for ScanSources {
     fn default() -> Self {
         Self {
-            messages: true,
             notes: true,
+            message_services: None,
+        }
+    }
+}
+
+impl ScanSources {
+    /// Whether any message threads are in scope.
+    pub fn includes_messages(&self) -> bool {
+        !matches!(&self.message_services, Some(v) if v.is_empty())
+    }
+
+    /// Whether a thread with `service` is in scope for this scan.
+    fn wants_service(&self, service: Option<&str>) -> bool {
+        match &self.message_services {
+            None => true, // all services
+            Some(list) => service.is_some_and(|s| list.iter().any(|w| w == s)),
+        }
+    }
+
+    /// The canonical `sources` string stored on the scan row and matched by the
+    /// scope predicates: "all", "messages" (every service, no notes), or a
+    /// comma-joined list of service names plus optionally "notes".
+    pub fn slug(&self) -> String {
+        match &self.message_services {
+            None if self.notes => "all".to_string(),
+            None => "messages".to_string(),
+            Some(list) => {
+                let mut toks = list.clone();
+                if self.notes {
+                    toks.push("notes".to_string());
+                }
+                if toks.is_empty() {
+                    "all".to_string()
+                } else {
+                    toks.join(",")
+                }
+            }
         }
     }
 }
@@ -164,18 +265,23 @@ pub fn strip_html(html: &str) -> String {
 
 /// Build every message chunk in scan order: threads by most recent activity
 /// first, windows chronological within each thread.
-pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
+pub fn chunk_messages(
+    cache: &CacheDb,
+    range: TimeRange,
+    sources: &ScanSources,
+) -> Result<Vec<Chunk>> {
     let conn = cache.conn();
     let mut threads = Vec::new();
     {
         let mut stmt = conn.prepare(
-            "SELECT id, identifier, display_name FROM threads ORDER BY last_message_at DESC, id",
+            "SELECT id, identifier, display_name, service FROM threads ORDER BY last_message_at DESC, id",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
             ))
         })?;
         for row in rows {
@@ -186,7 +292,11 @@ pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
     let where_range = range.sql_between("sent_at");
     let range_params = range.params();
     let mut chunks = Vec::new();
-    for (thread_id, identifier, display_name) in threads {
+    for (thread_id, identifier, display_name, service) in threads {
+        // Skip threads whose service the scan didn't select.
+        if !sources.wants_service(service.as_deref()) {
+            continue;
+        }
         let sql = format!(
             "SELECT id, sender, is_from_me, sent_at, body FROM messages
              WHERE thread_id = ?{p} AND body IS NOT NULL AND TRIM(body) != ''
@@ -218,12 +328,14 @@ pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
             } else {
                 sender.unwrap_or_else(|| "unknown".into())
             };
+            // Fingerprint the FULL body (finding identity/dismissals survive),
+            // then cap what the model actually sees.
             let fingerprint = message_fingerprint(&identifier, sent_at, &sender, &body);
             items.push(ChunkItem {
                 source_id: id,
                 sender,
                 occurred_at: sent_at,
-                text: body,
+                text: cap_item_text(body),
                 fingerprint,
             });
         }
@@ -249,6 +361,7 @@ pub fn chunk_messages(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
                 kind: SourceKind::Message,
                 thread_identifier: Some(identifier.clone()),
                 label: display_name.clone(),
+                service: service.clone(),
                 items: window.to_vec(),
             });
             if end == items.len() {
@@ -294,39 +407,74 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
             continue;
         }
         let fingerprint = note_fingerprint(created_at, &title, &text);
-        chunks.push(Chunk {
-            // Content-derived key: stable across re-imports even though the
-            // cache row id is not.
-            key: format!("n:{}", &fingerprint[..16]),
-            fingerprint: fingerprint.clone(),
-            kind: SourceKind::Note,
-            thread_identifier: None,
-            label: if title.is_empty() {
-                None
-            } else {
-                Some(title.clone())
-            },
-            items: vec![ChunkItem {
-                source_id: id,
-                sender: "me".into(),
-                occurred_at: modified_at.or(created_at),
-                text: if title.is_empty() {
-                    text
+        let full = if title.is_empty() {
+            text
+        } else {
+            format!("{title}\n{text}")
+        };
+        let segments = split_note_text(&full);
+        if segments.len() == 1 {
+            // The common case keeps the existing key shape — already-scanned
+            // short notes must not re-classify after this change.
+            chunks.push(Chunk {
+                // Content-derived key: stable across re-imports even though
+                // the cache row id is not.
+                key: format!("n:{}", &fingerprint[..16]),
+                fingerprint: fingerprint.clone(),
+                kind: SourceKind::Note,
+                thread_identifier: None,
+                label: if title.is_empty() {
+                    None
                 } else {
-                    format!("{title}\n{text}")
+                    Some(title.clone())
                 },
-                fingerprint,
-            }],
-        });
+                service: None,
+                items: vec![ChunkItem {
+                    source_id: id,
+                    sender: "me".into(),
+                    occurred_at: modified_at.or(created_at),
+                    text: full,
+                    fingerprint,
+                }],
+            });
+        } else {
+            // A long note becomes several windowed chunks (issue #33): each
+            // segment classifies independently within the context budget, so
+            // one oversized note can no longer fail expensively/unclassified.
+            let total = segments.len();
+            for (i, seg) in segments.into_iter().enumerate() {
+                let seg_fp = sha256_hex(&format!("note-seg|{fingerprint}|{i}|{seg}"));
+                chunks.push(Chunk {
+                    key: format!("n:{}:{i}", &fingerprint[..16]),
+                    fingerprint: seg_fp.clone(),
+                    kind: SourceKind::Note,
+                    thread_identifier: None,
+                    label: Some(if title.is_empty() {
+                        format!("Note (part {}/{total})", i + 1)
+                    } else {
+                        format!("{title} (part {}/{total})", i + 1)
+                    }),
+                    service: None,
+                    items: vec![ChunkItem {
+                        source_id: id,
+                        sender: "me".into(),
+                        occurred_at: modified_at.or(created_at),
+                        text: seg,
+                        fingerprint: seg_fp,
+                    }],
+                });
+            }
+        }
     }
     Ok(chunks)
 }
 
-/// Full scan order: all message chunks (newest threads first), then notes.
-pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: ScanSources) -> Result<Vec<Chunk>> {
+/// Full scan order: all in-scope message chunks (newest threads first), then
+/// notes. `sources` selects which message services and whether notes are covered.
+pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Result<Vec<Chunk>> {
     let mut chunks = Vec::new();
-    if sources.messages {
-        chunks.extend(chunk_messages(cache, range)?);
+    if sources.includes_messages() {
+        chunks.extend(chunk_messages(cache, range, sources)?);
     }
     if sources.notes {
         chunks.extend(chunk_notes(cache, range)?);
@@ -380,8 +528,8 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "hello world", i % 2 == 0))
             .collect();
         let cache = cache_with(&msgs);
-        let a = chunk_all(&cache, TimeRange::default(), ScanSources::default()).unwrap();
-        let b = chunk_all(&cache, TimeRange::default(), ScanSources::default()).unwrap();
+        let a = chunk_all(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let b = chunk_all(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         let keys_a: Vec<_> = a.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         let keys_b: Vec<_> = b.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         assert_eq!(keys_a, keys_b);
@@ -397,7 +545,7 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "steady text", false))
             .collect();
         let cache = cache_with(&msgs);
-        let before = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let before = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         // Append newer messages (later sent_at) — the realistic re-import delta.
         for i in 0..20 {
             cache
@@ -409,7 +557,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let after = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let after = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert!(after.len() > before.len());
         for (b, a) in before.iter().zip(after.iter()) {
             // Every pre-existing *complete* window is untouched; the final
@@ -427,7 +575,7 @@ mod tests {
             .map(|i| ("chatA", 1000 + i, "original", false))
             .collect();
         let cache = cache_with(&msgs);
-        let before = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let before = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         // Edit one message near the start (offset 2 → only window 0 sees it).
         cache
             .conn()
@@ -436,7 +584,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let after = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let after = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert_ne!(before[0].fingerprint, after[0].fingerprint);
         for i in 1..before.len() {
             assert_eq!(
@@ -462,6 +610,7 @@ mod tests {
                 start: Some(1000),
                 end: Some(2000),
             },
+            &ScanSources::default(),
         )
         .unwrap();
         let texts: Vec<_> = chunks[0].items.iter().map(|i| i.text.as_str()).collect();
@@ -473,6 +622,7 @@ mod tests {
                 start: Some(2000),
                 end: None,
             },
+            &ScanSources::default(),
         )
         .unwrap();
         assert_eq!(from_only[0].items.len(), 2);
@@ -482,6 +632,7 @@ mod tests {
                 start: None,
                 end: Some(999),
             },
+            &ScanSources::default(),
         )
         .unwrap();
         assert_eq!(until_only[0].items.len(), 1);
@@ -502,7 +653,7 @@ mod tests {
                 [],
             )
             .unwrap();
-        let chunks = chunk_messages(&cache, TimeRange::default()).unwrap();
+        let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert_eq!(chunks.len(), 2);
         // Newest thread first.
         assert_eq!(chunks[0].thread_identifier.as_deref(), Some("new-chat"));
@@ -534,6 +685,81 @@ mod tests {
         let again = chunk_notes(&cache, TimeRange::default()).unwrap();
         assert_eq!(again[0].key, key_before);
         assert_eq!(again[0].items[0].source_id, 70);
+    }
+
+    #[test]
+    fn long_note_windows_into_stable_segment_chunks() {
+        let cache = cache_with(&[]);
+        // ~3 windows of text; multi-byte chars sprinkled in so a segment cut
+        // on a non-ASCII boundary would panic if slicing were byte-based.
+        let body = "wörd ålpha ".repeat(2_000); // ~22k chars
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO notes (id, title, body_html, created_at, modified_at, locked)
+                 VALUES (7, 'Long', ?1, 500, 600, 0)",
+                params![body],
+            )
+            .unwrap();
+        let chunks = chunk_notes(&cache, TimeRange::default()).unwrap();
+        assert!(
+            chunks.len() >= 3,
+            "expected several segments, got {}",
+            chunks.len()
+        );
+        // Segment keys: n:<fp16>:<i>, deterministic across runs.
+        for (i, c) in chunks.iter().enumerate() {
+            assert!(
+                c.key.ends_with(&format!(":{i}")),
+                "key {} lacks segment index",
+                c.key
+            );
+            // The limit is in CHARS (the splitter is char-based; bytes can be
+            // larger with multi-byte text like this fixture's ö/å).
+            assert!(c.items[0].text.chars().count() <= NOTE_WINDOW_CHARS + NOTE_OVERLAP_CHARS + 16);
+            assert_eq!(c.items[0].source_id, 7);
+        }
+        let again = chunk_notes(&cache, TimeRange::default()).unwrap();
+        let keys: Vec<_> = chunks.iter().map(|c| (&c.key, &c.fingerprint)).collect();
+        let keys2: Vec<_> = again.iter().map(|c| (&c.key, &c.fingerprint)).collect();
+        assert_eq!(keys, keys2);
+        // A short note keeps the single-chunk key shape (no ':' segment
+        // suffix) — already-classified notes must not re-classify.
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO notes (id, title, body_html, created_at, modified_at, locked)
+                 VALUES (8, 'Short', 'tiny', 500, 600, 0)",
+                [],
+            )
+            .unwrap();
+        let with_short = chunk_notes(&cache, TimeRange::default()).unwrap();
+        let short = with_short
+            .iter()
+            .find(|c| c.items[0].source_id == 8)
+            .unwrap();
+        assert_eq!(
+            short.key.matches(':').count(),
+            1,
+            "short note key gained a segment suffix"
+        );
+    }
+
+    #[test]
+    fn oversized_message_item_is_capped_with_marker() {
+        let big = "α".repeat(ITEM_MAX_CHARS + 500);
+        let msgs: Vec<(&str, i64, &str, bool)> = vec![("chatA", 1000, big.as_str(), false)];
+        let cache = cache_with(&msgs);
+        let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let text = &chunks[0].items[0].text;
+        assert!(text.ends_with("…[truncated]"));
+        assert!(text.chars().count() < ITEM_MAX_CHARS + 20);
+        // Finding identity still covers the FULL body: fingerprint must match
+        // the uncapped text, so dismissals survive the cap.
+        assert_eq!(
+            chunks[0].items[0].fingerprint,
+            message_fingerprint("chatA", Some(1000), "them", &big)
+        );
     }
 
     #[test]

@@ -51,7 +51,7 @@ pub struct DownloadSnapshot {
 }
 
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
-fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_path
         .parent()
         .ok_or("unexpected cache layout")?
@@ -196,6 +196,9 @@ pub async fn safety_scan_health_check(
                 model_path,
                 port,
                 ctx_size,
+                // The health check probes startup, not throughput.
+                parallel: 1,
+                api_key: None,
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir,
@@ -419,26 +422,66 @@ pub async fn run_safety_scan(
     range_end: Option<i64>,
     // Which content to scan: "all" (default), "messages", or "notes".
     sources: Option<String>,
+    // Resume THIS existing scan (same row, accumulating findings) instead of
+    // creating a new one. Its stored range/sources are authoritative.
+    resume_scan_id: Option<i64>,
 ) -> Result<(), String> {
     let _guard = gate
         .0
         .try_lock()
         .map_err(|_| "a Safety Scan is already running")?;
 
-    let scan_sources = match sources.as_deref() {
-        Some("messages") => ScanSources {
-            messages: true,
-            notes: false,
-        },
-        Some("notes") => ScanSources {
-            messages: false,
-            notes: true,
-        },
-        _ => ScanSources::default(),
-    };
-
     let cache_path = active.path()?;
     let analysis_db_path = analysis_path(&cache_path)?;
+
+    // Resuming: read the scan's own stored scope rather than trusting the UI
+    // to echo it back — resume means "this scan, exactly".
+    let (range_start, range_end, sources) = match resume_scan_id {
+        Some(id) => {
+            let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+            let row = db
+                .scan_by_id(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("scan to resume no longer exists")?;
+            (row.range_start, row.range_end, Some(row.sources))
+        }
+        None => (range_start, range_end, sources),
+    };
+
+    // `sources` is "all", the legacy "messages"/"notes", or a comma-joined set
+    // of the picked message services (e.g. "iMessage,TikTok") plus optionally
+    // "notes" — the multi-select Content filter.
+    let scan_sources = match sources.as_deref() {
+        None | Some("all") | Some("") => ScanSources::default(),
+        Some("messages") => ScanSources {
+            notes: false,
+            message_services: None,
+        },
+        Some("notes") => ScanSources {
+            notes: true,
+            message_services: Some(Vec::new()),
+        },
+        Some(list) => {
+            let tokens: Vec<&str> = list
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let notes = tokens.contains(&"notes");
+            let all_messages = tokens.contains(&"messages");
+            let services: Vec<String> = tokens
+                .iter()
+                .filter(|t| **t != "notes" && **t != "messages")
+                .map(|t| t.to_string())
+                .collect();
+            ScanSources {
+                notes,
+                message_services: if all_messages { None } else { Some(services) },
+            }
+        }
+    };
+    // Canonicalise what we store on the row so the scope predicates match it.
+    let sources_slug = scan_sources.slug();
     let dir = models_dir(&app)?;
     let spec = match model_id.as_deref() {
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
@@ -448,6 +491,57 @@ pub async fn run_safety_scan(
         .installed_at(&dir)
         .ok_or("model not installed — download it first")?;
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+
+    // Cascade (#35): when the effective model is E4B and E2B is also
+    // installed, sweep everything with the fast tier and re-check flagged
+    // chunks with the strong one. Single-tier machines keep one-pass behavior.
+    // Computed BEFORE the row is created so the row records the SWEEP model —
+    // stamping the E4B id up front would falsely claim E4B judged content even
+    // when it never re-checked anything (verification Finding B).
+    let cascade_sweep = if spec.id.contains("E4B") {
+        models::spec_by_id("gemma-4-E2B-it-Q4_K_M").filter(|e| e.installed_at(&dir).is_some())
+    } else {
+        None
+    };
+    let primary_spec = cascade_sweep.unwrap_or(spec);
+    let primary_path = primary_spec
+        .installed_at(&dir)
+        .ok_or("model not installed — download it first")?;
+    // The strong tier's identity/path for the re-check phase (None = no cascade).
+    let strong = cascade_sweep.map(|_| (spec.id.to_string(), model_path.clone(), spec.ctx_size));
+
+    // Flip the scan row to 'running' NOW — before the slow (30–180 s) model
+    // load — so the stored state and the history rail reflect the user's
+    // action the moment it happens, in step with the Stop button, instead of
+    // a minute later. The engine then continues this same row. If startup
+    // fails below, the error path repairs the row back to 'interrupted'.
+    // Seeded with the SWEEP model; a completed cascade upgrades it to
+    // "e2b→e4b" only once the strong tier has actually re-checked.
+    let scan_row_id = {
+        let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+        match resume_scan_id {
+            Some(id) => {
+                db.resume_scan(id, primary_spec.id)
+                    .map_err(|e| e.to_string())?;
+                id
+            }
+            None => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                db.begin_scan(
+                    primary_spec.id,
+                    (range_start, range_end),
+                    &sources_slug,
+                    now,
+                )
+                .map_err(|e| e.to_string())?
+            }
+        }
+    };
+    let analysis_db_path_repair = analysis_db_path.clone();
+
     // The sandbox's only writable location — TraceLoupe-owned, wiped each run
     // (see below) so nothing the sidecar writes ever persists or is treated as
     // backup data.
@@ -456,16 +550,40 @@ pub async fn run_safety_scan(
     let cancel = CancelToken::new();
     *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
 
+    // Concurrency: Apple Silicon inference is memory-bandwidth-bound at batch
+    // 1, so a few server slots give near-linear throughput (#34). KV memory
+    // scales with slots × per-slot context, so slots are gated on RAM; ≤8 GB
+    // machines keep today's sequential behavior.
+    let gib = 1024u64 * 1024 * 1024;
+    let total_ram = models::total_ram_bytes();
+    let parallel: u32 = if total_ram >= 32 * gib {
+        4
+    } else if total_ram >= 16 * gib {
+        2
+    } else {
+        1
+    };
+
+    // One random bearer token for this run's server(s) — closes the loopback
+    // "CORS * / no key" gap (a malicious page in the user's browser can't drive
+    // the local model without it). Both the sweep and cascade-strong servers
+    // use it, and every client sends it.
+    let api_key = server::generate_api_key();
+
     let app2 = app.clone();
-    let spec_id = spec.id.to_string();
-    let ctx_size = spec.ctx_size;
+    let spec_id = primary_spec.id.to_string();
+    // ServerConfig.ctx_size is the TOTAL across slots: keep the full per-slot
+    // context at any parallelism.
+    let ctx_size = primary_spec.ctx_size * parallel;
+    let binary2 = binary.clone();
     let binary_log = binary.display().to_string();
-    let model_log = model_path.display().to_string();
+    let model_log = primary_path.display().to_string();
+    let model_path = primary_path;
     let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
         crate::logging::info(
             &app2,
-            format!("Safety Scan: starting (model={spec_id}, sandbox=on)"),
+            format!("Safety Scan: starting (model={spec_id}, sandbox=on, parallel={parallel})"),
         );
         crate::logging::debug(&app2, format!("Safety Scan: binary={binary_log}"));
         crate::logging::debug(&app2, format!("Safety Scan: model={model_log}"));
@@ -489,6 +607,8 @@ pub async fn run_safety_scan(
                 model_path,
                 port,
                 ctx_size,
+                parallel,
+                api_key: api_key.clone(),
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir: scratch_dir.clone(),
@@ -538,12 +658,17 @@ pub async fn run_safety_scan(
         // the model server — that drops the in-flight request immediately (its
         // retry then fails fast and the between-chunk check breaks the loop),
         // making Stop felt in a fraction of a second instead of up to a minute.
-        let server_pid = llama.pid();
+        //
+        // ONE watcher reads the CURRENT server pid from a shared atomic that the
+        // cascade swap updates — so after the sweep→strong swap it never kills
+        // the retired (possibly OS-reused) sweep pid (verification Finding C).
+        let current_pid = Arc::new(std::sync::atomic::AtomicU32::new(llama.pid()));
         let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let watcher = {
             let cancel = cancel.clone();
             let done = watch_done.clone();
             let app = app2.clone();
+            let current_pid = current_pid.clone();
             std::thread::spawn(move || {
                 while !done.load(std::sync::atomic::Ordering::SeqCst) {
                     if cancel.is_cancelled() {
@@ -553,7 +678,11 @@ pub async fn run_safety_scan(
                         );
                         let _ = std::process::Command::new("/bin/kill")
                             .arg("-9")
-                            .arg(server_pid.to_string())
+                            .arg(
+                                current_pid
+                                    .load(std::sync::atomic::Ordering::SeqCst)
+                                    .to_string(),
+                            )
                             .status();
                         break;
                     }
@@ -568,13 +697,102 @@ pub async fn run_safety_scan(
             // Per-chunk generation on E2B-class hardware can be slow; the
             // read timeout must comfortably exceed the worst single chunk.
             Duration::from_secs(300),
-        );
+        )
+        .with_api_key(api_key.clone());
         let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
         let mut analysis = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
         let range = TimeRange {
             start: range_start,
             end: range_end,
         };
+
+        // Cascade provider: called by the engine AFTER the sweep. Spawns the
+        // strong tier on a NEW port and only tears the sweep server down once
+        // the strong one is confirmed healthy — so if the strong model can't
+        // load (e.g. it doesn't fit in RAM on top of the sweep model), the
+        // sweep server stays alive: the engine keeps the sweep verdicts and
+        // the summary still has a live server to talk to (Finding 2). A new
+        // cancel watcher for the strong pid keeps Stop fast.
+        let mut provider = strong.map(|(strong_id, strong_path, strong_ctx)| {
+            let (llama_ref, app3, scratch2, binary3) = (
+                &mut llama,
+                app2.clone(),
+                scratch_dir.clone(),
+                binary2.clone(),
+            );
+            let (cancel2, current_pid2) = (cancel.clone(), current_pid.clone());
+            let api_key2 = api_key.clone();
+            move || -> traceloupe_core::Result<client::LlmClient> {
+                use traceloupe_core::Error;
+                let inf = |m: String| Error::Inference(m);
+                crate::logging::info(
+                    &app3,
+                    format!("Safety Scan: cascade re-check — loading {strong_id}"),
+                );
+                let port = server::pick_port()?;
+                let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+                let app_log = app3.clone();
+                std::thread::spawn(move || {
+                    while let Ok(line) = log_rx.recv() {
+                        crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+                    }
+                });
+                // Spawn into a LOCAL: the sweep server (in *llama_ref) stays up
+                // until this one is healthy. On any error below, `strong` is
+                // dropped (its Drop kills it) and *llama_ref is untouched.
+                let mut strong = server::LlamaServer::spawn(
+                    &server::ServerConfig {
+                        binary: binary3.clone(),
+                        model_path: strong_path.clone(),
+                        port,
+                        ctx_size: strong_ctx * parallel,
+                        parallel,
+                        api_key: api_key2.clone(),
+                        gpu_layers: -1,
+                        sandbox: true,
+                        scratch_dir: scratch2.clone(),
+                    },
+                    Some(log_tx),
+                )?;
+                let deadline = std::time::Instant::now() + Duration::from_secs(180);
+                loop {
+                    match strong.wait_healthy(Duration::from_secs(2)) {
+                        Ok(()) => break,
+                        Err(e) => {
+                            if cancel2.is_cancelled() {
+                                return Err(inf("cancelled".into()));
+                            }
+                            if strong.has_exited() || std::time::Instant::now() >= deadline {
+                                return Err(e);
+                            }
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                    }
+                }
+                // Strong tier is healthy: NOW retire the sweep server and take
+                // ownership of the strong one.
+                let strong_pid = strong.pid();
+                llama_ref.shutdown();
+                *llama_ref = strong;
+                // Point the (single) cancel watcher at the strong pid before it
+                // can fire on the now-reaped sweep pid — must happen AFTER the
+                // sweep shutdown so a cancel in this window still hits a live
+                // server, not the gap.
+                current_pid2.store(strong_pid, std::sync::atomic::Ordering::SeqCst);
+                if cancel2.is_cancelled() {
+                    // A cancel that landed during the swap: the watcher may have
+                    // already killed the old pid; make sure the new server dies.
+                    llama_ref.shutdown();
+                    return Err(inf("cancelled".into()));
+                }
+                Ok(client::LlmClient::new(
+                    llama_ref.base_url(),
+                    &strong_id,
+                    Duration::from_secs(300),
+                )
+                .with_api_key(api_key2.clone()))
+            }
+        });
 
         let mut last_emit = std::time::Instant::now();
         let outcome = engine::run_scan(
@@ -583,6 +801,13 @@ pub async fn run_safety_scan(
             &llm,
             range,
             scan_sources,
+            // The command already created/reopened the row (above) so the UI
+            // saw it flip immediately; the engine continues that same row.
+            Some(scan_row_id),
+            parallel as usize,
+            provider
+                .as_mut()
+                .map(|p| p as &mut dyn FnMut() -> traceloupe_core::Result<client::LlmClient>),
             &cancel,
             |p| {
                 // Always emit the first (done == 0) tick — it's what flips the UI from
@@ -606,9 +831,26 @@ pub async fn run_safety_scan(
         )
         .map_err(|e| e.to_string())?;
 
+        // A cascade swaps `llama` to the strong server, killing the sweep
+        // server `llm` was built against — so drop the provider (releasing its
+        // &mut llama) and rebuild the summary client from whatever server is
+        // live now. Without a cascade this is the same server, just rebuilt.
+        drop(provider);
+        let summary_client =
+            client::LlmClient::new(llama.base_url(), &spec_id, Duration::from_secs(300))
+                .with_api_key(api_key.clone());
+
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
-        summary::run_summaries(&mut analysis, &llm, outcome.scan_id, &cancel)
-            .map_err(|e| e.to_string())?;
+        // Best-effort: the classification is done and findings are saved, so a
+        // summary failure (e.g. the only live server died) must NOT fail the
+        // whole scan and discard a completed result — log it and move on. The
+        // report simply won't exist; the UI already handles "no written
+        // report", and a later resume regenerates it.
+        if let Err(e) =
+            summary::run_summaries(&mut analysis, &summary_client, outcome.scan_id, &cancel)
+        {
+            crate::logging::warn(&app2, format!("Safety Scan: report summary skipped — {e}"));
+        }
         // Stop the watcher (it may already have fired on cancel) before we take
         // the server down ourselves.
         watch_done.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -634,11 +876,19 @@ pub async fn run_safety_scan(
     .await;
 
     // Surface an error event on BOTH a normal Err and a panicked task, so the
-    // UI never sits waiting on a "loading" scan that silently died. (A stranded
-    // `running` scan row is repaired by the next begin_scan.)
+    // UI never sits waiting on a "loading" scan that silently died. The row was
+    // flipped to 'running' before startup, so a failure before/inside the
+    // engine must repair it back to 'interrupted' (best effort; the next
+    // backup open is the backstop).
+    let repair_on_error = || {
+        if let Ok(db) = AnalysisDb::open(&analysis_db_path_repair) {
+            let _ = db.repair_stranded_scans();
+        }
+    };
     let result = match join {
         Ok(r) => r,
         Err(e) => {
+            repair_on_error();
             let msg = format!("scan task failed: {e}");
             let _ = app.emit(
                 "safetyscan://progress",
@@ -650,6 +900,7 @@ pub async fn run_safety_scan(
         }
     };
     if let Err(msg) = &result {
+        repair_on_error();
         let _ = app.emit(
             "safetyscan://progress",
             ScanEvent::Error {
@@ -684,6 +935,9 @@ pub struct ContentFindingDto {
     /// The cache `threads.id` for message findings — the Messages deep-link.
     pub thread_id: Option<i64>,
     pub thread_identifier: Option<String>,
+    /// The messaging service for the app icon (e.g. "iMessage", "TikTok"), or
+    /// "Notes" for note findings. None when the source can't be resolved.
+    pub service: Option<String>,
     pub occurred_at: Option<i64>,
     pub fingerprint: String,
     pub category: String,
@@ -691,11 +945,18 @@ pub struct ContentFindingDto {
     pub rationale: String,
     pub stale: bool,
     pub dismissed: bool,
+    /// True when the cascade's strong tier (E4B) re-checked and kept this
+    /// finding — the honest "confidence" signal (two independent models agree),
+    /// vs a sweep-only (E2B, unconfirmed) flag.
+    pub rechecked: bool,
 }
 
+/// Findings, newest-severity first. `scan_id` restricts to one scan (the
+/// history view shows the selected scan's findings); None returns all.
 #[tauri::command]
 pub fn list_content_findings(
     active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
 ) -> Result<Vec<ContentFindingDto>, String> {
     let cache_path = active.path()?;
     let path = analysis_path(&cache_path)?;
@@ -706,38 +967,182 @@ pub fn list_content_findings(
     // Resolve message → thread ids for deep-links (best effort; a stale
     // source_id after re-import simply yields no link).
     let cache = CacheDb::open(&cache_path).ok();
-    let thread_of = |source_id: Option<i64>| -> Option<i64> {
-        let (cache, id) = (cache.as_ref()?, source_id?);
+    // For message findings, resolve the thread id (deep-link) AND the service
+    // (app icon) in one lookup; best effort — a stale source_id yields neither.
+    let thread_meta = |source_id: Option<i64>| -> (Option<i64>, Option<String>) {
+        let Some((cache, id)) = cache.as_ref().zip(source_id) else {
+            return (None, None);
+        };
         cache
             .conn()
-            .query_row("SELECT thread_id FROM messages WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
-            .ok()
+            .query_row(
+                "SELECT m.thread_id, t.service FROM messages m \
+                 LEFT JOIN threads t ON t.id = m.thread_id WHERE m.id = ?1",
+                [id],
+                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .unwrap_or((None, None))
     };
-    Ok(db
-        .list_findings()
-        .map_err(|e| e.to_string())?
+    // A scan shows every finding within its SCOPE (sources + time range), not
+    // just the ones its own run classified — classification is cached per chunk
+    // across scans, so scoping by scan_id makes a re-scan of already-covered data
+    // look empty. None (no scan selected) still returns all findings.
+    let findings = match scan_id {
+        Some(id) => match db.scan_by_id(id).map_err(|e| e.to_string())? {
+            Some(s) => db.list_findings_in_scope(&s.sources, s.range_start, s.range_end),
+            None => db.list_findings(Some(id)),
+        },
+        None => db.list_findings(None),
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(findings
         .into_iter()
-        .map(|f| ContentFindingDto {
-            id: f.id,
-            source_kind: f.source_kind.as_str().into(),
-            thread_id: if f.source_kind == traceloupe_core::analysis::SourceKind::Message {
-                thread_of(f.source_id)
+        .map(|f| {
+            let is_message = f.source_kind == traceloupe_core::analysis::SourceKind::Message;
+            let (thread_id, service) = if is_message {
+                thread_meta(f.source_id)
             } else {
-                None
-            },
-            source_id: f.source_id,
-            thread_identifier: f.thread_identifier,
-            occurred_at: f.occurred_at,
-            fingerprint: f.fingerprint,
-            category: f.category.as_str().into(),
-            severity: f.severity,
-            rationale: f.rationale,
-            stale: f.stale,
-            dismissed: f.dismissed,
+                // Note findings all come from Apple Notes.
+                (None, Some("Notes".to_string()))
+            };
+            ContentFindingDto {
+                id: f.id,
+                source_kind: f.source_kind.as_str().into(),
+                thread_id,
+                service,
+                source_id: f.source_id,
+                thread_identifier: f.thread_identifier,
+                occurred_at: f.occurred_at,
+                fingerprint: f.fingerprint,
+                category: f.category.as_str().into(),
+                severity: f.severity,
+                rationale: f.rationale,
+                stale: f.stale,
+                dismissed: f.dismissed,
+                rechecked: f.rechecked,
+            }
         })
         .collect())
+}
+
+/// A flagged source, fetched from the cache ON DEMAND for the peek popover.
+///
+/// This is on-device, on-demand UI content and is never persisted. When report
+/// EXPORT is built, `text` must be gated behind a user setting (default OFF) so
+/// verbatim flagged content isn't baked into a shareable file — see issue #38.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingSnippet {
+    /// The flagged text (message body, or note title + stripped body).
+    pub text: String,
+    /// Who sent it: "Me" for the device owner, else the handle/name. None for
+    /// notes.
+    pub sender: Option<String>,
+    /// The other side of the conversation (thread name/handle) — shown as
+    /// "Me → recipient" when the device owner's own message is flagged. None
+    /// for notes.
+    pub recipient: Option<String>,
+    /// When it was sent (unix seconds), for the popover header. None for notes.
+    pub occurred_at: Option<i64>,
+    /// The service for the app icon ("iMessage"/"TikTok"/…), "Notes" for notes.
+    pub service: Option<String>,
+}
+
+/// The flagged source for a finding, fetched from the cache ON DEMAND (never
+/// stored in analysis.db — ADR 0002 keeps raw text out of the analysis store).
+/// Returns None when the source row is gone or its id is stale after a
+/// re-import, so the UI can say "source no longer available" instead of lying.
+#[tauri::command]
+pub fn content_finding_snippet(
+    active: State<'_, ActiveBackup>,
+    source_kind: String,
+    source_id: Option<i64>,
+) -> Result<Option<FindingSnippet>, String> {
+    let cache_path = active.path()?;
+    let Some(id) = source_id else {
+        return Ok(None);
+    };
+    let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+    let snippet = match source_kind.as_str() {
+        "message" => cache
+            .conn()
+            .query_row(
+                "SELECT m.body, m.sender, m.is_from_me, m.sent_at, t.service, \
+                 t.display_name, t.identifier \
+                 FROM messages m LEFT JOIN threads t ON t.id = m.thread_id \
+                 WHERE m.id = ?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, bool>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .ok()
+            .and_then(
+                |(body, sender, is_from_me, sent_at, service, display_name, identifier)| {
+                    let text = body?.trim().to_string();
+                    if text.is_empty() {
+                        return None;
+                    }
+                    let sender = if is_from_me {
+                        Some("Me".to_string())
+                    } else {
+                        sender.filter(|s| !s.trim().is_empty())
+                    };
+                    // The conversation's name/handle, for "Me → recipient".
+                    let recipient = display_name.filter(|s| !s.trim().is_empty()).or(identifier);
+                    Some(FindingSnippet {
+                        text,
+                        sender,
+                        recipient,
+                        occurred_at: sent_at,
+                        service,
+                    })
+                },
+            ),
+        "note" => cache
+            .conn()
+            .query_row(
+                "SELECT title, body_html FROM notes WHERE id = ?1 AND locked = 0",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                    ))
+                },
+            )
+            .ok()
+            .and_then(|(title, body)| {
+                let body = traceloupe_core::safety_scan::chunker::strip_html(
+                    body.as_deref().unwrap_or(""),
+                );
+                let text = match title {
+                    Some(t) if !t.trim().is_empty() => format!("{t}\n{body}"),
+                    _ => body,
+                };
+                let text = text.trim().to_string();
+                if text.is_empty() {
+                    return None;
+                }
+                Some(FindingSnippet {
+                    text,
+                    sender: None,
+                    recipient: None,
+                    occurred_at: None,
+                    service: Some("Notes".to_string()),
+                })
+            }),
+        _ => None,
+    };
+    Ok(snippet)
 }
 
 /// Compact per-source severity marks for inline badges (plan T9): the top
@@ -762,7 +1167,7 @@ pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<Find
     }
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
     let cache = CacheDb::open(&cache_path).ok();
-    for f in db.list_findings().map_err(|e| e.to_string())? {
+    for f in db.list_findings(None).map_err(|e| e.to_string())? {
         // Dismissed and stale findings must not badge a row — the list should
         // match what the Safety Scan page shows by default.
         if f.dismissed || f.stale {
@@ -839,12 +1244,19 @@ pub struct SafetyScanReport {
 #[serde(rename_all = "camelCase")]
 pub struct ScanHistoryItem {
     pub id: i64,
+    pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub findings: i64,
+    /// Live finding counts by severity (3=serious, 2=harmful, 1=concerning).
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
 }
 
 /// Remove a past scan and everything scoped to it (findings, progress,
@@ -873,12 +1285,17 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
         .into_iter()
         .map(|s| ScanHistoryItem {
             id: s.id,
+            model: s.model,
             range_start: s.range_start,
             range_end: s.range_end,
+            sources: s.sources,
             status: s.status,
             started_at: s.started_at,
             finished_at: s.finished_at,
             findings: s.findings,
+            serious: s.serious,
+            harmful: s.harmful,
+            concerning: s.concerning,
         })
         .collect())
 }

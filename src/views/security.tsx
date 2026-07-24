@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  ShieldAlert, ShieldCheck, ShieldQuestion, Loader2, AlertTriangle, Info, ExternalLink, Download, Link2, } from "lucide-react";
+  ShieldAlert, ShieldCheck, ShieldQuestion, History, Loader2, AlertTriangle, Info, ExternalLink, Download, Link2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Card, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
+  Card, CardContent, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, } from "@/components/ui/sheet";
@@ -18,8 +18,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
+import { FilterControl } from "@/components/filter-control";
+import { badgeGroup } from "@/components/filter-groups";
+import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { feedDisplayName } from "@/lib/feeds";
-import { formatListTime } from "@/lib/format";
+import { formatListTime, formatTimelineTime } from "@/lib/format";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { ConsentDialogs } from "@/views/security-consent";
@@ -109,11 +112,18 @@ export function SecurityView() {
     queryFn: () => client.getIndicatorInfo(),
   });
 
-  const latestRun = runs.data?.[0] ?? null;
+  // The view shows ONE run at a time (default: the latest); the history rail
+  // switches which. Findings always belong to the selected run.
+  const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const selectedRun =
+    runs.data?.find((r) => r.id === selectedRunId) ?? runs.data?.[0] ?? null;
   const findings = useQuery({
-    queryKey: ["findings", latestRun?.id],
-    queryFn: () => client.listFindings(latestRun!.id),
-    enabled: enabled && !!latestRun && latestRun.status === "done",
+    queryKey: ["findings", selectedRun?.id],
+    queryFn: () => client.listFindings(selectedRun!.id),
+    // Any selectable run, not only completed ones: a cancelled scan keeps the
+    // findings it made before stopping, and gating on "done" would leave its
+    // findings table on a permanent skeleton (the query never resolves).
+    enabled: enabled && !!selectedRun,
   });
 
   const [progress, setProgress] = useState<string | null>(null);
@@ -188,7 +198,7 @@ export function SecurityView() {
     <div className="flex h-full flex-col">
       <ConsentDialogs />
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4">
+        <div className="mx-auto flex max-w-5xl flex-col gap-4">
           {/* What this is / disclaimer — always visible. */}
           <Alert>
             <Info className="size-4" />
@@ -272,7 +282,7 @@ export function SecurityView() {
           {!running && runs.isPending && <ListSkeleton rows={4} />}
           {runs.error && <ErrorState error={runs.error} />}
 
-          {!running && runs.data && !latestRun && (
+          {!running && runs.data && !selectedRun && (
             <Card>
               <CardHeader>
                 <CardTitle>No scan yet</CardTitle>
@@ -283,19 +293,194 @@ export function SecurityView() {
             </Card>
           )}
 
-          {!running && latestRun && (
-            <ResultSummary
-              run={latestRun}
-              findings={findings.data ?? []}
-              loadingFindings={findings.isPending}
-              onSelect={setSelected}
-            />
+          {!running && selectedRun && (
+            // Master–detail: run history on the left, the selected run's
+            // result + findings on the right (same shape as Safety Scan).
+            <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+              <RunRail
+                runs={runs.data ?? []}
+                selectedId={selectedRun.id}
+                onSelect={setSelectedRunId}
+              />
+              <div className="min-w-0">
+                <ResultSummary
+                  run={selectedRun}
+                  latest={selectedRun.id === runs.data?.[0]?.id}
+                  onBackToLatest={() => setSelectedRunId(null)}
+                  findings={findings.data ?? []}
+                  loadingFindings={findings.isPending}
+                  onSelect={setSelected}
+                />
+              </div>
+            </div>
           )}
         </div>
       </div>
 
       <FindingDetail finding={selected} onClose={() => setSelected(null)} />
     </div>
+  );
+}
+
+/** Date-led identity for a run; what kind of check it was is the subtitle. */
+const KIND_LABEL: Record<string, string> = {
+  explicit: "Explicit scan",
+  passive: "Automatic check",
+};
+
+/** The rail's compact outcome badge: one chip, colored by the worst severity. */
+function RunOutcomeBadge({ run }: { run: ScanRun }) {
+  if (run.status !== "done")
+    return (
+      <Badge variant="outline" className="shrink-0 text-muted-foreground">
+        {run.status}
+      </Badge>
+    );
+  const total = run.critical + run.warning + run.info;
+  if (total === 0)
+    return (
+      <Badge
+        variant="outline"
+        className="shrink-0 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+      >
+        Clean
+      </Badge>
+    );
+  const meta =
+    run.critical > 0
+      ? SEVERITY_META.critical
+      : run.warning > 0
+        ? SEVERITY_META.warning
+        : SEVERITY_META.info;
+  return (
+    <Badge className={cn("shrink-0", meta.badge)}>
+      {total} finding{total === 1 ? "" : "s"}
+    </Badge>
+  );
+}
+
+/** The run-history rail: every Security Check on this backup, newest first,
+ *  with outcome filters and sorting. Selecting a row drives the result pane. */
+function RunRail({
+  runs,
+  selectedId,
+  onSelect,
+}: {
+  runs: ScanRun[];
+  selectedId: number;
+  onSelect: (id: number | null) => void;
+}) {
+  const [outcome, setOutcome] = useState("all");
+  const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
+
+  const visible = useMemo(() => {
+    let rows = runs.filter((r) => {
+      const total = r.critical + r.warning + r.info;
+      return outcome === "findings"
+        ? total > 0
+        : outcome === "clean"
+          ? total === 0 && r.status === "done"
+          : true;
+    });
+    rows = sortItems(
+      rows,
+      sort.by === "findings"
+        ? (r) => r.critical + r.warning + r.info
+        : (r) => r.startedAt,
+      sort.desc,
+    );
+    return rows;
+  }, [runs, outcome, sort]);
+
+  // A filter must never hide the selection: if the selected run gets filtered
+  // out, move the selection to the first visible row so the rail and the
+  // result pane can't disagree about what's shown.
+  useEffect(() => {
+    if (visible.length > 0 && !visible.some((r) => r.id === selectedId))
+      onSelect(visible[0].id);
+  }, [visible, selectedId, onSelect]);
+
+  return (
+    <Card className="gap-3">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <History className="size-4" /> Scan history
+        </CardTitle>
+        <div className="flex items-center gap-2 pt-1">
+          <FilterControl
+            align="right"
+            groups={[
+              badgeGroup({
+                key: "outcome",
+                label: "Outcome",
+                description: "Which runs to list",
+                options: [
+                  { value: "all", label: "All", count: runs.length },
+                  {
+                    value: "findings",
+                    label: "With findings",
+                    count: runs.filter((r) => r.critical + r.warning + r.info > 0).length,
+                  },
+                  {
+                    value: "clean",
+                    label: "Clean",
+                    count: runs.filter(
+                      (r) => r.critical + r.warning + r.info === 0 && r.status === "done",
+                    ).length,
+                  },
+                ],
+                value: outcome,
+                onChange: setOutcome,
+              }),
+            ]}
+          />
+          <SortControl
+            fields={[
+              { value: "date", label: "Date" },
+              { value: "findings", label: "Findings" },
+            ]}
+            value={sort}
+            onChange={setSort}
+          />
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-1.5">
+        {visible.length === 0 && (
+          <p className="text-xs text-muted-foreground">No runs match.</p>
+        )}
+        {visible.map((r) => (
+          <div
+            key={r.id}
+            role="button"
+            tabIndex={0}
+            aria-current={r.id === selectedId}
+            onClick={() => onSelect(r.id)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onSelect(r.id);
+              }
+            }}
+            className={cn(
+              "flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
+              r.id === selectedId && "border-primary/50 bg-primary/5",
+            )}
+          >
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">
+                {formatTimelineTime(r.startedAt)}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">
+                {KIND_LABEL[r.kind] ?? r.kind}
+                {r.feedsGeneratedAt != null &&
+                  ` · feeds ${new Date(r.feedsGeneratedAt * 1000).toISOString().slice(0, 10)}`}
+              </div>
+            </div>
+            <RunOutcomeBadge run={r} />
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -322,13 +507,30 @@ function FeedReceipt({ run, className }: { run: ScanRun; className?: string }) {
   );
 }
 
+function BackToLatest({ onClick }: { onClick: () => void }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button variant="outline" size="sm" onClick={onClick}>
+          Back to latest
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>Show the most recent scan again</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ResultSummary({
   run,
+  latest,
+  onBackToLatest,
   findings,
   loadingFindings,
   onSelect,
 }: {
   run: ScanRun;
+  latest: boolean;
+  onBackToLatest: () => void;
   findings: Finding[];
   loadingFindings: boolean;
   onSelect: (f: Finding) => void;
@@ -340,15 +542,19 @@ function ResultSummary({
     return (
       <Card>
         <CardHeader>
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="size-5 text-emerald-600 dark:text-emerald-400" />
-            <CardTitle>No known indicators matched</CardTitle>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="size-5 text-emerald-600 dark:text-emerald-400" />
+              <CardTitle>No known indicators matched</CardTitle>
+            </div>
+            {!latest && <BackToLatest onClick={onBackToLatest} />}
           </div>
           <CardDescription>
             Scanned {formatListTime(run.startedAt)} against{" "}
             {run.indicatorCount?.toLocaleString() ?? "?"} indicators. A clean
             result means no traces of spyware <em>known to these feeds</em> were
             found — it does not guarantee the device is uncompromised.
+            {!latest && " This is a past scan — newer scans exist."}
           </CardDescription>
           <FeedReceipt run={run} className="text-xs text-muted-foreground" />
         </CardHeader>
@@ -358,6 +564,15 @@ function ResultSummary({
 
   return (
     <div className="flex flex-col gap-3">
+      {!latest && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
+          <span>
+            Viewing the scan of {formatTimelineTime(run.startedAt)} — its
+            findings are listed below.
+          </span>
+          <BackToLatest onClick={onBackToLatest} />
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         {run.critical > 0 && (
           <Badge className={cn("gap-1", SEVERITY_META.critical.badge)}>

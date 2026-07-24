@@ -62,7 +62,8 @@ pub const CATALOG: [ModelSpec; 2] = [
     ModelSpec {
         id: "gemma-4-E4B-it-Q4_K_M",
         display_name: "Gemma 4 E4B",
-        note: "Best accuracy — the default classifier.",
+        note: "Highest accuracy. With E2B also installed, it re-checks only the \
+               content E2B flagged — near-E4B accuracy at close to E2B speed.",
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         filename: "gemma-4-E4B-it-Q4_K_M.gguf",
         sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
@@ -73,7 +74,8 @@ pub const CATALOG: [ModelSpec; 2] = [
     ModelSpec {
         id: "gemma-4-E2B-it-Q4_K_M",
         display_name: "Gemma 4 E2B",
-        note: "Lighter fallback — smaller and faster; use it if the larger model is slow or won't load on this Mac.",
+        note: "Smaller and ~2× faster. On its own it's the low-RAM choice; \
+               alongside E4B it's the fast first-pass sweep of the cascade.",
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
         sha256: "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
