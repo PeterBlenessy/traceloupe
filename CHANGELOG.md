@@ -22,6 +22,11 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ### Changed
 
+- Safety Scan classifies several chunks concurrently (2 slots on 16 GB
+  machines, 4 on 32 GB+; sequential below that) — Apple Silicon serves small
+  batches at near-linear throughput, so scans finish roughly 2× faster on
+  typical hardware. Per-chunk checkpointing, resume, and cancellation behave
+  exactly as before. (#34)
 - Security Check and Safety Scan are now master–detail views: a scan-history
   rail (date-led titles, outcome filter, sorting) on the left, and the
   selected scan's report **and its findings** on the right — a past scan is

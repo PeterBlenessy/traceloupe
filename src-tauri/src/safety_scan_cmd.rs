@@ -196,6 +196,8 @@ pub async fn safety_scan_health_check(
                 model_path,
                 port,
                 ctx_size,
+                // The health check probes startup, not throughput.
+                parallel: 1,
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir,
@@ -503,16 +505,32 @@ pub async fn run_safety_scan(
     let cancel = CancelToken::new();
     *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
 
+    // Concurrency: Apple Silicon inference is memory-bandwidth-bound at batch
+    // 1, so a few server slots give near-linear throughput (#34). KV memory
+    // scales with slots × per-slot context, so slots are gated on RAM; ≤8 GB
+    // machines keep today's sequential behavior.
+    let gib = 1024u64 * 1024 * 1024;
+    let total_ram = models::total_ram_bytes();
+    let parallel: u32 = if total_ram >= 32 * gib {
+        4
+    } else if total_ram >= 16 * gib {
+        2
+    } else {
+        1
+    };
+
     let app2 = app.clone();
     let spec_id = spec.id.to_string();
-    let ctx_size = spec.ctx_size;
+    // ServerConfig.ctx_size is the TOTAL across slots: keep the full per-slot
+    // context at any parallelism.
+    let ctx_size = spec.ctx_size * parallel;
     let binary_log = binary.display().to_string();
     let model_log = model_path.display().to_string();
     let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
         crate::logging::info(
             &app2,
-            format!("Safety Scan: starting (model={spec_id}, sandbox=on)"),
+            format!("Safety Scan: starting (model={spec_id}, sandbox=on, parallel={parallel})"),
         );
         crate::logging::debug(&app2, format!("Safety Scan: binary={binary_log}"));
         crate::logging::debug(&app2, format!("Safety Scan: model={model_log}"));
@@ -536,6 +554,7 @@ pub async fn run_safety_scan(
                 model_path,
                 port,
                 ctx_size,
+                parallel,
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir: scratch_dir.clone(),
@@ -633,6 +652,7 @@ pub async fn run_safety_scan(
             // The command already created/reopened the row (above) so the UI
             // saw it flip immediately; the engine continues that same row.
             Some(scan_row_id),
+            parallel as usize,
             &cancel,
             |p| {
                 // Always emit the first (done == 0) tick — it's what flips the UI from

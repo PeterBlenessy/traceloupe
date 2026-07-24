@@ -192,7 +192,12 @@ pub struct ServerConfig {
     pub binary: PathBuf,
     pub model_path: PathBuf,
     pub port: u16,
+    /// TOTAL context across all slots — with `parallel` slots each request
+    /// gets `ctx_size / parallel`, so callers scale this when raising slots.
     pub ctx_size: u32,
+    /// Server slots (`--parallel`); >1 lets the engine classify chunks
+    /// concurrently. 1 = today's sequential behavior.
+    pub parallel: u32,
     /// `-1` = offload everything to the GPU (Apple Silicon default).
     pub gpu_layers: i32,
     /// Wrap the process in the Seatbelt profile (macOS only; on other
@@ -270,7 +275,7 @@ impl LlamaServer {
             .parent()
             .ok_or_else(|| Error::Inference("binary path has no parent dir".into()))?;
 
-        let server_args = [
+        let mut server_args: Vec<std::ffi::OsString> = [
             "--model".as_ref(),
             cfg.model_path.as_os_str(),
             "--host".as_ref(),
@@ -282,7 +287,12 @@ impl LlamaServer {
             "--n-gpu-layers".as_ref(),
             cfg.gpu_layers.to_string().as_str().as_ref(),
         ]
-        .map(std::ffi::OsString::from);
+        .map(std::ffi::OsString::from)
+        .to_vec();
+        if cfg.parallel > 1 {
+            server_args.push("--parallel".into());
+            server_args.push(cfg.parallel.to_string().into());
+        }
 
         // The scratch dir must exist before the sandbox denies writes
         // everywhere else — it's the process's only writable location.
@@ -447,6 +457,7 @@ mod tests {
             model_path: PathBuf::from("/tmp/model-dir/model.gguf"),
             port,
             ctx_size: 4096,
+            parallel: 1,
             gpu_layers: -1,
             sandbox: false,
             scratch_dir: std::env::temp_dir().join("traceloupe-scratch-test"),

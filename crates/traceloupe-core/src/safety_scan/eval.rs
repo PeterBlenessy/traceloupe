@@ -313,6 +313,7 @@ mod tests {
                 model_path: model,
                 port,
                 ctx_size: 8192,
+                parallel: 1,
                 gpu_layers: -1,
                 sandbox: true,
                 scratch_dir: std::env::temp_dir().join("traceloupe-eval-scratch"),
