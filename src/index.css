@@ -325,3 +325,25 @@
   scrollbar-color: color-mix(in oklab, var(--foreground) 30%, transparent)
     transparent;
 }
+
+/* Print/Export: isolate the Safety Scan report document so `window.print()`
+   (→ Save as PDF) renders only the report, not the surrounding app chrome or the
+   dialog it sits in. Visibility (not display) keeps the report's own layout. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .safety-report-print,
+  .safety-report-print * {
+    visibility: visible;
+  }
+  .safety-report-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+}
