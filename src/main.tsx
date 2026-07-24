@@ -32,7 +32,15 @@ import { InteractionsView } from "@/views/interactions";
 const rootRoute = createRootRoute({ component: AppShell });
 
 const routes = [
-  createRoute({ getParentRoute: () => rootRoute, path: "/", component: BackupPicker }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/",
+    // With a backup open, `/` is the condensed Device landing; `?choose` forces
+    // the backup picker so the user can still switch backups from here.
+    validateSearch: (search: Record<string, unknown>): { choose?: true } =>
+      search.choose ? { choose: true } : {},
+    component: BackupPicker,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/photos", component: PhotosView }),
   createRoute({
     getParentRoute: () => rootRoute,

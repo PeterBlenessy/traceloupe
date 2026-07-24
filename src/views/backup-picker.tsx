@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Check, ChevronRight, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
+import { ArrowRight, Check, ChevronRight, FolderOpen, Lock, LockOpen, RotateCw, Settings, Smartphone, Trash2 } from "lucide-react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -21,16 +21,31 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { useImport } from "@/components/import-provider";
+import { modelName } from "@/lib/device-names";
+import { formatDateTime } from "@/lib/format";
 
 export function BackupPicker() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const imp = useImport();
+  const { choose } = useSearch({ strict: false }) as { choose?: true };
+  const { data: active } = useQuery({
+    queryKey: ["hasActiveBackup"],
+    queryFn: () => client.hasActiveBackup(),
+  });
   const { data: importedIds } = useQuery({
     queryKey: ["importedBackupIds"],
     queryFn: () => client.importedBackupIds(),
   });
   const imported = new Set(importedIds ?? []);
+
+  // With a backup open, `/` is the condensed Device landing — the "open a
+  // backup" section is hidden (one is already open) but the app-features intro
+  // stays. `?choose` (from an "Open a different backup" action) forces the
+  // picker back so the user can still switch.
+  if (active === true && !choose) {
+    return <DeviceLanding onChooseOther={() => navigate({ to: "/", search: { choose: true } })} />;
+  }
 
   // Opening an already-parsed backup is instant (just point at its cache).
   // A never-parsed one needs a first-time read: unencrypted starts straight
@@ -46,7 +61,8 @@ export function BackupPicker() {
         // Drop any cached artifact data from a previously-open backup; with
         // staleTime: Infinity it would otherwise persist across backups.
         await qc.invalidateQueries();
-        navigate({ to: "/messages" });
+        // Land on the condensed Device view (`/`), the default post-open route.
+        navigate({ to: "/" });
       } catch (e) {
         toast.error("Couldn't open backup", {
           description: e instanceof Error ? e.message : String(e),
@@ -175,6 +191,101 @@ export function BackupPicker() {
               onForget={() => handleForget(b)}
             />
           ))}
+      </div>
+
+      <AppFeatures />
+    </div>
+  );
+}
+
+/** The condensed Device landing shown at `/` once a backup is open (issue #39).
+ *  It replaces the "open a backup" section — a backup is already open — with a
+ *  compact device summary, keeps the app-features intro below, and drops the big
+ *  phone icon (the device is already named with its icon in the sidebar). Full
+ *  device metadata still lives in the /device view. */
+function DeviceLanding({ onChooseOther }: { onChooseOther: () => void }) {
+  const navigate = useNavigate();
+  const { data: info } = useQuery<BackupInfo | null>({
+    queryKey: ["deviceInfo"],
+    queryFn: () => client.deviceInfo(),
+  });
+  const model = modelName(info?.productType ?? null);
+  const subtitle =
+    [model, info?.productVersion ? `iOS ${info.productVersion}` : null]
+      .filter(Boolean)
+      .join(" · ") || "Backup open";
+  const facts: { label: string; value: React.ReactNode }[] = [
+    { label: "Model", value: model ?? info?.productType ?? "—" },
+    { label: "iOS version", value: info?.productVersion ?? "—" },
+    {
+      label: "Last backup",
+      value:
+        info?.lastBackupDate != null ? formatDateTime(info.lastBackupDate) : "—",
+    },
+    {
+      label: "Encryption",
+      value:
+        info?.isEncrypted == null ? (
+          "—"
+        ) : (
+          <span className="inline-flex items-center gap-1.5">
+            {info.isEncrypted ? (
+              <>
+                <Lock className="size-3.5" /> Encrypted
+              </>
+            ) : (
+              <>
+                <LockOpen className="size-3.5" /> Not encrypted
+              </>
+            )}
+          </span>
+        ),
+    },
+  ];
+  return (
+    <div className="mx-auto max-w-2xl p-8">
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h1 className="truncate text-2xl font-semibold">
+            {info?.deviceName ?? "Device"}
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="outline" className="shrink-0" onClick={onChooseOther}>
+              <FolderOpen className="size-4" />
+              Open a different backup
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Switch to another iPhone backup</TooltipContent>
+        </Tooltip>
+      </div>
+
+      <div className="mt-6 grid gap-2.5 sm:grid-cols-2">
+        {facts.map((f) => (
+          <div key={f.label} className="rounded-lg border bg-card/40 p-3">
+            <div className="text-xs text-muted-foreground">{f.label}</div>
+            <div className="mt-0.5 select-text text-sm font-medium">
+              {f.value}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="link"
+              className="h-auto gap-1 px-0 text-sm"
+              onClick={() => navigate({ to: "/device" })}
+            >
+              Full device details
+              <ArrowRight className="size-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>See the serial number and all device metadata</TooltipContent>
+        </Tooltip>
       </div>
 
       <AppFeatures />
