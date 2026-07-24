@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS scans (
     model        TEXT NOT NULL,             -- e.g. 'gemma-4-E4B-it-Q4_K_M'
     range_start  INTEGER,                   -- user time-range filter (unix s), NULL = open
     range_end    INTEGER,
+    sources      TEXT NOT NULL DEFAULT 'all', -- 'all' | 'messages' | 'notes' (v2)
     status       TEXT NOT NULL,             -- 'running' | 'completed' | 'cancelled' | 'failed'
     started_at   INTEGER NOT NULL,
     finished_at  INTEGER,
@@ -250,6 +251,8 @@ pub struct ScanListRow {
     pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
@@ -304,6 +307,19 @@ impl AnalysisDb {
         // Additive migrations go here (mirroring cache.rs); never downgrade a
         // newer store.
         if version < SCHEMA_VERSION {
+            // v2: which content a scan covered ('all'|'messages'|'notes'), so
+            // the history can label it and "Resume" can re-run the same scope.
+            let has_sources = conn
+                .prepare("PRAGMA table_info(scans)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "sources");
+            if !has_sources {
+                conn.execute(
+                    "ALTER TABLE scans ADD COLUMN sources TEXT NOT NULL DEFAULT 'all'",
+                    [],
+                )?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -325,6 +341,7 @@ impl AnalysisDb {
         &self,
         model: &str,
         range: (Option<i64>, Option<i64>),
+        sources: &str,
         started_at: i64,
     ) -> Result<i64> {
         // Repair scans stranded 'running' by a crash or fatal error. Safe
@@ -335,9 +352,9 @@ impl AnalysisDb {
             params![started_at],
         )?;
         self.conn.execute(
-            "INSERT INTO scans (model, range_start, range_end, status, started_at)
-             VALUES (?1, ?2, ?3, 'running', ?4)",
-            params![model, range.0, range.1, started_at],
+            "INSERT INTO scans (model, range_start, range_end, sources, status, started_at)
+             VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
+            params![model, range.0, range.1, sources, started_at],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -663,8 +680,8 @@ impl AnalysisDb {
     /// (total + per severity) — for the scan-history list.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.model, s.range_start, s.range_end, s.status, s.started_at,
-                    s.finished_at,
+            "SELECT s.id, s.model, s.range_start, s.range_end, s.sources, s.status,
+                    s.started_at, s.finished_at,
                     coalesce(count(f.id), 0),
                     coalesce(sum(f.severity = 3), 0),
                     coalesce(sum(f.severity = 2), 0),
@@ -679,13 +696,14 @@ impl AnalysisDb {
                 model: r.get(1)?,
                 range_start: r.get(2)?,
                 range_end: r.get(3)?,
-                status: r.get(4)?,
-                started_at: r.get(5)?,
-                finished_at: r.get(6)?,
-                findings: r.get(7)?,
-                serious: r.get(8)?,
-                harmful: r.get(9)?,
-                concerning: r.get(10)?,
+                sources: r.get(4)?,
+                status: r.get(5)?,
+                started_at: r.get(6)?,
+                finished_at: r.get(7)?,
+                findings: r.get(8)?,
+                serious: r.get(9)?,
+                harmful: r.get(10)?,
+                concerning: r.get(11)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -780,11 +798,15 @@ mod tests {
     #[test]
     fn finding_roundtrip_and_replacement() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("gemma-4-E4B", (None, None), 100).unwrap();
+        let scan = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 100)
+            .unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ThreatViolence)], 101)
             .unwrap();
         // Re-classifying the same content replaces, never duplicates.
-        let scan2 = db.begin_scan("gemma-4-E4B", (None, None), 200).unwrap();
+        let scan2 = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 200)
+            .unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ThreatViolence)], 201)
             .unwrap();
         let rows = db.list_findings(None).unwrap();
@@ -797,13 +819,13 @@ mod tests {
     #[test]
     fn dismissal_survives_rescan() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 101)
             .unwrap();
         db.set_dismissed("fp1", Category::ScamFraud, true, 102)
             .unwrap();
         // New scan re-inserts the same finding — dismissal must still apply.
-        let scan2 = db.begin_scan("m", (None, None), 200).unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ScamFraud)], 201)
             .unwrap();
         let rows = db.list_findings(None).unwrap();
@@ -821,10 +843,10 @@ mod tests {
     #[test]
     fn list_findings_filters_by_scan() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan1 = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan1 = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan1, &[finding("fp1", Category::ScamFraud)], 101)
             .unwrap();
-        let scan2 = db.begin_scan("m", (None, None), 200).unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.replace_findings(scan2, &[finding("fp2", Category::SelfHarm)], 201)
             .unwrap();
         assert_eq!(db.list_findings(None).unwrap().len(), 2);
@@ -839,7 +861,9 @@ mod tests {
     #[test]
     fn list_scans_reports_model_and_severity_split() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("gemma-4-E4B", (None, None), 100).unwrap();
+        let scan = db
+            .begin_scan("gemma-4-E4B", (None, None), "all", 100)
+            .unwrap();
         let mut serious = finding("fp1", Category::ThreatViolence);
         serious.severity = 3;
         let harmful = finding("fp2", Category::ScamFraud); // severity 2
@@ -854,6 +878,7 @@ mod tests {
         let rows = db.list_scans(50).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].model, "gemma-4-E4B");
+        assert_eq!(rows[0].sources, "all");
         assert_eq!(rows[0].findings, 2);
         assert_eq!(
             (rows[0].serious, rows[0].harmful, rows[0].concerning),
@@ -864,7 +889,7 @@ mod tests {
     #[test]
     fn chunk_resume_is_fingerprint_sensitive() {
         let db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.record_chunk(scan, "thread1:0", "abc", ChunkStatus::Done, 101)
             .unwrap();
         assert!(db.chunk_is_done("thread1:0", "abc").unwrap());
@@ -879,7 +904,7 @@ mod tests {
     #[test]
     fn severity_range_enforced() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         let mut bad = finding("fp1", Category::SelfHarm);
         bad.severity = 4;
         assert!(db.replace_findings(scan, &[bad], 101).is_err());
@@ -888,7 +913,7 @@ mod tests {
     #[test]
     fn stale_flag_and_source_id_refresh() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::SelfHarm)], 101)
             .unwrap();
         db.set_stale("fp1", true).unwrap();
@@ -906,9 +931,9 @@ mod tests {
     #[test]
     fn stale_running_scan_repaired_at_next_begin() {
         let db = AnalysisDb::open_in_memory().unwrap();
-        let dead = db.begin_scan("m", (None, None), 100).unwrap();
+        let dead = db.begin_scan("m", (None, None), "all", 100).unwrap();
         // Simulate a crash: never finished. The next begin_scan repairs it.
-        let live = db.begin_scan("m", (None, None), 200).unwrap();
+        let live = db.begin_scan("m", (None, None), "all", 200).unwrap();
         let (dead_status, dead_finished): (String, Option<i64>) = db
             .conn()
             .query_row(
@@ -934,7 +959,7 @@ mod tests {
     fn scan_lifecycle_and_summary() {
         let db = AnalysisDb::open_in_memory().unwrap();
         let scan = db
-            .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), 100)
+            .begin_scan("gemma-4-E2B", (Some(1000), Some(2000)), "all", 100)
             .unwrap();
         db.set_chunks_total(scan, 10).unwrap();
         db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
@@ -959,7 +984,7 @@ mod tests {
         // summary — one row in every table that references scans(id). With
         // foreign_keys ON, delete_scan must clear all of them (the audit_log
         // row is the one that used to be left behind and blocked the delete).
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.record_chunk(scan, "k", "fp", ChunkStatus::Done, 101)
             .unwrap();
         db.audit(scan, 101, "chunk_classified", "chunk=k").unwrap();
@@ -982,7 +1007,7 @@ mod tests {
         .unwrap();
 
         // A second scan is left untouched, proving the delete is scoped by id.
-        let keep = db.begin_scan("m", (None, None), 200).unwrap();
+        let keep = db.begin_scan("m", (None, None), "all", 200).unwrap();
         db.audit(keep, 201, "scan_started", "").unwrap();
 
         db.delete_scan(scan).unwrap();

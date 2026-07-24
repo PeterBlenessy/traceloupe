@@ -364,36 +364,59 @@ export function SafetyScanView() {
                   />
                 </div>
                 {running ? (
-                  <Button
-                    variant="outline"
-                    disabled={stopping}
-                    onClick={() => {
-                      setStopping(true);
-                      cancelScan();
-                    }}
-                  >
-                    {stopping ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <Square className="size-4" />
-                    )}
-                    {stopping ? "Stopping…" : "Stop"}
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {/* A disabled trigger still needs its tooltip; the span
+                          also keeps the layout stable while the label swaps
+                          Stop → Stopping… (min-w prevents a mid-swap reflow). */}
+                      <span className="inline-flex">
+                        <Button
+                          variant="outline"
+                          className="min-w-28"
+                          disabled={stopping}
+                          onClick={() => {
+                            setStopping(true);
+                            cancelScan();
+                          }}
+                        >
+                          {stopping ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <Square className="size-4" />
+                          )}
+                          {stopping ? "Stopping…" : "Stop"}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {stopping
+                        ? "The scan aborts within a moment — progress so far is kept"
+                        : "Stop the scan; progress so far is kept and resumable"}
+                    </TooltipContent>
+                  </Tooltip>
                 ) : (
-                  <Button
-                    onClick={() =>
-                      void startScan({
-                        modelId: effectiveModelId,
-                        rangeStart: range.lo,
-                        // timeGroup's hi is exclusive; the scan range end is
-                        // inclusive, so step back one second.
-                        rangeEnd: range.hi != null ? range.hi - 1 : null,
-                        sources: source,
-                      })
-                    }
-                  >
-                    <Play className="size-4" /> Start Safety Scan
-                  </Button>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        onClick={() =>
+                          void startScan({
+                            modelId: effectiveModelId,
+                            rangeStart: range.lo,
+                            // timeGroup's hi is exclusive; the scan range end is
+                            // inclusive, so step back one second.
+                            rangeEnd: range.hi != null ? range.hi - 1 : null,
+                            sources: source,
+                          })
+                        }
+                      >
+                        <Play className="size-4" /> Start Safety Scan
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      Scan the selected period and content with the local AI —
+                      already-scanned content is skipped
+                    </TooltipContent>
+                  </Tooltip>
                 )}
               </div>
               {running && scan && <ScanProgress scanEvent={scan} />}
@@ -426,6 +449,20 @@ export function SafetyScanView() {
                 latest={selectedScan.id === scans[0]?.id}
                 live={running && selectedScan.id === scans[0]?.id}
                 onBackToLatest={() => setSelectedScanId(null)}
+                // Resume = start a new scan with this scan's period + content;
+                // checkpointing skips everything already classified. Only for
+                // scans that didn't complete, and never while one is running.
+                onResume={
+                  !running && selectedScan.status !== "completed"
+                    ? () =>
+                        void startScan({
+                          modelId: effectiveModelId,
+                          rangeStart: selectedScan.rangeStart,
+                          rangeEnd: selectedScan.rangeEnd,
+                          sources: selectedScan.sources,
+                        })
+                    : undefined
+                }
                 report={report.data}
                 findings={findings.data ?? []}
               />
@@ -526,6 +563,13 @@ const SCAN_STATUS_LABEL: Record<string, string> = {
 function scanTitle(s: SafetyScanHistoryItem): string {
   return formatTimelineTime(s.startedAt);
 }
+
+/** Human label for a scan's content scope. */
+const SOURCES_LABEL: Record<string, string> = {
+  all: "Messages & Notes",
+  messages: "Messages",
+  notes: "Notes",
+};
 
 /** The rail's compact outcome badge: one chip, colored by the worst severity.
  *  `live` says whether a scan is genuinely in flight right now — a DB row can
@@ -713,6 +757,8 @@ function ScanRail({
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">{scanTitle(s)}</div>
               <div className="truncate text-xs text-muted-foreground">
+                {SOURCES_LABEL[s.sources] ?? s.sources}
+                {" · "}
                 {formatScanRange(s.rangeStart, s.rangeEnd)}
                 {" · "}
                 {s.status === "running" && s.id !== liveId
@@ -787,6 +833,7 @@ function ScanReportCard({
   latest,
   live,
   onBackToLatest,
+  onResume,
   report,
   findings,
 }: {
@@ -795,6 +842,8 @@ function ScanReportCard({
   /** True while this scan is genuinely in flight (not a stranded row). */
   live: boolean;
   onBackToLatest: () => void;
+  /** Present when this scan can be resumed (didn't complete, nothing running). */
+  onResume?: () => void;
   report: SafetyScanReport | undefined;
   findings: ContentFinding[];
 }) {
@@ -819,16 +868,31 @@ function ScanReportCard({
             )}
             {clean ? "No harmful content flagged" : "Scan report"}
           </CardTitle>
-          {!latest && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="outline" size="sm" onClick={onBackToLatest}>
-                  Back to latest
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Show the most recent scan again</TooltipContent>
-            </Tooltip>
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {onResume && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button size="sm" onClick={onResume}>
+                    <Play className="size-4" /> Resume scan
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Starts a new scan over the same period and content — anything
+                  already scanned is skipped automatically
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {!latest && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="outline" size="sm" onClick={onBackToLatest}>
+                    Back to latest
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Show the most recent scan again</TooltipContent>
+              </Tooltip>
+            )}
+          </div>
         </div>
         <CardDescription>
           {SCAN_STATUS_LABEL[scan.status] ?? scan.status} {scanTitle(scan)}

@@ -845,6 +845,8 @@ pub struct ScanHistoryItem {
     pub model: String,
     pub range_start: Option<i64>,
     pub range_end: Option<i64>,
+    /// Which content the scan covered: 'all' | 'messages' | 'notes'.
+    pub sources: String,
     pub status: String,
     pub started_at: i64,
     pub finished_at: Option<i64>,
@@ -884,6 +886,7 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
             model: s.model,
             range_start: s.range_start,
             range_end: s.range_end,
+            sources: s.sources,
             status: s.status,
             started_at: s.started_at,
             finished_at: s.finished_at,
