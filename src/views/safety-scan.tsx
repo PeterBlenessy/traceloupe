@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ExternalLink, EyeOff, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ExternalLink, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -673,6 +673,9 @@ function ScanRail({
   const [outcome, setOutcome] = useState("all");
   const [sort, setSort] = useState<SortState>({ by: "date", desc: true });
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [reportScan, setReportScan] = useState<SafetyScanHistoryItem | null>(
+    null,
+  );
   const del = useMutation({
     mutationFn: (id: number) => client.deleteSafetyScan(id),
     onSuccess: (_, id) => {
@@ -813,6 +816,23 @@ function ScanRail({
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <ScanOutcomeBadge scan={s} live={s.id === liveId} />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 text-muted-foreground hover:text-foreground"
+                    aria-label="Open scan report"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setReportScan(s);
+                    }}
+                  >
+                    <FileText className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Open the report for this scan</TooltipContent>
+              </Tooltip>
               {/* Resume lives on the card of the scan it continues — not in the
                   report — so it's next to the run it acts on. Shown for any
                   non-completed scan when nothing else is running. */}
@@ -856,6 +876,13 @@ function ScanRail({
           </div>
         ))}
       </CardContent>
+
+      {reportScan && (
+        <SafetyReportDialog
+          scan={reportScan}
+          onOpenChange={(o) => !o && setReportScan(null)}
+        />
+      )}
 
       <Dialog
         open={confirmId != null}
@@ -1069,6 +1096,263 @@ function ScanReportCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Findings grouped for the report: message findings by conversation, notes
+ *  together; each group sorted worst-severity first, groups likewise. */
+function groupReportFindings(
+  findings: ContentFinding[],
+  labelOf: (id: string) => string,
+): {
+  key: string;
+  label: string;
+  threadId: number | null;
+  isNote: boolean;
+  findings: ContentFinding[];
+}[] {
+  const groups = new Map<string, ContentFinding[]>();
+  for (const f of findings) {
+    const key =
+      f.sourceKind === "note" ? "__notes__" : (f.threadIdentifier ?? "__?__");
+    const arr = groups.get(key) ?? [];
+    arr.push(f);
+    groups.set(key, arr);
+  }
+  const worst = (fs: ContentFinding[]) => Math.max(...fs.map((f) => f.severity));
+  return [...groups.entries()]
+    .map(([key, fs]) => ({
+      key,
+      isNote: key === "__notes__",
+      label: key === "__notes__" ? "Notes" : labelOf(key),
+      threadId: fs.find((f) => f.threadId != null)?.threadId ?? null,
+      findings: [...fs].sort((a, b) => b.severity - a.severity),
+    }))
+    .sort((a, b) => worst(b.findings) - worst(a.findings));
+}
+
+/** The Safety Scan report as a styled, printable document: a mostly-deterministic
+ *  frame (header, totals, findings grouped by conversation with resolved names)
+ *  with the model's narrative + per-conversation prose spliced in. This is also
+ *  the export source — Print renders exactly this (see the `safety-report-print`
+ *  print styles in index.css). */
+function SafetyReportDocument({
+  scan,
+  report,
+  findings,
+}: {
+  scan: SafetyScanHistoryItem;
+  report: SafetyScanReport | undefined;
+  findings: ContentFinding[];
+}) {
+  const resolve = useContactResolver();
+  const { showCascadeConfidence } = useSettings();
+  const { data: threads } = useQuery({
+    queryKey: ["threads"],
+    queryFn: () => client.listThreads(),
+  });
+  const threadByIdent = useMemo(
+    () => new Map((threads ?? []).map((t) => [t.identifier, t])),
+    [threads],
+  );
+  const labelOf = (identifier: string): string => {
+    const t = threadByIdent.get(identifier);
+    if (!t) return resolve(identifier)?.name ?? identifier;
+    if (t.displayName) return resolve(t.displayName)?.name ?? t.displayName;
+    const first = t.participants[0];
+    return first ? (resolve(first)?.name ?? first) : identifier;
+  };
+  const live = findings.filter((f) => !f.dismissed && !f.stale);
+  const groups = groupReportFindings(live, labelOf);
+  const summaryByIdent = new Map(report?.threadSummaries ?? []);
+  const catCounts = new Map<ContentCategory, number>();
+  for (const f of live) catCounts.set(f.category, (catCounts.get(f.category) ?? 0) + 1);
+
+  const sev = (n: number) =>
+    n === 3
+      ? "text-destructive"
+      : n === 2
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-muted-foreground";
+
+  return (
+    <article className="safety-report-print mx-auto max-w-2xl space-y-6 text-sm">
+      {/* Header */}
+      <header className="space-y-1 border-b pb-4">
+        <div className="flex items-center gap-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          <ShieldUser className="size-4" /> Safety Scan report
+        </div>
+        <h1 className="text-xl font-semibold">{scanTitle(scan)}</h1>
+        <p className="text-muted-foreground">
+          {SOURCES_LABEL[scan.sources] ?? scan.sources} ·{" "}
+          {formatScanRange(scan.rangeStart, scan.rangeEnd)} · {modelLabel(scan.model)} · on-device
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {scan.finishedAt != null && `Completed ${formatDateTimeYear(scan.finishedAt)}`}
+          {scan.finishedAt != null &&
+            ` · took ${formatDuration(scan.finishedAt - scan.startedAt)}`}
+        </p>
+      </header>
+
+      {/* Totals */}
+      <section className="grid grid-cols-4 gap-3 text-center">
+        {(
+          [
+            ["Findings", live.length, ""],
+            ["Serious", scan.serious, sev(3)],
+            ["Harmful", scan.harmful, sev(2)],
+            ["Concerning", scan.concerning, sev(1)],
+          ] as [string, number, string][]
+        ).map(([label, n, cls]) => (
+          <div key={label} className="rounded-lg border p-3">
+            <div className={cn("text-2xl font-semibold tabular-nums", cls)}>{n}</div>
+            <div className="text-xs text-muted-foreground">{label}</div>
+          </div>
+        ))}
+      </section>
+
+      {catCounts.size > 0 && (
+        <section className="flex flex-wrap gap-1.5">
+          {[...catCounts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .map(([cat, n]) => (
+              <Badge key={cat} variant="outline">
+                {CATEGORY_LABEL[cat]} · {n}
+              </Badge>
+            ))}
+        </section>
+      )}
+
+      {/* Narrative */}
+      <section className="space-y-1">
+        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          Overview
+        </h2>
+        {report?.report ? (
+          <p className="leading-relaxed">{report.report}</p>
+        ) : live.length === 0 ? (
+          <p className="text-muted-foreground">
+            Nothing was flagged in this scan's scope. A clean scan is a review aid,
+            not a guarantee — spot-check important conversations yourself.
+          </p>
+        ) : (
+          <p className="text-muted-foreground">
+            {live.length} finding{live.length === 1 ? "" : "s"} across{" "}
+            {groups.length} conversation{groups.length === 1 ? "" : "s"} — see the
+            breakdown below.
+          </p>
+        )}
+      </section>
+
+      {/* Per conversation */}
+      {groups.length > 0 && (
+        <section className="space-y-4">
+          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+            By conversation
+          </h2>
+          {groups.map((g) => {
+            const prose = g.isNote ? undefined : summaryByIdent.get(g.key);
+            return (
+              <div key={g.key} className="space-y-2 rounded-lg border p-3">
+                <div className="flex items-center gap-1.5 font-medium">
+                  {g.isNote ? (
+                    <NotebookText className="size-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+                  )}
+                  {g.label}
+                  <span className="text-xs font-normal text-muted-foreground">
+                    · {g.findings.length} finding{g.findings.length === 1 ? "" : "s"}
+                  </span>
+                </div>
+                {prose && <p className="text-muted-foreground">{prose}</p>}
+                <ul className="space-y-1.5">
+                  {g.findings.map((f) => (
+                    <li key={f.id} className="flex gap-2 border-t pt-1.5 first:border-t-0">
+                      <span className={cn("shrink-0 font-medium", sev(f.severity))}>
+                        {SEVERITY_META[f.severity]?.label ?? f.severity}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground">
+                        {CATEGORY_LABEL[f.category]}
+                      </span>
+                      {showCascadeConfidence && f.rechecked && (
+                        <span className="shrink-0 text-emerald-600 dark:text-emerald-400">
+                          ✓ confirmed
+                        </span>
+                      )}
+                      <span className="text-muted-foreground">
+                        {f.occurredAt != null && `${formatDateTimeYear(f.occurredAt)} — `}
+                        {f.rationale}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      <footer className="border-t pt-3 text-xs text-muted-foreground">
+        Generated on-device by {modelLabel(scan.model)}. Raw message content is not
+        included in this report.
+      </footer>
+    </article>
+  );
+}
+
+/** Opens the styled report for a scan in a dialog, with a Print/Export action
+ *  that renders the same document to PDF via the system print dialog. */
+function SafetyReportDialog({
+  scan,
+  onOpenChange,
+}: {
+  scan: SafetyScanHistoryItem;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const report = useQuery({
+    queryKey: ["safetyScan", "report", scan.id],
+    queryFn: () => client.getSafetyScanReport(scan.id),
+  });
+  const findings = useQuery({
+    queryKey: ["safetyScan", "findings", scan.id],
+    queryFn: () => client.listContentFindings(scan.id),
+  });
+  const loading = report.isPending || findings.isPending;
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-2xl">
+        <DialogTitle className="sr-only">Scan report</DialogTitle>
+        <DialogDescription className="sr-only">
+          The selected scan's findings, formatted for review and export.
+        </DialogDescription>
+        {/* Toolbar is outside the printable root, so it never prints. */}
+        <div className="flex items-center justify-between gap-2 border-b px-4 py-2 print:hidden">
+          <span className="text-sm font-medium">Scan report</span>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={loading}
+            onClick={() => window.print()}
+          >
+            <Printer className="size-4" /> Export PDF
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          {loading ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> Building report…
+            </div>
+          ) : (
+            <SafetyReportDocument
+              scan={scan}
+              report={report.data}
+              findings={findings.data ?? []}
+            />
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
