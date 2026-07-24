@@ -118,7 +118,19 @@ pub fn run_scan(
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanOutcome> {
     let chunks = chunker::chunk_all(cache, range, sources)?;
-    let scan_id = analysis.begin_scan(client.model(), (range.start, range.end), now())?;
+    // Stored on the run so the history can label its scope and "Resume" can
+    // re-run the same one.
+    let sources_slug = match (sources.messages, sources.notes) {
+        (true, false) => "messages",
+        (false, true) => "notes",
+        _ => "all",
+    };
+    let scan_id = analysis.begin_scan(
+        client.model(),
+        (range.start, range.end),
+        sources_slug,
+        now(),
+    )?;
     analysis.set_chunks_total(scan_id, chunks.len() as i64)?;
     analysis.audit(
         scan_id,

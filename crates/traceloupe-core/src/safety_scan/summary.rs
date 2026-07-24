@@ -218,7 +218,7 @@ mod tests {
 
     fn seeded_analysis(threads: &[&str]) -> (AnalysisDb, i64) {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         let mut findings = Vec::new();
         for (i, t) in threads.iter().enumerate() {
             findings.push(NewFinding {
@@ -240,7 +240,7 @@ mod tests {
     fn zero_findings_writes_clean_report_without_model_calls() {
         let (base, hits) = mock_text_server("SHOULD NOT BE CALLED");
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        let scan = db.begin_scan("m", (None, None), 100).unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
         let client = LlmClient::new(&base, "m", Duration::from_secs(5));
         let out = run_summaries(&mut db, &client, scan, &CancelToken::new()).unwrap();
         assert!(out.report_written);

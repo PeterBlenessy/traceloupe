@@ -694,6 +694,8 @@ export interface SafetyScanHistoryItem {
   model: string;
   rangeStart: number | null;
   rangeEnd: number | null;
+  /** Which content the scan covered. */
+  sources: "all" | "messages" | "notes" | string;
   status: "running" | "completed" | "cancelled" | "failed";
   startedAt: number;
   finishedAt: number | null;
@@ -3144,6 +3146,7 @@ export const mockClient: TraceLoupeClient = {
           {
             id: 3,
             model: "gemma-4-E4B-it-Q4_K_M",
+            sources: "messages",
             rangeStart: Math.floor(new Date(2024, 0, 1).getTime() / 1000),
             rangeEnd: Math.floor(new Date(2025, 0, 1).getTime() / 1000) - 1,
             status: "completed" as const,
@@ -3157,6 +3160,7 @@ export const mockClient: TraceLoupeClient = {
           {
             id: 2,
             model: "gemma-4-E4B-it-Q4_K_M",
+            sources: "all",
             rangeStart: null,
             rangeEnd: null,
             status: "cancelled" as const,
@@ -3170,6 +3174,7 @@ export const mockClient: TraceLoupeClient = {
           {
             id: 1,
             model: "gemma-3n-E2B-it-Q4_K_M",
+            sources: "all",
             rangeStart: null,
             rangeEnd: null,
             status: "completed" as const,
