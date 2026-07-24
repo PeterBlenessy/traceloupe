@@ -49,6 +49,7 @@ import {
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { useContactResolver } from "@/lib/use-contact-resolver";
+import { useSettings } from "@/components/settings-provider";
 import {
   client,
   type ContentCategory,
@@ -1082,6 +1083,7 @@ function FindingRow({
 }) {
   const navigate = useNavigate();
   const resolve = useContactResolver();
+  const { showCascadeConfidence } = useSettings();
   // Resolve a handle (phone/email) to a contact name, exactly like the
   // conversation view — so the popover shows people, not raw phone numbers.
   const nameOf = (h: string | null | undefined) =>
@@ -1134,11 +1136,31 @@ function FindingRow({
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Badge className={sev.badge}>{sev.label}</Badge>
         <Badge variant="outline">{CATEGORY_LABEL[f.category]}</Badge>
+        {/* Confidence signal (Developer setting, off by default): a positive
+            "Confirmed" mark when the strong tier (E4B) re-checked and kept it —
+            two independent models agreeing. Only shown when true, so an E2B-only
+            scan (nothing confirmed) isn't noisy. */}
+        {showCascadeConfidence && f.rechecked && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge
+                variant="outline"
+                className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+              >
+                <ShieldCheck className="size-3" /> Confirmed
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent>
+              Re-checked and kept by the stronger model (E4B) — not just the fast
+              sweep tier
+            </TooltipContent>
+          </Tooltip>
+        )}
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           {glyph("size-3.5 shrink-0")}
           {f.sourceKind === "note"
             ? "Note"
-            : (f.threadIdentifier ?? "Conversation")}
+            : (nameOf(f.threadIdentifier) ?? "Conversation")}
           {f.occurredAt != null && ` · ${formatListTime(f.occurredAt)}`}
         </span>
         {f.stale && (

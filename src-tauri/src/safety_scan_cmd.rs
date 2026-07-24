@@ -922,6 +922,10 @@ pub struct ContentFindingDto {
     pub rationale: String,
     pub stale: bool,
     pub dismissed: bool,
+    /// True when the cascade's strong tier (E4B) re-checked and kept this
+    /// finding — the honest "confidence" signal (two independent models agree),
+    /// vs a sweep-only (E2B, unconfirmed) flag.
+    pub rechecked: bool,
 }
 
 /// Findings, newest-severity first. `scan_id` restricts to one scan (the
@@ -992,6 +996,7 @@ pub fn list_content_findings(
                 rationale: f.rationale,
                 stale: f.stale,
                 dismissed: f.dismissed,
+                rechecked: f.rechecked,
             }
         })
         .collect())

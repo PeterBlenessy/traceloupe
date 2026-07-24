@@ -232,6 +232,9 @@ pub struct FindingRow {
     pub rationale: String,
     pub stale: bool,
     pub dismissed: bool,
+    /// 1 = confirmed by the cascade's strong tier (E4B re-checked and kept it);
+    /// 0 = seen only by the fast sweep tier (E2B), unconfirmed.
+    pub rechecked: bool,
     pub created_at: i64,
 }
 
@@ -620,7 +623,7 @@ impl AnalysisDb {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
-                    f.stale, f.created_at,
+                    f.stale, f.created_at, f.rechecked,
                     EXISTS(SELECT 1 FROM dismissals d
                            WHERE d.fingerprint = f.fingerprint AND d.category = f.category)
              FROM content_findings f
@@ -642,6 +645,7 @@ impl AnalysisDb {
                 r.get::<_, bool>(10)?,
                 r.get::<_, i64>(11)?,
                 r.get::<_, bool>(12)?,
+                r.get::<_, bool>(13)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -659,6 +663,7 @@ impl AnalysisDb {
                 rationale,
                 stale,
                 created_at,
+                rechecked,
                 dismissed,
             ) = row?;
             let source_kind = SourceKind::parse(&kind)
@@ -678,6 +683,7 @@ impl AnalysisDb {
                 rationale,
                 stale,
                 dismissed,
+                rechecked,
                 created_at,
             });
         }
