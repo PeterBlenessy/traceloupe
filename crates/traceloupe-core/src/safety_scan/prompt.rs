@@ -117,6 +117,7 @@ mod tests {
             kind: SourceKind::Message,
             thread_identifier: Some("x".into()),
             label: Some("Family".into()),
+            service: None,
             items: vec![
                 ChunkItem {
                     source_id: 1,

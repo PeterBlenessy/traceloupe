@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS content_findings (
     rationale         TEXT NOT NULL,        -- the model's one-line justification
     stale             INTEGER NOT NULL DEFAULT 0,  -- fingerprint no longer matches the cache row
     rechecked         INTEGER NOT NULL DEFAULT 0,  -- 1 = confirmed by the cascade's strong tier (v3)
+    service           TEXT,                 -- message thread's service (iMessage/SMS/TikTok…); NULL for notes/legacy (v5)
     created_at        INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_findings_scan ON content_findings(scan_id);
@@ -216,6 +217,9 @@ pub struct NewFinding {
     pub category: Category,
     pub severity: u8,
     pub rationale: String,
+    /// The message thread's service (iMessage/SMS/TikTok…); None for notes. Lets
+    /// a scan scoped to specific services count/list exactly its findings.
+    pub service: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -359,6 +363,18 @@ impl AnalysisDb {
                     "ALTER TABLE chunk_progress ADD COLUMN flagged INTEGER NOT NULL DEFAULT 0",
                     [],
                 )?;
+            }
+            // v5: the message thread's service on each finding (iMessage/SMS/
+            // TikTok…), so a scan scoped to a subset of services can count/list
+            // exactly its findings. NULL for notes and for findings created
+            // before this column existed (they only match 'all'/'messages').
+            let has_service = conn
+                .prepare("PRAGMA table_info(content_findings)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "service");
+            if !has_service {
+                conn.execute("ALTER TABLE content_findings ADD COLUMN service TEXT", [])?;
             }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -552,8 +568,8 @@ impl AnalysisDb {
             tx.execute(
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
-                    fingerprint, category, severity, rationale, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    fingerprint, category, severity, rationale, service, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -564,6 +580,7 @@ impl AnalysisDb {
                     f.category.as_str(),
                     f.severity,
                     f.rationale,
+                    f.service,
                     at
                 ],
             )?;
@@ -605,8 +622,10 @@ impl AnalysisDb {
     ) -> Result<Vec<FindingRow>> {
         self.query_findings(
             "(?1 = 'all'
-                 OR (?1 = 'messages' AND f.source_kind = 'message')
-                 OR (?1 = 'notes' AND f.source_kind = 'note'))
+                 OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
+                 OR ((',' || ?1 || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
+                 OR (f.source_kind = 'message' AND f.service IS NOT NULL
+                     AND (',' || ?1 || ',') LIKE ('%,' || f.service || ',%')))
              AND (?2 IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= ?2)
              AND (?3 IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= ?3)",
             params![sources, range_start, range_end],
@@ -769,8 +788,8 @@ impl AnalysisDb {
             tx.execute(
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
-                    fingerprint, category, severity, rationale, rechecked, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)",
+                    fingerprint, category, severity, rationale, service, rechecked, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -781,6 +800,7 @@ impl AnalysisDb {
                     f.category.as_str(),
                     f.severity,
                     f.rationale,
+                    f.service,
                     at
                 ],
             )?;
@@ -942,8 +962,13 @@ impl AnalysisDb {
              FROM scans s
              LEFT JOIN content_findings f ON f.stale = 0
                 AND (s.sources = 'all'
-                     OR (s.sources = 'messages' AND f.source_kind = 'message')
-                     OR (s.sources = 'notes' AND f.source_kind = 'note'))
+                     OR ((',' || s.sources || ',') LIKE '%,notes,%'
+                         AND f.source_kind = 'note')
+                     OR ((',' || s.sources || ',') LIKE '%,messages,%'
+                         AND f.source_kind = 'message')
+                     OR (f.source_kind = 'message' AND f.service IS NOT NULL
+                         AND (',' || s.sources || ',')
+                             LIKE ('%,' || f.service || ',%')))
                 AND (s.range_start IS NULL OR f.occurred_at IS NULL
                      OR f.occurred_at >= s.range_start)
                 AND (s.range_end IS NULL OR f.occurred_at IS NULL
@@ -1046,6 +1071,7 @@ mod tests {
             category: cat,
             severity: 2,
             rationale: "test rationale".into(),
+            service: Some("iMessage".into()),
         }
     }
 
@@ -1418,6 +1444,7 @@ mod tests {
                 category: Category::ScamFraud,
                 severity: 2,
                 rationale: "x".into(),
+                service: Some("iMessage".into()),
             }],
             105,
         )

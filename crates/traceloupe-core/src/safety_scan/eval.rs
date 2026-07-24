@@ -353,6 +353,7 @@ mod tests {
                 kind: crate::analysis::SourceKind::Message,
                 thread_identifier: Some(case.id.clone()),
                 label: None,
+                service: None,
                 items,
             };
             let user = prompt::render_chunk(&chunk);
