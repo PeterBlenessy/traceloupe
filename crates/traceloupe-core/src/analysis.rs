@@ -584,17 +584,50 @@ impl AnalysisDb {
     }
 
     pub fn list_findings(&self, scan_id: Option<i64>) -> Result<Vec<FindingRow>> {
-        let mut stmt = self.conn.prepare(
+        self.query_findings("?1 IS NULL OR f.scan_id = ?1", params![scan_id])
+    }
+
+    /// Findings within a scan's SCOPE — its sources ('all'|'messages'|'notes')
+    /// and optional time range — regardless of which run classified them. This
+    /// is what a scan's detail view shows: because classification is cached per
+    /// chunk across scans, a finding "belongs to" the first run that saw it, but
+    /// every scan whose scope covers it must surface it (see [`Self::list_scans`]).
+    /// A finding with a NULL `occurred_at` (e.g. an undated note) is kept — a
+    /// range filter can't place it, and dropping it would hide real findings.
+    pub fn list_findings_in_scope(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+    ) -> Result<Vec<FindingRow>> {
+        self.query_findings(
+            "(?1 = 'all'
+                 OR (?1 = 'messages' AND f.source_kind = 'message')
+                 OR (?1 = 'notes' AND f.source_kind = 'note'))
+             AND (?2 IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= ?2)
+             AND (?3 IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= ?3)",
+            params![sources, range_start, range_end],
+        )
+    }
+
+    /// Shared body for the finding-list queries: the same SELECT + severity-desc
+    /// ordering, parameterised only by the WHERE predicate.
+    fn query_findings(
+        &self,
+        where_clause: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<FindingRow>> {
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
                     f.stale, f.created_at,
                     EXISTS(SELECT 1 FROM dismissals d
                            WHERE d.fingerprint = f.fingerprint AND d.category = f.category)
              FROM content_findings f
-             WHERE ?1 IS NULL OR f.scan_id = ?1
+             WHERE {where_clause}
              ORDER BY f.severity DESC, f.occurred_at DESC",
-        )?;
-        let rows = stmt.query_map(params![scan_id], |r| {
+        ))?;
+        let rows = stmt.query_map(params, |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, i64>(1)?,
@@ -885,6 +918,13 @@ impl AnalysisDb {
 
     /// Past scans, newest first, each with its live (non-stale) finding counts
     /// (total + per severity) — for the scan-history list.
+    ///
+    /// Findings are counted by SCOPE (the scan's sources + time range), NOT by
+    /// which run first classified each chunk. Classification is cached per chunk
+    /// across scans, so a re-scan reuses chunks and attributes no new findings to
+    /// its own id — counting by scan_id then makes a re-scan of already-covered
+    /// data look "Clean". Counting by scope means every scan shows the findings
+    /// that fall within it, so two scans over the same data agree.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.model, s.range_start, s.range_end, s.sources, s.status,
@@ -894,7 +934,14 @@ impl AnalysisDb {
                     coalesce(sum(f.severity = 2), 0),
                     coalesce(sum(f.severity = 1), 0)
              FROM scans s
-             LEFT JOIN content_findings f ON f.scan_id = s.id AND f.stale = 0
+             LEFT JOIN content_findings f ON f.stale = 0
+                AND (s.sources = 'all'
+                     OR (s.sources = 'messages' AND f.source_kind = 'message')
+                     OR (s.sources = 'notes' AND f.source_kind = 'note'))
+                AND (s.range_start IS NULL OR f.occurred_at IS NULL
+                     OR f.occurred_at >= s.range_start)
+                AND (s.range_end IS NULL OR f.occurred_at IS NULL
+                     OR f.occurred_at <= s.range_end)
              GROUP BY s.id ORDER BY s.id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], |r| {
@@ -1209,6 +1256,43 @@ mod tests {
             (rows[0].serious, rows[0].harmful, rows[0].concerning),
             (1, 1, 0)
         );
+    }
+
+    #[test]
+    fn findings_are_scoped_not_owned_by_scan_id() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        // Scan A (all sources) classifies one MESSAGE and one NOTE finding.
+        let a = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        let msg = finding("fp-msg", Category::ScamFraud); // message, @1_700_000_000
+        let mut note = finding("fp-note", Category::SelfHarm);
+        note.source_kind = SourceKind::Note;
+        note.thread_identifier = None;
+        note.occurred_at = Some(1_700_000_500);
+        db.replace_findings(a, &[msg, note], 101).unwrap();
+
+        // Scan B (notes only) runs later; its chunks were reused from A, so it
+        // owns NO finding rows of its own — the bug this scoping fixes.
+        let b = db.begin_scan("m", (None, None), "notes", 200).unwrap();
+
+        // Scope surfaces findings by sources, regardless of which scan owns them.
+        let in_b = db.list_findings_in_scope("notes", None, None).unwrap();
+        assert_eq!(in_b.len(), 1);
+        assert_eq!(in_b[0].fingerprint, "fp-note");
+        let msgs = db.list_findings_in_scope("messages", None, None).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].fingerprint, "fp-msg");
+
+        // list_scans counts by scope: B (notes) shows the note, A (all) shows
+        // both — even though scan A owns every finding row.
+        let rows = db.list_scans(50).unwrap();
+        assert_eq!(rows.iter().find(|r| r.id == a).unwrap().findings, 2);
+        assert_eq!(rows.iter().find(|r| r.id == b).unwrap().findings, 1);
+
+        // A time range that excludes both keeps them out of scope.
+        let none = db
+            .list_findings_in_scope("all", Some(1_800_000_000), None)
+            .unwrap();
+        assert_eq!(none.len(), 0);
     }
 
     #[test]
