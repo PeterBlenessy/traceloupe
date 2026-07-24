@@ -652,15 +652,48 @@ function ScanOutcomeBadge({
   const worst = scan.serious > 0 ? 3 : scan.harmful > 0 ? 2 : 1;
   const outcome =
     scan.findings > 0 ? (
-      <Badge
-        className={cn(
-          "shrink-0 tabular-nums",
-          SEVERITY_META[worst as 1 | 2 | 3].badge,
-        )}
-        title={`${scan.findings} finding${scan.findings === 1 ? "" : "s"}`}
-      >
-        {scan.findings}
-      </Badge>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge
+            className={cn(
+              "shrink-0 cursor-default tabular-nums",
+              SEVERITY_META[worst as 1 | 2 | 3].badge,
+            )}
+          >
+            {scan.findings}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>
+          <div className="mb-1 font-medium">
+            {scan.findings} finding{scan.findings === 1 ? "" : "s"}
+          </div>
+          <ul className="space-y-0.5">
+            {(
+              [
+                [3, scan.serious],
+                [2, scan.harmful],
+                [1, scan.concerning],
+              ] as [1 | 2 | 3, number][]
+            )
+              .filter(([, n]) => n > 0)
+              .map(([lvl, n]) => (
+                <li key={lvl} className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "size-1.5 rounded-full",
+                      lvl === 3
+                        ? "bg-destructive"
+                        : lvl === 2
+                          ? "bg-amber-500"
+                          : "bg-muted-foreground",
+                    )}
+                  />
+                  {n} {SEVERITY_META[lvl].label.toLowerCase()}
+                </li>
+              ))}
+          </ul>
+        </TooltipContent>
+      </Tooltip>
     ) : scan.status === "completed" ? (
       <Badge
         variant="outline"
@@ -838,13 +871,13 @@ function ScanRail({
               }
             }}
             className={cn(
-              "group flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
+              "group relative flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
               s.id === selectedId && "border-primary/50 bg-primary/5",
             )}
           >
             <div className="min-w-0">
-              <div className="truncate text-sm font-medium">{scanTitle(s)}</div>
-              <div className="truncate text-xs text-muted-foreground">
+              <div className="text-sm font-medium">{scanTitle(s)}</div>
+              <div className="text-xs text-muted-foreground">
                 {SOURCES_LABEL[s.sources] ?? s.sources}
                 {" · "}
                 {formatScanRange(s.rangeStart, s.rangeEnd)}
@@ -854,9 +887,13 @@ function ScanRail({
                   : (SCAN_STATUS_LABEL[s.status] ?? s.status)}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-0.5">
+            <div className="relative flex shrink-0 items-center">
               <ScanOutcomeBadge scan={s} live={s.id === liveId} />
-              <Tooltip>
+              {/* Actions float to the LEFT of the outcome badge on hover/focus:
+                  they never steal title space, and the badge stays visible so
+                  its own (breakdown) tooltip is still reachable. */}
+              <div className="pointer-events-none absolute top-1/2 right-full mr-1 flex -translate-y-1/2 items-center gap-0.5 rounded-md border bg-background/95 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+                <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
@@ -912,6 +949,7 @@ function ScanRail({
                 </TooltipTrigger>
                 <TooltipContent>Delete this scan</TooltipContent>
               </Tooltip>
+              </div>
             </div>
           </div>
         ))}
