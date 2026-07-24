@@ -15,10 +15,11 @@ use crate::cache::CacheDb;
 use crate::sidecar::CancelToken;
 use crate::{Error, Result};
 
-/// Generation budget per chunk: verdicts are short JSON; 1200 tokens covers a
-/// pathological all-items-flagged window without letting a runaway loop stall
-/// the scan for minutes.
-const MAX_TOKENS: u32 = 1200;
+/// Generation budget per chunk: verdicts are short JSON; 800 tokens covers a
+/// pathological all-items-flagged window now that inputs are bounded
+/// (ITEM_MAX_CHARS / NOTE_WINDOW_CHARS), while cutting a runaway generation
+/// off at ~2/3 the previous cost (issue #33: runaways burned 146–212 s each).
+const MAX_TOKENS: u32 = 800;
 
 #[derive(Debug, Clone, Default)]
 pub struct ScanProgress {
@@ -285,9 +286,13 @@ fn classify_chunk(
         scan_id,
         now(),
         "chunk_skipped",
+        // Counts only (never content): enough to diagnose an oversized-input
+        // regression straight from the log (issue #33).
         &format!(
-            "chunk={} reason={}",
+            "chunk={} items={} input_chars={} reason={}",
             audit_key(&chunk.key),
+            chunk.items.len(),
+            chunk.items.iter().map(|i| i.text.len()).sum::<usize>(),
             last_err.map(|e| e.to_string()).unwrap_or_default()
         ),
     )?;
