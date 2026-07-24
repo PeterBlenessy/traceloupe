@@ -949,7 +949,7 @@ function SettingsMenu() {
             className="mt-0 flex flex-col gap-6"
           >
             <SettingsGroup
-              title="Developer"
+              title="Logging"
               description="Backend logs print to the browser dev-tools console."
             >
               <SettingsRow
@@ -978,6 +978,11 @@ function SettingsMenu() {
                   ))}
                 </select>
               </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup
+              title="Safety Scan classifier"
+              description="Diagnostics for the on-device content classifier."
+            >
               <SettingsRow
                 label="Show classifier confidence"
                 description="Badge each finding the strong tier (E4B) re-checked and kept as “Confirmed” — the cascade's agreement signal."
