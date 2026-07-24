@@ -958,6 +958,12 @@ export interface TraceLoupeClient {
   /** All Content Findings for the active backup (dismissed included). */
   /** Findings, most severe first; `scanId` restricts to one scan's. */
   listContentFindings(scanId?: number): Promise<ContentFinding[]>;
+  /** The flagged text for a finding, fetched from the backup on demand.
+   *  Null when the source row is gone or its id is stale after a re-import. */
+  contentFindingSnippet(
+    sourceKind: "message" | "note",
+    sourceId: number | null,
+  ): Promise<string | null>;
   /** Compact per-thread / per-note top severity for inline badges. */
   safetyScanFindingMarks(): Promise<FindingMarks>;
   /** Mark/unmark a finding as a false positive (keyed to survive re-scans). */
@@ -1342,6 +1348,11 @@ const tauriClient: TraceLoupeClient = {
   listContentFindings: (scanId) =>
     invoke<ContentFinding[]>("list_content_findings", {
       scanId: scanId ?? null,
+    }),
+  contentFindingSnippet: (sourceKind, sourceId) =>
+    invoke<string | null>("content_finding_snippet", {
+      sourceKind,
+      sourceId: sourceId ?? null,
     }),
   safetyScanFindingMarks: () =>
     invoke<FindingMarks>("safety_scan_finding_marks"),
@@ -3095,6 +3106,12 @@ export const mockClient: TraceLoupeClient = {
     if (scanId === 1) return mockContentFindings.slice(0, 1);
     if (scanId === 2) return [];
     return mockContentFindings;
+  },
+  contentFindingSnippet: async (sourceKind, sourceId) => {
+    if (!mockActive || sourceId == null) return null;
+    return sourceKind === "note"
+      ? "Journal — Jun 3\nToday was rough. Kept thinking about what they said…"
+      : "you need to send me your location right now, and show me who you were with";
   },
   safetyScanFindingMarks: async () => {
     const marks: FindingMarks = { threads: {}, notes: {} };

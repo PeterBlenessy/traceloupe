@@ -15,14 +15,27 @@ use crate::cache::CacheDb;
 use crate::sidecar::CancelToken;
 use crate::{Error, Result};
 
-/// Generation budget for a chunk with `items` items. The verdicts array is
-/// grammar-bounded to `items` elements (see `verdicts_schema`), each at most a
-/// ~200-char rationale (~55 tokens) plus structure — so this sizes the budget
-/// to fit a legitimately FULL array without truncating it into invalid JSON.
-/// A clean/lightly-flagged chunk stops at EOS well before this. The floor
-/// keeps a tiny single-item note chunk from being starved.
-fn chunk_token_budget(items: usize) -> u32 {
-    (items as u32 * 70 + 200).max(300)
+/// Cap on verdicts per chunk. A weak sweep tier (E2B) over-flags badly — up to
+/// 17 of 25 messages in one observed chunk — and with the array bounded only by
+/// item count it generates every one (~1900 tokens, ~2 min/chunk). The sweep's
+/// job is to *flag* a chunk, not enumerate it: a low cap keeps it fast, and in
+/// the cascade the strong tier re-checks flagged chunks and produces the
+/// authoritative findings anyway. (For a single-model scan this bounds how many
+/// findings one window surfaces — an acceptable trade for a usable scan speed.)
+const MAX_VERDICTS_PER_CHUNK: usize = 8;
+
+/// Verdicts allowed for a chunk of `items` items: at most one per item, capped.
+fn chunk_max_verdicts(items: usize) -> usize {
+    items.clamp(1, MAX_VERDICTS_PER_CHUNK)
+}
+
+/// Generation budget for a chunk allowed `max_verdicts` verdicts. The array is
+/// grammar-bounded to that many elements, each at most a ~140-char rationale
+/// (~40 tokens) plus structure (~15) — so this sizes the budget to fit a full
+/// array without truncating it into invalid JSON. A clean/lightly-flagged
+/// chunk stops at EOS well before this.
+fn chunk_token_budget(max_verdicts: usize) -> u32 {
+    (max_verdicts as u32 * 60 + 150).max(250)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -375,11 +388,13 @@ fn classify_batch(
                     }
                     let chunk = pending[i];
                     // Schema + budget are PER CHUNK: the verdicts array is
-                    // bounded to this chunk's item count, and the token budget
-                    // is sized to fit that bounded array (so a legitimately
-                    // full array is never truncated into invalid JSON).
-                    let schema = prompt::verdicts_schema(chunk.items.len());
-                    let max_tokens = chunk_token_budget(chunk.items.len());
+                    // bounded (item count, capped low) and the token budget is
+                    // sized to fit that bounded array, so a full array is never
+                    // truncated into invalid JSON and a weak over-flagging tier
+                    // can't run generation away.
+                    let max_verdicts = chunk_max_verdicts(chunk.items.len());
+                    let schema = prompt::verdicts_schema(max_verdicts);
+                    let max_tokens = chunk_token_budget(max_verdicts);
                     let user = prompt::render_chunk(chunk);
                     // One retry: a transient failure shouldn't skip a chunk,
                     // a persistent one shouldn't stall it.

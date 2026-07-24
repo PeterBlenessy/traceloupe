@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ExternalLink, EyeOff, HeartPulse, History, LayoutList, Loader2, MessageSquareWarning, MessagesSquare, NotebookText, Play, RotateCcw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ExternalLink, EyeOff, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, RotateCcw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,7 +13,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
   DialogContent,
@@ -28,12 +27,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { SettingsLink } from "@/components/settings-dialog-context";
@@ -1025,79 +1022,124 @@ function ScanReportCard({
  *  rationale, with an inline dismiss control. Click for the full detail sheet. */
 function FindingRow({
   finding: f,
-  onOpen,
   onDismiss,
 }: {
   finding: ContentFinding;
-  onOpen: () => void;
   onDismiss: (dismissed: boolean) => void;
 }) {
+  const navigate = useNavigate();
   const sev = SEVERITY_META[f.severity] ?? SEVERITY_META[1];
+  // Fetch the flagged text only once the peek popover is first opened — no
+  // upfront query per finding, and the raw text never lands in a list payload.
+  const [peeked, setPeeked] = useState(false);
+  const snippet = useQuery({
+    queryKey: ["findingSnippet", f.sourceKind, f.sourceId],
+    queryFn: () => client.contentFindingSnippet(f.sourceKind, f.sourceId),
+    enabled: peeked,
+  });
+  const SourceIcon = f.sourceKind === "note" ? NotebookText : MessageSquare;
+  const canOpen =
+    (f.sourceKind === "message" && f.threadId != null) ||
+    (f.sourceKind === "note" && f.sourceId != null);
+  const openSource = () => {
+    if (f.sourceKind === "message" && f.threadId != null) {
+      navigate({ to: "/messages", search: { thread: f.threadId } });
+    } else if (f.sourceKind === "note" && f.sourceId != null) {
+      navigate({ to: "/notes", search: { id: f.sourceId, from: "safety" } });
+    }
+  };
   return (
     <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        // Keydown bubbles up from the nested dismiss button — only act on keys
-        // pressed on the row itself, or Enter on the button would open the
-        // sheet instead of dismissing.
-        if (e.target !== e.currentTarget) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
       className={cn(
-        "flex cursor-pointer flex-wrap items-center gap-x-2 gap-y-1 rounded-md border px-3 py-2 hover:bg-accent/50",
+        "flex flex-col gap-1.5 rounded-md border px-3 py-2",
         f.dismissed && "opacity-55",
       )}
     >
-      <Badge className={sev.badge}>{sev.label}</Badge>
-      <Badge variant="outline">{CATEGORY_LABEL[f.category]}</Badge>
-      <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-        {f.sourceKind === "note" ? (
-          <>
-            <NotebookText className="size-3" /> Note
-          </>
-        ) : (
-          (f.threadIdentifier ?? "Conversation")
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <Badge className={sev.badge}>{sev.label}</Badge>
+        <Badge variant="outline">{CATEGORY_LABEL[f.category]}</Badge>
+        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+          {f.sourceKind === "note" ? (
+            <>
+              <NotebookText className="size-3" /> Note
+            </>
+          ) : (
+            (f.threadIdentifier ?? "Conversation")
+          )}
+          {f.occurredAt != null && ` · ${formatListTime(f.occurredAt)}`}
+        </span>
+        {f.stale && (
+          <Badge variant="outline" className="text-muted-foreground">
+            <HeartPulse className="size-3" /> outdated
+          </Badge>
         )}
-        {f.occurredAt != null && ` · ${formatListTime(f.occurredAt)}`}
-      </span>
-      {f.stale && (
-        <Badge variant="outline" className="text-muted-foreground">
-          <HeartPulse className="size-3" /> outdated
-        </Badge>
-      )}
-      <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-        {f.rationale}
-      </span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-7 shrink-0 text-muted-foreground"
-            aria-label={f.dismissed ? "Restore this finding" : "Dismiss this finding"}
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss(!f.dismissed);
-            }}
-          >
-            {f.dismissed ? (
-              <RotateCcw className="size-3.5" />
+      </div>
+      <p className="text-sm">{f.rationale}</p>
+      <div className="flex flex-wrap items-center gap-1">
+        {/* Peek: hover to reveal the flagged text (fetched on demand) and the
+            jump to its source. Actions live here on the card, not a sheet. */}
+        <HoverCard openDelay={120} closeDelay={80} onOpenChange={(o) => o && setPeeked(true)}>
+          <HoverCardTrigger asChild>
+            <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
+              <SourceIcon className="size-3.5" /> View flagged text
+            </Button>
+          </HoverCardTrigger>
+          <HoverCardContent className="w-96 text-sm">
+            <div className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Flagged {f.sourceKind === "note" ? "note" : "message"}
+            </div>
+            {snippet.isPending ? (
+              <p className="text-xs text-muted-foreground">Loading…</p>
+            ) : snippet.data ? (
+              <blockquote className="border-l-2 pl-3 whitespace-pre-wrap text-muted-foreground">
+                {snippet.data}
+              </blockquote>
             ) : (
-              <EyeOff className="size-3.5" />
+              <p className="text-xs text-muted-foreground">
+                The source is no longer available (it may have changed since
+                this scan).
+              </p>
             )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          {f.dismissed
-            ? "Restore — it was not a false positive after all"
-            : "Dismiss as a false positive (persists across re-scans)"}
-        </TooltipContent>
-      </Tooltip>
+            {canOpen && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3 w-full"
+                onClick={openSource}
+              >
+                <ExternalLink className="size-4" />
+                Open {f.sourceKind === "note" ? "note" : "conversation"}
+              </Button>
+            )}
+          </HoverCardContent>
+        </HoverCard>
+        <span className="flex-1" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-xs text-muted-foreground"
+              onClick={() => onDismiss(!f.dismissed)}
+            >
+              {f.dismissed ? (
+                <>
+                  <RotateCcw className="size-3.5" /> Restore
+                </>
+              ) : (
+                <>
+                  <EyeOff className="size-3.5" /> Dismiss
+                </>
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {f.dismissed
+              ? "Restore — it was not a false positive after all"
+              : "Dismiss as a false positive (persists across re-scans)"}
+          </TooltipContent>
+        </Tooltip>
+      </div>
     </div>
   );
 }
@@ -1118,7 +1160,6 @@ function FindingsList({
   const [severity, setSeverity] = useState("all");
   const [sort, setSort] = useState<SortState>({ by: "severity", desc: true });
   const [grouped, setGrouped] = useState(false);
-  const [selected, setSelected] = useState<ContentFinding | null>(null);
 
   const visible = useMemo(() => {
     let rows = findings.filter((f) => showDismissed || !f.dismissed);
@@ -1250,7 +1291,6 @@ function FindingsList({
                   <FindingRow
                     key={`${f.fingerprint}:${f.category}`}
                     finding={f}
-                    onOpen={() => setSelected(f)}
                     onDismiss={(d) => onDismiss(f, d)}
                   />
                 ))}
@@ -1260,7 +1300,6 @@ function FindingsList({
               <FindingRow
                 key={`${f.fingerprint}:${f.category}`}
                 finding={f}
-                onOpen={() => setSelected(f)}
                 onDismiss={(d) => onDismiss(f, d)}
               />
             ))}
@@ -1270,166 +1309,9 @@ function FindingsList({
           </p>
         )}
       </CardContent>
-
-      <FindingSheet
-        scan={scan}
-        finding={selected}
-        onClose={() => setSelected(null)}
-        onDismiss={(f, d) => {
-          onDismiss(f, d);
-          setSelected(null);
-        }}
-      />
     </Card>
   );
 }
 
 /** The full detail for one finding — the same interaction Security's findings
  *  table has: compact row → everything in a sheet. */
-function FindingSheet({
-  scan,
-  finding,
-  onClose,
-  onDismiss,
-}: {
-  scan: SafetyScanHistoryItem;
-  finding: ContentFinding | null;
-  onClose: () => void;
-  onDismiss: (f: ContentFinding, dismissed: boolean) => void;
-}) {
-  const navigate = useNavigate();
-  return (
-    <Sheet open={!!finding} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent className="w-full gap-0 sm:max-w-md">
-        {finding && (
-          <>
-            <SheetHeader>
-              <div className="flex items-center gap-2">
-                <Badge
-                  className={(SEVERITY_META[finding.severity] ?? SEVERITY_META[1]).badge}
-                >
-                  {(SEVERITY_META[finding.severity] ?? SEVERITY_META[1]).label}
-                </Badge>
-                <SheetTitle>{CATEGORY_LABEL[finding.category]}</SheetTitle>
-              </div>
-              <SheetDescription>
-                {finding.sourceKind === "note"
-                  ? "Flagged in a note"
-                  : `Flagged in ${finding.threadIdentifier ?? "a conversation"}`}
-                {finding.occurredAt != null &&
-                  ` · ${formatTimelineTime(finding.occurredAt)}`}
-              </SheetDescription>
-            </SheetHeader>
-            <div className="flex flex-col gap-3 px-4 pb-4 text-sm">
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Found in scan
-                </span>
-                <span>{scanTitle(scan)}</span>
-              </div>
-              <div className="flex flex-col gap-0.5">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Model rationale
-                </span>
-                <span>{finding.rationale}</span>
-              </div>
-              {finding.stale && (
-                <p className="text-xs text-muted-foreground">
-                  The source content changed since this verdict (or was removed
-                  in a later import) — treat it as outdated.
-                </p>
-              )}
-              <Separator />
-              <p className="text-xs text-muted-foreground">
-                A model verdict is a prompt to review the conversation yourself,
-                not proof. False positives are expected.
-              </p>
-              <div className="flex flex-col gap-2">
-                {finding.sourceKind === "message" && finding.threadId != null && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          navigate({
-                            to: "/messages",
-                            search: { thread: finding.threadId! },
-                          });
-                          onClose();
-                        }}
-                      >
-                        <ExternalLink className="size-4" /> Open conversation
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Read the flagged conversation in Messages
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-                {/* Same null-source guard as the conversation button: a stale
-                    finding whose note was removed has no id to open. */}
-                {finding.sourceKind === "note" && finding.sourceId != null && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          navigate({
-                            to: "/notes",
-                            search: {
-                              id: finding.sourceId!,
-                              from: "safety",
-                            },
-                          });
-                          onClose();
-                        }}
-                      >
-                        <ExternalLink className="size-4" /> Open note
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Read the flagged note in Notes
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-                {finding.dismissed ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onDismiss(finding, false)}
-                      >
-                        <RotateCcw className="size-4" /> Restore
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Restore — it was not a false positive after all
-                    </TooltipContent>
-                  </Tooltip>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onDismiss(finding, true)}
-                      >
-                        <EyeOff className="size-4" /> Dismiss as false positive
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Hide this finding; the dismissal persists across re-scans
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-            </div>
-          </>
-        )}
-      </SheetContent>
-    </Sheet>
-  );
-}
