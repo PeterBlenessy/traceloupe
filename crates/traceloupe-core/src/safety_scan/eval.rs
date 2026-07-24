@@ -356,8 +356,8 @@ mod tests {
                 items,
             };
             let user = prompt::render_chunk(&chunk);
-            let schema = prompt::verdicts_schema(chunk.items.len());
-            match client.chat_json(prompt::SYSTEM_PROMPT, &user, &schema, 1200) {
+            let grammar = prompt::verdicts_grammar(chunk.items.len());
+            match client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, 1200) {
                 Ok(output) => engine::verdicts_to_findings_for_eval(&chunk, &output)
                     .into_iter()
                     .map(|f| f.category)

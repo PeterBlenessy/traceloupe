@@ -15,27 +15,21 @@ use crate::cache::CacheDb;
 use crate::sidecar::CancelToken;
 use crate::{Error, Result};
 
-/// Cap on verdicts per chunk. A weak sweep tier (E2B) over-flags badly — up to
-/// 17 of 25 messages in one observed chunk — and with the array bounded only by
-/// item count it generates every one (~1900 tokens, ~2 min/chunk). The sweep's
-/// job is to *flag* a chunk, not enumerate it: a low cap keeps it fast, and in
-/// the cascade the strong tier re-checks flagged chunks and produces the
-/// authoritative findings anyway. (For a single-model scan this bounds how many
-/// findings one window surfaces — an acceptable trade for a usable scan speed.)
-const MAX_VERDICTS_PER_CHUNK: usize = 8;
-
-/// Verdicts allowed for a chunk of `items` items: at most one per item, capped.
+/// Max verdicts the grammar allows for a chunk of `items` items — one verdict
+/// per item is the norm. Unlike `maxItems` in a JSON schema (which the server
+/// ignores), the bounded GBNF grammar in `prompt::verdicts_grammar` ENFORCES
+/// this, so the array closes deterministically and never runs away.
 fn chunk_max_verdicts(items: usize) -> usize {
-    items.clamp(1, MAX_VERDICTS_PER_CHUNK)
+    items.max(1)
 }
 
-/// Generation budget for a chunk allowed `max_verdicts` verdicts. The array is
-/// grammar-bounded to that many elements, each at most a ~140-char rationale
-/// (~40 tokens) plus structure (~15) — so this sizes the budget to fit a full
-/// array without truncating it into invalid JSON. A clean/lightly-flagged
-/// chunk stops at EOS well before this.
-fn chunk_token_budget(max_verdicts: usize) -> u32 {
-    (max_verdicts as u32 * 60 + 150).max(250)
+/// Generation budget for a chunk of `items` items. With the array bounded by
+/// the grammar, this is only a safety-net ceiling — the model closes the array
+/// on its own well under this (a full flagged chunk measured ~45 tokens/verdict
+/// including a short rationale). Kept generous so it never clips a legitimate
+/// full array.
+fn chunk_token_budget(items: usize) -> u32 {
+    (items as u32 * 90 + 400).max(400)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -387,22 +381,20 @@ fn classify_batch(
                         break;
                     }
                     let chunk = pending[i];
-                    // Schema + budget are PER CHUNK: the verdicts array is
-                    // bounded (item count, capped low) and the token budget is
-                    // sized to fit that bounded array, so a full array is never
-                    // truncated into invalid JSON and a weak over-flagging tier
-                    // can't run generation away.
-                    let max_verdicts = chunk_max_verdicts(chunk.items.len());
-                    let schema = prompt::verdicts_schema(max_verdicts);
-                    let max_tokens = chunk_token_budget(max_verdicts);
+                    // Grammar + budget are PER CHUNK: the GBNF grammar bounds
+                    // the verdicts array to the item count so a weak over-flagging
+                    // tier can't run generation away, and the token budget is a
+                    // generous safety net (the bounded array closes on its own).
+                    let grammar = prompt::verdicts_grammar(chunk_max_verdicts(chunk.items.len()));
+                    let max_tokens = chunk_token_budget(chunk.items.len());
                     let user = prompt::render_chunk(chunk);
                     // One retry: a transient failure shouldn't skip a chunk,
                     // a persistent one shouldn't stall it.
                     let mut result =
-                        client.chat_json(prompt::SYSTEM_PROMPT, &user, &schema, max_tokens);
+                        client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, max_tokens);
                     if result.is_err() && !cancel.is_cancelled() {
                         result =
-                            client.chat_json(prompt::SYSTEM_PROMPT, &user, &schema, max_tokens);
+                            client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, max_tokens);
                     }
                     if tx.send((i, result)).is_err() {
                         break; // receiver gone (fatal storage error path)
