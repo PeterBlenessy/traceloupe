@@ -649,6 +649,8 @@ function SettingsMenu() {
     setTranslucentToolbar,
     showCascadeConfidence,
     setShowCascadeConfidence,
+    includeReportSnippets,
+    setIncludeReportSnippets,
   } = useSettings();
   const { theme, setTheme } = useTheme();
   // Lifted open/tab state so views can deep-link (e.g. "Settings → Safety").
@@ -1015,6 +1017,21 @@ function SettingsMenu() {
               <div className="p-3">
                 <SafetyModelSettings />
               </div>
+            </SettingsGroup>
+            <SettingsGroup
+              title="Report"
+              description="What a Safety Scan report contains when you view or export it."
+            >
+              <SettingsRow
+                label="Include flagged message text"
+                description="Add the verbatim flagged messages and notes to the report and its PDF export. Off by default — an export is a shareable file, so the report shows structured findings only unless you opt in."
+              >
+                <Switch
+                  aria-label="Include flagged message text in the report"
+                  checked={includeReportSnippets}
+                  onCheckedChange={setIncludeReportSnippets}
+                />
+              </SettingsRow>
             </SettingsGroup>
           </TabsContent>
           </div>

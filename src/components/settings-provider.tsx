@@ -70,6 +70,12 @@ type SettingsProviderState = {
    *  Off by default; it's a technical detail, not for the default audience. */
   showCascadeConfidence: boolean;
   setShowCascadeConfidence: (v: boolean) => void;
+  /** Include the verbatim flagged message/note text in the Safety Scan report
+   *  (and its export). OFF by default: an export is a shareable file, and the
+   *  Safety Scan audience may be surveilled — the report shows structured
+   *  findings only unless the user opts in to the raw quotes. */
+  includeReportSnippets: boolean;
+  setIncludeReportSnippets: (v: boolean) => void;
 };
 
 const NAMES_KEY = "traceloupe-show-names";
@@ -88,6 +94,7 @@ const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
 const DENSITY_KEY = "traceloupe-density";
 const TRANSLUCENT_KEY = "traceloupe-translucent-toolbar";
 const CASCADE_CONFIDENCE_KEY = "traceloupe-dev-cascade-confidence";
+const INCLUDE_REPORT_SNIPPETS_KEY = "traceloupe-include-report-snippets";
 
 /** Read the persisted density, defaulting to "comfortable". */
 function readDensity(): Density {
@@ -194,6 +201,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [showCascadeConfidence, setShowCascadeConfidenceState] =
     useState<boolean>(
       () => localStorage.getItem(CASCADE_CONFIDENCE_KEY) === "true",
+    );
+  // Off by default (opt-in): raw quotes shouldn't land in a shareable export
+  // unless the user asks.
+  const [includeReportSnippets, setIncludeReportSnippetsState] =
+    useState<boolean>(
+      () => localStorage.getItem(INCLUDE_REPORT_SNIPPETS_KEY) === "true",
     );
 
   // Reflect density onto the document root; a CSS rule keyed off `data-density`
@@ -333,6 +346,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setShowCascadeConfidenceState(v);
   };
 
+  const setIncludeReportSnippets = (v: boolean) => {
+    localStorage.setItem(INCLUDE_REPORT_SNIPPETS_KEY, String(v));
+    setIncludeReportSnippetsState(v);
+  };
+
   return (
     <SettingsProviderContext.Provider
       value={{
@@ -365,6 +383,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setTranslucentToolbar,
         showCascadeConfidence,
         setShowCascadeConfidence,
+        includeReportSnippets,
+        setIncludeReportSnippets,
       }}
     >
       {children}
