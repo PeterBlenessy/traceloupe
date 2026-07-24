@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
@@ -1146,7 +1151,7 @@ function SafetyReportDocument({
   findings: ContentFinding[];
 }) {
   const resolve = useContactResolver();
-  const { showCascadeConfidence } = useSettings();
+  const { showCascadeConfidence, includeReportSnippets } = useSettings();
   const { data: threads } = useQuery({
     queryKey: ["threads"],
     queryFn: () => client.listThreads(),
@@ -1163,6 +1168,23 @@ function SafetyReportDocument({
     return first ? (resolve(first)?.name ?? first) : identifier;
   };
   const live = findings.filter((f) => !f.dismissed && !f.stale);
+  // Verbatim flagged text is included ONLY when the user opts in (Settings →
+  // Safety → Report). Fetched on demand per finding, never stored (ADR 0002).
+  const snippetQueries = useQueries({
+    queries: includeReportSnippets
+      ? live.map((f) => ({
+          queryKey: ["findingSnippet", f.sourceKind, f.sourceId],
+          queryFn: () => client.contentFindingSnippet(f.sourceKind, f.sourceId),
+        }))
+      : [],
+  });
+  const snippetByFinding = new Map<number, string>();
+  if (includeReportSnippets) {
+    live.forEach((f, i) => {
+      const text = snippetQueries[i]?.data?.text;
+      if (text) snippetByFinding.set(f.id, text);
+    });
+  }
   const groups = groupReportFindings(live, labelOf);
   const summaryByIdent = new Map(report?.threadSummaries ?? []);
   const catCounts = new Map<ContentCategory, number>();
@@ -1268,22 +1290,35 @@ function SafetyReportDocument({
                 {prose && <p className="text-muted-foreground">{prose}</p>}
                 <ul className="space-y-1.5">
                   {g.findings.map((f) => (
-                    <li key={f.id} className="flex gap-2 border-t pt-1.5 first:border-t-0">
-                      <span className={cn("shrink-0 font-medium", sev(f.severity))}>
-                        {SEVERITY_META[f.severity]?.label ?? f.severity}
-                      </span>
-                      <span className="shrink-0 text-muted-foreground">
-                        {CATEGORY_LABEL[f.category]}
-                      </span>
-                      {showCascadeConfidence && f.rechecked && (
-                        <span className="shrink-0 text-emerald-600 dark:text-emerald-400">
-                          ✓ confirmed
+                    <li
+                      key={f.id}
+                      className="space-y-1 border-t pt-1.5 first:border-t-0"
+                    >
+                      <div className="flex flex-wrap gap-x-2">
+                        <span
+                          className={cn("shrink-0 font-medium", sev(f.severity))}
+                        >
+                          {SEVERITY_META[f.severity]?.label ?? f.severity}
                         </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {CATEGORY_LABEL[f.category]}
+                        </span>
+                        {showCascadeConfidence && f.rechecked && (
+                          <span className="shrink-0 text-emerald-600 dark:text-emerald-400">
+                            ✓ confirmed
+                          </span>
+                        )}
+                        <span className="text-muted-foreground">
+                          {f.occurredAt != null &&
+                            `${formatDateTimeYear(f.occurredAt)} — `}
+                          {f.rationale}
+                        </span>
+                      </div>
+                      {snippetByFinding.has(f.id) && (
+                        <blockquote className="border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground">
+                          {snippetByFinding.get(f.id)}
+                        </blockquote>
                       )}
-                      <span className="text-muted-foreground">
-                        {f.occurredAt != null && `${formatDateTimeYear(f.occurredAt)} — `}
-                        {f.rationale}
-                      </span>
                     </li>
                   ))}
                 </ul>
@@ -1294,8 +1329,10 @@ function SafetyReportDocument({
       )}
 
       <footer className="border-t pt-3 text-xs text-muted-foreground">
-        Generated on-device by {modelLabel(scan.model)}. Raw message content is not
-        included in this report.
+        Generated on-device by {modelLabel(scan.model)}.{" "}
+        {includeReportSnippets
+          ? "Includes the verbatim flagged content."
+          : "Raw message content is not included."}
       </footer>
     </article>
   );
@@ -1326,8 +1363,9 @@ function SafetyReportDialog({
         <DialogDescription className="sr-only">
           The selected scan's findings, formatted for review and export.
         </DialogDescription>
-        {/* Toolbar is outside the printable root, so it never prints. */}
-        <div className="flex items-center justify-between gap-2 border-b px-4 py-2 print:hidden">
+        {/* Toolbar is outside the printable root, so it never prints. pr-12
+            clears the dialog's built-in close (✕) at top-right. */}
+        <div className="flex items-center justify-between gap-2 border-b py-2 pl-4 pr-12 print:hidden">
           <span className="text-sm font-medium">Scan report</span>
           <Button
             size="sm"
