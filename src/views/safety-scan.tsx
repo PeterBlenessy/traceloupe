@@ -606,6 +606,12 @@ function ScanProgress({
           far — you can leave this page; the scan keeps running.
         </div>
       )}
+      {/* Honest surfacing of the power assertion the backend holds for the
+          scan's lifetime (issue #32): a long scan can run for hours, and the
+          app keeps the Mac from idle-sleeping so it doesn't stall mid-chunk. */}
+      <div className="text-xs text-muted-foreground/80">
+        Your Mac stays awake while the scan runs (the display can still sleep).
+      </div>
     </div>
   );
 }
