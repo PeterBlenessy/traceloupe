@@ -66,6 +66,64 @@ fn category_counts(findings: &[&FindingRow]) -> String {
         .join(", ")
 }
 
+/// A deterministic, model-free overview built straight from the findings — used
+/// when the classifier's prose comes back empty (weak sweep-tier models
+/// sometimes return only whitespace). A scan that HAS findings must never store
+/// a blank report, which the UI renders as "this scan didn't produce a written
+/// report" (#43). `live` is already severity-desc ordered by the caller.
+fn deterministic_report(live: &[&FindingRow]) -> String {
+    let convos = live
+        .iter()
+        .map(|f| f.thread_identifier.as_deref().unwrap_or("notes"))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let mut out = format!(
+        "This scan flagged {} finding{} across {} conversation{} and notes. By category: {}.",
+        live.len(),
+        if live.len() == 1 { "" } else { "s" },
+        convos,
+        if convos == 1 { "" } else { "s" },
+        category_counts(live),
+    );
+    let top: Vec<String> = live
+        .iter()
+        .take(5)
+        .map(|f| {
+            format!(
+                "{} (severity {}) in \"{}\"",
+                f.category.as_str(),
+                f.severity,
+                f.thread_identifier.as_deref().unwrap_or("notes"),
+            )
+        })
+        .collect();
+    if !top.is_empty() {
+        out.push_str(" Most serious: ");
+        out.push_str(&top.join("; "));
+        out.push('.');
+    }
+    out.push_str(
+        " Open each conversation to review the flagged messages in context. \
+         This is an automated summary, not a judgment.",
+    );
+    out
+}
+
+/// The per-thread equivalent of [`deterministic_report`] — a blank thread
+/// summary would show as an empty panel next to the finding.
+fn deterministic_thread_summary(thread: &str, findings: &[&FindingRow]) -> String {
+    let peak = findings.iter().map(|f| f.severity).max().unwrap_or(0);
+    format!(
+        "{} finding{} flagged in \"{}\" ({}). Peak severity {}. \
+         Open the conversation to review them in context.",
+        findings.len(),
+        if findings.len() == 1 { "" } else { "s" },
+        thread,
+        category_counts(findings),
+        peak,
+    )
+}
+
 /// Write the Scan report + per-flagged-thread summaries, stored under
 /// `scan_id`. Deliberately a CURRENT-STATE report: it describes all live
 /// findings (every scan's, since re-confirmed findings migrate to the newest
@@ -119,7 +177,15 @@ pub fn run_summaries(
         return Ok(outcome);
     }
     let report = client.chat_text(REPORT_SYSTEM, &user, 600)?;
-    analysis.set_summary(scan_id, "report", "", report.trim(), now())?;
+    let report = report.trim();
+    // Never store an empty narrative when there are findings — fall back to a
+    // deterministic overview built from the finding data itself (#43).
+    let report_text = if report.is_empty() {
+        deterministic_report(&live)
+    } else {
+        report.to_string()
+    };
+    analysis.set_summary(scan_id, "report", "", &report_text, now())?;
     outcome.report_written = true;
     outcome.model_calls += 1;
 
@@ -153,7 +219,13 @@ pub fn run_summaries(
             }
         );
         let text = client.chat_text(THREAD_SYSTEM, &user, 250)?;
-        analysis.set_summary(scan_id, "thread", thread, text.trim(), now())?;
+        let text = text.trim();
+        let text = if text.is_empty() {
+            deterministic_thread_summary(thread, findings)
+        } else {
+            text.to_string()
+        };
+        analysis.set_summary(scan_id, "thread", thread, &text, now())?;
         outcome.thread_summaries += 1;
         outcome.model_calls += 1;
     }
@@ -263,6 +335,35 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 3);
         assert!(db.get_summary(scan, "thread", "chatA").unwrap().is_some());
         assert!(db.get_summary(scan, "thread", "chatB").unwrap().is_some());
+    }
+
+    #[test]
+    fn empty_model_prose_falls_back_to_deterministic_report() {
+        // A weak sweep-tier model returning only whitespace must NOT leave a
+        // blank report (which the UI shows as "didn't produce a report") when
+        // there are findings — a deterministic overview is stored instead (#43).
+        let (base, hits) = mock_text_server("   \n  ");
+        let (mut db, scan) = seeded_analysis(&["Alice"]);
+        let client = LlmClient::new(&base, "m", Duration::from_secs(5));
+        let out = run_summaries(&mut db, &client, scan, &CancelToken::new()).unwrap();
+        assert!(out.report_written);
+        // The model was still called (it just answered empty), then we fell back.
+        assert!(hits.load(Ordering::SeqCst) >= 1);
+        let report = db.get_summary(scan, "report", "").unwrap().unwrap();
+        assert!(
+            !report.trim().is_empty(),
+            "report must never be blank when there are findings"
+        );
+        assert!(
+            report.contains("flagged") && report.contains("Alice"),
+            "deterministic report names the findings and conversation, got: {report}"
+        );
+        // The per-thread summary gets the same treatment — never blank.
+        let thread = db.get_summary(scan, "thread", "Alice").unwrap().unwrap();
+        assert!(
+            !thread.trim().is_empty(),
+            "thread summary must not be blank"
+        );
     }
 
     #[test]
