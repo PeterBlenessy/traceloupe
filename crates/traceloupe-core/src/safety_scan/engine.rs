@@ -185,15 +185,16 @@ pub fn run_scan(
         findings: 0,
     };
 
-    // An initial tick with the real chunk total, so the UI flips from "loading"
-    // to "scanning" the moment classification begins — otherwise the first
-    // progress event only lands after the first (slow ~1 min) chunk completes,
-    // leaving the model-loaded server looking like it's still starting up.
-    on_progress(ScanProgress {
-        chunks_done: 0,
-        chunks_total: chunks.len(),
-        findings: 0,
-    });
+    // Seed the live findings tally with what the scan ALREADY has, so a resumed
+    // scan shows its existing findings from the first frame instead of counting
+    // up from zero (a fresh scan has none, so this is a no-op there). The
+    // engine's own `outcome.findings` only counts THIS run's new findings, so a
+    // wrapper adds the baseline to every emitted tally.
+    let base_findings = analysis.count_findings(scan_id)?;
+    let mut on_progress = move |mut p: ScanProgress| {
+        p.findings += base_findings;
+        on_progress(p);
+    };
 
     let loop_result = (|| -> Result<()> {
         // Settle already-classified chunks first (DB-only, fast), collecting
@@ -214,13 +215,16 @@ pub fn run_scan(
                 pending.push(chunk);
             }
         }
-        if outcome.reused > 0 {
-            on_progress(ScanProgress {
-                chunks_done: outcome.reused,
-                chunks_total: outcome.chunks_total,
-                findings: 0,
-            });
-        }
+        // The first tick lands AFTER settling, so the UI flips from "loading" to
+        // "scanning" already at the TRUE state: a resumed scan shows its reused
+        // count (e.g. 53/72) and existing findings at once instead of 0% → jump;
+        // a fresh scan shows 0/total. Settling is DB-only (fast), so this still
+        // arrives well before the first slow inference chunk.
+        on_progress(ScanProgress {
+            chunks_done: outcome.reused,
+            chunks_total: outcome.chunks_total,
+            findings: 0, // wrapper adds base_findings
+        });
 
         // Phase 1: sweep every pending chunk with the primary model.
         classify_batch(

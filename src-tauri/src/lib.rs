@@ -1797,11 +1797,13 @@ async fn count_thread_messages(
     active: State<'_, ActiveBackup>,
     thread_id: i64,
     kind: Option<String>,
+    search: Option<String>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_messages(&cache, thread_id, kind.as_deref()).map_err(|e| e.to_string())
+        query::count_messages(&cache, thread_id, kind.as_deref(), search.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1815,6 +1817,7 @@ async fn get_thread_message_window(
     limit: i64,
     kind: Option<String>,
     desc: bool,
+    search: Option<String>,
 ) -> Result<Vec<Message>, String> {
     // Async + spawn_blocking: a synchronous command runs on the main thread and
     // would freeze the whole native UI. Only the requested window is read, so
@@ -1822,8 +1825,16 @@ async fn get_thread_message_window(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::get_message_window(&cache, thread_id, offset, limit, kind.as_deref(), desc)
-            .map_err(|e| e.to_string())
+        query::get_message_window(
+            &cache,
+            thread_id,
+            offset,
+            limit,
+            kind.as_deref(),
+            desc,
+            search.as_deref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

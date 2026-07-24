@@ -121,11 +121,19 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
 
 /// Total number of messages in a thread. Cheap; drives the virtual scroller so
 /// the UI can lazily fetch only the windows it renders.
-pub fn count_messages(cache: &CacheDb, thread_id: i64, kind: Option<&str>) -> Result<i64> {
+pub fn count_messages(
+    cache: &CacheDb,
+    thread_id: i64,
+    kind: Option<&str>,
+    search: Option<&str>,
+) -> Result<i64> {
+    let search = search.map(escape_like);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM messages
-         WHERE thread_id = ?1 AND (?2 IS NULL OR kind = ?2)",
-        rusqlite::params![thread_id, kind],
+         WHERE thread_id = ?1 AND (?2 IS NULL OR kind = ?2)
+           AND (?3 IS NULL OR body LIKE '%' || ?3 || '%' ESCAPE '\\'
+                          OR sender LIKE '%' || ?3 || '%' ESCAPE '\\')",
+        rusqlite::params![thread_id, kind, search],
         |r| r.get(0),
     )?;
     Ok(n)
@@ -142,20 +150,24 @@ pub fn get_message_window(
     limit: i64,
     kind: Option<&str>,
     desc: bool,
+    search: Option<&str>,
 ) -> Result<Vec<Message>> {
     let conn = cache.conn();
+    let search = search.map(escape_like);
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
         "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect, deleted, deleted_at
          FROM messages
          WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
+           AND (?5 IS NULL OR body LIKE '%' || ?5 || '%' ESCAPE '\\'
+                          OR sender LIKE '%' || ?5 || '%' ESCAPE '\\')
          ORDER BY sent_at {dir}, id {dir}
          LIMIT ?2 OFFSET ?3",
     ))?;
     let mut messages = stmt
         .query_map(
-            rusqlite::params![thread_id, limit, offset, kind],
+            rusqlite::params![thread_id, limit, offset, kind, search],
             row_to_message,
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;

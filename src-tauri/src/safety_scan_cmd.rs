@@ -912,6 +912,9 @@ pub struct ContentFindingDto {
     /// The cache `threads.id` for message findings — the Messages deep-link.
     pub thread_id: Option<i64>,
     pub thread_identifier: Option<String>,
+    /// The messaging service for the app icon (e.g. "iMessage", "TikTok"), or
+    /// "Notes" for note findings. None when the source can't be resolved.
+    pub service: Option<String>,
     pub occurred_at: Option<i64>,
     pub fingerprint: String,
     pub category: String,
@@ -937,41 +940,77 @@ pub fn list_content_findings(
     // Resolve message → thread ids for deep-links (best effort; a stale
     // source_id after re-import simply yields no link).
     let cache = CacheDb::open(&cache_path).ok();
-    let thread_of = |source_id: Option<i64>| -> Option<i64> {
-        let (cache, id) = (cache.as_ref()?, source_id?);
+    // For message findings, resolve the thread id (deep-link) AND the service
+    // (app icon) in one lookup; best effort — a stale source_id yields neither.
+    let thread_meta = |source_id: Option<i64>| -> (Option<i64>, Option<String>) {
+        let Some((cache, id)) = cache.as_ref().zip(source_id) else {
+            return (None, None);
+        };
         cache
             .conn()
-            .query_row("SELECT thread_id FROM messages WHERE id = ?1", [id], |r| {
-                r.get(0)
-            })
-            .ok()
+            .query_row(
+                "SELECT m.thread_id, t.service FROM messages m \
+                 LEFT JOIN threads t ON t.id = m.thread_id WHERE m.id = ?1",
+                [id],
+                |r| Ok((r.get::<_, Option<i64>>(0)?, r.get::<_, Option<String>>(1)?)),
+            )
+            .unwrap_or((None, None))
     };
     Ok(db
         .list_findings(scan_id)
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|f| ContentFindingDto {
-            id: f.id,
-            source_kind: f.source_kind.as_str().into(),
-            thread_id: if f.source_kind == traceloupe_core::analysis::SourceKind::Message {
-                thread_of(f.source_id)
+        .map(|f| {
+            let is_message = f.source_kind == traceloupe_core::analysis::SourceKind::Message;
+            let (thread_id, service) = if is_message {
+                thread_meta(f.source_id)
             } else {
-                None
-            },
-            source_id: f.source_id,
-            thread_identifier: f.thread_identifier,
-            occurred_at: f.occurred_at,
-            fingerprint: f.fingerprint,
-            category: f.category.as_str().into(),
-            severity: f.severity,
-            rationale: f.rationale,
-            stale: f.stale,
-            dismissed: f.dismissed,
+                // Note findings all come from Apple Notes.
+                (None, Some("Notes".to_string()))
+            };
+            ContentFindingDto {
+                id: f.id,
+                source_kind: f.source_kind.as_str().into(),
+                thread_id,
+                service,
+                source_id: f.source_id,
+                thread_identifier: f.thread_identifier,
+                occurred_at: f.occurred_at,
+                fingerprint: f.fingerprint,
+                category: f.category.as_str().into(),
+                severity: f.severity,
+                rationale: f.rationale,
+                stale: f.stale,
+                dismissed: f.dismissed,
+            }
         })
         .collect())
 }
 
-/// The flagged text for a finding, fetched from the cache ON DEMAND (never
+/// A flagged source, fetched from the cache ON DEMAND for the peek popover.
+///
+/// This is on-device, on-demand UI content and is never persisted. When report
+/// EXPORT is built, `text` must be gated behind a user setting (default OFF) so
+/// verbatim flagged content isn't baked into a shareable file — see issue #38.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingSnippet {
+    /// The flagged text (message body, or note title + stripped body).
+    pub text: String,
+    /// Who sent it: "Me" for the device owner, else the handle/name. None for
+    /// notes.
+    pub sender: Option<String>,
+    /// The other side of the conversation (thread name/handle) — shown as
+    /// "Me → recipient" when the device owner's own message is flagged. None
+    /// for notes.
+    pub recipient: Option<String>,
+    /// When it was sent (unix seconds), for the popover header. None for notes.
+    pub occurred_at: Option<i64>,
+    /// The service for the app icon ("iMessage"/"TikTok"/…), "Notes" for notes.
+    pub service: Option<String>,
+}
+
+/// The flagged source for a finding, fetched from the cache ON DEMAND (never
 /// stored in analysis.db — ADR 0002 keeps raw text out of the analysis store).
 /// Returns None when the source row is gone or its id is stale after a
 /// re-import, so the UI can say "source no longer available" instead of lying.
@@ -980,20 +1019,56 @@ pub fn content_finding_snippet(
     active: State<'_, ActiveBackup>,
     source_kind: String,
     source_id: Option<i64>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<FindingSnippet>, String> {
     let cache_path = active.path()?;
     let Some(id) = source_id else {
         return Ok(None);
     };
     let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
-    let text = match source_kind.as_str() {
+    let snippet = match source_kind.as_str() {
         "message" => cache
             .conn()
-            .query_row("SELECT body FROM messages WHERE id = ?1", [id], |r| {
-                r.get::<_, Option<String>>(0)
-            })
+            .query_row(
+                "SELECT m.body, m.sender, m.is_from_me, m.sent_at, t.service, \
+                 t.display_name, t.identifier \
+                 FROM messages m LEFT JOIN threads t ON t.id = m.thread_id \
+                 WHERE m.id = ?1",
+                [id],
+                |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, bool>(2)?,
+                        r.get::<_, Option<i64>>(3)?,
+                        r.get::<_, Option<String>>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
             .ok()
-            .flatten(),
+            .and_then(
+                |(body, sender, is_from_me, sent_at, service, display_name, identifier)| {
+                    let text = body?.trim().to_string();
+                    if text.is_empty() {
+                        return None;
+                    }
+                    let sender = if is_from_me {
+                        Some("Me".to_string())
+                    } else {
+                        sender.filter(|s| !s.trim().is_empty())
+                    };
+                    // The conversation's name/handle, for "Me → recipient".
+                    let recipient = display_name.filter(|s| !s.trim().is_empty()).or(identifier);
+                    Some(FindingSnippet {
+                        text,
+                        sender,
+                        recipient,
+                        occurred_at: sent_at,
+                        service,
+                    })
+                },
+            ),
         "note" => cache
             .conn()
             .query_row(
@@ -1007,18 +1082,29 @@ pub fn content_finding_snippet(
                 },
             )
             .ok()
-            .map(|(title, body)| {
+            .and_then(|(title, body)| {
                 let body = traceloupe_core::safety_scan::chunker::strip_html(
                     body.as_deref().unwrap_or(""),
                 );
-                match title {
+                let text = match title {
                     Some(t) if !t.trim().is_empty() => format!("{t}\n{body}"),
                     _ => body,
+                };
+                let text = text.trim().to_string();
+                if text.is_empty() {
+                    return None;
                 }
+                Some(FindingSnippet {
+                    text,
+                    sender: None,
+                    recipient: None,
+                    occurred_at: None,
+                    service: Some("Notes".to_string()),
+                })
             }),
         _ => None,
     };
-    Ok(text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty()))
+    Ok(snippet)
 }
 
 /// Compact per-source severity marks for inline badges (plan T9): the top

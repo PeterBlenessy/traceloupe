@@ -4,7 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ExternalLink, EyeOff, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, RotateCcw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ExternalLink, EyeOff, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -40,7 +40,15 @@ import { FilterControl } from "@/components/filter-control";
 import { badgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
-import { formatDuration, formatListTime, formatTimelineTime } from "@/lib/format";
+import {
+  formatDateTimeYear,
+  formatDuration,
+  formatListTime,
+  formatTimelineTime,
+} from "@/lib/format";
+import { serviceSlug } from "@/lib/apps";
+import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
+import { useContactResolver } from "@/lib/use-contact-resolver";
 import {
   client,
   type ContentCategory,
@@ -282,6 +290,13 @@ export function SafetyScanView() {
     preferredModelId && installedIds.includes(preferredModelId)
       ? preferredModelId
       : ms.readyModelId;
+  // Resume a non-completed scan from its history card: reopen THAT row (so the
+  // view stays pinned to it) and continue it from where it stopped. Only Start
+  // ever creates a new scan.
+  const resumeScan = (scanId: number) => {
+    setSelectedScanId(scanId);
+    void startScan({ modelId: effectiveModelId, resumeScanId: scanId });
+  };
   return (
     <div className="flex h-full flex-col">
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
@@ -438,12 +453,14 @@ export function SafetyScanView() {
           // scan's report + findings on the right. There is no "latest vs
           // history" split — the rail is the navigation, and everything on
           // the right belongs to the highlighted scan.
-          <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="grid items-start gap-4 grid-cols-[420px_minmax(0,1fr)]">
             <ScanRail
               scans={scans}
               selectedId={selectedScan.id}
               onSelect={setSelectedScanId}
               liveId={liveId}
+              onResume={resumeScan}
+              running={running}
             />
             <div className="min-w-0 space-y-4">
               <ScanReportCard
@@ -451,20 +468,6 @@ export function SafetyScanView() {
                 latest={selectedScan.id === scans[0]?.id}
                 live={selectedScan.id === liveId}
                 onBackToLatest={() => setSelectedScanId(null)}
-                // Resume continues THIS scan: the same row goes back to
-                // running and its findings/progress accumulate — so the view
-                // stays pinned right here. Only Start creates a new scan.
-                onResume={
-                  !running && selectedScan.status !== "completed"
-                    ? () => {
-                        setSelectedScanId(selectedScan.id);
-                        void startScan({
-                          modelId: effectiveModelId,
-                          resumeScanId: selectedScan.id,
-                        });
-                      }
-                    : undefined
-                }
                 report={report.data}
                 findings={findings.data ?? []}
               />
@@ -597,20 +600,27 @@ function ScanOutcomeBadge({
   scan: SafetyScanHistoryItem;
   live: boolean;
 }) {
-  if (scan.status === "running")
-    return live ? (
+  if (scan.status === "running" && live)
+    return (
       <Badge variant="outline" className="shrink-0">
         <Loader2 className="size-3 animate-spin" /> running
       </Badge>
-    ) : (
-      <Badge variant="outline" className="shrink-0 text-muted-foreground">
-        Interrupted
-      </Badge>
     );
-  // "Clean" is a completed scan's verdict — a stopped/failed scan with zero
-  // findings just didn't get to look, so it shows its status instead.
-  if (scan.findings === 0)
-    return scan.status === "completed" ? (
+  // A scan cut short mid-run — a stranded 'running' row (not live) or one
+  // repaired to 'interrupted' — still found what it found before it stopped.
+  const interrupted =
+    scan.status === "interrupted" || (scan.status === "running" && !live);
+
+  // The outcome pill: the findings count, or a verdict/status when there are
+  // none. "Clean" is a completed scan's verdict — a stopped/failed/interrupted
+  // scan with zero findings just didn't get to look, so it shows its status.
+  const worst = scan.serious > 0 ? 3 : scan.harmful > 0 ? 2 : 1;
+  const outcome =
+    scan.findings > 0 ? (
+      <Badge className={cn("shrink-0", SEVERITY_META[worst as 1 | 2 | 3].badge)}>
+        {scan.findings} finding{scan.findings === 1 ? "" : "s"}
+      </Badge>
+    ) : scan.status === "completed" ? (
       <Badge
         variant="outline"
         className="shrink-0 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
@@ -622,12 +632,20 @@ function ScanOutcomeBadge({
         {SCAN_STATUS_LABEL[scan.status] ?? scan.status}
       </Badge>
     );
-  const worst = scan.serious > 0 ? 3 : scan.harmful > 0 ? 2 : 1;
-  return (
-    <Badge className={cn("shrink-0", SEVERITY_META[worst as 1 | 2 | 3].badge)}>
-      {scan.findings} finding{scan.findings === 1 ? "" : "s"}
-    </Badge>
-  );
+
+  // Interrupted scans keep their findings pill; the state is shown as a label
+  // to its LEFT. With zero findings the outcome badge already reads
+  // "Interrupted", so it isn't doubled up.
+  if (interrupted && scan.findings > 0)
+    return (
+      <div className="flex shrink-0 items-center gap-1.5">
+        <Badge variant="outline" className="shrink-0 text-muted-foreground">
+          Interrupted
+        </Badge>
+        {outcome}
+      </div>
+    );
+  return outcome;
 }
 
 /** The scan-history rail: every scan on this backup, newest first, with
@@ -637,12 +655,18 @@ function ScanRail({
   selectedId,
   onSelect,
   liveId,
+  onResume,
+  running,
 }: {
   scans: SafetyScanHistoryItem[];
   selectedId: number;
   onSelect: (id: number | null) => void;
   /** The scan genuinely in flight right now, if any (see ScanOutcomeBadge). */
   liveId: number | null;
+  /** Resume a non-completed scan from its card. */
+  onResume: (id: number) => void;
+  /** A scan is already in flight — no other scan can be resumed meanwhile. */
+  running: boolean;
 }) {
   const qc = useQueryClient();
   const [outcome, setOutcome] = useState("all");
@@ -788,6 +812,28 @@ function ScanRail({
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <ScanOutcomeBadge scan={s} live={s.id === liveId} />
+              {/* Resume lives on the card of the scan it continues — not in the
+                  report — so it's next to the run it acts on. Shown for any
+                  non-completed scan when nothing else is running. */}
+              {!running && s.status !== "completed" && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-muted-foreground hover:text-foreground"
+                      aria-label="Resume this scan"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onResume(s.id);
+                      }}
+                    >
+                      <RotateCw className="size-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Resume this scan where it stopped</TooltipContent>
+                </Tooltip>
+              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -853,7 +899,6 @@ function ScanReportCard({
   latest,
   live,
   onBackToLatest,
-  onResume,
   report,
   findings,
 }: {
@@ -862,20 +907,41 @@ function ScanReportCard({
   /** True while this scan is genuinely in flight (not a stranded row). */
   live: boolean;
   onBackToLatest: () => void;
-  /** Present when this scan can be resumed (didn't complete, nothing running). */
-  onResume?: () => void;
   report: SafetyScanReport | undefined;
   findings: ContentFinding[];
 }) {
   const navigate = useNavigate();
+  const resolve = useContactResolver();
+  // Threads for this backup, so a per-conversation summary can show the
+  // conversation's NAME (resolved to a contact) and deep-link by its id —
+  // instead of the raw chunk thread identifier (a chat ROWID like "135").
+  const { data: threads } = useQuery({
+    queryKey: ["threads"],
+    queryFn: () => client.listThreads(),
+  });
+  const threadByIdent = useMemo(
+    () => new Map((threads ?? []).map((t) => [t.identifier, t])),
+    [threads],
+  );
   const duration =
     scan.finishedAt != null ? formatDuration(scan.finishedAt - scan.startedAt) : "";
-  // Deep-link a thread summary to its conversation via any of the scan's
-  // findings that carries the resolved cache thread id.
+  // The cache thread id for a summary's identifier — from the threads map, or
+  // (fallback) a finding that resolved it. Makes every conversation clickable.
   const threadIdOf = (identifier: string): number | null =>
+    threadByIdent.get(identifier)?.id ??
     findings.find(
       (f) => f.threadIdentifier === identifier && f.threadId != null,
-    )?.threadId ?? null;
+    )?.threadId ??
+    null;
+  // A human label for a summary's identifier: the thread's display name resolved
+  // to a contact, its participants, or the identifier itself as a last resort.
+  const labelOf = (identifier: string): string => {
+    const t = threadByIdent.get(identifier);
+    if (!t) return resolve(identifier)?.name ?? identifier;
+    if (t.displayName) return resolve(t.displayName)?.name ?? t.displayName;
+    const first = t.participants[0];
+    return first ? (resolve(first)?.name ?? first) : identifier;
+  };
   const clean = scan.findings === 0 && scan.status === "completed";
 
   return (
@@ -889,19 +955,6 @@ function ScanReportCard({
             {clean ? "No harmful content flagged" : "Scan report"}
           </CardTitle>
           <div className="flex shrink-0 items-center gap-2">
-            {onResume && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button size="sm" onClick={onResume}>
-                    <Play className="size-4" /> Resume scan
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  Continues this scan from where it stopped — content already
-                  covered is skipped
-                </TooltipContent>
-              </Tooltip>
-            )}
             {!latest && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -989,17 +1042,17 @@ function ScanReportCard({
                           onClick={() =>
                             navigate({
                               to: "/messages",
-                              search: { thread: threadId },
+                              search: { thread: threadId, from: "safety" },
                             })
                           }
                         >
-                          {thread} →
+                          {labelOf(thread)} →
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>Open this conversation</TooltipContent>
                     </Tooltip>
                   ) : (
-                    <span className="shrink-0 font-medium">{thread}</span>
+                    <span className="shrink-0 font-medium">{labelOf(thread)}</span>
                   )}
                   <span className="text-muted-foreground">{text}</span>
                 </div>
@@ -1028,6 +1081,11 @@ function FindingRow({
   onDismiss: (dismissed: boolean) => void;
 }) {
   const navigate = useNavigate();
+  const resolve = useContactResolver();
+  // Resolve a handle (phone/email) to a contact name, exactly like the
+  // conversation view — so the popover shows people, not raw phone numbers.
+  const nameOf = (h: string | null | undefined) =>
+    h ? (resolve(h)?.name ?? h) : null;
   const sev = SEVERITY_META[f.severity] ?? SEVERITY_META[1];
   // Fetch the flagged text only once the peek popover is first opened — no
   // upfront query per finding, and the raw text never lands in a list payload.
@@ -1037,13 +1095,31 @@ function FindingRow({
     queryFn: () => client.contentFindingSnippet(f.sourceKind, f.sourceId),
     enabled: peeked,
   });
-  const SourceIcon = f.sourceKind === "note" ? NotebookText : MessageSquare;
+  // App glyph: the real brand mark (iMessage, TikTok, …) when the service has
+  // one, else a note/message fallback. `f.service` is on the finding, so the
+  // icon is right from first paint — no hover needed.
+  const slug = serviceSlug(f.service);
+  const glyph = (cls: string) =>
+    hasBrandIcon(slug) ? (
+      <BrandIcon slug={slug} name={f.service ?? ""} className={cls} />
+    ) : f.sourceKind === "note" ? (
+      <NotebookText className={cls} />
+    ) : (
+      <MessageSquare className={cls} />
+    );
   const canOpen =
     (f.sourceKind === "message" && f.threadId != null) ||
     (f.sourceKind === "note" && f.sourceId != null);
   const openSource = () => {
     if (f.sourceKind === "message" && f.threadId != null) {
-      navigate({ to: "/messages", search: { thread: f.threadId } });
+      navigate({
+        to: "/messages",
+        search: {
+          thread: f.threadId,
+          message: f.sourceId ?? undefined,
+          from: "safety",
+        },
+      });
     } else if (f.sourceKind === "note" && f.sourceId != null) {
       navigate({ to: "/notes", search: { id: f.sourceId, from: "safety" } });
     }
@@ -1059,13 +1135,10 @@ function FindingRow({
         <Badge className={sev.badge}>{sev.label}</Badge>
         <Badge variant="outline">{CATEGORY_LABEL[f.category]}</Badge>
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
-          {f.sourceKind === "note" ? (
-            <>
-              <NotebookText className="size-3" /> Note
-            </>
-          ) : (
-            (f.threadIdentifier ?? "Conversation")
-          )}
+          {glyph("size-3.5 shrink-0")}
+          {f.sourceKind === "note"
+            ? "Note"
+            : (f.threadIdentifier ?? "Conversation")}
           {f.occurredAt != null && ` · ${formatListTime(f.occurredAt)}`}
         </span>
         {f.stale && (
@@ -1081,18 +1154,35 @@ function FindingRow({
         <HoverCard openDelay={120} closeDelay={80} onOpenChange={(o) => o && setPeeked(true)}>
           <HoverCardTrigger asChild>
             <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
-              <SourceIcon className="size-3.5" /> View flagged text
+              {glyph("size-3.5")} View flagged text
             </Button>
           </HoverCardTrigger>
           <HoverCardContent className="w-96 text-sm">
-            <div className="mb-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Flagged {f.sourceKind === "note" ? "note" : "message"}
+            {/* Header: who sent it, when, and the app it came from. */}
+            <div className="mb-2 flex items-center gap-1.5">
+              {glyph("size-4 shrink-0")}
+              <span className="truncate text-sm font-medium">
+                {snippet.data?.sender === "Me"
+                  ? `Me → ${nameOf(snippet.data.recipient) ?? "conversation"}`
+                  : (nameOf(snippet.data?.sender) ??
+                    (f.sourceKind === "note"
+                      ? "Note"
+                      : (nameOf(f.threadIdentifier) ?? "Conversation")))}
+              </span>
+              {(() => {
+                const when = snippet.data?.occurredAt ?? f.occurredAt;
+                return when != null ? (
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                    {formatDateTimeYear(when)}
+                  </span>
+                ) : null;
+              })()}
             </div>
             {snippet.isPending ? (
               <p className="text-xs text-muted-foreground">Loading…</p>
             ) : snippet.data ? (
               <blockquote className="border-l-2 pl-3 whitespace-pre-wrap text-muted-foreground">
-                {snippet.data}
+                {snippet.data.text}
               </blockquote>
             ) : (
               <p className="text-xs text-muted-foreground">
