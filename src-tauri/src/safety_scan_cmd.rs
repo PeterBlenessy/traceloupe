@@ -956,9 +956,19 @@ pub fn list_content_findings(
             )
             .unwrap_or((None, None))
     };
-    Ok(db
-        .list_findings(scan_id)
-        .map_err(|e| e.to_string())?
+    // A scan shows every finding within its SCOPE (sources + time range), not
+    // just the ones its own run classified — classification is cached per chunk
+    // across scans, so scoping by scan_id makes a re-scan of already-covered data
+    // look empty. None (no scan selected) still returns all findings.
+    let findings = match scan_id {
+        Some(id) => match db.scan_by_id(id).map_err(|e| e.to_string())? {
+            Some(s) => db.list_findings_in_scope(&s.sources, s.range_start, s.range_end),
+            None => db.list_findings(Some(id)),
+        },
+        None => db.list_findings(None),
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(findings
         .into_iter()
         .map(|f| {
             let is_message = f.source_kind == traceloupe_core::analysis::SourceKind::Message;
