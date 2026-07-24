@@ -471,19 +471,7 @@ export function SafetyScanView() {
             />
             <div className="min-w-0 space-y-4">
               {/* The report lives behind the history card's doc icon; the detail
-                  side is just the findings (open the report from there). Only a
-                  past scan needs the return-to-latest shortcut. */}
-              {selectedScan.id !== scans[0]?.id && (
-                <div className="flex justify-end">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setSelectedScanId(null)}
-                  >
-                    Back to latest
-                  </Button>
-                </div>
-              )}
+                  side is just the findings. Rail selection handles navigation. */}
               {(findings.data?.length ?? 0) > 0 ? (
                 <FindingsList
                   scan={selectedScan}
@@ -887,13 +875,11 @@ function ScanRail({
                   : (SCAN_STATUS_LABEL[s.status] ?? s.status)}
               </div>
             </div>
-            <div className="relative flex shrink-0 items-center">
-              <ScanOutcomeBadge scan={s} live={s.id === liveId} />
-              {/* Actions float to the LEFT of the outcome badge on hover/focus:
-                  they never steal title space, and the badge stays visible so
-                  its own (breakdown) tooltip is still reachable. */}
-              <div className="pointer-events-none absolute top-1/2 right-full mr-1 flex -translate-y-1/2 items-center gap-0.5 rounded-md border bg-background/95 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
-                <Tooltip>
+            <ScanOutcomeBadge scan={s} live={s.id === liveId} />
+            {/* Actions float over the card's right edge on hover/focus — hidden
+                otherwise, so they never steal space from the title + subtitle. */}
+            <div className="pointer-events-none absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-0.5 rounded-md border bg-background/95 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+              <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
@@ -949,7 +935,6 @@ function ScanRail({
                 </TooltipTrigger>
                 <TooltipContent>Delete this scan</TooltipContent>
               </Tooltip>
-              </div>
             </div>
           </div>
         ))}
@@ -1085,18 +1070,18 @@ function SafetyReportDocument({
         : "text-muted-foreground";
 
   return (
-    <article className="safety-report-print mx-auto max-w-2xl space-y-6 text-sm">
+    <article className="safety-report-print mx-auto max-w-2xl space-y-9 text-[15px] leading-relaxed">
       {/* Header */}
-      <header className="space-y-1 border-b pb-4">
+      <header className="space-y-1.5 border-b pb-5">
         <div className="flex items-center gap-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
           <ShieldUser className="size-4" /> Safety Scan report
         </div>
-        <h1 className="text-xl font-semibold">{scanTitle(scan)}</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-2xl font-semibold">{scanTitle(scan)}</h1>
+        <p className="text-sm text-muted-foreground">
           {SOURCES_LABEL[scan.sources] ?? scan.sources} ·{" "}
           {formatScanRange(scan.rangeStart, scan.rangeEnd)} · {modelLabel(scan.model)} · on-device
         </p>
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           {scan.finishedAt != null && `Completed ${formatDateTimeYear(scan.finishedAt)}`}
           {scan.finishedAt != null &&
             ` · took ${formatDuration(scan.finishedAt - scan.startedAt)}`}
@@ -1133,8 +1118,8 @@ function SafetyReportDocument({
       )}
 
       {/* Narrative */}
-      <section className="space-y-1">
-        <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+      <section className="space-y-2">
+        <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Overview
         </h2>
         {report?.report ? (
@@ -1155,54 +1140,58 @@ function SafetyReportDocument({
 
       {/* Per conversation */}
       {groups.length > 0 && (
-        <section className="space-y-4">
-          <h2 className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+        <section className="space-y-5">
+          <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
             By conversation
           </h2>
           {groups.map((g) => {
             const prose = g.isNote ? undefined : summaryByIdent.get(g.key);
             return (
-              <div key={g.key} className="space-y-2 rounded-lg border p-3">
-                <div className="flex items-center gap-1.5 font-medium">
+              <div key={g.key} className="space-y-3 rounded-lg border p-4">
+                <div className="flex items-center gap-2 text-base font-semibold">
                   {g.isNote ? (
                     <NotebookText className="size-4 shrink-0 text-muted-foreground" />
                   ) : (
                     <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
                   )}
                   {g.label}
-                  <span className="text-xs font-normal text-muted-foreground">
+                  <span className="text-sm font-normal text-muted-foreground">
                     · {g.findings.length} finding{g.findings.length === 1 ? "" : "s"}
                   </span>
                 </div>
-                {prose && <p className="text-muted-foreground">{prose}</p>}
-                <ul className="space-y-1.5">
+                {prose && <p className="text-foreground/90">{prose}</p>}
+                <ul className="space-y-4">
                   {g.findings.map((f) => (
                     <li
                       key={f.id}
-                      className="space-y-1 border-t pt-1.5 first:border-t-0"
+                      className="space-y-1.5 border-t pt-4 first:border-t-0 first:pt-0"
                     >
-                      <div className="flex flex-wrap gap-x-2">
+                      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                         <span
-                          className={cn("shrink-0 font-medium", sev(f.severity))}
+                          className={cn(
+                            "shrink-0 text-sm font-semibold",
+                            sev(f.severity),
+                          )}
                         >
                           {SEVERITY_META[f.severity]?.label ?? f.severity}
                         </span>
-                        <span className="shrink-0 text-muted-foreground">
+                        <span className="shrink-0 text-sm text-muted-foreground">
                           {CATEGORY_LABEL[f.category]}
                         </span>
+                        {f.occurredAt != null && (
+                          <span className="shrink-0 text-sm text-muted-foreground">
+                            {formatDateTimeYear(f.occurredAt)}
+                          </span>
+                        )}
                         {showCascadeConfidence && f.rechecked && (
-                          <span className="shrink-0 text-emerald-600 dark:text-emerald-400">
+                          <span className="shrink-0 text-sm text-emerald-600 dark:text-emerald-400">
                             ✓ confirmed
                           </span>
                         )}
-                        <span className="text-muted-foreground">
-                          {f.occurredAt != null &&
-                            `${formatDateTimeYear(f.occurredAt)} — `}
-                          {f.rationale}
-                        </span>
                       </div>
+                      <p>{f.rationale}</p>
                       {snippetByFinding.has(f.id) && (
-                        <blockquote className="border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground">
+                        <blockquote className="border-l-2 pl-3 text-sm whitespace-pre-wrap text-muted-foreground">
                           {snippetByFinding.get(f.id)}
                         </blockquote>
                       )}
@@ -1412,7 +1401,7 @@ function FindingRow({
             {snippet.isPending ? (
               <p className="text-xs text-muted-foreground">Loading…</p>
             ) : snippet.data ? (
-              <blockquote className="border-l-2 pl-3 whitespace-pre-wrap text-muted-foreground">
+              <blockquote className="max-h-60 overflow-y-auto border-l-2 pl-3 whitespace-pre-wrap text-muted-foreground">
                 {snippet.data.text}
               </blockquote>
             ) : (
