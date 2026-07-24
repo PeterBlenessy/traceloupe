@@ -96,7 +96,8 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
       // leave the user where they are — the data is now available via invalidate.
       if (wasForeground) {
         setDialogBackup(null);
-        navigate({ to: "/messages" });
+        // Land on the condensed Device view (`/`), the default post-open route.
+        navigate({ to: "/" });
       }
     } catch (e) {
       off();
