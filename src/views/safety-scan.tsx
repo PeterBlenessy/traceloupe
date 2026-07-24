@@ -577,6 +577,18 @@ const SOURCES_LABEL: Record<string, string> = {
   notes: "Notes",
 };
 
+/** Turn a stored model id (or an "e2b→e4b" cascade pair) into a readable
+ *  label: "Gemma E2B → E4B (re-checked)" for a cascade, "Gemma E4B" otherwise. */
+function modelLabel(raw: string): string {
+  const pretty = (id: string) =>
+    /e4b/i.test(id) ? "Gemma E4B" : /e2b/i.test(id) ? "Gemma E2B" : id;
+  const [sweep, strong] = raw.split("→");
+  if (strong && strong !== sweep) {
+    return `${pretty(sweep)} → ${pretty(strong)} (flagged items re-checked)`;
+  }
+  return pretty(sweep);
+}
+
 /** The rail's compact outcome badge: one chip, colored by the worst severity.
  *  `live` says whether a scan is genuinely in flight right now — a DB row can
  *  be stranded 'running' after a crash/kill, and showing a spinner for it
@@ -1002,7 +1014,7 @@ function ScanReportCard({
         {/* Provenance footer: the receipt this verdict carries. */}
         <div className="border-t pt-2 text-xs text-muted-foreground">
           Scanned {formatScanRange(scan.rangeStart, scan.rangeEnd)} ·{" "}
-          {scan.model} · on-device
+          {modelLabel(scan.model)} · on-device
         </div>
       </CardContent>
     </Card>

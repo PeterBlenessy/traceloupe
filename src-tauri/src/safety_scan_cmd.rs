@@ -519,13 +519,30 @@ pub async fn run_safety_scan(
         1
     };
 
+    // Cascade (#35): when the effective model is E4B and E2B is also
+    // installed, sweep everything with the fast tier and re-check flagged
+    // chunks with the strong one. Single-tier machines keep one-pass behavior.
+    let cascade_sweep = if spec.id.contains("E4B") {
+        models::spec_by_id("gemma-4-E2B-it-Q4_K_M").filter(|e| e.installed_at(&dir).is_some())
+    } else {
+        None
+    };
+    let primary_spec = cascade_sweep.unwrap_or(spec);
+    let primary_path = primary_spec
+        .installed_at(&dir)
+        .ok_or("model not installed — download it first")?;
+    // The strong tier's identity/path for the re-check phase (None = no cascade).
+    let strong = cascade_sweep.map(|_| (spec.id.to_string(), model_path.clone(), spec.ctx_size));
+
     let app2 = app.clone();
-    let spec_id = spec.id.to_string();
+    let spec_id = primary_spec.id.to_string();
     // ServerConfig.ctx_size is the TOTAL across slots: keep the full per-slot
     // context at any parallelism.
-    let ctx_size = spec.ctx_size * parallel;
+    let ctx_size = primary_spec.ctx_size * parallel;
+    let binary2 = binary.clone();
     let binary_log = binary.display().to_string();
-    let model_log = model_path.display().to_string();
+    let model_log = primary_path.display().to_string();
+    let model_path = primary_path;
     let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
         crate::logging::info(
@@ -642,6 +659,98 @@ pub async fn run_safety_scan(
             end: range_end,
         };
 
+        // Cascade provider: called by the engine AFTER the sweep. Spawns the
+        // strong tier on a NEW port and only tears the sweep server down once
+        // the strong one is confirmed healthy — so if the strong model can't
+        // load (e.g. it doesn't fit in RAM on top of the sweep model), the
+        // sweep server stays alive: the engine keeps the sweep verdicts and
+        // the summary still has a live server to talk to (Finding 2). A new
+        // cancel watcher for the strong pid keeps Stop fast.
+        let mut provider = strong.map(|(strong_id, strong_path, strong_ctx)| {
+            let (llama_ref, app3, scratch2, binary3) = (
+                &mut llama,
+                app2.clone(),
+                scratch_dir.clone(),
+                binary2.clone(),
+            );
+            let (cancel2, done2) = (cancel.clone(), watch_done.clone());
+            move || -> traceloupe_core::Result<client::LlmClient> {
+                use traceloupe_core::Error;
+                let inf = |m: String| Error::Inference(m);
+                crate::logging::info(
+                    &app3,
+                    format!("Safety Scan: cascade re-check — loading {strong_id}"),
+                );
+                let port = server::pick_port()?;
+                let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+                let app_log = app3.clone();
+                std::thread::spawn(move || {
+                    while let Ok(line) = log_rx.recv() {
+                        crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+                    }
+                });
+                // Spawn into a LOCAL: the sweep server (in *llama_ref) stays up
+                // until this one is healthy. On any error below, `strong` is
+                // dropped (its Drop kills it) and *llama_ref is untouched.
+                let mut strong = server::LlamaServer::spawn(
+                    &server::ServerConfig {
+                        binary: binary3.clone(),
+                        model_path: strong_path.clone(),
+                        port,
+                        ctx_size: strong_ctx * parallel,
+                        parallel,
+                        gpu_layers: -1,
+                        sandbox: true,
+                        scratch_dir: scratch2.clone(),
+                    },
+                    Some(log_tx),
+                )?;
+                let deadline = std::time::Instant::now() + Duration::from_secs(180);
+                loop {
+                    match strong.wait_healthy(Duration::from_secs(2)) {
+                        Ok(()) => break,
+                        Err(e) => {
+                            if cancel2.is_cancelled() {
+                                return Err(inf("cancelled".into()));
+                            }
+                            if strong.has_exited() || std::time::Instant::now() >= deadline {
+                                return Err(e);
+                            }
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                    }
+                }
+                // Strong tier is healthy: NOW retire the sweep server and take
+                // ownership of the strong one.
+                llama_ref.shutdown();
+                *llama_ref = strong;
+                // Watch the NEW pid for cancel, same as the sweep server.
+                let pid = llama_ref.pid();
+                let (cancel3, done3, app4) = (cancel2.clone(), done2.clone(), app3.clone());
+                std::thread::spawn(move || {
+                    while !done3.load(std::sync::atomic::Ordering::SeqCst) {
+                        if cancel3.is_cancelled() {
+                            crate::logging::info(
+                                &app4,
+                                "Safety Scan: cancel requested — stopping the model server",
+                            );
+                            let _ = std::process::Command::new("/bin/kill")
+                                .arg("-9")
+                                .arg(pid.to_string())
+                                .status();
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(120));
+                    }
+                });
+                Ok(client::LlmClient::new(
+                    llama_ref.base_url(),
+                    &strong_id,
+                    Duration::from_secs(300),
+                ))
+            }
+        });
+
         let mut last_emit = std::time::Instant::now();
         let outcome = engine::run_scan(
             &cache,
@@ -653,6 +762,9 @@ pub async fn run_safety_scan(
             // saw it flip immediately; the engine continues that same row.
             Some(scan_row_id),
             parallel as usize,
+            provider
+                .as_mut()
+                .map(|p| p as &mut dyn FnMut() -> traceloupe_core::Result<client::LlmClient>),
             &cancel,
             |p| {
                 // Always emit the first (done == 0) tick — it's what flips the UI from
@@ -676,9 +788,25 @@ pub async fn run_safety_scan(
         )
         .map_err(|e| e.to_string())?;
 
+        // A cascade swaps `llama` to the strong server, killing the sweep
+        // server `llm` was built against — so drop the provider (releasing its
+        // &mut llama) and rebuild the summary client from whatever server is
+        // live now. Without a cascade this is the same server, just rebuilt.
+        drop(provider);
+        let summary_client =
+            client::LlmClient::new(llama.base_url(), &spec_id, Duration::from_secs(300));
+
         let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
-        summary::run_summaries(&mut analysis, &llm, outcome.scan_id, &cancel)
-            .map_err(|e| e.to_string())?;
+        // Best-effort: the classification is done and findings are saved, so a
+        // summary failure (e.g. the only live server died) must NOT fail the
+        // whole scan and discard a completed result — log it and move on. The
+        // report simply won't exist; the UI already handles "no written
+        // report", and a later resume regenerates it.
+        if let Err(e) =
+            summary::run_summaries(&mut analysis, &summary_client, outcome.scan_id, &cancel)
+        {
+            crate::logging::warn(&app2, format!("Safety Scan: report summary skipped — {e}"));
+        }
         // Stop the watcher (it may already have fired on cancel) before we take
         // the server down ourselves.
         watch_done.store(true, std::sync::atomic::Ordering::SeqCst);

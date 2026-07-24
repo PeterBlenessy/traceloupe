@@ -123,6 +123,10 @@ pub fn run_scan(
     sources: chunker::ScanSources,
     resume_scan_id: Option<i64>,
     parallel: usize,
+    // Cascade (#35): when present, called AFTER the sweep to boot the
+    // stronger tier; its client re-checks every flagged chunk (the caller
+    // keeps that server alive until run_scan returns). None = single-tier.
+    recheck: Option<&mut dyn FnMut() -> Result<LlmClient>>,
     cancel: &CancelToken,
     mut on_progress: impl FnMut(ScanProgress),
 ) -> Result<ScanOutcome> {
@@ -160,7 +164,6 @@ pub fn run_scan(
         ),
     )?;
 
-    let schema = prompt::verdicts_schema();
     let mut outcome = ScanOutcome {
         scan_id,
         status: ScanStatus::Completed,
@@ -208,67 +211,101 @@ pub fn run_scan(
             });
         }
 
-        // Classify `parallel` chunks concurrently. Workers do ONLY the HTTP
-        // call (LlmClient is Sync; all its errors are Error::Inference, so a
-        // worker can never surface a fatal storage error); this thread
-        // persists results as they arrive, preserving the exact per-chunk
-        // commit/audit/resume semantics of the sequential engine.
-        let workers = parallel.max(1).min(pending.len().max(1));
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        let (tx, rx) = std::sync::mpsc::channel::<(usize, std::result::Result<Value, Error>)>();
-        std::thread::scope(|s| -> Result<()> {
-            for _ in 0..workers {
-                let tx = tx.clone();
-                let next = &next;
-                let pending = &pending;
-                let schema = &schema;
-                s.spawn(move || {
-                    loop {
-                        if cancel.is_cancelled() {
-                            break;
-                        }
-                        let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        if i >= pending.len() {
-                            break;
-                        }
-                        let user = prompt::render_chunk(pending[i]);
-                        // One retry, as before: a transient failure shouldn't
-                        // skip a chunk, a persistent one shouldn't stall it.
-                        let mut result =
-                            client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
-                        if result.is_err() && !cancel.is_cancelled() {
-                            result =
-                                client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
-                        }
-                        if tx.send((i, result)).is_err() {
-                            break; // receiver gone (fatal storage error path)
-                        }
-                    }
-                });
-            }
-            drop(tx);
+        // Phase 1: sweep every pending chunk with the primary model.
+        classify_batch(
+            analysis,
+            client,
+            &pending,
+            scan_id,
+            parallel,
+            cancel,
+            false,
+            &mut outcome,
+            &mut on_progress,
+        )?;
 
-            for (i, result) in rx {
-                let chunk = pending[i];
-                match result {
-                    Ok(output) => {
-                        let n = persist_classified(analysis, scan_id, chunk, &output)?;
-                        outcome.classified += 1;
-                        outcome.findings += n;
-                    }
-                    Err(e) => {
-                        persist_failed(analysis, scan_id, chunk, &e)?;
-                        outcome.skipped += 1;
+        // Phase 2 (cascade, #35): re-check flagged chunks with the stronger
+        // tier. `flagged` (chunks whose sweep produced a finding) is derived
+        // from the DB, so an interrupted cascade recomputes it on resume; a
+        // chunk's `#recheck` checkpoint marks it independently re-checked.
+        if let Some(provider) = recheck {
+            if !cancel.is_cancelled() {
+                let mut flagged: Vec<&chunker::Chunk> = Vec::new();
+                for chunk in &chunks {
+                    let has = chunk
+                        .items
+                        .iter()
+                        .try_fold(false, |acc, i| -> Result<bool> {
+                            Ok(acc || analysis.has_finding(&i.fingerprint)?)
+                        })?;
+                    if has {
+                        flagged.push(chunk);
                     }
                 }
-                on_progress(ScanProgress {
-                    chunks_done: outcome.reused + outcome.classified + outcome.skipped,
-                    chunks_total: outcome.chunks_total,
-                    findings: outcome.findings,
-                });
+                // A flagged chunk not yet re-checked needs the strong tier.
+                // (One already re-checked keeps its `#recheck` checkpoint even
+                // if the strong tier cleared its finding, so resume skips it.)
+                let mut todo: Vec<&chunker::Chunk> = Vec::new();
+                for chunk in &flagged {
+                    if !analysis
+                        .chunk_is_done(&format!("{}#recheck", chunk.key), &chunk.fingerprint)?
+                    {
+                        todo.push(chunk);
+                    }
+                }
+                if !todo.is_empty() {
+                    match provider() {
+                        Ok(strong) => {
+                            outcome.chunks_total += todo.len();
+                            analysis.set_chunks_total(scan_id, outcome.chunks_total as i64)?;
+                            analysis.audit(
+                                scan_id,
+                                now(),
+                                "recheck_started",
+                                &format!("chunks={} model={}", todo.len(), strong.model()),
+                            )?;
+                            let before_skipped = outcome.skipped;
+                            classify_batch(
+                                analysis,
+                                &strong,
+                                &todo,
+                                scan_id,
+                                parallel,
+                                cancel,
+                                true,
+                                &mut outcome,
+                                &mut on_progress,
+                            )?;
+                            // Stamp the cascade receipt only when every flagged
+                            // chunk was actually re-checked (none skipped, none
+                            // left by a cancel) — otherwise the label would
+                            // overclaim what the strong tier judged.
+                            let all_done =
+                                !cancel.is_cancelled() && outcome.skipped == before_skipped;
+                            if all_done {
+                                analysis.set_model(
+                                    scan_id,
+                                    &format!("{}→{}", client.model(), strong.model()),
+                                )?;
+                            }
+                        }
+                        Err(e) => {
+                            // The sweep's verdicts stand; a re-check that can't
+                            // start must never sink hours of completed work.
+                            analysis.audit(
+                                scan_id,
+                                now(),
+                                "recheck_unavailable",
+                                &e.to_string(),
+                            )?;
+                        }
+                    }
+                }
+                // (A resume where phase 2 already completed has an empty todo
+                //  AND keeps its "e2b→e4b" receipt, since resume_scan no longer
+                //  overwrites the model — Finding 4.)
             }
-            Ok(())
-        })?;
+        }
 
         if cancel.is_cancelled() {
             outcome.status = ScanStatus::Cancelled;
@@ -299,10 +336,98 @@ pub fn run_scan(
     Ok(outcome)
 }
 
-/// Persist one successfully classified chunk: validated findings, the Done
-/// checkpoint, and the audit row. Returns the finding count. Storage errors
-/// are fatal — never classify into a broken DB (plan T5 AC).
-fn persist_classified(
+/// Classify `pending` chunks with `parallel` concurrent workers. Workers do
+/// ONLY the HTTP call (LlmClient is Sync; all its errors are
+/// Error::Inference, so a worker can never surface a fatal storage error);
+/// the calling thread persists results as they arrive, preserving the exact
+/// per-chunk commit/audit/resume semantics of the sequential engine.
+/// `recheck` selects the cascade's strong-tier phase: results persist through
+/// the ATOMIC `apply_recheck` (clear-sweep + insert + `#recheck` checkpoint in
+/// one transaction) so a crash can't drop a finding, and a failed re-check
+/// leaves the sweep verdict standing.
+#[allow(clippy::too_many_arguments)] // one batch's distinct inputs
+fn classify_batch(
+    analysis: &mut AnalysisDb,
+    client: &LlmClient,
+    pending: &[&Chunk],
+    scan_id: i64,
+    parallel: usize,
+    cancel: &CancelToken,
+    recheck: bool,
+    outcome: &mut ScanOutcome,
+    on_progress: &mut impl FnMut(ScanProgress),
+) -> Result<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let schema = prompt::verdicts_schema();
+    let workers = parallel.max(1).min(pending.len());
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let (tx, rx) = std::sync::mpsc::channel::<(usize, std::result::Result<Value, Error>)>();
+    std::thread::scope(|s| -> Result<()> {
+        for _ in 0..workers {
+            let tx = tx.clone();
+            let next = &next;
+            let schema = &schema;
+            s.spawn(move || {
+                loop {
+                    if cancel.is_cancelled() {
+                        break;
+                    }
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    if i >= pending.len() {
+                        break;
+                    }
+                    let user = prompt::render_chunk(pending[i]);
+                    // One retry: a transient failure shouldn't skip a chunk,
+                    // a persistent one shouldn't stall it.
+                    let mut result =
+                        client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
+                    if result.is_err() && !cancel.is_cancelled() {
+                        result = client.chat_json(prompt::SYSTEM_PROMPT, &user, schema, MAX_TOKENS);
+                    }
+                    if tx.send((i, result)).is_err() {
+                        break; // receiver gone (fatal storage error path)
+                    }
+                }
+            });
+        }
+        drop(tx);
+
+        for (i, result) in rx {
+            let chunk = pending[i];
+            let suffix = if recheck { "#recheck" } else { "" };
+            match result {
+                Ok(output) => {
+                    let n = if recheck {
+                        persist_recheck(analysis, scan_id, chunk, &output)?
+                    } else {
+                        persist_classified(analysis, scan_id, chunk, "", &output)?
+                    };
+                    outcome.classified += 1;
+                    outcome.findings += n;
+                }
+                Err(e) => {
+                    // A failed re-check must NOT clear the sweep verdict — it
+                    // just records the #recheck checkpoint as skipped so resume
+                    // retries it, leaving the sweep finding in place meanwhile.
+                    persist_failed(analysis, scan_id, chunk, suffix, &e)?;
+                    outcome.skipped += 1;
+                }
+            }
+            on_progress(ScanProgress {
+                chunks_done: outcome.reused + outcome.classified + outcome.skipped,
+                chunks_total: outcome.chunks_total,
+                findings: outcome.findings,
+            });
+        }
+        Ok(())
+    })
+}
+
+/// Persist the cascade strong tier's verdict for one chunk via the atomic
+/// `apply_recheck`. Returns the finding count it wrote.
+fn persist_recheck(
     analysis: &mut AnalysisDb,
     scan_id: i64,
     chunk: &Chunk,
@@ -310,10 +435,44 @@ fn persist_classified(
 ) -> Result<usize> {
     let (findings, rejected) = verdicts_to_findings(chunk, output);
     let n = findings.len();
+    let item_fps: Vec<String> = chunk.items.iter().map(|i| i.fingerprint.clone()).collect();
+    analysis.apply_recheck(
+        scan_id,
+        &chunk.key,
+        &chunk.fingerprint,
+        &item_fps,
+        &findings,
+        now(),
+    )?;
+    analysis.audit(
+        scan_id,
+        now(),
+        "chunk_rechecked",
+        &format!(
+            "chunk={} items={} verdicts={n} rejected={rejected}",
+            audit_key(&chunk.key),
+            chunk.items.len()
+        ),
+    )?;
+    Ok(n)
+}
+
+/// Persist one successfully classified chunk: validated findings, the Done
+/// checkpoint, and the audit row. Returns the finding count. Storage errors
+/// are fatal — never classify into a broken DB (plan T5 AC).
+fn persist_classified(
+    analysis: &mut AnalysisDb,
+    scan_id: i64,
+    chunk: &Chunk,
+    key_suffix: &str,
+    output: &Value,
+) -> Result<usize> {
+    let (findings, rejected) = verdicts_to_findings(chunk, output);
+    let n = findings.len();
     analysis.replace_findings(scan_id, &findings, now())?;
     analysis.record_chunk(
         scan_id,
-        &chunk.key,
+        &format!("{}{}", chunk.key, key_suffix),
         &chunk.fingerprint,
         ChunkStatus::Done,
         now(),
@@ -338,11 +497,12 @@ fn persist_failed(
     analysis: &mut AnalysisDb,
     scan_id: i64,
     chunk: &Chunk,
+    key_suffix: &str,
     err: &Error,
 ) -> Result<()> {
     analysis.record_chunk(
         scan_id,
-        &chunk.key,
+        &format!("{}{}", chunk.key, key_suffix),
         &chunk.fingerprint,
         ChunkStatus::Skipped,
         now(),
@@ -460,6 +620,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             3,
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -482,12 +643,149 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             3,
+            None,
             &CancelToken::new(),
             |_| {},
         )
         .unwrap();
         assert_eq!(outcome2.reused, 3);
         assert_eq!(outcome2.classified, 0);
+    }
+
+    #[test]
+    fn cascade_recheck_overrules_sweep_false_positive() {
+        // Sweep tier flags item 0; strong tier returns clean — the finding
+        // must be REMOVED (silence overrules), the receipt must name both
+        // tiers, and a resumed run must have nothing left to do.
+        let flagged = serde_json::json!({ "verdicts": [
+            { "index": 0, "category": "scam-fraud", "severity": 2, "rationale": "sweep verdict" }
+        ]});
+        let clean = serde_json::json!({ "verdicts": [] });
+        let (base1, _h1) = mock_server(vec![envelope(&flagged)]);
+        let (base2, h2) = mock_server(vec![envelope(&clean)]);
+        let cache = small_cache(3);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let mut provider = || Ok(client_for(&base2));
+        let outcome = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base1),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            Some(&mut provider),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(outcome.status, ScanStatus::Completed);
+        assert_eq!(outcome.chunks_total, 2, "one sweep chunk + one re-check");
+        assert_eq!(
+            h2.load(Ordering::SeqCst),
+            1,
+            "strong tier saw the flagged chunk"
+        );
+        assert_eq!(
+            outcome.findings, 0,
+            "strong tier's silence overrules the flag"
+        );
+        assert!(analysis.list_findings(None).unwrap().is_empty());
+        let scans = analysis.list_scans(10).unwrap();
+        assert_eq!(scans[0].model, "test-model→test-model");
+
+        // Resume: sweep chunk reused, flagged set now empty → the provider
+        // must not even be called.
+        let mut provider2 =
+            || -> crate::Result<LlmClient> { panic!("no re-check should be needed") };
+        let o2 = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base1),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            Some(&mut provider2),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(o2.reused, 1);
+        assert_eq!(o2.classified, 0);
+    }
+
+    #[test]
+    fn cascade_unavailable_keeps_sweep_findings_then_resume_rechecks() {
+        // Sweep flags item 0; the strong tier is UNAVAILABLE (provider errors).
+        // The sweep finding must survive and the scan complete — then a resume
+        // with a working provider must re-check the still-flagged chunk (its
+        // #recheck checkpoint was never written), i.e. no finding is stranded.
+        let flagged = serde_json::json!({ "verdicts": [
+            { "index": 0, "category": "scam-fraud", "severity": 2, "rationale": "sweep" }
+        ]});
+        let (base1, _h1) = mock_server(vec![envelope(&flagged)]);
+        let cache = small_cache(3);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+
+        let mut failing = || -> crate::Result<LlmClient> {
+            Err(crate::Error::Inference("strong tier won't load".into()))
+        };
+        let o1 = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base1),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            Some(&mut failing),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(o1.status, ScanStatus::Completed);
+        assert_eq!(
+            o1.findings, 1,
+            "sweep finding stands when re-check can't run"
+        );
+        // Receipt stays single-tier: the strong model never judged anything.
+        assert_eq!(analysis.list_scans(10).unwrap()[0].model, "test-model");
+
+        // Resume with a working strong tier that CONFIRMS the finding.
+        let confirm = serde_json::json!({ "verdicts": [
+            { "index": 0, "category": "scam-fraud", "severity": 3, "rationale": "confirmed" }
+        ]});
+        let (base2, h2) = mock_server(vec![envelope(&confirm)]);
+        let mut working = || Ok(client_for(&base2));
+        run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base1),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            Some(&mut working),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            h2.load(Ordering::SeqCst),
+            1,
+            "resume re-checked the flagged chunk"
+        );
+        let rows = analysis.list_findings(None).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].severity, 3,
+            "strong tier's confirmed verdict replaced the sweep's"
+        );
+        assert_eq!(
+            analysis.list_scans(10).unwrap()[0].model,
+            "test-model→test-model"
+        );
     }
 
     #[test]
@@ -510,6 +808,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -541,6 +840,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -565,6 +865,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -579,6 +880,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -626,6 +928,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &CancelToken::new(),
             |_| {},
         )
@@ -653,6 +956,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &cancel,
             |_| {},
         )
@@ -676,6 +980,7 @@ mod tests {
             chunker::ScanSources::default(),
             None,
             1,
+            None,
             &CancelToken::new(),
             |p| {
                 seen.push((p.chunks_done, p.chunks_total));
