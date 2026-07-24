@@ -11,7 +11,13 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- Security Check runs now carry a per-run feed receipt: the result cards and
+  the exported CSV cite the exact indicator feeds the scan ran against
+  ("Checked against Pegasus 1,549 · … — feeds updated 2026-07-20"), even
+  after the installed feeds have since been updated. Runs recorded before
+  this change list their feeds without the updated-date. (#25)
 
 ## [0.30.1] — 2026-07-23
 

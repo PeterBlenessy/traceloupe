@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 48;
+const SCHEMA_VERSION: i64 = 49;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -302,7 +302,8 @@ CREATE TABLE IF NOT EXISTS scan_runs (
     finished_at     INTEGER,
     status          TEXT NOT NULL DEFAULT 'running',  -- running|done|cancelled|failed
     modules_json    TEXT NOT NULL DEFAULT '[]',       -- analyzer modules run
-    feeds_json      TEXT NOT NULL DEFAULT '[]',       -- [{source, fetched_at, count}]
+    feeds_json      TEXT NOT NULL DEFAULT '[]',       -- [{source, class, count, skipped}]
+    feeds_generated_at INTEGER,                       -- snapshot generated_at (unix s) at scan time
     indicator_count INTEGER
 );
 
@@ -729,6 +730,10 @@ impl CacheDb {
                 );
                 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, severity);",
             )?;
+            // v49: per-run feed receipt — the indicator snapshot's generated_at
+            // (unix seconds) at scan time, so historical reports cite the feed
+            // date they actually ran against. NULL on runs from before v49.
+            ensure_column(&conn, "scan_runs", "feeds_generated_at", "INTEGER")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

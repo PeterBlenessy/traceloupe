@@ -426,9 +426,10 @@ pub struct ScanInputs<'a> {
 }
 
 /// Run a scan. `inputs` carries the Tier-B artifacts (empty for a Passive
-/// Check); `feeds_json` describes the indicator feeds used (stored on the run
-/// for the report header). `progress` receives `(module, index, total)` before
-/// each module runs.
+/// Check); `feeds_json` describes the indicator feeds used and
+/// `feeds_generated_at` is the snapshot's generated-at (unix seconds) — both
+/// stored on the run so its report cites the feeds it actually ran against.
+/// `progress` receives `(module, index, total)` before each module runs.
 #[allow(clippy::too_many_arguments)] // Tier-B inputs are grouped in ScanInputs; the rest are distinct
 pub fn run_scan(
     db: &CacheDb,
@@ -437,6 +438,7 @@ pub fn run_scan(
     modules: &[&'static str],
     mut inputs: ScanInputs<'_>,
     feeds_json: &str,
+    feeds_generated_at: Option<i64>,
     cancel: &CancelToken,
     mut progress: impl FnMut(&str, usize, usize),
 ) -> Result<ScanOutcome> {
@@ -452,13 +454,14 @@ pub fn run_scan(
         .filter(|m| *m != "webkit" || !inputs.webkit_domains.is_empty())
         .collect();
     conn.execute(
-        "INSERT INTO scan_runs (kind, started_at, status, modules_json, feeds_json, indicator_count)
-         VALUES (?1, ?2, 'running', ?3, ?4, ?5)",
+        "INSERT INTO scan_runs (kind, started_at, status, modules_json, feeds_json, feeds_generated_at, indicator_count)
+         VALUES (?1, ?2, 'running', ?3, ?4, ?5, ?6)",
         params![
             kind.as_str(),
             now_unix(),
             serde_json::to_string(&modules).unwrap_or_else(|_| "[]".into()),
             feeds_json,
+            feeds_generated_at,
             set.len() as i64,
         ],
     )?;
@@ -1387,15 +1390,16 @@ fn format_epoch(secs: Option<i64>) -> String {
 /// the whole document as a string. `app_version` is stamped into the header.
 pub fn export_report_csv(db: &CacheDb, run_id: i64, app_version: &str) -> Result<String> {
     let conn = db.conn();
-    let (kind, started, finished, status, feeds_json, indicator_count): (
+    let (kind, started, finished, status, feeds_json, feeds_generated_at, indicator_count): (
         String,
         i64,
         Option<i64>,
         String,
         String,
         Option<i64>,
+        Option<i64>,
     ) = conn.query_row(
-        "SELECT kind, started_at, finished_at, status, feeds_json, indicator_count
+        "SELECT kind, started_at, finished_at, status, feeds_json, feeds_generated_at, indicator_count
          FROM scan_runs WHERE id = ?1",
         [run_id],
         |r| {
@@ -1406,6 +1410,7 @@ pub fn export_report_csv(db: &CacheDb, run_id: i64, app_version: &str) -> Result
                 r.get(3)?,
                 r.get(4)?,
                 r.get(5)?,
+                r.get(6)?,
             ))
         },
     )?;
@@ -1421,7 +1426,11 @@ pub fn export_report_csv(db: &CacheDb, run_id: i64, app_version: &str) -> Result
         "# Indicators evaluated: {}\n",
         indicator_count.map(|c| c.to_string()).unwrap_or_default()
     ));
-    // Feeds used (for attribution).
+    // Feeds used (for attribution) — the receipt from scan time, not the
+    // currently installed snapshot.
+    if let Some(at) = feeds_generated_at {
+        out.push_str(&format!("# Feeds updated: {}\n", format_epoch(Some(at))));
+    }
     if let Ok(feeds) = serde_json::from_str::<Vec<serde_json::Value>>(&feeds_json) {
         for f in feeds {
             if let Some(src) = f.get("source").and_then(|v| v.as_str()) {
@@ -1737,6 +1746,7 @@ mod tests {
                 webkit_domains: &webkit_domains,
             },
             "[]",
+            None,
             &cancel,
             |m, _, _| seen_modules.push(m.to_string()),
         )
@@ -2171,6 +2181,7 @@ mod tests {
             MODULES,
             ScanInputs::default(),
             "[]",
+            None,
             &CancelToken::new(),
             |_, _, _| {},
         )
@@ -2189,6 +2200,7 @@ mod tests {
             &modules,
             ScanInputs::default(),
             "[]",
+            None,
             &CancelToken::new(),
             |_, _, _| {},
         )
@@ -2213,6 +2225,8 @@ mod tests {
                 ..Default::default()
             },
             r#"[{"source":"echap/ioc","class":"stalkerware","count":2746,"skipped":0}]"#,
+            // 1970-01-02T00:00:00Z — deterministic value for the header assert.
+            Some(86_400),
             &CancelToken::new(),
             |_, _, _| {},
         )
@@ -2231,6 +2245,7 @@ mod tests {
         let csv = export_report_csv(&db, outcome.run_id, "9.9.9").unwrap();
         assert!(csv.contains("# TraceLoupe Security Check report"));
         assert!(csv.contains("# App version: 9.9.9"));
+        assert!(csv.contains("# Feeds updated: 1970-01-02T00:00:00Z"));
         assert!(csv.contains("# Feed: echap/ioc (2746 indicators)"));
         assert!(csv.contains("# Scan kind: explicit"));
         assert!(csv.contains("Severity,Time,Threat,Kind,Module,Matched,Context"));
@@ -2257,6 +2272,7 @@ mod tests {
             MODULES,
             ScanInputs::default(),
             "[]",
+            None,
             &cancel,
             |_, _, _| {},
         )
