@@ -715,11 +715,12 @@ function SettingsMenu() {
                 key={value}
                 value={value}
                 // Sidebar row: icon + label, SOLID accent pill when active — the
-                // same treatment as the app sidebar's active nav item.
-                // `flex-none h-9` stops the trigger's base `flex-1` from stretching
-                // rows to fill the tall sidebar; `[&::after]:hidden` drops the line
+                // same treatment as the app sidebar's active nav item, with the
+                // label kept at the normal --sidebar-foreground (unchanged from
+                // inactive). `flex-none h-9` stops the trigger's base `flex-1`
+                // from stretching rows; `[&::after]:hidden` drops the line
                 // variant's edge bar.
-                className="h-9 flex-none justify-start gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent [&::after]:hidden data-[state=active]:!bg-[var(--selected-bg)] data-[state=active]:!text-[var(--selected-fg)] data-[state=active]:font-medium"
+                className="h-9 flex-none justify-start gap-2.5 rounded-md px-2 text-sm hover:bg-sidebar-accent [&::after]:hidden data-[state=active]:!bg-[var(--selected-bg)] data-[state=active]:!text-sidebar-foreground data-[state=active]:font-medium"
               >
                 <Icon className="size-5 shrink-0" />
                 <span className="flex-1 truncate text-left">{label}</span>

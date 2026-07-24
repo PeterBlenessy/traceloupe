@@ -4,7 +4,8 @@
  * than the app's name. Three states:
  *
  * - backup open:   the phone with data under the loupe, device name, model +
- *                  iOS version, and an Encrypted chip. Links to /device.
+ *                  iOS version, and an Encrypted chip. Links to / (the landing,
+ *                  which IS the Device view once a backup is open).
  * - no backup:     a dashed "ghost" phone (the loupe stays — it's the brand
  *                  mark) with a Choose-a-backup action. Links to /.
  * - collapsed:     a compact phone+loupe mark on the icon rail.
@@ -39,10 +40,12 @@ export function DeviceHero({
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const collapsed = state === "collapsed";
   const pending = hasBackup === undefined;
-  const to = hasBackup === true ? "/device" : "/";
-  // The hero doubles as the Device-view (or backup-picker) nav entry, so it
-  // carries the active treatment those routes would otherwise lack.
-  const active = hasBackup === true ? pathname === "/device" : pathname === "/";
+  // `/` is both the backup picker (no backup) and the Device view (backup
+  // open) — one route, so the hero always points home.
+  const to = "/";
+  // The hero doubles as that nav entry, so it carries the active treatment the
+  // route would otherwise lack.
+  const active = pathname === "/";
   const name =
     hasBackup === true ? (deviceInfo?.deviceName ?? "Device") : "TraceLoupe";
   const label = hasBackup === true ? name : "Your iPhone backups";

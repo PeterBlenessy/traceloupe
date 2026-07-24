@@ -66,13 +66,10 @@
   --accent-text: oklch(from var(--accent-color) min(l, 0.5) c h);
 
   /* SELECTION highlight — a SOLID accent fill (native-macOS style), not the
-     soft tint above. Use for the selected/active nav row, Settings tab, and any
-     equivalent compact selection. The foreground reuses --primary-foreground,
-     whose lightness-adaptive clamp keeps text legible on ANY system accent
-     (white on dark accents, near-black on light ones like Yellow/Green) — and
-     it re-resolves per theme on its own, so no .dark override is needed. */
+     soft tint above. The selected item's TEXT stays the normal item color
+     (--sidebar-foreground: white in dark, dark in light) so a selected label
+     reads identically to its neighbours; only the background changes. */
   --selected-bg: var(--accent-color);
-  --selected-fg: var(--primary-foreground);
 
   --background: oklch(0.982 0.003 260);
   --foreground: oklch(0.21 0.012 260);
@@ -150,13 +147,14 @@
   --sidebar-ring: var(--accent-color);
 }
 
-/* The active sidebar item: a SOLID accent pill with contrasting text/icon
-   (native-macOS selection), not a tint. This unlayered rule outranks Tailwind's
-   @layer hover utilities, so the fill stays solid in both rest and hover states
-   — matching how a selected Finder row keeps its selection on hover. */
+/* The active sidebar item: a SOLID accent pill, with its label/icon kept at the
+   normal item color (--sidebar-foreground) so the selected row reads like the
+   others — just filled. This unlayered rule outranks Tailwind's @layer
+   utilities (including the cva's data-[active] color), so it wins in both rest
+   and hover states — matching how a selected Finder row keeps its selection. */
 [data-sidebar="menu-button"][data-active="true"] {
   background-color: var(--selected-bg);
-  color: var(--selected-fg);
+  color: var(--sidebar-foreground);
 }
 
 /* See-through toolbar (Settings → General). The bar keeps its border but goes
