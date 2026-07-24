@@ -415,11 +415,16 @@ export function SafetyScanView() {
               scans={scans}
               selectedId={selectedScan.id}
               onSelect={setSelectedScanId}
+              // A 'running' DB row is only genuinely live while this app has a
+              // scan in flight — after a crash/kill the row is stranded and
+              // must read "Interrupted", not show a spinner.
+              liveId={running ? (scans[0]?.id ?? null) : null}
             />
             <div className="min-w-0 space-y-4">
               <ScanReportCard
                 scan={selectedScan}
                 latest={selectedScan.id === scans[0]?.id}
+                live={running && selectedScan.id === scans[0]?.id}
                 onBackToLatest={() => setSelectedScanId(null)}
                 report={report.data}
                 findings={findings.data ?? []}
@@ -522,12 +527,25 @@ function scanTitle(s: SafetyScanHistoryItem): string {
   return formatTimelineTime(s.startedAt);
 }
 
-/** The rail's compact outcome badge: one chip, colored by the worst severity. */
-function ScanOutcomeBadge({ scan }: { scan: SafetyScanHistoryItem }) {
+/** The rail's compact outcome badge: one chip, colored by the worst severity.
+ *  `live` says whether a scan is genuinely in flight right now — a DB row can
+ *  be stranded 'running' after a crash/kill, and showing a spinner for it
+ *  reads as "something is scanning" when nothing is. */
+function ScanOutcomeBadge({
+  scan,
+  live,
+}: {
+  scan: SafetyScanHistoryItem;
+  live: boolean;
+}) {
   if (scan.status === "running")
-    return (
+    return live ? (
       <Badge variant="outline" className="shrink-0">
         <Loader2 className="size-3 animate-spin" /> running
+      </Badge>
+    ) : (
+      <Badge variant="outline" className="shrink-0 text-muted-foreground">
+        Interrupted
       </Badge>
     );
   // "Clean" is a completed scan's verdict — a stopped/failed scan with zero
@@ -559,10 +577,13 @@ function ScanRail({
   scans,
   selectedId,
   onSelect,
+  liveId,
 }: {
   scans: SafetyScanHistoryItem[];
   selectedId: number;
   onSelect: (id: number | null) => void;
+  /** The scan genuinely in flight right now, if any (see ScanOutcomeBadge). */
+  liveId: number | null;
 }) {
   const qc = useQueryClient();
   const [outcome, setOutcome] = useState("all");
@@ -694,11 +715,13 @@ function ScanRail({
               <div className="truncate text-xs text-muted-foreground">
                 {formatScanRange(s.rangeStart, s.rangeEnd)}
                 {" · "}
-                {SCAN_STATUS_LABEL[s.status] ?? s.status}
+                {s.status === "running" && s.id !== liveId
+                  ? "Interrupted"
+                  : (SCAN_STATUS_LABEL[s.status] ?? s.status)}
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1">
-              <ScanOutcomeBadge scan={s} />
+              <ScanOutcomeBadge scan={s} live={s.id === liveId} />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -762,12 +785,15 @@ function ScanRail({
 function ScanReportCard({
   scan,
   latest,
+  live,
   onBackToLatest,
   report,
   findings,
 }: {
   scan: SafetyScanHistoryItem;
   latest: boolean;
+  /** True while this scan is genuinely in flight (not a stranded row). */
+  live: boolean;
   onBackToLatest: () => void;
   report: SafetyScanReport | undefined;
   findings: ContentFinding[];
@@ -848,7 +874,9 @@ function ScanReportCard({
             {scan.status === "cancelled"
               ? "This scan was stopped before it finished, so it has no written report. Any findings it made before stopping are listed below."
               : scan.status === "running"
-                ? "The scan is still running — findings appear below as they are made."
+                ? live
+                  ? "The scan is still running — findings appear below as they are made."
+                  : "This scan was interrupted before finishing (the app closed mid-scan). Its progress is checkpointed — starting a new scan resumes from where it stopped."
                 : clean
                   ? "The model flagged nothing in this period. That is not a guarantee — spot-check important conversations yourself."
                   : "This scan didn't produce a written report."}
