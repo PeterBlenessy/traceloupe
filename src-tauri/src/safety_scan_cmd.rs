@@ -581,6 +581,14 @@ pub async fn run_safety_scan(
     let model_path = primary_path;
     let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
+        // Keep the Mac awake for the whole scan. A long scan (hours) would
+        // otherwise stall if the machine idle-sleeps mid-chunk: the in-flight
+        // request dies, the 300 s read timeout fails the chunk on wake, and an
+        // unattended run quietly stops. This RAII guard releases on EVERY exit
+        // path out of this closure (normal finish, `?` early return on a spawn/
+        // health/engine error, or a panic) — a superset of "where the watcher
+        // stops". Only system idle sleep is held; the display still sleeps.
+        let _keep_awake = crate::power::KeepAwake::prevent_idle_sleep("TraceLoupe Safety Scan");
         crate::logging::info(
             &app2,
             format!("Safety Scan: starting (model={spec_id}, sandbox=on, parallel={parallel})"),
