@@ -31,6 +31,14 @@
 :root[data-density="compact"] [data-slot="list-row"] {
   padding-block: 0.25rem;
 }
+/* A table row ignores padding — its CELLS carry it, so target them too. Without
+   this a `<tr data-slot="list-row">` silently opts out of Density (#78). */
+:root[data-density="cozy"] [data-slot="list-row"] > td {
+  padding-block: 0.375rem;
+}
+:root[data-density="compact"] [data-slot="list-row"] > td {
+  padding-block: 0.25rem;
+}
 
 /* Chat bubbles: tighten both the internal padding and the line-height so the
    bubbles themselves visibly shrink with density (short single-line bubbles are
