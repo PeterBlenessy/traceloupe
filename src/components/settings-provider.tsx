@@ -132,7 +132,12 @@ function printLog(r: LogRecord) {
         : r.level === "debug" || r.level === "trace"
           ? console.debug
           : console.info;
-  fn(`%c[traceloupe]%c ${r.message}`, "color:#a78bfa;font-weight:600", "color:inherit");
+  const t = r.atMs ? new Date(r.atMs).toLocaleTimeString() : "";
+  fn(
+    `%c[traceloupe]%c${t ? ` ${t}` : ""} ${r.message}`,
+    "color:#a78bfa;font-weight:600",
+    "color:inherit",
+  );
 }
 
 const SettingsProviderContext = createContext<SettingsProviderState | null>(null);
@@ -267,17 +272,21 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void client.setLogLevel(logLevel);
   }, [logLevel]);
+  // Subscribed once for the app's lifetime, over a Tauri Channel: batches arrive
+  // ~10/s however fast records are produced, instead of one IPC message per line
+  // (which is what froze the UI during a debug-level scan — #60).
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    void client.onLog(printLog).then((u) => {
-      if (cancelled) u();
-      else unlisten = u;
+    void client.subscribeLogs((batch) => {
+      for (const r of batch.records) printLog(r);
+      if (batch.dropped > 0) {
+        // Never hide loss: say what the console is missing.
+        console.warn(
+          `%c[traceloupe]%c ${batch.dropped} log record(s) dropped — producing faster than they can be shown`,
+          "color:#a78bfa;font-weight:600",
+          "color:inherit",
+        );
+      }
     });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
   }, []);
 
   const setLogLevel = (level: LogLevel) => {

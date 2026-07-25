@@ -10,6 +10,7 @@ import {
   HeartPulse,
   ListTodo,
   Waypoints,
+  FolderOpen,
   Globe,
   Image,
   Loader2,
@@ -953,7 +954,7 @@ function SettingsMenu() {
           >
             <SettingsGroup
               title="Logging"
-              description="Backend logs print to the browser dev-tools console."
+              description="Backend logs stream to the dev-tools console in real time, and can also be kept on disk."
             >
               <SettingsRow
                 label="Log level"
@@ -981,6 +982,7 @@ function SettingsMenu() {
                   ))}
                 </select>
               </SettingsRow>
+              <LogFileSettings />
             </SettingsGroup>
             <SettingsGroup
               title="Safety Scan classifier"
@@ -1075,6 +1077,65 @@ function SettingsGroup({
 }
 
 /** One row inside a SettingsGroup: label + description on the left, control right. */
+/** The opt-in file sink (#60). Logs always stream to the console; this keeps a
+ *  copy on disk as well, which survives a crash and can be read without the app.
+ *  Off by default — writing every debug line to disk during a long scan is a real
+ *  cost, so the user opts in. Shows where it writes and offers to reveal it,
+ *  because a path you can't find is not much use. */
+function LogFileSettings() {
+  const [enabled, setEnabled] = usePersistedState("traceloupe-log-to-file", false);
+  const { data: path } = useQuery({
+    queryKey: ["logFilePath"],
+    queryFn: () => client.logFilePath(),
+  });
+
+  // Re-apply on mount too: the backend defaults to off every launch, so a
+  // persisted "on" has to be pushed back down.
+  useEffect(() => {
+    void client.setFileLogging(enabled);
+  }, [enabled]);
+
+  return (
+    <>
+      <SettingsRow
+        label="Write logs to a file"
+        description="Also append log records to a file on disk. Off by default."
+      >
+        <Switch
+          checked={enabled}
+          onCheckedChange={setEnabled}
+          aria-label="Write logs to a file"
+        />
+      </SettingsRow>
+      {enabled && (
+        <SettingsRow
+          label="Log file"
+          description={path ?? "Resolving the log location…"}
+        >
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!path}
+                onClick={() => void client.revealLogFile()}
+              >
+                <FolderOpen className="size-4" />
+                Reveal in Finder
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {path
+                ? "Show the log file in Finder"
+                : "Waiting for the log location to resolve"}
+            </TooltipContent>
+          </Tooltip>
+        </SettingsRow>
+      )}
+    </>
+  );
+}
+
 function SettingsRow({
   label,
   description,
