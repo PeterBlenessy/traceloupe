@@ -959,6 +959,51 @@ pub struct ContentFindingDto {
     pub rechecked: bool,
 }
 
+/// Generate (or return) ONE thread's summary on demand (#18).
+///
+/// Scan end only writes prose for the top few threads by severity, so this fills
+/// in the rest when the user opens one. Cached results are free and survive
+/// re-scans; with no model server live it returns a deterministic summary built
+/// from the findings rather than an error, so the UI never has to render an empty
+/// panel or explain a failure. `source` tells the UI which it got.
+#[tauri::command]
+pub async fn generate_thread_summary(
+    active: State<'_, ActiveBackup>,
+    scan_id: i64,
+    thread_ref: String,
+) -> Result<Option<ThreadSummaryDto>, String> {
+    let analysis_db_path = analysis_path(&active.path()?)?;
+    // Opening the DB and (in the deterministic case) hashing findings is blocking
+    // work; keep it off the async executor.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+        // No client: an idle app has no sidecar, and spawning a 4–5 GB model for one
+        // 250-token call would cost the user 30–180 s. The deterministic summary is
+        // the honest, instant answer — see the ADR note on why warm-server reuse
+        // was rejected.
+        let out = summary::summarize_thread_on_demand(&mut db, None, scan_id, &thread_ref)
+            .map_err(|e| e.to_string())?;
+        Ok(out.map(|(content, source)| ThreadSummaryDto {
+            thread_ref,
+            content,
+            source: format!("{source:?}").to_lowercase(),
+        }))
+    })
+    .await
+    .map_err(|e| format!("summary task failed: {e}"))?
+}
+
+/// One thread's summary plus how it was produced ("cached" | "model" |
+/// "deterministic") — the UI labels model prose differently from the
+/// deterministic fallback rather than passing one off as the other.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSummaryDto {
+    pub thread_ref: String,
+    pub content: String,
+    pub source: String,
+}
+
 /// Findings, newest-severity first. `scan_id` restricts to one scan (the
 /// history view shows the selected scan's findings); None returns all.
 #[tauri::command]

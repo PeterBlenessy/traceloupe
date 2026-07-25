@@ -709,6 +709,16 @@ export interface SafetyScanReport {
   threadSummaries: [string, string][];
 }
 
+/** One thread's on-demand summary and how it was produced (#18). "model" is the
+ *  classifier's prose; "deterministic" is built from the finding data when no
+ *  model server is live — shown with an honest label rather than passed off as
+ *  model output; "cached" was already stored for these exact findings. */
+export interface ThreadFindingSummary {
+  threadRef: string;
+  content: string;
+  source: "cached" | "model" | "deterministic" | string;
+}
+
 /** One past scan for the history list (no internal "chunks" — just what a user
  *  cares about: period, when, status, model, and what it found). */
 export interface SafetyScanHistoryItem {
@@ -1000,6 +1010,16 @@ export interface TraceLoupeClient {
   /** A scan's report + per-thread summaries. Latest scan when `scanId` is
    *  omitted, or a specific past scan from the history list. */
   getSafetyScanReport(scanId?: number): Promise<SafetyScanReport>;
+  /** Generate (or fetch) ONE thread's summary on demand (#18). Scan end only
+   *  writes prose for the top few threads by severity; this fills in the rest
+   *  when the user opens one. Cached results are free. With no model server live
+   *  it returns a deterministic summary built from the findings — `source` says
+   *  which, so the UI can label it honestly. Null when the thread has no live
+   *  findings in the scan's scope. */
+  generateThreadSummary(
+    scanId: number,
+    threadRef: string,
+  ): Promise<ThreadFindingSummary | null>;
   /** Past scans (newest first) for the history list. */
   listSafetyScans(): Promise<SafetyScanHistoryItem[]>;
   /** Remove a past scan and everything scoped to it. */
@@ -1398,6 +1418,11 @@ const tauriClient: TraceLoupeClient = {
   getSafetyScanReport: (scanId) =>
     invoke<SafetyScanReport>("get_safety_scan_report", {
       scanId: scanId ?? null,
+    }),
+  generateThreadSummary: (scanId, threadRef) =>
+    invoke<ThreadFindingSummary | null>("generate_thread_summary", {
+      scanId,
+      threadRef,
     }),
   listSafetyScans: () =>
     invoke<SafetyScanHistoryItem[]>("list_safety_scans"),
@@ -3207,6 +3232,11 @@ export const mockClient: TraceLoupeClient = {
       }
     }
   },
+  generateThreadSummary: async (_scanId, threadRef) => ({
+    threadRef,
+    content: `${threadRef}: 2 findings flagged. Peak severity 2. Open the conversation to review them in context.`,
+    source: "deterministic" as const,
+  }),
   getSafetyScanReport: async (scanId) =>
     mockActive && mockContentFindings.length
       ? {

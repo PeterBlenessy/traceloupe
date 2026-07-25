@@ -577,6 +577,90 @@ function NoModelPrompt() {
 
 /** Inline scan progress shown inside the run card (below the button) so the
  *  card never gets swapped out mid-scan. */
+/** One conversation's summary inside the report (#18).
+ *
+ *  Scan end writes model prose only for the top few threads by severity, so the
+ *  rest start empty and are generated when the reader asks. The backend returns a
+ *  deterministic, findings-derived summary when no model server is live — real
+ *  content rather than an error — and says which it gave, so this labels model
+ *  prose and the computed fallback differently instead of passing one off as the
+ *  other. Generated text is cached, so asking again is free. */
+function ThreadSummaryBlock({
+  scanId,
+  threadRef,
+  initial,
+}: {
+  scanId: number;
+  threadRef: string;
+  initial?: string;
+}) {
+  const [text, setText] = useState(initial);
+  const [source, setSource] = useState<string | null>(initial ? "model" : null);
+  const [busy, setBusy] = useState(false);
+
+  // A different scan (or a re-scan) can arrive under the same mounted row.
+  useEffect(() => {
+    setText(initial);
+    setSource(initial ? "model" : null);
+  }, [initial, scanId, threadRef]);
+
+  async function generate() {
+    setBusy(true);
+    try {
+      const out = await client.generateThreadSummary(scanId, threadRef);
+      if (out) {
+        setText(out.content);
+        setSource(out.source);
+      }
+    } catch (e) {
+      toast.error("Couldn't summarize this conversation", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (text) {
+    return (
+      <div className="space-y-1">
+        <p className="text-foreground/90">{text}</p>
+        {source === "deterministic" && (
+          <p className="text-xs text-muted-foreground">
+            Summarized from the findings (no model loaded) — run a scan to get the
+            classifier's own wording.
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => void generate()}
+          className="print:hidden"
+        >
+          {busy ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <NotebookText className="size-4" />
+          )}
+          {busy ? "Summarizing…" : "Summarize this conversation"}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {busy
+          ? "Writing this conversation's summary"
+          : "Summarize these findings (kept for next time; instant when no model is loaded)"}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 function ScanProgress({
   scanEvent,
 }: {
@@ -1204,7 +1288,15 @@ function SafetyReportDocument({
                     · {g.findings.length} finding{g.findings.length === 1 ? "" : "s"}
                   </span>
                 </div>
-                {prose && <p className="text-foreground/90">{prose}</p>}
+                {/* Scan end only writes prose for the top few threads by
+                    severity (#18); the rest are summarized here, on demand. */}
+                {g.isNote ? null : (
+                  <ThreadSummaryBlock
+                    scanId={scan.id}
+                    threadRef={g.key}
+                    initial={prose}
+                  />
+                )}
                 <ul className="space-y-4">
                   {g.findings.map((f) => (
                     <li
