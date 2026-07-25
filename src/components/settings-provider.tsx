@@ -9,6 +9,13 @@ export type Density = "comfortable" | "cozy" | "compact";
 /** Ordered least-dense → most-dense; drives the density stepper in the header. */
 export const DENSITIES: Density[] = ["comfortable", "cozy", "compact"];
 
+/** Text size: scales TYPE only — never spacing or icons, which Density owns.
+ *  Drives the `--text-scale` knob via `data-text-size` on the document root. */
+export type TextSize = "xs" | "sm" | "md" | "lg" | "xl";
+/** Ordered smallest → largest; drives the A−/A+ stepper in the header. "md" is
+ *  the default. Two steps below it, because shrinking is the common need. */
+export const TEXT_SIZES: TextSize[] = ["xs", "sm", "md", "lg", "xl"];
+
 /** How message links preview. Escalating levels of contacting external sites:
  *  `off` (raw URLs, no network), `hover` (fetch on deliberate hover, default),
  *  `inline` (auto-unfurl every visible link in the bubble). */
@@ -62,6 +69,9 @@ type SettingsProviderState = {
   /** How tightly the UI packs (rows, headers, controls). */
   density: Density;
   setDensity: (d: Density) => void;
+  /** Text size — scales type only; Density owns spacing. */
+  textSize: TextSize;
+  setTextSize: (t: TextSize) => void;
   /** See-through toolbar: content scrolls visibly beneath a blurred title bar. */
   translucentToolbar: boolean;
   setTranslucentToolbar: (v: boolean) => void;
@@ -93,8 +103,15 @@ const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
 const DENSITY_KEY = "traceloupe-density";
 const TRANSLUCENT_KEY = "traceloupe-translucent-toolbar";
+const TEXT_SIZE_KEY = "traceloupe-text-size";
 const CASCADE_CONFIDENCE_KEY = "traceloupe-dev-cascade-confidence";
 const INCLUDE_REPORT_SNIPPETS_KEY = "traceloupe-include-report-snippets";
+
+/** Read the persisted text size, defaulting to "md". */
+function readTextSize(): TextSize {
+  const raw = localStorage.getItem(TEXT_SIZE_KEY);
+  return TEXT_SIZES.includes(raw as TextSize) ? (raw as TextSize) : "md";
+}
 
 /** Read the persisted density, defaulting to "comfortable". */
 function readDensity(): Density {
@@ -197,6 +214,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [biometricAvailable, setBiometricAvailable] = useState<boolean>(false);
   const [signingChecked, setSigningChecked] = useState<boolean>(false);
   const [density, setDensityState] = useState<Density>(() => readDensity());
+  const [textSize, setTextSizeState] = useState<TextSize>(() => readTextSize());
   // Default ON: the frosted bar with content scrolling beneath it is the
   // intended look; the toggle exists for anyone who prefers a solid bar.
   const [translucentToolbar, setTranslucentToolbarState] = useState<boolean>(
@@ -221,6 +239,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     document.documentElement.dataset.density = density;
   }, [density]);
+
+  // Same shape for text size: one attribute, one CSS knob (`--text-scale`) that
+  // the type ramp is expressed against, so every text utility resizes together
+  // while icons and spacing hold still.
+  useEffect(() => {
+    document.documentElement.dataset.textSize = textSize;
+  }, [textSize]);
 
   // Reflect the see-through toolbar onto the document root; CSS keyed off
   // `data-translucent-bar` blurs the title bar and lets the full-bleed list
@@ -345,6 +370,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     setDensityState(d); // the effect above applies it to the document root
   };
 
+  const setTextSize = (t: TextSize) => {
+    localStorage.setItem(TEXT_SIZE_KEY, t);
+    setTextSizeState(t); // the effect above applies it to the document root
+  };
+
   const setTranslucentToolbar = (v: boolean) => {
     localStorage.setItem(TRANSLUCENT_KEY, String(v));
     setTranslucentToolbarState(v); // the effect above applies it to the document root
@@ -387,6 +417,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         setBiometricUnlock,
         biometricAvailable,
         density,
+        textSize,
+        setTextSize,
         setDensity,
         translucentToolbar,
         setTranslucentToolbar,

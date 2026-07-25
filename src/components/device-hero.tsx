@@ -93,18 +93,18 @@ export function DeviceHero({
           )}
         >
           <PhoneLoupeArt ghost={hasBackup !== true} className="size-24" />
-          <div className="mt-2 w-full truncate text-[13.5px] font-semibold">
+          <div className="mt-2 w-full truncate text-[calc(0.84375rem*var(--text-scale))] font-semibold">
             {name}
           </div>
           {hasBackup === true ? (
             <>
               {meta && (
-                <div className="mt-0.5 w-full truncate text-[11px] text-sidebar-foreground/60">
+                <div className="mt-0.5 w-full truncate text-[calc(0.6875rem*var(--text-scale))] text-sidebar-foreground/60">
                   {meta}
                 </div>
               )}
               {deviceInfo?.isEncrypted === true && (
-                <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2.5 py-0.5 text-[10.5px] font-medium text-[var(--accent-text)]">
+                <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-[var(--accent-soft)] px-2.5 py-0.5 text-[calc(0.65625rem*var(--text-scale))] font-medium text-[var(--accent-text)]">
                   <Lock className="size-3" />
                   Encrypted
                 </span>
@@ -112,7 +112,7 @@ export function DeviceHero({
             </>
           ) : pending ? null : (
             <>
-              <div className="mt-0.5 text-[11px] text-sidebar-foreground/60">
+              <div className="mt-0.5 text-[calc(0.6875rem*var(--text-scale))] text-sidebar-foreground/60">
                 No backup open
               </div>
               <span className="mt-2.5 inline-flex items-center rounded-md bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors group-hover/hero:bg-primary/90">

@@ -79,7 +79,9 @@ import { useQuery } from "@tanstack/react-query";
 import {
   useSettings,
   DENSITIES,
+  TEXT_SIZES,
   type Density,
+  type TextSize,
   type LinkPreviewMode,
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
@@ -241,7 +243,7 @@ export function AppShell() {
                       </SidebarMenuButton>
                       {/* Experimental: local-AI classification quality is not yet
                           validated on real hardware. */}
-                      <SidebarMenuBadge className="text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <SidebarMenuBadge className="text-[calc(0.5625rem*var(--text-scale))] font-medium uppercase tracking-wide text-muted-foreground">
                         Beta
                       </SidebarMenuBadge>
                     </SidebarMenuItem>
@@ -417,6 +419,7 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
               no indicator at all. */}
           <ActivityIndicator />
           <ToolbarGroup>
+            <TextSizeToggle />
             <DensityToggle />
             <ModeToggle />
           </ToolbarGroup>
@@ -496,6 +499,66 @@ const DENSITY_META: Record<
 };
 
 /** A single header button that cycles list density; the icon reflects the level. */
+/** A−/A+ stepper for text size. Two buttons rather than one cycling control
+ *  (unlike Density) because "smaller" and "larger" are opposite intents — a
+ *  single button that wrapped around from smallest to largest would fight the
+ *  user who is stepping down. Each end disables at its limit, with a tooltip
+ *  saying so rather than a dead-looking button. */
+function TextSizeToggle() {
+  const { textSize, setTextSize } = useSettings();
+  const i = TEXT_SIZES.indexOf(textSize);
+  const atMin = i <= 0;
+  const atMax = i >= TEXT_SIZES.length - 1;
+  const label =
+    textSize === "md" ? "default" : textSize === "xs" ? "smallest" : textSize === "xl" ? "largest" : textSize;
+  return (
+    <>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            disabled={atMin}
+            onClick={() => setTextSize(TEXT_SIZES[i - 1])}
+          >
+            <span aria-hidden className="text-[0.7rem] font-semibold leading-none">
+              A−
+            </span>
+            <span className="sr-only">Decrease text size</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {atMin
+            ? `Text size: ${label} — already the smallest`
+            : `Decrease text size (currently ${label})`}
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8"
+            disabled={atMax}
+            onClick={() => setTextSize(TEXT_SIZES[i + 1])}
+          >
+            <span aria-hidden className="text-[0.95rem] font-semibold leading-none">
+              A+
+            </span>
+            <span className="sr-only">Increase text size</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>
+          {atMax
+            ? `Text size: ${label} — already the largest`
+            : `Increase text size (currently ${label})`}
+        </TooltipContent>
+      </Tooltip>
+    </>
+  );
+}
+
 function DensityToggle() {
   const { density, setDensity } = useSettings();
   const next = DENSITIES[(DENSITIES.indexOf(density) + 1) % DENSITIES.length];
@@ -550,6 +613,8 @@ function SettingsMenu() {
     biometricAvailable,
     density,
     setDensity,
+    textSize,
+    setTextSize,
     translucentToolbar,
     setTranslucentToolbar,
     showCascadeConfidence,
@@ -603,7 +668,7 @@ function SettingsMenu() {
             variant="line"
             className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-sidebar !rounded-none !p-3"
           >
-            <div className="mb-1.5 px-2 text-[10.5px] font-medium uppercase tracking-wider text-sidebar-foreground/60">
+            <div className="mb-1.5 px-2 text-[calc(0.65625rem*var(--text-scale))] font-medium uppercase tracking-wider text-sidebar-foreground/60">
               TraceLoupe
             </div>
             {(
@@ -724,6 +789,23 @@ function SettingsMenu() {
                   <option value="comfortable">Comfortable</option>
                   <option value="cozy">Cozy</option>
                   <option value="compact">Compact</option>
+                </select>
+              </SettingsRow>
+              <SettingsRow
+                label="Text size"
+                description="Scales text only — row spacing and icons are Density's job."
+              >
+                <select
+                  value={textSize}
+                  onChange={(e) => setTextSize(e.target.value as TextSize)}
+                  aria-label="Text size"
+                  className="inline-flex h-8 items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <option value="xs">Smallest</option>
+                  <option value="sm">Smaller</option>
+                  <option value="md">Default</option>
+                  <option value="lg">Larger</option>
+                  <option value="xl">Largest</option>
                 </select>
               </SettingsRow>
               <SettingsRow

@@ -1221,7 +1221,7 @@ function SafetyReportDocument({
         : "text-muted-foreground";
 
   return (
-    <article className="safety-report-print mx-auto max-w-2xl space-y-9 text-[15px] leading-relaxed">
+    <article className="safety-report-print mx-auto max-w-2xl space-y-9 text-[calc(0.9375rem*var(--text-scale))] leading-relaxed">
       {/* Header */}
       <header className="space-y-1.5 border-b pb-5">
         <div className="flex items-center gap-2 text-xs font-medium tracking-wide text-muted-foreground uppercase">
@@ -1795,7 +1795,7 @@ function FindingsList({
                     <MessagesSquare className="size-3.5" />
                   )}
                   {r.name}
-                  <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                  <Badge variant="outline" className="px-1.5 py-0 text-[calc(0.625rem*var(--text-scale))]">
                     {r.count}
                   </Badge>
                 </div>
