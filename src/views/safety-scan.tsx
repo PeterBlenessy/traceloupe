@@ -312,7 +312,7 @@ export function SafetyScanView() {
   };
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col space-y-4 overflow-y-auto p-4">
         {!expDismissed && (
           <Alert>
             <ShieldUser className="size-4" />
@@ -497,7 +497,10 @@ export function SafetyScanView() {
           // scan's report + findings on the right. There is no "latest vs
           // history" split — the rail is the navigation, and everything on
           // the right belongs to the highlighted scan.
-          <div className="grid items-start gap-4 grid-cols-[420px_minmax(0,1fr)]">
+          // min-h-0 + flex-1 so this row takes exactly the height the window
+          // leaves below the cards above, and each column scrolls inside it —
+          // instead of a fixed-height list forcing the whole PAGE to scroll.
+          <div className="grid min-h-0 flex-1 gap-4 grid-cols-[420px_minmax(0,1fr)]">
             <ScanRail
               scans={scans}
               selectedId={selectedScan.id}
@@ -507,7 +510,7 @@ export function SafetyScanView() {
               running={running}
               onOpenReport={setReportScan}
             />
-            <div className="min-w-0 space-y-4">
+            <div className="flex min-h-0 min-w-0 flex-col space-y-4">
               {/* The report lives behind the history card's doc icon; the detail
                   side is just the findings. Rail selection handles navigation. */}
               {(findings.data?.length ?? 0) > 0 ? (
@@ -1487,6 +1490,10 @@ function FindingRow({
   };
   return (
     <div
+      // Density-aware: index.css overrides padding-block on this slot, which is
+      // how every other list row responds to the Density setting (#78). A
+      // hand-rolled row without it silently opts out.
+      data-slot="list-row"
       className={cn(
         "flex flex-col gap-1.5 rounded-md border px-3 py-2",
         f.dismissed && "opacity-55",
@@ -1681,8 +1688,8 @@ function FindingsList({
 
   if (findings.length === 0) return null;
   return (
-    <Card>
-      <CardHeader>
+    <Card className="flex min-h-0 flex-1 flex-col">
+      <CardHeader className="shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <CardTitle className="flex items-center gap-2">
@@ -1762,12 +1769,14 @@ function FindingsList({
           </div>
         )}
       </CardHeader>
-      <CardContent className="space-y-2">
+      <CardContent className="flex min-h-0 flex-1 flex-col space-y-2">
         {/* Virtualized (#61): only on-screen rows are mounted, so 8000+ findings
             cost the same as 20. Bounded height because this list lives inside a
             card on a scrolling page — VirtualList needs a scroll container of
             its own to size against. */}
-        <div className="flex h-[60vh] flex-col">
+        {/* Fills the card, which fills the grid row, which fills the window
+            (#79) — no fixed fraction, so a tall window shows more rows. */}
+        <div className="flex min-h-0 flex-1 flex-col">
           <VirtualList
             items={rows}
             estimateSize={72}
