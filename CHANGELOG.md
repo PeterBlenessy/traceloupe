@@ -13,6 +13,18 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.3] — 2026-07-25
+
+### Fixed
+
+- **Safety Scan's content filters are in the filter popover**, grouped under
+  **Content** the same way periods are grouped under **Time** — one pill per
+  message service in the backup (iMessage, SMS, TikTok, …) plus Notes. They were
+  a separate row of toggle chips beside the filter button, which is not where the
+  rest of the app puts its filters; selections now surface as removable chips on
+  the filter island like everywhere else.
+  ([#57](https://github.com/PeterBlenessy/traceloupe/issues/57))
+
 ## [0.31.2] — 2026-07-25
 
 ### Fixed
