@@ -36,9 +36,12 @@ fn chunk_token_budget(items: usize) -> u32 {
 pub struct ScanProgress {
     pub chunks_done: usize,
     pub chunks_total: usize,
-    /// Running tally for UI feedback. May briefly over-count a message flagged
-    /// by two overlapping windows; the final [`ScanOutcome::findings`] is the
-    /// exact row count.
+    /// Live findings in this scan's SCOPE — re-read from the DB after every
+    /// chunk, so it is exactly the number the Findings panel shows (#59): the
+    /// same scope predicate, minus dismissed and stale. Not a running tally, so
+    /// re-confirming an already-flagged item or two overlapping windows hitting
+    /// the same message can't inflate it, and a scan whose scope already holds
+    /// findings reports them from the first frame.
     pub findings: usize,
 }
 
@@ -53,7 +56,26 @@ pub struct ScanOutcome {
     pub reused: usize,
     /// Chunks the model failed on (recorded, scan continued).
     pub skipped: usize,
+    /// Live findings in the scan's scope at the end of the run — the same
+    /// number as [`ScanProgress::findings`] and the Findings panel.
     pub findings: usize,
+}
+
+/// A scan's scope — its sources slug and optional time range — as the Findings
+/// panel resolves it (from the scan row). Held for the length of the run so
+/// every progress tick can ask the DB the SAME question the panel asks.
+struct Scope {
+    sources: String,
+    start: Option<i64>,
+    end: Option<i64>,
+}
+
+impl Scope {
+    /// Live (non-dismissed, non-stale) findings in this scope — the one
+    /// definition of "findings" the UI shows.
+    fn count(&self, analysis: &AnalysisDb) -> Result<usize> {
+        analysis.count_findings_in_scope(&self.sources, self.start, self.end)
+    }
 }
 
 /// Chunk keys embed thread identifiers (phone numbers, emails). The audit log
@@ -172,6 +194,23 @@ pub fn run_scan(
         ),
     )?;
 
+    // The scope the Findings panel resolves for this scan — read from the scan
+    // row, exactly as `list_content_findings` does, so the live counter and the
+    // panel can't disagree (#59). The row was just written above; the passed
+    // arguments are only a defensive fallback.
+    let scope = match analysis.scan_by_id(scan_id)? {
+        Some(s) => Scope {
+            sources: s.sources,
+            start: s.range_start,
+            end: s.range_end,
+        },
+        None => Scope {
+            sources: sources_slug.clone(),
+            start: range.start,
+            end: range.end,
+        },
+    };
+
     let mut outcome = ScanOutcome {
         scan_id,
         status: ScanStatus::Completed,
@@ -179,18 +218,10 @@ pub fn run_scan(
         classified: 0,
         reused: 0,
         skipped: 0,
-        findings: 0,
-    };
-
-    // Seed the live findings tally with what the scan ALREADY has, so a resumed
-    // scan shows its existing findings from the first frame instead of counting
-    // up from zero (a fresh scan has none, so this is a no-op there). The
-    // engine's own `outcome.findings` only counts THIS run's new findings, so a
-    // wrapper adds the baseline to every emitted tally.
-    let base_findings = analysis.count_findings(scan_id)?;
-    let mut on_progress = move |mut p: ScanProgress| {
-        p.findings += base_findings;
-        on_progress(p);
+        // Not zero: a scan whose scope already contains findings (a re-scan, a
+        // resume, or another run that covered the same data) must report them
+        // from the very first frame, like the panel does.
+        findings: scope.count(analysis)?,
     };
 
     let loop_result = (|| -> Result<()> {
@@ -220,7 +251,7 @@ pub fn run_scan(
         on_progress(ScanProgress {
             chunks_done: outcome.reused,
             chunks_total: outcome.chunks_total,
-            findings: 0, // wrapper adds base_findings
+            findings: outcome.findings,
         });
 
         // Phase 1: sweep every pending chunk with the primary model.
@@ -229,6 +260,7 @@ pub fn run_scan(
             client,
             &pending,
             scan_id,
+            &scope,
             parallel,
             cancel,
             false,
@@ -275,6 +307,7 @@ pub fn run_scan(
                                 &strong,
                                 &todo,
                                 scan_id,
+                                &scope,
                                 parallel,
                                 cancel,
                                 true,
@@ -325,9 +358,9 @@ pub fn run_scan(
         return Err(e);
     }
 
-    // Overlapping windows can flag the same message twice in the running
-    // tally; the DB row count for this scan is the truth.
-    outcome.findings = analysis.count_scan_findings(scan_id)? as usize;
+    // Final value, same definition as every tick along the way: live findings
+    // in this scan's scope — what the Findings panel shows.
+    outcome.findings = scope.count(analysis)?;
     analysis.finish_scan(scan_id, outcome.status, now())?;
     analysis.audit(
         scan_id,
@@ -356,6 +389,7 @@ fn classify_batch(
     client: &LlmClient,
     pending: &[&Chunk],
     scan_id: i64,
+    scope: &Scope,
     parallel: usize,
     cancel: &CancelToken,
     recheck: bool,
@@ -410,13 +444,19 @@ fn classify_batch(
             let suffix = if recheck { "#recheck" } else { "" };
             match result {
                 Ok(output) => {
-                    let n = if recheck {
-                        persist_recheck(analysis, scan_id, chunk, &output)?
+                    if recheck {
+                        persist_recheck(analysis, scan_id, chunk, &output)?;
                     } else {
-                        persist_classified(analysis, scan_id, chunk, "", &output)?
-                    };
+                        persist_classified(analysis, scan_id, chunk, "", &output)?;
+                    }
                     outcome.classified += 1;
-                    outcome.findings += n;
+                    // Re-read rather than accumulate: the DB is the deduped
+                    // source of truth, so re-confirming an already-flagged item
+                    // (replace_findings transfers ownership) and two overlapping
+                    // windows hitting the same message both stop inflating the
+                    // number (#59). One indexed COUNT(*) per chunk, next to
+                    // ~a minute of inference.
+                    outcome.findings = scope.count(analysis)?;
                 }
                 Err(e) => {
                     // A failed re-check must NOT clear the sweep verdict — it
@@ -541,6 +581,7 @@ fn persist_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analysis::{Category, NewFinding, SourceKind};
     use rusqlite::params;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
@@ -978,6 +1019,70 @@ mod tests {
         .unwrap();
         assert_eq!(outcome.status, ScanStatus::Cancelled);
         assert_eq!(outcome.classified, 0);
+    }
+
+    #[test]
+    fn progress_counts_pre_existing_scope_findings_from_the_first_frame() {
+        // The reported symptom (#59): a new scan over content an EARLIER scan
+        // already flagged showed 0 in the progress bar while the Findings panel
+        // showed the pre-existing total, and the two then drifted further apart.
+        // Both must report the same number — live findings in scope — throughout.
+        let cache = small_cache(30);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+
+        // An earlier scan owns a finding that falls in the new scan's scope.
+        let prior = analysis.begin_scan("m", (None, None), "all", 10).unwrap();
+        analysis
+            .replace_findings(
+                prior,
+                &[NewFinding {
+                    source_kind: SourceKind::Message,
+                    source_id: Some(1),
+                    thread_identifier: Some("t".into()),
+                    occurred_at: Some(1_000),
+                    fingerprint: "pre-existing".into(),
+                    category: Category::ScamFraud,
+                    severity: 2,
+                    rationale: "earlier run".into(),
+                    service: Some("iMessage".into()),
+                }],
+                11,
+            )
+            .unwrap();
+        analysis
+            .finish_scan(prior, ScanStatus::Completed, 12)
+            .unwrap();
+
+        let content = serde_json::json!({ "verdicts": [] });
+        let (base, _hits) = mock_server(vec![envelope(&content)]);
+        let mut seen: Vec<usize> = Vec::new();
+        let outcome = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            None,
+            &CancelToken::new(),
+            |p| seen.push(p.findings),
+        )
+        .unwrap();
+
+        // Every frame — including the first — sees the pre-existing finding,
+        // because the new scan's scope covers it. Previously these were 0.
+        assert!(!seen.is_empty(), "expected progress frames");
+        assert!(
+            seen.iter().all(|&n| n == 1),
+            "every frame must report the in-scope total, got {seen:?}",
+        );
+        // And the terminal count agrees with the panel's definition.
+        assert_eq!(outcome.findings, 1);
+        assert_eq!(
+            outcome.findings,
+            analysis.count_findings_in_scope("all", None, None).unwrap(),
+        );
     }
 
     #[test]
