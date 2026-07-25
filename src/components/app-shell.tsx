@@ -1099,7 +1099,7 @@ function LogFileSettings() {
     <>
       <SettingsRow
         label="Write logs to a file"
-        description="Also append log records to a file on disk. Off by default."
+        description="Also append log records to a file on disk."
       >
         <Switch
           checked={enabled}
