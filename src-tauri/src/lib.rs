@@ -2584,17 +2584,6 @@ async fn list_installed_apps(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-async fn list_media(active: State<'_, ActiveBackup>) -> Result<Vec<MediaItem>, String> {
-    let path = active.path()?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::list_media(&cache).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 /// (source label, count) pairs for the gallery's source filter.
 #[tauri::command]
 async fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, String> {
@@ -4039,7 +4028,6 @@ pub fn run() {
             list_contacts,
             list_installed_apps,
             get_app_icons,
-            list_media,
             media_sources,
             count_media,
             count_media_ranges,
