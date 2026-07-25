@@ -39,7 +39,7 @@ export type Activity = {
   key: string;
   /** Short label, e.g. "Safety Scan". */
   title: string;
-  /** What it's doing right now, e.g. "Scanning · 120/400". */
+  /** What it's doing right now, e.g. "Scanning · 38%". */
   detail: string;
   /** 0–100 when known; null for indeterminate phases (model loading, verifying). */
   percent: number | null;
@@ -62,7 +62,10 @@ function useActivities(): Activity[] {
         : scan.phase === "summarizing"
           ? "Writing report…"
           : scan.phase === "classifying" && scan.total > 0
-            ? `Scanning · ${scan.done}/${scan.total}`
+            ? // Percentage, matching what the Safety Scan view itself shows —
+              // the chunk count is an internal unit and means nothing to a
+              // reader glancing at the toolbar.
+              `Scanning · ${Math.round((scan.done / scan.total) * 100)}%`
             : "Scanning…";
     out.push({
       key: "safety-scan",

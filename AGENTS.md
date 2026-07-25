@@ -194,6 +194,35 @@ Anything else deferred is an unfinished task, not a status update. Say which of
 the two applies, specifically. If scope must shrink, finish everything else in
 full and state exactly what was left and why.
 
+## Background work must outlive the UI
+
+**Anything that outlives a single command call needs a status snapshot and a
+mount-time re-attach. The UI must never be the only place its state exists.**
+
+Work that runs in the Rust process — a scan, an import, a download — survives a
+webview reload. The React state describing it does not. Without a way to
+re-attach, a reload leaves an idle-looking UI over work that is still running,
+and any gate around that work then rejects the user's retry while the original
+is still going.
+
+This was found the hard way five times (#69, #72): Safety Scan, import,
+re-import and Security Check all shipped without it; only the model download had
+it, and its own comment explained exactly why. So, for any new background job:
+
+1. **Snapshot its last progress** in managed state (`Mutex<Option<Event>>`), and
+   expose a `get_*_status` command.
+2. **One helper owns both the emit and the snapshot.** They must not be updated
+   separately — a snapshot maintained at only *some* emit sites is worse than
+   none, because the UI then re-attaches to a stale phase. Security Check had
+   four emit sites for one event; Safety Scan had six.
+3. **Clear it on every exit path.** Use an RAII guard when the command has
+   several `?` returns — scattered clear calls eventually miss one and strand
+   finished work in the UI.
+4. **Re-attach on mount** in the provider, then subscribe — sharing one
+   subscribe function with the start path so both attach the same listener.
+5. **Surface it in the toolbar activity indicator** (`activity-indicator.tsx`) by
+   adding an entry to `useActivities` — not another toolbar pill.
+
 ## Finishing up
 
 - Open a PR (or hand off) once CI-clean and the branch is pushed.
