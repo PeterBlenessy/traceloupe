@@ -3832,6 +3832,7 @@ pub fn run() {
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
             safety_scan_cmd::get_safety_scan_report,
+            safety_scan_cmd::generate_thread_summary,
             safety_scan_cmd::list_safety_scans,
             safety_scan_cmd::delete_safety_scan,
             theme::get_system_accent_color

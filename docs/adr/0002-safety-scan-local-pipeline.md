@@ -73,7 +73,34 @@ scratch-redirect is the mitigation).
   accepted for v1 — output is local and display-only.
 - **The Scan report is a current-state report**: it summarizes all live
   (non-dismissed, non-stale) findings — the same state the findings UI shows —
-  not only rows written by the triggering run.
+  not only rows written by the triggering run. *(Superseded 2026-07-25: the
+  report is scoped to the scan's OWN sources and range, so it agrees with the
+  scan card beside it — see the amendment below.)*
+
+## Amendments (2026-07-25 — summary cost and scope)
+
+- **Report scope follows the scan, not the store.** `run_summaries` summarizes
+  `list_findings_in_scope(sources, range)` for the scan's own scope, the same
+  predicate the card and findings list use. Summarizing every scan's findings
+  made a notes-only re-scan narrate message findings from an earlier run.
+- **Summaries are cached by a digest of their findings.** A sha256 over
+  (fingerprint, category, severity, thread, timestamp) keys each stored summary,
+  so a re-scan that changed nothing reuses the text and spends no model calls.
+- **Per-thread prose is bounded at scan end, then on demand.** Only the top
+  `EAGER_THREAD_SUMMARIES` (5) threads by peak severity get model prose while the
+  sidecar is warm; the rest are generated when the reader opens them.
+  **Sidecar lifecycle is deliberately unchanged** — the two alternatives were
+  rejected:
+  - *Warm-server reuse* (hold the sidecar for an idle window after a scan) would
+    keep 4–5 GB resident for a 250-token call that may never come, and adds
+    lifecycle code with no bound on when it ends.
+  - *Spawn on demand* would cost 30–180 s of model load for one short summary.
+
+  Instead, on-demand generation uses the model **only if a scan's server happens
+  to be live**, and otherwise returns the deterministic, findings-derived
+  summary — instant, factual, and labelled as such in the UI so it is never
+  passed off as the classifier's own wording. This is what makes "no model
+  loaded" a normal state rather than an error, and needs no new lifecycle.
 
 ## Consequences
 
