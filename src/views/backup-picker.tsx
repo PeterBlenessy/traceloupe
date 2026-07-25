@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -21,6 +21,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { client, type BackupInfo } from "@/lib/ipc";
 import { useImport } from "@/components/import-provider";
+import {
+  openPerfEnd,
+  openPerfInFlight,
+  openPerfPhase,
+  openPerfStart,
+} from "@/lib/open-perf";
 import { modelName } from "@/lib/device-names";
 import { formatDateTime } from "@/lib/format";
 
@@ -52,7 +58,10 @@ export function BackupPicker() {
   async function handleOpen(b: BackupInfo) {
     if (imported.has(b.id)) {
       try {
+        // Time the whole open in devtools (#40) — filter by [open-perf].
+        openPerfStart(b.deviceName ?? b.id);
         await client.openBackup(b.id);
+        openPerfPhase("openBackup IPC (Keychain + key ladder + cache open)");
         // Mark active optimistically before invalidating (queries are
         // staleTime: Infinity), so the target view doesn't read a stale
         // `hasActiveBackup: false` and bounce back to the picker.
@@ -68,8 +77,10 @@ export function BackupPicker() {
         // are applied synchronously) and each view shows its own loading state
         // while its data lands. Matches what import-provider already does.
         void qc.invalidateQueries();
+        openPerfPhase("invalidate queries (fired, not awaited)");
         // Land on `/` — now the Device view for the freshly opened backup.
         navigate({ to: "/" });
+        openPerfPhase("navigate to landing");
       } catch (e) {
         toast.error("Couldn't open backup", {
           description: e instanceof Error ? e.message : String(e),
@@ -237,6 +248,11 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
     queryKey: ["deviceInfo"],
     queryFn: () => client.deviceInfo(),
   });
+  // Close out the open-perf trace when the landing view actually has its data —
+  // that's the moment the app is usable, which is what #40 is about.
+  useEffect(() => {
+    if (info !== undefined && openPerfInFlight()) openPerfEnd();
+  }, [info]);
   const model = modelName(info?.productType ?? null);
   const subtitle =
     [model, info?.productVersion ? `iOS ${info.productVersion}` : null]
