@@ -922,8 +922,8 @@ function ScanRail({
   }, [visible, selectedId, onSelect]);
 
   return (
-    <Card className="gap-3">
-      <CardHeader>
+    <Card className="flex h-full min-h-0 flex-col gap-3">
+      <CardHeader className="shrink-0">
         <CardTitle className="flex items-center gap-2 text-sm">
           <History className="size-4" /> Scan history
         </CardTitle>
@@ -975,7 +975,10 @@ function ScanRail({
           />
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-1.5">
+      {/* Scrolls inside the card rather than growing the page: this list gains a
+          row per scan and never sheds one, so it is unbounded in principle (#67).
+          Sized by the grid row, which is sized by the window (#79). */}
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">No scans match.</p>
         )}
