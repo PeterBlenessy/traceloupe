@@ -1127,6 +1127,34 @@ mod tests {
     // Kept next to the other migration-sensitive tests: every shipped DB is at
     // an older user_version, so the ALTER path — not the fresh CREATE — is what
     // real users run.
+    /// How large a findings payload actually gets, for the IPC audit (#65).
+    /// Ignored: a measurement, not an assertion. Run with:
+    ///
+    /// ```text
+    /// cargo test -p traceloupe-core findings_payload_size -- --ignored --nocapture
+    /// ```
+    ///
+    /// Synthetic rows sized like real ones (a sentence-length rationale) — no
+    /// real backup involved.
+    #[test]
+    #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
+    fn findings_payload_size_by_count() {
+        for n in [100usize, 1_000, 8_000] {
+            // Approximate the JSON the command serialises: the DTO's fields with
+            // realistic lengths. Rationale dominates, so model it honestly.
+            let per_row = format!(
+                r#"{{"id":123456,"sourceKind":"message","sourceId":987654,"threadId":4242,"threadIdentifier":"+46701234567","service":"iMessage","occurredAt":1700000000,"fingerprint":"{}","category":"harassment-bullying","severity":2,"rationale":"{}","stale":false,"dismissed":false,"rechecked":true}}"#,
+                "a".repeat(64),
+                "Repeated insults directed at the recipient over several messages.",
+            );
+            let bytes = per_row.len() * n + n; // + separators
+            println!(
+                "findings payload: {n} findings -> ~{:.1} KB of JSON",
+                bytes as f64 / 1024.0
+            );
+        }
+    }
+
     #[test]
     fn v5_database_upgrades_and_keeps_its_summaries() {
         use rusqlite::Connection;
