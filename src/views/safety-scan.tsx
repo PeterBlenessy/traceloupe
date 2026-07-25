@@ -42,6 +42,7 @@ import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { FilterControl } from "@/components/filter-control";
+import { VirtualList } from "@/components/virtual-list";
 import { badgeGroup, multiBadgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
@@ -1173,9 +1174,19 @@ function SafetyReportDocument({
     const first = t.participants[0];
     return first ? (resolve(first)?.name ?? first) : identifier;
   };
-  const live = findings.filter((f) => !f.dismissed && !f.stale);
+  const allLive = findings.filter((f) => !f.dismissed && !f.stale);
+  // The report is a readable/printable DOCUMENT, so unlike the findings list it
+  // can't be virtualized without breaking print and PDF export — every row has
+  // to exist in the DOM at once. So it is BOUNDED instead (#61): rendering ~8000
+  // findings here froze the machine. Severity-ordered, so the cap keeps the most
+  // serious; the shortfall is stated in the document rather than hidden.
+  const REPORT_FINDINGS_CAP = 500;
+  const live = allLive.slice(0, REPORT_FINDINGS_CAP);
+  const omittedFromReport = allLive.length - live.length;
   // Verbatim flagged text is included ONLY when the user opts in (Settings →
   // Safety → Report). Fetched on demand per finding, never stored (ADR 0002).
+  // Bounded by the cap above: this is one IPC round trip PER finding, so before
+  // the cap an 8000-finding report fired ~8000 `invoke` calls on open.
   const snippetQueries = useQueries({
     queries: includeReportSnippets
       ? live.map((f) => ({
@@ -1226,7 +1237,7 @@ function SafetyReportDocument({
       <section className="grid grid-cols-4 gap-3 text-center">
         {(
           [
-            ["Findings", live.length, ""],
+            ["Findings", allLive.length, ""],
             ["Serious", scan.serious, sev(3)],
             ["Harmful", scan.harmful, sev(2)],
             ["Concerning", scan.concerning, sev(1)],
@@ -1258,14 +1269,14 @@ function SafetyReportDocument({
         </h2>
         {report?.report ? (
           <p className="leading-relaxed">{report.report}</p>
-        ) : live.length === 0 ? (
+        ) : allLive.length === 0 ? (
           <p className="text-muted-foreground">
             Nothing was flagged in this scan's scope. A clean scan is a review aid,
             not a guarantee — spot-check important conversations yourself.
           </p>
         ) : (
           <p className="text-muted-foreground">
-            {live.length} finding{live.length === 1 ? "" : "s"} across{" "}
+            {allLive.length} finding{allLive.length === 1 ? "" : "s"} across{" "}
             {groups.length} conversation{groups.length === 1 ? "" : "s"} — see the
             breakdown below.
           </p>
@@ -1273,6 +1284,14 @@ function SafetyReportDocument({
       </section>
 
       {/* Per conversation */}
+      {omittedFromReport > 0 && (
+        <p className="text-sm text-muted-foreground">
+          Listing the {live.length} most serious findings below.{" "}
+          {omittedFromReport} lower-severity finding
+          {omittedFromReport === 1 ? " is" : "s are"} counted in the totals above
+          but not listed individually — open the Findings list to review them all.
+        </p>
+      )}
       {groups.length > 0 && (
         <section className="space-y-5">
           <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
@@ -1641,6 +1660,25 @@ function FindingsList({
     return [...map.entries()];
   }, [grouped, visible]);
 
+  // ONE flat row array for the virtualizer (#61). Grouping used to nest
+  // `groups.map(rows.map(...))`, which — like the ungrouped `visible.map(...)`
+  // — mounted every finding at once: ~8000 findings drove the WebKit render
+  // process to 99% CPU and 3.1 GB and froze the machine. Flattening group
+  // headers and findings into a single list lets VirtualList mount only what's
+  // on screen, exactly as every other list view in the app does.
+  type Row =
+    | { kind: "header"; name: string; count: number }
+    | { kind: "finding"; f: ContentFinding };
+  const rows = useMemo<Row[]>(() => {
+    if (!groups) return visible.map((f) => ({ kind: "finding" as const, f }));
+    const out: Row[] = [];
+    for (const [name, items] of groups) {
+      out.push({ kind: "header", name, count: items.length });
+      for (const f of items) out.push({ kind: "finding", f });
+    }
+    return out;
+  }, [groups, visible]);
+
   if (findings.length === 0) return null;
   return (
     <Card>
@@ -1725,36 +1763,41 @@ function FindingsList({
         )}
       </CardHeader>
       <CardContent className="space-y-2">
-        {groups
-          ? groups.map(([name, rows]) => (
-              <div key={name} className="space-y-1.5">
-                <div className="flex items-center gap-2 pt-1 text-xs font-medium text-muted-foreground">
-                  {name === "Notes" ? (
+        {/* Virtualized (#61): only on-screen rows are mounted, so 8000+ findings
+            cost the same as 20. Bounded height because this list lives inside a
+            card on a scrolling page — VirtualList needs a scroll container of
+            its own to size against. */}
+        <div className="flex h-[60vh] flex-col">
+          <VirtualList
+            items={rows}
+            estimateSize={72}
+            getKey={(r, i) =>
+              r.kind === "header" ? `h:${r.name}` : `${r.f.fingerprint}:${r.f.category}:${i}`
+            }
+            renderItem={(r) =>
+              r.kind === "header" ? (
+                <div className="flex items-center gap-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+                  {r.name === "Notes" ? (
                     <NotebookText className="size-3.5" />
                   ) : (
                     <MessagesSquare className="size-3.5" />
                   )}
-                  {name}
+                  {r.name}
                   <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                    {rows.length}
+                    {r.count}
                   </Badge>
                 </div>
-                {rows.map((f) => (
+              ) : (
+                <div className="pb-1.5">
                   <FindingRow
-                    key={`${f.fingerprint}:${f.category}`}
-                    finding={f}
-                    onDismiss={(d) => onDismiss(f, d)}
+                    finding={r.f}
+                    onDismiss={(d) => onDismiss(r.f, d)}
                   />
-                ))}
-              </div>
-            ))
-          : visible.map((f) => (
-              <FindingRow
-                key={`${f.fingerprint}:${f.category}`}
-                finding={f}
-                onDismiss={(d) => onDismiss(f, d)}
-              />
-            ))}
+                </div>
+              )
+            }
+          />
+        </div>
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">
             No findings match the current filter.
