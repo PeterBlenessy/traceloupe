@@ -13,6 +13,18 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.5] — 2026-07-25
+
+### Fixed
+
+- **A running scan is no longer lost by the window reloading.** Scan progress
+  lived only in the interface, so anything that reloaded it — a crash, a manual
+  refresh, the window recovering itself — left an idle "Start safety scan" over a
+  scan that was still running for hours underneath. The interface now re-attaches
+  to whatever is in flight and picks its progress back up, the same way an
+  in-progress model download already did.
+  ([#69](https://github.com/PeterBlenessy/traceloupe/issues/69))
+
 ## [0.31.4] — 2026-07-25
 
 ### Fixed
