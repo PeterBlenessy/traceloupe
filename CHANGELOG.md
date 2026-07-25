@@ -13,6 +13,46 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.2] — 2026-07-25
+
+### Fixed
+
+- **Opening a backup crashed the view** to the error boundary with "Rendered
+  fewer hooks than expected". The backup picker returned the Device home early,
+  above two of its own hooks, so the render right after a backup opened called
+  fewer hooks than the one before it. Introduced in 0.31.1 with the unified
+  Device home.
+  ([#54](https://github.com/PeterBlenessy/traceloupe/pull/54))
+- **Opening a backup is now ~100 ms instead of ~4 s.** The open was waiting on
+  the backup's decryption keys — which is mostly a macOS Keychain dialog, i.e.
+  unbounded human time. Browsing only needs the parsed cache, so keys now warm up
+  in the background (routed through the existing lock, so nothing derives twice
+  or prompts for Touch ID twice). The picker also stopped awaiting a full query
+  refetch round before navigating. Per-phase timings are logged permanently —
+  `[traceloupe]` for the Rust phases (debug level), `[open-perf]` for the
+  frontend — with any phase that can block on a person labelled as user time.
+  ([#40](https://github.com/PeterBlenessy/traceloupe/issues/40))
+- **The Safety Scan report matches the scan it belongs to.** It described every
+  live finding in the store, so a notes-only re-scan could narrate message
+  findings from an earlier run; it now covers the scan's own sources and time
+  range, the same scope its card and findings list use.
+  ([#43](https://github.com/PeterBlenessy/traceloupe/issues/43))
+
+### Changed
+
+- **Re-scanning no longer re-writes summaries that haven't changed.** Each
+  summary is keyed by a digest of the findings behind it, so a scan that added
+  nothing reuses the text and spends no model calls at all.
+  ([#43](https://github.com/PeterBlenessy/traceloupe/issues/43))
+- **Per-conversation summaries are written on demand.** A scan used to spend one
+  model call per flagged conversation at the end — 40 flagged conversations meant
+  40 calls, most never read. Now the most severe few are written while the model
+  is still warm, and the rest are summarized when you open them, with a
+  "Summarize this conversation" action. With no model loaded you still get an
+  immediate factual summary built from the findings, labelled as such rather than
+  passed off as the classifier's own wording.
+  ([#18](https://github.com/PeterBlenessy/traceloupe/issues/18))
+
 ## [0.31.1] — 2026-07-24
 
 ### Changed
