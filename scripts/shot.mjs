@@ -38,6 +38,9 @@ const NAV = {
   "/calls": "Calls", "/safari": "Safari", "/notes": "Notes",
   "/recordings": "Recordings", "/calendar": "Calendar", "/reminders": "Reminders",
   "/health": "Health", "/interactions": "Interactions", "/apps": "Apps", "/device": "Device",
+  // The two scan views were missing, which meant the screenshot harness could
+  // not reach precisely the views most often being changed.
+  "/security": "Security", "/safety-scan": "Safety",
 };
 
 if (process.env.ACTIVATE) {
@@ -52,6 +55,14 @@ if (process.env.ACTIVATE) {
   await page.waitForTimeout(1400);
   for (const route of routes) {
     if (NAV[route]) await page.getByRole("link", { name: NAV[route], exact: true }).click().catch(() => {});
+    await page.waitForTimeout(500);
+    // Dismiss a first-run consent dialog if the view shows one (Security does),
+    // otherwise it covers the very layout we are trying to capture.
+    await page
+      .getByRole("button", { name: /^(Not now|Dismiss|Close)$/ })
+      .first()
+      .click({ timeout: 1200 })
+      .catch(() => {});
     await setTheme();
     await page.waitForTimeout(700);
     const name = route.replace(/\//g, "_").replace(/^_/, "") + `.${THEME}.png`;
