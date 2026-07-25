@@ -568,6 +568,32 @@ mod tests {
     use aes::Aes256;
     use cbc::cipher::BlockEncryptMut;
 
+    /// What the backup key ladder costs at representative keybag iteration
+    /// counts — the input to "must this block the first paint?" (#40). Ignored by
+    /// default: a measurement, not an assertion. Run with:
+    ///
+    /// ```text
+    /// cargo test -p traceloupe-core key_ladder_cost -- --ignored --nocapture
+    /// ```
+    ///
+    /// Iteration counts are the ones iOS keybags carry (DPIC/ITER), used here as
+    /// plain parameters — no real backup or keybag is read.
+    #[test]
+    #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
+    fn key_ladder_cost_by_iteration_count() {
+        for (dpic, iter) in [(10_000u32, 10_000u32), (50_000, 10_000), (200_000, 10_000)] {
+            let started = std::time::Instant::now();
+            // The same two-stage ladder as BackupKeybag::unwrap_class_keys:
+            // k0 = PBKDF2-SHA256(password, DPSL, DPIC), KEK = PBKDF2-SHA1(k0, SALT, ITER).
+            let k0 = pbkdf2_hmac_array::<Sha256, 32>(b"correct horse", &[7u8; 32], dpic);
+            let _kek = pbkdf2_hmac_array::<Sha1, 32>(&k0, &[9u8; 20], iter);
+            println!(
+                "key ladder: DPIC={dpic} ITER={iter} -> {:?}",
+                started.elapsed()
+            );
+        }
+    }
+
     #[test]
     fn note_ladder_round_trips_and_rejects_wrong_password() {
         use aes::cipher::generic_array::GenericArray;

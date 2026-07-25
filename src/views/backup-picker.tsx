@@ -59,7 +59,15 @@ export function BackupPicker() {
         qc.setQueryData(["hasActiveBackup"], true);
         // Drop any cached artifact data from a previously-open backup; with
         // staleTime: Infinity it would otherwise persist across backups.
-        await qc.invalidateQueries();
+        //
+        // NOT awaited (#40): invalidateQueries' promise resolves only once every
+        // active query has REFETCHED, so awaiting it held the user on the picker
+        // through a full round of backend queries — seconds on a large backup —
+        // before the view even changed. Firing it and navigating immediately is
+        // just as correct (the invalidation is already registered, and the marks
+        // are applied synchronously) and each view shows its own loading state
+        // while its data lands. Matches what import-provider already does.
+        void qc.invalidateQueries();
         // Land on `/` — now the Device view for the freshly opened backup.
         navigate({ to: "/" });
       } catch (e) {
