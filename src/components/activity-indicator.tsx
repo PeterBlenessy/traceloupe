@@ -31,6 +31,8 @@ import {
 } from "@/components/ui/tooltip";
 import { useImport } from "@/components/import-provider";
 import { useSafetyScan } from "@/components/safety-scan-provider";
+import { useSecurityScan } from "@/components/security-scan-provider";
+import { useReimport } from "@/components/reimport-provider";
 
 /** One thing the app is doing, as the toolbar needs to show it. */
 export type Activity = {
@@ -49,6 +51,8 @@ export type Activity = {
 function useActivities(): Activity[] {
   const { scan, download, downloadingModelId } = useSafetyScan();
   const { active: importing } = useImport();
+  const { progress: security } = useSecurityScan();
+  const { running: reimporting } = useReimport();
   const out: Activity[] = [];
 
   if (scan) {
@@ -115,6 +119,32 @@ function useActivities(): Activity[] {
       title: `Importing ${importing.backup.deviceName ?? "backup"}`,
       detail,
       percent,
+      to: "/",
+    });
+  }
+
+  if (security) {
+    out.push({
+      key: "security-scan",
+      title: "Security Check",
+      detail:
+        security.total > 0
+          ? `${security.module} · ${security.index}/${security.total}`
+          : security.module,
+      percent:
+        security.total > 0 ? (security.index / security.total) * 100 : null,
+      to: "/security",
+    });
+  }
+
+  // Re-imports have no progress events — only which modules are in flight — so
+  // they list without a bar rather than with a fabricated one.
+  for (const module of reimporting) {
+    out.push({
+      key: `reimport:${module}`,
+      title: "Re-importing",
+      detail: module,
+      percent: null,
       to: "/",
     });
   }

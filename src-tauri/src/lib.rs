@@ -809,8 +809,8 @@ async fn run_passive_check_if_consented(app: &AppHandle, cache_path: &Path) {
             info.generated_at_unix(),
             &CancelToken::new(),
             |module, index, total| {
-                let _ = app2.emit(
-                    "scan://progress",
+                emit_security_progress(
+                    &app2,
                     ScanProgress {
                         module: module.to_string(),
                         index,
@@ -1086,6 +1086,19 @@ async fn reimport_module(
         return Err(format!("'{module_id}' can't be re-imported on its own"));
     }
     let label = reimport_label(&module_id);
+    // Register this module as in-flight so a reloaded UI (and the activity pill)
+    // can see it; the guard deregisters it however this returns.
+    if let Some(state) = app.try_state::<ReimportStatus>() {
+        state
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(module_id.clone());
+    }
+    let _status_guard = ReimportStatusGuard {
+        app: app.clone(),
+        module: module_id.clone(),
+    };
     // Serialize re-imports: a second one waits here until the first finishes, so
     // they never contend on the cache writer or the shared manifest temp file.
     logging::info(&app, format!("\u{25b6} Re-importing {label}\u{2026}"));
@@ -1249,6 +1262,81 @@ struct ScanProgress {
     total: usize,
 }
 
+/// The last `scan://progress` payload, or None when no security scan is running.
+///
+/// Security scans run in the Rust process and survive a webview reload; this is
+/// what lets the UI re-attach afterwards, and what lets the toolbar's activity
+/// pill show a scan the user has navigated away from (#72, #73).
+#[derive(Default)]
+struct SecurityScanStatus(std::sync::Arc<Mutex<Option<ScanProgress>>>);
+
+/// Emit security-scan progress AND record it as the re-attach snapshot. One
+/// helper for all four emit sites, so the snapshot cannot drift from what the UI
+/// was last told.
+fn emit_security_progress(app: &AppHandle, progress: ScanProgress) {
+    if let Some(state) = app.try_state::<SecurityScanStatus>() {
+        *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(progress.clone());
+    }
+    let _ = app.emit("scan://progress", progress);
+}
+
+/// Clear the security-scan snapshot — every path that ends a scan calls this, so
+/// a reloaded UI never shows a scan that already finished.
+fn clear_security_status(app: &AppHandle) {
+    if let Some(state) = app.try_state::<SecurityScanStatus>() {
+        *state.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// Re-attach to an in-flight security scan after the frontend lost its state.
+#[tauri::command]
+fn get_security_scan_status(status: State<'_, SecurityScanStatus>) -> Option<ScanProgress> {
+    status.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Which modules are re-importing right now, so the UI can re-attach and the
+/// activity pill can list them (#72, #73).
+#[derive(Default)]
+struct ReimportStatus(std::sync::Arc<Mutex<std::collections::BTreeSet<String>>>);
+
+#[tauri::command]
+fn get_reimport_status(status: State<'_, ReimportStatus>) -> Vec<String> {
+    status
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect()
+}
+
+/// Clears the security-scan snapshot on EVERY exit path — the command has many
+/// `?` returns, and a guard covers all of them (plus panics) where scattered
+/// clear calls would eventually miss one and strand a finished scan in the UI.
+struct SecurityScanStatusGuard(AppHandle);
+impl Drop for SecurityScanStatusGuard {
+    fn drop(&mut self) {
+        clear_security_status(&self.0);
+    }
+}
+
+/// Same, per re-imported module.
+struct ReimportStatusGuard {
+    app: AppHandle,
+    module: String,
+}
+impl Drop for ReimportStatusGuard {
+    fn drop(&mut self) {
+        if let Some(state) = self.app.try_state::<ReimportStatus>() {
+            state
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&self.module);
+        }
+    }
+}
+
 /// Summary returned when a scan finishes.
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1320,6 +1408,8 @@ async fn run_security_scan(
         "passive" => ScanKind::Passive,
         _ => return Err(format!("unknown scan kind '{kind}'")),
     };
+    // Snapshot lives for the scan; the guard clears it however this returns.
+    let _status_guard = SecurityScanStatusGuard(app.clone());
     let _gate = scan_gate.0.lock().await;
     let cache_path = active.path()?;
 
@@ -1334,8 +1424,8 @@ async fn run_security_scan(
             let bundled2 = bundled.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
                 indicators::fetch_snapshot(&bundled2, &dest, |file, i, n| {
-                    let _ = app2.emit(
-                        "scan://progress",
+                    emit_security_progress(
+                        &app2,
                         ScanProgress {
                             module: format!("updating indicators: {file}"),
                             index: i,
@@ -1548,8 +1638,8 @@ async fn run_security_scan(
             info.generated_at_unix(),
             &cancel,
             |module, index, total| {
-                let _ = app_progress.emit(
-                    "scan://progress",
+                emit_security_progress(
+                    &app_progress,
                     ScanProgress {
                         module: module.to_string(),
                         index,
@@ -1681,8 +1771,8 @@ async fn update_indicators(
     let app2 = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         indicators::fetch_snapshot(&bundled, &dest, |file, i, n| {
-            let _ = app2.emit(
-                "scan://progress",
+            emit_security_progress(
+                &app2,
                 ScanProgress {
                     module: format!("updating indicators: {file}"),
                     index: i,
@@ -3827,6 +3917,8 @@ pub fn run() {
         .manage(safety_scan_cmd::SafetyDownloadStatus::default())
         .manage(safety_scan_cmd::SafetyScanStatus::default())
         .manage(ImportStatus::default())
+        .manage(SecurityScanStatus::default())
+        .manage(ReimportStatus::default())
         // Asynchronous protocols: the handlers decrypt bytes and shell out to
         // `sips` to render/downscale images. On the *synchronous* scheme that
         // runs on the main thread, so scrolling a timeline or gallery full of
@@ -3992,6 +4084,8 @@ pub fn run() {
             logging::log_file_path,
             logging::reveal_log_file,
             get_import_status,
+            get_security_scan_status,
+            get_reimport_status,
             safety_scan_cmd::get_safety_scan_status,
             safety_scan_cmd::get_safety_scan_report,
             safety_scan_cmd::generate_thread_summary,

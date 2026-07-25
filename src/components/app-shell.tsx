@@ -46,6 +46,7 @@ import {
 } from "@/components/ui/sidebar";
 import { DeviceHero } from "@/components/device-hero";
 import { ActivityIndicator } from "@/components/activity-indicator";
+import { SecurityScanProvider } from "@/components/security-scan-provider";
 import {
   SettingsDialogProvider,
   useSettingsDialog,
@@ -166,6 +167,7 @@ export function AppShell() {
     <ImportProvider>
       <ReimportProvider>
        <SafetyScanProvider>
+       <SecurityScanProvider>
        <SettingsDialogProvider>
        <ToolbarProvider>
         {/* h-svh pins the app to a FIXED viewport height. shadcn's SidebarProvider
@@ -296,6 +298,7 @@ export function AppShell() {
         </SidebarProvider>
        </ToolbarProvider>
        </SettingsDialogProvider>
+       </SecurityScanProvider>
        </SafetyScanProvider>
       </ReimportProvider>
     </ImportProvider>
