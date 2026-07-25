@@ -13,6 +13,14 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.7] — 2026-07-25
+
+### Changed
+
+- **The activity indicator shows a Safety Scan's progress as a percentage**
+  rather than a chunk count, matching what the Safety Scan view itself shows.
+  ([#73](https://github.com/PeterBlenessy/traceloupe/issues/73))
+
 ## [0.31.6] — 2026-07-25
 
 ### Added
