@@ -448,6 +448,8 @@ function RunRail({
         {visible.map((r) => (
           <div
             key={r.id}
+            // Density-aware, like every other list row in the app (#78).
+            data-slot="list-row"
             role="button"
             tabIndex={0}
             aria-current={r.id === selectedId}
@@ -634,6 +636,7 @@ function ResultSummary({
               {findings.map((f) => (
                 <tr
                   key={f.id}
+                  data-slot="list-row"
                   className="cursor-pointer border-t hover:bg-accent/50"
                   onClick={() => onSelect(f)}
                 >
@@ -748,7 +751,11 @@ function ShortLinkExpander({ text }: { text: string }) {
         Shortened links
       </span>
       {links.data.map((url) => (
-        <div key={url} className="flex flex-col gap-1 rounded-md border p-2">
+        <div
+          key={url}
+          data-slot="list-row"
+          className="flex flex-col gap-1 rounded-md border p-2"
+        >
           <span className="break-all font-mono text-xs">{url}</span>
           {results[url] ? (
             <span className="break-all text-xs">
