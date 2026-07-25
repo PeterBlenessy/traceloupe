@@ -42,7 +42,7 @@ import { SettingsLink } from "@/components/settings-dialog-context";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { FilterControl } from "@/components/filter-control";
-import { badgeGroup, timeGroup } from "@/components/filter-groups";
+import { badgeGroup, multiBadgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import {
@@ -359,8 +359,9 @@ export function SafetyScanView() {
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap items-center gap-3">
-                {/* Time range left of the button (same row); the Filter popover
-                    morphs rightward so it opens into the card, not the sidebar. */}
+                {/* Scope (Content + Time) sits left of the Start button on the
+                    same row; the Filter popover morphs rightward so it opens
+                    into the card, not the sidebar. */}
                 <div
                   className={cn(
                     "flex items-center gap-2",
@@ -370,46 +371,50 @@ export function SafetyScanView() {
                   <Label className="text-xs text-muted-foreground">
                     Scan
                   </Label>
-                  {/* Content sources: the real message services in this backup +
-                      Notes, multi-select. All picked = scan everything. */}
-                  {sourceTokens.length > 0 && (
-                    <ToggleGroup
-                      type="multiple"
-                      variant="outline"
-                      size="sm"
-                      value={effectiveSelected}
-                      onValueChange={(v) => setSelectedSources(v)}
-                    >
-                      {sourceTokens.map((tok) => {
-                        const isNote = tok === "notes";
-                        const slug = isNote ? null : serviceSlug(tok);
-                        return (
-                          <ToggleGroupItem
-                            key={tok}
-                            value={tok}
-                            aria-label={isNote ? "Notes" : tok}
-                            className="gap-1.5"
-                          >
-                            {isNote ? (
+                  <FilterControl
+                    align="right"
+                    groups={[
+                      // Content sources live IN the popover, grouped exactly the
+                      // way periods are grouped under Time (#57) — not as a
+                      // separate chip row beside it. Multi-select over the real
+                      // message services in this backup, plus Notes; everything
+                      // selected means "scan everything".
+                      multiBadgeGroup({
+                        key: "content",
+                        label: "Content",
+                        description: "Which conversations and notes to scan",
+                        options: sourceTokens.map((tok) => ({
+                          value: tok,
+                          label: tok === "notes" ? "Notes" : tok,
+                          icon:
+                            tok === "notes" ? (
                               <NotebookText className="size-3.5" />
-                            ) : hasBrandIcon(slug) ? (
+                            ) : hasBrandIcon(serviceSlug(tok)) ? (
                               <BrandIcon
-                                slug={slug}
+                                slug={serviceSlug(tok)}
                                 name={tok}
                                 className="size-3.5"
                               />
                             ) : (
                               <MessageSquare className="size-3.5" />
-                            )}
-                            {isNote ? "Notes" : tok}
-                          </ToggleGroupItem>
-                        );
-                      })}
-                    </ToggleGroup>
-                  )}
-                  <FilterControl
-                    align="right"
-                    groups={[
+                            ),
+                        })),
+                        selected: effectiveSelected,
+                        onToggle: (value) => {
+                          const next = effectiveSelected.includes(value)
+                            ? effectiveSelected.filter((v) => v !== value)
+                            : [...effectiveSelected, value];
+                          // Deselecting the last source would scan nothing; keep
+                          // at least one so the Start button stays meaningful.
+                          if (next.length === 0) return;
+                          // Back to everything selected → null, the "all" state,
+                          // so the summary shows no chips rather than one per
+                          // source.
+                          setSelectedSources(
+                            next.length === sourceTokens.length ? null : next,
+                          );
+                        },
+                      }),
                       timeGroup({
                         description: "Which period to scan, by date",
                         presets,
