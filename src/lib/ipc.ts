@@ -991,6 +991,10 @@ export interface TraceLoupeClient {
   cancelSafetyScanModelDownload(): Promise<void>;
   /** The in-flight download, if any — lets the UI rehydrate after a refresh. */
   getSafetyScanDownloadStatus(): Promise<SafetyModelDownloadStatus | null>;
+  /** The in-flight scan's last progress event, or null when none is running.
+   *  Lets the UI re-attach after losing its state (a reload, a crash, or the
+   *  webview respawning) instead of showing an idle view over a running scan. */
+  getSafetyScanStatus(): Promise<SafetyScanEvent | null>;
   /** Start a Safety Scan over the active backup. Progress arrives on
    *  `safetyscan://progress`; rejects if one is already running. */
   runSafetyScan(opts: {
@@ -1413,6 +1417,8 @@ const tauriClient: TraceLoupeClient = {
     invoke<SafetyModelDownloadStatus | null>("get_safety_scan_download_status"),
   cancelSafetyScanModelDownload: () =>
     invoke("cancel_safety_scan_model_download"),
+  getSafetyScanStatus: () =>
+    invoke<SafetyScanEvent | null>("get_safety_scan_status"),
   runSafetyScan: (opts) =>
     invoke("run_safety_scan", {
       modelId: opts.modelId ?? null,
@@ -3198,6 +3204,7 @@ export const mockClient: TraceLoupeClient = {
     message: "Server started and Gemma 4 E4B loaded in 4.2s.",
   }),
   getSafetyScanDownloadStatus: async () => null,
+  getSafetyScanStatus: async () => null,
   downloadSafetyScanModel: async () => {
     mockSafetyModelInstalled = true;
   },
