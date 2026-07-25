@@ -13,6 +13,37 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.4] — 2026-07-25
+
+### Fixed
+
+- **A scan with thousands of findings no longer freezes the app.** The Safety
+  Scan findings list rendered every finding at once; with ~8000 it drove the
+  renderer to 99% CPU and 3.1 GB and locked up the whole machine. It is now
+  virtualized like every other list in the app, so only visible rows are built.
+  The report — which must stay whole to print and export — lists the 500 most
+  serious instead, states how many it left out, and keeps counting all of them in
+  its totals. ([#61](https://github.com/PeterBlenessy/traceloupe/issues/61))
+- **Turning on debug logging no longer makes the app unresponsive.** Every log
+  line was sent to the interface as its own message, and a running scan produces
+  hundreds a second — enough to drown out the scan's own progress updates. Logs
+  now arrive in batches over a transport built for streams, so they stay live and
+  readable without competing with the rest of the app. If the app ever produces
+  faster than it can show, it says how many lines it skipped rather than quietly
+  dropping them. ([#60](https://github.com/PeterBlenessy/traceloupe/issues/60))
+- **The scan's finding count matches the Findings list.** The progress counter
+  showed only findings that run had newly written, while the list showed
+  everything in the scan's scope — so a scan over already-checked content could
+  read 84 while the list read 251. Both now show the same number, from the first
+  moment of the scan. ([#59](https://github.com/PeterBlenessy/traceloupe/issues/59))
+
+### Added
+
+- **Optional log file.** Settings → Developer can also write logs to disk, shows
+  where they go, and reveals the file in Finder. Useful for handing over a log
+  after a long scan, or reading one after a crash.
+  ([#60](https://github.com/PeterBlenessy/traceloupe/issues/60))
+
 ## [0.31.3] — 2026-07-25
 
 ### Fixed
