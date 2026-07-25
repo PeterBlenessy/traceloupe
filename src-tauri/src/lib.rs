@@ -784,11 +784,25 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     if !valid_backup_id(&backup_id) {
         return false;
     }
+    // Per-phase timings for the open path (#40). Opening felt slow (~4 s) with no
+    // way to see where it went; these debug lines make each phase measurable in
+    // the dev console instead of guessed at. Kept permanently — a regression here
+    // is a UX regression, and the cost is one Instant per open.
+    let t_open = std::time::Instant::now();
+    let mut t_phase = t_open;
+    macro_rules! phase {
+        ($name:expr) => {{
+            let ms = t_phase.elapsed().as_millis();
+            t_phase = std::time::Instant::now();
+            logging::debug(&app, format!("open_backup: {} took {} ms", $name, ms));
+        }};
+    }
     // Serialize against an in-flight import's atomic cache swap, so we never point
     // ActiveBackup at a cache mid-write. Fetched from `app` (not a `State` param)
     // so this command can keep its plain `bool` return.
     let gate = app.state::<ImportGate>();
     let _gate = gate.0.lock().await;
+    phase!("import-gate wait");
     let Ok(data_dir) = app.path().app_data_dir() else {
         return false;
     };
@@ -805,6 +819,7 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
             }
         }
     }
+    phase!("clear previous decrypted temps");
     // Rebuilding the decryptor reads the Keychain, opens the cache and runs
     // PBKDF2 — all blocking. Keep it off the main thread so selecting a backup
     // never freezes the UI (no-op decryptor for plaintext backups).
@@ -813,6 +828,10 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
         .await
         .ok()
         .flatten();
+    // Keychain read + Touch ID prompt + the PBKDF2 key ladder. PBKDF2 is
+    // deliberately expensive, so this is expected to dominate; it must never
+    // block the first paint (the UI navigates without awaiting a refetch).
+    phase!("rebuild decryptor (Keychain + PBKDF2)");
     // Surface a silent key-load failure: if this backup is encrypted but we have
     // no decryptor, full-resolution photos and native re-imports won't work until
     // the keys load. Point at the likely cause — a cancelled/unavailable Touch ID
@@ -833,10 +852,21 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
                 logging::warn(&app, msg);
             }
         }
+        // Only on the locked path: re-opens the cache and reads the source dir's
+        // plists to explain WHY the keys are missing.
+        phase!("locked-backup diagnostic");
     }
     app.state::<SessionKeys>().set(decryptor);
     app.state::<ActiveBackup>().set(cache_path.clone());
     repair_stranded_safety_scans(&app, &cache_path);
+    phase!("repair stranded safety scans");
+    // The macro re-arms `t_phase` for a next phase that doesn't exist here; this
+    // read keeps that honest for clippy without an allow() over the whole fn.
+    let _ = t_phase;
+    logging::debug(
+        &app,
+        format!("open_backup: total {} ms", t_open.elapsed().as_millis()),
+    );
     true
 }
 
