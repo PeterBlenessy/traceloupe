@@ -37,6 +37,9 @@ pub struct SummaryOutcome {
     /// Summaries served from an earlier scan's text because the underlying
     /// findings hadn't changed — the model calls this run avoided (#43).
     pub cache_hits: usize,
+    /// Flagged threads left for on-demand generation (past the eager bound) —
+    /// the model calls this scan didn't spend up front (#18).
+    pub deferred: usize,
 }
 
 /// A stable fingerprint of the findings a summary is written from. Two runs
@@ -160,6 +163,56 @@ fn deterministic_thread_summary(thread: &str, findings: &[&FindingRow]) -> Strin
     )
 }
 
+/// How many flagged threads get model prose at scan end. The server is already
+/// warm there, so a bounded eager pass is nearly free — and severity order means
+/// it covers the conversations a reviewer opens first. Everything past this is
+/// generated on demand by [`summarize_thread_on_demand`] (#18).
+pub const EAGER_THREAD_SUMMARIES: usize = 5;
+
+/// The per-thread prompt. Shared by the eager pass and the on-demand path so the
+/// two can never drift into writing differently-shaped summaries.
+fn thread_prompt(thread: &str, findings: &[&FindingRow]) -> String {
+    format!(
+        "Conversation: {thread}\nFindings ({}):\n{}{}",
+        findings.len(),
+        findings
+            .iter()
+            .take(THREAD_FINDINGS_CAP)
+            .map(|f| finding_line(f))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        if findings.len() > THREAD_FINDINGS_CAP {
+            format!(
+                "\n({} more findings omitted — do not infer trends from where this list stops)",
+                findings.len() - THREAD_FINDINGS_CAP
+            )
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// The live findings for one scan's scope, grouped per thread and ordered the way
+/// the eager pass prioritises them: peak severity first, then finding count, then
+/// name (a stable tiebreak so runs are reproducible).
+fn threads_by_priority<'a>(live: &[&'a FindingRow]) -> Vec<(String, Vec<&'a FindingRow>)> {
+    let mut by_thread: BTreeMap<String, Vec<&'a FindingRow>> = BTreeMap::new();
+    for f in live {
+        if let Some(t) = &f.thread_identifier {
+            by_thread.entry(t.clone()).or_default().push(f);
+        }
+    }
+    let mut threads: Vec<(String, Vec<&'a FindingRow>)> = by_thread.into_iter().collect();
+    threads.sort_by(|(an, af), (bn, bf)| {
+        let peak = |v: &Vec<&FindingRow>| v.iter().map(|f| f.severity).max().unwrap_or(0);
+        peak(bf)
+            .cmp(&peak(af))
+            .then(bf.len().cmp(&af.len()))
+            .then(an.cmp(bn))
+    });
+    threads
+}
+
 /// Write the Scan report + per-flagged-thread summaries, stored under
 /// `scan_id`.
 ///
@@ -248,14 +301,14 @@ pub fn run_summaries(
         outcome.model_calls += 1;
     }
 
-    // ---- per-flagged-thread summaries (1 call each, or 0 on a cache hit) ----
-    let mut by_thread: BTreeMap<String, Vec<&FindingRow>> = BTreeMap::new();
-    for f in &live {
-        if let Some(t) = &f.thread_identifier {
-            by_thread.entry(t.clone()).or_default().push(f);
-        }
-    }
-    for (thread, findings) in &by_thread {
+    // ---- per-flagged-thread summaries ----
+    // BOUNDED (#18): only the top EAGER_THREAD_SUMMARIES threads by severity get
+    // model prose here. Previously this was one call per flagged thread on every
+    // scan — 40 conversations meant 40 calls at scan end, most of which no one
+    // ever read. The rest are generated when the user actually opens them.
+    // A cached (unchanged) thread is still reused for free regardless of rank.
+    let threads = threads_by_priority(&live);
+    for (rank, (thread, findings)) in threads.iter().enumerate() {
         if cancel.is_cancelled() {
             break;
         }
@@ -268,24 +321,11 @@ pub fn run_summaries(
             outcome.cache_hits += 1;
             continue;
         }
-        let user = format!(
-            "Conversation: {thread}\nFindings ({}):\n{}{}",
-            findings.len(),
-            findings
-                .iter()
-                .take(THREAD_FINDINGS_CAP)
-                .map(|f| finding_line(f))
-                .collect::<Vec<_>>()
-                .join("\n"),
-            if findings.len() > THREAD_FINDINGS_CAP {
-                format!(
-                    "\n({} more findings omitted — do not infer trends from where this list stops)",
-                    findings.len() - THREAD_FINDINGS_CAP
-                )
-            } else {
-                String::new()
-            }
-        );
+        if rank >= EAGER_THREAD_SUMMARIES {
+            outcome.deferred += 1;
+            continue;
+        }
+        let user = thread_prompt(thread, findings);
         let text = client.chat_text(THREAD_SYSTEM, &user, 250)?;
         let text = text.trim();
         let text = if text.is_empty() {
@@ -302,11 +342,94 @@ pub fn run_summaries(
         now(),
         "summary_written",
         &format!(
-            "kind=report+threads threads={} calls={} reused={}",
-            outcome.thread_summaries, outcome.model_calls, outcome.cache_hits
+            "kind=report+threads threads={} calls={} reused={} deferred={}",
+            outcome.thread_summaries, outcome.model_calls, outcome.cache_hits, outcome.deferred
         ),
     )?;
     Ok(outcome)
+}
+
+/// Where an on-demand thread summary came from — the UI distinguishes model prose
+/// from the deterministic fallback so it never passes off a computed digest of the
+/// findings as the model's reading of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummarySource {
+    /// Already stored for these exact findings (this scan or an earlier one).
+    Cached,
+    /// Generated just now by the model.
+    Model,
+    /// Built from the finding data because no model was available (#18): honest,
+    /// factual, instant — not an error state and not an empty panel.
+    Deterministic,
+}
+
+/// Get — or generate — the summary for ONE thread, on demand (#18).
+///
+/// Scan end only writes prose for the top [`EAGER_THREAD_SUMMARIES`] threads, so
+/// this is what fills in the rest when the user actually opens one. Resolution
+/// order:
+///
+/// 1. **Cached** for these exact findings (any scan) → returned free, so a second
+///    view costs nothing and it survives re-scan/re-import like the report does.
+/// 2. **Model**, when `client` is `Some` (a scan's sidecar is live).
+/// 3. **Deterministic**, otherwise — the model-not-loaded case resolves to a real
+///    summary rather than an error, which is why this needs no sidecar lifecycle
+///    of its own.
+///
+/// Returns `None` only when the thread has no live findings in the scan's scope.
+pub fn summarize_thread_on_demand(
+    analysis: &mut AnalysisDb,
+    client: Option<&LlmClient>,
+    scan_id: i64,
+    thread_ref: &str,
+) -> Result<Option<(String, SummarySource)>> {
+    let all = match analysis.scan_by_id(scan_id)? {
+        Some(row) => {
+            analysis.list_findings_in_scope(&row.sources, row.range_start, row.range_end)?
+        }
+        None => return Ok(None),
+    };
+    let findings: Vec<&FindingRow> = all
+        .iter()
+        .filter(|f| !f.dismissed && !f.stale && f.thread_identifier.as_deref() == Some(thread_ref))
+        .collect();
+    if findings.is_empty() {
+        return Ok(None);
+    }
+    let digest = findings_digest(&findings);
+    if let Some(cached) = analysis.find_summary_by_digest("thread", thread_ref, &digest)? {
+        // Re-stamp it under this scan so the report view finds it by scan_id.
+        analysis.set_summary(scan_id, "thread", thread_ref, &cached, &digest, now())?;
+        return Ok(Some((cached, SummarySource::Cached)));
+    }
+    let (text, source) = match client {
+        Some(c) => {
+            let raw = c.chat_text(THREAD_SYSTEM, &thread_prompt(thread_ref, &findings), 250)?;
+            let raw = raw.trim();
+            if raw.is_empty() {
+                (
+                    deterministic_thread_summary(thread_ref, &findings),
+                    SummarySource::Deterministic,
+                )
+            } else {
+                (raw.to_string(), SummarySource::Model)
+            }
+        }
+        None => (
+            deterministic_thread_summary(thread_ref, &findings),
+            SummarySource::Deterministic,
+        ),
+    };
+    analysis.set_summary(scan_id, "thread", thread_ref, &text, &digest, now())?;
+    // Content-free: which scan, how it was produced, how many findings — never the
+    // thread name or any text.
+    analysis.audit(
+        scan_id,
+        now(),
+        "summary_on_demand",
+        &format!("kind=thread source={source:?} findings={}", findings.len()),
+    )?;
+    Ok(Some((text, source)))
 }
 
 #[cfg(test)]
@@ -522,6 +645,65 @@ mod tests {
             report.contains("Nothing was flagged"),
             "notes-only scan must not report the message finding, got: {report}"
         );
+    }
+
+    #[test]
+    fn scan_end_bounds_eager_thread_summaries() {
+        // #18: the old behaviour was 1 call per flagged thread — 40 conversations
+        // meant 40 calls at scan end. Now only the top EAGER_THREAD_SUMMARIES get
+        // prose up front; the rest are deferred to on-demand.
+        let threads: Vec<String> = (0..9).map(|i| format!("chat{i}")).collect();
+        let refs: Vec<&str> = threads.iter().map(|s| s.as_str()).collect();
+        let (base, hits) = mock_text_server("A concise factual summary.");
+        let (mut db, scan) = seeded_analysis(&refs);
+        let client = LlmClient::new(&base, "m", Duration::from_secs(5));
+        let out = run_summaries(&mut db, &client, scan, &CancelToken::new()).unwrap();
+
+        // 1 report + EAGER_THREAD_SUMMARIES threads, not 1 + 9.
+        assert_eq!(out.model_calls, 1 + EAGER_THREAD_SUMMARIES);
+        assert_eq!(out.thread_summaries, EAGER_THREAD_SUMMARIES);
+        assert_eq!(out.deferred, refs.len() - EAGER_THREAD_SUMMARIES);
+        assert_eq!(hits.load(Ordering::SeqCst), 1 + EAGER_THREAD_SUMMARIES);
+    }
+
+    #[test]
+    fn on_demand_summary_falls_back_deterministically_then_caches() {
+        // The model-not-loaded case must resolve to real content, not an error
+        // (#18 AC), and a second request must cost nothing.
+        let (mut db, scan) = seeded_analysis(&["Alice"]);
+        let (text, source) = summarize_thread_on_demand(&mut db, None, scan, "Alice")
+            .unwrap()
+            .expect("Alice has live findings");
+        assert_eq!(source, SummarySource::Deterministic);
+        assert!(text.contains("Alice"), "got: {text}");
+
+        // Second call: served from the digest cache, no regeneration.
+        let (again, source2) = summarize_thread_on_demand(&mut db, None, scan, "Alice")
+            .unwrap()
+            .unwrap();
+        assert_eq!(source2, SummarySource::Cached);
+        assert_eq!(again, text);
+    }
+
+    #[test]
+    fn on_demand_summary_uses_the_model_when_one_is_live() {
+        let (base, hits) = mock_text_server("The model's own wording.");
+        let (mut db, scan) = seeded_analysis(&["Alice"]);
+        let client = LlmClient::new(&base, "m", Duration::from_secs(5));
+        let (text, source) = summarize_thread_on_demand(&mut db, Some(&client), scan, "Alice")
+            .unwrap()
+            .unwrap();
+        assert_eq!(source, SummarySource::Model);
+        assert_eq!(text, "The model's own wording.");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn on_demand_summary_is_none_for_a_thread_with_no_findings() {
+        let (mut db, scan) = seeded_analysis(&["Alice"]);
+        assert!(summarize_thread_on_demand(&mut db, None, scan, "Nobody")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
