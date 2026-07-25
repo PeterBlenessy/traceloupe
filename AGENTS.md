@@ -134,6 +134,66 @@ The top-level clone (`iphone-backup-analyzer/`) is the **canonical repo**, not a
 dev sandbox. Don't develop directly in it. Leave whatever branch it's on alone;
 create a worktree instead.
 
+## Never touch the user's real backup data
+
+The user's iPhone backup is **private data and off-limits.** Do not read it, and
+do not record anything derived from it (counts, sizes, names, statistics) in
+notes, commits, issues, or agent memory.
+
+Off-limits, concretely:
+
+- the backups Finder writes (`~/Library/Application Support/MobileSync/…`),
+- the decrypted mirror at `~/.traceloupe-dev/backup-mirror` and
+  `scripts/dump-backup.sh` that produces it,
+- any `caches/<backup_id>/` (`cache.db`, `analysis.db`) built from their device.
+
+**Validate with data you are allowed to have**, in this order:
+
+1. **Generate a fixture.** `tools/make_fixture_backup.py` produces a valid
+   *encrypted* iOS backup — real keybag → class-key → `Manifest.db` →
+   per-file-blob crypto — in a few KB. Extend it with the artifact your task
+   needs. For DB-level work, hand-seed the schema in an in-memory SQLite, as the
+   `analysis.rs` / `cache.rs` tests already do.
+2. **Public DFIR corpora.** iLEAPP's bundled per-artifact fixtures
+   (`admin/test/cases/data/…`) and the public Hickman/CTF iOS test images are
+   published research data — realistic *and* allowed. Keep what you use as a
+   committed fixture.
+3. **Never** the user's own backup, mirror, or caches.
+
+Apple's *schema* (table/column layouts, enum meanings) is public DFIR knowledge
+and fine to write down. The user's *data* is not. If a claim genuinely cannot be
+checked without real data, say so and state what your synthetic coverage does
+prove — don't quietly validate against their backup, and don't ask them to
+eyeball it in place of a test you could have written.
+
+## Done means shipped
+
+**A task is finished when the PR is open, not when it's understood.** Definition
+of done: implemented → tests written → the full [CI gate](#project-specific-notes)
+green locally → committed → **pushed** → PR opened. Then start the next item;
+don't stop to ask whether to continue.
+
+**Decide, document, ship — don't escalate a judgment call.** If a task needs a
+choice (which strategy, which trade-off), pick one, implement it, and write the
+reasoning into the PR body or an ADR. A PR the user can reject costs them a
+minute; a question blocks them until they next sit down.
+
+**Answer empirical questions with tests, not prompts.** "Is it slow?", "does the
+cache hold?", "does the migration work?" are all measurable — build the fixture
+and measure. Before asking the user anything, check whether a fixture could have
+answered it; if so, that's your job, not theirs.
+
+**Only two things justify stopping short:**
+
+1. **Externally blocked** — an upstream fix must land first, a credential or
+   artifact you cannot synthesise is missing.
+2. **Unsafe or destructive** — proceeding risks data loss or an irreversible,
+   outward-facing action.
+
+Anything else deferred is an unfinished task, not a status update. Say which of
+the two applies, specifically. If scope must shrink, finish everything else in
+full and state exactly what was left and why.
+
 ## Finishing up
 
 - Open a PR (or hand off) once CI-clean and the branch is pushed.
