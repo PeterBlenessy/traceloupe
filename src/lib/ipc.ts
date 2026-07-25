@@ -995,6 +995,12 @@ export interface TraceLoupeClient {
    *  Lets the UI re-attach after losing its state (a reload, a crash, or the
    *  webview respawning) instead of showing an idle view over a running scan. */
   getSafetyScanStatus(): Promise<SafetyScanEvent | null>;
+  /** The in-flight import's last progress event and which backup it belongs to,
+   *  or null when none is running. Lets the UI re-attach after a reload (#72). */
+  getImportStatus(): Promise<{
+    backupId: string;
+    event: ImportProgress;
+  } | null>;
   /** Start a Safety Scan over the active backup. Progress arrives on
    *  `safetyscan://progress`; rejects if one is already running. */
   runSafetyScan(opts: {
@@ -1419,6 +1425,10 @@ const tauriClient: TraceLoupeClient = {
     invoke("cancel_safety_scan_model_download"),
   getSafetyScanStatus: () =>
     invoke<SafetyScanEvent | null>("get_safety_scan_status"),
+  getImportStatus: () =>
+    invoke<{ backupId: string; event: ImportProgress } | null>(
+      "get_import_status",
+    ),
   runSafetyScan: (opts) =>
     invoke("run_safety_scan", {
       modelId: opts.modelId ?? null,
@@ -3205,6 +3215,7 @@ export const mockClient: TraceLoupeClient = {
   }),
   getSafetyScanDownloadStatus: async () => null,
   getSafetyScanStatus: async () => null,
+  getImportStatus: async () => null,
   downloadSafetyScanModel: async () => {
     mockSafetyModelInstalled = true;
   },
