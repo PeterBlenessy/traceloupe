@@ -13,6 +13,19 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.8] — 2026-07-25
+
+### Fixed
+
+- **Density now applies to the Safety Scan and Security views.** Both hand-rolled
+  their list rows without the shared markup the setting keys off, so changing
+  Density appeared to do nothing there while every other view responded.
+  ([#78](https://github.com/PeterBlenessy/traceloupe/issues/78))
+- **The Safety Scan findings list fills the window** instead of a fixed height. A
+  tall window now shows more rows, and the list scrolls in place rather than
+  making the whole page scroll to reach the rest of it.
+  ([#79](https://github.com/PeterBlenessy/traceloupe/issues/79))
+
 ## [0.31.7] — 2026-07-25
 
 ### Changed
