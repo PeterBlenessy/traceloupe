@@ -13,6 +13,17 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.10] — 2026-07-25
+
+### Fixed
+
+- **The Security view fills the window like every other view.** Its scan history
+  and findings table grew the page instead of scrolling in place, so with a few
+  scans behind you everything below them was pushed out of reach. Both now scroll
+  independently and a taller window simply shows more rows.
+  ([#79](https://github.com/PeterBlenessy/traceloupe/issues/79),
+  [#67](https://github.com/PeterBlenessy/traceloupe/issues/67))
+
 ## [0.31.9] — 2026-07-25
 
 ### Fixed
