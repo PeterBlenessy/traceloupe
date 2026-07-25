@@ -1057,7 +1057,6 @@ export interface TraceLoupeClient {
   listSafetyScans(): Promise<SafetyScanHistoryItem[]>;
   /** Remove a past scan and everything scoped to it. */
   deleteSafetyScan(scanId: number): Promise<void>;
-  listMedia(): Promise<MediaItem[]>;
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
   // huge lists a slice at a time.
@@ -1503,7 +1502,6 @@ const tauriClient: TraceLoupeClient = {
     await invoke("export_scan_report", { runId, path });
     return path;
   },
-  listMedia: () => invoke<MediaItem[]>("list_media"),
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
   // (mediaQuery below builds the `?thumb=1&k=…` suffix.)
@@ -3396,7 +3394,6 @@ export const mockClient: TraceLoupeClient = {
   },
   exportScanReport: async () => "/tmp/security-check-report.csv",
 
-  listMedia: async () => (mockActive ? mockMedia : []),
   mediaSources: async () => {
     if (!mockActive) return [];
     const counts = new Map<string, number>();
