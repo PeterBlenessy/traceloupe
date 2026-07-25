@@ -13,6 +13,14 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.9] — 2026-07-25
+
+### Fixed
+
+- **The Safety Scan history list scrolls in place** instead of growing the page.
+  It gains a row per scan and never loses one, so over time it pushed everything
+  below it out of reach. ([#67](https://github.com/PeterBlenessy/traceloupe/issues/67))
+
 ## [0.31.8] — 2026-07-25
 
 ### Fixed
