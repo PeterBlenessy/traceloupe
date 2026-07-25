@@ -5,7 +5,7 @@
  * `invoke()`, and a mock used when the app runs in a plain browser
  * (Vite dev server, Playwright). Views depend only on `TraceLoupeClient`.
  */
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -44,6 +44,16 @@ export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace";
 export interface LogRecord {
   level: Exclude<LogLevel, "off">;
   message: string;
+  /** Unix epoch ms — lets the console show real times and keep order. */
+  atMs: number;
+}
+
+/** One flush of the log stream. Records arrive batched (~10/s) rather than one
+ *  IPC message per line, and `dropped` reports records the backend discarded to
+ *  stay bounded under a flood — surfaced rather than hidden (#60). */
+export interface LogBatch {
+  records: LogRecord[];
+  dropped: number;
 }
 
 /** The app's macOS code-signing status (gates Touch ID / stable Keychain). */
@@ -796,7 +806,16 @@ export interface TraceLoupeClient {
   /** The app's code-signing status — whether Touch ID / stable Keychain can work. */
   appSigningStatus(): Promise<SigningStatus>;
   /** Subscribe to backend log records (forwarded to the console). */
-  onLog(cb: (r: LogRecord) => void): Promise<UnlistenFn>;
+  /** Subscribe to the backend log stream over a Tauri Channel — the transport
+   *  Tauri recommends for high-throughput ordered data (their event system
+   *  explicitly is not). Batched and bounded backend-side. */
+  subscribeLogs(cb: (b: LogBatch) => void): Promise<void>;
+  /** Also write logs to a file on disk (off by default). */
+  setFileLogging(enabled: boolean): Promise<void>;
+  /** Where the file sink writes, for display in Settings. */
+  logFilePath(): Promise<string | null>;
+  /** Reveal the log file in Finder. */
+  revealLogFile(): Promise<void>;
   hasActiveBackup(): Promise<boolean>;
   /** Close the open backup (clears session state; the on-disk cache remains). */
   closeBackup(): Promise<void>;
@@ -1181,7 +1200,14 @@ const tauriClient: TraceLoupeClient = {
   setBiometricRequired: (enabled) =>
     invoke("set_biometric_required", { enabled }),
   appSigningStatus: () => invoke<SigningStatus>("app_signing_status"),
-  onLog: (cb) => listen<LogRecord>("app://log", (e) => cb(e.payload)),
+  subscribeLogs: async (cb) => {
+    const channel = new Channel<LogBatch>();
+    channel.onmessage = cb;
+    await invoke("subscribe_logs", { channel });
+  },
+  setFileLogging: (enabled) => invoke("set_file_logging", { enabled }),
+  logFilePath: () => invoke<string | null>("log_file_path"),
+  revealLogFile: () => invoke("reveal_log_file"),
   hasActiveBackup: () => invoke<boolean>("has_active_backup"),
   closeBackup: () => invoke<void>("close_backup"),
   openBackup: (backupId) => invoke<boolean>("open_backup", { backupId }),
@@ -2659,7 +2685,10 @@ export const mockClient: TraceLoupeClient = {
     adhoc: false,
     identity: "Mock Identity",
   }),
-  onLog: async () => () => {},
+  subscribeLogs: async () => {},
+  setFileLogging: async () => {},
+  logFilePath: async () => "/tmp/traceloupe.log",
+  revealLogFile: async () => {},
   hasActiveBackup: async () => mockActive,
   closeBackup: async () => {
     mockActive = false;
