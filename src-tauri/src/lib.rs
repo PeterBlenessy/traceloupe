@@ -194,18 +194,62 @@ struct ImportGate(tauri::async_runtime::Mutex<()>);
 /// and the source dir recorded in its cache. `None` if not encrypted / no key, or
 /// if the biometric gate (when enabled) isn't satisfied. Blocks on the Touch ID
 /// prompt when biometric unlock is on, so call it off the async executor.
-fn reopen_decryptor(cache_path: &Path, backup_id: &str) -> Option<Arc<BackupDecryptor>> {
+fn reopen_decryptor(
+    app: &AppHandle,
+    cache_path: &Path,
+    backup_id: &str,
+) -> Option<Arc<BackupDecryptor>> {
+    // Sub-phase timings (#40). CAREFUL READING THESE: two of these phases can
+    // block on the USER, not on work — a Keychain item with an ACL makes
+    // `secret::get` show a password/"Allow" dialog, and `biometric::gate` waits
+    // on Touch ID. Their elapsed time is human think-time and is unbounded, so
+    // it must never be read as app latency (a ~19.5 s "key load" observed during
+    // #40 was exactly this). Phases that measure real work are labelled
+    // "compute"; the two that can wait on a person say so.
+    let t = std::time::Instant::now();
     // Fetch the stored password first: no key → plaintext backup → None, and the
     // biometric prompt never fires for a plaintext backup.
     let password = secret::get(backup_id)?;
+    logging::debug(
+        app,
+        format!(
+            "reopen_decryptor: Keychain read took {} ms",
+            t.elapsed().as_millis()
+        ),
+    );
+    let t = std::time::Instant::now();
     if biometric::gate("Unlock this iPhone backup to access its data").is_err() {
         return None; // user cancelled / auth failed → keys stay locked
     }
+    logging::debug(
+        app,
+        format!(
+            "reopen_decryptor: biometric gate took {} ms",
+            t.elapsed().as_millis()
+        ),
+    );
+    let t = std::time::Instant::now();
     let cache = CacheDb::open(cache_path).ok()?;
     let source_dir = cache.get_meta("source_dir").ok().flatten()?;
-    BackupDecryptor::open(Path::new(&source_dir), &password)
+    logging::debug(
+        app,
+        format!(
+            "reopen_decryptor: cache open took {} ms",
+            t.elapsed().as_millis()
+        ),
+    );
+    let t = std::time::Instant::now();
+    let out = BackupDecryptor::open(Path::new(&source_dir), &password)
         .ok()
-        .map(Arc::new)
+        .map(Arc::new);
+    logging::debug(
+        app,
+        format!(
+            "reopen_decryptor: keybag + key ladder took {} ms",
+            t.elapsed().as_millis()
+        ),
+    );
+    out
 }
 
 /// The session decryptor for the currently-open encrypted backup, lazily rebuilt
@@ -231,7 +275,7 @@ fn ensure_session_decryptor(app: &AppHandle, active_path: &Path) -> Option<Arc<B
         return None;
     }
     let backup_id = active_path.parent()?.file_name()?.to_str()?.to_owned();
-    match reopen_decryptor(active_path, &backup_id) {
+    match reopen_decryptor(app, active_path, &backup_id) {
         Some(d) => {
             guard.decryptor = Some(d.clone());
             Some(d)
@@ -784,11 +828,25 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     if !valid_backup_id(&backup_id) {
         return false;
     }
+    // Per-phase timings for the open path (#40). Opening felt slow (~4 s) with no
+    // way to see where it went; these debug lines make each phase measurable in
+    // the dev console instead of guessed at. Kept permanently — a regression here
+    // is a UX regression, and the cost is one Instant per open.
+    let t_open = std::time::Instant::now();
+    let mut t_phase = t_open;
+    macro_rules! phase {
+        ($name:expr) => {{
+            let ms = t_phase.elapsed().as_millis();
+            t_phase = std::time::Instant::now();
+            logging::debug(&app, format!("open_backup: {} took {} ms", $name, ms));
+        }};
+    }
     // Serialize against an in-flight import's atomic cache swap, so we never point
     // ActiveBackup at a cache mid-write. Fetched from `app` (not a `State` param)
     // so this command can keep its plain `bool` return.
     let gate = app.state::<ImportGate>();
     let _gate = gate.0.lock().await;
+    phase!("import-gate wait");
     let Ok(data_dir) = app.path().app_data_dir() else {
         return false;
     };
@@ -805,38 +863,74 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
             }
         }
     }
-    // Rebuilding the decryptor reads the Keychain, opens the cache and runs
-    // PBKDF2 — all blocking. Keep it off the main thread so selecting a backup
-    // never freezes the UI (no-op decryptor for plaintext backups).
-    let cp = cache_path.clone();
-    let decryptor = tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&cp, &backup_id))
-        .await
-        .ok()
-        .flatten();
-    // Surface a silent key-load failure: if this backup is encrypted but we have
-    // no decryptor, full-resolution photos and native re-imports won't work until
-    // the keys load. Point at the likely cause — a cancelled/unavailable Touch ID
-    // prompt when biometric unlock is on, otherwise the Keychain-ACL/signing issue
-    // (a rebuilt dev binary loses access; see docs/reference/signing.md).
-    if decryptor.is_none() {
-        if let Ok(Some(src)) = CacheDb::open(&cache_path).and_then(|c| c.get_meta("source_dir")) {
-            if discovery::read_backup_info(Path::new(&src)).is_encrypted == Some(true) {
-                let msg = if biometric::is_required() {
-                    "Backup is encrypted and Touch ID unlock is on, but its keys weren't unlocked \
-                     (Touch ID cancelled/failed, or unavailable on this build). Authenticate when \
-                     prompted, or turn off Require Touch ID in Settings."
-                } else {
-                    "Backup is encrypted but its keys couldn't be loaded from the Keychain — \
-                     full-resolution photos and native re-imports are unavailable. Re-import with \
-                     the password, or sign the build with a stable identity (docs/reference/signing.md)."
-                };
-                logging::warn(&app, msg);
-            }
-        }
-    }
-    app.state::<SessionKeys>().set(decryptor);
+    phase!("clear previous decrypted temps");
+    // Point the session at the new backup and hand control back. Browsing only
+    // needs the CACHE — keys are for media and native re-imports — so the key
+    // rebuild happens in the BACKGROUND (below) instead of blocking the open.
+    //
+    // Measured before this change: the rebuild was the ENTIRE open cost (~19.5 s
+    // observed; every other phase ≤1 ms). Crucially that time is mostly the USER
+    // — a Keychain ACL prompt and/or Touch ID — so it is unbounded and can never
+    // be optimised away. All the more reason not to sit on it: the first paint
+    // doesn't depend on keys, so the open no longer waits for a human to type.
+    //
+    // `set(None)` also clears the previous backup's keys and its auth_failed
+    // flag, so `ensure_session_decryptor` is free to load this backup's keys on
+    // demand if something asks before the warm-up finishes.
+    app.state::<SessionKeys>().set(None);
     app.state::<ActiveBackup>().set(cache_path.clone());
     repair_stranded_safety_scans(&app, &cache_path);
+    phase!("repair stranded safety scans");
+    // The macro re-arms `t_phase` for a next phase that doesn't exist here; this
+    // read keeps that honest for clippy without an allow() over the whole fn.
+    let _ = t_phase;
+
+    // Warm the keys in the background. Goes through `ensure_session_decryptor`,
+    // NOT `reopen_decryptor` directly, so it shares the one lock that already
+    // serialises rebuilds — a media request arriving mid-warm-up blocks briefly
+    // and reuses this result instead of deriving a second time (or firing a
+    // second Touch ID prompt).
+    let app_warm = app.clone();
+    let warm_path = cache_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let started = std::time::Instant::now();
+        let loaded = ensure_session_decryptor(&app_warm, &warm_path).is_some();
+        logging::debug(
+            &app_warm,
+            format!(
+                "open_backup: background key warm-up took {} ms (loaded={loaded}) \
+                 — includes any password/Touch ID dialog, i.e. user time, not app latency",
+                started.elapsed().as_millis()
+            ),
+        );
+        // Surface a silent key-load failure: if this backup is encrypted but we
+        // have no decryptor, full-resolution photos and native re-imports won't
+        // work until the keys load. Point at the likely cause — a cancelled or
+        // unavailable Touch ID prompt when biometric unlock is on, otherwise the
+        // Keychain-ACL/signing issue (a rebuilt dev binary loses access; see
+        // docs/reference/signing.md).
+        if !loaded {
+            if let Ok(Some(src)) = CacheDb::open(&warm_path).and_then(|c| c.get_meta("source_dir"))
+            {
+                if discovery::read_backup_info(Path::new(&src)).is_encrypted == Some(true) {
+                    let msg = if biometric::is_required() {
+                        "Backup is encrypted and Touch ID unlock is on, but its keys weren't unlocked \
+                         (Touch ID cancelled/failed, or unavailable on this build). Authenticate when \
+                         prompted, or turn off Require Touch ID in Settings."
+                    } else {
+                        "Backup is encrypted but its keys couldn't be loaded from the Keychain — \
+                         full-resolution photos and native re-imports are unavailable. Re-import with \
+                         the password, or sign the build with a stable identity (docs/reference/signing.md)."
+                    };
+                    logging::warn(&app_warm, msg);
+                }
+            }
+        }
+    });
+    logging::debug(
+        &app,
+        format!("open_backup: total {} ms", t_open.elapsed().as_millis()),
+    );
     true
 }
 
@@ -974,10 +1068,12 @@ async fn reimport_module(
     if decryptor.is_none() {
         let cp = cache_path.clone();
         let bid = backup_id.to_string();
-        let rebuilt = tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&cp, &bid))
-            .await
-            .ok()
-            .flatten();
+        let app_k = app.clone();
+        let rebuilt =
+            tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&app_k, &cp, &bid))
+                .await
+                .ok()
+                .flatten();
         if let Some(d) = rebuilt {
             session.set(Some(d.clone()));
             decryptor = Some(d);
@@ -1219,11 +1315,13 @@ async fn run_security_scan(
             if decryptor.is_none() {
                 let cp = cache_path.clone();
                 let bid = backup_id.clone();
-                decryptor =
-                    tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&cp, &bid))
-                        .await
-                        .ok()
-                        .flatten();
+                let app_k = app.clone();
+                decryptor = tauri::async_runtime::spawn_blocking(move || {
+                    reopen_decryptor(&app_k, &cp, &bid)
+                })
+                .await
+                .ok()
+                .flatten();
                 if let Some(d) = &decryptor {
                     session.set(Some(d.clone()));
                 }

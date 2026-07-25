@@ -308,6 +308,80 @@ mod tests {
         dir
     }
 
+    /// Quantifies what a `discover_backups` call costs, for the open-latency work
+    /// (#40). Ignored by default — it's a measurement, not an assertion, and
+    /// wall-clock numbers don't belong in CI. Run with:
+    ///
+    /// ```text
+    /// cargo test -p traceloupe-core discovery_cost -- --ignored --nocapture
+    /// ```
+    ///
+    /// Uses generated fixtures only (never a real backup): every backup gets an
+    /// `Installed Applications` array of realistic size, which is what makes a
+    /// real `Info.plist` big enough for this to matter.
+    #[test]
+    #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
+    fn discovery_cost_scales_with_backup_count() {
+        for (backups, apps) in [(1usize, 200usize), (5, 200), (10, 400)] {
+            let tmp = tempfile::tempdir().unwrap();
+            for i in 0..backups {
+                let dir = make_backup(
+                    tmp.path(),
+                    &format!("0000803{i}-000A1B2C3D4E5F"),
+                    "Test iPhone",
+                    true,
+                );
+                // Re-write Info.plist in the shape a real one has: an
+                // "Installed Applications" array of bundle IDs PLUS the bulky
+                // per-app "Applications" metadata dict. Deliberately generous —
+                // over-stating the size keeps the "discovery is cheap"
+                // conclusion conservative.
+                let mut info = Dictionary::new();
+                info.insert("Device Name".into(), Value::String("Test iPhone".into()));
+                info.insert("Product Version".into(), Value::String("17.5.1".into()));
+                info.insert(
+                    "Installed Applications".into(),
+                    Value::Array(
+                        (0..apps)
+                            .map(|a| Value::String(format!("com.example.app{a}")))
+                            .collect(),
+                    ),
+                );
+                let mut applications = Dictionary::new();
+                for a in 0..apps {
+                    let mut meta = Dictionary::new();
+                    meta.insert(
+                        "CFBundleIdentifier".into(),
+                        Value::String(format!("com.example.app{a}")),
+                    );
+                    meta.insert(
+                        "CFBundleDisplayName".into(),
+                        Value::String(format!("App {a}")),
+                    );
+                    meta.insert(
+                        "CFBundleShortVersionString".into(),
+                        Value::String("1.2.3".into()),
+                    );
+                    meta.insert("itemName".into(), Value::String(format!("App {a}")));
+                    meta.insert("artistName".into(), Value::String("Example, Inc.".into()));
+                    meta.insert("genre".into(), Value::String("Productivity".into()));
+                    applications.insert(format!("com.example.app{a}"), Value::Dictionary(meta));
+                }
+                info.insert("Applications".into(), Value::Dictionary(applications));
+                write_plist(&dir.join("Info.plist"), Value::Dictionary(info));
+            }
+            let started = std::time::Instant::now();
+            let found = discover_backups(tmp.path()).unwrap();
+            let elapsed = started.elapsed();
+            assert_eq!(found.len(), backups);
+            println!(
+                "discover_backups: {backups} backup(s) x {apps} apps -> {:?} ({:?}/backup)",
+                elapsed,
+                elapsed / backups as u32,
+            );
+        }
+    }
+
     #[test]
     fn discovers_and_parses_backups() {
         let tmp = tempfile::tempdir().unwrap();
