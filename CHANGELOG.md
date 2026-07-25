@@ -13,6 +13,30 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.6] — 2026-07-25
+
+### Added
+
+- **One place to see everything the app is doing.** The toolbar now shows a
+  single indicator: it names the task when one thing is running, and reads
+  "N ongoing" when several are. Clicking it lists each — Safety Scan, Security
+  Check, an import, a re-import, a model download — with its own progress and a
+  link to the view that owns it. Previously each kind had its own pill, so
+  several at once crowded out the view's own title and controls.
+  ([#73](https://github.com/PeterBlenessy/traceloupe/issues/73))
+
+### Fixed
+
+- **A running Security Check is no longer invisible.** Starting one and
+  navigating away left nothing on screen to say it was running, and no way back
+  to it. It now appears in the activity indicator like everything else.
+  ([#73](https://github.com/PeterBlenessy/traceloupe/issues/73))
+- **Imports, re-imports and Security Checks survive the window reloading.** Their
+  progress only existed in the interface, so a reload left them looking idle
+  while they carried on underneath — and starting them again then failed, because
+  the first was still running. Each now re-attaches to whatever is in flight.
+  ([#72](https://github.com/PeterBlenessy/traceloupe/issues/72))
+
 ## [0.31.5] — 2026-07-25
 
 ### Fixed
