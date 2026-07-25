@@ -61,7 +61,7 @@ export function BackupPicker() {
         // Time the whole open in devtools (#40) — filter by [open-perf].
         openPerfStart(b.deviceName ?? b.id);
         await client.openBackup(b.id);
-        openPerfPhase("openBackup IPC (Keychain + key ladder + cache open)");
+        openPerfPhase("openBackup IPC (cache only — keys warm up in background)");
         // Mark active optimistically before invalidating (queries are
         // staleTime: Infinity), so the target view doesn't read a stale
         // `hasActiveBackup: false` and bounce back to the picker.
