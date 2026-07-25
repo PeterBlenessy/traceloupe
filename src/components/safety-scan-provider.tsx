@@ -111,6 +111,19 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     // this React state doesn't — so on mount, rehydrate any in-flight download
     // from the backend and re-attach to its progress. Without this, a refresh
     // goes blank and re-clicking Download collides with the download gate.
+    // Same for a SCAN: it runs in the Rust process for hours and survives a
+    // webview reload, but this React state does not — so re-attach to whatever
+    // is in flight. Without this a reload (a crash, ⌘R, the webview respawning,
+    // or a dev-server HMR reload) left the view showing an idle "Start safety
+    // scan" over a scan that was still running, with its progress frozen.
+    void (async () => {
+      const live = await client.getSafetyScanStatus();
+      if (cancelled || !live) return;
+      setScan(live);
+      // Reflect what's already on disk, then follow it live.
+      qc.invalidateQueries({ queryKey: ["safetyScan"] });
+      await subscribeScan();
+    })();
     void (async () => {
       const status = await client.getSafetyScanDownloadStatus();
       if (cancelled || !status) return;
@@ -134,6 +147,45 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Subscribe to scan progress exactly once. Shared by startScan and the
+  // rehydration effect below — the same reason subscribeModel exists.
+  const subscribeScan = async () => {
+    if (unlistenScan.current) return;
+    // Claim the slot synchronously (before the await) so a second call in the
+    // same tick can't register a duplicate listener.
+    unlistenScan.current = () => {};
+    unlistenScan.current = await client.onSafetyScanProgress((p) => {
+      setScan(scanIsTerminal(p) ? null : p);
+      // Errors are a dismissable toast, not red text baked into the view.
+      // The full technical detail (incl. llama-server output) is in the dev
+      // logs; the toast stays short and readable.
+      if (p.phase === "error") toastScanError(p.message);
+      if (p.phase === "loading") {
+        // The command flips the scan row to 'running' before the model
+        // load and then emits Loading — refetch the history now so the
+        // rail's badge changes in step with the Stop button, not a model
+        // load later.
+        qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
+      }
+      if (p.phase === "classifying") {
+        // Backstop history refresh once classifying starts, and refresh the
+        // findings whenever the live count moves so they stream in.
+        if (!runLive.current.historyRefreshed) {
+          runLive.current.historyRefreshed = true;
+          qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
+        }
+        if (p.findings !== runLive.current.findings) {
+          runLive.current.findings = p.findings;
+          qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
+        }
+      }
+      if (p.phase === "done") {
+      // New findings and a new report exist; let every consumer refetch.
+      qc.invalidateQueries({ queryKey: ["safetyScan"] });
+      }
+    });
+  };
+
   const startScan = async (opts: {
     modelId?: string | null;
     rangeStart?: number | null;
@@ -144,41 +196,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
   }) => {
     setScan({ phase: "loading" });
     runLive.current = { historyRefreshed: false, findings: 0 };
-    if (!unlistenScan.current) {
-      // Claim the slot synchronously (before the await) so a second call in
-      // the same tick can't register a duplicate listener.
-      unlistenScan.current = () => {};
-      unlistenScan.current = await client.onSafetyScanProgress((p) => {
-        setScan(scanIsTerminal(p) ? null : p);
-        // Errors are a dismissable toast, not red text baked into the view.
-        // The full technical detail (incl. llama-server output) is in the dev
-        // logs; the toast stays short and readable.
-        if (p.phase === "error") toastScanError(p.message);
-        if (p.phase === "loading") {
-          // The command flips the scan row to 'running' before the model
-          // load and then emits Loading — refetch the history now so the
-          // rail's badge changes in step with the Stop button, not a model
-          // load later.
-          qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
-        }
-        if (p.phase === "classifying") {
-          // Backstop history refresh once classifying starts, and refresh the
-          // findings whenever the live count moves so they stream in.
-          if (!runLive.current.historyRefreshed) {
-            runLive.current.historyRefreshed = true;
-            qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
-          }
-          if (p.findings !== runLive.current.findings) {
-            runLive.current.findings = p.findings;
-            qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
-          }
-        }
-        if (p.phase === "done") {
-          // New findings and a new report exist; let every consumer refetch.
-          qc.invalidateQueries({ queryKey: ["safetyScan"] });
-        }
-      });
-    }
+    await subscribeScan();
     try {
       // Fall back to the persisted preference when the caller didn't pin a
       // model; the backend maps null ⇒ recommended tier.
