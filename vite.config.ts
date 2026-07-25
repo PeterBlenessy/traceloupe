@@ -34,7 +34,16 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      //
+      // `.claude/worktrees/**` matters just as much: this repo runs several
+      // agents, each in a git worktree created INSIDE the project root, and each
+      // holding a full copy of the tree (src/, dist/, docs/, node_modules/).
+      // Without this, another agent creating a worktree or running a build makes
+      // Vite issue a full `page reload` in whatever dev app is running — which
+      // silently wipes frontend state. That is what made a running Safety Scan's
+      // progress bar and finding counter freeze while the backend scanned on
+      // perfectly happily: the page had been reloaded out from under it.
+      ignored: ["**/src-tauri/**", "**/.claude/**"],
     },
   },
 }));

@@ -50,6 +50,28 @@ pub struct DownloadSnapshot {
     pub phase: String,
 }
 
+/// The last progress event emitted for the in-flight scan, or None when no scan
+/// is running. The scan lives in the Rust process and survives a webview reload;
+/// this React-independent snapshot is what lets the frontend re-attach to it
+/// after one, exactly as [`SafetyDownloadStatus`] does for downloads.
+///
+/// Without it a reload — from a crash, ⌘R, the webview respawning, or a dev-server
+/// HMR reload — left the UI showing an idle "Start safety scan" while the backend
+/// scanned on for hours.
+#[derive(Default)]
+pub struct SafetyScanStatus(pub Arc<Mutex<Option<ScanEvent>>>);
+
+/// Re-attach to an in-flight scan after the frontend lost its state. Returns the
+/// last emitted progress event, or None when nothing is running.
+#[tauri::command]
+pub fn get_safety_scan_status(status_state: State<'_, SafetyScanStatus>) -> Option<ScanEvent> {
+    status_state
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
 /// `…/caches/<id>/cache.db` → sibling `analysis.db` (survives re-import).
 pub(crate) fn analysis_path(cache_path: &Path) -> Result<PathBuf, String> {
     Ok(cache_path
@@ -385,9 +407,24 @@ pub fn cancel_safety_scan_model_download(
 
 // ---------- scan lifecycle ----------
 
+/// Emit a scan progress event AND record it as the re-attach snapshot.
+///
+/// Every progress emit goes through here so the snapshot can't drift from what
+/// the UI was last told. Terminal phases clear the snapshot: after Done/Error
+/// there is nothing to re-attach to, and a stale snapshot would make a reloaded
+/// UI show a scan that already finished.
+fn emit_scan(app: &AppHandle, event: ScanEvent) {
+    if let Some(state) = app.try_state::<SafetyScanStatus>() {
+        let terminal = matches!(event, ScanEvent::Done { .. } | ScanEvent::Error { .. });
+        let mut g = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        *g = if terminal { None } else { Some(event.clone()) };
+    }
+    let _ = app.emit("safetyscan://progress", event);
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
-enum ScanEvent {
+pub enum ScanEvent {
     Loading,
     Classifying {
         done: usize,
@@ -580,7 +617,7 @@ pub async fn run_safety_scan(
     let model_log = primary_path.display().to_string();
     let model_path = primary_path;
     let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
-        let _ = app2.emit("safetyscan://progress", ScanEvent::Loading);
+        emit_scan(&app2, ScanEvent::Loading);
         // Keep the Mac awake for the whole scan. A long scan (hours) would
         // otherwise stall if the machine idle-sleeps mid-chunk: the in-flight
         // request dies, the 300 s read timeout fails the chunk on wake, and an
@@ -826,8 +863,8 @@ pub async fn run_safety_scan(
                     || p.chunks_done == p.chunks_total
                 {
                     last_emit = std::time::Instant::now();
-                    let _ = app2.emit(
-                        "safetyscan://progress",
+                    emit_scan(
+                        &app2,
                         ScanEvent::Classifying {
                             done: p.chunks_done,
                             total: p.chunks_total,
@@ -848,7 +885,7 @@ pub async fn run_safety_scan(
             client::LlmClient::new(llama.base_url(), &spec_id, Duration::from_secs(300))
                 .with_api_key(api_key.clone());
 
-        let _ = app2.emit("safetyscan://progress", ScanEvent::Summarizing);
+        emit_scan(&app2, ScanEvent::Summarizing);
         // Best-effort: the classification is done and findings are saved, so a
         // summary failure (e.g. the only live server died) must NOT fail the
         // whole scan and discard a completed result — log it and move on. The
@@ -868,8 +905,8 @@ pub async fn run_safety_scan(
         // run's start-of-run wipe; this keeps the happy path tidy).
         let _ = std::fs::remove_dir_all(&scratch_dir);
 
-        let _ = app2.emit(
-            "safetyscan://progress",
+        emit_scan(
+            &app2,
             ScanEvent::Done {
                 scan_id: outcome.scan_id,
                 status: format!("{:?}", outcome.status).to_lowercase(),
@@ -898,8 +935,8 @@ pub async fn run_safety_scan(
         Err(e) => {
             repair_on_error();
             let msg = format!("scan task failed: {e}");
-            let _ = app.emit(
-                "safetyscan://progress",
+            emit_scan(
+                &app,
                 ScanEvent::Error {
                     message: msg.clone(),
                 },
@@ -909,8 +946,8 @@ pub async fn run_safety_scan(
     };
     if let Err(msg) = &result {
         repair_on_error();
-        let _ = app.emit(
-            "safetyscan://progress",
+        emit_scan(
+            &app,
             ScanEvent::Error {
                 message: msg.clone(),
             },
