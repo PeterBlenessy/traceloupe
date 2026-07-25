@@ -27,6 +27,25 @@ pub struct AnalysisDb {
 
 const SCHEMA_VERSION: i64 = 6;
 
+/// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
+/// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
+/// range bounds. Findings with a NULL `occurred_at` (e.g. an undated note) stay
+/// in scope — a range filter can't place them, and dropping them would hide
+/// real findings.
+///
+/// Defined once because *every* view of "how many findings does this scan
+/// have" must agree: [`AnalysisDb::list_findings_in_scope`] (the Findings
+/// panel) and [`AnalysisDb::count_findings_in_scope`] (the live progress
+/// counter) both build on it. Two hand-written copies of this predicate is
+/// exactly how the panel and the progress bar drifted apart (#59).
+const IN_SCOPE_PREDICATE: &str = "(?1 = 'all'
+     OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
+     OR ((',' || ?1 || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
+     OR (f.source_kind = 'message' AND f.service IS NOT NULL
+         AND (',' || ?1 || ',') LIKE ('%,' || f.service || ',%')))
+ AND (?2 IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= ?2)
+ AND (?3 IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= ?3)";
+
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -533,16 +552,6 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// Rows written/re-confirmed by `scan_id` — the accurate per-run findings
-    /// count (a message flagged by two overlapping windows is one row).
-    pub fn count_scan_findings(&self, scan_id: i64) -> Result<i64> {
-        Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM content_findings WHERE scan_id = ?1",
-            params![scan_id],
-            |r| r.get(0),
-        )?)
-    }
-
     /// True when `chunk_key` was already classified with this exact content —
     /// the resume/incremental check (plan T5).
     pub fn chunk_is_done(&self, chunk_key: &str, fingerprint: &str) -> Result<bool> {
@@ -610,17 +619,6 @@ impl AnalysisDb {
     /// Findings, dismissed included (callers filter); severity-descending
     /// within category, newest first. `scan_id` restricts to one scan's
     /// findings (the per-scan history view); None returns every scan's.
-    /// How many findings a scan already has. Used to seed the live progress
-    /// tally on resume, so a resumed scan shows its existing findings from the
-    /// first frame instead of counting up from zero.
-    pub fn count_findings(&self, scan_id: i64) -> Result<usize> {
-        Ok(self.conn.query_row(
-            "SELECT COUNT(*) FROM content_findings WHERE scan_id = ?1",
-            params![scan_id],
-            |r| r.get::<_, i64>(0),
-        )? as usize)
-    }
-
     pub fn list_findings(&self, scan_id: Option<i64>) -> Result<Vec<FindingRow>> {
         self.query_findings("?1 IS NULL OR f.scan_id = ?1", params![scan_id])
     }
@@ -638,16 +636,33 @@ impl AnalysisDb {
         range_start: Option<i64>,
         range_end: Option<i64>,
     ) -> Result<Vec<FindingRow>> {
-        self.query_findings(
-            "(?1 = 'all'
-                 OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
-                 OR ((',' || ?1 || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
-                 OR (f.source_kind = 'message' AND f.service IS NOT NULL
-                     AND (',' || ?1 || ',') LIKE ('%,' || f.service || ',%')))
-             AND (?2 IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= ?2)
-             AND (?3 IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= ?3)",
+        self.query_findings(IN_SCOPE_PREDICATE, params![sources, range_start, range_end])
+    }
+
+    /// How many LIVE findings are in a scan's scope — the same predicate as
+    /// [`Self::list_findings_in_scope`] plus the two filters the Findings panel
+    /// applies client-side (`!dismissed && !stale`), so this number is exactly
+    /// what the panel displays. The live scan progress reports it, which is why
+    /// it must not drift from the list query: both build on
+    /// [`IN_SCOPE_PREDICATE`].
+    pub fn count_findings_in_scope(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+    ) -> Result<usize> {
+        Ok(self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM content_findings f
+                 WHERE ({IN_SCOPE_PREDICATE})
+                   AND f.stale = 0
+                   AND NOT EXISTS(SELECT 1 FROM dismissals d
+                                  WHERE d.fingerprint = f.fingerprint
+                                    AND d.category = f.category)"
+            ),
             params![sources, range_start, range_end],
-        )
+            |r| r.get::<_, i64>(0),
+        )? as usize)
     }
 
     /// Shared body for the finding-list queries: the same SELECT + severity-desc
@@ -1418,6 +1433,72 @@ mod tests {
             .list_findings_in_scope("all", Some(1_800_000_000), None)
             .unwrap();
         assert_eq!(none.len(), 0);
+    }
+
+    /// The count the live progress bar reports must equal what the Findings
+    /// panel renders: the same scope predicate, minus dismissed and stale (#59).
+    #[test]
+    fn scope_count_matches_what_the_panel_renders() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let a = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        let msg = finding("fp-msg", Category::ScamFraud); // iMessage, @1_700_000_000
+        let mut note = finding("fp-note", Category::SelfHarm);
+        note.source_kind = SourceKind::Note;
+        note.thread_identifier = None;
+        note.service = None;
+        note.occurred_at = Some(1_700_000_500);
+        let mut undated = finding("fp-undated", Category::ThreatViolence);
+        undated.source_kind = SourceKind::Note;
+        undated.occurred_at = None;
+        undated.service = None;
+        db.replace_findings(a, &[msg, note, undated], 101).unwrap();
+
+        // Every scope the panel can ask for, counted the same way it lists.
+        for (sources, start, end) in [
+            ("all", None, None),
+            ("notes", None, None),
+            ("messages", None, None),
+            ("iMessage", None, None),
+            ("iMessage,notes", None, None),
+            ("tiktok", None, None),
+            ("all", Some(1_700_000_400), None),
+            ("all", Some(1_800_000_000), None),
+            ("all", None, Some(1_600_000_000)),
+        ] {
+            assert_eq!(
+                db.count_findings_in_scope(sources, start, end).unwrap(),
+                db.list_findings_in_scope(sources, start, end)
+                    .unwrap()
+                    .iter()
+                    .filter(|f| !f.dismissed && !f.stale)
+                    .count(),
+                "scope ({sources}, {start:?}, {end:?}) must count what it lists",
+            );
+        }
+        // Sanity: 'all' really does see all three, undated note included.
+        assert_eq!(db.count_findings_in_scope("all", None, None).unwrap(), 3);
+
+        // Dismissed and stale drop out — of both the count and the panel.
+        db.set_dismissed("fp-msg", Category::ScamFraud, true, 102)
+            .unwrap();
+        db.set_stale("fp-note", true).unwrap();
+        assert_eq!(db.count_findings_in_scope("all", None, None).unwrap(), 1);
+        assert_eq!(
+            db.list_findings_in_scope("all", None, None)
+                .unwrap()
+                .iter()
+                .filter(|f| !f.dismissed && !f.stale)
+                .count(),
+            1
+        );
+
+        // Re-classifying already-flagged content transfers ownership to a new
+        // scan (replace_findings deletes + re-inserts) — the scope count must
+        // not move, and must not depend on who owns the row.
+        let b = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        db.replace_findings(b, &[finding("fp-msg", Category::ScamFraud)], 201)
+            .unwrap();
+        assert_eq!(db.count_findings_in_scope("all", None, None).unwrap(), 1);
     }
 
     #[test]
