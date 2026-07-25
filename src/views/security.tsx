@@ -194,8 +194,8 @@ export function SecurityView() {
     // column, so the scroll region needs its own bounded-height parent.
     <div className="flex h-full flex-col">
       <ConsentDialogs />
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <div className="mx-auto flex max-w-5xl flex-col gap-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4">
+        <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col gap-4">
           {/* What this is / disclaimer — always visible. */}
           <Alert>
             <Info className="size-4" />
@@ -293,13 +293,13 @@ export function SecurityView() {
           {!running && selectedRun && (
             // Master–detail: run history on the left, the selected run's
             // result + findings on the right (same shape as Safety Scan).
-            <div className="grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
+            <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
               <RunRail
                 runs={runs.data ?? []}
                 selectedId={selectedRun.id}
                 onSelect={setSelectedRunId}
               />
-              <div className="min-w-0">
+              <div className="flex min-h-0 min-w-0 flex-col">
                 <ResultSummary
                   run={selectedRun}
                   latest={selectedRun.id === runs.data?.[0]?.id}
@@ -398,8 +398,8 @@ function RunRail({
   }, [visible, selectedId, onSelect]);
 
   return (
-    <Card className="gap-3">
-      <CardHeader>
+    <Card className="flex h-full min-h-0 flex-col gap-3">
+      <CardHeader className="shrink-0">
         <CardTitle className="flex items-center gap-2 text-sm">
           <History className="size-4" /> Scan history
         </CardTitle>
@@ -441,7 +441,10 @@ function RunRail({
           />
         </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-1.5">
+      {/* Scrolls in place: a row per run, never shed, so unbounded in
+          principle (#67). Height comes from the grid row, which comes from the
+          window (#79) — no fixed fraction. */}
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">No runs match.</p>
         )}
@@ -562,7 +565,9 @@ function ResultSummary({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    // Fills the grid cell so the findings table scrolls in place rather than
+    // growing the page (#67, #79).
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
       {!latest && (
         <div className="flex items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-sm">
           <span>
@@ -622,7 +627,7 @@ function ResultSummary({
       {loadingFindings ? (
         <ListSkeleton rows={4} />
       ) : (
-        <div className="overflow-hidden rounded-lg border">
+        <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs text-muted-foreground">
               <tr>
