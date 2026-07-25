@@ -23,6 +23,7 @@ import { badgeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { feedDisplayName } from "@/lib/feeds";
 import { formatListTime, formatTimelineTime } from "@/lib/format";
+import { useSecurityScan } from "@/components/security-scan-provider";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { ConsentDialogs } from "@/views/security-consent";
@@ -126,20 +127,16 @@ export function SecurityView() {
     enabled: enabled && !!selectedRun,
   });
 
-  const [progress, setProgress] = useState<string | null>(null);
-  useEffect(() => {
-    const un = client.onScanProgress((p) =>
-      setProgress(p.total ? `${p.module}` : p.module),
-    );
-    return () => {
-      un.then((f) => f());
-    };
-  }, []);
+  // Progress comes from the app-wide provider now (#72): it survives navigating
+  // away and a webview reload, and it feeds the toolbar's activity pill. This
+  // view just renders whatever is current.
+  const { progress: scanProgress, clear: clearScanProgress } = useSecurityScan();
+  const progress = scanProgress?.module ?? null;
 
   const scan = useMutation({
     mutationFn: () => client.runSecurityScan("explicit"),
     onSuccess: () => {
-      setProgress(null);
+      clearScanProgress();
       qc.invalidateQueries({ queryKey: ["scanRuns"] });
       qc.invalidateQueries({ queryKey: ["findings"] });
       qc.invalidateQueries({ queryKey: ["indicatorInfo"] });
