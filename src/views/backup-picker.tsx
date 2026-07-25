@@ -38,7 +38,21 @@ export function BackupPicker() {
     queryFn: () => client.importedBackupIds(),
   });
   const imported = new Set(importedIds ?? []);
+  // A folder the user picked (via the native panel), overriding the default
+  // MobileSync scan. Selecting a folder grants access without Full Disk Access.
+  const [root, setRoot] = useState<string | null>(null);
+  const { data, isPending, error, refetch } = useQuery({
+    queryKey: ["backups", root],
+    queryFn: () => client.listBackups(root ?? undefined),
+  });
 
+  // EVERY hook must run above this early return. `active` flips false→true the
+  // moment a backup opens (handleOpen sets it optimistically), so the very next
+  // render takes the DeviceHome branch — and if any hook lived below here, that
+  // render would call fewer hooks than the previous one, which React aborts with
+  // "Rendered fewer hooks than expected", crashing the view to the error
+  // boundary. Keep every hook above this line.
+  //
   // `/` is the app's one home. With a backup open it IS the Device view (full
   // device detail, densely laid out) — the separate /device route is gone.
   // `?choose` forces the picker back so the user can still switch backups.
@@ -71,14 +85,6 @@ export function BackupPicker() {
       imp.open(b); // first-time read: the provider owns the import + its dialog
     }
   }
-  // A folder the user picked (via the native panel), overriding the default
-  // MobileSync scan. Selecting a folder grants access without Full Disk Access.
-  const [root, setRoot] = useState<string | null>(null);
-  const { data, isPending, error, refetch } = useQuery({
-    queryKey: ["backups", root],
-    queryFn: () => client.listBackups(root ?? undefined),
-  });
-
   // Delete an imported backup's caches + stored password (not the original), then
   // refresh which backups show as imported.
   async function handleForget(b: BackupInfo) {
