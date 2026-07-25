@@ -1,4 +1,4 @@
-import { createContext, useContext, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { client, type BackupInfo, type ImportProgress } from "@/lib/ipc";
@@ -47,6 +47,47 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
   const foreground = useRef(false);
   foreground.current = dialogBackup !== null;
 
+  // An import runs in the Rust process and survives a webview reload; this React
+  // state does not — so on mount, re-attach to whatever is in flight (#72).
+  // Without this a reload showed no progress AND re-clicking Import collided
+  // with the backend's ImportGate, erroring while the original import was still
+  // writing the cache. Mirrors what SafetyScanProvider does for scans.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const live = await client.getImportStatus();
+      if (cancelled || !live) return;
+      // The backup list is the only place with the full BackupInfo; fall back to
+      // a minimal stand-in so progress still shows if it isn't loaded yet.
+      const backups = await client.listBackups().catch(() => null);
+      const backup =
+        backups?.status === "ok"
+          ? (backups.backups.find((b) => b.id === live.backupId) ?? null)
+          : null;
+      if (cancelled) return;
+      setActive({
+        backup: backup ?? ({ id: live.backupId, path: "" } as BackupInfo),
+        progress: live.event,
+      });
+      await subscribeImport();
+    })();
+    return () => {
+      cancelled = true;
+      unlisten.current?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Subscribe to import progress exactly once — shared by `start` and the
+  // rehydration effect above, so both attach the SAME listener.
+  const subscribeImport = async () => {
+    if (unlisten.current) return;
+    unlisten.current = () => {}; // claim synchronously against a double-call
+    unlisten.current = await client.onImportProgress((p) =>
+      setActive((a) => (a ? { ...a, progress: p } : a)),
+    );
+  };
+
   const open = (backup: BackupInfo) => {
     setError(null);
     setDialogBackup(backup);
@@ -61,10 +102,7 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
     stopped.current = false;
     setError(null);
     setActive({ backup, progress: null });
-    const off = await client.onImportProgress((p) =>
-      setActive((a) => (a && a.backup.id === backup.id ? { ...a, progress: p } : a)),
-    );
-    unlisten.current = off;
+    await subscribeImport();
     try {
       const result = await client.importBackup({
         backupPath: backup.path,
@@ -82,7 +120,7 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
           result.warnings,
         );
       }
-      off();
+      unlisten.current?.();
       unlisten.current = null;
       // The import made this backup active on the backend. Set that optimistically
       // BEFORE invalidating: queries use staleTime: Infinity, so without this the
@@ -100,7 +138,7 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
         navigate({ to: "/" });
       }
     } catch (e) {
-      off();
+      unlisten.current?.();
       unlisten.current = null;
       setActive(null);
       if (stopped.current) return; // user hit Stop; nothing to show

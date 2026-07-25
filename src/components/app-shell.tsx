@@ -5,7 +5,6 @@ import {
   Boxes,
   ShieldAlert,
   ShieldUser,
-  X,
   CalendarDays,
   HeartPulse,
   ListTodo,
@@ -46,6 +45,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { DeviceHero } from "@/components/device-hero";
+import { ActivityIndicator } from "@/components/activity-indicator";
 import {
   SettingsDialogProvider,
   useSettingsDialog,
@@ -82,11 +82,8 @@ import {
   type LinkPreviewMode,
 } from "@/components/settings-provider";
 import { useTheme, type Theme } from "@/components/theme-provider";
-import { ImportProvider, useImport } from "@/components/import-provider";
-import {
-  SafetyScanProvider,
-  useSafetyScan,
-} from "@/components/safety-scan-provider";
+import { ImportProvider } from "@/components/import-provider";
+import { SafetyScanProvider } from "@/components/safety-scan-provider";
 import { SafetyModelSettings } from "@/components/safety-model-settings";
 import { SecuritySettings } from "@/components/security-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
@@ -411,9 +408,11 @@ function AppToolbar({ collapsed }: { collapsed: boolean }) {
       trailing={
         // App-wide controls, rightmost.
         <>
-          <SafetyScanIndicator />
-          <ModelDownloadIndicator />
-          <ImportIndicator />
+          {/* ONE pill for everything running (#73): named when a single thing
+              is in flight, a count when several. Replaces three independent
+              pills that crowded the toolbar and still left Security scans with
+              no indicator at all. */}
+          <ActivityIndicator />
           <ToolbarGroup>
             <DensityToggle />
             <ModeToggle />
@@ -479,106 +478,8 @@ function ReimportAction({ module, label }: { module: string; label: string }) {
   );
 }
 
-/** A pill shown while an import runs in the background; click to reopen it. */
-function ImportIndicator() {
-  const { active, backgrounded, reopen } = useImport();
-  if (!backgrounded || !active) return null;
-  const p = active.progress;
-  const detail =
-    p?.phase === "indexing"
-      ? `${p.step}… (${p.index}/${p.total})`
-      : p?.phase === "parsing"
-        ? `Reading ${p.artifact}…`
-        : "starting…";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          onClick={reopen}
-          className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent"
-        >
-          <Loader2 className="size-3 animate-spin" />
-          <span className="max-w-[16rem] truncate">
-            Importing {active.backup.deviceName ?? active.backup.id} · {detail}
-          </span>
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>Reopen import</TooltipContent>
-    </Tooltip>
-  );
-}
 
-/** A pill shown while the Safety Scan model downloads in the background — so
- *  the ~5 GB download is visible and cancelable from anywhere, not only inside
- *  the Settings dialog (which is modal). The download itself already runs in
- *  the SafetyScanProvider, above the routes, so it keeps going as you navigate
- *  or close Settings; this just surfaces it. */
-function ModelDownloadIndicator() {
-  const { download, cancelDownload } = useSafetyScan();
-  if (!download) return null;
-  const pct =
-    download.phase === "downloading" && download.total > 0
-      ? Math.round((download.received / download.total) * 100)
-      : null;
-  const label =
-    download.phase === "verifying"
-      ? "Verifying model…"
-      : pct !== null
-        ? `Downloading model · ${pct}%`
-        : "Downloading model…";
-  return (
-    <span className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
-      <Loader2 className="size-3 animate-spin" />
-      <span className="max-w-[14rem] truncate">{label}</span>
-      {download.phase === "downloading" && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              onClick={cancelDownload}
-              aria-label="Cancel model download"
-              className="ml-0.5 rounded-full p-0.5 hover:bg-accent hover:text-foreground"
-            >
-              <X className="size-3" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>Cancel model download</TooltipContent>
-        </Tooltip>
-      )}
-    </span>
-  );
-}
 
-/** A Safety Scan runs in the SafetyScanProvider (above the routes), so it keeps
- *  going after you leave the Safety view. This pill surfaces it in the title bar
- *  — spinner + progress — and jumps back to the view on click. Hidden while the
- *  Safety view is open (it's redundant there). */
-function SafetyScanIndicator() {
-  const { scan } = useSafetyScan();
-  const pathname = useRouterState({ select: (s) => s.location.pathname });
-  if (!scan || pathname === "/safety-scan") return null;
-  const label =
-    scan.phase === "loading"
-      ? "Loading model…"
-      : scan.phase === "summarizing"
-        ? "Writing report…"
-        : scan.phase === "classifying" && scan.total > 0
-          ? `Scanning · ${scan.done}/${scan.total}`
-          : "Scanning…";
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Link
-          to="/safety-scan"
-          className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        >
-          <Loader2 className="size-3 animate-spin" />
-          <span className="max-w-[14rem] truncate">{label}</span>
-        </Link>
-      </TooltipTrigger>
-      <TooltipContent>Go to Safety Scan</TooltipContent>
-    </Tooltip>
-  );
-}
 
 // A "rows" glyph per level (more rows = denser), à la Airtable/Notion's row-height
 // control — the recognizable idiom for density (unlike "A", which reads as text size).
