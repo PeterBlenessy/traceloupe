@@ -569,11 +569,22 @@ mod tests {
     use cbc::cipher::BlockEncryptMut;
 
     /// What the backup key ladder costs at representative keybag iteration
-    /// counts — the input to "must this block the first paint?" (#40). Ignored by
-    /// default: a measurement, not an assertion. Run with:
+    /// counts (#40, #55).
+    ///
+    /// **This cost is the point, not a defect.** DPIC is the brute-force price of
+    /// the backup password; iOS sets it in the MILLIONS, and at 10 M this ladder
+    /// takes ~2.8 s in release — which is exactly the ~2875 ms measured on a real
+    /// backup. Making it faster means weakening the KDF. The right response is to
+    /// pay it once per session off the critical path (which is what #40 did), not
+    /// to optimise it.
+    ///
+    /// Run in RELEASE — a debug build misleads by roughly an order of magnitude,
+    /// and an earlier reading of this bench (debug, capped at DPIC=200k)
+    /// wrongly concluded the ladder was cheap. Ignored by default: a
+    /// measurement, not an assertion. Run with:
     ///
     /// ```text
-    /// cargo test -p traceloupe-core key_ladder_cost -- --ignored --nocapture
+    /// cargo test --release -p traceloupe-core key_ladder_cost -- --ignored --nocapture
     /// ```
     ///
     /// Iteration counts are the ones iOS keybags carry (DPIC/ITER), used here as
@@ -581,7 +592,16 @@ mod tests {
     #[test]
     #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
     fn key_ladder_cost_by_iteration_count() {
-        for (dpic, iter) in [(10_000u32, 10_000u32), (50_000, 10_000), (200_000, 10_000)] {
+        // Modern iOS backup keybags carry DPIC in the MILLIONS — deliberately, it
+        // is the brute-force cost. The original range topped out at 200k, which
+        // is why an earlier reading of #40 concluded "the ladder is cheap".
+        for (dpic, iter) in [
+            (10_000u32, 10_000u32),
+            (200_000, 10_000),
+            (1_000_000, 10_000),
+            (5_000_000, 10_000),
+            (10_000_000, 10_000),
+        ] {
             let started = std::time::Instant::now();
             // The same two-stage ladder as BackupKeybag::unwrap_class_keys:
             // k0 = PBKDF2-SHA256(password, DPSL, DPIC), KEK = PBKDF2-SHA1(k0, SALT, ITER).
