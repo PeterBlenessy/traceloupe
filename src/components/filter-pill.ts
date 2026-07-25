@@ -22,4 +22,4 @@ export function filterPillClass(active: boolean, extra?: string): string {
 }
 
 /** The count suffix shown inside a filter pill (kept uniform across all chips). */
-export const filterPillCount = "text-[10px] tabular-nums opacity-60";
+export const filterPillCount = "text-[calc(0.625rem*var(--text-scale))] tabular-nums opacity-60";

@@ -482,7 +482,7 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         className="size-full object-cover transition-transform group-hover:scale-105"
       />
       {item.source && (
-        <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-[calc(0.625rem*var(--text-scale))] font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
           {item.source}
         </span>
       )}
@@ -673,7 +673,7 @@ function Lightbox({
           </div>
         </div>
         {(item.camera || item.lens || item.exif || item.width || item.fileSize) && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-neutral-400">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[calc(0.6875rem*var(--text-scale))] text-neutral-400">
             {item.camera && (
               <span className="inline-flex items-center gap-1">
                 <Camera className="size-3 shrink-0" />

@@ -52,6 +52,40 @@
   line-height: 1.3;
 }
 
+/* TEXT SIZE — scales type only, never spacing or icons.
+   Keyed off `data-text-size` on <html> (set by useTextSize from a persisted
+   setting); "md" is the default and needs no rule.
+
+   Why this lever: Tailwind v4 resolves `text-xs`/`text-sm`/… through `--text-*`
+   theme variables, so redefining those scales every text utility in the app at
+   once. Changing the ROOT font-size would do that too — but it would also scale
+   `size-4` icons and rem-based spacing, which is exactly the imbalance the
+   density work already hit once (see the note above about `--spacing`). Type
+   scales; the furniture stays put.
+
+   Arbitrary sizes (`text-[10px]` and friends) are written as
+   `calc(<rem> * var(--text-scale))` so they ride the same knob — otherwise the
+   smallest labels in the app, which are precisely the ones a user shrinking text
+   cares about, would be the only ones that didn't move. */
+:root {
+  --text-scale: 1;
+}
+:root[data-text-size="xs"] { --text-scale: 0.85; }
+:root[data-text-size="sm"] { --text-scale: 0.925; }
+:root[data-text-size="lg"] { --text-scale: 1.1; }
+:root[data-text-size="xl"] { --text-scale: 1.2; }
+
+/* Tailwind v4's type ramp, re-expressed against the scale. Line heights are
+   ratios in v4, so they follow automatically. */
+:root {
+  --text-xs: calc(0.75rem * var(--text-scale));
+  --text-sm: calc(0.875rem * var(--text-scale));
+  --text-base: calc(1rem * var(--text-scale));
+  --text-lg: calc(1.125rem * var(--text-scale));
+  --text-xl: calc(1.25rem * var(--text-scale));
+  --text-2xl: calc(1.5rem * var(--text-scale));
+}
+
 /* The surface palette is layered tinted neutrals (a whisper of chroma at hue
    260 — cool, instrument-like) instead of pure white / near-black, so panes
    read as distinct layers: in light mode the sidebar is a visibly deeper pane
