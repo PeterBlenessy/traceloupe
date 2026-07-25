@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { client, type ReimportResult } from "@/lib/ipc";
@@ -42,6 +42,8 @@ function summarize(module: string, r: ReimportResult): string {
 }
 
 type ReimportContextValue = {
+  /** Module ids currently re-importing — for the toolbar activity list (#73). */
+  running: Set<string>;
   /** True while `module` is being re-imported. */
   isRunning: (module: string) => boolean;
   /** Kick off a single-module re-import (no-op if that module is already running). */
@@ -63,6 +65,20 @@ const ReimportContext = createContext<ReimportContextValue | null>(null);
 export function ReimportProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   const [running, setRunning] = useState<Set<string>>(new Set());
+
+  // A re-import runs in the Rust process and survives a webview reload; this
+  // state does not. Re-attach on mount so a reload doesn't show the module as
+  // idle (and let the user start a second one) while the first still runs (#72).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const live = await client.getReimportStatus().catch(() => []);
+      if (!cancelled && live.length > 0) setRunning(new Set(live));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const setModuleRunning = (module: string, on: boolean) =>
     setRunning((prev) => {
@@ -93,7 +109,7 @@ export function ReimportProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <ReimportContext.Provider
-      value={{ isRunning: (m) => running.has(m), reimport }}
+      value={{ running, isRunning: (m) => running.has(m), reimport }}
     >
       {children}
     </ReimportContext.Provider>

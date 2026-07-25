@@ -1001,6 +1001,10 @@ export interface TraceLoupeClient {
     backupId: string;
     event: ImportProgress;
   } | null>;
+  /** The in-flight security scan's last progress, or null when none runs (#72). */
+  getSecurityScanStatus(): Promise<ScanProgress | null>;
+  /** Module ids currently re-importing (#72). */
+  getReimportStatus(): Promise<string[]>;
   /** Start a Safety Scan over the active backup. Progress arrives on
    *  `safetyscan://progress`; rejects if one is already running. */
   runSafetyScan(opts: {
@@ -1429,6 +1433,9 @@ const tauriClient: TraceLoupeClient = {
     invoke<{ backupId: string; event: ImportProgress } | null>(
       "get_import_status",
     ),
+  getSecurityScanStatus: () =>
+    invoke<ScanProgress | null>("get_security_scan_status"),
+  getReimportStatus: () => invoke<string[]>("get_reimport_status"),
   runSafetyScan: (opts) =>
     invoke("run_safety_scan", {
       modelId: opts.modelId ?? null,
@@ -3216,6 +3223,8 @@ export const mockClient: TraceLoupeClient = {
   getSafetyScanDownloadStatus: async () => null,
   getSafetyScanStatus: async () => null,
   getImportStatus: async () => null,
+  getSecurityScanStatus: async () => null,
+  getReimportStatus: async () => [],
   downloadSafetyScanModel: async () => {
     mockSafetyModelInstalled = true;
   },
