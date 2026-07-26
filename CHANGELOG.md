@@ -13,6 +13,28 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.14] — 2026-07-26
+
+### Changed
+
+- **Controls match native macOS.** Buttons, fields, dropdowns and toolbar
+  clusters were noticeably chunkier than the macOS controls beside them — the
+  standard button stood 36px tall where a native one is 28px. Everything now
+  reads at native height, and every control takes that height from one shared
+  scale, so a button can no longer end up a different height than the field next
+  to it. Controls still grow with the text-size setting.
+  ([#91](https://github.com/PeterBlenessy/traceloupe/issues/91))
+- **The toolbar and sort clusters no longer tower over everything else.** Both
+  stood 38px tall and read as a second row of chrome; they now sit level with the
+  controls around them.
+  ([#91](https://github.com/PeterBlenessy/traceloupe/issues/91))
+
+### Fixed
+
+- **Live reload works again for developers running the app from a git
+  worktree.** The file watcher ignored the very directory such a checkout lives
+  in, so edits kept serving a stale bundle with no error to explain it.
+
 ## [0.31.13] — 2026-07-26
 
 ### Fixed
