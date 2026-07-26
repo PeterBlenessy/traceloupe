@@ -298,9 +298,22 @@ pub fn chunk_messages(
             continue;
         }
         let sql = format!(
+            // Emptiness is decided by the BODY test above, not by `kind`.
+            //
+            // `kind` previously excluded 'media' and 'sticker' too, which looked
+            // like "skip messages with nothing to read" but wasn't:
+            // `message_kind` returns "media" whenever an attachment is present —
+            // BEFORE it looks at the body — so every message sent WITH a photo
+            // was dropped from the scan along with its text. A threatening
+            // message with an image attached was never classified, and the scan
+            // still reported clean. `kind` exists for the Messages content
+            // filter; using it to decide scan scope was the mistake.
+            //
+            // Only 'system' stays excluded: those are app-generated notices
+            // ("you renamed this conversation"), not anything a person wrote.
             "SELECT id, sender, is_from_me, sent_at, body FROM messages
              WHERE thread_id = ?{p} AND body IS NOT NULL AND TRIM(body) != ''
-               AND (kind IS NULL OR kind NOT IN ('media', 'sticker', 'system'))
+               AND (kind IS NULL OR kind != 'system')
                AND {where_range}
              ORDER BY sent_at, id",
             p = range_params.len() + 1
@@ -639,7 +652,12 @@ mod tests {
     }
 
     #[test]
-    fn skips_empty_and_media_bodies_and_orders_threads_by_recency() {
+    fn scans_captions_on_media_messages_but_skips_empty_and_system() {
+        // `kind` is the Messages CONTENT FILTER's classification, not a statement
+        // about whether there is anything to read: `message_kind` returns "media"
+        // whenever an attachment exists, before it looks at the body. The scanner
+        // used to exclude that bucket, so a message sent WITH a photo was dropped
+        // along with its text — and the scan still reported clean (#97).
         let cache = cache_with(&[
             ("old-chat", 100, "old text", false),
             ("new-chat", 5000, "new text", false),
@@ -649,16 +667,28 @@ mod tests {
             .execute(
                 "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind)
                  VALUES (1, 'them', 0, '  ', 101, 'text'),
-                        (1, 'them', 0, 'IMG_1.HEIC', 102, 'media')",
+                        (1, 'them', 0, 'look at this, I know where you live', 102, 'media'),
+                        (1, 'them', 0, NULL, 103, 'media'),
+                        (1, 'them', 0, 'you renamed the conversation', 104, 'system')",
                 [],
             )
             .unwrap();
         let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert_eq!(chunks.len(), 2);
-        // Newest thread first.
         assert_eq!(chunks[0].thread_identifier.as_deref(), Some("new-chat"));
-        // Blank + media rows dropped from old-chat.
-        assert_eq!(chunks[1].items.len(), 1);
+
+        let bodies: Vec<&str> = chunks[1].items.iter().map(|i| i.text.as_str()).collect();
+        // The caption on a media message IS scanned — this is the bug fix.
+        assert!(
+            bodies.iter().any(|b| b.contains("I know where you live")),
+            "a caption sent with a photo must be scanned, got {bodies:?}",
+        );
+        // Blank body, NULL body and app-generated system notices stay out.
+        assert!(!bodies.iter().any(|b| b.trim().is_empty()));
+        assert!(!bodies
+            .iter()
+            .any(|b| b.contains("renamed the conversation")));
+        assert_eq!(bodies.len(), 2, "old text + the caption, got {bodies:?}");
     }
 
     #[test]
