@@ -516,7 +516,6 @@ function BackupCard({
               <span className="text-xs">Remove imported data?</span>
               <Button
                 variant="destructive"
-                size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirming(false);
@@ -527,7 +526,6 @@ function BackupCard({
               </Button>
               <Button
                 variant="ghost"
-                size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   setConfirming(false);
@@ -542,7 +540,6 @@ function BackupCard({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="sm"
                     onClick={(e) => {
                       e.stopPropagation();
                       onReimport();
@@ -575,7 +572,6 @@ function BackupCard({
                 </TooltipContent>
               </Tooltip>
               <Button
-                size="sm"
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect();
@@ -586,7 +582,6 @@ function BackupCard({
             </>
           ) : (
             <Button
-              size="sm"
               onClick={(e) => {
                 e.stopPropagation();
                 onSelect();
