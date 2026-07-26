@@ -79,6 +79,12 @@ jobs:
       # binary instead).
       - run: bash scripts/download-llama-server.sh
       - run: cargo check -p traceloupe
+      # RUN the shell crate's tests, don't just compile them. They were only ever
+      # type-checked here (via clippy --all-targets), so the Channel stream
+      # contract and the unbounded-command guard would both have passed CI while
+      # failing — a test that never executes is worse than no test, because it
+      # reads as coverage.
+      - run: cargo test -p traceloupe
       # Lint the shell crate too (clippy needs the built `dist/` from pnpm
       # build above, which cargo check also relies on). --all-targets so
       # test-code lints in the Tauri crate are gated, not just the library.
