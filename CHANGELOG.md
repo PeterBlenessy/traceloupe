@@ -13,6 +13,14 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.11] — 2026-07-25
+
+### Removed
+
+- **An unused command that loaded the whole photo library at once.** Nothing
+  called it any more — the Photos view fetches in windows — so it was dead weight
+  on every build. ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
+
 ## [0.31.10] — 2026-07-25
 
 ### Fixed
