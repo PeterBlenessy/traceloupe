@@ -520,7 +520,7 @@ function TextSizeToggle() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-6"
+            className="h-8 w-5"
             disabled={atMin}
             onClick={() => setTextSize(TEXT_SIZES[i - 1])}
           >
@@ -541,7 +541,7 @@ function TextSizeToggle() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-6"
+            className="h-8 w-5"
             disabled={atMax}
             onClick={() => setTextSize(TEXT_SIZES[i + 1])}
           >
@@ -1139,7 +1139,7 @@ function SettingsRow({
   // leaves, wrapping long help text one word per line.
   return (
     <div className="px-3.5 py-2.5">
-      <div className="flex min-h-7 items-center gap-4">
+      <div className="flex min-h-[calc(1.75rem*var(--text-scale))] items-center gap-4">
         <div className="min-w-0 flex-1 text-sm">{label}</div>
         <div className="shrink-0">{children}</div>
       </div>
