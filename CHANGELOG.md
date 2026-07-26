@@ -13,6 +13,17 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.22] — 2026-07-26
+
+### Changed
+
+- **Severity and status colours now come from macOS.** Reds, ambers, greens and
+  blues throughout the app — severity badges, "Clean" and "NEW" markers, warning
+  banners, destructive buttons — use the system's own colours instead of a
+  hand-picked palette, so they match other Mac apps and shift correctly between
+  light and dark. Text on tinted badges is darkened or lightened as needed to
+  stay readable.
+
 ## [0.31.21] — 2026-07-26
 
 ### Changed
