@@ -38,6 +38,72 @@ const SCHEMA_VERSION: i64 = 6;
 /// panel) and [`AnalysisDb::count_findings_in_scope`] (the live progress
 /// counter) both build on it. Two hand-written copies of this predicate is
 /// exactly how the panel and the progress bar drifted apart (#59).
+/// Whether a finding has been dismissed. Written once: the SELECT, the
+/// "hide dismissed" filter and the counts must agree, and three copies of a
+/// correlated EXISTS is how they would stop agreeing.
+/// The scope predicate plus a page request's filters. Shared by the page query
+/// and the matching count, so the number the list produces and the number the
+/// panel promises come from the same string — separately-derived counts and rows
+/// are exactly what drifted in #59.
+fn filtered_scope(q: &FindingQuery) -> String {
+    let mut w = String::from(IN_SCOPE_PREDICATE);
+    if !q.include_dismissed {
+        w.push_str(&format!(" AND NOT {DISMISSED_EXPR}"));
+    }
+    if q.exclude_stale {
+        w.push_str(" AND NOT f.stale");
+    }
+    if let Some(sev) = q.severity {
+        // An integer from an enum-shaped field, never caller text.
+        w.push_str(&format!(" AND f.severity = {}", sev as i64));
+    }
+    w
+}
+
+/// How the Findings panel orders a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FindingSort {
+    /// Severity first, recency inside a band.
+    #[default]
+    Severity,
+    Date,
+}
+
+/// A page request from the Findings panel: its filters and its order.
+#[derive(Debug, Clone, Default)]
+pub struct FindingQuery {
+    /// Only this severity, or every severity when None.
+    pub severity: Option<u8>,
+    /// Dismissed findings are hidden unless the panel asks for them.
+    pub include_dismissed: bool,
+    pub sort: FindingSort,
+    pub desc: bool,
+    /// Order by conversation first, so the panel's grouped mode can build its
+    /// headings from a window without holding the whole list.
+    pub group_by_thread: bool,
+    /// Drop findings whose source content is gone. The panel keeps them (the
+    /// verdict still stands); the printable report leaves them out, because it
+    /// quotes the text and there is none to quote.
+    pub exclude_stale: bool,
+}
+
+/// What the filter pills display, counted in one query.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FindingCounts {
+    /// Not dismissed — the panel's default view.
+    pub live: i64,
+    /// Not dismissed AND not stale — what the printable report includes, so its
+    /// "N more not shown" line can be computed without fetching everything.
+    pub live_fresh: i64,
+    pub dismissed: i64,
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
+}
+
+const DISMISSED_EXPR: &str = "EXISTS(SELECT 1 FROM dismissals d
+                WHERE d.fingerprint = f.fingerprint AND d.category = f.category)";
+
 const IN_SCOPE_PREDICATE: &str = "(?1 = 'all'
      OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
      OR ((',' || ?1 || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
@@ -639,6 +705,113 @@ impl AnalysisDb {
         self.query_findings(IN_SCOPE_PREDICATE, params![sources, range_start, range_end])
     }
 
+    /// One page of a scan's findings, filtered and ordered by SQLite rather than
+    /// by the view (#65).
+    ///
+    /// The panel used to receive every finding and derive the visible list in
+    /// JavaScript — ~3 MB of JSON at the 8800 findings seen in practice, re-sent
+    /// and re-derived on every invalidation. Ordering has to happen here anyway
+    /// for paging to mean anything: a page is only well-defined relative to a
+    /// total order.
+    ///
+    /// `stale` findings are deliberately still returned. Their source content is
+    /// gone but the verdict stands, and hiding them would silently shrink a past
+    /// scan's results.
+    pub fn list_findings_in_scope_page(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+        q: &FindingQuery,
+        offset: i64,
+        limit: i64,
+    ) -> Result<Vec<FindingRow>> {
+        let where_clause = filtered_scope(q);
+        // Built from enums and integers, never from caller text.
+        let dir = if q.desc { "DESC" } else { "ASC" };
+        let mut tail = String::from("ORDER BY ");
+        if q.group_by_thread {
+            // Notes have no thread; they gather at the end under their own
+            // heading, which is where the grouped view has always put them.
+            tail.push_str("f.thread_identifier IS NULL, f.thread_identifier, ");
+        }
+        match q.sort {
+            FindingSort::Severity => {
+                // Severity first, recency inside a band — the same order the
+                // panel produced with `severity * 1e12 + occurred_at`.
+                tail.push_str(&format!("f.severity {dir}, f.occurred_at {dir}"));
+            }
+            FindingSort::Date => tail.push_str(&format!("f.occurred_at {dir}")),
+        }
+        // A total order, so paging is well-defined. Findings routinely share a
+        // severity AND a timestamp, and SQL leaves the order among ties
+        // unspecified — today's plan happens to return them by rowid, but adding
+        // an index over (severity, occurred_at) would be enough to change that,
+        // and then a row sits on two pages while another sits on none.
+        tail.push_str(&format!(", f.id {dir} LIMIT {limit} OFFSET {offset}"));
+        self.query_findings_tail(
+            &where_clause,
+            &tail,
+            params![sources, range_start, range_end],
+        )
+    }
+
+    /// How many findings the current filter matches — the virtualizer's row
+    /// count. Same predicate as the page, so the list can't run out early or
+    /// leave a gap at the end.
+    pub fn count_findings_matching(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+        q: &FindingQuery,
+    ) -> Result<i64> {
+        Ok(self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM content_findings f WHERE {}",
+                filtered_scope(q)
+            ),
+            params![sources, range_start, range_end],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// The numbers the filter pills show, in one round trip.
+    ///
+    /// Counted with the same predicate the page query uses, so a pill can never
+    /// promise rows the list won't produce — the drift #59 was about.
+    pub fn count_findings_breakdown(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+    ) -> Result<FindingCounts> {
+        let sql = format!(
+            "SELECT
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR}),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT f.stale),
+               COUNT(*) FILTER (WHERE {DISMISSED_EXPR}),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND f.severity = 3),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND f.severity = 2),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND f.severity = 1)
+             FROM content_findings f
+             WHERE {IN_SCOPE_PREDICATE}"
+        );
+        let c = self
+            .conn
+            .query_row(&sql, params![sources, range_start, range_end], |r| {
+                Ok(FindingCounts {
+                    live: r.get(0)?,
+                    live_fresh: r.get(1)?,
+                    dismissed: r.get(2)?,
+                    serious: r.get(3)?,
+                    harmful: r.get(4)?,
+                    concerning: r.get(5)?,
+                })
+            })?;
+        Ok(c)
+    }
+
     /// How many LIVE findings are in a scan's scope — the same predicate as
     /// [`Self::list_findings_in_scope`] plus the two filters the Findings panel
     /// applies client-side (`!dismissed && !stale`), so this number is exactly
@@ -672,15 +845,31 @@ impl AnalysisDb {
         where_clause: &str,
         params: &[&dyn rusqlite::ToSql],
     ) -> Result<Vec<FindingRow>> {
+        self.query_findings_tail(
+            where_clause,
+            "ORDER BY f.severity DESC, f.occurred_at DESC",
+            params,
+        )
+    }
+
+    /// The row query, with the caller supplying everything after `WHERE` —
+    /// ordering, and a `LIMIT`/`OFFSET` when it wants one page rather than all
+    /// of them. One SELECT for both, so a paged read and a whole read can never
+    /// disagree about what a finding row contains.
+    fn query_findings_tail(
+        &self,
+        where_clause: &str,
+        tail: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<FindingRow>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
                     f.stale, f.created_at, f.rechecked,
-                    EXISTS(SELECT 1 FROM dismissals d
-                           WHERE d.fingerprint = f.fingerprint AND d.category = f.category)
+                    {DISMISSED_EXPR}
              FROM content_findings f
              WHERE {where_clause}
-             ORDER BY f.severity DESC, f.occurred_at DESC",
+             {tail}",
         ))?;
         let rows = stmt.query_map(params, |r| {
             Ok((
@@ -1136,6 +1325,141 @@ mod tests {
     ///
     /// Synthetic rows sized like real ones (a sentence-length rationale) — no
     /// real backup involved.
+    /// Seed `n` findings across two threads and three severities.
+    fn seeded_findings(n: usize) -> AnalysisDb {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..n)
+            .map(|i| NewFinding {
+                source_kind: if i % 4 == 3 {
+                    SourceKind::Note
+                } else {
+                    SourceKind::Message
+                },
+                source_id: Some(i as i64),
+                thread_identifier: if i % 4 == 3 {
+                    None
+                } else {
+                    Some(format!("chat{}", i % 2))
+                },
+                // Deliberate ties: many findings share a severity AND a
+                // timestamp, which is what makes the id tie-break load-bearing.
+                occurred_at: Some(1_700_000_000 + (i as i64 % 7)),
+                fingerprint: format!("fp{i:05}"),
+                category: Category::ScamFraud,
+                severity: (i % 3 + 1) as u8,
+                rationale: "why".into(),
+                service: Some("iMessage".into()),
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 1).unwrap();
+        db
+    }
+
+    #[test]
+    fn pages_partition_the_list_exactly_once() {
+        // Rows sharing a sort key must not drift between pages — one fetched
+        // twice, another never. The seed makes many findings share a severity and
+        // a timestamp so the order is decided by the id tie-break rather than by
+        // luck. (SQLite's current plan is incidentally stable for these ties, so
+        // this asserts the property rather than demonstrating the failure.)
+        let db = seeded_findings(97);
+        let q = FindingQuery {
+            sort: FindingSort::Severity,
+            desc: true,
+            ..Default::default()
+        };
+        let whole: Vec<String> = db
+            .list_findings_in_scope_page("all", None, None, &q, 0, 1000)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.fingerprint)
+            .collect();
+        assert_eq!(whole.len(), 97);
+
+        let mut paged = Vec::new();
+        for offset in (0..97).step_by(10) {
+            paged.extend(
+                db.list_findings_in_scope_page("all", None, None, &q, offset, 10)
+                    .unwrap()
+                    .into_iter()
+                    .map(|f| f.fingerprint),
+            );
+        }
+        assert_eq!(paged, whole, "pages must reproduce the full order exactly");
+        let unique: std::collections::HashSet<_> = paged.iter().collect();
+        assert_eq!(unique.len(), 97, "no row appears on two pages");
+    }
+
+    #[test]
+    fn the_pills_cannot_promise_rows_the_list_will_not_produce() {
+        // Counts and rows come from the same predicate. When they were derived
+        // separately — a SQL count against a JavaScript filter — they drifted,
+        // which is what #59 was about.
+        let db = seeded_findings(60);
+        db.set_dismissed("fp00000", Category::ScamFraud, true, 1)
+            .unwrap();
+        db.set_dismissed("fp00001", Category::ScamFraud, true, 1)
+            .unwrap();
+        let counts = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(counts.dismissed, 2);
+        assert_eq!(counts.live, 58);
+
+        let page = |severity, include_dismissed| {
+            db.list_findings_in_scope_page(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    severity,
+                    include_dismissed,
+                    ..Default::default()
+                },
+                0,
+                1000,
+            )
+            .unwrap()
+            .len() as i64
+        };
+        assert_eq!(page(None, false), counts.live);
+        assert_eq!(page(None, true), counts.live + counts.dismissed);
+        assert_eq!(page(Some(3), false), counts.serious);
+        assert_eq!(page(Some(2), false), counts.harmful);
+        assert_eq!(page(Some(1), false), counts.concerning);
+    }
+
+    #[test]
+    fn grouping_orders_a_thread_contiguously_with_notes_last() {
+        // The grouped view builds its headings from a window, so every finding
+        // for a conversation must be adjacent in the total order — otherwise a
+        // heading reappears further down the list.
+        let db = seeded_findings(40);
+        let rows = db
+            .list_findings_in_scope_page(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    group_by_thread: true,
+                    desc: true,
+                    ..Default::default()
+                },
+                0,
+                1000,
+            )
+            .unwrap();
+        let threads: Vec<Option<String>> =
+            rows.iter().map(|f| f.thread_identifier.clone()).collect();
+        let mut seen = Vec::new();
+        for t in &threads {
+            if seen.last() != Some(t) {
+                assert!(!seen.contains(t), "thread {t:?} appears in two blocks");
+                seen.push(t.clone());
+            }
+        }
+        assert_eq!(threads.last().unwrap(), &None, "notes gather at the end");
+    }
+
     #[test]
     #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
     fn findings_payload_size_by_count() {

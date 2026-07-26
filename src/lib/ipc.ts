@@ -644,6 +644,33 @@ export interface SafetyModelDownloadStatus {
   phase: "downloading" | "verifying";
 }
 
+/** How the Findings panel asks for a page. */
+export interface ContentFindingPage {
+  /** Only this severity, or every severity when undefined. */
+  severity?: 1 | 2 | 3;
+  includeDismissed: boolean;
+  sortBy: "severity" | "date";
+  desc: boolean;
+  /** Order by conversation, so grouped mode can build headings from a window. */
+  groupByThread: boolean;
+  /** Drop findings whose source is gone — the report does, the panel doesn't. */
+  excludeStale?: boolean;
+  offset: number;
+  limit: number;
+}
+
+export interface ContentFindingCounts {
+  /** Rows the requested filter matches — the virtualizer's count. */
+  matching: number;
+  live: number;
+  /** Not dismissed and not stale — what the printable report includes. */
+  liveFresh: number;
+  dismissed: number;
+  serious: number;
+  harmful: number;
+  concerning: number;
+}
+
 export type SafetyScanEvent =
   | { phase: "loading" }
   | {
@@ -1032,7 +1059,21 @@ export interface TraceLoupeClient {
   ): Promise<UnlistenFn>;
   /** All Content Findings for the active backup (dismissed included). */
   /** Findings, most severe first; `scanId` restricts to one scan's. */
-  listContentFindings(scanId?: number): Promise<ContentFinding[]>;
+  /** One page of a scan's findings, filtered and ordered by SQLite (#65). */
+  listContentFindings(
+    scanId: number | undefined,
+    page: ContentFindingPage,
+  ): Promise<ContentFinding[]>;
+  /** The pills' numbers, plus how many rows the given filter matches — counted
+   *  with the same predicate as the page, so the two can never disagree. */
+  countContentFindings(
+    scanId: number | undefined,
+    filter?: {
+      severity?: 1 | 2 | 3;
+      includeDismissed?: boolean;
+      excludeStale?: boolean;
+    },
+  ): Promise<ContentFindingCounts>;
   /** The flagged source (text, sender, time, service) for a finding, fetched
    *  from the backup on demand. Null when the source row is gone or its id is
    *  stale after a re-import. */
@@ -1493,9 +1534,24 @@ const tauriClient: TraceLoupeClient = {
       "subscribe_safety_model_progress",
       cb,
     ),
-  listContentFindings: (scanId) =>
+  listContentFindings: (scanId, page) =>
     invoke<ContentFinding[]>("list_content_findings", {
       scanId: scanId ?? null,
+      severity: page.severity ?? null,
+      includeDismissed: page.includeDismissed,
+      sortBy: page.sortBy,
+      desc: page.desc,
+      groupByThread: page.groupByThread,
+      excludeStale: page.excludeStale ?? false,
+      offset: page.offset,
+      limit: page.limit,
+    }),
+  countContentFindings: (scanId, filter) =>
+    invoke<ContentFindingCounts>("count_content_findings", {
+      scanId: scanId ?? null,
+      severity: filter?.severity ?? null,
+      includeDismissed: filter?.includeDismissed ?? false,
+      excludeStale: filter?.excludeStale ?? false,
     }),
   contentFindingSnippet: (sourceKind, sourceId) =>
     invoke<FindingSnippet | null>("content_finding_snippet", {
@@ -2633,6 +2689,17 @@ const safariKey = (by: string) => (h: HistoryVisit) =>
 type ProgressCb = (p: ImportProgress) => void;
 const mockProgressSubs = new Set<ProgressCb>();
 
+/** Which findings a mock scan holds. One definition for the list and the count,
+ *  because two would drift exactly the way #59 did. */
+function mockFindingsForScan(scanId?: number) {
+  if (!mockActive) return [];
+  // Mock scan 1 found only the first finding; scans 2 and 4 found none;
+  // scan 3 (latest) found everything.
+  if (scanId === 1) return mockContentFindings.slice(0, 1);
+  if (scanId === 2 || scanId === 4) return [];
+  return mockBulk(mockContentFindings, (f, i) => ({ ...f, id: 900000 + i }));
+}
+
 const mockEngineSubs = new Set<(p: EngineProgress) => void>();
 
 export const mockClient: TraceLoupeClient = {
@@ -3300,14 +3367,45 @@ export const mockClient: TraceLoupeClient = {
   cancelSafetyScan: async () => {},
   onSafetyScanProgress: async () => () => {},
   onSafetyModelProgress: async () => () => {},
-  listContentFindings: async (scanId) => {
-    if (!mockActive) return [];
-    // Mock scan 1 found only the first finding; scan 2 was cancelled early
-    // (none); scan 3 (latest) found everything.
-    if (scanId === 1) return mockContentFindings.slice(0, 1);
-    if (scanId === 2) return [];
-    if (scanId === 4) return [];
-    return mockContentFindings;
+  listContentFindings: async (scanId, page) => {
+    // The mock applies the same filters and order as SQLite, so the browser
+    // harness exercises the real paging path rather than a shortcut.
+    const all = mockFindingsForScan(scanId);
+    let rows = all.filter((f) => page.includeDismissed || !f.dismissed);
+    if (page.excludeStale) rows = rows.filter((f) => !f.stale);
+    if (page.severity) rows = rows.filter((f) => f.severity === page.severity);
+    const dir = page.desc ? -1 : 1;
+    rows = [...rows].sort((a, b) => {
+      if (page.groupByThread) {
+        const at = a.threadIdentifier ?? "\uffff";
+        const bt = b.threadIdentifier ?? "\uffff";
+        if (at !== bt) return at < bt ? -1 : 1;
+      }
+      if (page.sortBy === "severity" && a.severity !== b.severity)
+        return (a.severity - b.severity) * dir;
+      const ao = a.occurredAt ?? 0;
+      const bo = b.occurredAt ?? 0;
+      if (ao !== bo) return (ao - bo) * dir;
+      return (a.id - b.id) * dir;
+    });
+    return rows.slice(page.offset, page.offset + page.limit);
+  },
+  countContentFindings: async (scanId, filter) => {
+    const all = mockFindingsForScan(scanId);
+    const live = all.filter((f) => !f.dismissed);
+    let matched = filter?.includeDismissed ? all : live;
+    if (filter?.excludeStale) matched = matched.filter((f) => !f.stale);
+    if (filter?.severity)
+      matched = matched.filter((f) => f.severity === filter.severity);
+    return {
+      matching: matched.length,
+      live: live.length,
+      liveFresh: live.filter((f) => !f.stale).length,
+      dismissed: all.length - live.length,
+      serious: live.filter((f) => f.severity === 3).length,
+      harmful: live.filter((f) => f.severity === 2).length,
+      concerning: live.filter((f) => f.severity === 1).length,
+    };
   },
   contentFindingSnippet: async (sourceKind, sourceId) => {
     if (!mockActive || sourceId == null) return null;
