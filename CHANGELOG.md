@@ -13,6 +13,30 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.16] — 2026-07-26
+
+### Changed
+
+- **Buttons, fields and dropdowns have tighter corners**, closer to native macOS
+  than the softer web-style rounding they had. One value controls it, so the whole
+  control family stays consistent.
+- **The toolbar cluster is spaced properly again.** Text size, density and theme
+  were packed together as if they were one control; only the A− / A+ pair is a
+  single control, and only that pair sits flush now.
+
+### Fixed
+
+- **Long lists can no longer freeze the app.** Scan history, security runs and
+  security findings now render only the rows on screen. Each of these grows
+  forever — a row per scan, never removed — and a long one used to put every row
+  in the document at once, which is what locked up the machine in an earlier
+  release. Verified against 4,000-row lists.
+  ([#67](https://github.com/PeterBlenessy/traceloupe/issues/67))
+- **A note packed with photos, and a finding with many shortened links, stay
+  responsive.** Both now show a sensible number and say plainly how many aren't
+  shown, instead of rendering everything.
+  ([#67](https://github.com/PeterBlenessy/traceloupe/issues/67))
+
 ## [0.31.14] — 2026-07-26
 
 ### Changed
