@@ -66,7 +66,7 @@ export function SortControl({
         value={value.by}
         onChange={(e) => onChange({ ...value, by: e.target.value })}
         aria-label="Sort by"
-        className="rounded-md border-0 bg-transparent px-1.5 py-1 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="h-(--control-h-sm) rounded-md border-0 bg-transparent px-1.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {fields.map((f) => (
           <option key={f.value} value={f.value}>
@@ -80,12 +80,12 @@ export function SortControl({
             type="button"
             onClick={() => onChange({ ...value, desc: !value.desc })}
             aria-label={value.desc ? "Sort descending" : "Sort ascending"}
-            className="inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            className="inline-flex size-(--control-h-sm) shrink-0 items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
           >
             {value.desc ? (
-              <ArrowDownWideNarrow className="size-5" />
+              <ArrowDownWideNarrow className="size-4" />
             ) : (
-              <ArrowUpNarrowWide className="size-5" />
+              <ArrowUpNarrowWide className="size-4" />
             )}
           </button>
         </TooltipTrigger>

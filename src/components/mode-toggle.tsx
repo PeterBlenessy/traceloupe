@@ -26,8 +26,7 @@ export function ModeToggle() {
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
-          size="icon"
-          className="size-8"
+          size="icon-sm"
           onClick={() => setTheme(next)}
         >
           <Icon className="size-5" />

@@ -230,7 +230,7 @@ export function SecurityView() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex">
-                  <Button size="sm" onClick={() => scan.mutate()} disabled={running}>
+                  <Button onClick={() => scan.mutate()} disabled={running}>
                     {running ? (
                       <Loader2 className="size-4 animate-spin" />
                     ) : (

@@ -161,8 +161,8 @@ function JumpButtons({
           <span className="inline-flex">
             <Button
               variant="ghost"
-              size="sm"
-              className="size-8 px-0 text-muted-foreground"
+              size="icon-sm"
+              className="text-muted-foreground"
               disabled={disabled}
               onClick={onTop}
             >
@@ -177,8 +177,8 @@ function JumpButtons({
           <span className="inline-flex">
             <Button
               variant="ghost"
-              size="sm"
-              className="-ml-1 size-8 px-0 text-muted-foreground"
+              size="icon-sm"
+              className="-ml-1 text-muted-foreground"
               disabled={disabled}
               onClick={onBottom}
             >
@@ -201,7 +201,7 @@ function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }
           variant="ghost"
           size="sm"
           onClick={onToggle}
-          className="h-9 shrink-0 gap-1.5 px-2 text-sm text-muted-foreground"
+          className="shrink-0 gap-1.5 px-2 text-sm text-muted-foreground"
         >
           {desc ? (
             <ArrowDownWideNarrow className="size-5" />
@@ -1373,7 +1373,7 @@ function Conversation({
           <Button
             variant="ghost"
             size="sm"
-            className="-ml-2 h-7 gap-1 px-2 text-muted-foreground"
+            className="-ml-2 gap-1 px-2 text-muted-foreground"
             onClick={onBack}
           >
             <ArrowLeft className="size-4" />
