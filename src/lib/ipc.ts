@@ -1173,6 +1173,40 @@ function mediaQuery(opts?: { thumb?: boolean; cacheKey?: number }): string {
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
+/**
+ * Subscribe to a backend progress stream over a Tauri **Channel** rather than an
+ * event (#65). Tauri's guidance is that events "are not designed for low latency
+ * or high throughput" and that rapid events delivered to an async listener may be
+ * processed OUT OF ORDER — for a progress stream that is a correctness problem,
+ * not a cosmetic one.
+ *
+ * Keeps the `listen()` contract callers already use: returns an unlisten
+ * function. Unlisten detaches the callback here rather than telling the backend
+ * to forget the channel — each of these streams holds a single slot that the next
+ * subscribe replaces, and a send into a detached channel is dropped. Subscribing
+ * twice is therefore safe; the newest subscriber wins, which is exactly what a
+ * webview reload needs.
+ *
+ * Every one of these streams pairs with a status-snapshot command that the UI
+ * reads at mount. The snapshot answers "what is happening right now"; the stream
+ * only carries what happens next. Anything emitted before subscribing is dropped
+ * — as it was with events, where an emit reached only a live listener.
+ */
+async function subscribeStream<T>(
+  command: string,
+  cb: (payload: T) => void,
+): Promise<UnlistenFn> {
+  let live = true;
+  const channel = new Channel<T>();
+  channel.onmessage = (p) => {
+    if (live) cb(p);
+  };
+  await invoke(command, { channel });
+  return () => {
+    live = false;
+  };
+}
+
 const tauriClient: TraceLoupeClient = {
   listBackups: (root) => invoke<DiscoveryResult>("list_backups", { root }),
   defaultBackupRoot: () => invoke<string | null>("default_backup_root"),
@@ -1207,7 +1241,7 @@ const tauriClient: TraceLoupeClient = {
   listImportModules: () => invoke<ImportModule[]>("list_import_modules"),
   importBackup: (args) => invoke<ImportResult>("import_backup", args),
   onImportProgress: (cb) =>
-    listen<ImportProgress>("import://progress", (e) => cb(e.payload)),
+    subscribeStream<ImportProgress>("subscribe_import_progress", cb),
   cancelImport: () => invoke("cancel_import"),
   setLogLevel: (level) => invoke("set_log_level", { level }),
   setBiometricRequired: (enabled) =>
@@ -1405,7 +1439,7 @@ const tauriClient: TraceLoupeClient = {
     invoke<ScanSummary>("run_security_scan", { kind }),
   cancelScan: () => invoke("cancel_scan"),
   onScanProgress: (cb) =>
-    listen<ScanProgress>("scan://progress", (e) => cb(e.payload)),
+    subscribeStream<ScanProgress>("subscribe_security_progress", cb),
   listScanRuns: () => invoke<ScanRun[]>("list_scan_runs"),
   latestScanRun: () => invoke<number | null>("latest_scan_run"),
   listFindings: (runId, minSeverity, module) =>
@@ -1445,10 +1479,11 @@ const tauriClient: TraceLoupeClient = {
     }),
   cancelSafetyScan: () => invoke("cancel_safety_scan"),
   onSafetyScanProgress: (cb) =>
-    listen<SafetyScanEvent>("safetyscan://progress", (e) => cb(e.payload)),
+    subscribeStream<SafetyScanEvent>("subscribe_safety_scan_progress", cb),
   onSafetyModelProgress: (cb) =>
-    listen<SafetyModelProgressEvent>("safetyscan://model-progress", (e) =>
-      cb(e.payload),
+    subscribeStream<SafetyModelProgressEvent>(
+      "subscribe_safety_model_progress",
+      cb,
     ),
   listContentFindings: (scanId) =>
     invoke<ContentFinding[]>("list_content_findings", {
