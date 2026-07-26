@@ -33,6 +33,12 @@ pub const OVERLAP: usize = 5;
 /// an explicit marker instead. The item FINGERPRINT still covers the full
 /// text, so finding identity and dismissals are unaffected.
 pub const ITEM_MAX_CHARS: usize = 4_000;
+
+/// Shown to both the reader and the model where an attachment sat. Deliberately
+/// plain words rather than an emoji or a bare "[image]": it must read as a note
+/// ABOUT the content, and it must be obvious that the attachment was not itself
+/// examined (#97).
+pub const MEDIA_MARKER: &str = "[attachment not examined]";
 /// Long notes are windowed into segments of ~this many chars (~2k tokens).
 /// One-chunk-per-note failed in practice: an oversized note runs the model to
 /// its output cap and produces nothing, at 10× the cost of a normal chunk
@@ -378,9 +384,22 @@ pub fn chunk_messages(
             continue;
         }
         let sql = format!(
-            "SELECT id, sender, is_from_me, sent_at, body FROM messages
+            // Emptiness is decided by the BODY test above, not by `kind`.
+            //
+            // `kind` previously excluded 'media' and 'sticker' too, which looked
+            // like "skip messages with nothing to read" but wasn't:
+            // `message_kind` returns "media" whenever an attachment is present —
+            // BEFORE it looks at the body — so every message sent WITH a photo
+            // was dropped from the scan along with its text. A threatening
+            // message with an image attached was never classified, and the scan
+            // still reported clean. `kind` exists for the Messages content
+            // filter; using it to decide scan scope was the mistake.
+            //
+            // Only 'system' stays excluded: those are app-generated notices
+            // ("you renamed this conversation"), not anything a person wrote.
+            "SELECT id, sender, is_from_me, sent_at, body, has_attachments FROM messages
              WHERE thread_id = ?{p} AND body IS NOT NULL AND TRIM(body) != ''
-               AND (kind IS NULL OR kind NOT IN ('media', 'sticker', 'system'))
+               AND (kind IS NULL OR kind != 'system')
                AND {where_range}
              ORDER BY sent_at, id",
             p = range_params.len() + 1
@@ -398,11 +417,12 @@ pub fn chunk_messages(
                 r.get::<_, bool>(2)?,
                 r.get::<_, Option<i64>>(3)?,
                 r.get::<_, String>(4)?,
+                r.get::<_, Option<bool>>(5)?.unwrap_or(false),
             ))
         })?;
         let mut items = Vec::new();
         for row in rows {
-            let (id, sender, is_from_me, sent_at, body) = row?;
+            let (id, sender, is_from_me, sent_at, body, has_attachments) = row?;
             let sender = if is_from_me {
                 "me".to_string()
             } else {
@@ -411,11 +431,23 @@ pub fn chunk_messages(
             // Fingerprint the FULL body (finding identity/dismissals survive),
             // then cap what the model actually sees.
             let fingerprint = message_fingerprint(&identifier, sent_at, &sender, &body);
+            // Say when an attachment came with the words. "look at this" reads
+            // very differently from "look at this" + a photo, and the model
+            // previously had no way to know the difference — the attachment was
+            // invisible to it. The marker rides the TEXT, never the fingerprint,
+            // so identity (and dismissals) are unaffected.
+            //
+            // The image itself is still not examined — see #97.
+            let text = if has_attachments {
+                format!("{}\n{MEDIA_MARKER}", cap_item_text(body))
+            } else {
+                cap_item_text(body)
+            };
             items.push(ChunkItem {
                 source_id: id,
                 sender,
                 occurred_at: sent_at,
-                text: cap_item_text(body),
+                text,
                 fingerprint,
             });
         }
@@ -459,7 +491,8 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
     let conn = cache.conn();
     let where_range = range.sql_between("COALESCE(modified_at, created_at)");
     let sql = format!(
-        "SELECT id, title, body_html, created_at, modified_at FROM notes
+        "SELECT id, title, body_html, created_at, modified_at,
+                COALESCE(image_count, 0) + COALESCE(attachment_count, 0) FROM notes
          WHERE locked = 0 AND {where_range}
          ORDER BY COALESCE(modified_at, created_at) DESC, id"
     );
@@ -476,21 +509,35 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
             r.get::<_, Option<String>>(2)?,
             r.get::<_, Option<i64>>(3)?,
             r.get::<_, Option<i64>>(4)?,
+            r.get::<_, i64>(5)?,
         ))
     })?;
     let mut chunks = Vec::new();
     for row in rows {
-        let (id, title, body_html, created_at, modified_at) = row?;
+        let (id, title, body_html, created_at, modified_at, media_count) = row?;
         let title = title.unwrap_or_default();
         let text = html_to_text(body_html.as_deref().unwrap_or_default());
         if text.trim().is_empty() && title.trim().is_empty() {
             continue;
         }
+        // Identity is the note's words — media markers must not enter it, or a
+        // note would change identity when an attachment is added or removed.
         let fingerprint = note_fingerprint(created_at, &title, &text);
         let full = if title.is_empty() {
             text
         } else {
             format!("{title}\n{text}")
+        };
+        // Notes keep their images in `note_media`, so the body carries no trace
+        // of them: a note that is mostly photos read to the model as if it were
+        // near-empty. Say they were there — and say they were not examined (#97).
+        let full = if media_count > 0 {
+            format!(
+                "{full}\n[{media_count} attachment{} not examined]",
+                if media_count == 1 { "" } else { "s" }
+            )
+        } else {
+            full
         };
         let segments = split_note_text(&full);
         if segments.len() == 1 {
@@ -806,7 +853,12 @@ mod tests {
     }
 
     #[test]
-    fn skips_empty_and_media_bodies_and_orders_threads_by_recency() {
+    fn scans_captions_on_media_messages_but_skips_empty_and_system() {
+        // `kind` is the Messages CONTENT FILTER's classification, not a statement
+        // about whether there is anything to read: `message_kind` returns "media"
+        // whenever an attachment exists, before it looks at the body. The scanner
+        // used to exclude that bucket, so a message sent WITH a photo was dropped
+        // along with its text — and the scan still reported clean (#97).
         let cache = cache_with(&[
             ("old-chat", 100, "old text", false),
             ("new-chat", 5000, "new text", false),
@@ -816,16 +868,87 @@ mod tests {
             .execute(
                 "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind)
                  VALUES (1, 'them', 0, '  ', 101, 'text'),
-                        (1, 'them', 0, 'IMG_1.HEIC', 102, 'media')",
+                        (1, 'them', 0, 'look at this, I know where you live', 102, 'media'),
+                        (1, 'them', 0, NULL, 103, 'media'),
+                        (1, 'them', 0, 'you renamed the conversation', 104, 'system')",
                 [],
             )
             .unwrap();
         let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
         assert_eq!(chunks.len(), 2);
-        // Newest thread first.
         assert_eq!(chunks[0].thread_identifier.as_deref(), Some("new-chat"));
-        // Blank + media rows dropped from old-chat.
-        assert_eq!(chunks[1].items.len(), 1);
+
+        let bodies: Vec<&str> = chunks[1].items.iter().map(|i| i.text.as_str()).collect();
+        // The caption on a media message IS scanned — this is the bug fix.
+        assert!(
+            bodies.iter().any(|b| b.contains("I know where you live")),
+            "a caption sent with a photo must be scanned, got {bodies:?}",
+        );
+        // Blank body, NULL body and app-generated system notices stay out.
+        assert!(!bodies.iter().any(|b| b.trim().is_empty()));
+        assert!(!bodies
+            .iter()
+            .any(|b| b.contains("renamed the conversation")));
+        assert_eq!(bodies.len(), 2, "old text + the caption, got {bodies:?}");
+    }
+
+    #[test]
+    fn attachments_are_marked_without_changing_identity() {
+        // Media was invisible to the model: a message's attachment was never
+        // mentioned, and a note's images live in another table so its body read
+        // as if they weren't there. Both now say an attachment was present AND
+        // that it wasn't examined — while identity ignores the marker, so adding
+        // or removing an attachment can't orphan a finding's dismissal (#97).
+        let cache = cache_with(&[("chat", 100, "seed", false)]);
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind, has_attachments)
+                 VALUES (1, 'them', 0, 'look at this', 200, 'media', 1)",
+                [],
+            )
+            .unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO notes (id, title, body_html, created_at, modified_at, locked, image_count)
+                 VALUES (9, 'Trip', '<p>plans</p>', 500, 600, 0, 3)",
+                [],
+            )
+            .unwrap();
+
+        let msg = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let flagged = msg
+            .iter()
+            .flat_map(|c| &c.items)
+            .find(|i| i.text.contains("look at this"))
+            .expect("the captioned media message must be scanned");
+        assert!(
+            flagged.text.contains("not examined"),
+            "the model must be told an attachment came with the words, got {:?}",
+            flagged.text,
+        );
+        // …but identity is the words alone, so the dismissal survives.
+        assert_eq!(
+            flagged.fingerprint,
+            message_fingerprint("chat", Some(200), "them", "look at this"),
+        );
+
+        let notes = chunk_notes(&cache, TimeRange::default()).unwrap();
+        let note = notes
+            .iter()
+            .find(|c| c.label.as_deref() == Some("Trip"))
+            .unwrap();
+        assert!(
+            note.items[0].text.contains("3 attachments not examined"),
+            "a note's images must be mentioned, got {:?}",
+            note.items[0].text,
+        );
+        assert_eq!(
+            note.items[0].fingerprint,
+            note_fingerprint(Some(500), "Trip", "plans"),
+            "the marker must stay out of note identity",
+        );
     }
 
     #[test]
