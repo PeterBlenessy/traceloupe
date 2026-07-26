@@ -13,6 +13,22 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.13] — 2026-07-26
+
+### Fixed
+
+- **Findings kept their link to the message or note they came from across a
+  re-import.** Re-importing rebuilds the cache and renumbers every row, so
+  findings from an earlier scan pointed at nothing and "View flagged text" said
+  the source was no longer available — for content that was still right there.
+  Findings are now re-attached by content, so past scans stay readable.
+  ([#96](https://github.com/PeterBlenessy/traceloupe/issues/96))
+- **A finding whose content really is gone now says so, instead of showing
+  someone else's.** The dangling row id is cleared rather than left to point at
+  whichever row inherited the number. And "gone" isn't permanent: re-importing a
+  backup that has the content again brings the finding back.
+  ([#96](https://github.com/PeterBlenessy/traceloupe/issues/96))
+
 ## [0.31.12] — 2026-07-26
 
 ### Fixed
