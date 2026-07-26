@@ -46,6 +46,10 @@ import {
 } from "@/components/ui/sidebar";
 import { DeviceHero } from "@/components/device-hero";
 import { ActivityIndicator } from "@/components/activity-indicator";
+import {
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/settings-primitives";
 import { SecurityScanProvider } from "@/components/security-scan-provider";
 import {
   SettingsDialogProvider,
@@ -1032,37 +1036,6 @@ function SettingsMenu() {
   );
 }
 
-/**
- * A macOS System Settings-style group: a small header above a rounded card whose
- * rows are separated by hairline dividers.
- */
-function SettingsGroup({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="flex flex-col gap-2">
-      <div className="px-1">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          {title}
-        </h3>
-        {description && (
-          <p className="mt-1 text-xs leading-snug text-muted-foreground">
-            {description}
-          </p>
-        )}
-      </div>
-      <div className="divide-y divide-border overflow-hidden rounded-xl border bg-card">
-        {children}
-      </div>
-    </section>
-  );
-}
 
 /** One row inside a SettingsGroup: label + description on the left, control right. */
 /** The opt-in file sink (#60). Logs always stream to the console; this keeps a
@@ -1124,30 +1097,3 @@ function LogFileSettings() {
   );
 }
 
-function SettingsRow({
-  label,
-  description,
-  children,
-}: {
-  label: string;
-  description?: string;
-  children: React.ReactNode;
-}) {
-  // Stacked layout (macOS System Settings pattern): the label and control sit
-  // together on the first row; the description flows full-width beneath them. A
-  // side-by-side layout squeezes the description into whatever width the control
-  // leaves, wrapping long help text one word per line.
-  return (
-    <div className="px-3.5 py-2.5">
-      <div className="flex min-h-[calc(1.75rem*var(--text-scale))] items-center gap-4">
-        <div className="min-w-0 flex-1 text-sm">{label}</div>
-        <div className="shrink-0">{children}</div>
-      </div>
-      {description && (
-        <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          {description}
-        </div>
-      )}
-    </div>
-  );
-}
