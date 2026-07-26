@@ -13,6 +13,21 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.18] — 2026-07-26
+
+### Changed
+
+- **The findings list stays quick no matter how much a scan flagged.** It used to
+  hand the whole list to the interface at once — several megabytes at eight
+  thousand findings, resent every time anything changed, including each time you
+  dismissed something. Findings are now filtered, sorted and grouped in the
+  database and fetched a screenful at a time.
+  ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
+- **The severity counts beside the filters can no longer disagree with the list.**
+  Both are now counted the same way, so a filter promising twelve findings
+  always shows twelve.
+  ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
+
 ## [0.31.17] — 2026-07-26
 
 ### Fixed
