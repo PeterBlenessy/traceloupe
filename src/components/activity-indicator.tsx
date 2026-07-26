@@ -198,7 +198,7 @@ export function ActivityIndicator() {
         </TooltipContent>
       </Tooltip>
       <PopoverContent align="end" className="w-72 p-2">
-        <div className="px-1 pb-1.5 text-[calc(0.65625rem*var(--text-scale))] font-medium uppercase tracking-wider text-muted-foreground">
+        <div className="px-1 pb-1.5 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
           Ongoing
         </div>
         <ul className="space-y-1">

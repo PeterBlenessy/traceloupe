@@ -1270,6 +1270,9 @@ function SafetyReportDocument({
         : "text-muted-foreground";
 
   return (
+    // 15px: the printable report is a DOCUMENT, read end to end and exported
+    // to PDF, so it sets its own reading size between the UI's 14px and 16px
+    // rather than inheriting a UI step. Deliberately off the ramp.
     <article className="safety-report-print mx-auto max-w-2xl space-y-9 text-[calc(0.9375rem*var(--text-scale))] leading-relaxed">
       {/* Header */}
       <header className="space-y-1.5 border-b pb-5">

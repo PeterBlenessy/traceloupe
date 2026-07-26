@@ -98,6 +98,8 @@ export function BrandIcon({
   return (
     <span
       aria-label={name}
+      // 0.65EM, not a ramp step: this is the letter drawn inside a brand
+      // monogram, so it scales with whatever size the icon is given.
       className="inline-flex items-center justify-center text-[0.65em] font-semibold text-muted-foreground"
     >
       {name.slice(0, 2).toUpperCase()}

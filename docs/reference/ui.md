@@ -41,6 +41,13 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   "all"/first).
 - **Spacing/sizing:** Tailwind scale utilities. Arbitrary values (`w-[70%]`)
   are allowed only where no scale step fits (e.g. chat-bubble max width).
+- **Two steps below `text-xs`: `text-3xs` (10px) and `text-2xs` (11px).** They
+  exist because the app kept reinventing them — 24 of 31 arbitrary type sizes
+  were already exactly these. A timestamp, a duration badge and a NEW chip are a
+  role; `text-[calc(0.625rem*var(--text-scale))]` written 17 times is that role
+  without a name. An arbitrary size is still right when it is *fitted to
+  something* rather than chosen typographically (initials inside a half-size
+  avatar, a monogram at `0.65em`, the A−/A+ glyphs) — those say so at the site.
 - **Our type ramp is a web ramp, not the platform's.** Tailwind gives us
   12/14/16/18/20/24 px; macOS's text styles are 10/11/12/13/15/17/22/26 — our
   body text sits a step above the system's. `scripts/font-probe.swift` prints

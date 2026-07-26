@@ -237,7 +237,7 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
         <ItemTitle className="flex items-center gap-2">
           {app.name}
           {app.version && (
-            <span className="font-mono text-[calc(0.6875rem*var(--text-scale))] font-normal tabular-nums text-muted-foreground/70">
+            <span className="font-mono text-2xs font-normal tabular-nums text-muted-foreground/70">
               {app.version}
             </span>
           )}
@@ -288,7 +288,7 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
             {app.appleId && `via ${app.appleId}`}
           </ItemDescription>
         ) : null}
-        <ItemDescription className="truncate font-mono text-[calc(0.6875rem*var(--text-scale))] text-muted-foreground/60">
+        <ItemDescription className="truncate font-mono text-2xs text-muted-foreground/60">
           {app.bundleId}
         </ItemDescription>
       </ItemContent>
