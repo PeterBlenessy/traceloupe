@@ -54,6 +54,12 @@ import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { client, type Note, type TimeRange } from "@/lib/ipc";
 
+/** Most images to put in the document for one note. A note built from a long
+ *  photo roll would otherwise mount hundreds of <img> elements at once; the
+ *  shortfall is stated in the gallery rather than silently dropped (#67). */
+const NOTE_IMAGE_CAP = 50;
+
+
 /** A flattened list row for the virtualized master: a date/section header (flat
  *  view), a folder node (tree view), or a note. */
 type NoteRowItem =
@@ -778,7 +784,15 @@ function NoteDetail({ note }: { note: Note }) {
               True inline-at-position rendering is a future pass. */}
           {!note.locked && note.availableImageCount > 0 && (
             <div className="mt-4 flex flex-col gap-3">
-              {Array.from({ length: note.availableImageCount }).map((_, i) => (
+              {/* Bounded, with the shortfall stated below: one <img> per image in
+                  a single note is unbounded in principle, and a note built from
+                  a long photo roll would put hundreds of image elements in the
+                  document at once (#67). Bounded rather than virtualized because
+                  images vary wildly in height and this gallery sits inside the
+                  note body's own scroller. */}
+              {Array.from({
+                length: Math.min(note.availableImageCount, NOTE_IMAGE_CAP),
+              }).map((_, i) => (
                 <img
                   key={i}
                   src={client.noteImageUrl(note.id, i)}
@@ -790,6 +804,12 @@ function NoteDetail({ note }: { note: Note }) {
                   }}
                 />
               ))}
+              {note.availableImageCount > NOTE_IMAGE_CAP && (
+                <p className="text-xs text-muted-foreground">
+                  Showing the first {NOTE_IMAGE_CAP} of{" "}
+                  {note.availableImageCount} images in this note.
+                </p>
+              )}
               {note.imageCount > note.availableImageCount && (
                 <p className="text-xs text-muted-foreground">
                   {note.imageCount - note.availableImageCount} more image

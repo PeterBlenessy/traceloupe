@@ -2393,6 +2393,24 @@ let mockDetectionSettings: DetectionSettings = {
 
 let mockDeshortenAutoApprove = false;
 
+/**
+ * Dev-only list inflater for the mock client: repeats a fixture list until it has
+ * N entries. Virtualization is a claim about behaviour at scale, and a 5-row
+ * fixture cannot test it — this makes "does this rail actually virtualize?" a
+ * repeatable check rather than a promise (#67).
+ *
+ * Set it with `localStorage.setItem("traceloupe-mock-bulk", "4000")`. NOT a URL
+ * parameter: the router validates search params and strips unknown ones on the
+ * first navigation, so a `?bulk=` knob silently stops applying the moment you
+ * leave the landing route — which reads exactly like a passing test.
+ */
+function mockBulk<T>(rows: T[], renumber: (row: T, i: number) => T): T[] {
+  if (typeof localStorage === "undefined" || !rows.length) return rows;
+  const n = Number(localStorage.getItem("traceloupe-mock-bulk") ?? 0);
+  if (!Number.isFinite(n) || n <= rows.length) return rows;
+  return Array.from({ length: n }, (_, i) => renumber(rows[i % rows.length], i));
+}
+
 let mockScanRuns: ScanRun[] = [];
 
 let mockSafetyModelInstalled = false;
@@ -3179,7 +3197,10 @@ export const mockClient: TraceLoupeClient = {
   },
   cancelScan: async () => {},
   onScanProgress: async () => () => {},
-  listScanRuns: async () => (mockActive ? mockScanRuns : []),
+  listScanRuns: async () =>
+    mockActive
+      ? mockBulk(mockScanRuns, (r, i) => ({ ...r, id: 100000 + i }))
+      : [],
   latestScanRun: async () =>
     mockActive && mockScanRuns.length ? mockScanRuns[0].id : null,
   listFindings: async (_runId, minSeverity) => {
@@ -3187,7 +3208,10 @@ export const mockClient: TraceLoupeClient = {
     const rank = (s: Severity) =>
       s === "critical" ? 3 : s === "warning" ? 2 : 1;
     const min = minSeverity ? rank(minSeverity) : 1;
-    return mockFindings.filter((f) => rank(f.severity) >= min);
+    return mockBulk(
+      mockFindings.filter((f) => rank(f.severity) >= min),
+      (f, i) => ({ ...f, id: 100000 + i }),
+    );
   },
   getSafetyScanModelStatus: async () => ({
     totalRamBytes: 16 * 1024 ** 3,
@@ -3318,7 +3342,7 @@ export const mockClient: TraceLoupeClient = {
       : { scan: null, report: null, threadSummaries: [] },
   listSafetyScans: async () =>
     mockActive && mockContentFindings.length
-      ? [
+      ? mockBulk([
           {
             id: 3,
             model: "gemma-4-E4B-it-Q4_K_M",
@@ -3397,7 +3421,9 @@ export const mockClient: TraceLoupeClient = {
             harmful: 307,
             concerning: 965,
           },
-        ].filter((s) => !mockDeletedScanIds.has(s.id))
+          ].filter((s) => !mockDeletedScanIds.has(s.id)),
+          (s, i) => ({ ...s, id: 100000 + i }),
+        )
       : [],
   deleteSafetyScan: async (scanId) => {
     mockDeletedScanIds.add(scanId);

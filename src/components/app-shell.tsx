@@ -96,6 +96,7 @@ import { SecuritySettings } from "@/components/security-settings";
 import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
+import { useBoundedList } from "@/lib/bounded-list";
 
 const nav = [
   { to: "/photos", label: "Photos", icon: Image, module: "camera_roll" },
@@ -634,6 +635,9 @@ function SettingsMenu() {
     queryKey: ["importModules"],
     queryFn: () => client.listImportModules(),
   });
+  // Every row is one import module the backend offers — a fixed set, so this
+  // list is declared bounded rather than virtualized (#67).
+  useBoundedList("settings import catalog", catalog?.length ?? 0, 40);
   // Effective selection: the user's saved choice, or every default.
   const selected =
     importModules ?? catalog?.filter((m) => m.default).map((m) => m.id) ?? [];
@@ -913,6 +917,7 @@ function SettingsMenu() {
                 />
               </SettingsRow>
             </SettingsGroup>
+            {/* Bounded by the backend's import catalog (#67). */}
             {catalog && catalog.length > 0 ? (
               <SettingsGroup
                 title="Data to import"
