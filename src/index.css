@@ -76,12 +76,23 @@
 /* Tailwind v4's type ramp, re-expressed against the scale. Line heights are
    ratios in v4, so they follow automatically. */
 :root {
-  --text-xs: calc(0.75rem * var(--text-scale));
-  --text-sm: calc(0.875rem * var(--text-scale));
-  --text-base: calc(1rem * var(--text-scale));
-  --text-lg: calc(1.125rem * var(--text-scale));
-  --text-xl: calc(1.25rem * var(--text-scale));
-  --text-2xl: calc(1.5rem * var(--text-scale));
+  /* The unscaled ramp. Every scaled value below multiplies one of these, so the
+     numbers exist ONCE even though the ramp is declared twice (see
+     `[data-text-scale="fixed"]` further down for why the second declaration is
+     unavoidable). */
+  --ramp-xs: 0.75rem;
+  --ramp-sm: 0.875rem;
+  --ramp-base: 1rem;
+  --ramp-lg: 1.125rem;
+  --ramp-xl: 1.25rem;
+  --ramp-2xl: 1.5rem;
+
+  --text-xs: calc(var(--ramp-xs) * var(--text-scale));
+  --text-sm: calc(var(--ramp-sm) * var(--text-scale));
+  --text-base: calc(var(--ramp-base) * var(--text-scale));
+  --text-lg: calc(var(--ramp-lg) * var(--text-scale));
+  --text-xl: calc(var(--ramp-xl) * var(--text-scale));
+  --text-2xl: calc(var(--ramp-2xl) * var(--text-scale));
 }
 
 /* Control geometry — ONE scale for every inline control (buttons, inputs,
@@ -100,10 +111,15 @@
    scaled — horizontal breathing room is furniture, and scaling it would make
    large-text buttons grow absurdly wide. */
 :root {
-  --control-h-xs: calc(1.25rem * var(--text-scale));   /* 20px */
-  --control-h-sm: calc(1.5rem * var(--text-scale));    /* 24px */
-  --control-h: calc(1.75rem * var(--text-scale));      /* 28px — native default */
-  --control-h-lg: calc(2rem * var(--text-scale));      /* 32px */
+  --ramp-control-xs: 1.25rem;                          /* 20px */
+  --ramp-control-sm: 1.5rem;                           /* 24px */
+  --ramp-control: 1.75rem;                             /* 28px — native default */
+  --ramp-control-lg: 2rem;                             /* 32px */
+
+  --control-h-xs: calc(var(--ramp-control-xs) * var(--text-scale));
+  --control-h-sm: calc(var(--ramp-control-sm) * var(--text-scale));
+  --control-h: calc(var(--ramp-control) * var(--text-scale));
+  --control-h-lg: calc(var(--ramp-control-lg) * var(--text-scale));
   /* Corner radius for controls, deliberately tighter than the app's general
      --radius (10px, so `rounded-md` resolves to 8px — a 1:3.5 radius-to-height
      ratio at 28px, which read soft and web-like next to native controls).
@@ -111,6 +127,45 @@
      macOS button pair. Fixed, not scaled with text: a corner that grows with the
      font reads as a different button, not a bigger one. */
   --control-radius: 0.25rem;                           /* 4px */
+}
+
+/* The app frame does NOT follow the text-size control.
+   ================================================================
+   A+/− is a READING preference: it makes the backup's content easier to read.
+   The frame — the top toolbar, the sidebar, and a dialog's action row — is not
+   read, it is aimed at. Two reasons it stays put:
+
+   1. A modal's action row is a decision point, often a destructive one. The
+      button under the cursor must not depend on a font setting.
+   2. A toolbar that reflows the window when someone adjusts text size feels
+      unstable, and the sidebar is the same furniture as the toolbar.
+
+   A dialog's TITLE and BODY still scale — those are read. Only its action row
+   is furniture, which is why this attaches to the footer rather than the dialog.
+
+   Why the ramp is re-declared here rather than just resetting --text-scale: a
+   custom property's `var()` is substituted where the property is DECLARED, so
+   `--text-sm` computed at :root has already baked in :root's scale. Descendants
+   inherit that computed value; overriding --text-scale alone changes nothing.
+   Re-declaring against the same --ramp-* numbers is what re-substitutes them —
+   so the values still live in exactly one place.
+
+   If the app ever needs a legibility control for the frame itself, that wants to
+   be its own setting (or the macOS text-size setting), NOT this one. */
+[data-text-scale="fixed"] {
+  --text-scale: 1;
+
+  --text-xs: calc(var(--ramp-xs) * var(--text-scale));
+  --text-sm: calc(var(--ramp-sm) * var(--text-scale));
+  --text-base: calc(var(--ramp-base) * var(--text-scale));
+  --text-lg: calc(var(--ramp-lg) * var(--text-scale));
+  --text-xl: calc(var(--ramp-xl) * var(--text-scale));
+  --text-2xl: calc(var(--ramp-2xl) * var(--text-scale));
+
+  --control-h-xs: calc(var(--ramp-control-xs) * var(--text-scale));
+  --control-h-sm: calc(var(--ramp-control-sm) * var(--text-scale));
+  --control-h: calc(var(--ramp-control) * var(--text-scale));
+  --control-h-lg: calc(var(--ramp-control-lg) * var(--text-scale));
 }
 
 /* The surface palette is layered tinted neutrals (a whisper of chroma at hue
