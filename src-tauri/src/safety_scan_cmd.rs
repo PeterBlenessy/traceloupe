@@ -1211,7 +1211,7 @@ pub fn content_finding_snippet(
             )
             .ok()
             .and_then(|(title, body)| {
-                let body = traceloupe_core::safety_scan::chunker::strip_html(
+                let body = traceloupe_core::safety_scan::chunker::html_to_text(
                     body.as_deref().unwrap_or(""),
                 );
                 let text = match title {
