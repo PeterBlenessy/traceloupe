@@ -1211,10 +1211,7 @@ pub fn content_finding_snippet(
             )
             .ok()
             .and_then(|(title, body)| {
-                // Display path: keep the note's line structure. `strip_html` is
-                // the MODEL's flattener and feeds chunk fingerprints, so it must
-                // not change — a reader gets this one instead.
-                let body = traceloupe_core::safety_scan::chunker::html_to_display_text(
+                let body = traceloupe_core::safety_scan::chunker::html_to_text(
                     body.as_deref().unwrap_or(""),
                 );
                 let text = match title {

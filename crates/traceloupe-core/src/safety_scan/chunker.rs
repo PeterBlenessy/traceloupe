@@ -209,72 +209,50 @@ pub fn message_fingerprint(
     sender: &str,
     body: &str,
 ) -> String {
+    // Canonicalised for the same reason as notes: identity tracks content, not
+    // rendering. Message bodies are plain today, so this is a no-op for them now
+    // and insurance against the next formatting change.
     sha256_hex(&format!(
-        "message|{thread_identifier}|{}|{sender}|{body}",
-        sent_at.map(|t| t.to_string()).unwrap_or_default()
+        "message|{thread_identifier}|{}|{sender}|{}",
+        sent_at.map(|t| t.to_string()).unwrap_or_default(),
+        canonical_for_identity(body)
     ))
+}
+
+/// Collapse a body to its canonical form for IDENTITY purposes: whitespace runs
+/// (including line breaks) become single spaces.
+///
+/// A finding's fingerprint is what dismissals are keyed on, so it must depend on
+/// what the text SAYS, not on how we happen to render it. Without this, improving
+/// the HTML converter — as this change does — would silently invalidate every
+/// note dismissal the user had made, because the same note would hash
+/// differently. Presentation may keep evolving; identity must not move with it.
+fn canonical_for_identity(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn note_fingerprint(created_at: Option<i64>, title: &str, text: &str) -> String {
     sha256_hex(&format!(
-        "note|{}|{title}|{text}",
-        created_at.map(|t| t.to_string()).unwrap_or_default()
+        "note|{}|{}|{}",
+        created_at.map(|t| t.to_string()).unwrap_or_default(),
+        canonical_for_identity(title),
+        canonical_for_identity(text)
     ))
 }
 
-/// Strip HTML tags and decode the handful of entities Apple Notes bodies use,
-/// so fingerprints and prompts see prose, not markup.
-pub fn strip_html(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag = false;
-    let mut chars = html.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            // Only a '<' that starts a plausible tag ('<b', '</p', '<!--')
-            // enters tag mode; a stray literal '<' ("3 < 5") must not swallow
-            // the rest of the note.
-            '<' if !in_tag => match chars.peek() {
-                Some(n) if n.is_ascii_alphabetic() || *n == '/' || *n == '!' => in_tag = true,
-                _ => out.push('<'),
-            },
-            '>' => {
-                if in_tag {
-                    in_tag = false;
-                    // Block-ish boundary → keep words apart.
-                    if !out.ends_with(' ') && !out.ends_with('\n') && !out.is_empty() {
-                        out.push(' ');
-                    }
-                } else {
-                    out.push('>');
-                }
-            }
-            _ if !in_tag => out.push(c),
-            _ => {}
-        }
-    }
-    // `&amp;` last, or a note that literally discusses "&lt;" double-decodes.
-    let out = out
-        .replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&");
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// HTML → text for DISPLAY, preserving the line structure a reader expects.
+/// HTML → text, preserving the line structure both a reader and the classifier
+/// benefit from. The ONE converter: display surfaces and the chunker share it.
 ///
-/// [`strip_html`] exists for the MODEL: it flattens everything to one space-
-/// separated line, which is fine for classification and — critically — feeds the
-/// chunk fingerprints that cache classification results. Changing it would change
-/// every fingerprint and force a full re-scan, so it stays exactly as it is.
+/// There were briefly two — a flattening one for the model and a structured one
+/// for display — to avoid changing chunk fingerprints. That was rejected: the two
+/// duplicated all the entity and tag handling, so a fix to one would silently
+/// miss the other, which is the same drift that produced the list/count and
+/// Settings-spacing bugs. A single converter costs one re-scan, once.
 ///
-/// This is the sibling for anything a person reads (the flagged-text popover, the
-/// report). Block-level boundaries become newlines instead of spaces, so a note
-/// written as paragraphs, headings or a list still reads as paragraphs, headings
-/// or a list rather than collapsing into one block of prose.
-pub fn html_to_display_text(html: &str) -> String {
+/// Structure is also signal for the classifier: a note that is a shopping list
+/// reads very differently from one that is a paragraph, and flattening erased
+/// that distinction before the model ever saw it.
+pub fn html_to_text(html: &str) -> String {
     /// Tags that end a line. Everything else (b, i, span, a…) is inline and
     /// yields a space, so words don't run together.
     const BLOCK: &[&str] = &[
@@ -504,7 +482,7 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
     for row in rows {
         let (id, title, body_html, created_at, modified_at) = row?;
         let title = title.unwrap_or_default();
-        let text = strip_html(body_html.as_deref().unwrap_or_default());
+        let text = html_to_text(body_html.as_deref().unwrap_or_default());
         if text.trim().is_empty() && title.trim().is_empty() {
             continue;
         }
@@ -588,44 +566,60 @@ pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Re
 mod tests {
 
     #[test]
-    fn display_text_keeps_the_line_structure_a_reader_expects() {
+    fn finding_identity_survives_a_rendering_change() {
+        // The guarantee that makes future formatting work safe: a finding's
+        // fingerprint — which dismissals are keyed on — must not move when only
+        // the RENDERING of the same content changes. Flattened and structured
+        // renderings of one note must hash identically.
+        let flat = "Shopping First line Second line milk eggs";
+        let structured = "Shopping\nFirst line\nSecond line\nmilk\neggs";
+        assert_eq!(
+            note_fingerprint(Some(10), "T", flat),
+            note_fingerprint(Some(10), "T", structured),
+            "improving the HTML converter must not invalidate note dismissals",
+        );
+        // Different CONTENT must still differ, or the fingerprint is useless.
+        assert_ne!(
+            note_fingerprint(Some(10), "T", structured),
+            note_fingerprint(Some(10), "T", "something else entirely"),
+        );
+        // Same for messages, which are plain today but need the same insurance.
+        assert_eq!(
+            message_fingerprint("t", Some(1), "me", "a\nb"),
+            message_fingerprint("t", Some(1), "me", "a b"),
+        );
+    }
+
+    #[test]
+    fn html_to_text_keeps_the_line_structure_a_reader_expects() {
         // The bug: every tag boundary became a space and the final pass collapsed
         // all whitespace, so a note written as paragraphs arrived as one block.
         let html = "<h1>Shopping</h1><p>First line</p><p>Second line</p><ul><li>milk</li><li>eggs</li></ul>";
-        let out = html_to_display_text(html);
+        let out = html_to_text(html);
         assert_eq!(
             out, "Shopping\nFirst line\nSecond line\nmilk\neggs",
             "block tags must break lines, got: {out:?}"
         );
 
         // <br> is the common case inside a single paragraph.
-        assert_eq!(html_to_display_text("a<br>b<br/>c"), "a\nb\nc");
+        assert_eq!(html_to_text("a<br>b<br/>c"), "a\nb\nc");
 
         // Inline tags must NOT break — they just keep words apart.
         assert_eq!(
-            html_to_display_text("<p>a <b>bold</b> and <i>italic</i></p>"),
+            html_to_text("<p>a <b>bold</b> and <i>italic</i></p>"),
             "a bold and italic"
         );
 
         // Entities still decode, and a literal '<' survives.
-        assert_eq!(
-            html_to_display_text("<p>3 &lt; 5 &amp; more</p>"),
-            "3 < 5 & more"
-        );
-        assert_eq!(html_to_display_text("<p>3 < 5</p>"), "3 < 5");
+        assert_eq!(html_to_text("<p>3 &lt; 5 &amp; more</p>"), "3 < 5 & more");
+        assert_eq!(html_to_text("<p>3 < 5</p>"), "3 < 5");
 
         // Runs of empty blocks collapse to at most one blank line.
-        assert_eq!(
-            html_to_display_text("<p>a</p><p></p><p></p><p>b</p>"),
-            "a\nb"
-        );
+        assert_eq!(html_to_text("<p>a</p><p></p><p></p><p>b</p>"), "a\nb");
 
-        // The model-facing stripper is deliberately unchanged: it still flattens,
-        // because its output feeds chunk fingerprints that cache scan results.
-        assert_eq!(
-            strip_html(html),
-            "Shopping First line Second line milk eggs"
-        );
+        // ONE converter: the chunker sees the same structured text the reader
+        // does. Structure is signal — a shopping list should not read as prose
+        // to the classifier either.
     }
     use super::*;
     use rusqlite::params;
@@ -906,13 +900,14 @@ mod tests {
     }
 
     #[test]
-    fn strip_html_handles_tags_and_entities() {
-        assert_eq!(strip_html("<p>a&nbsp;&lt;b&gt;</p><p>c</p>"), "a <b> c");
-        assert_eq!(strip_html("plain"), "plain");
-        assert_eq!(strip_html(""), "");
+    fn html_to_text_handles_tags_and_entities() {
+        // Block boundaries break lines now (they used to collapse to a space).
+        assert_eq!(html_to_text("<p>a&nbsp;&lt;b&gt;</p><p>c</p>"), "a <b>\nc");
+        assert_eq!(html_to_text("plain"), "plain");
+        assert_eq!(html_to_text(""), "");
         // A stray literal '<' must not swallow the rest of the note.
-        assert_eq!(strip_html("score was 3 < 5 ok"), "score was 3 < 5 ok");
+        assert_eq!(html_to_text("score was 3 < 5 ok"), "score was 3 < 5 ok");
         // '&amp;' decodes last: a note discussing "&lt;" must not double-decode.
-        assert_eq!(strip_html("&amp;lt;"), "&lt;");
+        assert_eq!(html_to_text("&amp;lt;"), "&lt;");
     }
 }
