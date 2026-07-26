@@ -33,6 +33,7 @@ import { useImport } from "@/components/import-provider";
 import { useSafetyScan } from "@/components/safety-scan-provider";
 import { useSecurityScan } from "@/components/security-scan-provider";
 import { useReimport } from "@/components/reimport-provider";
+import { useBoundedList } from "@/lib/bounded-list";
 
 /** One thing the app is doing, as the toolbar needs to show it. */
 export type Activity = {
@@ -168,6 +169,10 @@ export function ActivityIndicator() {
   const label = single
     ? `${single.title} · ${single.detail}`
     : `${activities.length} ongoing`;
+
+  // Bounded by the fixed activity kinds plus one row per re-importing
+  // module (#67).
+  useBoundedList("activity-indicator entries", activities.length, 30);
 
   return (
     <Popover>
