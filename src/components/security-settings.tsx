@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
+import {
+  SettingsGroup,
+  SettingsRow,
+} from "@/components/settings-primitives";
 import {
   Tooltip,
   TooltipContent,
@@ -75,34 +77,43 @@ export function SecuritySettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      <Row
-        id="sec-auto-check"
-        label="Check each imported backup automatically"
-        description="Compares installed apps against public stalkerware lists and flags matches in Security. Nothing about your data leaves your Mac."
-        checked={autoCheck}
-        onChange={(on) =>
-          updateSettings(
-            on
-              ? { passiveEnabled: true, passiveConsent: "granted" }
-              : { passiveEnabled: false },
-          )
-        }
-      />
-      <Row
-        id="sec-auto-update"
-        label="Download the latest indicator lists"
-        description="Fetches updated lists from Amnesty International, the MVT project, and Échap over HTTPS at the start of a scan. Only the lists are downloaded — nothing about you or your backup is sent."
-        checked={autoUpdate}
-        onChange={(on) =>
-          updateSettings(
-            on
-              ? { autoUpdateIndicators: true, fetchConsent: "granted" }
-              : { autoUpdateIndicators: false },
-          )
-        }
-      />
-
-      <Separator />
+      <SettingsGroup
+        title="Automatic checks"
+        description="What Security does without being asked."
+      >
+        <SettingsRow
+          label="Check each imported backup automatically"
+          description="Compares installed apps against public stalkerware lists and flags matches in Security. Nothing about your data leaves your Mac."
+        >
+          <Switch
+            aria-label="Check each imported backup automatically"
+            checked={autoCheck}
+            onCheckedChange={(on) =>
+              updateSettings(
+                on
+                  ? { passiveEnabled: true, passiveConsent: "granted" }
+                  : { passiveEnabled: false },
+              )
+            }
+          />
+        </SettingsRow>
+        <SettingsRow
+          label="Download the latest indicator lists"
+          description="Fetches updated lists from Amnesty International, the MVT project, and Échap over HTTPS at the start of a scan. Only the lists are downloaded — nothing about you or your backup is sent."
+        >
+          <Switch
+            aria-label="Download the latest indicator lists"
+            checked={autoUpdate}
+            onCheckedChange={(on) =>
+              updateSettings(
+                on
+                  ? { autoUpdateIndicators: true, fetchConsent: "granted" }
+                  : { autoUpdateIndicators: false },
+              )
+            }
+          />
+        </SettingsRow>
+      </SettingsGroup>
 
       {/* ---- Indicator feeds: freshness, sources, manual update. ---- */}
       <div className="flex items-center justify-between gap-3">
@@ -262,28 +273,3 @@ export function SecuritySettings() {
   );
 }
 
-function Row({
-  id,
-  label,
-  description,
-  checked,
-  onChange,
-}: {
-  id: string;
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (on: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="space-y-0.5">
-        <Label htmlFor={id} className="text-sm">
-          {label}
-        </Label>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-      <Switch id={id} checked={checked} onCheckedChange={onChange} />
-    </div>
-  );
-}
