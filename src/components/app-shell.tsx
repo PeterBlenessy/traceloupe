@@ -724,7 +724,7 @@ function SettingsMenu() {
                   value={theme}
                   onChange={(e) => setTheme(e.target.value as Theme)}
                   aria-label="Appearance"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="system">System</option>
                   <option value="light">Light</option>
@@ -761,7 +761,7 @@ function SettingsMenu() {
                     setLinkPreviewMode(e.target.value as LinkPreviewMode)
                   }
                   aria-label="Link previews"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="off">Off</option>
                   <option value="hover">On hover</option>
@@ -778,7 +778,7 @@ function SettingsMenu() {
                     setClockFormatPref(e.target.value as ClockFormat)
                   }
                   aria-label="Time format"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="system">System</option>
                   <option value="24h">24-hour</option>
@@ -793,7 +793,7 @@ function SettingsMenu() {
                   value={density}
                   onChange={(e) => setDensity(e.target.value as Density)}
                   aria-label="Density"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="comfortable">Comfortable</option>
                   <option value="cozy">Cozy</option>
@@ -808,7 +808,7 @@ function SettingsMenu() {
                   value={textSize}
                   onChange={(e) => setTextSize(e.target.value as TextSize)}
                   aria-label="Text size"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="xs">Smallest</option>
                   <option value="sm">Smaller</option>
@@ -869,7 +869,7 @@ function SettingsMenu() {
                     setLightboxStyle(e.target.value as "windowed" | "fullscreen")
                   }
                   aria-label="Viewer style"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <option value="fullscreen">Fullscreen</option>
                   <option value="windowed">Windowed</option>
@@ -960,7 +960,7 @@ function SettingsMenu() {
                   value={logLevel}
                   onChange={(e) => setLogLevel(e.target.value as LogLevel)}
                   aria-label="Log level"
-                  className="inline-flex h-(--control-h) items-center rounded-md border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="inline-flex h-(--control-h) items-center rounded-(--control-radius) border bg-transparent px-2.5 text-sm capitalize outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {(
                     [
