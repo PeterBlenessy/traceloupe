@@ -18,7 +18,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::stream::ProgressStream;
 
 use crate::ActiveBackup;
-use traceloupe_core::analysis::{AnalysisDb, Category};
+use traceloupe_core::analysis::{AnalysisDb, Category, FindingQuery, FindingSort};
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::install::InstallProgress;
 use traceloupe_core::safety_scan::chunker::{ScanSources, TimeRange};
@@ -1067,12 +1067,27 @@ pub struct ThreadSummaryDto {
     pub source: String,
 }
 
-/// Findings, newest-severity first. `scan_id` restricts to one scan (the
-/// history view shows the selected scan's findings); None returns all.
+/// One page of a scan's findings, filtered and ordered by SQLite (#65).
+///
+/// This used to return every finding — ~3 MB of JSON at 8000, re-sent and
+/// re-derived by the view on each invalidation. The filters and the order live
+/// here now because a page only means something relative to a total order.
+///
+/// `scan_id` restricts to one scan (the history view shows the selected scan's
+/// findings); None returns all.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn list_content_findings(
     active: State<'_, ActiveBackup>,
     scan_id: Option<i64>,
+    severity: Option<u8>,
+    include_dismissed: bool,
+    sort_by: String,
+    desc: bool,
+    group_by_thread: bool,
+    exclude_stale: bool,
+    offset: i64,
+    limit: i64,
 ) -> Result<Vec<ContentFindingDto>, String> {
     let cache_path = active.path()?;
     let path = analysis_path(&cache_path)?;
@@ -1103,12 +1118,33 @@ pub fn list_content_findings(
     // just the ones its own run classified — classification is cached per chunk
     // across scans, so scoping by scan_id makes a re-scan of already-covered data
     // look empty. None (no scan selected) still returns all findings.
+    let q = FindingQuery {
+        severity,
+        include_dismissed,
+        sort: if sort_by == "date" {
+            FindingSort::Date
+        } else {
+            FindingSort::Severity
+        },
+        desc,
+        group_by_thread,
+        exclude_stale,
+    };
     let findings = match scan_id {
         Some(id) => match db.scan_by_id(id).map_err(|e| e.to_string())? {
-            Some(s) => db.list_findings_in_scope(&s.sources, s.range_start, s.range_end),
-            None => db.list_findings(Some(id)),
+            Some(s) => db.list_findings_in_scope_page(
+                &s.sources,
+                s.range_start,
+                s.range_end,
+                &q,
+                offset,
+                limit,
+            ),
+            // A scan row that vanished: fall back to every finding rather than
+            // an empty page, still windowed.
+            None => db.list_findings_in_scope_page("all", None, None, &q, offset, limit),
         },
-        None => db.list_findings(None),
+        None => db.list_findings_in_scope_page("all", None, None, &q, offset, limit),
     }
     .map_err(|e| e.to_string())?;
     Ok(findings
@@ -1465,5 +1501,78 @@ pub fn get_safety_scan_report(
         }),
         report,
         thread_summaries: threads,
+    })
+}
+
+/// The filter pills' numbers for a scan's scope, in one round trip — counted
+/// with the same predicate the page query uses, so a pill can't promise rows the
+/// list won't produce (#59).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentFindingCounts {
+    /// Rows the CURRENT filter matches — the virtualizer's count.
+    pub matching: i64,
+    pub live: i64,
+    pub live_fresh: i64,
+    pub dismissed: i64,
+    pub serious: i64,
+    pub harmful: i64,
+    pub concerning: i64,
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn count_content_findings(
+    active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
+    severity: Option<u8>,
+    include_dismissed: bool,
+    exclude_stale: bool,
+) -> Result<ContentFindingCounts, String> {
+    let cache_path = active.path()?;
+    let path = analysis_path(&cache_path)?;
+    if !path.exists() {
+        return Ok(ContentFindingCounts {
+            matching: 0,
+            live: 0,
+            live_fresh: 0,
+            dismissed: 0,
+            serious: 0,
+            harmful: 0,
+            concerning: 0,
+        });
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    let (sources, start, end) = match scan_id {
+        Some(id) => match db.scan_by_id(id).map_err(|e| e.to_string())? {
+            Some(s) => (s.sources, s.range_start, s.range_end),
+            None => ("all".to_string(), None, None),
+        },
+        None => ("all".to_string(), None, None),
+    };
+    let c = db
+        .count_findings_breakdown(&sources, start, end)
+        .map_err(|e| e.to_string())?;
+    let matching = db
+        .count_findings_matching(
+            &sources,
+            start,
+            end,
+            &FindingQuery {
+                severity,
+                include_dismissed,
+                exclude_stale,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(ContentFindingCounts {
+        matching,
+        live: c.live,
+        live_fresh: c.live_fresh,
+        dismissed: c.dismissed,
+        serious: c.serious,
+        harmful: c.harmful,
+        concerning: c.concerning,
     })
 }
