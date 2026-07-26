@@ -684,7 +684,7 @@ function ResultSummary({
                   {f.isNew && (
                     <Badge
                       variant="outline"
-                      className="shrink-0 border-sky-500/40 px-1.5 py-0 text-[calc(0.625rem*var(--text-scale))] font-semibold text-sky-600 dark:text-sky-400"
+                      className="shrink-0 border-sky-500/40 px-1.5 py-0 text-3xs font-semibold text-sky-600 dark:text-sky-400"
                     >
                       NEW
                     </Badge>
