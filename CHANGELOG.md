@@ -13,6 +13,34 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.12] — 2026-07-26
+
+### Fixed
+
+- **Safety Scan was skipping every message sent with an attachment — including
+  its text.** A message with a photo attached was never examined at all, and the
+  scan still reported clean. Those messages are now scanned for what they say.
+  ([#97](https://github.com/PeterBlenessy/traceloupe/issues/97))
+- **The scan now says when an attachment was there.** Previously "look at this"
+  read the same whether or not a photo came with it, and a note made mostly of
+  photos looked almost empty. Both now note the attachment — and say plainly that
+  it was not itself examined.
+  ([#97](https://github.com/PeterBlenessy/traceloupe/issues/97))
+- **Flagged text keeps its line breaks.** Notes shown in "View flagged text"
+  arrived as one run-on block; paragraphs, headings and lists now read as written.
+  Dismissals are unaffected — a note's identity no longer depends on how its text
+  is laid out.
+- **Settings tabs match each other again.** Safety and Security were built from
+  their own components, so their spacing drifted from the rest; every tab now uses
+  the same rows, and those rows are tighter than before.
+  ([#93](https://github.com/PeterBlenessy/traceloupe/issues/93))
+
+### Note
+
+Notes re-classify once on the next scan — the text sent for classification
+changed, so previous results for them are recomputed. Findings, dismissals and
+message results are unaffected.
+
 ## [0.31.11] — 2026-07-25
 
 ### Removed
