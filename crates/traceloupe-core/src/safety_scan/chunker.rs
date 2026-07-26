@@ -263,6 +263,108 @@ pub fn strip_html(html: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// HTML → text for DISPLAY, preserving the line structure a reader expects.
+///
+/// [`strip_html`] exists for the MODEL: it flattens everything to one space-
+/// separated line, which is fine for classification and — critically — feeds the
+/// chunk fingerprints that cache classification results. Changing it would change
+/// every fingerprint and force a full re-scan, so it stays exactly as it is.
+///
+/// This is the sibling for anything a person reads (the flagged-text popover, the
+/// report). Block-level boundaries become newlines instead of spaces, so a note
+/// written as paragraphs, headings or a list still reads as paragraphs, headings
+/// or a list rather than collapsing into one block of prose.
+pub fn html_to_display_text(html: &str) -> String {
+    /// Tags that end a line. Everything else (b, i, span, a…) is inline and
+    /// yields a space, so words don't run together.
+    const BLOCK: &[&str] = &[
+        "p",
+        "div",
+        "br",
+        "li",
+        "ul",
+        "ol",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "tr",
+        "table",
+        "blockquote",
+        "pre",
+        "section",
+        "article",
+        "header",
+        "footer",
+        "hr",
+    ];
+    let mut out = String::with_capacity(html.len());
+    let mut tag = String::new();
+    let mut in_tag = false;
+    let mut chars = html.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // Only a '<' starting a plausible tag enters tag mode; a stray
+            // literal '<' ("3 < 5") must not swallow the rest of the note.
+            '<' if !in_tag => match chars.peek() {
+                Some(n) if n.is_ascii_alphabetic() || *n == '/' || *n == '!' => {
+                    in_tag = true;
+                    tag.clear();
+                }
+                _ => out.push('<'),
+            },
+            '>' if in_tag => {
+                in_tag = false;
+                let name: String = tag
+                    .trim_start_matches('/')
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric())
+                    .collect::<String>()
+                    .to_ascii_lowercase();
+                if BLOCK.contains(&name.as_str()) {
+                    if !out.ends_with('\n') && !out.is_empty() {
+                        out.push('\n');
+                    }
+                } else if !out.ends_with(' ') && !out.ends_with('\n') && !out.is_empty() {
+                    out.push(' ');
+                }
+            }
+            _ if in_tag => tag.push(c),
+            _ => out.push(c),
+        }
+    }
+    // `&amp;` last, or text that literally discusses "&lt;" double-decodes.
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    // Tidy each line, drop runs of blank lines, keep the paragraph breaks.
+    // Owned Strings: each line also has its internal space runs collapsed (an
+    // inline tag adjacent to a literal space yields two), which borrowing from
+    // `out` can't express.
+    let mut lines: Vec<String> = Vec::new();
+    for line in out.lines() {
+        let t = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if t.is_empty() {
+            if lines.last().map(|l| l.is_empty()).unwrap_or(true) {
+                continue;
+            }
+            lines.push(String::new());
+        } else {
+            lines.push(t);
+        }
+    }
+    while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
 /// Build every message chunk in scan order: threads by most recent activity
 /// first, windows chronological within each thread.
 pub fn chunk_messages(
@@ -484,6 +586,47 @@ pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Re
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn display_text_keeps_the_line_structure_a_reader_expects() {
+        // The bug: every tag boundary became a space and the final pass collapsed
+        // all whitespace, so a note written as paragraphs arrived as one block.
+        let html = "<h1>Shopping</h1><p>First line</p><p>Second line</p><ul><li>milk</li><li>eggs</li></ul>";
+        let out = html_to_display_text(html);
+        assert_eq!(
+            out, "Shopping\nFirst line\nSecond line\nmilk\neggs",
+            "block tags must break lines, got: {out:?}"
+        );
+
+        // <br> is the common case inside a single paragraph.
+        assert_eq!(html_to_display_text("a<br>b<br/>c"), "a\nb\nc");
+
+        // Inline tags must NOT break — they just keep words apart.
+        assert_eq!(
+            html_to_display_text("<p>a <b>bold</b> and <i>italic</i></p>"),
+            "a bold and italic"
+        );
+
+        // Entities still decode, and a literal '<' survives.
+        assert_eq!(
+            html_to_display_text("<p>3 &lt; 5 &amp; more</p>"),
+            "3 < 5 & more"
+        );
+        assert_eq!(html_to_display_text("<p>3 < 5</p>"), "3 < 5");
+
+        // Runs of empty blocks collapse to at most one blank line.
+        assert_eq!(
+            html_to_display_text("<p>a</p><p></p><p></p><p>b</p>"),
+            "a\nb"
+        );
+
+        // The model-facing stripper is deliberately unchanged: it still flattens,
+        // because its output feeds chunk fingerprints that cache scan results.
+        assert_eq!(
+            strip_html(html),
+            "Shopping First line Second line milk eggs"
+        );
+    }
     use super::*;
     use rusqlite::params;
 
