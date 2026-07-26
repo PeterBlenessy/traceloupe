@@ -13,6 +13,26 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.17] — 2026-07-26
+
+### Fixed
+
+- **Scan progress no longer credits this run with findings it didn't make.**
+  Restarting a scan of a range that had been scanned before read
+  "0% · 8823 findings so far" — the count includes everything the range already
+  held, which is what the Findings panel shows, but the wording claimed it for
+  the run just started. It now reads "12% · 17 new · «redacted» from earlier scans of
+  this range".
+  ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
+
+### Note
+
+- **A scan started after 0.31.12 can't reuse work from before it.** That release
+  fixed messages sent with an attachment being skipped entirely, which changes
+  what a scan reads — so previously-scanned stretches containing an attachment
+  have to be looked at again. It is a one-time cost, and only for ranges scanned
+  before 0.31.12.
+
 ## [0.31.16] — 2026-07-26
 
 ### Changed
