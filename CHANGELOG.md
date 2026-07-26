@@ -13,6 +13,14 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.19] — 2026-07-26
+
+### Changed
+
+- **The buttons on a backup card are back to full size.** Open, Read & open,
+  Re-import and Forget had been pinned to the small size — a leftover from when
+  the standard button was too tall and everything was shrunk by hand.
+
 ## [0.31.18] — 2026-07-26
 
 ### Changed
