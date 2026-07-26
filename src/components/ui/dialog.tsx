@@ -100,6 +100,9 @@ function DialogFooter({
   return (
     <div
       data-slot="dialog-footer"
+      // The action row is a decision point, so it does not follow the reading
+      // preference — the dialog's title and body still do (see index.css).
+      data-text-scale="fixed"
       className={cn(
         "flex flex-col-reverse gap-2 sm:flex-row sm:justify-end",
         className

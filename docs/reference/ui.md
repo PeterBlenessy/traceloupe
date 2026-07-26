@@ -41,6 +41,15 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   "all"/first).
 - **Spacing/sizing:** Tailwind scale utilities. Arbitrary values (`w-[70%]`)
   are allowed only where no scale step fits (e.g. chat-bubble max width).
+- **The text-size control (A+/−) is a READING preference, so the app frame opts
+  out.** The top toolbar, the sidebar and a dialog's *action row* carry
+  `data-text-scale="fixed"` and keep their size at every step; content, list
+  rows, pills, content-adjacent buttons and a dialog's title/body all scale. The
+  reason is not tidiness: a modal action row is a decision point, often
+  destructive, and the button under the cursor must not depend on a font
+  setting — and a toolbar that reflows the window on a text change reads as
+  unstable. If the frame ever needs its own legibility control, that is a
+  separate setting (or the macOS text-size setting), never this one.
 - **Control height — one scale, never a literal.** Every inline control
   (button, input, select, toggle, tab trigger) takes its height from the
   `--control-h*` tokens in `index.css`: `--control-h` is the default at **28 px
