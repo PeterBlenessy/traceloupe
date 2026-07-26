@@ -168,6 +168,7 @@ function Sidebar({
     return (
       <div
         data-slot="sidebar"
+        data-text-scale="fixed"
         className={cn(
           "flex h-full w-(--sidebar-width) flex-col bg-sidebar text-sidebar-foreground",
           className
@@ -185,6 +186,7 @@ function Sidebar({
         <SheetContent
           data-sidebar="sidebar"
           data-slot="sidebar"
+          data-text-scale="fixed"
           data-mobile="true"
           className="w-(--sidebar-width) bg-sidebar p-0 text-sidebar-foreground [&>button]:hidden"
           style={
@@ -212,6 +214,7 @@ function Sidebar({
       data-variant={variant}
       data-side={side}
       data-slot="sidebar"
+      data-text-scale="fixed"
     >
       {/* This is what handles the sidebar gap on desktop */}
       <div

@@ -25,6 +25,9 @@ export function AdaptiveToolbar({
   return (
     <div
       data-tauri-drag-region
+      // Frame furniture: the toolbar is aimed at, not read, so it keeps its size
+      // when the text-size control changes (see index.css).
+      data-text-scale="fixed"
       className={cn("relative flex min-w-0 flex-1 items-center gap-2", className)}
     >
       {leading && (
