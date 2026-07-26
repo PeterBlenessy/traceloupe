@@ -250,7 +250,7 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
               className={cn(
                 "px-2 py-0.5 font-medium",
                 app.support === "native" &&
-                  "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+                  "bg-status-ok-soft text-status-ok-text",
               )}
             >
               {label}

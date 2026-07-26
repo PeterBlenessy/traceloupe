@@ -489,7 +489,7 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
       <div className="absolute right-1 top-1 flex gap-1">
         {item.trashed && (
           <span
-            className="rounded-full bg-red-600/80 p-1 text-white"
+            className="rounded-full bg-status-danger/80 p-1 text-white"
             title="In Recently Deleted"
           >
             <Trash2 className="size-3" />
@@ -505,7 +505,7 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         )}
         {item.favorite && (
           <span className="rounded-full bg-black/55 p-1" title="Favorite">
-            <Heart className="size-3 fill-red-500 text-red-500" />
+            <Heart className="size-3 fill-status-danger text-status-danger-text" />
           </span>
         )}
         {item.persons && (
@@ -620,7 +620,7 @@ function Lightbox({
           <div className="flex min-w-0 items-center gap-3">
             {item.trashed && (
               <Trash2
-                className="size-3.5 shrink-0 text-red-400"
+                className="size-3.5 shrink-0 text-status-danger-text"
                 aria-label="In Recently Deleted"
               />
             )}
@@ -628,7 +628,7 @@ function Lightbox({
               <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />
             )}
             {item.favorite && (
-              <Heart className="size-3.5 shrink-0 fill-red-500 text-red-500" />
+              <Heart className="size-3.5 shrink-0 fill-status-danger text-status-danger-text" />
             )}
             <span className="select-text truncate">{item.filename ?? "—"}</span>
             {item.persons && (
@@ -663,7 +663,7 @@ function Lightbox({
               (item.takenAt == null ||
                 Math.abs(item.addedAt - item.takenAt) > 86400) && (
                 <span
-                  className="inline-flex items-center gap-1 text-amber-400"
+                  className="inline-flex items-center gap-1 text-status-warning-text"
                   title="Added to this device's library later than it was captured — likely received, saved, or imported"
                 >
                   <Import className="size-3 shrink-0" />
