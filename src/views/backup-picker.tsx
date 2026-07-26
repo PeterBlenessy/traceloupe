@@ -312,7 +312,6 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8"
                 disabled={!info}
                 aria-label="Re-import backup"
                 onClick={() => info && imp.open(info)}
@@ -331,7 +330,6 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8"
                 aria-label="Open a different backup"
                 onClick={onChooseOther}
               >
@@ -345,7 +343,6 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-8"
                 aria-label="Close backup"
                 onClick={() => void closeBackup()}
               >

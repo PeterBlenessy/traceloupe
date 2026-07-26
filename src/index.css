@@ -86,6 +86,28 @@
   --text-2xl: calc(1.5rem * var(--text-scale));
 }
 
+/* Control geometry — ONE scale for every inline control (buttons, inputs,
+   selects, toggles, tab triggers), so a button never ends up a different height
+   than the field beside it. shadcn ships each primitive with its own hard-coded
+   `h-9`/`h-8`/`h-10`, which is five copies of one decision: change the button and
+   the input next to it silently disagrees.
+
+   The steps sit one notch below shadcn's defaults to match native macOS, whose
+   standard push button is ~28px rather than 36px (#91). That mismatch is why 34
+   of 60 call sites had already been hand-tuned to `size="sm"` — the default was
+   wrong, and every author worked around it locally.
+
+   Heights ride `--text-scale` for the same reason the type ramp does: at xl text
+   a fixed-height control clips its own label. The *padding* is deliberately NOT
+   scaled — horizontal breathing room is furniture, and scaling it would make
+   large-text buttons grow absurdly wide. */
+:root {
+  --control-h-xs: calc(1.25rem * var(--text-scale));   /* 20px */
+  --control-h-sm: calc(1.5rem * var(--text-scale));    /* 24px */
+  --control-h: calc(1.75rem * var(--text-scale));      /* 28px — native default */
+  --control-h-lg: calc(2rem * var(--text-scale));      /* 32px */
+}
+
 /* The surface palette is layered tinted neutrals (a whisper of chroma at hue
    260 — cool, instrument-like) instead of pure white / near-black, so panes
    read as distinct layers: in light mode the sidebar is a visibly deeper pane

@@ -1024,8 +1024,8 @@ function ScanRail({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-6 text-muted-foreground hover:text-foreground"
+                    size="icon-sm"
+                    className="text-muted-foreground hover:text-foreground"
                     aria-label="Open scan report"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -1045,8 +1045,8 @@ function ScanRail({
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="size-6 text-muted-foreground hover:text-foreground"
+                      size="icon-sm"
+                      className="text-muted-foreground hover:text-foreground"
                       aria-label="Resume this scan"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1063,8 +1063,8 @@ function ScanRail({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-6 text-muted-foreground hover:text-destructive"
+                    size="icon-sm"
+                    className="text-muted-foreground hover:text-destructive"
                     aria-label="Delete this scan"
                     onClick={(e) => {
                       e.stopPropagation();
