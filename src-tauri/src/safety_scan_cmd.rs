@@ -451,7 +451,10 @@ pub enum ScanEvent {
     Classifying {
         done: usize,
         total: usize,
+        /// Findings in this scan's scope right now — earlier runs included.
         findings: usize,
+        /// How many of those were already there when this run started.
+        preexisting: usize,
     },
     Summarizing,
     Done {
@@ -891,6 +894,7 @@ pub async fn run_safety_scan(
                             done: p.chunks_done,
                             total: p.chunks_total,
                             findings: p.findings,
+                            preexisting: p.preexisting,
                         },
                     );
                 }

@@ -43,6 +43,16 @@ pub struct ScanProgress {
     /// the same message can't inflate it, and a scan whose scope already holds
     /// findings reports them from the first frame.
     pub findings: usize,
+    /// How many of `findings` were already there when this run started — from
+    /// earlier scans of the same scope.
+    ///
+    /// Without this the UI cannot tell "this run found 8823" from "8823 were
+    /// already here", and the two read identically: `0% · 8823 findings so far`
+    /// is a contradiction on its face. It is most visible exactly when it
+    /// matters — a re-scan whose chunk cache no longer matches (the #97 chunker
+    /// change invalidated every chunk containing an attachment) starts at 0%
+    /// with every earlier finding already in scope.
+    pub preexisting: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +69,9 @@ pub struct ScanOutcome {
     /// Live findings in the scan's scope at the end of the run — the same
     /// number as [`ScanProgress::findings`] and the Findings panel.
     pub findings: usize,
+    /// Findings this scope already held before the run started, so `findings -
+    /// preexisting` is what this run is responsible for.
+    pub preexisting: usize,
 }
 
 /// A scan's scope — its sources slug and optional time range — as the Findings
@@ -211,6 +224,10 @@ pub fn run_scan(
         },
     };
 
+    // Read once, before anything is classified: everything this scope already
+    // held. `findings` moves from here; this stays put, so the UI can say which
+    // part of the count this run is responsible for.
+    let preexisting = scope.count(analysis)?;
     let mut outcome = ScanOutcome {
         scan_id,
         status: ScanStatus::Completed,
@@ -221,7 +238,8 @@ pub fn run_scan(
         // Not zero: a scan whose scope already contains findings (a re-scan, a
         // resume, or another run that covered the same data) must report them
         // from the very first frame, like the panel does.
-        findings: scope.count(analysis)?,
+        findings: preexisting,
+        preexisting,
     };
 
     let loop_result = (|| -> Result<()> {
@@ -252,6 +270,7 @@ pub fn run_scan(
             chunks_done: outcome.reused,
             chunks_total: outcome.chunks_total,
             findings: outcome.findings,
+            preexisting: outcome.preexisting,
         });
 
         // Phase 1: sweep every pending chunk with the primary model.
@@ -470,6 +489,7 @@ fn classify_batch(
                 chunks_done: outcome.reused + outcome.classified + outcome.skipped,
                 chunks_total: outcome.chunks_total,
                 findings: outcome.findings,
+                preexisting: outcome.preexisting,
             });
         }
         Ok(())
@@ -959,6 +979,77 @@ mod tests {
             )
             .unwrap();
         assert_eq!((done, total), (2, 2));
+    }
+
+    #[test]
+    fn a_rescan_reports_earlier_findings_as_preexisting_not_as_its_own() {
+        // The shape a user actually hit: a re-scan whose chunk cache no longer
+        // matches starts at 0% while the scope already holds findings from an
+        // earlier run. Reporting one number made that read "0% · N findings so
+        // far", which is a contradiction — the run had found nothing yet.
+        let content = serde_json::json!({
+            "verdicts": [
+                { "index": 0, "category": "threat-violence", "severity": 3, "rationale": "explicit threat" }
+            ]
+        });
+        let (base, _hits) = mock_server(vec![envelope(&content)]);
+        let cache = small_cache(3);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let first = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            None,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(first.findings, 1);
+        assert_eq!(first.preexisting, 0, "nothing existed before the first run");
+
+        // Change a message's text, the way the #97 chunker fix did for every
+        // message carrying an attachment: the chunk's fingerprint moves, so
+        // none of the cached work applies and the re-scan starts from zero.
+        cache
+            .conn()
+            .execute(
+                "UPDATE messages SET body = 'edited so the chunk fingerprint moves' WHERE id = 1",
+                [],
+            )
+            .unwrap();
+
+        let mut ticks: Vec<ScanProgress> = Vec::new();
+        let second = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            None,
+            &CancelToken::new(),
+            |p| ticks.push(p),
+        )
+        .unwrap();
+
+        let first_tick = ticks.first().expect("a tick lands before any inference");
+        assert_eq!(first_tick.chunks_done, 0, "nothing was reusable");
+        assert_eq!(
+            first_tick.preexisting, 1,
+            "the earlier run's finding is in scope from the first frame",
+        );
+        assert_eq!(
+            first_tick.findings - first_tick.preexisting,
+            0,
+            "and NONE of it is this run's work yet — the number the UI shows as `new`",
+        );
+        assert_eq!(second.reused, 0);
+        assert_eq!(second.preexisting, 1);
     }
 
     #[test]
