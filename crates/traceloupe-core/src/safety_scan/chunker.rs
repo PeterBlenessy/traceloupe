@@ -500,7 +500,14 @@ pub fn chunk_notes(cache: &CacheDb, range: TimeRange) -> Result<Vec<Chunk>> {
                 // Content-derived key: stable across re-imports even though
                 // the cache row id is not.
                 key: format!("n:{}", &fingerprint[..16]),
-                fingerprint: fingerprint.clone(),
+                // Hash the TEXT THE MODEL WILL SEE, not the note's identity.
+                // These are two different questions: the chunk fingerprint gates
+                // "does this need re-classifying?", while `fingerprint` (now
+                // whitespace-canonical, so dismissals survive re-rendering) answers
+                // "is this the same note?". Reusing identity here would mean a
+                // change to how text is rendered never triggers a re-scan — the
+                // model would keep verdicts formed on text it no longer sees.
+                fingerprint: sha256_hex(&full),
                 kind: SourceKind::Note,
                 thread_identifier: None,
                 label: if title.is_empty() {
@@ -564,6 +571,29 @@ pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Re
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn chunk_fingerprint_tracks_text_while_item_identity_tracks_content() {
+        // Two fingerprints answer two different questions, and conflating them
+        // breaks one or the other:
+        //   chunk fingerprint  -> "does this need re-classifying?"  (tracks TEXT)
+        //   item  fingerprint  -> "is this the same note?"          (tracks CONTENT)
+        //
+        // If the chunk fingerprint tracked identity, a rendering change would
+        // never trigger a re-scan and the model would keep verdicts formed on
+        // text it no longer sees. If the item fingerprint tracked text, the same
+        // change would wipe the user's dismissals.
+        let flat = "Shopping First line milk";
+        let structured = "Shopping\nFirst line\nmilk";
+
+        // Identity: stable across rendering.
+        assert_eq!(
+            note_fingerprint(Some(1), "T", flat),
+            note_fingerprint(Some(1), "T", structured),
+        );
+        // Chunk text: must differ, so resume re-classifies.
+        assert_ne!(sha256_hex(flat), sha256_hex(structured));
+    }
 
     #[test]
     fn finding_identity_survives_a_rendering_change() {
