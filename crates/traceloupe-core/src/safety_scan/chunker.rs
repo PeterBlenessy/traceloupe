@@ -237,7 +237,7 @@ fn canonical_for_identity(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn note_fingerprint(created_at: Option<i64>, title: &str, text: &str) -> String {
+pub fn note_fingerprint(created_at: Option<i64>, title: &str, text: &str) -> String {
     sha256_hex(&format!(
         "note|{}|{}|{}",
         created_at.map(|t| t.to_string()).unwrap_or_default(),
