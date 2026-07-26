@@ -106,6 +106,12 @@
   --control-h-sm: calc(1.5rem * var(--text-scale));    /* 24px */
   --control-h: calc(1.75rem * var(--text-scale));      /* 28px — native default */
   --control-h-lg: calc(2rem * var(--text-scale));      /* 32px */
+  /* Corner radius for controls, deliberately tighter than the app's general
+     --radius (10px, so `rounded-md` resolves to 8px). At the native 28px control
+     height that read too soft — a macOS push button is closer to a 1:4.5 radius
+     to height ratio. Fixed, not scaled with text: a corner that grows with the
+     font looks like a different button, not a bigger one. */
+  --control-radius: 0.375rem;                          /* 6px */
 }
 
 /* The surface palette is layered tinted neutrals (a whisper of chroma at hue
