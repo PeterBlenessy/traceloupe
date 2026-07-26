@@ -727,6 +727,7 @@ async fn import_backup(
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
     repair_stranded_safety_scans(&app_for_passive, &outcome.cache_path);
+    relink_findings_to_cache(&app_for_passive, &outcome.cache_path);
 
     // Remember the source dir for every backup — a partial re-import needs it to
     // locate the backup's files (encrypted or not).
@@ -990,6 +991,43 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     true
 }
 
+/// Point Safety Scan findings back at their source rows after an import (#96).
+///
+/// `source_id` is a cache row id, and a re-import renumbers every row — so
+/// without this a pre-existing finding shows "the source is no longer available"
+/// for content that is still there. Findings carry a content fingerprint exactly
+/// so the mapping can be rebuilt, which is what this does; anything that truly is
+/// gone gets marked stale instead of pointing somewhere wrong.
+///
+/// Best-effort: never fail an import over it. No analysis DB (never scanned) is
+/// the normal case for a first import.
+fn relink_findings_to_cache(app: &AppHandle, cache_path: &Path) {
+    let Ok(analysis_path) = safety_scan_cmd::analysis_path(cache_path) else {
+        return;
+    };
+    if !analysis_path.exists() {
+        return;
+    }
+    let result = (|| -> Result<_, String> {
+        let cache = CacheDb::open(cache_path).map_err(|e| e.to_string())?;
+        let analysis = traceloupe_core::analysis::AnalysisDb::open(&analysis_path)
+            .map_err(|e| e.to_string())?;
+        traceloupe_core::safety_scan::relink::relink_findings(&cache, &analysis)
+            .map_err(|e| e.to_string())
+    })();
+    match result {
+        Ok(o) if o.relinked > 0 || o.stale > 0 => logging::info(
+            app,
+            format!(
+                "Safety Scan: relinked {} finding(s) to the re-imported cache, {} no longer present",
+                o.relinked, o.stale
+            ),
+        ),
+        Ok(_) => {}
+        Err(e) => logging::warn(app, format!("Safety Scan: finding relink failed — {e}")),
+    }
+}
+
 /// Mark Safety Scan rows stranded 'running' as 'interrupted' the moment a
 /// backup becomes active — this process provably has no scan in flight at that
 /// point, so the stored state must not claim one is running. Best-effort: no
@@ -1192,6 +1230,12 @@ async fn reimport_module(
             started.elapsed().as_millis()
         ),
     );
+    // A partial re-import renumbers that module's rows too, and 'messages' and
+    // 'notes' are precisely the two sources findings come from — so the links
+    // need rebuilding here as well as after a full import (#96).
+    if matches!(module_id.as_str(), "messages" | "notes") {
+        relink_findings_to_cache(&app, &cache_path);
+    }
     for w in &report.warnings {
         logging::warn(&app, w.clone());
     }
