@@ -13,6 +13,18 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.21] — 2026-07-26
+
+### Changed
+
+- **Text now matches macOS.** Sizes follow the system's own text styles rather
+  than a web scale — the app's body text had been sitting a step larger than
+  every native window beside it. Text colours come from macOS too, which means
+  they also follow the system's "Increase contrast" accessibility setting.
+- **Consistent small text.** Timestamps, badges and chips were being sized by
+  hand in 31 places across 7 slightly different values; they now share two named
+  sizes, so the same kind of label looks the same everywhere.
+
 ## [0.31.20] — 2026-07-26
 
 ### Changed
