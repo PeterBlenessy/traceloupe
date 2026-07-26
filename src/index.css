@@ -66,6 +66,11 @@
    smallest labels in the app, which are precisely the ones a user shrinking text
    cares about, would be the only ones that didn't move. */
 :root {
+  /* Tells WebKit which appearance to resolve system colors in. Our theme is a
+     class on <html>, not the OS appearance, so without this an app set to Light
+     under a Dark system would be handed dark-mode label colors — white text on
+     a white card. Also fixes native scrollbars and form controls. */
+  color-scheme: light;
   --text-scale: 1;
 }
 :root[data-text-size="xs"] { --text-scale: 0.85; }
@@ -223,6 +228,7 @@
   --secondary-foreground: oklch(0.25 0.01 260);
   --muted: oklch(0.955 0.005 260);
   --muted-foreground: oklch(0.52 0.015 260);
+  --faint-foreground: oklch(0.62 0.012 260);
   --accent: oklch(0.945 0.006 260);
   --accent-foreground: oklch(0.25 0.01 260);
   --destructive: oklch(0.577 0.245 27.325);
@@ -243,6 +249,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   /* The system accent verbatim when present; the fallback brightens so the
      default blue doesn't muddy on the dark ground. Text mixes toward white. */
   --accent-color: var(--accent-system-value, oklch(0.68 0.15 252));
@@ -263,6 +270,7 @@
   --secondary-foreground: oklch(0.955 0.005 260);
   --muted: oklch(0.295 0.01 260);
   --muted-foreground: oklch(0.7 0.012 260);
+  --faint-foreground: oklch(0.58 0.01 260);
   --accent: oklch(0.31 0.012 260);
   --accent-foreground: oklch(0.97 0.004 260);
   --destructive: oklch(0.704 0.191 22.216);
@@ -307,6 +315,36 @@
   scroll-padding-top: 3.25rem;
 }
 
+/* Text colors come from the PLATFORM where the engine has them.
+   ================================================================
+   macOS ships four label tiers as alpha over black/white (measured: 0.847 /
+   0.549 / 0.247 / 0.098). Two reasons that beats our hand-picked values:
+
+   - Alpha composes. One label color is correct on a card, the sidebar and a
+     popover alike, where a solid color needs re-tuning per surface.
+   - They track the "Increase contrast" accessibility setting, which values
+     baked into this file never can.
+
+   Surfaces stay ours — the tinted oklch neutrals are the app's identity, and
+   macOS has no opinion about them.
+
+   @supports is doing real work here, not decoration: WKWebView (what we ship)
+   reports true, Chromium (what `scripts/shot.mjs` renders with) reports false.
+   Without the guard the custom property would be invalid at use time in
+   Chromium and text would fall back to plain black/white — the screenshot
+   harness would stop representing the app. With it, each engine gets a correct
+   answer. Verified with CSS.supports() in both.
+
+   The keyword flips with `color-scheme`, so one declaration covers light and
+   dark; it sits after `.dark` so it wins on equal specificity. */
+@supports (color: -apple-system-label) {
+  :root {
+    --foreground: -apple-system-label;
+    --muted-foreground: -apple-system-secondary-label;
+    --faint-foreground: -apple-system-tertiary-label;
+  }
+}
+
 @theme inline {
   /* The two sub-xs steps, so they are utilities (`text-3xs`) rather than another
      arbitrary value. The rest of the ramp is Tailwind's own, redefined above. */
@@ -324,6 +362,7 @@
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
+  --color-faint-foreground: var(--faint-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);

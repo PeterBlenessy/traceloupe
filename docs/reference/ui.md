@@ -15,8 +15,21 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   ones with `pnpm dlx shadcn@latest add <name>` rather than writing custom
   equivalents. Prefer an existing primitive (Item, Empty, Avatar, Card,
   Dialog…) over new markup.
-- **Colors & theming:** one token layer in `src/index.css`, all on the neutral
-  **oklch** scale (no mixed color systems). Use semantic tokens
+- **Colors & theming:** one token layer in `src/index.css`. **Surfaces are ours**
+  — tinted oklch neutrals, the app's identity. **Text is the platform's**: the
+  three label tiers (`--foreground`, `--muted-foreground`, `--faint-foreground`)
+  resolve to `-apple-system-label` and friends inside an
+  `@supports (color: -apple-system-label)` block, with our oklch values as the
+  fallback. macOS ships them as *alpha* over black/white, so one value is right
+  on a card, the sidebar and a popover alike, and they follow the "Increase
+  contrast" accessibility setting.
+  **The `@supports` guard is load-bearing:** WKWebView (what we ship) supports
+  those keywords, Chromium (what `scripts/shot.mjs` renders with) does not — and
+  a custom property holding an unsupported keyword is invalid *at use time*, so
+  without the guard Chromium would drop to plain black/white and the screenshot
+  harness would stop representing the app. Verified with `CSS.supports()` in
+  both engines. `color-scheme` on `:root`/`.dark` is what ties the platform's
+  appearance to *our* theme class. Use semantic tokens
   (`bg-background`, `text-muted-foreground`, `bg-accent`, `border`) — never raw
   hex or `oklch(...)` literals in components. Sidebar tokens match the same
   scale.
