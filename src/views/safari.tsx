@@ -268,7 +268,7 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
           </span>
           {item.private && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[10px] font-medium text-purple-500"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-500/15 px-1.5 py-0.5 text-[calc(0.625rem*var(--text-scale))] font-medium text-purple-500"
               title="Open in a private-browsing window"
             >
               <EyeOff className="size-2.5" />
@@ -296,7 +296,7 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
               Read {formatDate(item.dateViewed)}
             </span>
           ) : (
-            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[calc(0.625rem*var(--text-scale))] font-medium text-primary">
               Unread
             </span>
           ))}

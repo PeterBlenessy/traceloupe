@@ -686,7 +686,7 @@ function NoteRow({
             {showFolder && note.folder && (
               <Badge
                 variant="outline"
-                className="shrink-0 gap-1 px-1.5 py-0 text-[10px] font-normal"
+                className="shrink-0 gap-1 px-1.5 py-0 text-[calc(0.625rem*var(--text-scale))] font-normal"
               >
                 <Folder className="size-2.5" />
                 {note.folder}
