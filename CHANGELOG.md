@@ -13,6 +13,23 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.16] — 2026-07-26
+
+### Changed
+
+- **Progress bars now report in order.** Import, Security Check, Safety Scan and
+  the model download sent their progress over a transport whose own
+  documentation warns that rapid updates can arrive out of order — so a bar could
+  jump backwards. They now use an ordered channel.
+  ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
+
+### Fixed
+
+- **A failed model download says so again.** Its error was sent on a path that
+  the progress rework had left behind, so a failure could look like a download
+  that simply stopped moving.
+  ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
+
 ## [0.31.15] — 2026-07-26
 
 ### Fixed
