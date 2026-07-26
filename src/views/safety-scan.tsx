@@ -1000,12 +1000,22 @@ function ScanRail({
               }
             }}
             className={cn(
-              "group relative flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
+              "group flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
               s.id === selectedId && "border-primary/50 bg-primary/5",
             )}
           >
-            <div className="min-w-0">
-              <div className="text-sm font-medium">{scanTitle(s)}</div>
+            {/* The count sits WITH the title, not on the right edge (#92). It
+                used to live where the hover actions appear, so the actions
+                landed on top of it — which made its severity-breakdown tooltip
+                unreachable by construction: hovering the row to reach the pill
+                was the very thing that covered it. */}
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-sm font-medium">
+                  {scanTitle(s)}
+                </span>
+                <ScanOutcomeBadge scan={s} live={s.id === liveId} />
+              </div>
               <div className="text-xs text-muted-foreground">
                 {formatSources(s.sources)}
                 {" · "}
@@ -1016,10 +1026,18 @@ function ScanRail({
                   : (SCAN_STATUS_LABEL[s.status] ?? s.status)}
               </div>
             </div>
-            <ScanOutcomeBadge scan={s} live={s.id === liveId} />
-            {/* Actions float over the card's right edge on hover/focus — hidden
-                otherwise, so they never steal space from the title + subtitle. */}
-            <div className="pointer-events-none absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center gap-0.5 rounded-md border bg-background/95 p-0.5 opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100">
+            {/* In normal flow, so the right edge is permanently theirs and
+                nothing can overlap. Dimmed rather than hidden: the space is
+                reserved either way, and an invisible cluster just leaves the
+                edge looking empty. They stay clickable and focusable at rest —
+                the old version set pointer-events-none until hover.
+
+                Width is reserved for the widest case (three actions; Resume
+                only appears on an unfinished scan) and the cluster is
+                right-aligned, so the icons form straight columns down the list
+                instead of shifting row to row. Sized from the same control
+                token as the buttons, so it can't drift from them. */}
+            <div className="flex min-w-[calc(3*var(--control-h-sm)+0.25rem)] shrink-0 items-center justify-end gap-0.5 opacity-45 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
