@@ -43,6 +43,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { FilterControl } from "@/components/filter-control";
 import { VirtualList } from "@/components/virtual-list";
+import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { badgeGroup, multiBadgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
@@ -60,6 +61,7 @@ import {
   client,
   type ContentCategory,
   type ContentFinding,
+  type ContentFindingCounts,
   type SafetyScanHistoryItem,
   type SafetyScanReport,
   type TimeRange,
@@ -251,9 +253,11 @@ export function SafetyScanView() {
     scan !== null
       ? (scans.find((s) => s.status === "running")?.id ?? null)
       : null;
-  const findings = useQuery({
-    queryKey: ["safetyScan", "findings", selectedScan?.id ?? null],
-    queryFn: () => client.listContentFindings(selectedScan?.id),
+  // Counts, not rows. The panel pages its own rows now (#65) — this only has to
+  // answer "is there anything to show?" and feed the filter pills.
+  const findingCounts = useQuery({
+    queryKey: ["safetyScan", "findingCounts", selectedScan?.id ?? null],
+    queryFn: () => client.countContentFindings(selectedScan?.id),
     enabled: selectedScan != null,
   });
 
@@ -263,6 +267,7 @@ export function SafetyScanView() {
     onSuccess: () => {
       // Refresh both the findings list and the inline badges (marks).
       qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
+      qc.invalidateQueries({ queryKey: ["safetyScan", "findingCounts"] });
       qc.invalidateQueries({ queryKey: ["safetyScan", "marks"] });
     },
   });
@@ -513,10 +518,11 @@ export function SafetyScanView() {
             <div className="flex min-h-0 min-w-0 flex-col space-y-4">
               {/* The report lives behind the history card's doc icon; the detail
                   side is just the findings. Rail selection handles navigation. */}
-              {(findings.data?.length ?? 0) > 0 ? (
+              {(findingCounts.data?.live ?? 0) > 0 ||
+              (findingCounts.data?.dismissed ?? 0) > 0 ? (
                 <FindingsList
                   scan={selectedScan}
-                  findings={findings.data ?? []}
+                  counts={findingCounts.data}
                   showDismissed={showDismissed}
                   setShowDismissed={setShowDismissed}
                   onDismiss={(f, dismissed) =>
@@ -1186,6 +1192,13 @@ function groupReportFindings(
     .sort((a, b) => worst(b.findings) - worst(a.findings));
 }
 
+/** The report is a readable/printable DOCUMENT, so unlike the findings list it
+ *  can't be virtualized — print and PDF export need every row in the DOM at
+ *  once. So it is BOUNDED instead (#61): rendering ~8000 findings froze the
+ *  machine. Severity-ordered, so the cap keeps the most serious; the shortfall
+ *  is stated in the document rather than hidden. */
+const REPORT_FINDINGS_CAP = 500;
+
 /** The Safety Scan report as a styled, printable document: a mostly-deterministic
  *  frame (header, totals, findings grouped by conversation with resolved names)
  *  with the model's narrative + per-conversation prose spliced in. This is also
@@ -1195,10 +1208,15 @@ function SafetyReportDocument({
   scan,
   report,
   findings,
+  liveTotal,
 }: {
   scan: SafetyScanHistoryItem;
   report: SafetyScanReport | undefined;
+  /** Already capped, filtered and severity-ordered by SQLite (#65). */
   findings: ContentFinding[];
+  /** Every live, non-stale finding in scope — the denominator for the
+   *  "N more not shown" line, which used to come from the array's length. */
+  liveTotal: number;
 }) {
   const resolve = useContactResolver();
   const { showCascadeConfidence, includeReportSnippets } = useSettings();
@@ -1217,15 +1235,9 @@ function SafetyReportDocument({
     const first = t.participants[0];
     return first ? (resolve(first)?.name ?? first) : identifier;
   };
-  const allLive = findings.filter((f) => !f.dismissed && !f.stale);
-  // The report is a readable/printable DOCUMENT, so unlike the findings list it
-  // can't be virtualized without breaking print and PDF export — every row has
-  // to exist in the DOM at once. So it is BOUNDED instead (#61): rendering ~8000
-  // findings here froze the machine. Severity-ordered, so the cap keeps the most
-  // serious; the shortfall is stated in the document rather than hidden.
-  const REPORT_FINDINGS_CAP = 500;
-  const live = allLive.slice(0, REPORT_FINDINGS_CAP);
-  const omittedFromReport = allLive.length - live.length;
+  // The page arrives capped, dismissed- and stale-filtered, severity-ordered.
+  const live = findings;
+  const omittedFromReport = Math.max(0, liveTotal - live.length);
   // Verbatim flagged text is included ONLY when the user opts in (Settings →
   // Safety → Report). Fetched on demand per finding, never stored (ADR 0002).
   // Bounded by the cap above: this is one IPC round trip PER finding, so before
@@ -1280,7 +1292,7 @@ function SafetyReportDocument({
       <section className="grid grid-cols-4 gap-3 text-center">
         {(
           [
-            ["Findings", allLive.length, ""],
+            ["Findings", liveTotal, ""],
             ["Serious", scan.serious, sev(3)],
             ["Harmful", scan.harmful, sev(2)],
             ["Concerning", scan.concerning, sev(1)],
@@ -1312,14 +1324,14 @@ function SafetyReportDocument({
         </h2>
         {report?.report ? (
           <p className="leading-relaxed">{report.report}</p>
-        ) : allLive.length === 0 ? (
+        ) : liveTotal === 0 ? (
           <p className="text-muted-foreground">
             Nothing was flagged in this scan's scope. A clean scan is a review aid,
             not a guarantee — spot-check important conversations yourself.
           </p>
         ) : (
           <p className="text-muted-foreground">
-            {allLive.length} finding{allLive.length === 1 ? "" : "s"} across{" "}
+            {liveTotal} finding{liveTotal === 1 ? "" : "s"} across{" "}
             {groups.length} conversation{groups.length === 1 ? "" : "s"} — see the
             breakdown below.
           </p>
@@ -1431,9 +1443,26 @@ function SafetyReportDialog({
     queryKey: ["safetyScan", "report", scan.id],
     queryFn: () => client.getSafetyScanReport(scan.id),
   });
+  // The report is bounded at REPORT_FINDINGS_CAP, so ask for exactly that many
+  // — severity-ordered by SQLite — instead of fetching every finding and
+  // slicing (#65). The count supplies the "N more not shown" line, which used
+  // to come from the length of the full array.
   const findings = useQuery({
-    queryKey: ["safetyScan", "findings", scan.id],
-    queryFn: () => client.listContentFindings(scan.id),
+    queryKey: ["safetyScan", "findings", "report", scan.id],
+    queryFn: () =>
+      client.listContentFindings(scan.id, {
+        includeDismissed: false,
+        excludeStale: true,
+        sortBy: "severity",
+        desc: true,
+        groupByThread: false,
+        offset: 0,
+        limit: REPORT_FINDINGS_CAP,
+      }),
+  });
+  const counts = useQuery({
+    queryKey: ["safetyScan", "findingCounts", scan.id],
+    queryFn: () => client.countContentFindings(scan.id),
   });
   const loading = report.isPending || findings.isPending;
   return (
@@ -1466,6 +1495,7 @@ function SafetyReportDialog({
               scan={scan}
               report={report.data}
               findings={findings.data ?? []}
+              liveTotal={counts.data?.liveFresh ?? findings.data?.length ?? 0}
             />
           )}
         </div>
@@ -1662,15 +1692,24 @@ function FindingRow({
   );
 }
 
+/** The heading a finding sits under in grouped mode: its conversation, or
+ *  "Notes" for note findings — which SQL sorts to the end. */
+function groupNameOf(f: ContentFinding): string {
+  return f.sourceKind === "note"
+    ? "Notes"
+    : (f.threadIdentifier ?? "Conversation");
+}
+
 function FindingsList({
   scan,
-  findings,
+  counts,
   showDismissed,
   setShowDismissed,
   onDismiss,
 }: {
   scan: SafetyScanHistoryItem;
-  findings: ContentFinding[];
+  /** Unfiltered totals for the pills; the rows themselves are paged (#65). */
+  counts: ContentFindingCounts | undefined;
   showDismissed: boolean;
   setShowDismissed: (v: boolean) => void;
   onDismiss: (f: ContentFinding, dismissed: boolean) => void;
@@ -1679,54 +1718,37 @@ function FindingsList({
   const [sort, setSort] = useState<SortState>({ by: "severity", desc: true });
   const [grouped, setGrouped] = useState(false);
 
-  const visible = useMemo(() => {
-    let rows = findings.filter((f) => showDismissed || !f.dismissed);
-    if (severity !== "all")
-      rows = rows.filter((f) => f.severity === Number(severity));
-    return sortItems(
-      rows,
-      sort.by === "date"
-        ? (f) => f.occurredAt
-        : // Secondary date order inside a severity band, so equal severities
-          // don't shuffle: severity is the integer part, recency the fraction.
-          (f) => f.severity * 1e12 + (f.occurredAt ?? 0),
-      sort.desc,
-    );
-  }, [findings, showDismissed, severity, sort]);
-  const dismissedCount = findings.filter((f) => f.dismissed).length;
+  // The panel used to receive every finding and derive the visible list here:
+  // ~3 MB of JSON at 8000 findings, re-sent and re-derived on every
+  // invalidation. Filtering, ordering and grouping happen in SQLite now, and the
+  // rows arrive a page at a time (#65).
+  const page = useMemo(
+    () => ({
+      severity:
+        severity === "all" ? undefined : (Number(severity) as 1 | 2 | 3),
+      includeDismissed: showDismissed,
+      sortBy: sort.by === "date" ? ("date" as const) : ("severity" as const),
+      desc: sort.desc,
+      groupByThread: grouped,
+    }),
+    [severity, showDismissed, sort, grouped],
+  );
 
-  // Group by conversation (thread identifier); notes gather under "Notes".
-  const groups = useMemo(() => {
-    if (!grouped) return null;
-    const map = new Map<string, ContentFinding[]>();
-    for (const f of visible) {
-      const key =
-        f.sourceKind === "note" ? "Notes" : (f.threadIdentifier ?? "Conversation");
-      (map.get(key) ?? map.set(key, []).get(key)!).push(f);
-    }
-    return [...map.entries()];
-  }, [grouped, visible]);
+  // How many rows the CURRENT filter matches — the virtualizer's count, from the
+  // same predicate the page query uses, so the list can't run out early or leave
+  // a gap at the end.
+  const matching = useQuery({
+    queryKey: ["safetyScan", "findings", "count", scan.id, page],
+    queryFn: () =>
+      client.countContentFindings(scan.id, {
+        severity: page.severity,
+        includeDismissed: page.includeDismissed,
+      }),
+  });
+  const total = matching.data?.matching ?? 0;
+  const dismissedCount = counts?.dismissed ?? 0;
 
-  // ONE flat row array for the virtualizer (#61). Grouping used to nest
-  // `groups.map(rows.map(...))`, which — like the ungrouped `visible.map(...)`
-  // — mounted every finding at once: ~8000 findings drove the WebKit render
-  // process to 99% CPU and 3.1 GB and froze the machine. Flattening group
-  // headers and findings into a single list lets VirtualList mount only what's
-  // on screen, exactly as every other list view in the app does.
-  type Row =
-    | { kind: "header"; name: string; count: number }
-    | { kind: "finding"; f: ContentFinding };
-  const rows = useMemo<Row[]>(() => {
-    if (!groups) return visible.map((f) => ({ kind: "finding" as const, f }));
-    const out: Row[] = [];
-    for (const [name, items] of groups) {
-      out.push({ kind: "header", name, count: items.length });
-      for (const f of items) out.push({ kind: "finding", f });
-    }
-    return out;
-  }, [groups, visible]);
-
-  if (findings.length === 0) return null;
+  if ((counts?.live ?? 0) === 0 && dismissedCount === 0) return null;
   return (
     <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader className="shrink-0">
@@ -1734,7 +1756,7 @@ function FindingsList({
           <div>
             <CardTitle className="flex items-center gap-2">
               <MessageSquareWarning className="size-4" /> Findings
-              <Badge variant="secondary">{visible.length}</Badge>
+              <Badge variant="secondary">{total}</Badge>
             </CardTitle>
             <CardDescription>
               What the scan of {scanTitle(scan)} flagged. Dismiss anything you
@@ -1749,10 +1771,10 @@ function FindingsList({
                   label: "Severity",
                   description: "Show only findings of one severity",
                   options: [
-                    { value: "all", label: "All", count: findings.length },
-                    { value: "3", label: "Serious", count: findings.filter((f) => f.severity === 3).length },
-                    { value: "2", label: "Harmful", count: findings.filter((f) => f.severity === 2).length },
-                    { value: "1", label: "Concerning", count: findings.filter((f) => f.severity === 1).length },
+                    { value: "all", label: "All", count: counts?.live ?? 0 },
+                    { value: "3", label: "Serious", count: counts?.serious ?? 0 },
+                    { value: "2", label: "Harmful", count: counts?.harmful ?? 0 },
+                    { value: "1", label: "Concerning", count: counts?.concerning ?? 0 },
                   ],
                   value: severity,
                   onChange: setSeverity,
@@ -1817,37 +1839,48 @@ function FindingsList({
         {/* Fills the card, which fills the grid row, which fills the window
             (#79) — no fixed fraction, so a tall window shows more rows. */}
         <div className="flex min-h-0 flex-1 flex-col">
-          <VirtualList
-            items={rows}
+          <LazyVirtualList
+            count={total}
             estimateSize={72}
-            getKey={(r, i) =>
-              r.kind === "header" ? `h:${r.name}` : `${r.f.fingerprint}:${r.f.category}:${i}`
+            windowKey={(p) => [
+              "safetyScan",
+              "findings",
+              "page",
+              scan.id,
+              page,
+              p,
+            ]}
+            fetchWindow={(offset, limit) =>
+              client.listContentFindings(scan.id, { ...page, offset, limit })
             }
-            renderItem={(r) =>
-              r.kind === "header" ? (
-                <div className="flex items-center gap-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">
-                  {r.name === "Notes" ? (
-                    <NotebookText className="size-3.5" />
-                  ) : (
-                    <MessagesSquare className="size-3.5" />
-                  )}
-                  {r.name}
-                  <Badge variant="outline" className="px-1.5 py-0 text-[calc(0.625rem*var(--text-scale))]">
-                    {r.count}
-                  </Badge>
-                </div>
-              ) : (
-                <div className="pb-1.5">
-                  <FindingRow
-                    finding={r.f}
-                    onDismiss={(d) => onDismiss(r.f, d)}
-                  />
-                </div>
-              )
-            }
+            renderPlaceholder={() => (
+              <div className="pb-1.5">
+                <div className="h-16 animate-pulse rounded-lg bg-muted/40" />
+              </div>
+            )}
+            renderItem={(f, _i, prev) => (
+              <div className="pb-1.5">
+                {/* Grouped mode gets its headings from the ORDER, not from a
+                    grouped copy of the whole list: SQL orders by conversation,
+                    so a heading is simply "this row's thread differs from the
+                    one above". LazyVirtualList fetches the page before the
+                    visible range precisely so `prev` exists at a boundary. */}
+                {grouped && groupNameOf(f) !== (prev ? groupNameOf(prev) : null) && (
+                  <div className="flex items-center gap-2 pt-3 pb-1 text-xs font-medium text-muted-foreground">
+                    {f.sourceKind === "note" ? (
+                      <NotebookText className="size-3.5" />
+                    ) : (
+                      <MessagesSquare className="size-3.5" />
+                    )}
+                    {groupNameOf(f)}
+                  </div>
+                )}
+                <FindingRow finding={f} onDismiss={(d) => onDismiss(f, d)} />
+              </div>
+            )}
           />
         </div>
-        {visible.length === 0 && (
+        {total === 0 && !matching.isPending && (
           <p className="text-xs text-muted-foreground">
             No findings match the current filter.
           </p>

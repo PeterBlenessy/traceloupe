@@ -87,13 +87,6 @@ const BOUNDED: &[(&str, &str)] = &[
     // covered), but a large backup makes the JSON itself expensive. Windowing
     // them means moving filter/sort/group into SQL, which is a view change, not
     // a command change — tracked in #65.
-    // The one that actually hurts: ~350 B/row, so ~3 MB at the 8800 findings
-    // seen in practice — and the view re-derives filter, sort and grouping
-    // from the whole array on every invalidation.
-    (
-        "list_content_findings",
-        "#65: ~3 MB at 8800 findings; needs filter/sort/group in SQL first",
-    ),
     // Measured: 399 B for a heavy group-chat row (8 participants, display
     // name, full snippet) — 78 KB at 200 conversations, 390 KB at 1000,
     // 1.9 MB at 5000. Window it when a real backup approaches the thousands;
