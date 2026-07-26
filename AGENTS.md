@@ -223,6 +223,36 @@ it, and its own comment explained exactly why. So, for any new background job:
 5. **Surface it in the toolbar activity indicator** (`activity-indicator.tsx`) by
    adding an entry to `useActivities` — not another toolbar pill.
 
+## Pick the right IPC primitive
+
+**Events are for one-off notifications. Streams use a Channel. Bulk data is
+paginated or raw bytes.** Two incidents came from getting this wrong (#60, #61),
+and both were found in production rather than in review (#65).
+
+Tauri's own guidance is that the event system "is not designed for low latency or
+high throughput situations", and that rapid events delivered to an async listener
+**may be processed out of order** — for a progress stream that is a correctness
+bug, not a performance one.
+
+| What you have | Use |
+|---|---|
+| A rare, small notification ("the theme changed") | `emit` |
+| An ordered stream from a background job (progress, logs) | `tauri::ipc::Channel`, via `stream::ProgressStream` |
+| A collection that grows with the backup | a command with `offset`/`limit`, plus a separate `count_*` |
+| Bytes (media, exports) | the custom protocol or `ipc::Response`, never JSON |
+
+Notes that are easy to get wrong:
+
+- **A `ProgressStream` holds one channel slot.** These streams are
+  single-producer, single-consumer: one job emits, one React provider consumes
+  and fans out through context. Two components subscribing to the same stream
+  means the second silently steals it — fan out in the provider instead.
+- **A stream carries updates, not state.** Anything sent before the UI subscribes
+  is dropped, which is why every stream pairs with the `get_*_status` snapshot
+  described above.
+- **Convert every emit site for a stream, including the error path.** A partial
+  conversion leaves failures reaching nobody, which looks exactly like a hang.
+
 ## Finishing up
 
 - Open a PR (or hand off) once CI-clean and the branch is pushed.

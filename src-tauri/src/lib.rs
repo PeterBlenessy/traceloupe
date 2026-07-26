@@ -9,6 +9,7 @@ mod power;
 mod safety_scan_cmd;
 mod secret;
 mod signing;
+mod stream;
 mod theme;
 
 use std::path::{Path, PathBuf};
@@ -418,6 +419,11 @@ async fn install_engine(app: AppHandle) -> Result<(), String> {
                 install::InstallProgress::Verifying => EngineEvent::Verifying,
                 install::InstallProgress::Done => EngineEvent::Done,
             };
+            // Deliberately still an event, not a Channel (#65): the iLEAPP
+            // engine is dormant — imports are fully native — and nothing in the
+            // UI calls installEngine or listens to this. Converting a stream
+            // with no consumer would be busywork; removing the dormant engine
+            // surface is a separate call than this plumbing change.
             let _ = app.emit("engine://progress", ev);
         })
         .map(|_| ())
@@ -491,7 +497,21 @@ fn emit_import(app: &AppHandle, backup_id: &str, event: ImportEvent) {
             event: event.clone(),
         });
     }
-    let _ = app.emit("import://progress", event);
+    IMPORT_PROGRESS.send(event);
+}
+
+/// The import progress stream. One producer (the import task), one consumer
+/// (`import-provider.tsx`, which fans out through React context) — see
+/// [`stream`] for why that makes a Channel the right primitive.
+static IMPORT_PROGRESS: stream::ProgressStream<ImportEvent> = stream::ProgressStream::new();
+
+/// Subscribe to import progress. Pairs with `get_import_status`: the snapshot
+/// re-attaches a freshly mounted UI to an import already running, and this
+/// carries what happens next. Either order works — a progress stream ticks
+/// again, so a value crossing the two calls self-corrects on the next update.
+#[tauri::command]
+fn subscribe_import_progress(channel: tauri::ipc::Channel<ImportEvent>) {
+    IMPORT_PROGRESS.subscribe(channel);
 }
 
 /// Clear the import snapshot. Called on every exit path — success, failure and
@@ -1321,7 +1341,18 @@ fn emit_security_progress(app: &AppHandle, progress: ScanProgress) {
     if let Some(state) = app.try_state::<SecurityScanStatus>() {
         *state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(progress.clone());
     }
-    let _ = app.emit("scan://progress", progress);
+    SECURITY_PROGRESS.send(progress);
+}
+
+/// The security-scan progress stream (one producer, one consumer — see
+/// [`stream`]).
+static SECURITY_PROGRESS: stream::ProgressStream<ScanProgress> = stream::ProgressStream::new();
+
+/// Subscribe to security-scan progress. Paired with `get_security_scan_status`,
+/// which re-attaches a reloaded UI to a scan already in flight.
+#[tauri::command]
+fn subscribe_security_progress(channel: tauri::ipc::Channel<ScanProgress>) {
+    SECURITY_PROGRESS.subscribe(channel);
 }
 
 /// Clear the security-scan snapshot — every path that ends a scan calls this, so
@@ -4024,6 +4055,8 @@ pub fn run() {
             open_full_disk_access_settings,
             fetch_link_preview,
             engine_status,
+            subscribe_import_progress,
+            subscribe_security_progress,
             engine_info,
             install_engine,
             list_import_modules,
@@ -4108,6 +4141,8 @@ pub fn run() {
             safety_scan_cmd::run_safety_scan,
             safety_scan_cmd::cancel_safety_scan,
             safety_scan_cmd::list_content_findings,
+            safety_scan_cmd::subscribe_safety_scan_progress,
+            safety_scan_cmd::subscribe_safety_model_progress,
             safety_scan_cmd::content_finding_snippet,
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,

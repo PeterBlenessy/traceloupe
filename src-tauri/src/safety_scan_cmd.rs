@@ -12,7 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::ipc::Channel;
+use tauri::{AppHandle, Manager, State};
+
+use crate::stream::ProgressStream;
 
 use crate::ActiveBackup;
 use traceloupe_core::analysis::{AnalysisDb, Category};
@@ -287,7 +290,7 @@ pub async fn safety_scan_health_check(
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase", tag = "phase")]
-enum ModelProgressEvent {
+pub enum ModelProgressEvent {
     Downloading { received: u64, total: u64 },
     Verifying,
     Done,
@@ -320,7 +323,6 @@ pub async fn download_safety_scan_model(
         phase: "downloading".into(),
     });
 
-    let app2 = app.clone();
     let status_w = status.clone();
     let model_id_c = model_id.clone();
     let join = tauri::async_runtime::spawn_blocking(move || {
@@ -350,7 +352,7 @@ pub async fn download_safety_scan_model(
                 }
                 InstallProgress::Done => ModelProgressEvent::Done,
             };
-            let _ = app2.emit("safetyscan://model-progress", ev);
+            MODEL_PROGRESS.send(ev);
         })
     })
     .await;
@@ -366,12 +368,11 @@ pub async fn download_safety_scan_model(
         Ok(_) => Ok(()),
         Err(e) => {
             let msg = e.to_string();
-            let _ = app.emit(
-                "safetyscan://model-progress",
-                ModelProgressEvent::Error {
-                    message: msg.clone(),
-                },
-            );
+            // The error path is a stream site too — converting only the happy
+            // path would have left download failures reaching nobody.
+            MODEL_PROGRESS.send(ModelProgressEvent::Error {
+                message: msg.clone(),
+            });
             Err(msg)
         }
     }
@@ -419,7 +420,28 @@ fn emit_scan(app: &AppHandle, event: ScanEvent) {
         let mut g = state.0.lock().unwrap_or_else(|e| e.into_inner());
         *g = if terminal { None } else { Some(event.clone()) };
     }
-    let _ = app.emit("safetyscan://progress", event);
+    SCAN_PROGRESS.send(event);
+}
+
+/// The two Safety Scan streams. One producer, one consumer each
+/// (`safety-scan-provider.tsx` fans both out through React context), which is
+/// what makes a Channel the right primitive — see [`crate::stream`].
+static SCAN_PROGRESS: ProgressStream<ScanEvent> = ProgressStream::new();
+static MODEL_PROGRESS: ProgressStream<ModelProgressEvent> = ProgressStream::new();
+
+/// Subscribe to scan progress. Paired with `get_safety_scan_status`, which
+/// re-attaches a reloaded UI to a scan already running; this carries the updates
+/// from there on.
+#[tauri::command]
+pub fn subscribe_safety_scan_progress(channel: Channel<ScanEvent>) {
+    SCAN_PROGRESS.subscribe(channel);
+}
+
+/// Subscribe to model-download progress. Paired with
+/// `get_safety_scan_download_status`.
+#[tauri::command]
+pub fn subscribe_safety_model_progress(channel: Channel<ModelProgressEvent>) {
+    MODEL_PROGRESS.subscribe(channel);
 }
 
 #[derive(Clone, serde::Serialize)]
