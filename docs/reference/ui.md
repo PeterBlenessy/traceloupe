@@ -177,6 +177,52 @@ List rows use shadcn **`Item`** (`ItemMedia`/`ItemContent`/`ItemTitle`/…), ava
 from `lib/contact.ts`, timestamps via `lib/format.ts`. Selected/hovered rows show
 an inset, rounded, full-width highlight, matching the sidebar.
 
+## Every list is virtualized, bounded, or provably small
+
+**Any list whose length is not bounded by a constant must use the shared
+virtualization** — `VirtualList` / `VirtualListView` / `LazyListView`, never a
+hand-rolled windowing scheme. This is not a performance nicety: in
+[#61](https://github.com/PeterBlenessy/traceloupe/issues/61) one list rendering
+~8000 rows drove the WebKit render process to 99 % CPU and 3.1 GB and froze the
+whole laptop. That list looked harmless when it was written, because findings
+were expected to be few.
+
+So every list must fall into one of three buckets, and which one is a decision
+you record — not something a reader has to reverse-engineer:
+
+1. **Virtualized** — the default for anything that grows with the backup, with a
+   scan, or with a run. Scan-history rails and findings lists included: they gain
+   a row per scan and never shed one.
+2. **Bounded with disclosure** — render the first N and *say* what is not shown.
+   For lists that cannot be virtualized: a printable document (every row must
+   exist in the DOM for print/PDF — the Safety Scan report caps at 500 most
+   severe), or a gallery inside another scroller (a note's images cap at 50).
+   Never truncate silently; a list that quietly stops is worse than a slow one.
+3. **Provably small** — a fixed set (nav items, sort fields, the import catalog).
+   Declare it with `useBoundedList(name, count, bound)`
+   (`src/lib/bounded-list.ts`), which logs in dev if the bound is ever exceeded.
+   A comment claiming "this is always short" ages silently; the hook does not.
+
+When in doubt, virtualize. The cost of virtualizing a list that stays short is a
+few lines; the cost of not virtualizing one that grows is the user's machine.
+
+**Check it, don't assert it.** `scripts/check-virtualization.mjs` inflates the
+mock fixtures to thousands of rows (the `traceloupe-mock-bulk` localStorage knob,
+which the mock client reads) and fails if an audited list stops mounting only a
+windowful. It reads the virtualizer's scroll height as well as the mounted-row
+count — a low row count on its own looks identical to a fixture that never
+inflated, which is exactly how a broken check passes.
+
+Current classification:
+
+| List | Bucket |
+|---|---|
+| Photos, Safari, Calls, Apps, Health, Notes, Messages, Recordings, Reminders, Contacts, Interactions, Calendar | virtualized (`VirtualListView` / `LazyListView`) |
+| Safety Scan history rail · Safety Scan findings · Security run rail · Security findings | virtualized (`VirtualList`) |
+| Safety Scan report findings (500) · a note's image gallery (50) · a finding's shortened links (25) | bounded with disclosure |
+| Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |
+| Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder | provably small, declared via `useBoundedList` |
+
 ## Buttons always have a tooltip
 
 **Every button gets a tooltip. No exceptions** — text buttons and icon-only

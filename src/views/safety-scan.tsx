@@ -975,16 +975,19 @@ function ScanRail({
           />
         </div>
       </CardHeader>
-      {/* Scrolls inside the card rather than growing the page: this list gains a
-          row per scan and never sheds one, so it is unbounded in principle (#67).
+      {/* This list gains a row per scan and never sheds one, so it is unbounded
+          in principle — virtualized rather than trusted to stay short (#67).
           Sized by the grid row, which is sized by the window (#79). */}
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+      <CardContent className="flex min-h-0 flex-1 flex-col">
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">No scans match.</p>
         )}
-        {visible.map((s) => (
+        <VirtualList
+          items={visible}
+          estimateSize={62}
+          getKey={(s) => s.id}
+          renderItem={(s) => (
           <div
-            key={s.id}
             role="button"
             tabIndex={0}
             aria-current={s.id === selectedId}
@@ -1000,7 +1003,7 @@ function ScanRail({
               }
             }}
             className={cn(
-              "group flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
+              "group mb-1.5 flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
               s.id === selectedId && "border-primary/50 bg-primary/5",
             )}
           >
@@ -1096,7 +1099,8 @@ function ScanRail({
               </Tooltip>
             </div>
           </div>
-        ))}
+        )}
+        />
       </CardContent>
 
       <Dialog

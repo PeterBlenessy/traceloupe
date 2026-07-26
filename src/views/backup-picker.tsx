@@ -29,6 +29,7 @@ import {
 } from "@/lib/open-perf";
 import { modelName } from "@/lib/device-names";
 import { formatDateTime } from "@/lib/format";
+import { useBoundedList } from "@/lib/bounded-list";
 
 export function BackupPicker() {
   const navigate = useNavigate();
@@ -51,6 +52,14 @@ export function BackupPicker() {
     queryKey: ["backups", root],
     queryFn: () => client.listBackups(root ?? undefined),
   });
+  // One card per backup in ONE folder — a handful in practice. Declared rather
+  // than assumed, so a folder full of backups shows up in dev instead of on a
+  // user's machine (#67).
+  useBoundedList(
+    "backup-picker backups",
+    data?.status === "ok" ? data.backups.length : 0,
+    60,
+  );
 
   // EVERY hook must run above this early return. `active` flips false→true the
   // moment a backup opens (handleOpen sets it optimistically), so the very next

@@ -37,6 +37,7 @@ import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
 import { client, type Contact } from "@/lib/ipc";
 import { formatDate } from "@/lib/format";
+import { useBoundedList } from "@/lib/bounded-list";
 
 export function ContactsView() {
   const { data: active } = useQuery({
@@ -287,6 +288,8 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
       keys.has(phoneOrEmailKey(t.displayName ?? t.identifier)) ||
       t.participants.some((h) => keys.has(phoneOrEmailKey(h))),
   );
+  // Bounded by the threads ONE contact appears in — declared, not assumed (#67).
+  useBoundedList("contact conversations", conversations.length, 200);
   return (
     <div className="flex h-full flex-col">
       {/* No header-bar name here — it's already the big name under the avatar
@@ -385,6 +388,7 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
               <Field icon={StickyNote} label={null} value={contact.note} wrap />
             </FieldGroup>
           )}
+          {/* Bounded by the threads one contact appears in (#67). */}
           {conversations.length > 0 && (
             <FieldGroup title={`Conversations (${conversations.length})`}>
               {conversations.map((t) => (

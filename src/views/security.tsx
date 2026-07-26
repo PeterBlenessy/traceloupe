@@ -26,6 +26,7 @@ import { formatListTime, formatTimelineTime } from "@/lib/format";
 import { useSecurityScan } from "@/components/security-scan-provider";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { VirtualList } from "@/components/virtual-list";
 import { ConsentDialogs } from "@/views/security-consent";
 
 const SEVERITY_META: Record<
@@ -50,6 +51,12 @@ const SEVERITY_META: Record<
     icon: Info,
   },
 };
+
+/** Findings-table columns. ONE definition shared by the header and the rows —
+ *  a virtualized list has no <table> to keep them aligned for it, so two copies
+ *  of this template would drift the moment either changed (#67). */
+const FINDING_COLS =
+  "grid-cols-[auto_minmax(0,1fr)_minmax(0,16rem)_auto]";
 
 const MODULE_LABEL: Record<string, string> = {
   apps: "Installed apps",
@@ -441,16 +448,19 @@ function RunRail({
           />
         </div>
       </CardHeader>
-      {/* Scrolls in place: a row per run, never shed, so unbounded in
-          principle (#67). Height comes from the grid row, which comes from the
-          window (#79) — no fixed fraction. */}
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
+      {/* A row per run, never shed, so unbounded in principle — virtualized
+          rather than trusted to stay short (#67). Height comes from the grid
+          row, which comes from the window (#79) — no fixed fraction. */}
+      <CardContent className="flex min-h-0 flex-1 flex-col">
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">No runs match.</p>
         )}
-        {visible.map((r) => (
+        <VirtualList
+          items={visible}
+          estimateSize={62}
+          getKey={(r) => r.id}
+          renderItem={(r) => (
           <div
-            key={r.id}
             // Density-aware, like every other list row in the app (#78).
             data-slot="list-row"
             role="button"
@@ -464,7 +474,7 @@ function RunRail({
               }
             }}
             className={cn(
-              "flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
+              "mb-1.5 flex cursor-pointer items-center justify-between gap-2 rounded-md border px-3 py-2 hover:bg-accent/50",
               r.id === selectedId && "border-primary/50 bg-primary/5",
             )}
           >
@@ -480,7 +490,8 @@ function RunRail({
             </div>
             <RunOutcomeBadge run={r} />
           </div>
-        ))}
+        )}
+        />
       </CardContent>
     </Card>
   );
@@ -627,50 +638,67 @@ function ResultSummary({
       {loadingFindings ? (
         <ListSkeleton rows={4} />
       ) : (
-        <div className="min-h-0 flex-1 overflow-auto rounded-lg border">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50 text-xs text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2 text-left font-medium">Severity</th>
-                <th className="px-3 py-2 text-left font-medium">Threat</th>
-                <th className="px-3 py-2 text-left font-medium">Matched</th>
-                <th className="px-3 py-2 text-left font-medium">Where</th>
-              </tr>
-            </thead>
-            <tbody>
-              {findings.map((f) => (
-                <tr
-                  key={f.id}
-                  data-slot="list-row"
-                  className="cursor-pointer border-t hover:bg-accent/50"
-                  onClick={() => onSelect(f)}
-                >
-                  <td className="px-3 py-2">
-                    <SeverityBadge severity={f.severity} />
-                  </td>
-                  <td className="px-3 py-2 font-medium">
-                    <span className="inline-flex items-center gap-1.5">
-                      {f.malware}
-                      {f.isNew && (
-                        <Badge
-                          variant="outline"
-                          className="border-sky-500/40 px-1.5 py-0 text-[calc(0.625rem*var(--text-scale))] font-semibold text-sky-600 dark:text-sky-400"
-                        >
-                          NEW
-                        </Badge>
-                      )}
-                    </span>
-                  </td>
-                  <td className="max-w-[16rem] truncate px-3 py-2 font-mono text-xs text-muted-foreground">
-                    {f.matchedValue}
-                  </td>
-                  <td className="px-3 py-2 text-muted-foreground">
-                    {MODULE_LABEL[f.module] ?? f.module}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        // One row per indicator match: a backup that matches many produces
+        // exactly the shape that froze the machine in #61, so it is virtualized.
+        // That means leaving <table> behind — virtualized rows are absolutely
+        // positioned, which a table layout cannot express — so the columns are a
+        // shared grid template between the header and the rows instead.
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border">
+          <div
+            className={cn(
+              "grid shrink-0 gap-3 border-b bg-muted/50 px-3 py-2 text-xs font-medium text-muted-foreground",
+              FINDING_COLS,
+            )}
+          >
+            <span>Severity</span>
+            <span>Threat</span>
+            <span>Matched</span>
+            <span>Where</span>
+          </div>
+          <VirtualList
+            items={findings}
+            estimateSize={37}
+            getKey={(f) => f.id}
+            renderItem={(f) => (
+              <div
+                data-slot="list-row"
+                role="button"
+                tabIndex={0}
+                className={cn(
+                  "grid cursor-pointer items-center gap-3 border-b px-3 py-2 text-sm hover:bg-accent/50",
+                  FINDING_COLS,
+                )}
+                onClick={() => onSelect(f)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelect(f);
+                  }
+                }}
+              >
+                <span>
+                  <SeverityBadge severity={f.severity} />
+                </span>
+                <span className="inline-flex min-w-0 items-center gap-1.5 font-medium">
+                  <span className="truncate">{f.malware}</span>
+                  {f.isNew && (
+                    <Badge
+                      variant="outline"
+                      className="shrink-0 border-sky-500/40 px-1.5 py-0 text-[calc(0.625rem*var(--text-scale))] font-semibold text-sky-600 dark:text-sky-400"
+                    >
+                      NEW
+                    </Badge>
+                  )}
+                </span>
+                <span className="truncate font-mono text-xs text-muted-foreground">
+                  {f.matchedValue}
+                </span>
+                <span className="truncate text-muted-foreground">
+                  {MODULE_LABEL[f.module] ?? f.module}
+                </span>
+              </div>
+            )}
+          />
         </div>
       )}
 
@@ -750,12 +778,20 @@ function ShortLinkExpander({ text }: { text: string }) {
     expand.mutate(url);
   }
 
+  // Links found in ONE finding's text — a handful in practice, but a text can
+  // contain any number, so it is bounded with the shortfall stated rather than
+  // trusted (#67). Bounded, not virtualized: this list lives in a detail panel
+  // that grows with its content and has no scroll box of its own.
+  const LINK_CAP = 25;
+  const shown = links.data.slice(0, LINK_CAP);
+  const hidden = links.data.length - shown.length;
+
   return (
     <div className="flex flex-col gap-2">
       <span className="text-xs font-medium text-muted-foreground">
         Shortened links
       </span>
-      {links.data.map((url) => (
+      {shown.map((url) => (
         <div
           key={url}
           data-slot="list-row"
@@ -784,6 +820,12 @@ function ShortLinkExpander({ text }: { text: string }) {
           )}
         </div>
       ))}
+      {hidden > 0 && (
+        <span className="text-xs text-muted-foreground">
+          {hidden} more shortened link{hidden === 1 ? "" : "s"} in this text
+          aren't shown.
+        </span>
+      )}
 
       <Dialog open={!!pending} onOpenChange={(o) => !o && setPending(null)}>
         <DialogContent showCloseButton={false}>
