@@ -1592,7 +1592,7 @@ function MessageBubble({
               )}
               {message.deleted && (
                 <span
-                  className="mt-0.5 flex items-center gap-1 text-3xs font-medium text-red-500"
+                  className="mt-0.5 flex items-center gap-1 text-3xs font-medium text-status-danger-text"
                   title={
                     message.deletedAt
                       ? `Deleted ${formatMessageTime(message.deletedAt)}`
@@ -2120,7 +2120,7 @@ function RecoveredAttachment({
   const isVideo = data.kind === "video";
   const meta = showMediaMetadata ? (
     <div className="flex items-center gap-2">
-      <Sparkles className="size-3.5 shrink-0 text-amber-400" />
+      <Sparkles className="size-3.5 shrink-0 text-status-warning-text" />
       <span>
         Recovered from Photos — a camera-roll item named “{att.filename}”. Matched
         by file name, so it may not be the exact attachment.

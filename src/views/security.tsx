@@ -42,7 +42,7 @@ const SEVERITY_META: Record<
   warning: {
     label: "Warning",
     badge:
-      "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30",
+      "bg-status-warning-soft text-status-warning-text border-status-warning-line",
     icon: AlertTriangle,
   },
   info: {
@@ -256,7 +256,7 @@ export function SecurityView() {
           </div>
 
           {stale && (
-            <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-700 dark:text-amber-400">
+            <div className="flex items-center gap-2 rounded-lg border border-status-warning-line bg-status-warning-soft px-4 py-2.5 text-sm text-status-warning-text">
               <AlertTriangle className="size-4 shrink-0" />
               <span>
                 The threat feeds are {staleDays} days old — update them in{" "}
@@ -345,7 +345,7 @@ function RunOutcomeBadge({ run }: { run: ScanRun }) {
     return (
       <Badge
         variant="outline"
-        className="shrink-0 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+        className="shrink-0 border-status-ok-line text-status-ok-text"
       >
         Clean
       </Badge>
@@ -557,7 +557,7 @@ function ResultSummary({
         <CardHeader>
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <ShieldCheck className="size-5 text-emerald-600 dark:text-emerald-400" />
+              <ShieldCheck className="size-5 text-status-ok-text" />
               <CardTitle>No known indicators matched</CardTitle>
             </div>
             {!latest && <BackToLatest onClick={onBackToLatest} />}
@@ -611,7 +611,7 @@ function ResultSummary({
           scanned {formatListTime(run.startedAt)}
         </span>
         {newCount > 0 && (
-          <span className="text-xs font-medium text-sky-600 dark:text-sky-400">
+          <span className="text-xs font-medium text-status-info-text">
             {newCount} new since last scan
           </span>
         )}
@@ -684,7 +684,7 @@ function ResultSummary({
                   {f.isNew && (
                     <Badge
                       variant="outline"
-                      className="shrink-0 border-sky-500/40 px-1.5 py-0 text-3xs font-semibold text-sky-600 dark:text-sky-400"
+                      className="shrink-0 border-status-info-line px-1.5 py-0 text-3xs font-semibold text-status-info-text"
                     >
                       NEW
                     </Badge>
@@ -837,7 +837,7 @@ function ShortLinkExpander({ text }: { text: string }) {
               destination.
             </DialogDescription>
           </DialogHeader>
-          <Alert className="[&>svg]:text-amber-500">
+          <Alert className="[&>svg]:text-status-warning">
             <AlertTriangle className="size-4" />
             <AlertTitle>This sends data from your backup</AlertTitle>
             <AlertDescription>
