@@ -3239,6 +3239,7 @@ export const mockClient: TraceLoupeClient = {
     // (none); scan 3 (latest) found everything.
     if (scanId === 1) return mockContentFindings.slice(0, 1);
     if (scanId === 2) return [];
+    if (scanId === 4) return [];
     return mockContentFindings;
   },
   contentFindingSnippet: async (sourceKind, sourceId) => {
@@ -3362,6 +3363,39 @@ export const mockClient: TraceLoupeClient = {
             serious: 0,
             harmful: 1,
             concerning: 0,
+          },
+          // A clean completed scan and a scan with a 4-digit count: the two row
+          // states that stress the card's layout hardest (an empty-looking right
+          // side, and the widest possible pill next to a long title). Without
+          // them the layout could only ever be checked against the easy cases
+          // (#92).
+          {
+            id: 4,
+            model: "gemma-4-E4B-it-Q4_K_M",
+            sources: "notes",
+            rangeStart: null,
+            rangeEnd: null,
+            status: "completed" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 300000,
+            finishedAt: Math.floor(Date.now() / 1000) - 299400,
+            findings: 0,
+            serious: 0,
+            harmful: 0,
+            concerning: 0,
+          },
+          {
+            id: 5,
+            model: "gemma-4-E4B-it-Q4_K_M",
+            sources: "all",
+            rangeStart: null,
+            rangeEnd: null,
+            status: "completed" as const,
+            startedAt: Math.floor(Date.now() / 1000) - 400000,
+            finishedAt: Math.floor(Date.now() / 1000) - 380000,
+            findings: 1284,
+            serious: 12,
+            harmful: 307,
+            concerning: 965,
           },
         ].filter((s) => !mockDeletedScanIds.has(s.id))
       : [],
