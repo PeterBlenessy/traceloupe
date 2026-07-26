@@ -13,6 +13,21 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.15] — 2026-07-26
+
+### Fixed
+
+- **The findings count on a scan history row can be inspected again.** Its
+  breakdown (serious / harmful / concerning) appeared on hover — but the row's
+  hover actions landed on top of the count, so reaching for it was the very thing
+  that covered it, and the breakdown could never be seen. The count now sits
+  beside the scan's date and the actions have the right edge to themselves.
+  ([#92](https://github.com/PeterBlenessy/traceloupe/issues/92))
+- **Row actions no longer jump around.** They stay visible (dimmed until you
+  hover), and line up in straight columns whether or not a row offers Resume — so
+  Delete is always in the same place.
+  ([#92](https://github.com/PeterBlenessy/traceloupe/issues/92))
+
 ## [0.31.14] — 2026-07-26
 
 ### Changed
