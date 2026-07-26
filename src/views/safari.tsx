@@ -268,7 +268,7 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
           </span>
           {item.private && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-purple-500/15 px-1.5 py-0.5 text-3xs font-medium text-purple-500"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-note-soft px-1.5 py-0.5 text-3xs font-medium text-status-note-text"
               title="Open in a private-browsing window"
             >
               <EyeOff className="size-2.5" />

@@ -88,7 +88,7 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   2: {
     label: "Harmful",
     badge:
-      "bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-500/30",
+      "bg-status-warning-soft text-status-warning-text border-status-warning-line",
   },
   1: {
     label: "Concerning",
@@ -538,7 +538,7 @@ export function SafetyScanView() {
                   <CardContent className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
                     {selectedScan.status === "completed" ? (
                       <>
-                        <ShieldCheck className="size-6 text-emerald-600 dark:text-emerald-400" />
+                        <ShieldCheck className="size-6 text-status-ok-text" />
                         Nothing flagged in this scan's scope. Open the report for
                         the full summary.
                       </>
@@ -831,7 +831,7 @@ function ScanOutcomeBadge({
                       lvl === 3
                         ? "bg-destructive"
                         : lvl === 2
-                          ? "bg-amber-500"
+                          ? "bg-status-warning"
                           : "bg-muted-foreground",
                     )}
                   />
@@ -844,7 +844,7 @@ function ScanOutcomeBadge({
     ) : scan.status === "completed" ? (
       <Badge
         variant="outline"
-        className="shrink-0 border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+        className="shrink-0 border-status-ok-line text-status-ok-text"
       >
         Clean
       </Badge>
@@ -1266,7 +1266,7 @@ function SafetyReportDocument({
     n === 3
       ? "text-destructive"
       : n === 2
-        ? "text-amber-600 dark:text-amber-400"
+        ? "text-status-warning-text"
         : "text-muted-foreground";
 
   return (
@@ -1402,7 +1402,7 @@ function SafetyReportDocument({
                           </span>
                         )}
                         {showCascadeConfidence && f.rechecked && (
-                          <span className="shrink-0 text-sm text-emerald-600 dark:text-emerald-400">
+                          <span className="shrink-0 text-sm text-status-ok-text">
                             ✓ confirmed
                           </span>
                         )}
@@ -1583,7 +1583,7 @@ function FindingRow({
             <TooltipTrigger asChild>
               <Badge
                 variant="outline"
-                className="border-emerald-500/40 text-emerald-600 dark:text-emerald-400"
+                className="border-status-ok-line text-status-ok-text"
               >
                 <ShieldCheck className="size-3" /> Confirmed
               </Badge>

@@ -18,7 +18,7 @@ import {
 
 const SEVERITY_CLASS: Record<1 | 2 | 3, string> = {
   3: "text-destructive",
-  2: "text-amber-600 dark:text-amber-400",
+  2: "text-status-warning-text",
   1: "text-muted-foreground",
 };
 

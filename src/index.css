@@ -244,7 +244,10 @@
   --faint-foreground: oklch(0.62 0.012 260);
   --accent: oklch(0.945 0.006 260);
   --accent-foreground: oklch(0.25 0.01 260);
-  --destructive: oklch(0.577 0.245 27.325);
+  /* One red in the app. shadcn's destructive token IS the danger role —
+     macOS uses systemRed for destructive actions, and two independently
+     defined reds drift the moment either is touched. */
+  --destructive: var(--status-danger);
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.905 0.006 260);
   --input: oklch(0.905 0.006 260);
@@ -286,7 +289,7 @@
   --faint-foreground: oklch(0.58 0.01 260);
   --accent: oklch(0.31 0.012 260);
   --accent-foreground: oklch(0.97 0.004 260);
-  --destructive: oklch(0.704 0.191 22.216);
+  --destructive: var(--status-danger);
   --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
@@ -366,7 +369,98 @@ body {
   }
 }
 
+/* Status colors — the platform's, with everything else derived from them.
+   ================================================================
+   Five roles, one color each, replacing 56 hardcoded Tailwind palette classes
+   across 24 distinct values (`text-emerald-600 dark:text-emerald-400` and
+   friends). The light/dark PAIR disappears: a system color already flips, so
+   one class now says what a thing means instead of two saying what it looks
+   like in each theme.
+
+   Three tiers per role, because a status color is used three ways:
+     --status-X        the color itself — icons, dots, fills, chart marks
+     --status-X-text   contrast-corrected for TEXT. systemOrange on white is
+                       about 2:1, which is unreadable, so lightness is clamped
+                       down in light mode and up in dark — the same trick
+                       --accent-text already uses for the system accent.
+     --status-X-soft / -line   15% / 30% tints for badge fills and borders.
+
+   Fallbacks are the measured sRGB of each macOS color converted to oklch, so
+   the Chromium screenshot harness renders what the shipped WKWebView does. */
+:root {
+  --status-danger: oklch(0.653 0.233 25.7);
+  --status-warning: oklch(0.753 0.172 55.7);
+  --status-ok: oklch(0.730 0.194 147.4);
+  --status-info: oklch(0.632 0.202 254.1);
+  --status-note: oklch(0.622 0.263 322.5);
+}
+.dark {
+  --status-danger: oklch(0.662 0.225 25.1);
+  --status-warning: oklch(0.762 0.167 57.1);
+  --status-ok: oklch(0.756 0.208 147.0);
+  --status-info: oklch(0.624 0.206 255.5);
+  --status-note: oklch(0.637 0.259 322.1);
+}
+@supports (color: -apple-system-red) {
+  :root, .dark {
+    --status-danger: -apple-system-red;
+    --status-warning: -apple-system-orange;
+    --status-ok: -apple-system-green;
+    --status-info: -apple-system-blue;
+    --status-note: -apple-system-purple;
+  }
+}
+
+/* Derived from whichever of the two the engine picked, so these follow the
+   platform automatically where it is available. */
+:root {
+  --status-danger-text: oklch(from var(--status-danger) min(l, 0.55) c h);
+  --status-warning-text: oklch(from var(--status-warning) min(l, 0.52) c h);
+  --status-ok-text: oklch(from var(--status-ok) min(l, 0.55) c h);
+  --status-info-text: oklch(from var(--status-info) min(l, 0.55) c h);
+  --status-note-text: oklch(from var(--status-note) min(l, 0.55) c h);
+}
+.dark {
+  --status-danger-text: oklch(from var(--status-danger) max(l, 0.72) c h);
+  --status-warning-text: oklch(from var(--status-warning) max(l, 0.75) c h);
+  --status-ok-text: oklch(from var(--status-ok) max(l, 0.75) c h);
+  --status-info-text: oklch(from var(--status-info) max(l, 0.72) c h);
+  --status-note-text: oklch(from var(--status-note) max(l, 0.72) c h);
+}
+:root {
+  --status-danger-soft: color-mix(in srgb, var(--status-danger) 15%, transparent);
+  --status-warning-soft: color-mix(in srgb, var(--status-warning) 15%, transparent);
+  --status-ok-soft: color-mix(in srgb, var(--status-ok) 15%, transparent);
+  --status-info-soft: color-mix(in srgb, var(--status-info) 15%, transparent);
+  --status-note-soft: color-mix(in srgb, var(--status-note) 15%, transparent);
+  --status-danger-line: color-mix(in srgb, var(--status-danger) 30%, transparent);
+  --status-warning-line: color-mix(in srgb, var(--status-warning) 30%, transparent);
+  --status-ok-line: color-mix(in srgb, var(--status-ok) 40%, transparent);
+  --status-info-line: color-mix(in srgb, var(--status-info) 40%, transparent);
+  --status-note-line: color-mix(in srgb, var(--status-note) 30%, transparent);
+}
+
 @theme inline {
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-text: var(--status-danger-text);
+  --color-status-danger-soft: var(--status-danger-soft);
+  --color-status-danger-line: var(--status-danger-line);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-text: var(--status-warning-text);
+  --color-status-warning-soft: var(--status-warning-soft);
+  --color-status-warning-line: var(--status-warning-line);
+  --color-status-ok: var(--status-ok);
+  --color-status-ok-text: var(--status-ok-text);
+  --color-status-ok-soft: var(--status-ok-soft);
+  --color-status-ok-line: var(--status-ok-line);
+  --color-status-info: var(--status-info);
+  --color-status-info-text: var(--status-info-text);
+  --color-status-info-soft: var(--status-info-soft);
+  --color-status-info-line: var(--status-info-line);
+  --color-status-note: var(--status-note);
+  --color-status-note-text: var(--status-note-text);
+  --color-status-note-soft: var(--status-note-soft);
+  --color-status-note-line: var(--status-note-line);
   /* The two sub-xs steps, so they are utilities (`text-3xs`) rather than another
      arbitrary value. The rest of the ramp is Tailwind's own, redefined above. */
   --text-3xs: var(--text-3xs);

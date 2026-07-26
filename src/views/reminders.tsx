@@ -42,7 +42,7 @@ function ReminderRow({ reminder }: { reminder: Reminder }) {
           >
             {reminder.title ?? "(untitled)"}
             {reminder.flagged && (
-              <Flag className="ml-1.5 inline size-3 fill-orange-500 text-orange-500" />
+              <Flag className="ml-1.5 inline size-3 fill-status-warning text-status-warning" />
             )}
           </span>
           {reminder.listName && (

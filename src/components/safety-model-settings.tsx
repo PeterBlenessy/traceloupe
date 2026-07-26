@@ -257,7 +257,7 @@ export function SafetyModelSettings() {
           {!health.isPending && health.data && (
             <p className="mt-2 flex items-center gap-1.5 text-xs text-foreground">
               {health.data.ok ? (
-                <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                <CheckCircle2 className="size-4 shrink-0 text-status-ok-text" />
               ) : (
                 <XCircle className="size-4 shrink-0 text-destructive" />
               )}

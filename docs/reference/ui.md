@@ -23,6 +23,15 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   fallback. macOS ships them as *alpha* over black/white, so one value is right
   on a card, the sidebar and a popover alike, and they follow the "Increase
   contrast" accessibility setting.
+  **Status colours are the platform's too** — five roles (`danger` · `warning` ·
+  `ok` · `info` · `note`) mapped to `-apple-system-red/orange/green/blue/purple`,
+  replacing 56 hardcoded palette classes. Each has three tiers:
+  `--status-X` (icons, fills), `--status-X-text` (lightness-clamped for
+  contrast — systemOrange on white is ~2:1, unreadable), and
+  `--status-X-soft`/`-line` (15 % / 30 % `color-mix` tints). Note what
+  disappears: `text-emerald-600 dark:text-emerald-400` becomes
+  `text-status-ok-text`, because a system colour already flips with the
+  appearance. `--destructive` is the danger role — one red in the app.
   **The `@supports` guard is load-bearing:** WKWebView (what we ship) supports
   those keywords, Chromium (what `scripts/shot.mjs` renders with) does not — and
   a custom property holding an unsupported keyword is invalid *at use time*, so
