@@ -512,13 +512,15 @@ function TextSizeToggle() {
   const label =
     textSize === "md" ? "default" : textSize === "xs" ? "smallest" : textSize === "xl" ? "largest" : textSize;
   return (
-    <>
+    // One unit: no gap between the two halves, and narrower than a stock icon
+    // button because "A−"/"A+" are much narrower glyphs than an icon.
+    <span className="inline-flex items-center">
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            className="size-8"
+            className="h-8 w-6"
             disabled={atMin}
             onClick={() => setTextSize(TEXT_SIZES[i - 1])}
           >
@@ -539,7 +541,7 @@ function TextSizeToggle() {
           <Button
             variant="ghost"
             size="icon"
-            className="size-8"
+            className="h-8 w-6"
             disabled={atMax}
             onClick={() => setTextSize(TEXT_SIZES[i + 1])}
           >
@@ -555,7 +557,7 @@ function TextSizeToggle() {
             : `Increase text size (currently ${label})`}
         </TooltipContent>
       </Tooltip>
-    </>
+    </span>
   );
 }
 
