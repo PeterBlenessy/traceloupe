@@ -1061,7 +1061,7 @@ function TimelineRow({
                   <Icon className="size-3.5 shrink-0" />
                   <span className="truncate">{a.filename ?? "attachment"}</span>
                   {!a.localPath && (
-                    <span className="shrink-0 text-[calc(0.625rem*var(--text-scale))] italic opacity-70">
+                    <span className="shrink-0 text-3xs italic opacity-70">
                       · not in backup
                     </span>
                   )}
@@ -1237,7 +1237,7 @@ function ContactAvatar({
             )}
             <div
               className={cn(
-                "mt-0.5 text-[calc(0.6875rem*var(--text-scale))]",
+                "mt-0.5 text-2xs",
                 contactId != null ? "text-primary" : "text-muted-foreground",
               )}
             >
@@ -1272,6 +1272,10 @@ function GroupAvatar({
           {m?.hasImage && (
             <AvatarImage src={client.contactAvatarUrl(m.id)} alt="" />
           )}
+          {/* Sized to the AVATAR, not to the type ramp: these initials sit in a
+              half-size circle inside a stacked group avatar, and the ramp's
+              smallest step (10px) overflows it. An arbitrary value is correct
+              here — it is a fitted size, not a typographic choice. */}
           <AvatarFallback className="text-[calc(0.5rem*var(--text-scale))]">
             {m ? initials(m.name) : <Users className="size-2.5" />}
           </AvatarFallback>
@@ -1576,19 +1580,19 @@ function MessageBubble({
                 from={message.isFromMe ? "You" : (senderLabel ?? message.sender ?? null)}
               />
               {message.effect && (
-                <span className="mt-0.5 flex items-center gap-1 text-[calc(0.625rem*var(--text-scale))] opacity-60">
+                <span className="mt-0.5 flex items-center gap-1 text-3xs opacity-60">
                   <Sparkles className="size-2.5" />
                   Sent with {message.effect}
                 </span>
               )}
               {message.edited && (
-                <span className="mt-0.5 block text-[calc(0.625rem*var(--text-scale))] italic opacity-60">
+                <span className="mt-0.5 block text-3xs italic opacity-60">
                   Edited
                 </span>
               )}
               {message.deleted && (
                 <span
-                  className="mt-0.5 flex items-center gap-1 text-[calc(0.625rem*var(--text-scale))] font-medium text-red-500"
+                  className="mt-0.5 flex items-center gap-1 text-3xs font-medium text-red-500"
                   title={
                     message.deletedAt
                       ? `Deleted ${formatMessageTime(message.deletedAt)}`
@@ -1609,7 +1613,7 @@ function MessageBubble({
             </span>
           )}
           {message.isFromMe && (message.readAt || message.deliveredAt) && (
-            <span className="mt-0.5 text-[calc(0.625rem*var(--text-scale))] text-muted-foreground">
+            <span className="mt-0.5 text-3xs text-muted-foreground">
               {message.readAt
                 ? `Read ${formatMessageTime(message.readAt)}`
                 : "Delivered"}
@@ -1905,14 +1909,14 @@ function LinkPreviewCard({
               />
             )}
             <div className="min-w-0 px-2.5 py-2">
-              <div className="truncate text-[calc(0.625rem*var(--text-scale))] uppercase tracking-wide text-muted-foreground">
+              <div className="truncate text-3xs uppercase tracking-wide text-muted-foreground">
                 {data?.siteName ?? host}
               </div>
               <div className="line-clamp-2 text-xs font-medium leading-snug">
                 {data?.title ?? host}
               </div>
               {data?.description && (
-                <div className="mt-0.5 line-clamp-2 text-[calc(0.6875rem*var(--text-scale))] leading-snug text-muted-foreground">
+                <div className="mt-0.5 line-clamp-2 text-2xs leading-snug text-muted-foreground">
                   {data.description}
                 </div>
               )}
@@ -1922,14 +1926,14 @@ function LinkPreviewCard({
         <TooltipContent>{url}</TooltipContent>
       </Tooltip>
       <div className="flex items-center gap-2 border-t px-2.5 py-1">
-        <span className="min-w-0 flex-1 truncate text-[calc(0.625rem*var(--text-scale))] text-muted-foreground/70">
+        <span className="min-w-0 flex-1 truncate text-3xs text-muted-foreground/70">
           {host}
         </span>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               onClick={copy}
-              className="-mr-1 inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[calc(0.625rem*var(--text-scale))] text-muted-foreground hover:bg-accent hover:text-foreground"
+              className="-mr-1 inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-3xs text-muted-foreground hover:bg-accent hover:text-foreground"
             >
               <Copy className="size-3" />
               Copy
@@ -1986,7 +1990,7 @@ function LinkPreviewContent({ url }: { url: string }) {
       )}
       <div className="min-w-0 p-2.5">
         {data.siteName && (
-          <div className="truncate text-[calc(0.625rem*var(--text-scale))] uppercase tracking-wide text-muted-foreground">
+          <div className="truncate text-3xs uppercase tracking-wide text-muted-foreground">
             {data.siteName}
           </div>
         )}
@@ -2000,7 +2004,7 @@ function LinkPreviewContent({ url }: { url: string }) {
             {data.description}
           </div>
         )}
-        <div className="mt-1 truncate text-[calc(0.625rem*var(--text-scale))] text-muted-foreground/70">
+        <div className="mt-1 truncate text-3xs text-muted-foreground/70">
           {url}
         </div>
       </div>
@@ -2139,7 +2143,7 @@ function RecoveredAttachment({
               alt=""
               className="max-h-64 w-full object-cover"
             />
-            <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-[calc(0.625rem*var(--text-scale))] font-medium text-white">
+            <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-3xs font-medium text-white">
               <Sparkles className="size-3" /> Photos
             </span>
           </button>
@@ -2254,7 +2258,7 @@ function AttachmentView({
             <Icon className="size-4 shrink-0" />
             <span className="truncate">{att.filename ?? "attachment"}</span>
             {!available && (
-              <span className="shrink-0 text-[calc(0.625rem*var(--text-scale))] italic opacity-70">
+              <span className="shrink-0 text-3xs italic opacity-70">
                 · not in backup
               </span>
             )}

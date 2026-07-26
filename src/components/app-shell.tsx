@@ -248,7 +248,7 @@ export function AppShell() {
                       </SidebarMenuButton>
                       {/* Experimental: local-AI classification quality is not yet
                           validated on real hardware. */}
-                      <SidebarMenuBadge className="text-[calc(0.5625rem*var(--text-scale))] font-medium uppercase tracking-wide text-muted-foreground">
+                      <SidebarMenuBadge className="text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                         Beta
                       </SidebarMenuBadge>
                     </SidebarMenuItem>
@@ -529,6 +529,9 @@ function TextSizeToggle() {
             disabled={atMin}
             onClick={() => setTextSize(TEXT_SIZES[i - 1])}
           >
+            {/* The two glyphs are drawn at DIFFERENT sizes on purpose so the
+                pair reads as one stepper — small A for smaller, large A for
+                larger. Sized to the icon, not to the type ramp. */}
             <span aria-hidden className="text-[0.7rem] font-semibold leading-none">
               A−
             </span>
@@ -677,7 +680,7 @@ function SettingsMenu() {
             variant="line"
             className="!h-full w-48 shrink-0 flex-col items-stretch justify-start gap-0.5 border-r bg-sidebar !rounded-none !p-3"
           >
-            <div className="mb-1.5 px-2 text-[calc(0.65625rem*var(--text-scale))] font-medium uppercase tracking-wider text-sidebar-foreground/60">
+            <div className="mb-1.5 px-2 text-2xs font-medium uppercase tracking-wider text-sidebar-foreground/60">
               TraceLoupe
             </div>
             {(

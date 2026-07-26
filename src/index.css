@@ -80,6 +80,13 @@
      numbers exist ONCE even though the ramp is declared twice (see
      `[data-text-scale="fixed"]` further down for why the second declaration is
      unavoidable). */
+  /* Two steps below Tailwind's ramp, because the app kept reinventing them:
+     24 of the 31 arbitrary type sizes in the codebase were already exactly
+     these two values. A timestamp, a duration badge and a NEW chip are a real
+     role, and `text-[calc(0.625rem*var(--text-scale))]` written 17 times is that
+     role without a name. */
+  --ramp-3xs: 0.625rem;   /* 10px — micro labels: timestamps, chips, counts */
+  --ramp-2xs: 0.6875rem;  /* 11px — small meta: mono ids, secondary lines */
   --ramp-xs: 0.75rem;
   --ramp-sm: 0.875rem;
   --ramp-base: 1rem;
@@ -87,6 +94,8 @@
   --ramp-xl: 1.25rem;
   --ramp-2xl: 1.5rem;
 
+  --text-3xs: calc(var(--ramp-3xs) * var(--text-scale));
+  --text-2xs: calc(var(--ramp-2xs) * var(--text-scale));
   --text-xs: calc(var(--ramp-xs) * var(--text-scale));
   --text-sm: calc(var(--ramp-sm) * var(--text-scale));
   --text-base: calc(var(--ramp-base) * var(--text-scale));
@@ -155,6 +164,8 @@
 [data-text-scale="fixed"] {
   --text-scale: 1;
 
+  --text-3xs: calc(var(--ramp-3xs) * var(--text-scale));
+  --text-2xs: calc(var(--ramp-2xs) * var(--text-scale));
   --text-xs: calc(var(--ramp-xs) * var(--text-scale));
   --text-sm: calc(var(--ramp-sm) * var(--text-scale));
   --text-base: calc(var(--ramp-base) * var(--text-scale));
@@ -297,6 +308,10 @@
 }
 
 @theme inline {
+  /* The two sub-xs steps, so they are utilities (`text-3xs`) rather than another
+     arbitrary value. The rest of the ramp is Tailwind's own, redefined above. */
+  --text-3xs: var(--text-3xs);
+  --text-2xs: var(--text-2xs);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
