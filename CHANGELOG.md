@@ -13,6 +13,17 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.20] — 2026-07-26
+
+### Changed
+
+- **The text-size buttons now resize what you're reading, not the app around
+  it.** The toolbar, the sidebar and a dialog's OK/Cancel row keep their size at
+  every step; messages, notes, findings, list rows and the buttons that sit among
+  them scale as before. A dialog's title and body still scale — only its action
+  row holds still, so a destructive button can't shift under your cursor because
+  you changed a reading preference.
+
 ## [0.31.19] — 2026-07-26
 
 ### Changed
