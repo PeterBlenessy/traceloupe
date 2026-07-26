@@ -61,9 +61,13 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   without a name. An arbitrary size is still right when it is *fitted to
   something* rather than chosen typographically (initials inside a half-size
   avatar, a monogram at `0.65em`, the A−/A+ glyphs) — those say so at the site.
-- **Our type ramp is a web ramp, not the platform's.** Tailwind gives us
-  12/14/16/18/20/24 px; macOS's text styles are 10/11/12/13/15/17/22/26 — our
-  body text sits a step above the system's. `scripts/font-probe.swift` prints
+- **The type ramp IS the platform's.** `--ramp-*` carries macOS's text-style
+  sizes — 10/11/12/13/15/17/22/26 (caption · subheadline · callout · body ·
+  title3 · title2 · title1 · largeTitle) — not Tailwind's web ramp of
+  12/14/16/18/20/24. They're numbers rather than the `-apple-system-*` keywords
+  because a keyword sets an *absolute* size and would break A+/−; this way the
+  sizes are native at scale 1 and still scale. `body` defaults to the body step,
+  so text without an explicit class can't silently inherit the browser's 16px. `scripts/font-probe.swift` prints
   both sides (AppKit metrics, AppKit text styles, and what a WKWebView resolves
   `font: -apple-system-body` and friends to, since that needs no native bridge).
   Run it before changing anything about type, and run it again after changing
