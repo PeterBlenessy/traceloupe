@@ -695,8 +695,23 @@ function ScanProgress({
       {scanEvent.phase === "classifying" && scanEvent.total > 0 && (
         <div className="text-xs text-muted-foreground">
           {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
-          {scanEvent.findings} finding{scanEvent.findings === 1 ? "" : "s"} so
-          far — you can leave this page; the scan keeps running.
+          {/* Findings already in scope are NOT this run's work, and conflating
+              the two produced a line that read as a contradiction: "0% · 8823
+              findings so far". Most visible on a re-scan whose chunk cache no
+              longer matches — it starts at 0% with every earlier finding
+              already counted. */}
+          {scanEvent.preexisting > 0 ? (
+            <>
+              {scanEvent.findings - scanEvent.preexisting} new ·{" "}
+              {scanEvent.preexisting} from earlier scans of this range
+            </>
+          ) : (
+            <>
+              {scanEvent.findings} finding
+              {scanEvent.findings === 1 ? "" : "s"} so far
+            </>
+          )}{" "}
+          — you can leave this page; the scan keeps running.
         </div>
       )}
       {/* Honest surfacing of the power assertion the backend holds for the

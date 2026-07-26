@@ -646,7 +646,15 @@ export interface SafetyModelDownloadStatus {
 
 export type SafetyScanEvent =
   | { phase: "loading" }
-  | { phase: "classifying"; done: number; total: number; findings: number }
+  | {
+      phase: "classifying";
+      done: number;
+      total: number;
+      /** Findings in this scan's scope right now — earlier runs included. */
+      findings: number;
+      /** How many of those were already there when this run started. */
+      preexisting: number;
+    }
   | { phase: "summarizing" }
   | {
       phase: "done";
