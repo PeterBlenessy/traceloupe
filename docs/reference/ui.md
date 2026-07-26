@@ -41,6 +41,14 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   "all"/first).
 - **Spacing/sizing:** Tailwind scale utilities. Arbitrary values (`w-[70%]`)
   are allowed only where no scale step fits (e.g. chat-bubble max width).
+- **Our type ramp is a web ramp, not the platform's.** Tailwind gives us
+  12/14/16/18/20/24 px; macOS's text styles are 10/11/12/13/15/17/22/26 — our
+  body text sits a step above the system's. `scripts/font-probe.swift` prints
+  both sides (AppKit metrics, AppKit text styles, and what a WKWebView resolves
+  `font: -apple-system-body` and friends to, since that needs no native bridge).
+  Run it before changing anything about type, and run it again after changing
+  System Settings → Accessibility → Display → Text Size to see whether the
+  platform's sizes follow that setting.
 - **The text-size control (A+/−) is a READING preference, so the app frame opts
   out.** The top toolbar, the sidebar and a dialog's *action row* carry
   `data-text-scale="fixed"` and keep their size at every step; content, list
