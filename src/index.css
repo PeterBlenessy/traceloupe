@@ -90,14 +90,27 @@
      these two values. A timestamp, a duration badge and a NEW chip are a real
      role, and `text-[calc(0.625rem*var(--text-scale))]` written 17 times is that
      role without a name. */
-  --ramp-3xs: 0.625rem;   /* 10px — micro labels: timestamps, chips, counts */
-  --ramp-2xs: 0.6875rem;  /* 11px — small meta: mono ids, secondary lines */
-  --ramp-xs: 0.75rem;
-  --ramp-sm: 0.875rem;
-  --ramp-base: 1rem;
-  --ramp-lg: 1.125rem;
-  --ramp-xl: 1.25rem;
-  --ramp-2xl: 1.5rem;
+  /* The ramp is macOS's, not the web's. Tailwind's default steps
+     (12/14/16/18/20/24) are a web ramp; the platform's text styles measure
+     10/11/12/13/15/17/22/26 — read them yourself with
+     `swift scripts/font-probe.swift`. Our body text used to sit a full step
+     above the system's, which is most of why the app read slightly "web" beside
+     native windows.
+
+     The bottom three steps needed no change: they came from what the app had
+     already invented for itself and had drifted onto the platform's values.
+
+     These are NUMBERS rather than the `-apple-system-*` keywords on purpose. The
+     keywords set an absolute size, which would break the A+/− control — this way
+     the sizes are native at scale 1 and still scale. */
+  --ramp-3xs: 0.625rem;   /* 10px — caption1 / footnote: timestamps, chips, counts */
+  --ramp-2xs: 0.6875rem;  /* 11px — subheadline: mono ids, secondary lines */
+  --ramp-xs: 0.75rem;     /* 12px — callout: metadata, most secondary text */
+  --ramp-sm: 0.8125rem;   /* 13px — body: the app's primary text and controls */
+  --ramp-base: 0.9375rem; /* 15px — title3: card titles, the printable report */
+  --ramp-lg: 1.0625rem;   /* 17px — title2 */
+  --ramp-xl: 1.375rem;    /* 22px — title1 */
+  --ramp-2xl: 1.625rem;   /* 26px — largeTitle: the device hero */
 
   --text-3xs: calc(var(--ramp-3xs) * var(--text-scale));
   --text-2xs: calc(var(--ramp-2xs) * var(--text-scale));
@@ -337,6 +350,14 @@
 
    The keyword flips with `color-scheme`, so one declaration covers light and
    dark; it sits after `.dark` so it wins on equal specificity. */
+/* The document's default text size is the platform's body size. Without this,
+   anything without an explicit `text-*` class inherits the browser's 16px — a
+   value that appears nowhere in our ramp, so it silently reads as "slightly too
+   big" and nobody can point at where it came from. */
+body {
+  font-size: var(--text-sm);
+}
+
 @supports (color: -apple-system-label) {
   :root {
     --foreground: -apple-system-label;
