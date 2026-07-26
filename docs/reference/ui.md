@@ -41,6 +41,23 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   "all"/first).
 - **Spacing/sizing:** Tailwind scale utilities. Arbitrary values (`w-[70%]`)
   are allowed only where no scale step fits (e.g. chat-bubble max width).
+- **Control height — one scale, never a literal.** Every inline control
+  (button, input, select, toggle, tab trigger) takes its height from the
+  `--control-h*` tokens in `index.css`: `--control-h` is the default at **28 px
+  to match a native macOS push button**, with `-xs` / `-sm` / `-lg` at 20 / 24 /
+  32 px. Write `h-(--control-h)`, never `h-9` or `size-8` — a literal is how the
+  app ends up with a 36 px button next to a 32 px field, which is exactly the
+  drift [#91](https://github.com/PeterBlenessy/traceloupe/issues/91) had to undo
+  (34 of 60 buttons had been hand-shrunk with `size="sm"` to fight a too-tall
+  default). Heights ride `--text-scale` so a control grows with the text it
+  contains; **padding does not**, because horizontal room is furniture.
+- **A control island stands level with a button.** `ToolbarGroup` and
+  `SortControl` wrap segments in a bordered island with `p-0.5`; segments are
+  therefore `size="icon-sm"` (24 px), which puts the island at **30 px** (24 +
+  2 px padding + 1 px border, each side) against a 28 px button — a hair taller,
+  the way a macOS segmented control is. Segments at the default 28 px push the
+  island to 34 px, and it stops reading as one unit and starts reading as a
+  second row of chrome.
 
 ## App frame
 

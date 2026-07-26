@@ -43,7 +43,17 @@ export default defineConfig(async () => ({
       // silently wipes frontend state. That is what made a running Safety Scan's
       // progress bar and finding counter freeze while the backend scanned on
       // perfectly happily: the page had been reloaded out from under it.
-      ignored: ["**/src-tauri/**", "**/.claude/**"],
+      //
+      // The pattern must be anchored to THIS root, not a bare `**/.claude/**`:
+      // a dev server started inside a worktree has its own root *under*
+      // `.claude/worktrees/<slug>`, so the unanchored glob matched every one of
+      // its own source files and HMR went silently dead — edits kept serving the
+      // stale bundle. Anchoring ignores only the `.claude` nested in the current
+      // root, which is what "other agents' worktrees" actually means.
+      ignored: [
+        path.resolve(__dirname, "src-tauri") + "/**",
+        path.resolve(__dirname, ".claude") + "/**",
+      ],
     },
   },
 }));
