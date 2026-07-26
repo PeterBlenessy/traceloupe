@@ -252,6 +252,11 @@ Notes that are easy to get wrong:
   described above.
 - **Convert every emit site for a stream, including the error path.** A partial
   conversion leaves failures reaching nobody, which looks exactly like a hang.
+- **A command returning `Vec<T>` must be windowed or declared bounded.**
+  `src-tauri/tests/command_bounds.rs` fails the build otherwise, and its `BOUNDED`
+  list is the inventory: every unwindowed collection command with the reason it
+  cannot grow, and a measured size where it can. Write what *caps* the
+  collection — "it's small" is not a bound.
 
 ## Finishing up
 
