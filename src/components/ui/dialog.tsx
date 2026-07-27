@@ -126,7 +126,10 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("text-lg leading-none font-semibold", className)}
+      // leading-tight, not leading-none: a line box exactly as tall as the font
+      // size clips its own descenders as soon as the text grows, which the
+      // design lint caught at the largest text size (22px of text in a 20px box).
+      className={cn("text-lg leading-tight font-semibold", className)}
       {...props}
     />
   )
