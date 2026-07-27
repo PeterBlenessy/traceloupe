@@ -674,7 +674,9 @@ export interface ContentFindingCounts {
 /** Which macOS setting changed. The payload is only an identifier — the value
  *  is re-read through the same command that reads it at startup, so there is one
  *  path rather than two that can disagree. */
-export type SystemChange = { kind: "accent" | "appearance" | "textSize" };
+export type SystemChange = {
+  kind: "accent" | "appearance" | "textSize" | "keyboardAccess";
+};
 
 export type SafetyScanEvent =
   | { phase: "loading" }
@@ -851,6 +853,10 @@ export interface TraceLoupeClient {
   onSystemChange(cb: (c: SystemChange) => void): Promise<UnlistenFn>;
   /** The accessibility text-size category as a multiplier for the type ramp. */
   systemTextScale(): Promise<number>;
+  /** Whether macOS Full Keyboard Access is on (System Settings → Keyboard →
+   *  "Keyboard navigation"). With it off, native Tab visits only text fields
+   *  and lists. */
+  fullKeyboardAccess(): Promise<boolean>;
   /** Subscribe to the backend log stream over a Tauri Channel — the transport
    *  Tauri recommends for high-throughput ordered data (their event system
    *  explicitly is not). Batched and bounded backend-side. */
@@ -1308,6 +1314,7 @@ const tauriClient: TraceLoupeClient = {
   appSigningStatus: () => invoke<SigningStatus>("app_signing_status"),
   onSystemChange: (cb) => subscribeStream<SystemChange>("subscribe_system_changes", cb),
   systemTextScale: () => invoke<number>("get_system_text_scale"),
+  fullKeyboardAccess: () => invoke<boolean>("get_full_keyboard_access"),
   subscribeLogs: async (cb) => {
     const channel = new Channel<LogBatch>();
     channel.onmessage = cb;
@@ -2848,6 +2855,7 @@ export const mockClient: TraceLoupeClient = {
   }),
   onSystemChange: async () => () => {},
   systemTextScale: async () => 1,
+  fullKeyboardAccess: async () => false,
   subscribeLogs: async () => {},
   setFileLogging: async () => {},
   logFilePath: async () => "/tmp/traceloupe.log",
