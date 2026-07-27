@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
@@ -121,7 +121,11 @@ const nav = [
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   // Follow the macOS accent color (System Settings → Appearance).
-  useSystemAccent();
+  // A region change makes every formatted date, time and number stale. They are
+  // produced during render from the webview's locale, so re-mounting the view
+  // subtree is what re-formats them; a key bump does that without a reload.
+  const [localeVersion, setLocaleVersion] = useState(0);
+  useSystemAccent(() => setLocaleVersion((v: number) => v + 1));
   // Scrollbar thumbs paint only while their element scrolls (index.css keys off
   // `data-scrolling`); the 12px gutter is always reserved, so nothing shifts.
   useEffect(() => {
@@ -298,7 +302,9 @@ export function AppShell() {
                 overflow clips at the padding box, which lets an opted-in list
                 (data-underlap) rise under the translucent bar while every other
                 view keeps starting below it. */}
-            <div className="min-h-0 flex-1 overflow-hidden pt-13">
+            {/* Keyed on the locale so a region change re-mounts the view and
+                every date, time and number is formatted afresh. */}
+            <div key={localeVersion} className="min-h-0 flex-1 overflow-hidden pt-13">
               <Outlet />
             </div>
           </SidebarInset>

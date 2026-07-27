@@ -681,6 +681,8 @@ export interface AccessibilityPrefs {
   differentiateWithoutColor: boolean;
   /** 1 small · 2 medium · 3 large (System Settings → Appearance). */
   sidebarIconSize: number;
+  /** "automatic" | "whenScrolling" | "always". */
+  showScrollBars: string;
 }
 
 export type SystemChange = {
@@ -689,7 +691,8 @@ export type SystemChange = {
     | "appearance"
     | "textSize"
     | "keyboardAccess"
-    | "accessibility";
+    | "accessibility"
+    | "locale";
 };
 
 export type SafetyScanEvent =
@@ -867,6 +870,8 @@ export interface TraceLoupeClient {
   onSystemChange(cb: (c: SystemChange) => void): Promise<UnlistenFn>;
   /** The accessibility text-size category as a multiplier for the type ramp. */
   systemTextScale(): Promise<number>;
+  /** The colour macOS paints a selected row — kept separate from the accent. */
+  systemSelectionColor(): Promise<string | null>;
   /** Display preferences to respect: reduce motion/transparency, increase
    *  contrast, differentiate without colour, and the sidebar icon size. */
   accessibilityPrefs(): Promise<AccessibilityPrefs>;
@@ -1334,6 +1339,8 @@ const tauriClient: TraceLoupeClient = {
   fullKeyboardAccess: () => invoke<boolean>("get_full_keyboard_access"),
   accessibilityPrefs: () =>
     invoke<AccessibilityPrefs>("get_accessibility_prefs"),
+  systemSelectionColor: () =>
+    invoke<string | null>("get_system_selection_color"),
   subscribeLogs: async (cb) => {
     const channel = new Channel<LogBatch>();
     channel.onmessage = cb;
@@ -2881,7 +2888,9 @@ export const mockClient: TraceLoupeClient = {
     increaseContrast: false,
     differentiateWithoutColor: false,
     sidebarIconSize: 2,
+    showScrollBars: "automatic",
   }),
+  systemSelectionColor: async () => null,
   subscribeLogs: async () => {},
   setFileLogging: async () => {},
   logFilePath: async () => "/tmp/traceloupe.log",
