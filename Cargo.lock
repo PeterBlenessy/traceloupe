@@ -4517,9 +4517,11 @@ name = "traceloupe"
 version = "0.31.22"
 dependencies = [
  "base64 0.22.1",
+ "block2 0.6.2",
  "keyring",
  "objc2 0.6.4",
  "objc2-app-kit",
+ "objc2-foundation 0.3.2",
  "robius-authentication",
  "serde",
  "serde_json",
