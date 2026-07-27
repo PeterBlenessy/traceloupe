@@ -259,7 +259,10 @@ export function ListSearch({
         }
       }}
       className={cn(
-        "relative flex h-(--island-h) shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
+        // focus-WITHIN, not focus-visible: the input carries `outline-none` and
+        // sits inside this island, so tabbing to it showed nothing at all. The
+        // ring belongs to the island, which is the control the user sees.
+        "relative flex h-(--island-h) shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
         open ? "w-44 sm:w-56" : "w-9 cursor-pointer hover:bg-accent hover:text-foreground",
       )}
     >

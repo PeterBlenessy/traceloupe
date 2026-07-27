@@ -23,6 +23,10 @@
  *   tooltip   every icon-only button explains itself
  *   spacing   gaps and padding stay on the 2px grid
  *
+ * Every rule is proved on every run (see selfTest): each is shown a deliberate
+ * violation and must report it. Three of them — focus, tooltip, spacing — were
+ * NOT proved for a while, and the focus rule was quietly broken that whole time.
+ *
  * Usage: pnpm dev (or vite --port N), then:
  *   node scripts/check-design.mjs
  *   BASE=http://localhost:1440 node scripts/check-design.mjs
@@ -363,7 +367,21 @@ const probe = () =>
  * app was fine. Pressing Tab is the only way to ask the question honestly.
  */
 const checkFocus = async (state) => {
-  await page.evaluate(() => document.body.focus());
+  // Start the walk at the top of the document. blur() is NOT enough: the browser
+  // keeps a "sequential focus navigation starting point" that a click sets and a
+  // blur does not clear, so after the harness clicks anything, Tab resumes from
+  // there and never reaches the controls above it. Focusing a sentinel at the
+  // very start moves that point explicitly.
+  await page.evaluate(() => {
+    let anchor = document.getElementById("__tab_origin");
+    if (!anchor) {
+      anchor = document.createElement("span");
+      anchor.id = "__tab_origin";
+      anchor.tabIndex = -1;
+      document.body.insertBefore(anchor, document.body.firstChild);
+    }
+    anchor.focus();
+  });
   const seen = new Set();
   for (let i = 0; i < 14; i++) {
     await page.keyboard.press("Tab");
@@ -373,13 +391,47 @@ const checkFocus = async (state) => {
       const cs = getComputedStyle(el);
       const name =
         (el.getAttribute("aria-label") || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 24) || "(icon)";
-      const ring = [cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0, cs.boxShadow !== "none"];
+      // Tailwind emits several shadow LAYERS, the unused ones as fully
+      // transparent placeholders — a real ring sits among them, e.g.
+      // "rgba(0,0,0,0) 0 0 0 0, oklch(…) 0 0 0 2px". So neither "is it none?"
+      // nor "does it start transparent?" answers the question: strip every
+      // transparent layer and see whether any colour is left.
+      // The ring may sit on a WRAPPER rather than the focused element itself —
+      // `has-[:focus-visible]:ring-2` on an island around an input is the normal
+      // way to do it, and the user sees a ring either way. So look at the
+      // element and its nearest ancestors.
+      const ringed = (node) => {
+        const c = getComputedStyle(node);
+        if (c.outlineStyle !== "none" && parseFloat(c.outlineWidth) > 0) return true;
+        const sh = c.boxShadow === "none" ? "" : c.boxShadow;
+        const rest = sh.replace(/rgba?\([^)]*,\s*0\s*\)/g, "").replace(/\btransparent\b/g, "");
+        return /(oklch|oklab|color\(|#[0-9a-f]{3}|rgb)/i.test(rest);
+      };
+      // An ancestor only counts if it DECLARES a focus ring — otherwise an
+      // ordinary drop shadow (every dialog has one) reads as focus styling and
+      // the rule passes on anything inside a card.
+      const declaresFocusRing = (node) =>
+        /(?:focus-visible|focus-within|has-\[:focus-visible\]):ring/.test(
+          (node.className || "").toString(),
+        );
+      if (ringed(el)) return { name, visible: true, key: name + el.tagName };
+      for (let n = el.parentElement, i = 0; n && i < 3; n = n.parentElement, i++)
+        if (declaresFocusRing(n) && ringed(n))
+          return { name, visible: true, key: name + el.tagName };
+      const shadow = cs.boxShadow === "none" ? "" : cs.boxShadow;
+      const opaqueShadow = /(oklch|oklab|color\(|#[0-9a-f]{3})/i.test(
+        shadow.replace(/rgba?\([^)]*,\s*0\s*\)/g, "").replace(/\btransparent\b/g, ""),
+      ) || /rgba?\([^)]*?(?:,\s*(?:0?\.\d+|1(?:\.0+)?))?\s*\)/.test(
+        shadow.replace(/rgba?\([^)]*,\s*0\s*\)/g, ""),
+      );
+      const ring = [cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0, opaqueShadow];
       return { name, visible: ring.some(Boolean), key: name + el.tagName };
     });
     if (!r || seen.has(r.key)) continue;
     seen.add(r.key);
     if (!r.visible) fail("focus", state, `"${r.name}" shows no focus ring when tabbed to`);
   }
+  await page.evaluate(() => document.getElementById("__tab_origin")?.remove());
 };
 
 const check = async (state, scale) => {
@@ -459,7 +511,9 @@ const selfTest = async () => {
       <button style="position:absolute;left:10px;top:4px;width:60px;height:20px">over</button>
       <span style="display:block;height:4px;overflow:visible;font-size:13px">clipped text</span>
       <span style="color:#7a7a7a;background:#6f6f6f;font-size:13px">low contrast</span>
-      <button style="height:28px;width:28px"><svg width="10" height="10"></svg></button>`;
+      <button style="height:28px;width:28px"><svg width="10" height="10"></svg></button>
+      <button aria-label="no tooltip here" style="height:28px;width:28px"><svg width="10" height="10"></svg></button>
+      <div style="display:flex;gap:3px"><span style="font-size:13px">odd gap</span></div>`;
     card.appendChild(host);
   });
   await page.waitForTimeout(150);
@@ -473,7 +527,44 @@ const selfTest = async () => {
 
   await page.evaluate(() => document.getElementById("__design_lint_selftest")?.remove());
 
-  const missing = ["type", "control", "island", "overlap", "clipping", "contrast", "a11y"].filter((r) => !fired.has(r));
+  // Focus is driven by the keyboard and lives outside check(), so it is proved
+  // separately below. Everything else must fire on the planted violations.
+  {
+    // The focus rule tabs rather than calling focus(), so it cannot be planted
+    // in the same pass. A control with no ring, placed first in tab order, must
+    // trip it — otherwise a rule that reports nothing looks identical to an app
+    // with perfect focus styling.
+    await page.evaluate(() => {
+      const b = document.createElement("button");
+      b.id = "__design_lint_focus_probe";
+      b.textContent = "no ring";
+      b.style.cssText = "outline:none!important;box-shadow:none!important;height:28px";
+      // Inside the open dialog when there is one. A modal traps focus, so a
+      // probe planted outside it is never tabbed to — which read as "the focus
+      // detector is broken" when the detector was fine and the probe was
+      // unreachable.
+      const trap = document.querySelector('[role="dialog"]');
+      if (trap) trap.appendChild(b);
+      else document.body.insertBefore(b, document.body.firstChild);
+    });
+    const before = failures.length;
+    await checkFocus("self-test");
+    const fired = failures.slice(before).some((f) => f.startsWith("[focus]"));
+    failures.length = before;
+    await page.evaluate(() => document.getElementById("__design_lint_focus_probe")?.remove());
+    if (!fired) {
+      console.error(
+        "design lint SELF-TEST failed: focus did not fire on a control with no" +
+          " focus ring. The detector is broken — a clean run would have meant nothing.",
+      );
+      await browser.close();
+      process.exit(2);
+    }
+  }
+
+  const missing = [
+    "type", "control", "island", "overlap", "clipping", "contrast", "a11y", "tooltip", "spacing",
+  ].filter((r) => !fired.has(r));
   if (missing.length) {
     console.error(
       `design lint SELF-TEST failed: ${missing.join(", ")} did not fire on a deliberate` +
