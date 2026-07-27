@@ -61,7 +61,7 @@ export function SortControl({
     // One bordered island grouping the "sort by" dropdown + the direction toggle.
     <div
       className={cn(
-        "inline-flex items-center gap-0.5 rounded-lg border border-border/70 bg-muted/40 p-0.5",
+        "inline-flex h-(--island-h) items-center gap-0.5 rounded-lg border border-border/70 bg-muted/40 px-0.5",
         className,
       )}
     >

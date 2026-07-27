@@ -320,6 +320,48 @@ Current classification:
 | Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |
 | Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder | provably small, declared via `useBoundedList` |
 
+### A chart is never drawn from a bounded list
+
+The corollary that is easy to miss: once a list is capped, anything *summarising*
+it must go back to the database. The Safety Scan report renders at most 500
+findings and its narrative sees at most 100 — a chart built from either would
+describe a subset while looking like it described the scan.
+
+So `AnalysisDb::finding_analytics` aggregates in SQL over every finding the
+filter matches, and it builds its `WHERE` from the same `filtered_scope()` the
+page query uses. A chart and the rows beneath it therefore describe one
+population by construction, not by two authors keeping two queries in step —
+which is exactly what drifted in #59.
+
+The same rule caught a live defect: the report's totals row printed
+"15 findings" beside a severity split of 3 / 9 / 4. The total excluded stale
+findings and the split (read off the scan row) did not.
+
+### Charts: what they are allowed to claim
+
+Charts in this app describe an *unvalidated local classifier's* output, so the
+form is constrained on purpose (#66):
+
+- **Counts and time, never proportions.** No pie charts, no "41% coercive
+  control" — a percentage of a model's opinion reads like a diagnosis.
+- **Every bar splits confirmed from unconfirmed.** Colour carries severity,
+  a diagonal hatch carries "the cascade's strong tier never saw this". A scan run
+  without the cascade then *looks* less certain instead of being silently so.
+- **Disclosures sit next to the chart**, not in a footer: how many findings are
+  charted, how many have no date (and so cannot be on a timeline), how many were
+  dismissed as false positives and left out.
+- **The x-axis is the content's timeline**, never a series of scan runs. Runs are
+  not comparable to one another — the chunker, the model tier and the scope have
+  all changed between them.
+- **Inline SVG, geometry in percentages.** The report prints; canvas rasterizes
+  badly and CSS background gradients get dropped. No measurement, no distortion,
+  and the hatch survives a greyscale print. Bucket width adapts (day → year) so
+  the axis holds ~10–30 bars at any range, and the axis names the unit.
+
+`scripts/check-design.mjs` opens the Safety view's analysis panel as one of its
+measured states — a section behind a toggle is otherwise invisible to the lint,
+which is where an off-ramp size survives.
+
 ## macOS display preferences are respected
 
 > Full reference: [`macos-integration.md`](macos-integration.md) — every setting
