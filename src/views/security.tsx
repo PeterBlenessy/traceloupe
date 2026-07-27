@@ -28,6 +28,7 @@ import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { VirtualList } from "@/components/virtual-list";
 import { ConsentDialogs } from "@/views/security-consent";
+import { useListNavigation } from "@/lib/use-keyboard-nav";
 
 const SEVERITY_META: Record<
   Severity,
@@ -396,6 +397,15 @@ function RunRail({
     return rows;
   }, [runs, outcome, sort]);
 
+  // ↑/↓ move the selection, Home/End jump. Selection rather than focus, so it
+  // works with virtualised rows that are not mounted.
+  const { listProps } = useListNavigation({
+    items: visible,
+    selectedId,
+    onSelect,
+    getId: (r) => r.id,
+  });
+
   // A filter must never hide the selection: if the selected run gets filtered
   // out, move the selection to the first visible row so the rail and the
   // result pane can't disagree about what's shown.
@@ -451,7 +461,13 @@ function RunRail({
       {/* A row per run, never shed, so unbounded in principle — virtualized
           rather than trusted to stay short (#67). Height comes from the grid
           row, which comes from the window (#79) — no fixed fraction. */}
-      <CardContent className="flex min-h-0 flex-1 flex-col">
+      {/* One tab stop for the whole list, with ↑/↓ moving the selection — the
+          macOS model, and what makes honouring "Keyboard navigation" an
+          improvement rather than just fewer tab stops. */}
+      <CardContent
+        {...listProps}
+        className="flex min-h-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">No runs match.</p>
         )}
@@ -463,8 +479,8 @@ function RunRail({
           <div
             // Density-aware, like every other list row in the app (#78).
             data-slot="list-row"
-            role="button"
-            tabIndex={0}
+            role="option"
+            tabIndex={-1}
             aria-current={r.id === selectedId}
             onClick={() => onSelect(r.id)}
             onKeyDown={(e) => {

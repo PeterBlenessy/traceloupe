@@ -3,6 +3,7 @@ import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { DialogKeyboardContext } from "@/components/ui/button"
 import { Button } from "@/components/ui/button"
 
 function Dialog({
@@ -57,6 +58,15 @@ function DialogContent({
     <DialogPortal data-slot="dialog-portal">
       <DialogOverlay />
       <DialogPrimitive.Content
+        // Radix focuses the first control when a dialog opens, which put a
+        // keyboard focus ring on the "General" tab every time Settings was
+        // opened — with the mouse. Focus the dialog itself instead: the trap and
+        // Escape still work, screen readers still announce the title, and no
+        // control looks pre-chosen.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          ;(e.currentTarget as HTMLElement | null)?.focus({ preventScroll: true })
+        }}
         data-slot="dialog-content"
         className={cn(
           "fixed top-[50%] left-[50%] z-50 grid w-full max-w-[calc(100%-2rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border bg-background p-6 shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 sm:max-w-lg",
@@ -64,7 +74,10 @@ function DialogContent({
         )}
         {...props}
       >
-        {children}
+        {/* Buttons inside a modal keep their tab stops (see button.tsx). */}
+        <DialogKeyboardContext.Provider value={true}>
+          {children}
+        </DialogKeyboardContext.Provider>
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"

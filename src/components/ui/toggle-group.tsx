@@ -6,6 +6,7 @@ import { ToggleGroup as ToggleGroupPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 import { toggleVariants } from "@/components/ui/toggle"
+import { useControlTabIndex } from "@/lib/use-keyboard-nav"
 
 const ToggleGroupContext = React.createContext<
   VariantProps<typeof toggleVariants> & {
@@ -61,6 +62,7 @@ function ToggleGroupItem({
   return (
     <ToggleGroupPrimitive.Item
       data-slot="toggle-group-item"
+      tabIndex={useControlTabIndex()}
       data-variant={context.variant || variant}
       data-size={context.size || size}
       data-spacing={context.spacing}

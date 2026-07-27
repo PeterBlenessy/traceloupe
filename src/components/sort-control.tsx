@@ -5,6 +5,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useControlTabIndex } from "@/lib/use-keyboard-nav";
 
 /** One selectable sort field: the value sent to the backend + its label. */
 export interface SortField {
@@ -54,6 +55,8 @@ export function SortControl({
   onChange: (next: SortState) => void;
   className?: string;
 }) {
+  // Follows macOS Keyboard navigation, like every other control.
+  const controlTabIndex = useControlTabIndex();
   return (
     // One bordered island grouping the "sort by" dropdown + the direction toggle.
     <div
@@ -78,6 +81,7 @@ export function SortControl({
         <TooltipTrigger asChild>
           <button
             type="button"
+              tabIndex={controlTabIndex}
             onClick={() => onChange({ ...value, desc: !value.desc })}
             aria-label={value.desc ? "Sort descending" : "Sort ascending"}
             className="inline-flex size-(--control-h-sm) shrink-0 items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"

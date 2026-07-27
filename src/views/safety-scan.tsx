@@ -67,6 +67,7 @@ import {
   type TimeRange,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { useListNavigation } from "@/lib/use-keyboard-nav";
 
 const CATEGORY_LABEL: Record<ContentCategory, string> = {
   "threat-violence": "Threats & violence",
@@ -934,6 +935,15 @@ function ScanRail({
     return rows;
   }, [scans, outcome, sort]);
 
+  // ↑/↓ move the selection, Home/End jump. Selection rather than focus, so it
+  // works with virtualised rows that are not mounted.
+  const { listProps } = useListNavigation({
+    items: visible,
+    selectedId,
+    onSelect,
+    getId: (r) => r.id,
+  });
+
   // A filter must never hide the selection: if the selected scan gets
   // filtered out, move the selection to the first visible row so the rail
   // and the detail pane can't disagree about what's shown.
@@ -999,7 +1009,13 @@ function ScanRail({
       {/* This list gains a row per scan and never sheds one, so it is unbounded
           in principle — virtualized rather than trusted to stay short (#67).
           Sized by the grid row, which is sized by the window (#79). */}
-      <CardContent className="flex min-h-0 flex-1 flex-col">
+      {/* One tab stop for the whole list, with ↑/↓ moving the selection — the
+          macOS model, and what makes honouring "Keyboard navigation" an
+          improvement rather than just fewer tab stops. */}
+      <CardContent
+        {...listProps}
+        className="flex min-h-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
         {visible.length === 0 && (
           <p className="text-xs text-muted-foreground">No scans match.</p>
         )}
@@ -1009,8 +1025,8 @@ function ScanRail({
           getKey={(s) => s.id}
           renderItem={(s) => (
           <div
-            role="button"
-            tabIndex={0}
+            role="option"
+            tabIndex={-1}
             aria-current={s.id === selectedId}
             onClick={() => onSelect(s.id)}
             onKeyDown={(e) => {

@@ -19,6 +19,7 @@ import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useControlTabIndex } from "@/lib/use-keyboard-nav";
 
 /** The header strip at the top of a view: title, optional count, actions. */
 export function ViewHeader({
@@ -238,6 +239,8 @@ export function ListSearch({
   onChange: (v: string) => void;
   placeholder: string;
 }) {
+  // Follows macOS Keyboard navigation, like every other control.
+  const controlTabIndex = useControlTabIndex();
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const open = focused || value.length > 0;
@@ -274,6 +277,7 @@ export function ListSearch({
       />
       {open && value && (
         <button
+              tabIndex={controlTabIndex}
           type="button"
           aria-label="Clear search"
           onMouseDown={(e) => e.preventDefault()}
