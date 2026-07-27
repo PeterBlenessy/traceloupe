@@ -674,8 +674,22 @@ export interface ContentFindingCounts {
 /** Which macOS setting changed. The payload is only an identifier — the value
  *  is re-read through the same command that reads it at startup, so there is one
  *  path rather than two that can disagree. */
+export interface AccessibilityPrefs {
+  reduceMotion: boolean;
+  reduceTransparency: boolean;
+  increaseContrast: boolean;
+  differentiateWithoutColor: boolean;
+  /** 1 small · 2 medium · 3 large (System Settings → Appearance). */
+  sidebarIconSize: number;
+}
+
 export type SystemChange = {
-  kind: "accent" | "appearance" | "textSize" | "keyboardAccess";
+  kind:
+    | "accent"
+    | "appearance"
+    | "textSize"
+    | "keyboardAccess"
+    | "accessibility";
 };
 
 export type SafetyScanEvent =
@@ -853,6 +867,9 @@ export interface TraceLoupeClient {
   onSystemChange(cb: (c: SystemChange) => void): Promise<UnlistenFn>;
   /** The accessibility text-size category as a multiplier for the type ramp. */
   systemTextScale(): Promise<number>;
+  /** Display preferences to respect: reduce motion/transparency, increase
+   *  contrast, differentiate without colour, and the sidebar icon size. */
+  accessibilityPrefs(): Promise<AccessibilityPrefs>;
   /** Whether macOS Full Keyboard Access is on (System Settings → Keyboard →
    *  "Keyboard navigation"). With it off, native Tab visits only text fields
    *  and lists. */
@@ -1315,6 +1332,8 @@ const tauriClient: TraceLoupeClient = {
   onSystemChange: (cb) => subscribeStream<SystemChange>("subscribe_system_changes", cb),
   systemTextScale: () => invoke<number>("get_system_text_scale"),
   fullKeyboardAccess: () => invoke<boolean>("get_full_keyboard_access"),
+  accessibilityPrefs: () =>
+    invoke<AccessibilityPrefs>("get_accessibility_prefs"),
   subscribeLogs: async (cb) => {
     const channel = new Channel<LogBatch>();
     channel.onmessage = cb;
@@ -2856,6 +2875,13 @@ export const mockClient: TraceLoupeClient = {
   onSystemChange: async () => () => {},
   systemTextScale: async () => 1,
   fullKeyboardAccess: async () => false,
+  accessibilityPrefs: async () => ({
+    reduceMotion: false,
+    reduceTransparency: false,
+    increaseContrast: false,
+    differentiateWithoutColor: false,
+    sidebarIconSize: 2,
+  }),
   subscribeLogs: async () => {},
   setFileLogging: async () => {},
   logFilePath: async () => "/tmp/traceloupe.log",

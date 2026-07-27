@@ -41,7 +41,7 @@ base64 = "0.22"
 # the system accent set in System Settings (theme.rs).
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSColor", "NSColorSpace", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSColor", "NSColorSpace", "NSWorkspace", "NSAccessibility", "objc2-core-foundation"] }
 # Live system-settings adoption (system_watch.rs): distributed notifications tell
 # us the accent, appearance or text size changed, and NSUserDefaults reads the
 # accessibility text-size category.

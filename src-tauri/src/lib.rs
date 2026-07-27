@@ -4059,6 +4059,7 @@ pub fn run() {
             system_watch::subscribe_system_changes,
             system_watch::get_system_text_scale,
             system_watch::get_full_keyboard_access,
+            system_watch::get_accessibility_prefs,
             subscribe_import_progress,
             subscribe_security_progress,
             engine_info,
