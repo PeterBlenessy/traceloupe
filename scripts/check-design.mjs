@@ -16,7 +16,12 @@
  *   control   every control height comes from --control-h*          (#91: 34 of 60 hand-tuned)
  *   island    islands are one height, segments another              (#131: 30/36/38 in one bar)
  *   overlap   no interactive element sits on top of another         (#92: actions over the pill)
- *   clipping  no label is cut off by its own box
+ *   clipping  no label is cut off by its own box                   (DialogTitle's leading-none)
+ *   contrast  text meets WCAG AA against what is really behind it  (a tile letter at 4.11:1)
+ *   focus     every control shows a ring when TABBED to            (:focus-visible needs real keys)
+ *   a11y      every control has an accessible name                 (unnamed Settings switches)
+ *   tooltip   every icon-only button explains itself
+ *   spacing   gaps and padding stay on the 2px grid
  *
  * Usage: pnpm dev (or vite --port N), then:
  *   node scripts/check-design.mjs
@@ -57,6 +62,28 @@ const FITTED_TYPE = [
   { px: 15.2, why: "A+ glyph, drawn to the stepper icon" },
   { px: 8, why: "initials in a half-size group avatar" },
   { px: 16, why: "browser default on non-text nodes (title/style)" },
+];
+
+/**
+ * Contrast below AA that is a deliberate design decision, with the measurement
+ * that made it. Recorded rather than silently skipped: if one of these gets
+ * WORSE than the floor here, it fails again.
+ */
+const CONTRAST_ACCEPTED = [
+  {
+    selector: '[class*="text-muted-foreground"], [class*="text-faint-foreground"]',
+    floor: 3,
+    why: "the platform's secondary/tertiary label tiers, which macOS itself renders" +
+      " below AA (secondary is 55% alpha). Matching the platform is the point; the" +
+      " floor still fails anything genuinely illegible.",
+  },
+  {
+    selector: '[data-slot="sidebar"] [data-active="true"]',
+    floor: 2.3,
+    why: "selected sidebar row: white on the system accent, matching macOS's own" +
+      " sidebar selection. Keeping the label white was an explicit product" +
+      " decision (#41); AA would require darkening it against every accent colour.",
+  },
 ];
 
 const near = (a, b) => Math.abs(a - b) <= 0.6;
@@ -134,10 +161,13 @@ const page = await ctx.newPage();
 
 /** Everything the rules need, read in one pass so the states stay consistent. */
 const probe = () =>
-  page.evaluate(() => {
+  page.evaluate((ACCEPTED) => {
     const visible = (el) => {
       const r = el.getBoundingClientRect();
       const cs = getComputedStyle(el);
+      // sr-only text is a 1px clipped box: present for screen readers, not on
+      // screen, so no visual rule should judge it.
+      if (r.width <= 1 || r.height <= 1) return false;
       return r.width > 0 && r.height > 0 && cs.visibility !== "hidden" && cs.opacity !== "0";
     };
     const box = (el) => {
@@ -200,6 +230,114 @@ const probe = () =>
       interactive.push(els.map((e) => ({ ...box(e), name: label(e) })));
     }
 
+    // Tooltip + accessible name. A trigger may wrap the button in a <span>
+    // (needed so a DISABLED button still shows its tooltip), so look up a few
+    // levels rather than at the button itself.
+    const unnamed = [];
+    for (const el of document.querySelectorAll("button")) {
+      if (!visible(el)) continue;
+      const hasText = !!(el.textContent || "").trim();
+      let tipped = false;
+      for (let n = el, i = 0; n && i < 3; n = n.parentElement, i++)
+        if (n.getAttribute?.("data-slot") === "tooltip-trigger") { tipped = true; break; }
+      // A <label for> names a button too — it is labelable HTML — so a switch
+      // paired with a visible Label is named even with no ARIA on it.
+      const labelled = el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const named =
+        hasText || el.getAttribute("aria-label") || el.getAttribute("aria-labelledby") ||
+        el.getAttribute("title") || !!el.querySelector(".sr-only") || !!labelled;
+      if (!named) unnamed.push({ kind: "name", name: el.outerHTML.replace(/\s+/g, " ").slice(0, 120) });
+      // The tooltip rule is about ICON BUTTONS, whose meaning is otherwise
+      // unconveyed. A switch or checkbox sits beside a visible label that
+      // already says what it does, and does not want a tooltip on top.
+      const selfExplaining =
+        ["switch", "checkbox", "radio", "tab"].includes(el.getAttribute("role") || "") || !!labelled;
+      if (!named) { /* reported above */ }
+      else if (!hasText && !tipped && !selfExplaining)
+        unnamed.push({ kind: "tooltip", name: el.getAttribute("aria-label") || "(icon)" });
+    }
+
+    // Contrast: composite the text colour over whatever is actually behind it.
+    //
+    // Colours are resolved by painting them onto a 1px canvas and reading the
+    // pixel, NOT by parsing the string: getComputedStyle returns whatever colour
+    // space the author used — `oklch(0.93 0.006 260)` here — and reading those
+    // three numbers as if they were R/G/B produces confident nonsense (it
+    // reported 952 failures, all imaginary).
+    const _c = document.createElement("canvas");
+    _c.width = _c.height = 1;
+    const _ctx = _c.getContext("2d", { willReadFrequently: true });
+    const parse = (css) => {
+      _ctx.clearRect(0, 0, 1, 1);
+      _ctx.fillStyle = "#000";
+      _ctx.fillStyle = css;
+      _ctx.fillRect(0, 0, 1, 1);
+      const d = _ctx.getImageData(0, 0, 1, 1).data;
+      return { r: d[0], g: d[1], b: d[2], a: d[3] / 255 };
+    };
+    const over = (fg, bg) => ({
+      r: fg.r * fg.a + bg.r * (1 - fg.a),
+      g: fg.g * fg.a + bg.g * (1 - fg.a),
+      b: fg.b * fg.a + bg.b * (1 - fg.a),
+      a: 1,
+    });
+    const lum = (c) => {
+      const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+    };
+    const bgOf = (el) => {
+      let acc = null;
+      for (let n = el; n; n = n.parentElement) {
+        const c = parse(getComputedStyle(n).backgroundColor);
+        if (c.a === 0) continue;
+        acc = acc ? over(acc, c) : c;
+        if (acc.a === 1 && c.a === 1) return acc;
+      }
+      return acc || { r: 0, g: 0, b: 0, a: 1 };
+    };
+    const contrast = [];
+    for (const el of document.querySelectorAll("body *")) {
+      if (el.children.length || !(el.textContent || "").trim() || !visible(el)) continue;
+      if (el.closest(".sr-only") || (el.className || "").toString().includes("sr-only")) continue;
+      const cs = getComputedStyle(el);
+      if (parseFloat(cs.opacity) < 0.6) continue;   // deliberately de-emphasised
+      const size = parseFloat(cs.fontSize), weight = parseInt(cs.fontWeight, 10) || 400;
+      const bg = bgOf(el);
+      const fg = over(parse(cs.color), bg);
+      const L1 = lum(fg), L2 = lum(bg);
+      const ratio = (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
+      const large = size >= 18.66 || (size >= 14 && weight >= 700);
+      const want = large ? 3 : 4.5;
+      if (ratio < want) {
+        const accepted = ACCEPTED.find(
+          (a) => el.closest(a.selector) || el.matches(a.selector),
+        );
+        if (accepted && ratio >= accepted.floor) continue;
+        const rgb = (c) => `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
+        contrast.push(
+          `"${label(el)}" ${ratio.toFixed(2)}:1 at ${size}px (needs ${want}:1) —` +
+            ` ${rgb(fg)} on ${rgb(bg)}, <${el.tagName.toLowerCase()} class="${(el.className || "").toString().slice(0, 44)}">`,
+        );
+      }
+    }
+
+    // Spacing: Tailwind's scale is entirely even numbers of px, so an odd gap or
+    // pad is an arbitrary value someone typed.
+    const spacing = [];
+    for (const el of document.querySelectorAll("body *")) {
+      if (!visible(el)) continue;
+      const cs = getComputedStyle(el);
+      const vals = [];
+      if (/flex|grid/.test(cs.display)) vals.push(["gap", cs.columnGap], ["gap", cs.rowGap]);
+      vals.push(["padding", cs.paddingTop], ["padding", cs.paddingLeft]);
+      for (const [what, v] of vals) {
+        const px = parseFloat(v);
+        if (!px || Number.isNaN(px) || px > 96) continue;
+        if (Math.abs(px - Math.round(px / 2) * 2) > 0.35)
+          spacing.push(`${what} ${px}px on "${label(el)}" is off the 2px grid`);
+      }
+    }
+
     const clipped = [];
     for (const el of document.querySelectorAll("body *")) {
       if (el.children.length || !el.textContent?.trim() || !visible(el)) continue;
@@ -212,11 +350,48 @@ const probe = () =>
         clipped.push(`${label(el)} (${el2.scrollHeight}px of text in ${el2.clientHeight}px)`);
     }
 
-    return { type, controls, islands, interactive, clipped };
-  });
+    return { type, controls, islands, interactive, clipped, unnamed, contrast, spacing };
+  }, CONTRAST_ACCEPTED);
+
+
+/**
+ * Focus must be visible — and it can only be checked from the keyboard.
+ *
+ * Tailwind styles focus with `focus-visible:`, which the browser applies for
+ * keyboard navigation and NOT for a programmatic `el.focus()`. An in-page
+ * version of this rule therefore reported all 185 controls as broken while the
+ * app was fine. Pressing Tab is the only way to ask the question honestly.
+ */
+const checkFocus = async (state) => {
+  await page.evaluate(() => document.body.focus());
+  const seen = new Set();
+  for (let i = 0; i < 14; i++) {
+    await page.keyboard.press("Tab");
+    const r = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      const cs = getComputedStyle(el);
+      const name =
+        (el.getAttribute("aria-label") || el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 24) || "(icon)";
+      const ring = [cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) > 0, cs.boxShadow !== "none"];
+      return { name, visible: ring.some(Boolean), key: name + el.tagName };
+    });
+    if (!r || seen.has(r.key)) continue;
+    seen.add(r.key);
+    if (!r.visible) fail("focus", state, `"${r.name}" shows no focus ring when tabbed to`);
+  }
+};
 
 const check = async (state, scale) => {
-  const { type, controls, islands, interactive, clipped } = await probe();
+  const { type, controls, islands, interactive, clipped, unnamed, contrast, spacing } = await probe();
+
+  for (const u of unnamed)
+    fail(u.kind === "name" ? "a11y" : "tooltip", state,
+      u.kind === "name"
+        ? `an icon-only ${u.name} has no accessible name — a screen reader announces nothing`
+        : `icon-only button "${u.name}" has no tooltip`);
+  for (const c of contrast) fail("contrast", state, c);
+  for (const sp of spacing) fail("spacing", state, sp);
 
   for (const t of type) {
     const s0 = t.fixed ? 1 : scale;
@@ -282,7 +457,9 @@ const selfTest = async () => {
       <div class="rounded-lg border bg-muted/40" style="height:44px">off-scale island</div>
       <button style="position:absolute;left:0;top:0;width:60px;height:20px">under</button>
       <button style="position:absolute;left:10px;top:4px;width:60px;height:20px">over</button>
-      <span style="display:block;height:4px;overflow:visible;font-size:13px">clipped text</span>`;
+      <span style="display:block;height:4px;overflow:visible;font-size:13px">clipped text</span>
+      <span style="color:#7a7a7a;background:#6f6f6f;font-size:13px">low contrast</span>
+      <button style="height:28px;width:28px"><svg width="10" height="10"></svg></button>`;
     card.appendChild(host);
   });
   await page.waitForTimeout(150);
@@ -296,7 +473,7 @@ const selfTest = async () => {
 
   await page.evaluate(() => document.getElementById("__design_lint_selftest")?.remove());
 
-  const missing = ["type", "control", "island", "overlap", "clipping"].filter((r) => !fired.has(r));
+  const missing = ["type", "control", "island", "overlap", "clipping", "contrast", "a11y"].filter((r) => !fired.has(r));
   if (missing.length) {
     console.error(
       `design lint SELF-TEST failed: ${missing.join(", ")} did not fire on a deliberate` +
@@ -326,6 +503,7 @@ for (const view of VIEWS) {
 
   await check(view, 1);
   if (!DEEP.has(view)) continue;
+  await checkFocus(view);
 
   // Hovered — where row actions appear and can land on something (#92).
   const row = page.locator('[data-slot="list-row"], [role="button"][aria-current]').first();
@@ -404,6 +582,8 @@ if (failures.length) {
   process.exit(1);
 }
 console.log(
-  `design lint OK — type, control heights, island geometry, overlap and clipping,` +
-    ` across ${VIEWS.join(" / ")} in idle / hover / search / filter states and at both text extremes.`,
+  `design lint OK — type, control heights, island geometry, overlap, clipping,` +
+    ` contrast, focus visibility, accessible names, tooltips and spacing, across` +
+    ` ${VIEWS.length} views + Settings in idle / hover / search / filter states and at both` +
+    ` text extremes.`,
 );
