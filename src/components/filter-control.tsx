@@ -179,7 +179,7 @@ export function FilterControl({
           shapes, a lone `size-9` button (36px) and a `size-8`-in-island (38px),
           so the control both sat taller than every other toolbar island (30px)
           AND changed height the moment a filter was applied. */}
-      <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
+      <div className="flex h-(--island-h) items-center rounded-lg border border-border/70 bg-muted/40 px-0.5">
         <Tooltip>
           <TooltipTrigger asChild>
             <button

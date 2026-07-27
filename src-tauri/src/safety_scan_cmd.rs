@@ -18,7 +18,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::stream::ProgressStream;
 
 use crate::ActiveBackup;
-use traceloupe_core::analysis::{AnalysisDb, Category, FindingQuery, FindingSort};
+use traceloupe_core::analysis::{AnalysisDb, Category, ChartBucket, FindingQuery, FindingSort};
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::install::InstallProgress;
 use traceloupe_core::safety_scan::chunker::{ScanSources, TimeRange};
@@ -1574,5 +1574,104 @@ pub fn count_content_findings(
         serious: c.serious,
         harmful: c.harmful,
         concerning: c.concerning,
+    })
+}
+
+/// One bar. `confirmed[i]`/`unconfirmed[i]` are severity `i + 1`.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartBucketDto {
+    pub key: String,
+    pub confirmed: [i64; 3],
+    pub unconfirmed: [i64; 3],
+}
+
+impl From<ChartBucket> for ChartBucketDto {
+    fn from(b: ChartBucket) -> Self {
+        ChartBucketDto {
+            key: b.key,
+            confirmed: b.confirmed,
+            unconfirmed: b.unconfirmed,
+        }
+    }
+}
+
+/// What the report's charts draw (#66).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingAnalyticsDto {
+    /// What one bar of `overTime` spans: day | week | month | quarter | year.
+    pub unit: String,
+    pub over_time: Vec<ChartBucketDto>,
+    pub by_category: Vec<ChartBucketDto>,
+    pub by_conversation: Vec<ChartBucketDto>,
+    pub other_conversations: i64,
+    pub other_conversation_findings: i64,
+    pub charted: i64,
+    pub undated: i64,
+    pub dismissed: i64,
+}
+
+/// The report's charts, aggregated in SQL over every finding the filter matches.
+///
+/// Deliberately NOT derived from the findings the panel already holds: that list
+/// is one capped page (#65), and a chart drawn from it would describe a subset
+/// while looking like it described the scan. Every vector here is bounded — nine
+/// categories, one bar per time bucket with the unit chosen to keep that near
+/// 10–30, and conversations capped with the remainder stated.
+#[tauri::command]
+pub fn content_finding_analytics(
+    active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
+    severity: Option<u8>,
+    include_dismissed: bool,
+    exclude_stale: bool,
+) -> Result<FindingAnalyticsDto, String> {
+    let cache_path = active.path()?;
+    let path = analysis_path(&cache_path)?;
+    if !path.exists() {
+        return Ok(FindingAnalyticsDto {
+            unit: "month".into(),
+            over_time: Vec::new(),
+            by_category: Vec::new(),
+            by_conversation: Vec::new(),
+            other_conversations: 0,
+            other_conversation_findings: 0,
+            charted: 0,
+            undated: 0,
+            dismissed: 0,
+        });
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    let (sources, start, end) = match scan_id {
+        Some(id) => match db.scan_by_id(id).map_err(|e| e.to_string())? {
+            Some(s) => (s.sources, s.range_start, s.range_end),
+            None => ("all".to_string(), None, None),
+        },
+        None => ("all".to_string(), None, None),
+    };
+    let a = db
+        .finding_analytics(
+            &sources,
+            start,
+            end,
+            &FindingQuery {
+                severity,
+                include_dismissed,
+                exclude_stale,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(FindingAnalyticsDto {
+        unit: a.unit.as_str().to_string(),
+        over_time: a.over_time.into_iter().map(Into::into).collect(),
+        by_category: a.by_category.into_iter().map(Into::into).collect(),
+        by_conversation: a.by_conversation.into_iter().map(Into::into).collect(),
+        other_conversations: a.other_conversations,
+        other_conversation_findings: a.other_conversation_findings,
+        charted: a.charted,
+        undated: a.undated,
+        dismissed: a.dismissed,
     })
 }

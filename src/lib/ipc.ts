@@ -671,6 +671,41 @@ export interface ContentFindingCounts {
   concerning: number;
 }
 
+/** One bar of one report chart (#66). Index `i` is severity `i + 1`, so 0 is
+ *  concerning and 2 serious. `confirmed` is what the cascade's strong tier
+ *  agreed with; `unconfirmed` is what only the fast sweep ever saw — drawn
+ *  hatched, so a number can't borrow authority the model never gave it. */
+export interface ChartBucket {
+  /** A date key, a category slug, or a thread identifier. Empty = notes. */
+  key: string;
+  confirmed: [number, number, number];
+  unconfirmed: [number, number, number];
+}
+
+/** The report's charts, aggregated in SQL over EVERY finding the filter matches
+ *  — never over the page the list renders, which is capped (#61/#65). */
+export interface FindingAnalytics {
+  /** What one bar of `overTime` spans; chosen from the span the findings cover
+   *  so the axis stays readable from a two-week scan to a ten-year one. */
+  unit: "day" | "week" | "month" | "quarter" | "year";
+  /** Keyed by the LOCAL calendar: `YYYY-MM-DD` (day, and a week's Monday),
+   *  `YYYY-MM`, `YYYY-Qn`, `YYYY`. Only non-empty buckets; the view fills gaps. */
+  overTime: ChartBucket[];
+  byCategory: ChartBucket[];
+  /** The busiest conversations, most findings first, capped by the backend. */
+  byConversation: ChartBucket[];
+  /** Conversations past that cap, and their findings — stated, never dropped. */
+  otherConversations: number;
+  otherConversationFindings: number;
+  /** How many findings the charts describe under the requested filter. */
+  charted: number;
+  /** In scope but undated, so absent from `overTime` alone. */
+  undated: number;
+  /** Dismissed as false positives: out of every chart, reported so the reader
+   *  can see how much the model got wrong. */
+  dismissed: number;
+}
+
 /** Which macOS setting changed. The payload is only an identifier — the value
  *  is re-read through the same command that reads it at startup, so there is one
  *  path rather than two that can disagree. */
@@ -1112,6 +1147,18 @@ export interface TraceLoupeClient {
       excludeStale?: boolean;
     },
   ): Promise<ContentFindingCounts>;
+  /** The report's charts, aggregated in SQL over every finding the filter
+   *  matches. Pass the SAME filter the list is showing — the aggregates share
+   *  the list's scope predicate, so a chart and the rows beneath it always
+   *  describe one population. */
+  contentFindingAnalytics(
+    scanId: number | undefined,
+    filter?: {
+      severity?: 1 | 2 | 3;
+      includeDismissed?: boolean;
+      excludeStale?: boolean;
+    },
+  ): Promise<FindingAnalytics>;
   /** The flagged source (text, sender, time, service) for a finding, fetched
    *  from the backup on demand. Null when the source row is gone or its id is
    *  stale after a re-import. */
@@ -1593,6 +1640,13 @@ const tauriClient: TraceLoupeClient = {
     }),
   countContentFindings: (scanId, filter) =>
     invoke<ContentFindingCounts>("count_content_findings", {
+      scanId: scanId ?? null,
+      severity: filter?.severity ?? null,
+      includeDismissed: filter?.includeDismissed ?? false,
+      excludeStale: filter?.excludeStale ?? false,
+    }),
+  contentFindingAnalytics: (scanId, filter) =>
+    invoke<FindingAnalytics>("content_finding_analytics", {
       scanId: scanId ?? null,
       severity: filter?.severity ?? null,
       includeDismissed: filter?.includeDismissed ?? false,
@@ -2558,40 +2612,89 @@ function mockBulk<T>(rows: T[], renumber: (row: T, i: number) => T): T[] {
 let mockScanRuns: ScanRun[] = [];
 
 let mockSafetyModelInstalled = false;
-const mockContentFindings: ContentFinding[] = [
-  {
-    id: 1,
-    sourceKind: "message",
-    sourceId: 2,
-    threadId: 1,
-    threadIdentifier: "mock-thread-alex",
-    service: "iMessage",
-    occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 12,
-    fingerprint: "mockfp-coercive-1",
-    category: "coercive-control",
-    severity: 2,
-    rationale: "Demands constant location sharing and account passwords.",
-    stale: false,
-    dismissed: false,
-    rechecked: true,
-  },
-  {
-    id: 2,
-    sourceKind: "message",
-    sourceId: 9,
-    threadId: 4,
-    threadIdentifier: "+1 555 0100",
-    service: "TikTok",
-    occurredAt: Math.floor(Date.now() / 1000) - 86_400 * 3,
-    fingerprint: "mockfp-scam-1",
-    category: "scam-fraud",
-    severity: 2,
-    rationale: "Unsolicited crypto investment pitch pushing urgent transfer.",
-    stale: false,
-    dismissed: false,
-    rechecked: false,
-  },
-];
+/** Findings spread over ~10 months across four conversations and a note.
+ *
+ *  The spread is the point: two findings a fortnight apart can't tell you
+ *  whether the report's charts bucket, rank, fill their gaps or split confirmed
+ *  from unconfirmed correctly (#66). This fixture covers a month-bucketed span
+ *  with quiet months in it, several categories and severities, both cascade
+ *  tiers, and the three findings that are supposed to be treated specially — a
+ *  dismissed one, a stale one, and one with no date at all.
+ *
+ *  Thread identifiers are the real mock threads', so the labels resolve to names
+ *  the way they do against a backup. */
+const mockContentFindings: ContentFinding[] = (
+  [
+    // [daysAgo, thread, category, severity, rechecked]
+    [3, "tiktok", "scam-fraud", 2, false, "Unsolicited crypto investment pitch pushing urgent transfer."],
+    [12, "alex", "coercive-control", 2, true, "Demands constant location sharing and account passwords."],
+    [18, "sam", "sexual-content", 1, false, "Sexually explicit exchange; both parties appear adult."],
+    [20, "alex", "coercive-control", 3, true, "Threatens to cut off money and contact if she leaves."],
+    [26, "alex", "harassment-bullying", 2, false, "Repeated insults after being asked to stop."],
+    [33, "hiking", "threat-violence", 2, true, "Talk of 'sorting him out' after the argument."],
+    [40, "alex", "coercive-control", 2, true, "Insists on reading her messages every evening."],
+    [55, "sam", "sexual-content", 1, false, "Explicit image request; recipient declines."],
+    [70, "hiking", "threat-violence", 3, true, "Explicit threat to turn up at someone's home."],
+    [95, "tiktok", "scam-fraud", 1, false, "Link to a lookalike wallet site."],
+    [120, "alex", "coercive-control", 3, true, "Tracks her whereabouts and confronts her about them."],
+    [150, "note", "self-harm", 2, true, "Journal entry describing self-harm ideation."],
+    [185, "sam", "harassment-bullying", 1, false, "Name-calling in a group thread."],
+    [210, "hiking", "harassment-bullying", 2, false, "Pile-on aimed at one member of the group."],
+    [250, "alex", "coercive-control", 2, true, "Controls who she is allowed to see at weekends."],
+    [300, "tiktok", "scam-fraud", 2, false, "Account-recovery phish impersonating support."],
+  ] as const
+).map(([daysAgo, who, category, severity, rechecked, rationale], i) => {
+  const thread = {
+    alex: { threadId: 1, identifier: "12", service: "iMessage" },
+    sam: { threadId: 2, identifier: "8", service: "SMS" },
+    hiking: { threadId: 4, identifier: "20", service: "iMessage" },
+    tiktok: {
+      threadId: 5,
+      identifier: "0:1:179546233697390592:7145206438070666245",
+      service: "TikTok",
+    },
+    note: { threadId: null, identifier: null, service: "Notes" },
+  }[who];
+  return {
+    id: i + 1,
+    sourceKind: who === "note" ? ("note" as const) : ("message" as const),
+    sourceId: who === "note" ? 1 : 2 + i,
+    threadId: thread.threadId,
+    threadIdentifier: thread.identifier,
+    service: thread.service,
+    occurredAt: Math.floor(Date.now() / 1000) - 86_400 * daysAgo,
+    fingerprint: `mockfp-${category}-${i}`,
+    category,
+    severity,
+    rationale,
+    // One stale (source content gone: the report drops it, the panel keeps it)
+    // and one dismissed, so the two disclosures the charts owe the reader are
+    // never zero in the mock.
+    stale: daysAgo === 33,
+    dismissed: daysAgo === 18,
+    rechecked,
+  } satisfies ContentFinding;
+});
+
+// A finding with no date. It cannot sit on a timeline, so the charts count it
+// everywhere else and say so — the case that would otherwise leave the chart's
+// total quietly disagreeing with the list's.
+mockContentFindings.push({
+  id: mockContentFindings.length + 1,
+  sourceKind: "note",
+  sourceId: 2,
+  threadId: null,
+  threadIdentifier: null,
+  service: "Notes",
+  occurredAt: null,
+  fingerprint: "mockfp-self-harm-undated",
+  category: "self-harm",
+  severity: 1,
+  rationale: "Undated note referring to wanting to disappear.",
+  stale: false,
+  dismissed: false,
+  rechecked: false,
+});
 
 const mockFindings: Finding[] = [
   {
@@ -2736,6 +2839,18 @@ const mockProgressSubs = new Set<ProgressCb>();
 
 /** Which findings a mock scan holds. One definition for the list and the count,
  *  because two would drift exactly the way #59 did. */
+/** The live severity split of the whole fixture — what a scan that saw all of it
+ *  reports on its history card. */
+function mockScanTotals() {
+  const live = mockContentFindings.filter((f) => !f.dismissed);
+  return {
+    findings: live.length,
+    serious: live.filter((f) => f.severity === 3).length,
+    harmful: live.filter((f) => f.severity === 2).length,
+    concerning: live.filter((f) => f.severity === 1).length,
+  };
+}
+
 function mockFindingsForScan(scanId?: number) {
   if (!mockActive) return [];
   // Mock scan 1 found only the first finding; scans 2 and 4 found none;
@@ -3464,6 +3579,89 @@ export const mockClient: TraceLoupeClient = {
       concerning: live.filter((f) => f.severity === 1).length,
     };
   },
+  contentFindingAnalytics: async (scanId, filter) => {
+    const all = mockFindingsForScan(scanId);
+    const live = filter?.includeDismissed ? all : all.filter((f) => !f.dismissed);
+    let matched = filter?.excludeStale ? live.filter((f) => !f.stale) : live;
+    if (filter?.severity)
+      matched = matched.filter((f) => f.severity === filter.severity);
+
+    // Mirrors the backend's grouping shape so the mock exercises the same view
+    // paths — including the splits, which are what the charts are about.
+    const bucketOf = (rows: typeof matched, key: (f: (typeof matched)[0]) => string) => {
+      const by = new Map<string, ChartBucket>();
+      for (const f of rows) {
+        const k = key(f);
+        const b =
+          by.get(k) ??
+          ({ key: k, confirmed: [0, 0, 0], unconfirmed: [0, 0, 0] } as ChartBucket);
+        const i = (f.severity - 1) as 0 | 1 | 2;
+        if (f.rechecked) b.confirmed[i]++;
+        else b.unconfirmed[i]++;
+        by.set(k, b);
+      }
+      return [...by.values()];
+    };
+    const total = (b: ChartBucket) =>
+      b.confirmed.reduce((a, n) => a + n, 0) + b.unconfirmed.reduce((a, n) => a + n, 0);
+
+    const dated = matched.filter((f) => f.occurredAt != null);
+    const stamps = dated.map((f) => f.occurredAt as number);
+    const span = stamps.length ? Math.max(...stamps) - Math.min(...stamps) : 0;
+    const DAY = 86400;
+    const unit =
+      span <= 31 * DAY
+        ? "day"
+        : span <= 210 * DAY
+          ? "week"
+          : span <= 1095 * DAY
+            ? "month"
+            : span <= 3650 * DAY
+              ? "quarter"
+              : "year";
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const timeKey = (at: number) => {
+      const d = new Date(at * 1000);
+      const y = d.getFullYear();
+      switch (unit) {
+        case "day":
+          return `${y}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+        case "week": {
+          const m = new Date(d);
+          // Back to this week's Monday, matching the SQL bucket.
+          m.setDate(m.getDate() - ((m.getDay() + 6) % 7));
+          return `${m.getFullYear()}-${pad(m.getMonth() + 1)}-${pad(m.getDate())}`;
+        }
+        case "month":
+          return `${y}-${pad(d.getMonth() + 1)}`;
+        case "quarter":
+          return `${y}-Q${Math.floor(d.getMonth() / 3) + 1}`;
+        default:
+          return `${y}`;
+      }
+    };
+
+    const byConversation = bucketOf(matched, (f) => f.threadIdentifier ?? "").sort(
+      (a, b) => total(b) - total(a) || a.key.localeCompare(b.key),
+    );
+    const CAP = 12;
+    const overflow = byConversation.slice(CAP);
+    return {
+      unit,
+      overTime: bucketOf(dated, (f) => timeKey(f.occurredAt as number)).sort((a, b) =>
+        a.key.localeCompare(b.key),
+      ),
+      byCategory: bucketOf(matched, (f) => f.category).sort(
+        (a, b) => total(b) - total(a) || a.key.localeCompare(b.key),
+      ),
+      byConversation: byConversation.slice(0, CAP),
+      otherConversations: overflow.length,
+      otherConversationFindings: overflow.reduce((n, b) => n + total(b), 0),
+      charted: matched.length,
+      undated: matched.length - dated.length,
+      dismissed: all.filter((f) => f.dismissed).length,
+    };
+  },
   contentFindingSnippet: async (sourceKind, sourceId) => {
     if (!mockActive || sourceId == null) return null;
     const finding = mockContentFindings.find((f) => f.sourceId === sourceId);
@@ -3550,10 +3748,9 @@ export const mockClient: TraceLoupeClient = {
             status: "completed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 3600,
             finishedAt: Math.floor(Date.now() / 1000) - 3000,
-            findings: 2,
-            serious: 0,
-            harmful: 2,
-            concerning: 0,
+            // Derived, not typed in: the rail badge and the detail pane read the
+            // same fixture, and two hand-kept copies are how they would drift.
+            ...mockScanTotals(),
           },
           {
             id: 2,
