@@ -53,8 +53,14 @@ const DEEP = new Set(["Messages", "Notes", "Safety", "Contacts", "Photos"]);
 const RAMP = [10, 11, 12, 13, 15, 17, 22, 26];
 /** Control heights from --control-h*. */
 const CONTROLS = [20, 24, 28, 32];
-const ISLAND = 30;
 const SEGMENT = 24;
+/** An island is one segment tall plus its 0.5 padding and 1px border — 6px of
+ *  chrome that is deliberately NOT scaled with the text (see the note on
+ *  --island-h in index.css: padding is furniture, not type). Scaling the whole
+ *  island linearly, as this rule used to, reports every island as broken at any
+ *  text size but the default — which nothing noticed, because the only view with
+ *  islands in a card header was never reached at those sizes. */
+const ISLAND_CHROME = 6;
 
 /**
  * Sizes that are deliberately off the ramp because they are fitted to something
@@ -82,11 +88,24 @@ const CONTRAST_ACCEPTED = [
       " floor still fails anything genuinely illegible.",
   },
   {
-    selector: '[data-slot="sidebar"] [data-active="true"]',
+    // The app sidebar AND Settings' nav, which is deliberately the same treatment
+    // (see the comment on that TabsTrigger). One decision, so one exception.
+    selector:
+      '[data-slot="sidebar"] [data-active="true"], [data-slot="tabs-trigger"][data-state="active"]',
     floor: 2.3,
     why: "selected sidebar row: white on the system accent, matching macOS's own" +
       " sidebar selection. Keeping the label white was an explicit product" +
       " decision (#41); AA would require darkening it against every accent colour.",
+  },
+  {
+    // Not keyed on data-slot="badge": wrapping the badge in a TooltipTrigger
+    // overwrites that attribute, and the rule would silently stop applying.
+    selector: '[class*="bg-destructive"][class*="rounded-full"]',
+    floor: 3.9,
+    why: "the count/severity badge: white on the system red, exactly as macOS draws" +
+      " its own badges. The alternatives are dark text on red (wrong for the" +
+      " design language) or a red that is no longer the system red. The number is" +
+      " never the only place a count appears.",
   },
 ];
 
@@ -313,10 +332,14 @@ const probe = () =>
       const large = size >= 18.66 || (size >= 14 && weight >= 700);
       const want = large ? 3 : 4.5;
       if (ratio < want) {
-        const accepted = ACCEPTED.find(
+        // Every matching decision, not the first one listed: an element can sit
+        // inside two recorded exceptions (the Settings tab label is both a
+        // muted-tier label and a selected nav row), and `find` made acceptance
+        // depend on the order of this array rather than on the measurement.
+        const accepted = ACCEPTED.filter(
           (a) => el.closest(a.selector) || el.matches(a.selector),
         );
-        if (accepted && ratio >= accepted.floor) continue;
+        if (accepted.some((a) => ratio >= a.floor)) continue;
         const rgb = (c) => `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
         contrast.push(
           `"${label(el)}" ${ratio.toFixed(2)}:1 at ${size}px (needs ${want}:1) —` +
@@ -349,6 +372,12 @@ const probe = () =>
       // truncate/line-clamp cut text ON PURPOSE; this is about boxes too small
       // for text that was meant to fit.
       if (cs.textOverflow === "ellipsis" || cs.overflow !== "visible") continue;
+      // SVG has no CSS box to be clipped BY: an <svg><text> reports a
+      // scrollHeight/clientHeight pair that means nothing here, and the chart
+      // labels (#66) tripped the rule while rendering perfectly. Overflow of an
+      // SVG is the viewport's business, and the type rule still measures the
+      // text's size.
+      if (el.ownerSVGElement) continue;
       const el2 = el;
       if (el2.scrollHeight > el2.clientHeight + 1 && el2.clientHeight > 0)
         clipped.push(`${label(el)} (${el2.scrollHeight}px of text in ${el2.clientHeight}px)`);
@@ -459,7 +488,8 @@ const check = async (state, scale) => {
   }
 
   for (const i of islands) {
-    const want = (i.segment ? SEGMENT : ISLAND) * (i.fixed ? 1 : scale);
+    const seg = SEGMENT * (i.fixed ? 1 : scale);
+    const want = i.segment ? seg : seg + ISLAND_CHROME;
     if (!near(i.h, want))
       fail("island", state, `${i.segment ? "segment" : "island"} "${i.name}" is ${Math.round(i.h * 10) / 10}px, expected ${Math.round(want * 10) / 10}px`);
   }
@@ -587,14 +617,54 @@ if (await open.count()) {
 await selfTest();
 
 for (const view of VIEWS) {
+  // Leave the previous view cleanly. A dialog or popover left open swallows the
+  // next click, and the loop then measures the OLD view under a new name — which
+  // is how Safety went un-deep-checked without anything failing.
+  for (let i = 0; i < 3 && (await page.locator('[role="dialog"]').count()); i++) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await page.waitForTimeout(250);
+    // A first-run setup dialog (Security Check's) deliberately ignores Escape:
+    // it wants a decision. Decline it — declining is the state that leaves the
+    // view underneath in its normal, measurable form.
+    if (await page.locator('[role="dialog"]').count()) {
+      const decline = page.getByRole("button", { name: /^(Not now|Cancel|Close|Got it)$/ }).first();
+      if (await decline.count()) {
+        await decline.click().catch(() => {});
+        await page.waitForTimeout(300);
+      }
+    }
+  }
   await page.getByText(view, { exact: true }).first().click().catch(() => {});
   await page.waitForTimeout(900);
   const dismiss = page.getByRole("button", { name: /^Got it$/ });
   if (await dismiss.count()) { await dismiss.first().click().catch(() => {}); await page.waitForTimeout(250); }
 
+  // And prove we got there. A silent navigation failure reads exactly like a
+  // clean view.
+  const heading = await page.evaluate(
+    () => document.querySelector("h1, [data-slot='toolbar'] span")?.textContent ?? "",
+  );
+  if (!heading.includes(view)) {
+    fail("navigation", view, `clicking "${view}" left the app showing "${heading}" — the` +
+      ` checks below would have measured the wrong view`);
+    continue;
+  }
+
   await check(view, 1);
   if (!DEEP.has(view)) continue;
   await checkFocus(view);
+
+  // Sections that are hidden behind a toggle are exactly where an unmeasured
+  // font size or an off-grid gap survives: the idle sweep never opens them. The
+  // Safety report's charts (#66) live behind one.
+  const reveal = page.locator('[aria-label="Show analysis"]').first();
+  if (await reveal.count()) {
+    await reveal.click().catch(() => {});
+    await page.waitForTimeout(700);
+    await check(`${view}+analysis`, 1);
+    await reveal.click().catch(() => {});
+    await page.waitForTimeout(400);
+  }
 
   // Hovered — where row actions appear and can land on something (#92).
   const row = page.locator('[data-slot="list-row"], [role="button"][aria-current]').first();
@@ -663,8 +733,7 @@ if (failures.length) {
   console.error(`design lint failed — ${failures.length} finding(s):\n`);
   for (const [rule, list] of Object.entries(byRule)) {
     console.error(`  ${rule} (${list.length}):`);
-    for (const f of [...new Set(list)].slice(0, 8)) console.error(`    ${f}`);
-    if (new Set(list).size > 8) console.error(`    … and ${new Set(list).size - 8} more`);
+    for (const f of [...new Set(list)].slice(0, 40)) console.error(`    ${f}`);
   }
   console.error(
     `\nTake sizes from the tokens (--ramp-*, --control-h*, --island-h) rather than` +
