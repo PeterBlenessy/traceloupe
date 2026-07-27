@@ -13,6 +13,27 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.23] — 2026-07-27
+
+### Added
+
+- **The app follows the macOS Text Size setting** (System Settings →
+  Accessibility → Display → Text Size). macOS doesn't hand that setting to apps
+  like ours, so TraceLoupe reads it and applies it — and unlike the in-app A+/−
+  buttons, which resize what you're reading, this one also enlarges the toolbar
+  and sidebar, because someone who needs bigger text needs it everywhere.
+
+### Fixed
+
+- **System changes apply immediately instead of when the app regains focus.**
+  Changing the accent colour recoloured every other app at once and TraceLoupe
+  only after you clicked into it — it wasn't listening for the change. Accent,
+  light/dark and text size are all picked up live now.
+- **Every control in Settings has a name for screen readers.** The switches
+  announced themselves as an unnamed button.
+- **Dialog titles no longer clip their descenders** at larger text sizes, and
+  generated app tiles keep their letter readable at every colour.
+
 ## [0.31.22] — 2026-07-26
 
 ### Changed
