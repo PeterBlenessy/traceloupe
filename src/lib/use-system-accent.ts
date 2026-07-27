@@ -95,11 +95,31 @@ export function useSystemAccent() {
     };
     void applyTextScale();
 
+    // Stamp macOS's own "Keyboard navigation" setting on <html>. Nothing reads
+    // it yet — this is the hook the keyboard-focus work needs, and having the
+    // value present makes the current behaviour measurable: with the setting
+    // OFF, a native app's Tab visits text fields and lists only, while ours
+    // visits every button and row.
+    const applyKeyboardAccess = async () => {
+      try {
+        const on = await client.fullKeyboardAccess();
+        if (!cancelled)
+          document.documentElement.setAttribute(
+            "data-full-keyboard-access",
+            on ? "on" : "off",
+          );
+      } catch {
+        // Non-Tauri host: leave the attribute absent.
+      }
+    };
+    void applyKeyboardAccess();
+
     let unlisten: (() => void) | undefined;
     void client
       .onSystemChange((c) => {
         if (c.kind === "accent" || c.kind === "appearance") void fetchAndApply();
         if (c.kind === "textSize") void applyTextScale();
+        if (c.kind === "keyboardAccess") void applyKeyboardAccess();
       })
       .then((fn) => {
         if (cancelled) fn();
@@ -113,6 +133,7 @@ export function useSystemAccent() {
       if (document.visibilityState === "hidden") return;
       void fetchAndApply();
       void applyTextScale();
+      void applyKeyboardAccess();
     };
 
     window.addEventListener("focus", onFocusOrVisible);
