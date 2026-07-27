@@ -256,7 +256,7 @@ export function ListSearch({
         }
       }}
       className={cn(
-        "relative flex h-9 shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
+        "relative flex h-(--island-h) shrink-0 items-center overflow-hidden rounded-lg border border-border/70 bg-muted/40 text-muted-foreground transition-[width] duration-200 ease-out",
         open ? "w-44 sm:w-56" : "w-9 cursor-pointer hover:bg-accent hover:text-foreground",
       )}
     >
