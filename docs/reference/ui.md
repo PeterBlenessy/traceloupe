@@ -112,7 +112,18 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   | `control` | a height that is not a `--control-h*` step | 34 of 60 buttons hand-tuned (#91) |
   | `island` | islands/segments off their one height | 30 / 36 / 38 px in one toolbar (#131) |
   | `overlap` | one interactive element covering another | hover actions over the count pill (#92) |
-  | `clipping` | a label cut off by its own box | — |
+  | `clipping` | a label cut off by its own box | `DialogTitle`'s `leading-none` |
+  | `contrast` | text under WCAG AA against what is *really* behind it | a generated app tile at 4.11:1 |
+  | `focus` | a control with no ring when **tabbed** to | — |
+  | `a11y` | a control with no accessible name | unnamed Settings switches |
+  | `tooltip` | an icon-only button that explains nothing | — |
+  | `spacing` | a gap or padding off the 2px grid | — |
+
+  Two contrast exceptions are recorded *with their measurement* rather than
+  hidden: the selected sidebar row (white on the accent, 2.34:1 — an explicit
+  product decision, and what macOS does), and the secondary/tertiary label tiers
+  (which macOS itself renders below AA). Each has a floor, so if one gets worse
+  it fails again.
 
   It runs **two passes**. The *static* pass reads the source and rejects a size
   or colour literal written onto a control — that is the only way to cover a

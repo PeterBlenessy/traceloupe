@@ -163,6 +163,7 @@ function JumpButtons({
               variant="ghost"
               size="icon-sm"
               className="text-muted-foreground"
+              aria-label="Jump to top"
               disabled={disabled}
               onClick={onTop}
             >
@@ -179,6 +180,7 @@ function JumpButtons({
               variant="ghost"
               size="icon-sm"
               className="-ml-1 text-muted-foreground"
+              aria-label="Jump to bottom"
               disabled={disabled}
               onClick={onBottom}
             >
