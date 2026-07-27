@@ -13,6 +13,20 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.26] — 2026-07-27
+
+### Added
+
+- **The app follows four more macOS settings**, and picks them up the moment you
+  change them:
+  - **Reduce motion** — animations and transitions stop moving.
+  - **Reduce transparency** — the frosted title bar becomes solid, and lists no
+    longer scroll beneath it.
+  - **Increase contrast** — borders firm up and secondary text darkens to full
+    strength.
+  - **Sidebar icon size** (Appearance) — small, medium or large icons, with the
+    row height to match.
+
 ## [0.31.25] — 2026-07-27
 
 ### Fixed
