@@ -210,8 +210,10 @@ pub struct FindingAnalytics {
     pub charted: i64,
     /// In scope but undated, so absent from [`Self::over_time`].
     pub undated: i64,
-    /// Dismissed as false positives — excluded from every chart, reported so the
-    /// reader can see how much the model got wrong.
+    /// How many findings the charts LEFT OUT as false positives, under the
+    /// caller's own filter — zero when the caller asked for dismissed findings,
+    /// because then nothing was left out. It is what the disclosure beside the
+    /// charts claims, so it has to mean exactly that.
     pub dismissed: i64,
 }
 
@@ -1036,16 +1038,30 @@ impl AnalysisDb {
             }
         }
 
-        // Dismissed is reported whatever the current filter is: the charts leave
-        // false positives out, and the count is how the report says so.
-        let dismissed = self.conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM content_findings f
-                 WHERE ({IN_SCOPE_PREDICATE}) AND {DISMISSED_EXPR}"
-            ),
-            params![sources, range_start, range_end],
-            |r| r.get::<_, i64>(0),
-        )?;
+        // How many findings the charts LEFT OUT as false positives — not how many
+        // dismissals exist. Two things made the old count say something untrue:
+        // it ignored the severity filter, so narrowing to Serious still reported
+        // every dismissal; and when the panel's "Show dismissed" is on the
+        // findings are IN the charts, while the disclosure beside them went on
+        // claiming they had been left out. Counted with the caller's own filter,
+        // and zero when nothing was excluded, the sentence is true in every state.
+        let dismissed = if q.include_dismissed {
+            0
+        } else {
+            let shown_but_dismissed = FindingQuery {
+                include_dismissed: true,
+                ..q.clone()
+            };
+            self.conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM content_findings f
+                     WHERE ({}) AND {DISMISSED_EXPR}",
+                    filtered_scope(&shown_but_dismissed)
+                ),
+                params![sources, range_start, range_end],
+                |r| r.get::<_, i64>(0),
+            )?
+        };
 
         Ok(FindingAnalytics {
             unit,
@@ -2448,6 +2464,69 @@ mod tests {
         assert_eq!(a.charted, 3, "the dismissed one is not drawn");
         assert_eq!(a.dismissed, 1, "but the report can say so");
         assert_eq!(a.by_category[0].total(), 3);
+    }
+
+    #[test]
+    fn the_dismissed_count_is_what_the_charts_left_out_and_nothing_else() {
+        // The disclosure beside the charts reads "N dismissed as false positives
+        // and left out of every chart". That sentence has to be true in every
+        // state the panel can reach — including "Show dismissed", where they are
+        // not left out at all, and a severity filter, which the count used to
+        // ignore.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..6)
+            .map(|i| NewFinding {
+                severity: (i % 3 + 1) as u8,
+                occurred_at: Some(MON_2024_03_11 + i),
+                ..finding(&format!("x{i}"), Category::SelfHarm)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 1).unwrap();
+        // One severity-1 (x0) and one severity-3 (x2) dismissed.
+        db.set_dismissed("x0", Category::SelfHarm, true, 2).unwrap();
+        db.set_dismissed("x2", Category::SelfHarm, true, 2).unwrap();
+
+        let all = db
+            .finding_analytics("all", None, None, &FindingQuery::default())
+            .unwrap();
+        assert_eq!((all.charted, all.dismissed), (4, 2));
+
+        // Filtered to serious: only the serious dismissal was left out.
+        let serious = db
+            .finding_analytics(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    severity: Some(3),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            (serious.charted, serious.dismissed),
+            (1, 1),
+            "a severity filter narrows what was left out, not just what was drawn"
+        );
+
+        // Showing dismissed: they are in the charts, so nothing was left out.
+        let shown = db
+            .finding_analytics(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    include_dismissed: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            (shown.charted, shown.dismissed),
+            (6, 0),
+            "nothing is 'left out' when the caller asked for it"
+        );
     }
 
     #[test]

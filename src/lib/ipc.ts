@@ -3659,7 +3659,18 @@ export const mockClient: TraceLoupeClient = {
       otherConversationFindings: overflow.reduce((n, b) => n + total(b), 0),
       charted: matched.length,
       undated: matched.length - dated.length,
-      dismissed: all.filter((f) => f.dismissed).length,
+      // What these charts LEFT OUT, mirroring the backend: zero when the caller
+      // asked for dismissed findings (nothing was left out), and narrowed by the
+      // severity filter like everything else. The disclosure beside the charts
+      // says "left out of every chart" — in the mock too, that has to be true.
+      dismissed: filter?.includeDismissed
+        ? 0
+        : all.filter(
+            (f) =>
+              f.dismissed &&
+              (!filter?.excludeStale || !f.stale) &&
+              (!filter?.severity || f.severity === filter.severity),
+          ).length,
     };
   },
   contentFindingSnippet: async (sourceKind, sourceId) => {
