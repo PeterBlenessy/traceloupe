@@ -329,13 +329,26 @@ function AppTitleBar() {
   // display:none'd on collapse and the title-bar one unmounts on expand, so
   // the just-activated control vanishes and focus falls to <body>, restarting
   // tab order from the top. When that happens, hand focus to the visible
-  // counterpart. Skipped on mount (focus starts on <body> without any swap).
-  const mounted = useRef(false);
+  // counterpart.
+  //
+  // "Focus is on <body>" is NOT enough to identify that case — it is also true
+  // on a fresh load, and the collapsed state settles from its persisted value
+  // just after mount, which reads as a change and stole focus onto the sidebar
+  // toggle every time the app was refreshed. So we require that focus was
+  // actually on a trigger before the swap: a keyboard user who pressed it gets
+  // focus back, and a load or a mouse click does not summon a focus ring.
+  const focusWasOnTrigger = useRef(false);
   useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      return;
-    }
+    const onFocusIn = (e: FocusEvent) => {
+      focusWasOnTrigger.current = !!(e.target as HTMLElement | null)?.closest?.(
+        '[data-sidebar="trigger"]',
+      );
+    };
+    document.addEventListener("focusin", onFocusIn);
+    return () => document.removeEventListener("focusin", onFocusIn);
+  }, []);
+  useEffect(() => {
+    if (!focusWasOnTrigger.current) return;
     if (document.activeElement !== document.body) return;
     const id = requestAnimationFrame(() => {
       const triggers = document.querySelectorAll<HTMLElement>(
