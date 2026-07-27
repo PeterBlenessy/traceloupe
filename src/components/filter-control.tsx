@@ -13,6 +13,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useControlTabIndex } from "@/lib/use-keyboard-nav";
 
 /** The open panel's width (matches the inner content's fixed width, 26rem). */
 const PANEL_W = 416;
@@ -45,6 +46,8 @@ export function FilterControl({
    *  funnel, e.g. beside a button in a card, so it doesn't cover the sidebar). */
   align?: "left" | "right";
 }) {
+  // Follows macOS Keyboard navigation, like every other control.
+  const controlTabIndex = useControlTabIndex();
   const [mounted, setMounted] = useState(false); // overlay is in the tree
   const [expanded, setExpanded] = useState(false); // morph target (full panel)
   const [rect, setRect] = useState({ top: 0, right: 0, left: 0, w: 32, h: 32 });
@@ -181,6 +184,7 @@ export function FilterControl({
           <TooltipTrigger asChild>
             <button
               ref={btnRef}
+              tabIndex={controlTabIndex}
               type="button"
               aria-label="Filter"
               aria-haspopup="dialog"
