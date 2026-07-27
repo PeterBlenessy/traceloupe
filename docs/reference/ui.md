@@ -318,7 +318,7 @@ Current classification:
 | Safety Scan history rail · Safety Scan findings · Security run rail · Security findings | virtualized (`VirtualList`) |
 | Safety Scan report findings (500) · a note's image gallery (50) · a finding's shortened links (25) | bounded with disclosure |
 | Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |
-| Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder | provably small, declared via `useBoundedList` |
+| Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder · Safety Scan chart buckets | provably small, declared via `useBoundedList` |
 
 ### A chart is never drawn from a bounded list
 
@@ -353,6 +353,15 @@ form is constrained on purpose (#66):
 - **The x-axis is the content's timeline**, never a series of scan runs. Runs are
   not comparable to one another — the chunker, the model tier and the scope have
   all changed between them.
+- **A timestamp outside 2007..now is not a date.** Apple stores seconds since
+  2001; read as Unix time that lands in 1970, and a zeroed column lands there
+  too. The bucket unit is chosen from the span and `year` is the coarsest unit
+  there is, so *one* such finding turned a year of real data into a single bar
+  with fifty empty ones beside it. `TIMELINE_START` closes the window, and those
+  findings join the ones with no timestamp at all under "no usable date" —
+  counted everywhere except the axis they cannot sit on. That is also what
+  *bounds* the axis: the widest possible span is ~20 years of `year` buckets, so
+  there is nothing left to truncate.
 - **Inline SVG, geometry in percentages.** The report prints; canvas rasterizes
   badly and CSS background gradients get dropped. No measurement, no distortion,
   and the hatch survives a greyscale print. Bucket width adapts (day → year) so
