@@ -322,6 +322,11 @@ Current classification:
 
 ## macOS display preferences are respected
 
+> Full reference: [`macos-integration.md`](macos-integration.md) — every setting
+> we follow, how the bridge works, and the measured reasons CSS media queries
+> cannot do this job. The decision behind it is
+> [ADR 0004](../adr/0004-follow-macos-settings-not-app-preferences.md).
+
 Four settings are read by `system_watch.rs`, stamped on `<html>`, and consumed by
 rules in `index.css`:
 
