@@ -1270,7 +1270,12 @@ function SafetyReportDocument({
   const labelOf = useThreadLabel();
   // The page arrives capped, dismissed- and stale-filtered, severity-ordered.
   const live = findings;
-  const omittedFromReport = Math.max(0, liveTotal - live.length);
+  // From the analytics count, not the pill count. Both are "in scope, not
+  // dismissed, not stale" — but via two different SQL expressions, and the
+  // header would then disagree with this line the first time they drifted. One
+  // number, one query.
+  const reportTotal = analytics?.charted ?? liveTotal;
+  const omittedFromReport = Math.max(0, reportTotal - live.length);
   // Verbatim flagged text is included ONLY when the user opts in (Settings →
   // Safety → Report). Fetched on demand per finding, never stored (ADR 0002).
   // Bounded by the cap above: this is one IPC round trip PER finding, so before
@@ -1338,7 +1343,7 @@ function SafetyReportDocument({
       <section className="grid grid-cols-4 gap-3 text-center">
         {(
           [
-            ["Findings", analytics?.charted ?? liveTotal, ""],
+            ["Findings", reportTotal, ""],
             ["Serious", severityTotal(3) ?? scan.serious, sev(3)],
             ["Harmful", severityTotal(2) ?? scan.harmful, sev(2)],
             ["Concerning", severityTotal(1) ?? scan.concerning, sev(1)],
@@ -1358,14 +1363,14 @@ function SafetyReportDocument({
         </h2>
         {report?.report ? (
           <p className="leading-relaxed">{report.report}</p>
-        ) : liveTotal === 0 ? (
+        ) : reportTotal === 0 ? (
           <p className="text-muted-foreground">
             Nothing was flagged in this scan's scope. A clean scan is a review aid,
             not a guarantee — spot-check important conversations yourself.
           </p>
         ) : (
           <p className="text-muted-foreground">
-            {liveTotal} finding{liveTotal === 1 ? "" : "s"} across{" "}
+            {reportTotal} finding{reportTotal === 1 ? "" : "s"} across{" "}
             {groups.length} conversation{groups.length === 1 ? "" : "s"} — see the
             breakdown below.
           </p>
