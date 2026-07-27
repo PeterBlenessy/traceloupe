@@ -223,6 +223,29 @@ it, and its own comment explained exactly why. So, for any new background job:
 5. **Surface it in the toolbar activity indicator** (`activity-indicator.tsx`) by
    adding an entry to `useActivities` — not another toolbar pill.
 
+## Measure the UI, don't eyeball it
+
+**A screenshot tells you it rendered. It does not tell you it is right.** Every
+visual inconsistency this project has shipped was looked at first and accepted:
+hover actions covering a count pill, toolbar controls packed 2px apart, three
+different island heights in one toolbar (30 / 36 / 38px). Each looked fine in
+isolation, which is precisely how they accumulate.
+
+So after any UI change, read the numbers:
+
+- **Computed geometry, not the render.** `getBoundingClientRect().height` for
+  every control in the region; the resolved value of the token that is supposed
+  to drive it; the set of distinct font sizes on the page. Compare like with
+  like — every island, every segment, every row.
+- **The states an idle screenshot never shows.** Filter applied, search
+  expanded, hovered, empty, at the smallest and largest text size. A control
+  that *changes* size between states is worse than one that is merely wrong, and
+  only a state sweep finds it.
+- **When a rule breaks twice, make it executable.** `check-toolbar-geometry.mjs`
+  and `check-virtualization.mjs` exist because writing the rule down a second
+  time did not work. Prove a new check can fail before trusting it — a check
+  that cannot fail reads as coverage while providing none.
+
 ## Pick the right IPC primitive
 
 **Events are for one-off notifications. Streams use a Channel. Bulk data is
