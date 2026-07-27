@@ -32,6 +32,9 @@ pub enum SystemChange {
     Appearance,
     TextSize,
     KeyboardAccess,
+    /// Reduce motion / reduce transparency / increase contrast / differentiate
+    /// without colour, and the sidebar icon size.
+    Accessibility,
 }
 
 static SYSTEM_CHANGES: ProgressStream<SystemChange> = ProgressStream::new();
@@ -44,6 +47,41 @@ pub fn subscribe_system_changes(channel: Channel<SystemChange>) {
     SYSTEM_CHANGES.subscribe(channel);
     #[cfg(target_os = "macos")]
     macos::start_observing();
+}
+
+/// The display preferences a UI is expected to respect, read together because
+/// they change together and the UI applies them together.
+///
+/// WebKit exposes matching media queries (`prefers-reduced-motion`,
+/// `prefers-contrast`, `prefers-reduced-transparency`) but a WKWebView never
+/// resolves them to the system values — measured: all report false on a machine
+/// where the settings are readable through AppKit. So the queries are free
+/// syntax and not free behaviour, and the values have to come across the bridge.
+#[derive(Clone, serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessibilityPrefs {
+    pub reduce_motion: bool,
+    pub reduce_transparency: bool,
+    pub increase_contrast: bool,
+    pub differentiate_without_color: bool,
+    /// System Settings → Appearance → Sidebar icon size: 1 small, 2 medium,
+    /// 3 large. Defaults to medium when unset.
+    pub sidebar_icon_size: i64,
+}
+
+#[tauri::command]
+pub fn get_accessibility_prefs() -> AccessibilityPrefs {
+    #[cfg(target_os = "macos")]
+    {
+        macos::accessibility_prefs()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        AccessibilityPrefs {
+            sidebar_icon_size: 2,
+            ..Default::default()
+        }
+    }
 }
 
 /// Whether macOS **Full Keyboard Access** is on (System Settings → Keyboard →
@@ -99,12 +137,13 @@ mod macos {
 
     use block2::RcBlock;
     use objc2::AnyThread;
+    use objc2_app_kit::NSWorkspace;
     use objc2_foundation::{
         NSDistributedNotificationCenter, NSNotification, NSNotificationCenter, NSString,
         NSUserDefaults,
     };
 
-    use super::{SystemChange, SYSTEM_CHANGES};
+    use super::{AccessibilityPrefs, SystemChange, SYSTEM_CHANGES};
 
     /// Category → multiplier, keyed by the SUFFIX.
     ///
@@ -161,6 +200,26 @@ mod macos {
         }
     }
 
+    pub fn accessibility_prefs() -> AccessibilityPrefs {
+        let workspace = NSWorkspace::sharedWorkspace();
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let size_key = NSString::from_str("NSTableViewDefaultSizeMode");
+        let size = defaults.integerForKey(&size_key);
+        AccessibilityPrefs {
+            reduce_motion: workspace.accessibilityDisplayShouldReduceMotion(),
+            reduce_transparency: workspace.accessibilityDisplayShouldReduceTransparency(),
+            increase_contrast: workspace.accessibilityDisplayShouldIncreaseContrast(),
+            differentiate_without_color: workspace
+                .accessibilityDisplayShouldDifferentiateWithoutColor(),
+            // 0 means unset; macOS's own default is medium.
+            sidebar_icon_size: if (1..=3).contains(&size) {
+                size as i64
+            } else {
+                2
+            },
+        }
+    }
+
     pub fn full_keyboard_access() -> bool {
         let defaults = NSUserDefaults::standardUserDefaults();
         let key = NSString::from_str("AppleKeyboardUIMode");
@@ -185,6 +244,10 @@ mod macos {
             SystemChange::Appearance
         }),
         ("AppleAquaColorVariantChanged", || SystemChange::Accent),
+        // Sidebar icon size is an Appearance preference.
+        ("AppleNoRedisplayAppearancePreferenceChanged", || {
+            SystemChange::Accessibility
+        }),
         (
             "ApplePreferredContentSizeCategoryChangedNotification",
             || SystemChange::TextSize,
@@ -203,6 +266,25 @@ mod macos {
     pub fn start_observing() {
         if STARTED.swap(true, Ordering::SeqCst) {
             return;
+        }
+        // The display options post on the WORKSPACE's notification centre, not
+        // the distributed one — observing only the distributed centre would miss
+        // every one of them.
+        {
+            let center = NSWorkspace::sharedWorkspace().notificationCenter();
+            let block = RcBlock::new(move |_note: core::ptr::NonNull<NSNotification>| {
+                SYSTEM_CHANGES.send(SystemChange::Accessibility);
+            });
+            unsafe {
+                center.addObserverForName_object_queue_usingBlock(
+                    Some(&NSString::from_str(
+                        "NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification",
+                    )),
+                    None,
+                    None,
+                    &block,
+                );
+            }
         }
         let center = NSDistributedNotificationCenter::defaultCenter();
         // The block-based observer lives on NSNotificationCenter, the superclass;
@@ -233,6 +315,27 @@ mod tests {
     /// against the actual preference domain, which is where the earlier guesses
     /// about this feature went wrong. The assertion is a range, not a value, so
     /// it holds whatever the machine is set to.
+    /// Reads the machine's real display preferences. Asserts shape rather than
+    /// values, so it holds however the machine is configured — the point is that
+    /// the bridge reaches the actual settings.
+    #[test]
+    fn accessibility_prefs_read_the_real_settings() {
+        let p = super::get_accessibility_prefs();
+        println!(
+            "reduceMotion={} reduceTransparency={} increaseContrast={} differentiate={} sidebarIconSize={}",
+            p.reduce_motion,
+            p.reduce_transparency,
+            p.increase_contrast,
+            p.differentiate_without_color,
+            p.sidebar_icon_size,
+        );
+        assert!(
+            (1..=3).contains(&p.sidebar_icon_size),
+            "sidebar icon size {} is outside macOS's 1..3",
+            p.sidebar_icon_size,
+        );
+    }
+
     #[test]
     fn text_scale_reads_the_system_category() {
         let scale = super::get_system_text_scale();

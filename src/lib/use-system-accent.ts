@@ -114,12 +114,38 @@ export function useSystemAccent() {
     };
     void applyKeyboardAccess();
 
+    // The display preferences macOS expects an app to respect. Stamped as
+    // attributes because the rules that consume them are CSS (index.css) — the
+    // matching media queries exist in WebKit but never resolve to the system
+    // values, so they cannot do this job.
+    const applyAccessibility = async () => {
+      try {
+        const p = await client.accessibilityPrefs();
+        if (cancelled) return;
+        const root = document.documentElement;
+        const flag = (name: string, on: boolean) => {
+          if (on) root.setAttribute(name, "true");
+          else root.removeAttribute(name);
+        };
+        flag("data-reduce-motion", p.reduceMotion);
+        flag("data-reduce-transparency", p.reduceTransparency);
+        flag("data-increase-contrast", p.increaseContrast);
+        flag("data-differentiate-without-color", p.differentiateWithoutColor);
+        root.setAttribute("data-sidebar-icon-size", String(p.sidebarIconSize));
+      } catch {
+        // Leave whatever is applied.
+      }
+    };
+    void applyAccessibility();
+
     let unlisten: (() => void) | undefined;
     void client
       .onSystemChange((c) => {
         if (c.kind === "accent" || c.kind === "appearance") void fetchAndApply();
         if (c.kind === "textSize") void applyTextScale();
         if (c.kind === "keyboardAccess") void applyKeyboardAccess();
+        if (c.kind === "accessibility" || c.kind === "appearance")
+          void applyAccessibility();
       })
       .then((fn) => {
         if (cancelled) fn();
@@ -134,6 +160,7 @@ export function useSystemAccent() {
       void fetchAndApply();
       void applyTextScale();
       void applyKeyboardAccess();
+      void applyAccessibility();
     };
 
     window.addEventListener("focus", onFocusOrVisible);
