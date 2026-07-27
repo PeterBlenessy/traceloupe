@@ -114,6 +114,12 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   | `overlap` | one interactive element covering another | hover actions over the count pill (#92) |
   | `clipping` | a label cut off by its own box | — |
 
+  It runs **two passes**. The *static* pass reads the source and rejects a size
+  or colour literal written onto a control — that is the only way to cover a
+  button in a view nobody visited or a state nobody opened, which is exactly
+  where literals survive. The *runtime* pass then measures every view (plus the
+  Settings dialog) in both colour schemes.
+
   It **self-tests its detectors on every run**: it injects one deliberate
   violation per rule and fails if any rule stays quiet, because a lint whose
   matcher drifts reports OK forever and reads as coverage. Sizes that are

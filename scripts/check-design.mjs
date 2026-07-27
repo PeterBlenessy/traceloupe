@@ -24,9 +24,21 @@
  * Exits non-zero and names every offender.
  */
 import { chromium } from "@playwright/test";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 const BASE = process.env.BASE || "http://localhost:1420";
-const VIEWS = ["Messages", "Notes", "Safety", "Photos", "Contacts"];
+/**
+ * Every view, because a rule that only holds where someone remembered to look is
+ * not a rule. The deep states (hover / search / filter) are expensive, so they
+ * run on the views that have the most toolbar surface; every other view still
+ * gets its idle sweep in both colour schemes.
+ */
+const VIEWS = [
+  "Photos", "Messages", "Contacts", "Calls", "Safari", "Notes", "Recordings",
+  "Calendar", "Reminders", "Health", "Interactions", "Apps", "Security", "Safety",
+];
+const DEEP = new Set(["Messages", "Notes", "Safety", "Contacts", "Photos"]);
 
 /** The type ramp, in px at scale 1 — macOS's text styles (see index.css). */
 const RAMP = [10, 11, 12, 13, 15, 17, 22, 26];
@@ -50,6 +62,68 @@ const FITTED_TYPE = [
 const near = (a, b) => Math.abs(a - b) <= 0.6;
 const failures = [];
 const fail = (rule, state, msg) => failures.push(`[${rule}] ${state}: ${msg}`);
+
+
+// ---------------------------------------------------------------------------
+// Static pass: the source, not the render.
+//
+// The runtime rules can only judge what is on screen. A button in a view nobody
+// visited, behind an error state, or in a dialog that never opened is invisible
+// to them — and that is exactly where a literal survives. So before the browser
+// starts, read the source and reject size or colour literals written onto a
+// CONTROL. Scoped to controls on purpose: `size-10` on an avatar is fitted to
+// the avatar, and flagging it would bury the signal in noise.
+// ---------------------------------------------------------------------------
+const CONTROL_ELEMENTS = /<(Button|button|Input|input|Select|SelectTrigger|ToggleGroupItem|Toggle)\b/g;
+// A control height literal — `h-9`, `size-8`, `h-[36px]`. Small `size-*` values
+// are icon sizes and legitimate.
+const SIZE_LITERAL = /(?<![\w:-])(?:h|size|min-h)-(?:6|7|8|9|10|11|12|14)\b|(?<![\w:-])(?:h|size)-\[[^\]]*(?:px|rem)[^\]]*\]/g;
+const PALETTE_LITERAL = /(?<![\w:-])(?:text|bg|border|ring|fill)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b/g;
+
+const walk = (dir) =>
+  readdirSync(dir).flatMap((e) => {
+    const p = join(dir, e);
+    return statSync(p).isDirectory() ? walk(p) : p.endsWith(".tsx") ? [p] : [];
+  });
+
+const staticPass = () => {
+  for (const file of walk("src")) {
+    let src = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")   // prose about sizes is not code
+      .replace(/^\s*\/\/.*$/gm, "");
+    for (const m of src.matchAll(CONTROL_ELEMENTS)) {
+      let i = m.index + m[0].length, depth = 0;
+      while (i < src.length && !(src[i] === ">" && depth === 0)) {
+        if (src[i] === "{") depth++;
+        else if (src[i] === "}") depth--;
+        i++;
+      }
+      const tag = src.slice(m.index, i);
+      const line = src.slice(0, m.index).split("\n").length;
+      for (const [re, kind] of [[SIZE_LITERAL, "size"], [PALETTE_LITERAL, "colour"]]) {
+        for (const hit of tag.matchAll(re)) {
+          fail(kind === "size" ? "control" : "type", "source",
+            `${file}:${line} writes \`${hit[0]}\` on <${m[1]}> — take it from a token` +
+            ` (--control-h*, --island-h, --status-*)`);
+        }
+      }
+    }
+  }
+};
+
+// Prove the static detector fires, for the same reason the runtime ones do.
+{
+  const before = failures.length;
+  const probe = "<Button className=\"h-9 text-emerald-500\">x</Button>";
+  for (const [re, kind] of [[SIZE_LITERAL, "size"], [PALETTE_LITERAL, "colour"]]) {
+    if (![...probe.matchAll(re)].length) {
+      console.error(`design lint SELF-TEST failed: the static ${kind} matcher did not fire on ${probe}`);
+      process.exit(2);
+    }
+  }
+  failures.length = before;
+}
+staticPass();
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({
@@ -97,7 +171,16 @@ const probe = () =>
     }
 
     const islands = [];
-    for (const el of document.querySelectorAll("div")) {
+    // Only inside a toolbar or a card header. The same rounded-bordered-muted
+    // look is used for CONTENT chips too (the Interactions channel strip), and
+    // those size to their content — judging them against the island height
+    // reports the app as broken when it is the detector that is wrong.
+    const islandScopes = [
+      ...document.querySelectorAll("[data-tauri-drag-region]"),
+      ...document.querySelectorAll('[data-slot="card-header"]'),
+    ];
+    for (const scope of islandScopes)
+    for (const el of scope.querySelectorAll("div")) {
       const cls = (el.className || "").toString();
       if (!/rounded-lg/.test(cls) || !/border/.test(cls) || !/bg-muted/.test(cls)) continue;
       if (!visible(el)) continue;
@@ -183,7 +266,13 @@ const check = async (state, scale) => {
  */
 const selfTest = async () => {
   await page.evaluate(() => {
-    const card = document.querySelector('[data-slot="card"]') || document.body;
+    // Inject where each rule actually looks: the island rule only scans toolbars
+    // and card headers, so a violation planted anywhere else would not be seen —
+    // and the self-test would then be testing nothing.
+    const card =
+      document.querySelector('[data-slot="card-header"]') ||
+      document.querySelector("[data-tauri-drag-region]") ||
+      document.body;
     const host = document.createElement("div");
     host.id = "__design_lint_selftest";
     host.style.cssText = "position:relative;height:80px";
@@ -231,45 +320,61 @@ await selfTest();
 
 for (const view of VIEWS) {
   await page.getByText(view, { exact: true }).first().click().catch(() => {});
-  await page.waitForTimeout(1200);
+  await page.waitForTimeout(900);
   const dismiss = page.getByRole("button", { name: /^Got it$/ });
-  if (await dismiss.count()) { await dismiss.first().click().catch(() => {}); await page.waitForTimeout(300); }
+  if (await dismiss.count()) { await dismiss.first().click().catch(() => {}); await page.waitForTimeout(250); }
 
   await check(view, 1);
+  if (!DEEP.has(view)) continue;
 
-  // Hovered — where actions appear and can land on something.
+  // Hovered — where row actions appear and can land on something (#92).
   const row = page.locator('[data-slot="list-row"], [role="button"][aria-current]').first();
   if (await row.count()) {
     await row.hover().catch(() => {});
-    await page.waitForTimeout(400);
+    await page.waitForTimeout(350);
     await check(`${view}+hover`, 1);
   }
 
-  // Search expanded, and a filter applied.
   const search = page.getByRole("button", { name: /search/i }).first();
   if (await search.count()) {
     await search.click().catch(() => {});
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(450);
     await check(`${view}+search`, 1);
     await page.keyboard.press("Escape").catch(() => {});
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(250);
   }
+
   const funnel = page.getByRole("button", { name: "Filter" }).first();
   if (await funnel.count()) {
     await funnel.click().catch(() => {});
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(450);
     const opt = page.getByRole("button", { name: /iMessage|SMS|With photos|Serious|Harmful|Folders/i }).first();
     if (await opt.count()) {
       await opt.click().catch(() => {});
-      await page.waitForTimeout(600);
-      await page.keyboard.press("Escape").catch(() => {});
       await page.waitForTimeout(500);
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(400);
       await check(`${view}+filter`, 1);
     } else {
       await page.keyboard.press("Escape").catch(() => {});
     }
   }
 }
+
+// Settings is a dialog, so nothing above ever opens it — and it is dense with
+// controls, which is precisely where an off-scale one hides.
+await page.getByText("Settings", { exact: true }).first().click().catch(() => {});
+await page.waitForTimeout(1000);
+for (const tab of ["General", "Media", "Apps", "Security", "Safety", "Developer"]) {
+  const t = page.getByRole("tab", { name: tab }).first();
+  if (await t.count()) {
+    await t.click().catch(() => {});
+    await page.waitForTimeout(350);
+    await check(`Settings/${tab}`, 1);
+  }
+}
+await page.keyboard.press("Escape").catch(() => {});
+await page.waitForTimeout(400);
 
 // The extremes of the text-size control: the ramp scales, the frame does not.
 for (const [size, scale] of [["xs", 0.85], ["xl", 1.2]]) {
