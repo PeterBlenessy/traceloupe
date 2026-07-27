@@ -13,6 +13,15 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.25] — 2026-07-27
+
+### Fixed
+
+- **Reloading the app no longer puts a keyboard highlight on the sidebar
+  toggle.** The app moves focus to that button when you collapse or expand the
+  sidebar from the keyboard, so it doesn't get lost — but it couldn't tell that
+  apart from the app simply starting up.
+
 ## [0.31.24] — 2026-07-27
 
 ### Changed
