@@ -13,6 +13,59 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.32.0] — 2026-07-27
+
+**TraceLoupe follows your Mac instead of approximating it** — text, colour,
+motion, contrast and keyboard behaviour all come from your system settings and
+change the moment you do, and the app no longer slows to a crawl on a large
+backup.
+
+### Added
+
+- **Eleven macOS settings are followed, live.** Accent and selection colour,
+  light/dark, text size, keyboard navigation, reduce motion, reduce
+  transparency, increase contrast, differentiate without colour, sidebar icon
+  size and scroll bars — each applied the moment you change it, rather than the
+  next time the app is clicked into. Changing your region re-formats dates and
+  times immediately too.
+- **The macOS Text Size setting works** (System Settings → Accessibility →
+  Display). macOS doesn't hand that setting to apps built like this one, so
+  TraceLoupe reads it and applies it — and unlike the in-app A+/− buttons, which
+  resize what you're reading, it enlarges the toolbar and sidebar as well.
+- **Arrow-key navigation in lists.** Tab reaches a list, then ↑/↓ move the
+  selection and Home/End jump to the ends.
+
+### Changed
+
+- **Text and colour come from macOS.** Sizes follow the system's own text styles
+  rather than a web scale — the app's body text had been sitting a step larger
+  than every native window beside it — and text and status colours use the
+  platform's, so they match other Mac apps and follow "Increase contrast".
+- **Controls match native macOS**: buttons, fields and dropdowns at native
+  height with tighter corners, one shared scale so a button can never be a
+  different height than the field beside it.
+- **Keyboard focus follows your Mac's setting** instead of stopping at every
+  button and row.
+
+### Fixed
+
+- **Large scans stay fast.** The findings list is filtered, sorted and fetched a
+  screenful at a time instead of handing the whole list to the interface — it
+  used to send several megabytes on every change. Scan history, security runs
+  and security findings render only the rows on screen, so a long history can no
+  longer freeze the app.
+- **Findings survive a re-import**, keeping their link to the message or note
+  they came from.
+- **Progress is honest**: bars report in order, a re-scan says how many findings
+  it actually made rather than counting earlier ones, and a failed model
+  download says so.
+- **Safety Scan reads messages sent with an attachment**, which were being
+  skipped entirely — text and all.
+- **Accessibility and polish**: every control in Settings is named for screen
+  readers, dialog titles no longer clip at larger text sizes, the search box
+  shows a focus ring when tabbed to, and severity is readable without relying on
+  colour.
+
 ## [0.31.27] — 2026-07-27
 
 ### Added
