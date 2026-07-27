@@ -72,6 +72,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # Measure the UI instead of trusting that it looked fine. Every visual bug
+      # this project shipped was reviewed in a screenshot and accepted, so this
+      # reads computed geometry across five views in the states an idle
+      # screenshot never shows — hovered, filtered, search open, both text
+      # extremes. It self-tests its own detectors first, so a rule that quietly
+      # stops matching fails instead of reporting OK forever.
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Design lint
+        run: |
+          pnpm exec vite --port 1420 --strictPort &
+          npx wait-on http://localhost:1420 -t 60000
+          node scripts/check-design.mjs
       # Stage the llama-server sidecar so `bundle.externalBin` resolves — Tauri
       # validates it at cargo-check time. The binary is git-ignored (see
       # docs/reference/safety-scan-sidecar.md); the fast pre-built download satisfies the
