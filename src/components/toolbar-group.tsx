@@ -26,7 +26,7 @@ export function ToolbarGroup({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-2 rounded-lg border border-border/70 bg-muted/40 p-0.5",
+        "inline-flex h-(--island-h) items-center gap-2 rounded-lg border border-border/70 bg-muted/40 px-0.5",
         className,
       )}
     >

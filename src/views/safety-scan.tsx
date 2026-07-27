@@ -9,7 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ExternalLink, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ChartColumn, ExternalLink, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,12 +62,14 @@ import {
   type ContentCategory,
   type ContentFinding,
   type ContentFindingCounts,
+  type FindingAnalytics,
   type SafetyScanHistoryItem,
   type SafetyScanReport,
   type TimeRange,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
+import { FindingCharts } from "@/components/safety-charts";
 
 const CATEGORY_LABEL: Record<ContentCategory, string> = {
   "threat-violence": "Threats & violence",
@@ -80,6 +82,29 @@ const CATEGORY_LABEL: Record<ContentCategory, string> = {
   "scam-fraud": "Scams & fraud",
   "drugs-illegal": "Drugs & illegal activity",
 };
+
+/** Thread identifier → the name a reader recognises (group title, contact name,
+ *  or the raw handle when nothing resolves). Shared by the report's per-
+ *  conversation sections and its charts, so a bar and the block below it can
+ *  never disagree about whose conversation it is. */
+function useThreadLabel(): (identifier: string) => string {
+  const resolve = useContactResolver();
+  const { data: threads } = useQuery({
+    queryKey: ["threads"],
+    queryFn: () => client.listThreads(),
+  });
+  const threadByIdent = useMemo(
+    () => new Map((threads ?? []).map((t) => [t.identifier, t])),
+    [threads],
+  );
+  return (identifier: string): string => {
+    const t = threadByIdent.get(identifier);
+    if (!t) return resolve(identifier)?.name ?? identifier;
+    if (t.displayName) return resolve(t.displayName)?.name ?? t.displayName;
+    const first = t.participants[0];
+    return first ? (resolve(first)?.name ?? first) : identifier;
+  };
+}
 
 const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   3: {
@@ -1229,6 +1254,7 @@ function SafetyReportDocument({
   report,
   findings,
   liveTotal,
+  analytics,
 }: {
   scan: SafetyScanHistoryItem;
   report: SafetyScanReport | undefined;
@@ -1237,24 +1263,11 @@ function SafetyReportDocument({
   /** Every live, non-stale finding in scope — the denominator for the
    *  "N more not shown" line, which used to come from the array's length. */
   liveTotal: number;
+  /** The charts' numbers, counted over ALL of them — see [`FindingCharts`]. */
+  analytics: FindingAnalytics | undefined;
 }) {
-  const resolve = useContactResolver();
   const { showCascadeConfidence, includeReportSnippets } = useSettings();
-  const { data: threads } = useQuery({
-    queryKey: ["threads"],
-    queryFn: () => client.listThreads(),
-  });
-  const threadByIdent = useMemo(
-    () => new Map((threads ?? []).map((t) => [t.identifier, t])),
-    [threads],
-  );
-  const labelOf = (identifier: string): string => {
-    const t = threadByIdent.get(identifier);
-    if (!t) return resolve(identifier)?.name ?? identifier;
-    if (t.displayName) return resolve(t.displayName)?.name ?? t.displayName;
-    const first = t.participants[0];
-    return first ? (resolve(first)?.name ?? first) : identifier;
-  };
+  const labelOf = useThreadLabel();
   // The page arrives capped, dismissed- and stale-filtered, severity-ordered.
   const live = findings;
   const omittedFromReport = Math.max(0, liveTotal - live.length);
@@ -1279,8 +1292,14 @@ function SafetyReportDocument({
   }
   const groups = groupReportFindings(live, labelOf);
   const summaryByIdent = new Map(report?.threadSummaries ?? []);
-  const catCounts = new Map<ContentCategory, number>();
-  for (const f of live) catCounts.set(f.category, (catCounts.get(f.category) ?? 0) + 1);
+
+  /** How many of one severity the charts describe — summed across the category
+   *  buckets, so it is the same number the bars add up to. */
+  const severityTotal = (s: 1 | 2 | 3): number | undefined =>
+    analytics?.byCategory.reduce(
+      (n, b) => n + b.confirmed[s - 1] + b.unconfirmed[s - 1],
+      0,
+    );
 
   const sev = (n: number) =>
     n === 3
@@ -1310,14 +1329,19 @@ function SafetyReportDocument({
         </p>
       </header>
 
-      {/* Totals */}
+      {/* Totals. All four from ONE population: the report excludes dismissed AND
+          stale findings, but the severity split used to come off the scan row,
+          which only excludes dismissed. With any stale finding in scope the
+          three tiers then added up to more than the total printed beside them.
+          The analytics counts carry the report's own filter, so they agree by
+          construction; the scan row is only the fallback while they load. */}
       <section className="grid grid-cols-4 gap-3 text-center">
         {(
           [
-            ["Findings", liveTotal, ""],
-            ["Serious", scan.serious, sev(3)],
-            ["Harmful", scan.harmful, sev(2)],
-            ["Concerning", scan.concerning, sev(1)],
+            ["Findings", analytics?.charted ?? liveTotal, ""],
+            ["Serious", severityTotal(3) ?? scan.serious, sev(3)],
+            ["Harmful", severityTotal(2) ?? scan.harmful, sev(2)],
+            ["Concerning", severityTotal(1) ?? scan.concerning, sev(1)],
           ] as [string, number, string][]
         ).map(([label, n, cls]) => (
           <div key={label} className="rounded-lg border p-3">
@@ -1326,18 +1350,6 @@ function SafetyReportDocument({
           </div>
         ))}
       </section>
-
-      {catCounts.size > 0 && (
-        <section className="flex flex-wrap gap-1.5">
-          {[...catCounts.entries()]
-            .sort((a, b) => b[1] - a[1])
-            .map(([cat, n]) => (
-              <Badge key={cat} variant="outline">
-                {CATEGORY_LABEL[cat]} · {n}
-              </Badge>
-            ))}
-        </section>
-      )}
 
       {/* Narrative */}
       <section className="space-y-2">
@@ -1359,6 +1371,19 @@ function SafetyReportDocument({
           </p>
         )}
       </section>
+
+      {/* Analysis. Above the per-conversation blocks because it is the part a
+          reader can take in at a glance — and because its numbers come from
+          every finding, while the blocks below are the capped list. */}
+      {analytics && (
+        <FindingCharts
+          analytics={analytics}
+          categoryLabel={(slug) =>
+            CATEGORY_LABEL[slug as ContentCategory] ?? slug
+          }
+          conversationLabel={labelOf}
+        />
+      )}
 
       {/* Per conversation */}
       {omittedFromReport > 0 && (
@@ -1486,7 +1511,19 @@ function SafetyReportDialog({
     queryKey: ["safetyScan", "findingCounts", scan.id],
     queryFn: () => client.countContentFindings(scan.id),
   });
-  const loading = report.isPending || findings.isPending;
+  // Counted over EVERY finding in scope, with the same filter the list above
+  // uses — the charts must not describe the capped page (#66).
+  const analytics = useQuery({
+    queryKey: ["safetyScan", "analytics", "report", scan.id],
+    queryFn: () =>
+      client.contentFindingAnalytics(scan.id, {
+        includeDismissed: false,
+        excludeStale: true,
+      }),
+  });
+  // The charts are part of the printable document, so Export must wait for them
+  // too — a PDF with a hole where the analysis goes is worse than a slow one.
+  const loading = report.isPending || findings.isPending || analytics.isPending;
   return (
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[85vh] flex-col gap-0 p-0 sm:max-w-2xl">
@@ -1518,6 +1555,7 @@ function SafetyReportDialog({
               report={report.data}
               findings={findings.data ?? []}
               liveTotal={counts.data?.liveFresh ?? findings.data?.length ?? 0}
+              analytics={analytics.data}
             />
           )}
         </div>
@@ -1770,6 +1808,26 @@ function FindingsList({
   const total = matching.data?.matching ?? 0;
   const dismissedCount = counts?.dismissed ?? 0;
 
+  // The same charts the report prints, over the panel's CURRENT filter — the
+  // aggregates share the page query's scope predicate, so narrowing to Serious
+  // narrows the bars and the rows together (#66). Note `excludeStale` is false
+  // here and true in the report: the panel keeps stale findings, so its charts
+  // must too, or a bar would count rows the list below does not show.
+  const [showCharts, setShowCharts] = usePersistedState(
+    "safety-scan:show-analysis",
+    false,
+  );
+  const analytics = useQuery({
+    queryKey: ["safetyScan", "analytics", scan.id, page.severity, page.includeDismissed],
+    queryFn: () =>
+      client.contentFindingAnalytics(scan.id, {
+        severity: page.severity,
+        includeDismissed: page.includeDismissed,
+      }),
+    enabled: showCharts,
+  });
+  const threadLabel = useThreadLabel();
+
   if ((counts?.live ?? 0) === 0 && dismissedCount === 0) return null;
   return (
     <Card className="flex min-h-0 flex-1 flex-col">
@@ -1811,6 +1869,28 @@ function FindingsList({
               value={sort}
               onChange={setSort}
             />
+            {/* Its own island rather than an item in the view-mode group: this
+                reveals a section, it doesn't change how rows are listed. Same
+                ToggleGroup shell so its height matches the islands beside it. */}
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              value={showCharts ? "charts" : ""}
+              onValueChange={(v) => setShowCharts(v === "charts")}
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <ToggleGroupItem value="charts" aria-label="Show analysis">
+                    <ChartColumn className="size-4" />
+                  </ToggleGroupItem>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Charts of when, what and where — counted over every finding the
+                  current filter matches
+                </TooltipContent>
+              </Tooltip>
+            </ToggleGroup>
             <ToggleGroup
               type="single"
               variant="outline"
@@ -1854,6 +1934,21 @@ function FindingsList({
         )}
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-2">
+        {showCharts && analytics.data && (
+          // shrink-0 so the charts keep their height and the list takes what is
+          // left; the list is the scrolling part, and two nested scrollbars
+          // would be worse than a shorter list.
+          <div className="shrink-0 border-b pb-3">
+            <FindingCharts
+              variant="panel"
+              analytics={analytics.data}
+              categoryLabel={(slug) =>
+                CATEGORY_LABEL[slug as ContentCategory] ?? slug
+              }
+              conversationLabel={threadLabel}
+            />
+          </div>
+        )}
         {/* Virtualized (#61): only on-screen rows are mounted, so 8000+ findings
             cost the same as 20. Bounded height because this list lives inside a
             card on a scrolling page — VirtualList needs a scroll container of

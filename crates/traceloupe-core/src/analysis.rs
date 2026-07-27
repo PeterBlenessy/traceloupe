@@ -101,6 +101,120 @@ pub struct FindingCounts {
     pub concerning: i64,
 }
 
+/// How many conversations the by-conversation chart draws before folding the
+/// rest into a stated remainder.
+pub const CONVERSATION_CHART_CAP: usize = 12;
+
+/// How the report's time chart buckets its x-axis.
+///
+/// Chosen from the span the findings cover rather than fixed, so a two-week scan
+/// and a ten-year one both produce roughly 10–30 bars. The axis names the unit,
+/// because "Findings by month" and "Findings by day" are different claims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeUnit {
+    Day,
+    Week,
+    /// What an empty or single-instant scan falls back to.
+    #[default]
+    Month,
+    Quarter,
+    Year,
+}
+
+impl TimeUnit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeUnit::Day => "day",
+            TimeUnit::Week => "week",
+            TimeUnit::Month => "month",
+            TimeUnit::Quarter => "quarter",
+            TimeUnit::Year => "year",
+        }
+    }
+
+    /// The coarsest unit that still shows the shape of a span this long.
+    fn for_span(seconds: i64) -> TimeUnit {
+        const DAY: i64 = 86_400;
+        match seconds {
+            s if s <= 31 * DAY => TimeUnit::Day,
+            s if s <= 210 * DAY => TimeUnit::Week,
+            s if s <= 1095 * DAY => TimeUnit::Month,
+            s if s <= 3650 * DAY => TimeUnit::Quarter,
+            _ => TimeUnit::Year,
+        }
+    }
+
+    /// SQLite expression yielding this unit's bucket key.
+    ///
+    /// Bucketed by the LOCAL calendar (`localtime`) — a message sent at 23:30 on
+    /// the 31st belongs to that month as the reader lived it, not as UTC files
+    /// it. The keys are `YYYY-MM-DD` (day, and a week's Monday), `YYYY-MM`,
+    /// `YYYY-Qn` and `YYYY`; the view formats them for the locale, so no
+    /// timestamp is re-interpreted in a second time zone on the way out.
+    fn key_expr(self) -> &'static str {
+        match self {
+            TimeUnit::Day => "date(f.occurred_at, 'unixepoch', 'localtime')",
+            // 'weekday 0' lands on the coming Sunday (or stays put on one), so
+            // -6 days is that week's Monday — including when the finding itself
+            // falls on a Monday.
+            TimeUnit::Week => {
+                "date(f.occurred_at, 'unixepoch', 'localtime', 'weekday 0', '-6 days')"
+            }
+            TimeUnit::Month => "strftime('%Y-%m', f.occurred_at, 'unixepoch', 'localtime')",
+            TimeUnit::Quarter => {
+                "strftime('%Y', f.occurred_at, 'unixepoch', 'localtime') || '-Q' ||
+                 ((CAST(strftime('%m', f.occurred_at, 'unixepoch', 'localtime') AS INTEGER) + 2) / 3)"
+            }
+            TimeUnit::Year => "strftime('%Y', f.occurred_at, 'unixepoch', 'localtime')",
+        }
+    }
+}
+
+/// One bar of one chart, split two ways.
+///
+/// `confirmed[i]` and `unconfirmed[i]` are severity `i + 1` — index 0 is
+/// concerning, 2 is serious. Confirmed means the cascade's strong tier agreed
+/// with the sweep; unconfirmed means only the fast tier ever saw it, and the
+/// chart hatches that portion rather than letting it borrow the same authority.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChartBucket {
+    /// The bucket's identity: a date key, a category slug, or a thread
+    /// identifier. Empty means "findings with no conversation" — notes.
+    pub key: String,
+    pub confirmed: [i64; 3],
+    pub unconfirmed: [i64; 3],
+}
+
+impl ChartBucket {
+    pub fn total(&self) -> i64 {
+        self.confirmed.iter().chain(&self.unconfirmed).sum()
+    }
+}
+
+/// Everything the report's charts draw, from one pass over the findings.
+#[derive(Debug, Clone, Default)]
+pub struct FindingAnalytics {
+    /// What one bar of [`Self::over_time`] spans.
+    pub unit: TimeUnit,
+    /// Only the buckets that have findings — a run of empty months is a gap the
+    /// view fills, so an absence of data can't arrive as an absence of bars.
+    pub over_time: Vec<ChartBucket>,
+    pub by_category: Vec<ChartBucket>,
+    /// The busiest conversations, most findings first, capped at
+    /// [`CONVERSATION_CHART_CAP`].
+    pub by_conversation: Vec<ChartBucket>,
+    /// Conversations past the cap, and their findings — stated, never dropped.
+    pub other_conversations: i64,
+    pub other_conversation_findings: i64,
+    /// How many findings the charts describe, under the caller's filter.
+    pub charted: i64,
+    /// In scope but undated, so absent from [`Self::over_time`].
+    pub undated: i64,
+    /// Dismissed as false positives — excluded from every chart, reported so the
+    /// reader can see how much the model got wrong.
+    pub dismissed: i64,
+}
+
 const DISMISSED_EXPR: &str = "EXISTS(SELECT 1 FROM dismissals d
                 WHERE d.fingerprint = f.fingerprint AND d.category = f.category)";
 
@@ -836,6 +950,149 @@ impl AnalysisDb {
             params![sources, range_start, range_end],
             |r| r.get::<_, i64>(0),
         )? as usize)
+    }
+
+    /// The report's charts, counted in SQL over EVERY finding the filter matches
+    /// (#66).
+    ///
+    /// The rendered list is capped — 500 rows in the panel, 100 in the narrative
+    /// — and a chart built from either cap would quietly describe a subset while
+    /// looking like it described the whole scan. So the aggregates are computed
+    /// here, and from [`filtered_scope`]: the same predicate the page query uses,
+    /// so a chart can never describe a different population than the list beneath
+    /// it.
+    ///
+    /// Every bar carries its severity split AND its confirmation split. The
+    /// cascade re-checks only some findings with the strong tier, so a bar's
+    /// unconfirmed portion is drawn hatched — a scan run without the cascade then
+    /// *looks* less certain instead of being silently so.
+    pub fn finding_analytics(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+        q: &FindingQuery,
+    ) -> Result<FindingAnalytics> {
+        let scope = filtered_scope(q);
+
+        // The bucket unit comes from the span the findings actually cover, so a
+        // three-week scan and a ten-year one both produce a readable axis.
+        // Undated findings are counted here and excluded from the time chart:
+        // they cannot be placed on an axis, and dropping them silently would
+        // leave the chart's total disagreeing with the list's.
+        let (min_at, max_at, undated, charted) = self.conn.query_row(
+            &format!(
+                "SELECT MIN(f.occurred_at), MAX(f.occurred_at),
+                        COUNT(*) FILTER (WHERE f.occurred_at IS NULL),
+                        COUNT(*)
+                 FROM content_findings f WHERE {scope}"
+            ),
+            params![sources, range_start, range_end],
+            |r| {
+                Ok((
+                    r.get::<_, Option<i64>>(0)?,
+                    r.get::<_, Option<i64>>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            },
+        )?;
+        let unit = match (min_at, max_at) {
+            (Some(a), Some(b)) => TimeUnit::for_span(b - a),
+            // Nothing dated to measure; the axis is empty either way.
+            _ => TimeUnit::Month,
+        };
+
+        let over_time = self.bucket_counts(
+            &format!("({scope}) AND f.occurred_at IS NOT NULL"),
+            unit.key_expr(),
+            "ORDER BY k",
+            params![sources, range_start, range_end],
+        )?;
+        let by_category = self.bucket_counts(
+            &scope,
+            "f.category",
+            "ORDER BY total DESC, k",
+            params![sources, range_start, range_end],
+        )?;
+        // Notes have no thread; they gather under one empty key, which the view
+        // labels, rather than one bar per note.
+        let mut by_conversation = self.bucket_counts(
+            &scope,
+            "COALESCE(f.thread_identifier, '')",
+            "ORDER BY total DESC, k",
+            params![sources, range_start, range_end],
+        )?;
+
+        // A scan can touch hundreds of conversations. The chart shows the busiest
+        // and folds the rest into a stated remainder — an unbounded bar chart is
+        // an unbounded payload, and neither is readable.
+        let mut other_conversations = 0;
+        let mut other_conversation_findings = 0;
+        if by_conversation.len() > CONVERSATION_CHART_CAP {
+            for b in by_conversation.split_off(CONVERSATION_CHART_CAP) {
+                other_conversations += 1;
+                other_conversation_findings += b.total();
+            }
+        }
+
+        // Dismissed is reported whatever the current filter is: the charts leave
+        // false positives out, and the count is how the report says so.
+        let dismissed = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM content_findings f
+                 WHERE ({IN_SCOPE_PREDICATE}) AND {DISMISSED_EXPR}"
+            ),
+            params![sources, range_start, range_end],
+            |r| r.get::<_, i64>(0),
+        )?;
+
+        Ok(FindingAnalytics {
+            unit,
+            over_time,
+            by_category,
+            by_conversation,
+            other_conversations,
+            other_conversation_findings,
+            charted,
+            undated,
+            dismissed,
+        })
+    }
+
+    /// One grouped count query, parameterised by what makes a bucket. Every chart
+    /// shares it, so the severity and confirmation splits cannot mean one thing
+    /// on the time axis and another by category.
+    fn bucket_counts(
+        &self,
+        where_clause: &str,
+        key_expr: &str,
+        tail: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<Vec<ChartBucket>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {key_expr} AS k,
+                    COUNT(*) FILTER (WHERE f.severity = 1 AND f.rechecked),
+                    COUNT(*) FILTER (WHERE f.severity = 2 AND f.rechecked),
+                    COUNT(*) FILTER (WHERE f.severity = 3 AND f.rechecked),
+                    COUNT(*) FILTER (WHERE f.severity = 1 AND NOT f.rechecked),
+                    COUNT(*) FILTER (WHERE f.severity = 2 AND NOT f.rechecked),
+                    COUNT(*) FILTER (WHERE f.severity = 3 AND NOT f.rechecked),
+                    COUNT(*) AS total
+             FROM content_findings f
+             WHERE {where_clause}
+             GROUP BY k
+             {tail}"
+        ))?;
+        let rows = stmt.query_map(params, |r| {
+            Ok(ChartBucket {
+                key: r.get(0)?,
+                confirmed: [r.get(1)?, r.get(2)?, r.get(3)?],
+                unconfirmed: [r.get(4)?, r.get(5)?, r.get(6)?],
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
     }
 
     /// Shared body for the finding-list queries: the same SELECT + severity-desc
@@ -2010,5 +2267,244 @@ mod tests {
             )
             .unwrap();
         assert_eq!(kept_audit, 1);
+    }
+
+    // ---- report charts (#66) -------------------------------------------------
+
+    /// Seed findings at chosen instants, one per timestamp.
+    fn dated(db: &mut AnalysisDb, scan: i64, at: &[Option<i64>]) {
+        let rows: Vec<NewFinding> = at
+            .iter()
+            .enumerate()
+            .map(|(i, t)| NewFinding {
+                occurred_at: *t,
+                fingerprint: format!("t{i:05}"),
+                ..finding(&format!("t{i:05}"), Category::ScamFraud)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 1).unwrap();
+    }
+
+    /// 2024-03-11 is a Monday; 2024-03-17 the Sunday that closes its week.
+    const MON_2024_03_11: i64 = 1_710_115_200;
+    const DAY: i64 = 86_400;
+
+    #[test]
+    fn charts_count_every_finding_not_the_page_the_report_renders() {
+        // The trap #66 names: the panel renders at most 500 rows and the
+        // narrative at most 100. A chart built from either would describe a
+        // subset while looking like it described the scan.
+        let db = seeded_findings(600);
+        let q = FindingQuery::default();
+        let page = db
+            .list_findings_in_scope_page("all", None, None, &q, 0, 500)
+            .unwrap();
+        let a = db.finding_analytics("all", None, None, &q).unwrap();
+
+        assert_eq!(page.len(), 500, "page is capped");
+        assert_eq!(a.charted, 600, "charts are not");
+        let by_cat: i64 = a.by_category.iter().map(|b| b.total()).sum();
+        let by_conv: i64 = a.by_conversation.iter().map(|b| b.total()).sum();
+        let over_time: i64 = a.over_time.iter().map(|b| b.total()).sum();
+        assert_eq!(by_cat, 600);
+        assert_eq!(by_conv + a.other_conversation_findings, 600);
+        assert_eq!(over_time, 600 - a.undated);
+    }
+
+    #[test]
+    fn the_bucket_unit_follows_the_span_the_findings_cover() {
+        for (span_days, want, bars) in [
+            (10_i64, TimeUnit::Day, 11_usize),
+            (120, TimeUnit::Week, 18),
+            (900, TimeUnit::Month, 31),
+            (2500, TimeUnit::Quarter, 28),
+            (7000, TimeUnit::Year, 20),
+        ] {
+            let mut db = AnalysisDb::open_in_memory().unwrap();
+            let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+            // Twenty findings spread evenly across the span, plus its endpoint.
+            let mut at: Vec<Option<i64>> = (0..20)
+                .map(|i| Some(MON_2024_03_11 + i * span_days * DAY / 20))
+                .collect();
+            at.push(Some(MON_2024_03_11 + span_days * DAY));
+            dated(&mut db, scan, &at);
+
+            let a = db
+                .finding_analytics("all", None, None, &FindingQuery::default())
+                .unwrap();
+            assert_eq!(a.unit, want, "span of {span_days} days");
+            // The point of adapting: the axis stays readable at every range.
+            assert!(
+                a.over_time.len() <= bars,
+                "{span_days} days produced {} bars",
+                a.over_time.len()
+            );
+            assert!(!a.over_time.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_week_bucket_runs_monday_through_sunday() {
+        // `weekday 0, -6 days` is exactly the idiom that lands a week early when
+        // the finding itself falls on a Monday.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let mut at: Vec<Option<i64>> = (0..7)
+            .map(|d| Some(MON_2024_03_11 + d * DAY + 12 * 3600))
+            .collect();
+        // …and one in the following week, which must not join them.
+        at.push(Some(MON_2024_03_11 + 7 * DAY + 12 * 3600));
+        // Force week bucketing by spanning ~4 months.
+        at.push(Some(MON_2024_03_11 + 120 * DAY));
+        dated(&mut db, scan, &at);
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default())
+            .unwrap();
+        assert_eq!(a.unit, TimeUnit::Week);
+        let first = &a.over_time[0];
+        assert_eq!(first.key, "2024-03-11", "the week is keyed by its Monday");
+        assert_eq!(first.total(), 7, "Monday through Sunday, and no more");
+        assert_eq!(a.over_time[1].key, "2024-03-18");
+    }
+
+    #[test]
+    fn undated_findings_are_left_off_the_axis_and_counted_out_loud() {
+        // They cannot be placed on a timeline. Dropping them quietly would leave
+        // the chart's total disagreeing with the list's, which is how a reader
+        // learns to distrust both.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        dated(
+            &mut db,
+            scan,
+            &[
+                Some(MON_2024_03_11),
+                Some(MON_2024_03_11 + DAY),
+                None,
+                None,
+                None,
+            ],
+        );
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default())
+            .unwrap();
+        assert_eq!(a.charted, 5);
+        assert_eq!(a.undated, 3);
+        assert_eq!(a.over_time.iter().map(|b| b.total()).sum::<i64>(), 2);
+        // The other charts keep them: only the time axis can't place them.
+        assert_eq!(a.by_category.iter().map(|b| b.total()).sum::<i64>(), 5);
+    }
+
+    #[test]
+    fn every_bar_splits_confirmed_from_unconfirmed() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..6)
+            .map(|i| NewFinding {
+                severity: (i % 3 + 1) as u8,
+                occurred_at: Some(MON_2024_03_11 + i),
+                ..finding(&format!("c{i}"), Category::ThreatViolence)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 1).unwrap();
+        // The cascade confirmed the first three.
+        db.conn()
+            .execute(
+                "UPDATE content_findings SET rechecked = 1
+                 WHERE fingerprint IN ('c0','c1','c2')",
+                [],
+            )
+            .unwrap();
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default())
+            .unwrap();
+        let cat = &a.by_category[0];
+        // c0/c3 are severity 1, c1/c4 severity 2, c2/c5 severity 3 — one
+        // confirmed and one unconfirmed in each band.
+        assert_eq!(cat.confirmed, [1, 1, 1]);
+        assert_eq!(cat.unconfirmed, [1, 1, 1]);
+        assert_eq!(cat.total(), 6);
+    }
+
+    #[test]
+    fn dismissals_leave_the_charts_but_stay_in_the_disclosure() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..4)
+            .map(|i| NewFinding {
+                occurred_at: Some(MON_2024_03_11 + i),
+                ..finding(&format!("d{i}"), Category::SelfHarm)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 1).unwrap();
+        db.set_dismissed("d0", Category::SelfHarm, true, 2).unwrap();
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default())
+            .unwrap();
+        assert_eq!(a.charted, 3, "the dismissed one is not drawn");
+        assert_eq!(a.dismissed, 1, "but the report can say so");
+        assert_eq!(a.by_category[0].total(), 3);
+    }
+
+    #[test]
+    fn the_conversation_chart_is_capped_and_says_what_it_folded() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        // 20 conversations; the busiest get progressively more findings, so the
+        // ranking is unambiguous.
+        let mut rows = Vec::new();
+        for c in 0..20u32 {
+            for n in 0..=c {
+                rows.push(NewFinding {
+                    thread_identifier: Some(format!("chat{c:02}")),
+                    occurred_at: Some(MON_2024_03_11 + i64::from(n)),
+                    ..finding(&format!("k{c:02}-{n:02}"), Category::ScamFraud)
+                });
+            }
+        }
+        let total: i64 = rows.len() as i64;
+        db.replace_findings(scan, &rows, 1).unwrap();
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default())
+            .unwrap();
+        assert_eq!(a.by_conversation.len(), CONVERSATION_CHART_CAP);
+        assert_eq!(a.by_conversation[0].key, "chat19", "busiest first");
+        assert_eq!(a.other_conversations, 20 - CONVERSATION_CHART_CAP as i64);
+        // Nothing is lost between the bars and the remainder.
+        let drawn: i64 = a.by_conversation.iter().map(|b| b.total()).sum();
+        assert_eq!(drawn + a.other_conversation_findings, total);
+        assert_eq!(a.charted, total);
+    }
+
+    #[test]
+    fn charts_and_list_answer_to_the_same_filter() {
+        // filtered_scope() is shared on purpose: a chart that counted a different
+        // population than the list beneath it is #59 all over again.
+        let db = seeded_findings(90);
+        for q in [
+            FindingQuery::default(),
+            FindingQuery {
+                severity: Some(3),
+                ..Default::default()
+            },
+            FindingQuery {
+                include_dismissed: true,
+                ..Default::default()
+            },
+            FindingQuery {
+                exclude_stale: true,
+                severity: Some(1),
+                ..Default::default()
+            },
+        ] {
+            let listed = db.count_findings_matching("all", None, None, &q).unwrap();
+            let charted = db.finding_analytics("all", None, None, &q).unwrap().charted;
+            assert_eq!(listed, charted, "{q:?}");
+        }
     }
 }

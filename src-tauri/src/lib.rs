@@ -4148,6 +4148,7 @@ pub fn run() {
             safety_scan_cmd::cancel_safety_scan,
             safety_scan_cmd::list_content_findings,
             safety_scan_cmd::count_content_findings,
+            safety_scan_cmd::content_finding_analytics,
             safety_scan_cmd::subscribe_safety_scan_progress,
             safety_scan_cmd::subscribe_safety_model_progress,
             safety_scan_cmd::content_finding_snippet,
