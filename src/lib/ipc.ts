@@ -671,6 +671,11 @@ export interface ContentFindingCounts {
   concerning: number;
 }
 
+/** Which macOS setting changed. The payload is only an identifier — the value
+ *  is re-read through the same command that reads it at startup, so there is one
+ *  path rather than two that can disagree. */
+export type SystemChange = { kind: "accent" | "appearance" | "textSize" };
+
 export type SafetyScanEvent =
   | { phase: "loading" }
   | {
@@ -841,6 +846,11 @@ export interface TraceLoupeClient {
   /** The app's code-signing status — whether Touch ID / stable Keychain can work. */
   appSigningStatus(): Promise<SigningStatus>;
   /** Subscribe to backend log records (forwarded to the console). */
+  /** Notified when a macOS setting changes (accent, appearance, text size), so
+   *  the app adopts it immediately instead of at the next window focus. */
+  onSystemChange(cb: (c: SystemChange) => void): Promise<UnlistenFn>;
+  /** The accessibility text-size category as a multiplier for the type ramp. */
+  systemTextScale(): Promise<number>;
   /** Subscribe to the backend log stream over a Tauri Channel — the transport
    *  Tauri recommends for high-throughput ordered data (their event system
    *  explicitly is not). Batched and bounded backend-side. */
@@ -1296,6 +1306,8 @@ const tauriClient: TraceLoupeClient = {
   setBiometricRequired: (enabled) =>
     invoke("set_biometric_required", { enabled }),
   appSigningStatus: () => invoke<SigningStatus>("app_signing_status"),
+  onSystemChange: (cb) => subscribeStream<SystemChange>("subscribe_system_changes", cb),
+  systemTextScale: () => invoke<number>("get_system_text_scale"),
   subscribeLogs: async (cb) => {
     const channel = new Channel<LogBatch>();
     channel.onmessage = cb;
@@ -2834,6 +2846,8 @@ export const mockClient: TraceLoupeClient = {
     adhoc: false,
     identity: "Mock Identity",
   }),
+  onSystemChange: async () => () => {},
+  systemTextScale: async () => 1,
   subscribeLogs: async () => {},
   setFileLogging: async () => {},
   logFilePath: async () => "/tmp/traceloupe.log",

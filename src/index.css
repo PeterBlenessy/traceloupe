@@ -66,6 +66,13 @@
    smallest labels in the app, which are precisely the ones a user shrinking text
    cares about, would be the only ones that didn't move. */
 :root {
+  /* The macOS accessibility Text Size, as a multiplier (system_watch.rs reads
+     the category; useSystemAccent applies it). It multiplies the ramp ALONGSIDE
+     --text-scale, and the frame deliberately does NOT reset it: A+/- is a
+     reading preference for content, but someone who enlarged system text needs
+     the toolbar and sidebar legible too. */
+  --system-text-scale: 1;
+
   /* Tells WebKit which appearance to resolve system colors in. Our theme is a
      class on <html>, not the OS appearance, so without this an app set to Light
      under a Dark system would be handed dark-mode label colors — white text on
@@ -112,14 +119,14 @@
   --ramp-xl: 1.375rem;    /* 22px — title1 */
   --ramp-2xl: 1.625rem;   /* 26px — largeTitle: the device hero */
 
-  --text-3xs: calc(var(--ramp-3xs) * var(--text-scale));
-  --text-2xs: calc(var(--ramp-2xs) * var(--text-scale));
-  --text-xs: calc(var(--ramp-xs) * var(--text-scale));
-  --text-sm: calc(var(--ramp-sm) * var(--text-scale));
-  --text-base: calc(var(--ramp-base) * var(--text-scale));
-  --text-lg: calc(var(--ramp-lg) * var(--text-scale));
-  --text-xl: calc(var(--ramp-xl) * var(--text-scale));
-  --text-2xl: calc(var(--ramp-2xl) * var(--text-scale));
+  --text-3xs: calc(var(--ramp-3xs) * var(--text-scale) * var(--system-text-scale));
+  --text-2xs: calc(var(--ramp-2xs) * var(--text-scale) * var(--system-text-scale));
+  --text-xs: calc(var(--ramp-xs) * var(--text-scale) * var(--system-text-scale));
+  --text-sm: calc(var(--ramp-sm) * var(--text-scale) * var(--system-text-scale));
+  --text-base: calc(var(--ramp-base) * var(--text-scale) * var(--system-text-scale));
+  --text-lg: calc(var(--ramp-lg) * var(--text-scale) * var(--system-text-scale));
+  --text-xl: calc(var(--ramp-xl) * var(--text-scale) * var(--system-text-scale));
+  --text-2xl: calc(var(--ramp-2xl) * var(--text-scale) * var(--system-text-scale));
 }
 
 /* Control geometry — ONE scale for every inline control (buttons, inputs,
@@ -143,10 +150,10 @@
   --ramp-control: 1.75rem;                             /* 28px — native default */
   --ramp-control-lg: 2rem;                             /* 32px */
 
-  --control-h-xs: calc(var(--ramp-control-xs) * var(--text-scale));
-  --control-h-sm: calc(var(--ramp-control-sm) * var(--text-scale));
-  --control-h: calc(var(--ramp-control) * var(--text-scale));
-  --control-h-lg: calc(var(--ramp-control-lg) * var(--text-scale));
+  --control-h-xs: calc(var(--ramp-control-xs) * var(--text-scale) * var(--system-text-scale));
+  --control-h-sm: calc(var(--ramp-control-sm) * var(--text-scale) * var(--system-text-scale));
+  --control-h: calc(var(--ramp-control) * var(--text-scale) * var(--system-text-scale));
+  --control-h-lg: calc(var(--ramp-control-lg) * var(--text-scale) * var(--system-text-scale));
   /* A toolbar island: one segment tall, plus its p-0.5 padding and 1px border.
      Derived, so it can't drift from the segment size — and declared in BOTH
      blocks because a custom property bakes in the scale where it is declared. */
@@ -186,19 +193,19 @@
 [data-text-scale="fixed"] {
   --text-scale: 1;
 
-  --text-3xs: calc(var(--ramp-3xs) * var(--text-scale));
-  --text-2xs: calc(var(--ramp-2xs) * var(--text-scale));
-  --text-xs: calc(var(--ramp-xs) * var(--text-scale));
-  --text-sm: calc(var(--ramp-sm) * var(--text-scale));
-  --text-base: calc(var(--ramp-base) * var(--text-scale));
-  --text-lg: calc(var(--ramp-lg) * var(--text-scale));
-  --text-xl: calc(var(--ramp-xl) * var(--text-scale));
-  --text-2xl: calc(var(--ramp-2xl) * var(--text-scale));
+  --text-3xs: calc(var(--ramp-3xs) * var(--text-scale) * var(--system-text-scale));
+  --text-2xs: calc(var(--ramp-2xs) * var(--text-scale) * var(--system-text-scale));
+  --text-xs: calc(var(--ramp-xs) * var(--text-scale) * var(--system-text-scale));
+  --text-sm: calc(var(--ramp-sm) * var(--text-scale) * var(--system-text-scale));
+  --text-base: calc(var(--ramp-base) * var(--text-scale) * var(--system-text-scale));
+  --text-lg: calc(var(--ramp-lg) * var(--text-scale) * var(--system-text-scale));
+  --text-xl: calc(var(--ramp-xl) * var(--text-scale) * var(--system-text-scale));
+  --text-2xl: calc(var(--ramp-2xl) * var(--text-scale) * var(--system-text-scale));
 
-  --control-h-xs: calc(var(--ramp-control-xs) * var(--text-scale));
-  --control-h-sm: calc(var(--ramp-control-sm) * var(--text-scale));
-  --control-h: calc(var(--ramp-control) * var(--text-scale));
-  --control-h-lg: calc(var(--ramp-control-lg) * var(--text-scale));
+  --control-h-xs: calc(var(--ramp-control-xs) * var(--text-scale) * var(--system-text-scale));
+  --control-h-sm: calc(var(--ramp-control-sm) * var(--text-scale) * var(--system-text-scale));
+  --control-h: calc(var(--ramp-control) * var(--text-scale) * var(--system-text-scale));
+  --control-h-lg: calc(var(--ramp-control-lg) * var(--text-scale) * var(--system-text-scale));
   /* A toolbar island: one segment tall, plus its p-0.5 padding and 1px border.
      Derived, so it can't drift from the segment size — and declared in BOTH
      blocks because a custom property bakes in the scale where it is declared. */

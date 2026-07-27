@@ -7,10 +7,18 @@
  * with a baked-in blue fallback, so non-macOS hosts (or a failed invoke) simply
  * keep the default.
  *
- * macOS doesn't push accent changes into a running process without an
- * NSDistributedNotificationCenter observer, so we re-fetch on window focus and
- * visibility change — changing the accent in System Settings and switching back
- * to TraceLoupe picks it up without native plumbing.
+ * macOS DOES push these changes — it posts distributed notifications any process
+ * can observe, which is why every other app recolours the instant you move the
+ * slider. This hook used to say otherwise and only re-fetch on focus, so the app
+ * visibly lagged the rest of the system until you clicked into it. It now
+ * subscribes (see src-tauri/src/system_watch.rs) and keeps the focus/visibility
+ * refetch as a belt-and-braces path for anything the OS does not announce.
+ *
+ * It also carries the accessibility TEXT SIZE, because macOS's Text Size setting
+ * reaches neither AppKit metrics nor WebKit's `-apple-system-*` fonts — measured
+ * with scripts/font-probe.swift at category XL, where every text style still
+ * reported its default size. An app that wants to honour it has to read the
+ * category and apply it, which is what `--system-text-scale` does.
  */
 import { useEffect } from "react";
 import { client } from "@/lib/ipc";
@@ -69,15 +77,49 @@ export function useSystemAccent() {
     }
     void fetchAndApply();
 
+    // The type ramp follows the system text size, and unlike the in-app A+/-
+    // control this one scales the FRAME too: someone who enlarged system text
+    // needs the toolbar and sidebar legible as well, which is exactly the gap
+    // freezing the frame against A+/- left open.
+    const applyTextScale = async () => {
+      try {
+        const scale = await client.systemTextScale();
+        if (cancelled) return;
+        const root = document.documentElement;
+        if (scale && Math.abs(scale - 1) > 0.001)
+          root.style.setProperty("--system-text-scale", String(scale));
+        else root.style.removeProperty("--system-text-scale");
+      } catch {
+        // Leave whatever is applied; a failed read is not "no preference".
+      }
+    };
+    void applyTextScale();
+
+    let unlisten: (() => void) | undefined;
+    void client
+      .onSystemChange((c) => {
+        if (c.kind === "accent" || c.kind === "appearance") void fetchAndApply();
+        if (c.kind === "textSize") void applyTextScale();
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {
+        // No subscription (non-Tauri host): the focus refetch below still runs.
+      });
+
     const onFocusOrVisible = () => {
       if (document.visibilityState === "hidden") return;
       void fetchAndApply();
+      void applyTextScale();
     };
 
     window.addEventListener("focus", onFocusOrVisible);
     document.addEventListener("visibilitychange", onFocusOrVisible);
     return () => {
       cancelled = true;
+      unlisten?.();
       window.removeEventListener("focus", onFocusOrVisible);
       document.removeEventListener("visibilitychange", onFocusOrVisible);
     };
