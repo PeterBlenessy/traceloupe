@@ -346,6 +346,77 @@
   scroll-padding-top: 3.25rem;
 }
 
+/* macOS display preferences, applied.
+   ================================================================
+   WebKit knows the media queries for these (`prefers-reduced-motion`,
+   `prefers-contrast`, `prefers-reduced-transparency`) but a WKWebView never
+   resolves them to the system values — measured: all false on a machine where
+   AppKit reports them fine. So system_watch.rs reads them and stamps the root,
+   and these rules key off that instead of the media queries. */
+
+/* Reduce motion: keep state changes instant. Not `animation: none`, which would
+   leave a spinner frozen mid-arc looking broken — the duration collapses so a
+   loop still completes, it just does not travel. */
+:root[data-reduce-motion="true"] *,
+:root[data-reduce-motion="true"] *::before,
+:root[data-reduce-motion="true"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Reduce transparency: the frosted title bar becomes solid. The setting exists
+   because translucency makes text harder to read over moving content, which is
+   exactly what our list views scroll beneath it. */
+:root[data-reduce-transparency="true"] [data-slot="app-titlebar"] {
+  background-color: var(--background) !important;
+  backdrop-filter: none !important;
+}
+:root[data-reduce-transparency="true"] [data-underlap] {
+  /* Nothing shows through a solid bar, so stop pulling rows under it. */
+  margin-top: 0;
+  padding-top: 0;
+  scroll-padding-top: 0;
+}
+
+/* Increase contrast: firmer borders, and the secondary text tiers lifted toward
+   the primary one. This is the setting that earns back the contrast exception
+   the design lint records for those tiers — with it on, they are no longer the
+   platform's low-contrast greys. */
+:root[data-increase-contrast="true"] {
+  --border: var(--foreground);
+  --muted-foreground: var(--foreground);
+  --faint-foreground: var(--foreground);
+}
+@supports (color: -apple-system-label) {
+  :root[data-increase-contrast="true"] {
+    --muted-foreground: -apple-system-label;
+    --faint-foreground: -apple-system-secondary-label;
+  }
+}
+
+/* Sidebar icon size (System Settings → Appearance). macOS offers small, medium
+   and large; we were fixed at one size. The row grows with the icon so the
+   rhythm holds. */
+/* Medium is our existing 20px icon, so only the other two need a rule. The
+   first version set "large" to 1.25rem — which IS 20px — and changed nothing;
+   measuring the default first is what caught it. */
+:root[data-sidebar-icon-size="1"] [data-sidebar="menu-button"] > svg {
+  width: 1rem;
+  height: 1rem;
+}
+:root[data-sidebar-icon-size="3"] [data-sidebar="menu-button"] > svg {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+:root[data-sidebar-icon-size="3"] [data-sidebar="menu-button"] {
+  min-height: calc(2.5rem * var(--text-scale) * var(--system-text-scale));
+}
+:root[data-sidebar-icon-size="1"] [data-sidebar="menu-button"] {
+  min-height: calc(1.75rem * var(--text-scale) * var(--system-text-scale));
+}
+
 /* Text colors come from the PLATFORM where the engine has them.
    ================================================================
    macOS ships four label tiers as alpha over black/white (measured: 0.847 /

@@ -320,6 +320,28 @@ Current classification:
 | Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |
 | Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder | provably small, declared via `useBoundedList` |
 
+## macOS display preferences are respected
+
+Four settings are read by `system_watch.rs`, stamped on `<html>`, and consumed by
+rules in `index.css`:
+
+| setting | attribute | what changes |
+|---|---|---|
+| Reduce motion | `data-reduce-motion` | transitions and animations collapse to ~0 |
+| Reduce transparency | `data-reduce-transparency` | the frosted title bar goes solid, and lists stop rising beneath it |
+| Increase contrast | `data-increase-contrast` | borders firm up; the secondary/tertiary text tiers lift to the primary one |
+| Sidebar icon size | `data-sidebar-icon-size` | 16 / 20 / 24 px icons, row height to match |
+
+**Why attributes and not media queries.** WebKit *supports*
+`prefers-reduced-motion`, `prefers-contrast` and `prefers-reduced-transparency`
+— and a WKWebView never resolves them to the system values. Measured: all report
+false on a machine where AppKit reports them correctly. They are free syntax, not
+free behaviour, so the values come over the bridge.
+
+Increase contrast is also what earns back the contrast exception the design lint
+records for the secondary label tiers: with it on they are no longer the
+platform's low-contrast greys.
+
 ## Keyboard navigation follows macOS
 
 **macOS decides how much Tab reaches, not us.** System Settings → Keyboard →
