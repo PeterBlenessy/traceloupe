@@ -171,14 +171,12 @@ export function FilterControl({
 
   return (
     <div className="relative flex shrink-0 items-center">
-      {/* Closed representation: a lone funnel button, or the funnel + active chips
-          wrapped in a bordered island. */}
-      <div
-        className={cn(
-          "flex items-center",
-          hasActive && "rounded-lg border border-border/70 bg-muted/40 p-0.5",
-        )}
-      >
+      {/* Closed representation: always the same bordered island, whether or not
+          any filter is active — the chips simply extend it. It used to be two
+          shapes, a lone `size-9` button (36px) and a `size-8`-in-island (38px),
+          so the control both sat taller than every other toolbar island (30px)
+          AND changed height the moment a filter was applied. */}
+      <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -189,14 +187,11 @@ export function FilterControl({
               aria-expanded={expanded}
               onClick={() => (mounted ? close() : open())}
               data-active={mounted || hasActive}
-              className={cn(
-                "inline-flex shrink-0 items-center justify-center text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[active=true]:text-foreground",
-                hasActive
-                  ? "size-8 rounded-md"
-                  : "size-9 rounded-lg border border-border/70 bg-muted/40 data-[active=true]:bg-accent",
-              )}
+              // One segment of the island, sized from the shared control scale
+              // like every other island segment (see index.css).
+              className="inline-flex size-(--control-h-sm) shrink-0 items-center justify-center rounded-md text-muted-foreground outline-hidden transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring data-[active=true]:bg-accent data-[active=true]:text-foreground"
             >
-              <Funnel className="size-5" />
+              <Funnel className="size-4" />
             </button>
           </TooltipTrigger>
           <TooltipContent>Filter</TooltipContent>
