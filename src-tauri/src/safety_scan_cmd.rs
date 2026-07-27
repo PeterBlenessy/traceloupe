@@ -1650,6 +1650,12 @@ pub fn content_finding_analytics(
         },
         None => ("all".to_string(), None, None),
     };
+    // The clock is passed in rather than read inside the query so the window is
+    // one decision made in one place — and so the tests can pin it.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(i64::MAX);
     let a = db
         .finding_analytics(
             &sources,
@@ -1661,6 +1667,7 @@ pub fn content_finding_analytics(
                 exclude_stale,
                 ..Default::default()
             },
+            now,
         )
         .map_err(|e| e.to_string())?;
     Ok(FindingAnalyticsDto {

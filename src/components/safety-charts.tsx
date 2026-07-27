@@ -17,6 +17,8 @@
  */
 import { useId } from "react";
 
+import { useBoundedList } from "@/lib/bounded-list";
+
 import type { FindingAnalytics, ChartBucket } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -176,6 +178,13 @@ function step(unit: Unit, d: Date): Date {
  *  about the data, so the gaps are filled with empty bars rather than closed up
  *  — otherwise an absence of findings arrives as an absence of *time*, and the
  *  axis silently compresses a two-year lull into nothing. */
+/** The most bars the axis can ever hold — see `TIMELINE_START` in analysis.rs.
+ *  Findings outside 2007..now are not datable, so the widest possible span is
+ *  ~20 years, which selects the `year` unit and one bar per year; the widest
+ *  that still selects `quarter` is ten years, or 40 bars. Declared rather than
+ *  assumed: `useBoundedList` says so out loud in dev if it is ever wrong. */
+export const MAX_TIME_BUCKETS = 48;
+
 export function fillTimeGaps(
   unit: Unit,
   buckets: ChartBucket[],
@@ -184,12 +193,16 @@ export function fillTimeGaps(
   const byKey = new Map(buckets.map((b) => [b.key, b]));
   const last = keyToDate(unit, buckets[buckets.length - 1].key).getTime();
   const out: ChartBucket[] = [];
-  // Guard against a malformed key producing a runaway loop; the unit is chosen
-  // to keep this well under a hundred.
+  // No truncation here. This used to stop at 600 buckets, which silently turned
+  // "the axis is wrong" into "the axis looks fine" — and it was reachable,
+  // because nothing bounded the span. The span is bounded at the source now
+  // (TIMELINE_START in analysis.rs), so this loop terminates on the data; a
+  // malformed key would trip the declared bound below rather than being cut off
+  // without a word.
   for (
-    let d = keyToDate(unit, buckets[0].key), i = 0;
-    d.getTime() <= last && i < 600;
-    d = step(unit, d), i++
+    let d = keyToDate(unit, buckets[0].key);
+    d.getTime() <= last;
+    d = step(unit, d)
   ) {
     const key = dateToKey(unit, d);
     out.push(
@@ -569,6 +582,13 @@ export function FindingCharts({
   } = analytics;
   const overTime = fillTimeGaps(unit, analytics.overTime);
   const multiYear = spansYears(unit, overTime);
+  // Every bar is in the DOM (this prints), so the count has to be provably
+  // small rather than assumed small — the #61 lesson.
+  useBoundedList(
+    "safety-scan chart buckets",
+    overTime.length,
+    MAX_TIME_BUCKETS,
+  );
 
   if (charted === 0) return null;
 
@@ -667,7 +687,7 @@ export function FindingCharts({
       <p className={cn("text-2xs leading-relaxed text-muted-foreground", full)}>
         {charted} finding{charted === 1 ? "" : "s"} charted.
         {undated > 0 &&
-          ` ${undated} ${undated === 1 ? "has" : "have"} no date and ${undated === 1 ? "is" : "are"} absent from the timeline (counted everywhere else).`}
+          ` ${undated} ${undated === 1 ? "has" : "have"} no usable date — missing, or outside the range a backup can cover — and ${undated === 1 ? "is" : "are"} absent from the timeline (counted everywhere else).`}
         {dismissed > 0 &&
           ` ${dismissed} dismissed as false positive${dismissed === 1 ? "" : "s"} and left out of every chart.`}{" "}
         These are one local model's verdicts, not ground truth. Hatched portions
