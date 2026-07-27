@@ -13,6 +13,37 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.33.0] — 2026-07-27
+
+**The Safety Scan report analyses your findings instead of just listing them** —
+charts for when, what and where, honest about what a local model can and cannot
+tell you.
+
+### Added
+
+- **Analysis charts in the scan report and beside the findings list.** Findings
+  over time, by category, and by conversation — in the printable report and, at
+  the click of the chart button, above the findings list, where they follow
+  whatever filter you have applied.
+- **Every bar says how sure the model is.** Solid means a second, stronger model
+  confirmed the finding; a diagonal hatch means only the fast pass ever saw it.
+  A scan run without the confirmation pass now *looks* less certain rather than
+  quietly being so.
+- **The charts say what they leave out**: how many findings they cover, how many
+  have no date and so can't appear on the timeline, and how many you dismissed
+  as false positives.
+- **Time buckets fit the scan.** A three-week scan reads by day and a ten-year
+  one by quarter, the axis names which, and quiet periods stay visible as gaps
+  rather than being closed up.
+
+### Fixed
+
+- **The report's totals now add up.** It printed a findings count that left out
+  findings whose original message is gone, beside a severity breakdown that
+  didn't — so the three severities could total more than the number above them.
+- **The report's category counts covered the whole scan**, not just the 500
+  findings it lists.
+
 ## [0.32.0] — 2026-07-27
 
 **TraceLoupe follows your Mac instead of approximating it** — text, colour,
