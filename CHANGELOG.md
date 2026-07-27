@@ -13,6 +13,21 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.27] — 2026-07-27
+
+### Added
+
+- **Selected rows use your Mac's highlight colour.** macOS lets you pick a
+  highlight colour separately from the accent; the app was using the accent for
+  both.
+- **Severity is readable without colour.** With "Differentiate without colour"
+  on, a finding count marks its severity with a symbol instead of relying on red
+  versus amber alone.
+- **Scroll bars follow your setting.** Choosing "Always" gives permanent scroll
+  bars with room reserved for them.
+- **Changing your region re-formats dates and times immediately**, rather than
+  on the next restart.
+
 ## [0.31.26] — 2026-07-27
 
 ### Added
