@@ -35,6 +35,8 @@ pub enum SystemChange {
     /// Reduce motion / reduce transparency / increase contrast / differentiate
     /// without colour, and the sidebar icon size.
     Accessibility,
+    /// Region or language changed — anything formatted from a locale is stale.
+    Locale,
 }
 
 static SYSTEM_CHANGES: ProgressStream<SystemChange> = ProgressStream::new();
@@ -67,6 +69,9 @@ pub struct AccessibilityPrefs {
     /// System Settings → Appearance → Sidebar icon size: 1 small, 2 medium,
     /// 3 large. Defaults to medium when unset.
     pub sidebar_icon_size: i64,
+    /// System Settings → Appearance → Show scroll bars:
+    /// "automatic" | "whenScrolling" | "always".
+    pub show_scroll_bars: String,
 }
 
 #[tauri::command]
@@ -79,6 +84,7 @@ pub fn get_accessibility_prefs() -> AccessibilityPrefs {
     {
         AccessibilityPrefs {
             sidebar_icon_size: 2,
+            show_scroll_bars: "automatic".into(),
             ..Default::default()
         }
     }
@@ -217,6 +223,20 @@ mod macos {
             } else {
                 2
             },
+            show_scroll_bars: {
+                let key = NSString::from_str("AppleShowScrollBars");
+                match defaults
+                    .stringForKey(&key)
+                    .map(|v| v.to_string())
+                    .as_deref()
+                {
+                    Some("Always") => "always".into(),
+                    Some("WhenScrolling") => "whenScrolling".into(),
+                    // Unset is macOS's default: automatic — overlay bars that
+                    // appear on scroll, permanent when a mouse is attached.
+                    _ => "automatic".into(),
+                }
+            },
         }
     }
 
@@ -247,6 +267,13 @@ mod macos {
         // Sidebar icon size is an Appearance preference.
         ("AppleNoRedisplayAppearancePreferenceChanged", || {
             SystemChange::Accessibility
+        }),
+        // Region / language: everything formatted from a locale is now stale.
+        ("NSCurrentLocaleDidChangeNotification", || {
+            SystemChange::Locale
+        }),
+        ("AppleLanguagePreferencesChangedNotification", || {
+            SystemChange::Locale
         }),
         (
             "ApplePreferredContentSizeCategoryChangedNotification",

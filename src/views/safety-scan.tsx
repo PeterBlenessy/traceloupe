@@ -803,6 +803,10 @@ function ScanOutcomeBadge({
       <Tooltip>
         <TooltipTrigger asChild>
           <Badge
+            // The severity is otherwise carried by hue alone here, which is
+            // exactly what "Differentiate without colour" is about (index.css
+            // adds a glyph when it is on).
+            data-severity={worst}
             className={cn(
               "shrink-0 cursor-default tabular-nums",
               SEVERITY_META[worst as 1 | 2 | 3].badge,

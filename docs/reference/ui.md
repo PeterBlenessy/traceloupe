@@ -331,6 +331,15 @@ rules in `index.css`:
 | Reduce transparency | `data-reduce-transparency` | the frosted title bar goes solid, and lists stop rising beneath it |
 | Increase contrast | `data-increase-contrast` | borders firm up; the secondary/tertiary text tiers lift to the primary one |
 | Sidebar icon size | `data-sidebar-icon-size` | 16 / 20 / 24 px icons, row height to match |
+| Differentiate without colour | `data-differentiate-without-color` | severity carried by hue alone gains a glyph (`data-severity` marks those spots) |
+| Show scroll bars | `data-scroll-bars` | "always" reserves the gutter and draws a thumb instead of an overlay |
+
+Two more system values ride the same bridge but are not attributes:
+**`--selected-system-value`** is the colour macOS paints a selected row —
+deliberately separate from the accent, since Appearance offers both and we were
+painting selection with the wrong one — and a **locale change** re-keys the view
+subtree so every date, time and number is formatted afresh (they are produced
+during render from the webview's locale, which is otherwise fixed at launch).
 
 **Why attributes and not media queries.** WebKit *supports*
 `prefers-reduced-motion`, `prefers-contrast` and `prefers-reduced-transparency`

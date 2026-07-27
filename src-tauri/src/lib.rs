@@ -4060,6 +4060,7 @@ pub fn run() {
             system_watch::get_system_text_scale,
             system_watch::get_full_keyboard_access,
             system_watch::get_accessibility_prefs,
+            theme::get_system_selection_color,
             subscribe_import_progress,
             subscribe_security_progress,
             engine_info,
