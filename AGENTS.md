@@ -297,6 +297,12 @@ Notes that are easy to get wrong:
 ## Project-specific notes
 
 - Stack: Tauri + Rust (`crates/traceloupe-core`, `src-tauri`) + React (`src/`).
+- **System settings: read `docs/reference/macos-integration.md` before touching
+  anything that follows the OS** (accent, appearance, text size, keyboard
+  navigation, the accessibility display options). It records what macOS actually
+  exposes, what WebKit does *not* give us for free, and the traps that make a
+  setting look adopted when it is not. The decision to follow the system rather
+  than add app preferences is ADR 0004.
 - **UI / views: read `docs/reference/ui.md` before building or changing any view.** Every
   view surfaces its title, filters, sort and search through ONE shared top toolbar
   (`useViewToolbar`) — there are no per-view header bars. Don't hand-roll headers,
