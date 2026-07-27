@@ -82,6 +82,17 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   Run it before changing anything about type, and run it again after changing
   System Settings → Accessibility → Display → Text Size to see whether the
   platform's sizes follow that setting.
+- **Two scales, and they are not the same thing.** `--system-text-scale` carries
+  the macOS accessibility Text Size and multiplies the ramp **everywhere,
+  including the frame** — someone who enlarged system text needs the toolbar and
+  sidebar legible too. `--text-scale` is the in-app A+/− reading preference and
+  scales **content only**. macOS's setting reaches neither AppKit metrics nor
+  WebKit's `-apple-system-*` fonts (measured at category XL, where every text
+  style still reported its default size), so `system_watch.rs` reads the category
+  from `com.apple.universalaccess` and maps it to a multiplier. Note the stored
+  value is the SHORT name (`XL`), not `UICTContentSizeCategoryXL` — matching only
+  the long form returns 1.0 on a machine that is actually set to XL, which looks
+  exactly like the feature not working.
 - **The text-size control (A+/−) is a READING preference, so the app frame opts
   out.** The top toolbar, the sidebar and a dialog's *action row* carry
   `data-text-scale="fixed"` and keep their size at every step; content, list

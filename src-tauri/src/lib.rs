@@ -10,6 +10,7 @@ mod safety_scan_cmd;
 mod secret;
 mod signing;
 mod stream;
+mod system_watch;
 mod theme;
 
 use std::path::{Path, PathBuf};
@@ -4055,6 +4056,8 @@ pub fn run() {
             open_full_disk_access_settings,
             fetch_link_preview,
             engine_status,
+            system_watch::subscribe_system_changes,
+            system_watch::get_system_text_scale,
             subscribe_import_progress,
             subscribe_security_progress,
             engine_info,
