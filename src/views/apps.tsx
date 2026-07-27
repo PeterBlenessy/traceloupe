@@ -42,9 +42,14 @@ function appTile(bundleId: string): { backgroundColor: string; color: string } {
   let h = 0;
   for (let i = 0; i < bundleId.length; i++)
     h = (h * 31 + bundleId.charCodeAt(i)) % 360;
+  // oklch, not hsl: HSL lightness is not perceptual, so a fixed 62% is legible
+  // at one hue and not at another — the design lint caught a pink tile at
+  // 4.11:1. oklch's L IS perceptual, so one value holds across every hue.
+  // light-dark() picks the tier for the current theme, which works because
+  // `color-scheme` is set on the root.
   return {
-    backgroundColor: `hsl(${h} 55% 50% / 0.16)`,
-    color: `hsl(${h} 60% 62%)`,
+    backgroundColor: `oklch(0.62 0.14 ${h} / 0.16)`,
+    color: `light-dark(oklch(0.48 0.13 ${h}), oklch(0.82 0.13 ${h}))`,
   };
 }
 
