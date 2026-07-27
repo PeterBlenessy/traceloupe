@@ -237,7 +237,10 @@
      soft tint above. The selected item's TEXT stays the normal item color
      (--sidebar-foreground: white in dark, dark in light) so a selected label
      reads identically to its neighbours; only the background changes. */
-  --selected-bg: var(--accent-color);
+  /* The system's selection colour when we can read it, the accent otherwise.
+     macOS keeps the two apart: Appearance offers an accent AND a highlight
+     colour, and a selected row uses the highlight. */
+  --selected-bg: var(--selected-system-value, var(--accent-color));
 
   --background: oklch(0.982 0.003 260);
   --foreground: oklch(0.21 0.012 260);
@@ -415,6 +418,44 @@
 }
 :root[data-sidebar-icon-size="1"] [data-sidebar="menu-button"] {
   min-height: calc(1.75rem * var(--text-scale) * var(--system-text-scale));
+}
+
+/* Scroll bars (System Settings → Appearance → Show scroll bars).
+   "Always" means the user wants them permanently visible and taking space, so
+   the gutter is reserved and the thumb is drawn rather than left to the
+   overlay behaviour WebKit defaults to. */
+:root[data-scroll-bars="always"] ::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+:root[data-scroll-bars="always"] ::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--foreground) 28%, transparent);
+  border: 2px solid transparent;
+  background-clip: content-box;
+  border-radius: 6px;
+}
+:root[data-scroll-bars="always"] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+:root[data-scroll-bars="always"] [class*="overflow-"] {
+  scrollbar-gutter: stable;
+}
+
+/* Differentiate without colour: severity must not be carried by hue alone.
+   Our severity pills already say "Serious"/"Harmful", but the COUNT pill on a
+   scan row is colour-only — a red 1284 and an amber 2 differ by nothing else.
+   With the setting on, the count gains a glyph per level. */
+:root[data-differentiate-without-color="true"] [data-severity="3"]::before {
+  content: "!!! ";
+  font-weight: 700;
+}
+:root[data-differentiate-without-color="true"] [data-severity="2"]::before {
+  content: "!! ";
+  font-weight: 700;
+}
+:root[data-differentiate-without-color="true"] [data-severity="1"]::before {
+  content: "! ";
+  font-weight: 700;
 }
 
 /* Text colors come from the PLATFORM where the engine has them.

@@ -35,7 +35,13 @@ function isValidAccent(value: string): boolean {
   return value.startsWith("oklch(") && CSS.supports("color", value);
 }
 
-export function useSystemAccent() {
+/**
+ * @param onLocaleChange called when the region or language changes, so anything
+ * formatted from a locale can be re-rendered. Dates, times and numbers are
+ * formatted during render from the webview's locale, which is fixed at launch —
+ * without this they keep the old region until the app restarts.
+ */
+export function useSystemAccent(onLocaleChange?: () => void) {
   useEffect(() => {
     let cancelled = false;
 
@@ -56,6 +62,16 @@ export function useSystemAccent() {
       try {
         const value = await client.systemAccentColor();
         if (!cancelled) apply(value ?? null);
+        // macOS keeps the SELECTION colour separate from the accent (Appearance
+        // has both), and a selected row uses the former. We painted selection
+        // with the accent, so setting them differently showed the wrong one.
+        const selection = await client.systemSelectionColor();
+        if (!cancelled) {
+          const root = document.documentElement;
+          if (selection && isValidAccent(selection))
+            root.style.setProperty("--selected-system-value", selection);
+          else root.style.removeProperty("--selected-system-value");
+        }
       } catch {
         // Transient IPC failure ≠ "host has no accent": keep the current value
         // (and the warm-start cache) rather than flashing the fallback blue.
@@ -132,6 +148,7 @@ export function useSystemAccent() {
         flag("data-increase-contrast", p.increaseContrast);
         flag("data-differentiate-without-color", p.differentiateWithoutColor);
         root.setAttribute("data-sidebar-icon-size", String(p.sidebarIconSize));
+        root.setAttribute("data-scroll-bars", p.showScrollBars);
       } catch {
         // Leave whatever is applied.
       }
@@ -146,6 +163,7 @@ export function useSystemAccent() {
         if (c.kind === "keyboardAccess") void applyKeyboardAccess();
         if (c.kind === "accessibility" || c.kind === "appearance")
           void applyAccessibility();
+        if (c.kind === "locale") onLocaleChange?.();
       })
       .then((fn) => {
         if (cancelled) fn();

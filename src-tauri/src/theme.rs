@@ -51,6 +51,35 @@ fn read_macos_accent() -> Result<Option<String>, String> {
     })
 }
 
+/// The colour macOS paints a selected list row, as oklch.
+///
+/// This is NOT the accent. macOS keeps them apart — Appearance has an accent and
+/// a separate highlight colour, and a selected sidebar row uses the latter. We
+/// were painting selection with the accent, so a user who set them differently
+/// saw the wrong one.
+#[tauri::command]
+pub fn get_system_selection_color() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        autoreleasepool(|_| {
+            let color = NSColor::selectedContentBackgroundColor();
+            let Some(srgb) = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace()) else {
+                return Ok(None);
+            };
+            let (r, g, b) = (
+                srgb.redComponent() as f32,
+                srgb.greenComponent() as f32,
+                srgb.blueComponent() as f32,
+            );
+            Ok(Some(format_oklch(srgb_to_oklch(r, g, b))))
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
+}
+
 /// Convert an sRGB triple (each channel in [0.0, 1.0]) to oklch.
 ///
 /// Returns `(L, C, H)` where `L` is in [0.0, 1.0], `C` is typically in
