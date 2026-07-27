@@ -320,6 +320,34 @@ Current classification:
 | Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |
 | Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder | provably small, declared via `useBoundedList` |
 
+## Keyboard navigation follows macOS
+
+**macOS decides how much Tab reaches, not us.** System Settings → Keyboard →
+"Keyboard navigation" (`AppleKeyboardUIMode`) is the user's statement about it:
+with it OFF, native Tab visits text fields and lists only; with it ON, every
+control. `system_watch.rs` reads it and stamps `data-full-keyboard-access` on
+`<html>`; `useControlTabIndex()` turns that into a `tabIndex` for any control
+that is not a text field or a list.
+
+Ignoring it is what made keyboard focus feel noisy — Tab had 46 stops in
+Messages and 58 in Safety Scan, every button and every row, on a machine where
+the setting was off. Following it gives 34 and 27, and 46/54 when the user turns
+it on.
+
+Two consequences worth knowing:
+
+- **A list is one tab stop, and ↑/↓ move the selection** (`useListNavigation`).
+  That is what makes this an improvement rather than a removal — Tab reaches the
+  list, arrows move within it, Home/End jump. Selection moves rather than focus,
+  which is what lets it work with virtualised rows that are not mounted.
+- **Dialogs are exempt.** A modal must be completable from the keyboard and,
+  unlike a toolbar, there is nowhere else to reach its buttons from.
+
+Also: **a dialog does not hand focus to its first control.** Radix does that by
+default, which put a focus ring on Settings' "General" tab every time it was
+opened with the mouse. `DialogContent` focuses itself instead — the trap and
+Escape still work, and nothing looks pre-chosen.
+
 ## Buttons always have a tooltip
 
 **Every button gets a tooltip. No exceptions** — text buttons and icon-only

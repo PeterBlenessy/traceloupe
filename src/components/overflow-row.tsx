@@ -11,6 +11,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { useControlTabIndex } from "@/lib/use-keyboard-nav";
 
 /** One item in an {@link OverflowRow}. `render` is called for the inline row and
  *  the measurement copy with `inMenu=false`, and for the overflow menu with
@@ -46,6 +47,8 @@ export function OverflowRow({
   menuClassName?: string;
   title?: string;
 }) {
+  // Follows macOS Keyboard navigation, like every other control.
+  const controlTabIndex = useControlTabIndex();
   const areaRef = useRef<HTMLDivElement>(null);
   const measureRefs = useRef<(HTMLSpanElement | null)[]>([]);
   const [visible, setVisible] = useState(items.length);
@@ -115,6 +118,7 @@ export function OverflowRow({
               <TooltipTrigger asChild>
                 <PopoverTrigger asChild>
                   <button
+              tabIndex={controlTabIndex}
                     type="button"
                     data-active={hiddenActive}
                     aria-label={title}

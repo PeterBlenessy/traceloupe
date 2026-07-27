@@ -1,8 +1,13 @@
 import * as React from "react"
+import { createContext, useContext } from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
+import { useFullKeyboardAccess } from "@/lib/use-keyboard-nav"
+
+/** Set inside a modal, where buttons keep their place in the tab order. */
+export const DialogKeyboardContext = createContext(false)
 
 const buttonVariants = cva(
   "inline-flex shrink-0 items-center justify-center gap-2 rounded-(--control-radius) text-sm font-medium whitespace-nowrap transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
@@ -52,6 +57,23 @@ function Button({
     asChild?: boolean
   }) {
   const Comp = asChild ? Slot.Root : "button"
+  // macOS skips buttons when Keyboard navigation is off (System Settings →
+  // Keyboard); a native app's Tab goes to text fields and lists only. Following
+  // that took Tab in Messages from 46 stops to a handful. Buttons stay clickable
+  // and stay reachable once the user turns the setting on.
+  //
+  // Dialogs are exempt: a modal has to be completable from the keyboard, and
+  // unlike a toolbar there is nowhere else its buttons can be reached from.
+  const fullKeyboard = useFullKeyboardAccess()
+  const inDialog = useContext(DialogKeyboardContext)
+  //
+  // A tabIndex of 0 arriving in props is NOT an app decision — Radix's
+  // TooltipTrigger injects it when it wraps a button, and 15 of Messages' 24
+  // buttons are tooltip-wrapped. Treating that as explicit left them in the tab
+  // order and the setting appeared to do nothing. Only a non-zero tabIndex is
+  // treated as deliberate.
+  const explicit = props.tabIndex && props.tabIndex !== 0 ? props.tabIndex : undefined
+  const tabIndex = explicit ?? (fullKeyboard || inDialog ? undefined : -1)
 
   return (
     <Comp
@@ -60,6 +82,7 @@ function Button({
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
+      tabIndex={tabIndex}
     />
   )
 }
