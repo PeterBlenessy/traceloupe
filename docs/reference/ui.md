@@ -101,15 +101,25 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   (34 of 60 buttons had been hand-shrunk with `size="sm"` to fight a too-tall
   default). Heights ride `--text-scale` so a control grows with the text it
   contains; **padding does not**, because horizontal room is furniture.
-- **Toolbar geometry is checkable, not remembered.**
-  `scripts/check-toolbar-geometry.mjs` measures every island and segment across
-  four views — including expanded search and an applied filter — and fails if
-  any is off. It exists because this rule was broken three separate times by
-  literals at call sites: the Filter control was `size-9` (36 px) idle and a
-  38 px island once a filter was applied, so it was both taller than its
-  neighbours *and* changed height as you used it; the search box was `h-9`; two
-  view-mode toggles defaulted to 28 px segments where a third passed
-  `size="sm"`. Take the height from `--island-h` / `--control-h-sm`.
+- **The visual rules are enforced, not remembered.** `scripts/check-design.mjs`
+  runs in CI and measures five invariants across five views, in the states an
+  idle screenshot never shows (hovered, filtered, search expanded, smallest and
+  largest text size):
+
+  | rule | what it catches | the bug it comes from |
+  |---|---|---|
+  | `type` | a font size that is not a ramp step | 31 hand-written sizes across 7 values |
+  | `control` | a height that is not a `--control-h*` step | 34 of 60 buttons hand-tuned (#91) |
+  | `island` | islands/segments off their one height | 30 / 36 / 38 px in one toolbar (#131) |
+  | `overlap` | one interactive element covering another | hover actions over the count pill (#92) |
+  | `clipping` | a label cut off by its own box | — |
+
+  It **self-tests its detectors on every run**: it injects one deliberate
+  violation per rule and fails if any rule stays quiet, because a lint whose
+  matcher drifts reports OK forever and reads as coverage. Sizes that are
+  legitimately off-ramp (initials fitted to an avatar, the A−/A+ glyphs) are
+  listed in the script with their reason — so a *new* off-ramp size still fails.
+  Take heights from `--island-h` / `--control-h-sm`, never a literal.
 - **A control island stands level with a button.** `ToolbarGroup` and
   `SortControl` wrap segments in a bordered island with `p-0.5`; segments are
   therefore `size="icon-sm"` (24 px), which puts the island at **30 px** (24 +

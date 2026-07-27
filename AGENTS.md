@@ -241,10 +241,13 @@ So after any UI change, read the numbers:
   expanded, hovered, empty, at the smallest and largest text size. A control
   that *changes* size between states is worse than one that is merely wrong, and
   only a state sweep finds it.
-- **When a rule breaks twice, make it executable.** `check-toolbar-geometry.mjs`
-  and `check-virtualization.mjs` exist because writing the rule down a second
-  time did not work. Prove a new check can fail before trusting it — a check
-  that cannot fail reads as coverage while providing none.
+- **When a rule breaks twice, make it executable.** `scripts/check-design.mjs`
+  (in CI) and `check-virtualization.mjs` exist because writing the rule down a
+  second time did not work. Run the design lint after any UI change; it measures
+  type, control heights, island geometry, overlap and clipping across five views
+  and both text extremes. Prove a new check can fail before trusting it — the
+  design lint does this to itself on every run, injecting a violation per rule
+  and failing if any detector stays quiet.
 
 ## Pick the right IPC primitive
 
