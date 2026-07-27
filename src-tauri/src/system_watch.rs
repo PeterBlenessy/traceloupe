@@ -31,6 +31,7 @@ pub enum SystemChange {
     Accent,
     Appearance,
     TextSize,
+    KeyboardAccess,
 }
 
 static SYSTEM_CHANGES: ProgressStream<SystemChange> = ProgressStream::new();
@@ -43,6 +44,30 @@ pub fn subscribe_system_changes(channel: Channel<SystemChange>) {
     SYSTEM_CHANGES.subscribe(channel);
     #[cfg(target_os = "macos")]
     macos::start_observing();
+}
+
+/// Whether macOS **Full Keyboard Access** is on (System Settings → Keyboard →
+/// "Keyboard navigation").
+///
+/// This is the system-level expression of "I navigate with the keyboard", and it
+/// changes what Tab does natively: with it OFF, Tab moves only between text
+/// fields and lists — buttons, checkboxes and rows are skipped. Our app makes
+/// everything tabbable regardless, which is why keyboard focus feels noisy on a
+/// machine where the setting is off (measured: 46 tab stops in Messages, 58 in
+/// Safety Scan, against roughly six a native app would offer).
+///
+/// `AppleKeyboardUIMode` is a bit field; bit 1 (value 2) means full keyboard
+/// access. Returns false on non-macOS and when the preference is unset.
+#[tauri::command]
+pub fn get_full_keyboard_access() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::full_keyboard_access()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        false
+    }
 }
 
 /// The accessibility text-size category as a multiplier for our type ramp.
@@ -136,6 +161,13 @@ mod macos {
         }
     }
 
+    pub fn full_keyboard_access() -> bool {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str("AppleKeyboardUIMode");
+        // 0 = text fields and lists only; 2 (bit 1) = every control.
+        defaults.integerForKey(&key) & 2 != 0
+    }
+
     static STARTED: AtomicBool = AtomicBool::new(false);
 
     /// Notification names, and what each one means to us. Several are observed
@@ -162,6 +194,10 @@ mod macos {
             "com.apple.universalaccess.FontSizeCategoryDidChange",
             || SystemChange::TextSize,
         ),
+        // Keyboard navigation is toggled in System Settings → Keyboard.
+        ("AppleKeyboardUIModeChangedNotification", || {
+            SystemChange::KeyboardAccess
+        }),
     ];
 
     pub fn start_observing() {
