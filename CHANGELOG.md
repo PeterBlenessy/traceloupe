@@ -13,6 +13,24 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.31.24] — 2026-07-27
+
+### Changed
+
+- **Keyboard navigation follows your Mac's setting.** macOS decides how far the
+  Tab key reaches (System Settings → Keyboard → "Keyboard navigation"), and the
+  app ignored it — tabbing through a view stopped at every button and every row.
+  It now matches what native apps do: with the setting off, Tab reaches text
+  fields and lists, and **arrow keys move the selection within a list**, with
+  Home and End jumping to the ends. Turn the setting on and everything is
+  reachable again.
+
+### Fixed
+
+- **Opening Settings no longer highlights the "General" tab** as though you had
+  tabbed to it.
+- **Clicking a dialog's close button no longer draws a keyboard focus ring.**
+
 ## [0.31.23] — 2026-07-27
 
 ### Added
