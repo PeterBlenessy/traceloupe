@@ -287,12 +287,25 @@ Notes that are easy to get wrong:
 ## Finishing up
 
 - Open a PR (or hand off) once CI-clean and the branch is pushed.
-- When your branch is merged or abandoned, clean up:
+- When your branch is merged or abandoned, clean up **with the script**:
   ```bash
-  git worktree remove .claude/worktrees/<slug>
-  git branch -d <slug>          # -d refuses unless merged; that's the safety net
-  git worktree prune            # drop stale worktree admin entries
+  scripts/agent-cleanup.sh <slug>            # refuses if anything would be lost
+  scripts/agent-cleanup.sh <slug> --force    # …and this is how you say "lose it"
+  scripts/agent-cleanup.sh --list            # every worktree: dirty? merged? unpushed?
   ```
+  It removes the worktree, the local branch and the remote branch, is idempotent,
+  and gates every destructive step on a check that names what it found. Doing it
+  by hand is three commands whose failure modes are silent, and it has two ways
+  to hurt in a repo several agents share:
+
+  - **Removing the worktree your shell is standing in** leaves the shell with no
+    working directory, and the next relative path resolves somewhere else or not
+    at all. A script cannot chdir its caller, so this refuses up front and prints
+    the command to run instead. (This one is not hypothetical — it happened while
+    cutting 0.34.0.)
+  - **`git worktree remove` discards uncommitted work and `git push --delete`
+    discards unpushed commits**, both silently. Another agent's hours can be in
+    there.
 
 ## Project-specific notes
 
