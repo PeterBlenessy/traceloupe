@@ -33,6 +33,12 @@ const BOUNDED: &[(&str, &str)] = &[
          the kinds of data the app can show, not a per-row collection. Each \
          tile's series is SPARK_BUCKETS long, also a constant",
     ),
+    (
+        "list_safety_suppressions",
+        "one row per standing dismissal rule the user created — at most one per \
+         conversation plus one per category, and every one is listed in the \
+         popover that manages them, so it cannot outgrow what a person typed",
+    ),
     ("count_media_ranges", "one count per histogram bucket"),
     ("count_message_ranges", "one count per histogram bucket"),
     ("count_note_ranges", "one count per histogram bucket"),

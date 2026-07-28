@@ -9,7 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ChartColumn, ChevronDown, ExternalLink, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ChartColumn, ChevronDown, ExternalLink, Filter, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -51,6 +51,7 @@ import {
   type ContentCategory,
   type ContentFinding,
   type ContentFindingCounts,
+  type Suppression,
   type FindingAnalytics,
   type SafetyScanHistoryItem,
   type SafetyScanReport,
@@ -58,6 +59,8 @@ import {
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
 import { FindingCharts } from "@/components/safety-charts";
 
 /** Exported because the home dashboard's Safety tile names the top categories.
@@ -288,9 +291,38 @@ export function SafetyScanView() {
     },
   });
 
+  // A rule can dismiss many findings at once, so everything the panel shows has
+  // to re-read — unlike marking one finding seen.
+  const addRule = useMutation({
+    mutationFn: (r: {
+      scope: "thread" | "category";
+      value: string;
+      reason?: string;
+    }) => client.addSafetySuppression(r.scope, r.value, r.reason),
+    onSuccess: (n, r) => {
+      qc.invalidateQueries({ queryKey: ["safetyScan"] });
+      toast.success(
+        n === 0
+          ? "Rule saved — it will apply to future scans"
+          : `Dismissed ${n} finding${n === 1 ? "" : "s"}`,
+        {
+          description:
+            r.scope === "thread"
+              ? "Everything in this conversation, now and in future scans"
+              : "Everything in this category, now and in future scans",
+        },
+      );
+    },
+  });
+
   const dismiss = useMutation({
-    mutationFn: (f: { fingerprint: string; category: string; dismissed: boolean }) =>
-      client.dismissContentFinding(f.fingerprint, f.category, f.dismissed),
+    mutationFn: (f: {
+      fingerprint: string;
+      category: string;
+      dismissed: boolean;
+      reason?: string;
+    }) =>
+      client.dismissContentFinding(f.fingerprint, f.category, f.dismissed, f.reason),
     onSuccess: () => {
       // Refresh both the findings list and the inline badges (marks).
       qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
@@ -552,11 +584,12 @@ export function SafetyScanView() {
                   counts={findingCounts.data}
                   showDismissed={showDismissed}
                   setShowDismissed={setShowDismissed}
-                  onDismiss={(f, dismissed) =>
+                  onDismiss={(f, dismissed, reason) =>
                     dismiss.mutate({
                       fingerprint: f.fingerprint,
                       category: f.category,
                       dismissed,
+                      reason,
                     })
                   }
                   onSeen={(f) =>
@@ -564,6 +597,9 @@ export function SafetyScanView() {
                       fingerprint: f.fingerprint,
                       category: f.category,
                     })
+                  }
+                  onRule={(scope, value, reason) =>
+                    addRule.mutate({ scope, value, reason })
                   }
                 />
               ) : (
@@ -1582,12 +1618,15 @@ function FindingRow({
   finding: f,
   onDismiss,
   onSeen,
+  onRule,
 }: {
   finding: ContentFinding;
-  onDismiss: (dismissed: boolean) => void;
+  onDismiss: (dismissed: boolean, reason?: string) => void;
   /** Called the first time the row is expanded — the deliberate act that means
    *  the flagged text was read. */
   onSeen: () => void;
+  /** Dismiss a whole conversation or category rather than one finding. */
+  onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
 }) {
   const navigate = useNavigate();
   const resolve = useContactResolver();
@@ -1751,35 +1790,217 @@ function FindingRow({
               </Button>
             )}
             <span className="flex-1" />
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1.5 text-xs text-muted-foreground"
-                  onClick={() => onDismiss(!f.dismissed)}
-                >
-                  {f.dismissed ? (
-                    <>
-                      <RotateCcw className="size-3.5" /> Restore
-                    </>
-                  ) : (
-                    <>
-                      <EyeOff className="size-3.5" /> Dismiss
-                    </>
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                {f.dismissed
-                  ? "Restore — it was not a false positive after all"
-                  : "Dismiss as a false positive (persists across re-scans)"}
-              </TooltipContent>
-            </Tooltip>
+            {f.dismissed ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 text-xs text-muted-foreground"
+                    onClick={() => onDismiss(!f.dismissed, undefined)}
+                  >
+                    <RotateCcw className="size-3.5" /> Restore
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Restore — it was not a false positive after all
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <DismissPopover finding={f} onDismiss={onDismiss} onRule={onRule} />
+            )}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+/** The standing rules, and the only way to undo one.
+ *
+ *  Without this a scoped dismissal is a one-way door: you could tell the app to
+ *  dismiss a whole conversation for ever and have no way to take it back. */
+function SuppressionChip() {
+  const qc = useQueryClient();
+  const { data: rules } = useQuery({
+    queryKey: ["safetyScan", "suppressions"],
+    queryFn: () => client.listSafetySuppressions(),
+  });
+  const remove = useMutation({
+    mutationFn: (r: Suppression) => client.removeSafetySuppression(r.scope, r.value),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["safetyScan"] }),
+  });
+  const resolve = useThreadLabel();
+  if (!rules?.length) return null;
+
+  return (
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="sm" className="gap-1.5 text-xs text-muted-foreground">
+              <Filter className="size-3.5" />
+              {rules.length} rule{rules.length === 1 ? "" : "s"}
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>
+          Conversations and categories you have set to dismiss automatically
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" className="w-96 space-y-2">
+        <p className="text-xs text-muted-foreground">
+          These dismiss matching findings automatically, in this scan and future
+          ones. Nothing is hidden — they are counted under “Show dismissed”.
+        </p>
+        <ul className="space-y-1">
+          {rules.map((r) => (
+            <li
+              key={`${r.scope}:${r.value}`}
+              className="flex items-center gap-2 rounded-md border px-2 py-1.5"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium">
+                  {r.scope === "thread"
+                    ? (resolve(r.value) ?? r.value)
+                    : (CATEGORY_LABEL[r.value as ContentCategory] ?? r.value)}
+                </p>
+                <p className="truncate text-3xs text-muted-foreground">
+                  {r.scope === "thread" ? "Whole conversation" : "Whole category"}
+                  {r.reason ? ` · ${r.reason}` : ""}
+                </p>
+              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Remove this rule"
+                    onClick={() => remove.mutate(r)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  Stop dismissing these automatically. Findings it already
+                  dismissed keep their verdict.
+                </TooltipContent>
+              </Tooltip>
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Dismissing, with a reason and a choice of how far it reaches.
+ *
+ *  A scoped dismissal becomes a standing rule. It DISMISSES what it covers
+ *  rather than hiding it — dismissed findings stay counted, reachable behind
+ *  "Show dismissed", and carry the reason — because a conversation that is fine
+ *  today may not be next month, and that is the case this app exists to catch.
+ *
+ *  "This sender" is deliberately absent: a finding carries its conversation and
+ *  category, but the sender lives on the message in the cache, a different
+ *  database. For a one-to-one chat the conversation IS the sender, which the
+ *  wording says. */
+function DismissPopover({
+  finding: f,
+  onDismiss,
+  onRule,
+}: {
+  finding: ContentFinding;
+  onDismiss: (dismissed: boolean, reason?: string) => void;
+  onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const trimmed = reason.trim() || undefined;
+  const close = () => {
+    setOpen(false);
+    setReason("");
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="gap-1.5 text-xs text-muted-foreground"
+            >
+              <EyeOff className="size-3.5" /> Dismiss
+            </Button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>
+          Dismiss as a false positive — optionally for the whole conversation or
+          category
+        </TooltipContent>
+      </Tooltip>
+      <PopoverContent align="end" className="w-80 space-y-3">
+        <div className="space-y-1.5">
+          <Label htmlFor={`why-${f.id}`} className="text-xs">
+            Why is this wrong? <span className="text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            id={`why-${f.id}`}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="e.g. song lyrics, work banter"
+            className="text-sm"
+          />
+        </div>
+        <div className="space-y-1">
+          <p className="text-xs text-muted-foreground">Apply to</p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() => {
+              onDismiss(true, trimmed);
+              close();
+            }}
+          >
+            Just this finding
+          </Button>
+          {f.threadIdentifier && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start"
+              onClick={() => {
+                onRule("thread", f.threadIdentifier!, trimmed);
+                close();
+              }}
+            >
+              Everything in this conversation
+            </Button>
+          )}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() => {
+              onRule("category", f.category, trimmed);
+              close();
+            }}
+          >
+            Everything in “{CATEGORY_LABEL[f.category]}”
+          </Button>
+        </div>
+        {/* Said plainly, because a rule that quietly swallowed future findings
+            would be the dangerous version of this feature. */}
+        <p className="text-3xs leading-relaxed text-muted-foreground">
+          A conversation or category rule also applies to future scans. Nothing
+          is hidden — findings it covers are dismissed, still counted, and shown
+          under “Show dismissed”.
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1798,14 +2019,16 @@ function FindingsList({
   setShowDismissed,
   onDismiss,
   onSeen,
+  onRule,
 }: {
   scan: SafetyScanHistoryItem;
   /** Unfiltered totals for the pills; the rows themselves are paged (#65). */
   counts: ContentFindingCounts | undefined;
   showDismissed: boolean;
   setShowDismissed: (v: boolean) => void;
-  onDismiss: (f: ContentFinding, dismissed: boolean) => void;
+  onDismiss: (f: ContentFinding, dismissed: boolean, reason?: string) => void;
   onSeen: (f: ContentFinding) => void;
+  onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
 }) {
   const [severity, setSeverity] = useState("all");
   const [sort, setSort] = useState<SortState>({ by: "severity", desc: true });
@@ -1902,6 +2125,7 @@ function FindingsList({
               value={sort}
               onChange={setSort}
             />
+            <SuppressionChip />
             {/* Dismissed findings: an island in the toolbar row rather than a
                 switch on a row of its own, which cost a whole line of vertical
                 space in a panel whose job is to show as many findings as fit.
@@ -2039,8 +2263,9 @@ function FindingsList({
                 )}
                 <FindingRow
                   finding={f}
-                  onDismiss={(d) => onDismiss(f, d)}
+                  onDismiss={(d, reason) => onDismiss(f, d, reason)}
                   onSeen={() => onSeen(f)}
+                  onRule={onRule}
                 />
               </div>
             )}

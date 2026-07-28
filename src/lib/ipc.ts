@@ -684,6 +684,15 @@ export interface ContentFindingPage {
   limit: number;
 }
 
+/** A standing "this is fine" rule. Scope is conversation or category — NOT
+ *  sender: a finding carries thread_identifier and category, but the sender
+ *  lives on the message in the cache, a different database. */
+export interface Suppression {
+  scope: "thread" | "category";
+  value: string;
+  reason: string | null;
+}
+
 export interface ContentFindingCounts {
   /** Rows the requested filter matches — the virtualizer's count. */
   matching: number;
@@ -1220,6 +1229,18 @@ export interface TraceLoupeClient {
    *  the one deliberate act that means it was read. One-way: collapsing does
    *  not un-read it. */
   markContentFindingSeen(fingerprint: string, category: string): Promise<void>;
+  /** Dismiss a whole conversation or category, now and in future.
+   *
+   *  The rule DISMISSES what it covers rather than hiding it — a dismissed
+   *  finding is counted, reachable and says why; a hidden one is gone. Returns
+   *  how many existing findings it dismissed. */
+  addSafetySuppression(
+    scope: "thread" | "category",
+    value: string,
+    reason?: string,
+  ): Promise<number>;
+  listSafetySuppressions(): Promise<Suppression[]>;
+  removeSafetySuppression(scope: string, value: string): Promise<void>;
   /** A scan's report + per-thread summaries. Latest scan when `scanId` is
    *  omitted, or a specific past scan from the history list. */
   getSafetyScanReport(scanId?: number): Promise<SafetyScanReport>;
@@ -1716,6 +1737,12 @@ const tauriClient: TraceLoupeClient = {
     }),
   markContentFindingSeen: (fingerprint, category) =>
     invoke("mark_content_finding_seen", { fingerprint, category }),
+  addSafetySuppression: (scope, value, reason) =>
+    invoke<number>("add_safety_suppression", { scope, value, reason: reason ?? null }),
+  listSafetySuppressions: () =>
+    invoke<Suppression[]>("list_safety_suppressions"),
+  removeSafetySuppression: (scope, value) =>
+    invoke("remove_safety_suppression", { scope, value }),
   getSafetyScanReport: (scanId) =>
     invoke<SafetyScanReport>("get_safety_scan_report", {
       scanId: scanId ?? null,
@@ -2811,6 +2838,7 @@ const mockFindings: Finding[] = [
   },
 ];
 
+let mockSuppressions: Suppression[] = [];
 let mockActive = false;
 const mockImported = new Set<string>();
 // Scan-history rows the browser mock has "deleted", so delete + re-list behaves.
@@ -3964,6 +3992,26 @@ export const mockClient: TraceLoupeClient = {
         f.dismissReason = dismissed ? (reason ?? null) : null;
       }
     }
+  },
+  addSafetySuppression: async (scope, value, reason) => {
+    let n = 0;
+    for (const f of mockContentFindings) {
+      const hit =
+        scope === "thread" ? f.threadIdentifier === value : f.category === value;
+      // Never overwrite a decision made by hand — same rule as the backend.
+      if (hit && !f.dismissed && f.dismissReason == null) {
+        f.dismissed = true;
+        f.dismissReason = reason ?? "Matched a rule you set";
+        n += 1;
+      }
+    }
+    mockSuppressions.push({ scope, value, reason: reason ?? null });
+    return n;
+  },
+  listSafetySuppressions: async () => (mockActive ? mockSuppressions : []),
+  removeSafetySuppression: async (scope, value) => {
+    const i = mockSuppressions.findIndex((s) => s.scope === scope && s.value === value);
+    if (i >= 0) mockSuppressions.splice(i, 1);
   },
   markContentFindingSeen: async (fingerprint, category) => {
     for (const f of mockContentFindings) {
