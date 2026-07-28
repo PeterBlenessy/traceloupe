@@ -8,6 +8,7 @@ pub mod analysis;
 pub mod analyzer;
 pub mod cache;
 pub mod crypto;
+pub mod dashboard;
 pub mod detection_settings;
 pub mod discovery;
 pub mod engine;

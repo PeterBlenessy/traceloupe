@@ -2096,6 +2096,57 @@ async fn device_info(active: State<'_, ActiveBackup>) -> Result<Option<BackupInf
     .map_err(|e| e.to_string())?
 }
 
+/// One home-dashboard tile. Carries its own label, route and icon, so the view
+/// renders whatever arrives without knowing which modules exist (#157).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModuleMetricDto {
+    id: String,
+    label: String,
+    route: String,
+    icon: String,
+    count: i64,
+    first_at: Option<i64>,
+    last_at: Option<i64>,
+    series: Vec<i64>,
+}
+
+/// The home dashboard's tiles: every kind of data this backup actually yielded,
+/// with its count, the period it covers and a sparkline of when it clusters.
+///
+/// Deliberately NOT part of `device_info`: #40 measures "the backup is open" as
+/// the moment the home view has its data, and these aggregates would land on
+/// exactly that number. The view paints its device header first and fills the
+/// tiles in behind it.
+#[tauri::command]
+async fn module_metrics(active: State<'_, ActiveBackup>) -> Result<Vec<ModuleMetricDto>, String> {
+    let path = active.path()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(i64::MAX);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        let metrics = traceloupe_core::dashboard::module_metrics(cache.conn(), now)
+            .map_err(|e| e.to_string())?;
+        Ok(metrics
+            .into_iter()
+            .map(|m| ModuleMetricDto {
+                id: m.id,
+                label: m.label,
+                route: m.route,
+                icon: m.icon,
+                count: m.count,
+                first_at: m.first_at,
+                last_at: m.last_at,
+                series: m.series,
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Distinct content kinds present (with counts) for the message content filter.
 /// `thread_id` scopes to a conversation; otherwise all messages in `service`.
 #[tauri::command]
@@ -4079,6 +4130,7 @@ pub fn run() {
             imported_backup_ids,
             list_threads,
             device_info,
+            module_metrics,
             list_calendar_events,
             list_reminders,
             list_workouts,

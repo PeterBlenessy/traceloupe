@@ -335,6 +335,27 @@ export interface Reminder {
   createdAt: number | null;
 }
 
+/** One home-dashboard tile (#157).
+ *
+ *  Carries its own `label`, `route` and `icon`, so this view renders whatever
+ *  the backend sends without knowing which modules exist. A kind of data added
+ *  later appears here with no frontend change at all — an unrecognised `icon`
+ *  falls back to a generic glyph rather than dropping the tile. */
+export interface ModuleMetric {
+  id: string;
+  label: string;
+  /** Where the tile navigates, e.g. "/messages". */
+  route: string;
+  /** Icon name; unknown values fall back to a generic one. */
+  icon: string;
+  count: number;
+  /** The period this data covers; null when the source has no timestamps. */
+  firstAt: number | null;
+  lastAt: number | null;
+  /** Equal-width bucket counts across the span. Empty when undated. */
+  series: number[];
+}
+
 /** Counts refreshed by a partial re-import (only the relevant field is set). */
 export interface ReimportResult {
   module: string;
@@ -1019,6 +1040,10 @@ export interface TraceLoupeClient {
    *  count and the Notes view agree for the same period. */
   countNoteRanges(ranges: TimeRange[]): Promise<number[]>;
   /** The earliest and latest dated message (Unix seconds), or null if none. */
+  /** The home dashboard's tiles: every kind of data this backup yielded, with
+   *  its count, span and sparkline. Loaded AFTER the home view paints — these
+   *  aggregates must not land on the open-backup timing (#40). */
+  moduleMetrics(): Promise<ModuleMetric[]>;
   messageDateBounds(): Promise<[number, number] | null>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
   getRangeWindow(
@@ -1485,6 +1510,7 @@ const tauriClient: TraceLoupeClient = {
     }),
   countNoteRanges: (ranges) =>
     invoke<number[]>("count_note_ranges", { ranges }),
+  moduleMetrics: () => invoke<ModuleMetric[]>("module_metrics"),
   messageDateBounds: () =>
     invoke<[number, number] | null>("message_date_bounds"),
   getRangeWindow: (
@@ -3368,6 +3394,43 @@ export const mockClient: TraceLoupeClient = {
         return (r.lo == null || t >= r.lo) && (r.hi == null || t < r.hi);
       }).length;
     }),
+  moduleMetrics: async () => {
+    if (!mockActive) return [];
+    // Mirrors the backend's shape, including the rule that a source with no
+    // rows earns no tile — the mock is what the design lint and every browser
+    // check measure, so it has to behave like the real thing.
+    const now = Math.floor(Date.now() / 1000);
+    const spark = (stamps: number[]): Omit<ModuleMetric, "id" | "label" | "route" | "icon" | "count"> => {
+      const ok = stamps.filter((t) => t >= 1_167_609_600 && t <= now + 86_400);
+      if (!ok.length) return { firstAt: null, lastAt: null, series: [] };
+      const lo = Math.min(...ok), hi = Math.max(...ok);
+      const series = new Array(16).fill(0);
+      for (const t of ok) {
+        const b = Math.min(15, Math.floor(((t - lo) * 16) / (hi - lo + 1)));
+        series[b] += 1;
+      }
+      return { firstAt: lo, lastAt: hi, series };
+    };
+    const sources: [string, string, string, string, number, number[]][] = [
+      ["messages", "Messages", "/messages", "messages", Object.values(mockMessages).flat().length,
+        Object.values(mockMessages).flat().map((m) => m.sentAt ?? 0).filter(Boolean)],
+      ["photos", "Photos & videos", "/photos", "photos", mockMedia.length,
+        mockMedia.map((m) => m.takenAt ?? 0).filter(Boolean)],
+      ["contacts", "Contacts", "/contacts", "contacts", mockContacts.length, []],
+      ["calls", "Calls", "/calls", "calls", mockCalls.length,
+        mockCalls.map((c) => c.occurredAt ?? 0).filter(Boolean)],
+      ["safari", "Safari history", "/safari", "safari", mockSafari.length,
+        mockSafari.map((v) => v.visitedAt ?? 0).filter(Boolean)],
+      ["notes", "Notes", "/notes", "notes", mockNotes.length,
+        mockNotes.map((n) => n.modifiedAt ?? 0).filter(Boolean)],
+      ["apps", "Apps", "/apps", "apps", mockInstalledApps.length, []],
+    ];
+    return sources
+      .filter(([, , , , count]) => count > 0)
+      .map(([id, label, route, icon, count, stamps]) => ({
+        id, label, route, icon, count, ...spark(stamps),
+      }));
+  },
   messageDateBounds: async () => {
     if (!mockActive) return null;
     const ts = Object.values(mockMessages)
