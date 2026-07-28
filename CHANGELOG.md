@@ -13,6 +13,19 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.33.2] — 2026-07-28
+
+### Fixed
+
+- **Chart hovers look like the rest of the app.** Pointing at a bar showed a
+  plain browser tooltip after a delay, in the browser's styling rather than
+  TraceLoupe's — and it described only the slice under the pointer. Hovering now
+  covers the whole column or row and gives the full breakdown.
+- **The same plain tooltips are gone from Calls, Interactions, Notes and
+  Messages** — a country flag, channel totals, a group marker and an image
+  count. The Messages avatar was showing a plain tooltip on top of the contact
+  card it already opens.
+
 ## [0.33.1] — 2026-07-28
 
 ### Fixed
