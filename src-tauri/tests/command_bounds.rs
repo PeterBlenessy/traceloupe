@@ -27,6 +27,12 @@ const BOUNDED: &[(&str, &str)] = &[
         "count_call_ranges",
         "one count per histogram bucket; the bucket count is a UI constant",
     ),
+    (
+        "module_metrics",
+        "one tile per entry in dashboard::METRIC_SOURCES — a compile-time list of \
+         the kinds of data the app can show, not a per-row collection. Each \
+         tile's series is SPARK_BUCKETS long, also a constant",
+    ),
     ("count_media_ranges", "one count per histogram bucket"),
     ("count_message_ranges", "one count per histogram bucket"),
     ("count_note_ranges", "one count per histogram bucket"),
