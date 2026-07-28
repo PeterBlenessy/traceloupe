@@ -13,6 +13,24 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.33.1] — 2026-07-28
+
+### Fixed
+
+- **The note beside the charts told the truth in every state.** It claimed
+  dismissed findings had been left out even when "Show dismissed" was putting
+  them on the chart, and counted dismissals of every severity when you had
+  filtered to one.
+- **Charts covering more than a year name the year.** A two-year view read
+  "Jan Feb … Dec Jan Feb" with nothing to say which January.
+- **One message with an unreadable date no longer ruins the timeline.** A
+  timestamp that doesn't decode reads as 1970, which stretched the chart across
+  fifty years and squashed every real finding into the last bar. Dates outside
+  what a backup can cover now count as "no usable date" — included in every
+  other chart, and said so beside them.
+- **The report's totals come from one count**, so the number in the header can't
+  drift from the one below it.
+
 ## [0.33.0] — 2026-07-27
 
 **The Safety Scan report analyses your findings instead of just listing them** —
