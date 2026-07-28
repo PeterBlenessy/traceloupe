@@ -71,7 +71,9 @@ import { cn } from "@/lib/utils";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
 import { FindingCharts } from "@/components/safety-charts";
 
-const CATEGORY_LABEL: Record<ContentCategory, string> = {
+/** Exported because the home dashboard's Safety tile names the top categories.
+ *  Shared rather than copied — a second table of these would drift. */
+export const CATEGORY_LABEL: Record<ContentCategory, string> = {
   "threat-violence": "Threats & violence",
   "harassment-bullying": "Harassment & bullying",
   "sexual-content": "Sexual content",
@@ -773,7 +775,7 @@ function scanTitle(s: SafetyScanHistoryItem): string {
 
 /** Human label for a scan's content scope — "all"/"messages"/"notes", or a
  *  comma-joined set of services + "notes" (e.g. "iMessage,TikTok,notes"). */
-function formatSources(sources: string): string {
+export function formatSources(sources: string): string {
   if (sources === "all") return "Messages & Notes";
   if (sources === "messages") return "Messages";
   if (sources === "notes") return "Notes";

@@ -2109,6 +2109,15 @@ struct ModuleMetricDto {
     first_at: Option<i64>,
     last_at: Option<i64>,
     series: Vec<i64>,
+    facets: Vec<FacetDto>,
+}
+
+/// What is inside a tile — a service, a channel, a Health category.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FacetDto {
+    label: String,
+    count: i64,
 }
 
 /// The home dashboard's tiles: every kind of data this backup actually yielded,
@@ -2140,6 +2149,14 @@ async fn module_metrics(active: State<'_, ActiveBackup>) -> Result<Vec<ModuleMet
                 first_at: m.first_at,
                 last_at: m.last_at,
                 series: m.series,
+                facets: m
+                    .facets
+                    .into_iter()
+                    .map(|f| FacetDto {
+                        label: f.label,
+                        count: f.count,
+                    })
+                    .collect(),
             })
             .collect())
     })

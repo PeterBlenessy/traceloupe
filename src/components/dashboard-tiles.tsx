@@ -10,46 +10,24 @@
  */
 import { useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import {
-  Boxes,
-  Calendar,
-  Camera,
-  Globe,
-  HeartPulse,
-  Mic,
-  MessageSquare,
-  NotebookText,
-  Phone,
-  ListChecks,
-  ShieldCheck,
-  Users,
-  Waypoints,
-  type LucideIcon,
-} from "lucide-react";
+import { Boxes } from "lucide-react";
 
 import type { ModuleMetric } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useBoundedList } from "@/lib/bounded-list";
+import { navFor, navOrder } from "@/lib/nav";
+import { BrandIcon } from "@/lib/brand-icon";
+import { serviceSlug } from "@/lib/apps";
+import { formatCount } from "@/lib/format";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
-/** Icon names the backend may send. An unknown name is not an error — the tile
- *  renders with the fallback and everything else about it still works. */
-const ICONS: Record<string, LucideIcon> = {
-  messages: MessageSquare,
-  photos: Camera,
-  contacts: Users,
-  calls: Phone,
-  safari: Globe,
-  notes: NotebookText,
-  recordings: Mic,
-  calendar: Calendar,
-  reminders: ListChecks,
-  health: HeartPulse,
-  interactions: Waypoints,
-  apps: Boxes,
-  security: ShieldCheck,
-};
+/** A module the nav has never heard of still gets a tile — right label, right
+ *  link, right numbers — and this glyph until someone gives it one. */
 const FALLBACK = Boxes;
+
+/** How many facet icons a tile shows. Four fits the tile at every text size;
+ *  the backend sends more so the view can skip ones it has no icon for. */
+const FACET_CAP = 4;
 
 /** The dashboard is one tile per kind of data. It cannot grow with the backup —
  *  only with the number of parsers — so it renders every row rather than
@@ -61,10 +39,6 @@ const MAX_TILES = 32;
  *  reader can use and invites reading meaning into the gaps. Those tiles keep
  *  their count and span and drop the strip. */
 const MIN_FOR_SPARKLINE = 12;
-
-function formatCount(n: number): string {
-  return n.toLocaleString();
-}
 
 /** "2017 – 2024", or a single year when the data does not span one. */
 function formatSpan(firstAt: number | null, lastAt: number | null): string | null {
@@ -106,23 +80,57 @@ function Sparkline({ series }: { series: number[] }) {
  *  heights here mean a tile cannot disagree with its neighbour no matter what
  *  goes in it, and they ride the text scale like everything else. */
 function TileShell({
-  icon,
-  label,
+  route,
+  fallbackLabel,
+  facets,
   value,
   middle,
   footer,
+  band,
+  headerRight,
+  wide = false,
+  align = "center",
   onClick,
   tooltip,
 }: {
-  icon: string;
-  label: string;
+  route: string;
+  fallbackLabel: string;
+  /** Drawn instead of the module icon when the module has parts worth naming. */
+  facets?: { label: string; count: number }[];
+  /** Replaces the facet row entirely — the scan tiles' severity strip. */
+  band?: React.ReactNode;
+  /** Right-aligned in the header, e.g. a scan's age. */
+  headerRight?: React.ReactNode;
+  /** Two columns wide. Scan tiles carry three facts and a data tile's width
+   *  cannot hold them. */
+  wide?: boolean;
+  /** Scan tiles read left-to-right; data tiles centre their number. */
+  align?: "center" | "start";
   value: React.ReactNode;
   middle: React.ReactNode;
   footer?: string;
   onClick: () => void;
   tooltip: React.ReactNode;
 }) {
-  const Icon = ICONS[icon] ?? FALLBACK;
+  // Label and icon come from the sidebar's entry for this route, so the two
+  // surfaces cannot drift; the backend's values are the fallback for a module
+  // the nav does not know about.
+  const item = navFor(route);
+  const label = item?.label ?? fallbackLabel;
+  const Icon = item?.icon ?? FALLBACK;
+  // Only facets we can actually DRAW. BrandIcon falls back to text initials,
+  // and a row reading "COCOCOCO" (four unresolved bundle ids) is worse than no
+  // row — so unresolvable brands are skipped, and a module whose facets are
+  // categories rather than brands (Health) gets them as words instead.
+  const all = facets ?? [];
+  const brands = all.filter((f) => serviceSlug(f.label) != null).slice(0, FACET_CAP);
+  const words =
+    brands.length === 0 && all.length > 0
+      ? all
+          .filter((f) => !f.label.includes("."))
+          .slice(0, 3)
+          .map((f) => f.label)
+      : [];
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -130,17 +138,70 @@ function TileShell({
           type="button"
           onClick={onClick}
           className={cn(
-            "group flex flex-col items-center gap-1.5 rounded-lg border p-3 text-center",
+            "group flex flex-col gap-1.5 rounded-lg border p-3",
+            align === "start"
+              ? "items-stretch text-left"
+              : "items-center text-center",
+            wide && "col-span-2",
             "transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
           )}
         >
-          <div className="flex h-4 w-full items-center justify-center gap-1.5 text-muted-foreground">
+          <div
+            className={cn(
+              "flex h-4 w-full items-center gap-1.5 text-muted-foreground",
+              align === "start" ? "justify-start" : "justify-center",
+            )}
+          >
             <Icon className="size-3.5 shrink-0" />
             <span className="truncate text-xs">{label}</span>
+            {headerRight && (
+              <span className="ml-auto shrink-0 text-xs">{headerRight}</span>
+            )}
           </div>
-          <div className="flex h-7 w-full items-center justify-center">{value}</div>
-          <div className="flex h-5 w-full items-end justify-center">{middle}</div>
-          <div className="h-3.5 text-3xs text-muted-foreground">{footer ?? ""}</div>
+          {/* What is actually inside, when the module has parts: the services a
+              conversation used, the channels, the Health categories. Reserved
+              height either way so a tile with facets and one without still
+              agree — the defect that shipped the first time round. */}
+          <div
+            className={cn(
+              "flex h-4 w-full items-center gap-1 overflow-hidden",
+              align === "start" ? "justify-start" : "justify-center",
+            )}
+          >
+            {band}
+            {brands.map((f) => (
+              <BrandIcon
+                key={f.label}
+                slug={serviceSlug(f.label)}
+                name={f.label}
+                className="size-3.5"
+              />
+            ))}
+            {words.length > 0 && (
+              <span className="truncate text-3xs text-muted-foreground">
+                {words.join(" · ")}
+              </span>
+            )}
+          </div>
+          <div
+            className={cn(
+              "flex h-7 w-full items-center",
+              align === "start" ? "justify-start" : "justify-center",
+            )}
+          >
+            {value}
+          </div>
+          <div
+            className={cn(
+              "flex h-5 w-full items-end",
+              align === "start" ? "justify-start" : "justify-center",
+            )}
+          >
+            {middle}
+          </div>
+          <div className="h-3.5 w-full truncate text-3xs text-muted-foreground">
+            {footer ?? ""}
+          </div>
         </button>
       </TooltipTrigger>
       <TooltipContent>{tooltip}</TooltipContent>
@@ -153,8 +214,9 @@ function Tile({ metric }: { metric: ModuleMetric }) {
   const span = formatSpan(metric.firstAt, metric.lastAt);
   return (
     <TileShell
-      icon={metric.icon}
-      label={metric.label}
+      route={metric.route}
+      fallbackLabel={metric.label}
+      facets={metric.facets}
       value={
         <span className="text-xl font-semibold tabular-nums">
           {formatCount(metric.count)}
@@ -197,51 +259,87 @@ export function DashboardTilesSkeleton() {
  *  Same grid, same weight as the data tiles, and never a banner — the home
  *  screen states what has happened rather than asking for something every time
  *  it is opened. */
+/** A severity strip at tile scale — the report's chart language, three bands.
+ *
+ *  Same shape for both scans so the pair reads as a pair, even though one
+ *  counts serious/harmful/concerning and the other critical/warning/info. */
+function SeverityStrip({ bands }: { bands: { n: number; color: string }[] }) {
+  const total = bands.reduce((a, b) => a + b.n, 0);
+  if (total === 0) return null;
+  return (
+    <div aria-hidden="true" className="flex h-2 w-full overflow-hidden rounded-[2px]">
+      {bands.map((b, i) =>
+        b.n > 0 ? (
+          <div key={i} style={{ width: `${(b.n / total) * 100}%`, background: b.color }} />
+        ) : null,
+      )}
+    </div>
+  );
+}
+
+/** A scan's tile: status where a data tile has its count, and the detail that
+ *  makes a scan result mean something — the split, what changed, what it
+ *  actually covered.
+ *
+ *  Double width, because those three lines do not fit in a data tile and a scan
+ *  summarised as one number is the thing that made these tiles worth
+ *  rethinking (#163). */
+/** A scan's tile — through the SAME shell as a data tile.
+ *
+ *  They were separate components twice, and diverged in height twice (119.8 vs
+ *  96.5, then 144 vs 122). One row layout is the only thing that actually stops
+ *  it: whatever goes in the slots, the rows are the rows. */
 export function ScanTile({
+  route,
   label,
-  icon,
   status,
-  detail,
+  bands,
+  lines,
   onRun,
   onOpen,
 }: {
+  route: string;
+  /** Fallback only; the sidebar's name for this route wins. */
   label: string;
-  icon: string;
   /** The headline: "never run", "3 days ago". */
   status: string;
-  /** The supporting line: "clean", "2 findings". */
-  detail?: string;
+  /** Severity split, drawn as one strip. */
+  bands?: { n: number; color: string; label: string }[];
+  /** Supporting facts, most useful first. */
+  lines?: string[];
   /** Given only when the scan has never run. */
   onRun?: () => void;
   onOpen: () => void;
 }) {
+  const name = navFor(route)?.label ?? label;
+  const shown = (lines ?? []).filter(Boolean);
   return (
     <TileShell
-      icon={icon}
-      label={label}
+      route={route}
+      fallbackLabel={label}
+      wide
+      align="start"
+      headerRight={status}
+      band={bands ? <SeverityStrip bands={bands} /> : null}
       value={
-        <span
-          className={cn(
-            "truncate text-base font-semibold",
-            onRun && "text-muted-foreground",
-          )}
-        >
-          {status}
-        </span>
-      }
-      middle={
         onRun ? (
-          // h-5, exactly the row: a badge that outgrew it made this tile taller
-          // than every other one in the grid.
-          <span className="inline-flex h-5 items-center rounded-md border px-2 text-xs font-medium group-hover:bg-background">
+          <span className="inline-flex h-6 items-center rounded-md border px-2 text-xs font-medium group-hover:bg-background">
             Run
           </span>
         ) : (
-          <span className="truncate text-xs text-muted-foreground">{detail ?? ""}</span>
+          <span className="truncate text-sm">{shown[0] ?? ""}</span>
         )
       }
+      middle={
+        <span className="truncate text-xs text-muted-foreground">
+          {onRun ? "" : shown[1] ?? ""}
+        </span>
+      }
+      // Two facts on one line rather than a taller tile: the scan tiles are
+      // double-width, so they have the room sideways that they do not have down.
+      footer={onRun ? undefined : shown.slice(2).join(" · ") || undefined}
       onClick={onRun ?? onOpen}
-      tooltip={onRun ? `Run ${label} on this backup` : `Open ${label}`}
+      tooltip={onRun ? `Run ${name} on this backup` : `Open ${name}`}
     />
   );
 }
@@ -255,10 +353,11 @@ export function DashboardTiles({
   children?: React.ReactNode;
 }) {
   const sorted = useMemo(
-    // Busiest first: the tile with the most in it is the most likely
-    // destination, and the order then holds steady across backups rather than
-    // following whatever order the backend happened to declare.
-    () => [...metrics].sort((a, b) => b.count - a.count),
+    // Sidebar order, not busiest-first. Busiest-first changed with every backup
+    // so no tile's position was ever learnable, and it put Messages before
+    // Photos while the sidebar does the opposite — two navigational surfaces
+    // showing the same destinations in different orders (#163).
+    () => [...metrics].sort((a, b) => navOrder(a.route) - navOrder(b.route)),
     [metrics],
   );
   useBoundedList("home dashboard tiles", sorted.length, MAX_TILES);
