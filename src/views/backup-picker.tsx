@@ -28,6 +28,11 @@ import {
   openPerfStart,
 } from "@/lib/open-perf";
 import { modelName } from "@/lib/device-names";
+import {
+  DashboardTiles,
+  DashboardTilesSkeleton,
+  ScanTile,
+} from "@/components/dashboard-tiles";
 import { formatDateTime } from "@/lib/format";
 import { useBoundedList } from "@/lib/bounded-list";
 
@@ -231,6 +236,82 @@ export function BackupPicker() {
   );
 }
 
+/** The metrics for the open backup: one tile per kind of data it yielded, plus
+ *  the two scans.
+ *
+ *  Loaded AFTER the device header paints. #40 measures "the backup is open" as
+ *  the moment this view has its data, and putting a dozen aggregate queries in
+ *  front of that would spend the very number #40 exists to protect. */
+function HomeDashboard() {
+  const navigate = useNavigate();
+  const { data: metrics, isPending } = useQuery({
+    queryKey: ["moduleMetrics"],
+    queryFn: () => client.moduleMetrics(),
+  });
+  const { data: securityRuns } = useQuery({
+    queryKey: ["scanRuns"],
+    queryFn: () => client.listScanRuns(),
+  });
+  const { data: safetyScans } = useQuery({
+    queryKey: ["safetyScan", "history"],
+    queryFn: () => client.listSafetyScans(),
+  });
+
+  const security = (securityRuns ?? []).find((r) => r.status === "done");
+  const safety = (safetyScans ?? []).find((s) => s.status === "completed");
+
+  return (
+    <section className="mt-8 space-y-3">
+      <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        In this backup
+      </h2>
+      {isPending ? (
+        <DashboardTilesSkeleton />
+      ) : (
+        <DashboardTiles metrics={metrics ?? []}>
+          <ScanTile
+            label="Security Check"
+            icon="security"
+            status={security ? formatRelative(security.finishedAt ?? security.startedAt) : "never run"}
+            detail={
+              security
+                ? security.critical + security.warning > 0
+                  ? `${security.critical + security.warning} to review`
+                  : "clean"
+                : undefined
+            }
+            onRun={security ? undefined : () => void navigate({ to: "/security" })}
+            onOpen={() => void navigate({ to: "/security" })}
+          />
+          <ScanTile
+            label="Safety Scan"
+            icon="messages"
+            status={safety ? formatRelative(safety.finishedAt ?? safety.startedAt) : "never run"}
+            detail={
+              safety
+                ? safety.findings > 0
+                  ? `${safety.findings} finding${safety.findings === 1 ? "" : "s"}`
+                  : "nothing flagged"
+                : undefined
+            }
+            onRun={safety ? undefined : () => void navigate({ to: "/safety-scan" })}
+            onOpen={() => void navigate({ to: "/safety-scan" })}
+          />
+        </DashboardTiles>
+      )}
+    </section>
+  );
+}
+
+/** "today" / "3 days ago" / "Mar 2024" — a scan's age, not its timestamp. */
+function formatRelative(at: number): string {
+  const days = Math.floor((Date.now() / 1000 - at) / 86_400);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  return formatDateTime(at).split(",")[0] ?? "earlier";
+}
+
 /** One label/value line of the device detail table. Dense: the pair sits on a
  *  single row, values right-aligned and selectable. */
 function DeviceRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -395,7 +476,7 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
         </p>
       )}
 
-      <AppFeatures />
+      <HomeDashboard />
     </div>
   );
 }

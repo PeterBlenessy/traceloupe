@@ -318,7 +318,7 @@ Current classification:
 | Safety Scan history rail · Safety Scan findings · Security run rail · Security findings | virtualized (`VirtualList`) |
 | Safety Scan report findings (500) · a note's image gallery (50) · a finding's shortened links (25) | bounded with disclosure |
 | Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |
-| Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder · Safety Scan chart buckets | provably small, declared via `useBoundedList` |
+| Settings import catalog · activity-indicator entries · a contact's conversations · backups in a folder · Safety Scan chart buckets · home dashboard tiles | provably small, declared via `useBoundedList` |
 
 ### A chart is never drawn from a bounded list
 
@@ -374,6 +374,30 @@ form is constrained on purpose (#66):
 `scripts/check-design.mjs` opens the Safety view's analysis panel as one of its
 measured states — a section behind a toggle is otherwise invisible to the lint,
 which is where an off-ramp size survives.
+
+### The home dashboard extends itself
+
+The tiles on the home view are driven by `dashboard::METRIC_SOURCES` — id, label,
+route, icon, table, timestamp column. The command iterates that list and sends
+each tile's **label, route and icon as data**, so `dashboard-tiles.tsx` knows
+nothing about which modules exist. Adding a kind of data is one row in Rust and
+no frontend change; an icon name the UI does not recognise falls back to a
+generic glyph rather than dropping the tile, so a new module works immediately
+and merely looks generic until someone picks one.
+
+Full table introspection was rejected: a tile needs a label, a route and an icon
+that do not exist in the schema, and the cache holds plenty of tables that are
+not modules (`attachments`, `note_media`, the FTS shadow tables).
+
+**What makes "add a parser and it appears" true rather than intended** is
+`every_content_table_is_accounted_for`. It lists the cache's real tables and
+fails on any that has neither a `MetricSource` nor an entry in `NOT_A_TILE` with
+a reason. Adding `CREATE TABLE podcasts` fails the build until someone decides
+what it is. It found the six FTS shadow tables on its first run.
+
+Two tiles, two implementations, is how their heights diverged (119.8px and
+96.5px in one grid) — both kinds now render through one `TileShell` with fixed
+row heights, so a tile cannot disagree with its neighbour whatever goes in it.
 
 ## macOS display preferences are respected
 
