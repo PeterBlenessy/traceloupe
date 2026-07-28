@@ -23,6 +23,7 @@
  *   tooltip   every icon-only button explains itself
  *   native-tooltip  no `title=` / SVG `<title>` — the app has its own Tooltip
  *   locale    nothing formats in the webview's default locale   (#161: Region ≠ language)
+ *   coverage  every checked state actually measured something     (a blank page used to pass)
  *   spacing   gaps and padding stay on the 2px grid
  *
  * Every rule is proved on every run (see selfTest): each is shown a deliberate
@@ -137,6 +138,25 @@ const NATIVE_TOOLTIP_BACKLOG = [
       " the grid and wants its own verification.",
   },
 ];
+
+/**
+ * The floor below which a "clean" state is a broken CHECK, not a clean app.
+ *
+ * Every real view renders dozens of text nodes. A state that measured almost
+ * nothing was measuring the wrong page, or measured before the data arrived —
+ * and it reported OK either way. That happened three times in one week: the
+ * loop reported "Safety" while a dialog kept it on Security; the home view was
+ * measured at a fixed 1200ms, before its tiles existed, and a planted violation
+ * passed; and the mock omitted five modules, so those tiles were never on screen
+ * to measure.
+ *
+ * A rule that cannot fail is indistinguishable from a rule that passes, so the
+ * check now states what it saw and fails when it saw too little.
+ */
+const MIN_MEASURED = 12;
+
+/** What each checked state actually observed, for the coverage rule below. */
+const observed = [];
 
 const near = (a, b) => Math.abs(a - b) <= 0.6;
 const failures = [];
@@ -547,6 +567,8 @@ const checkFocus = async (state) => {
 const check = async (state, scale) => {
   const { type, controls, islands, interactive, clipped, unnamed, contrast, spacing, nativeTips } = await probe();
 
+  observed.push({ state, elements: type.length, controls: controls.length });
+
   for (const u of unnamed)
     fail(u.kind === "name" ? "a11y" : "tooltip", state,
       u.kind === "name"
@@ -818,6 +840,36 @@ for (const [size, scale] of [["xs", 0.85], ["xl", 1.2]]) {
   await page.evaluate((s) => document.documentElement.setAttribute("data-text-size", s), size);
   await page.waitForTimeout(400);
   await check(`text-${size}`, scale);
+}
+
+// ---- did the checks above actually look at anything? --------------------
+//
+// Proved before it is trusted, like every other rule: a deliberately blank page
+// must trip it. Without this the self-test would only show that the rule EXISTS.
+await page.goto("about:blank");
+await page.waitForTimeout(200);
+{
+  const before = failures.length;
+  const mark = observed.length;
+  await check("self-test:blank", 1);
+  const blank = observed.splice(mark)[0];
+  failures.length = before;
+  if (!blank || blank.elements >= MIN_MEASURED) {
+    console.error(
+      `design lint SELF-TEST failed: a blank page reported ${blank?.elements} elements,` +
+        ` which is at or above the floor of ${MIN_MEASURED}. The coverage rule cannot fire.`,
+    );
+    await browser.close();
+    process.exit(2);
+  }
+}
+
+for (const o of observed) {
+  if (o.elements < MIN_MEASURED)
+    fail("coverage", o.state,
+      `measured only ${o.elements} text elements and ${o.controls} controls —` +
+      ` this state was empty, or measured before it had rendered. Every rule` +
+      ` above "passed" on nothing.`);
 }
 
 await browser.close();
