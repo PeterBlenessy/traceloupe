@@ -691,6 +691,8 @@ export interface ContentFindingCounts {
   /** Not dismissed and not stale — what the printable report includes. */
   liveFresh: number;
   dismissed: number;
+  /** Live, not-stale findings nobody has read yet — the app's unread count. */
+  unread: number;
   serious: number;
   harmful: number;
   concerning: number;
@@ -801,6 +803,11 @@ export interface ContentFinding {
   /** True when the cascade's strong tier (E4B) re-checked and kept this finding
    *  — "confirmed" (two models agree) vs a sweep-only (E2B) unconfirmed flag. */
   rechecked: boolean;
+  /** Has anyone revealed this finding's flagged text? Unread findings are shown
+   *  differently in the list, the way unread mail is. */
+  seen: boolean;
+  /** Why it was dismissed, when it was. */
+  dismissReason: string | null;
 }
 
 /** The flagged source behind a finding, loaded on demand for the peek popover. */
@@ -1206,7 +1213,13 @@ export interface TraceLoupeClient {
     fingerprint: string,
     category: string,
     dismissed: boolean,
+    /** Why. Recorded only when dismissing; the report shows it. */
+    reason?: string,
   ): Promise<void>;
+  /** Record that a finding's flagged text has been revealed. Called on expand —
+   *  the one deliberate act that means it was read. One-way: collapsing does
+   *  not un-read it. */
+  markContentFindingSeen(fingerprint: string, category: string): Promise<void>;
   /** A scan's report + per-thread summaries. Latest scan when `scanId` is
    *  omitted, or a specific past scan from the history list. */
   getSafetyScanReport(scanId?: number): Promise<SafetyScanReport>;
@@ -1694,8 +1707,15 @@ const tauriClient: TraceLoupeClient = {
     }),
   safetyScanFindingMarks: () =>
     invoke<FindingMarks>("safety_scan_finding_marks"),
-  dismissContentFinding: (fingerprint, category, dismissed) =>
-    invoke("dismiss_content_finding", { fingerprint, category, dismissed }),
+  dismissContentFinding: (fingerprint, category, dismissed, reason) =>
+    invoke("dismiss_content_finding", {
+      fingerprint,
+      category,
+      dismissed,
+      reason: reason ?? null,
+    }),
+  markContentFindingSeen: (fingerprint, category) =>
+    invoke("mark_content_finding_seen", { fingerprint, category }),
   getSafetyScanReport: (scanId) =>
     invoke<SafetyScanReport>("get_safety_scan_report", {
       scanId: scanId ?? null,
@@ -2707,6 +2727,10 @@ const mockContentFindings: ContentFinding[] = (
     // never zero in the mock.
     stale: daysAgo === 33,
     dismissed: daysAgo === 18,
+    // A few already read, so the mock shows both states — a fixture where
+    // everything is unread would never exercise the read styling.
+    seen: daysAgo === 18 || daysAgo === 12 || daysAgo === 40,
+    dismissReason: daysAgo === 18 ? "Both adults, consensual" : null,
     rechecked,
   } satisfies ContentFinding;
 });
@@ -2732,6 +2756,8 @@ mockContentFindings.push({
   rationale: "Message whose timestamp did not decode.",
   stale: false,
   dismissed: false,
+  seen: false,
+  dismissReason: null,
   rechecked: false,
 });
 
@@ -2749,6 +2775,8 @@ mockContentFindings.push({
   rationale: "Undated note referring to wanting to disappear.",
   stale: false,
   dismissed: false,
+  seen: false,
+  dismissReason: null,
   rechecked: false,
 });
 
@@ -3778,6 +3806,7 @@ export const mockClient: TraceLoupeClient = {
       live: live.length,
       liveFresh: live.filter((f) => !f.stale).length,
       dismissed: all.length - live.length,
+      unread: live.filter((f) => !f.stale && !f.seen).length,
       serious: live.filter((f) => f.severity === 3).length,
       harmful: live.filter((f) => f.severity === 2).length,
       concerning: live.filter((f) => f.severity === 1).length,
@@ -3924,11 +3953,21 @@ export const mockClient: TraceLoupeClient = {
     }
     return marks;
   },
-  dismissContentFinding: async (fingerprint, category, dismissed) => {
+  dismissContentFinding: async (fingerprint, category, dismissed, reason) => {
     for (const f of mockContentFindings) {
       if (f.fingerprint === fingerprint && f.category === category) {
         f.dismissed = dismissed;
+        // Dismissing implies reading — the control lives inside the expansion,
+        // so it cannot be reached without revealing the text. Mirrored here so
+        // the mock's unread count behaves like the backend's.
+        if (dismissed) f.seen = true;
+        f.dismissReason = dismissed ? (reason ?? null) : null;
       }
+    }
+  },
+  markContentFindingSeen: async (fingerprint, category) => {
+    for (const f of mockContentFindings) {
+      if (f.fingerprint === fingerprint && f.category === category) f.seen = true;
     }
   },
   generateThreadSummary: async (_scanId, threadRef) => ({
