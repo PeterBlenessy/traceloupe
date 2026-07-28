@@ -667,13 +667,17 @@ function NoteRow({
                 />
               )}
               {note.imageCount > 0 && (
-                <span
-                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
-                  title={`${note.imageCount} image${note.imageCount > 1 ? "s" : ""}`}
-                >
-                  <ImageIcon className="size-3.5" />
-                  {note.imageCount}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
+                      <ImageIcon className="size-3.5" />
+                      {note.imageCount}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {note.imageCount} image{note.imageCount > 1 ? "s" : ""}
+                  </TooltipContent>
+                </Tooltip>
               )}
               {note.attachmentCount > note.imageCount && (
                 <span

@@ -362,6 +362,10 @@ form is constrained on purpose (#66):
   counted everywhere except the axis they cannot sit on. That is also what
   *bounds* the axis: the widest possible span is ~20 years of `year` buckets, so
   there is nothing left to truncate.
+- **Hover uses the app's tooltip, never an SVG `<title>`.** A `<title>` is a
+  native browser tooltip: it ignores the type ramp and the theme, waits about a
+  second, and can only describe the one shape the pointer is over. Charts point
+  at the whole bucket — a column or a row — and say what is in it.
 - **Inline SVG, geometry in percentages.** The report prints; canvas rasterizes
   badly and CSS background gradients get dropped. No measurement, no distortion,
   and the hatch survives a greyscale print. Bucket width adapts (day → year) so

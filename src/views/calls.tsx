@@ -16,6 +16,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { useSettings } from "@/components/settings-provider";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
@@ -204,12 +205,16 @@ function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | nul
         <ItemDescription className="truncate">{subtitle}</ItemDescription>
       </ItemContent>
       {call.countryCode && countryFlag(call.countryCode) && (
-        <span
-          className="shrink-0 text-base leading-none"
-          title={`Number country: ${call.countryCode.toUpperCase()}`}
-        >
-          {countryFlag(call.countryCode)}
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="shrink-0 text-base leading-none">
+              {countryFlag(call.countryCode)}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            Number country: {call.countryCode.toUpperCase()}
+          </TooltipContent>
+        </Tooltip>
       )}
       <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
         <span>{formatDateTime(call.occurredAt)}</span>
