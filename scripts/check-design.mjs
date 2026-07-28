@@ -670,6 +670,16 @@ if (await open.count()) {
 
 await selfTest();
 
+// The home view is not in VIEWS — it is where the loop STARTS from, so it was
+// never measured. Its dashboard tiles (#157) are the app's front door and the
+// first thing anyone sees after opening a backup.
+// Wait for the tiles, not a fixed delay: at 1200ms the import was often still
+// running, so this "measured" an empty home view and reported it clean — which
+// is how a planted violation here passed.
+await page.waitForSelector("text=In this backup", { timeout: 8000 }).catch(() => {});
+await page.waitForTimeout(500);
+await check("Home", 1);
+
 for (const view of VIEWS) {
   // Leave the previous view cleanly. A dialog or popover left open swallows the
   // next click, and the loop then measures the OLD view under a new name — which
