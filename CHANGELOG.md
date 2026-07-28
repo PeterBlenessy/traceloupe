@@ -13,6 +13,30 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.34.0] — 2026-07-28
+
+**Opening a backup now shows you what's in it** — a tile for every kind of data
+TraceLoupe found, with how much, the years it covers, and when it clusters.
+
+### Added
+
+- **A dashboard on the home view.** One tile per kind of data the backup
+  actually yielded — messages, photos, contacts, calls, Safari history, notes,
+  voice memos, calendar, reminders, workouts, interactions, apps — each showing
+  the count, the period it covers and a small chart of when that data clusters.
+  Click a tile to go straight there.
+- **Security Check and Safety Scan appear as tiles too**, showing when they last
+  ran and what they found, with a Run action when a backup has never been
+  scanned.
+- **Kinds of data with nothing in them are left out**, so no tile leads to an
+  empty screen.
+
+### Changed
+
+- **The "What you can do with TraceLoupe" cards now appear only before a backup
+  is open.** Once one is open, its actual contents are the more useful thing to
+  show — and you can click them.
+
 ## [0.33.2] — 2026-07-28
 
 ### Fixed
