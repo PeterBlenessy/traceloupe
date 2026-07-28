@@ -112,14 +112,21 @@ export function multiBadgeGroup(opts: {
       selected: sel.has(o.value),
       onSelect: () => onToggle(o.value),
     })),
-    summary: options
-      .filter((o) => sel.has(o.value))
-      .map((o) => ({
-        key: `${key}:${o.value}`,
-        label: o.label,
-        icon: o.icon,
-        onClear: () => onToggle(o.value),
-      })),
+    // Everything selected is not a narrowing, so it earns no chips. Without
+    // this, a filter nobody has touched fills the toolbar with one chip per
+    // option — six of them on Health — which reads as an active filter and is
+    // the opposite of what it means.
+    summary:
+      options.every((o) => sel.has(o.value))
+        ? []
+        : options
+            .filter((o) => sel.has(o.value))
+            .map((o) => ({
+              key: `${key}:${o.value}`,
+              label: o.label,
+              icon: o.icon,
+              onClear: () => onToggle(o.value),
+            })),
   };
 }
 

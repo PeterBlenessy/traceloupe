@@ -7,7 +7,12 @@ import { type BadgeFilterOption } from "@/components/badge-filter";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
+import {
+  badgeGroup,
+  multiBadgeGroup,
+  timeGroup,
+  type FilterGroup,
+} from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
 import { NoBackupState, VirtualListView } from "@/components/view";
@@ -435,10 +440,33 @@ export function HealthView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const [section, setSection] = usePersistedState<HealthSection>(
-    "health:section",
-    "workouts",
+  // Sections are MULTI-select with All as the default. They read as a filter —
+  // pills in the filter popover, like every other view — so behaving like a
+  // mode switch that could only ever show one thing, with no way back to
+  // everything, was the bug (#162).
+  //
+  // The key changed with the shape: a persisted single value would deserialize
+  // into `sections.includes` and silently match nothing.
+  const [sections, setSections] = usePersistedState<HealthSection[]>(
+    "health:sections",
+    [],
   );
+  /** Empty selection means "everything present" — so a new section appears
+   *  without anyone having to re-tick it. */
+  const selected = useMemo(
+    () => (sections.length > 0 ? sections : SECTIONS.map((x) => x.value)),
+    [sections],
+  );
+  const isOn = (v: HealthSection) => selected.includes(v);
+  const toggleSection = (v: string) => {
+    const value = v as HealthSection;
+    const next = selected.includes(value)
+      ? selected.filter((x) => x !== value)
+      : [...selected, value];
+    // Deselecting the last one would show nothing at all; treat "none" as
+    // "everything", which is also what an untouched filter means.
+    setSections(next.length === 0 || next.length === SECTIONS.length ? [] : next);
+  };
   const {
     data: workouts,
     isPending,
@@ -463,7 +491,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthDaily"],
     queryFn: () => client.healthDaily(),
-    enabled: active === true && section === "daily",
+    enabled: active === true && isOn("daily"),
   });
   const {
     data: sleep,
@@ -472,7 +500,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthSleep"],
     queryFn: () => client.listSleep(),
-    enabled: active === true && section === "sleep",
+    enabled: active === true && isOn("sleep"),
   });
   const {
     data: timezones,
@@ -481,7 +509,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthTimezones"],
     queryFn: () => client.listHealthTimezones(),
-    enabled: active === true && section === "timezones",
+    enabled: active === true && isOn("timezones"),
   });
   const {
     data: awards,
@@ -490,7 +518,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthAwards"],
     queryFn: () => client.listHealthAchievements(),
-    enabled: active === true && section === "awards",
+    enabled: active === true && isOn("awards"),
   });
   const {
     data: cycle,
@@ -499,7 +527,7 @@ export function HealthView() {
   } = useQuery({
     queryKey: ["healthCycle"],
     queryFn: () => client.listCycle(),
-    enabled: active === true && section === "cycle",
+    enabled: active === true && isOn("cycle"),
   });
 
   const [activity, setActivity] = usePersistedState<string>("health:activity", "all");
@@ -722,40 +750,70 @@ export function HealthView() {
       summary, hasAny,
     ],
   );
-  const cur = defs[section];
-
-  const baseItems = cur.items ?? [];
+  // One list across every selected section. Each row remembers which section it
+  // came from, so rendering, sorting and the time window still go through that
+  // section's own descriptor — the sections stay section-agnostic, they just
+  // stop being mutually exclusive.
+  type Row = { section: HealthSection; item: unknown };
+  const only = selected.length === 1 ? defs[selected[0]] : undefined;
+  const baseItems = useMemo<Row[]>(
+    () =>
+      selected.flatMap((k) =>
+        (defs[k].items ?? []).map((item) => ({ section: k, item })),
+      ),
+    [selected, defs],
+  );
+  const pending = selected.some((k) => defs[k].pending);
+  const anyError = selected.map((k) => defs[k].error).find(Boolean);
   const presetCounts = useMemo(
-    () => presets.map((p) => baseItems.filter((i) => inWindow(cur.windowAt(i), p.lo, p.hi)).length),
-    [presets, baseItems, cur],
+    () =>
+      presets.map(
+        (p) =>
+          baseItems.filter((r) =>
+            inWindow(defs[r.section].windowAt(r.item), p.lo, p.hi),
+          ).length,
+      ),
+    [presets, baseItems, defs],
   );
   const shown = useMemo(
     () =>
       sortItems(
-        baseItems.filter((i) => inWindow(cur.windowAt(i), range.lo, range.hi)),
-        (i) => cur.sortKey(i, cur.sort.by),
-        cur.sort.desc,
+        baseItems.filter((r) =>
+          inWindow(defs[r.section].windowAt(r.item), range.lo, range.hi),
+        ),
+        // Across several sections only time is comparable — a workout's
+        // "distance" means nothing to a sleep session. One section keeps its own
+        // sort fields, so single-section behaviour is exactly as it was.
+        (r) =>
+          only
+            ? only.sortKey(r.item, only.sort.by)
+            : defs[r.section].windowAt(r.item),
+        // Newest first across sections — the only ordering that means the same
+        // thing for a workout, a night's sleep and an award.
+        only ? only.sort.desc : true,
       ),
-    [baseItems, range, cur],
+    [baseItems, range, defs, only],
   );
 
   const filterGroups = useMemo<FilterGroup[]>(() => {
     if (!hasAny) return [];
     const out: FilterGroup[] = [
-      badgeGroup({
+      multiBadgeGroup({
         key: "section",
         label: "Section",
-        description: "Workout log or per-day activity totals",
-        options: SECTIONS.map((s) => ({
-          value: s.value,
-          label: s.label,
-          count: defs[s.value].count,
+        description: "Which kinds of Health data to list",
+        // Only what this backup actually has: a pill for an absent section is
+        // an invitation to an empty list.
+        options: SECTIONS.filter((x) => (defs[x.value].count ?? 0) > 0).map((x) => ({
+          value: x.value,
+          label: x.label,
+          count: defs[x.value].count,
         })),
-        value: section,
-        onChange: (v) => setSection(v as HealthSection),
+        selected,
+        onToggle: toggleSection,
       }),
     ];
-    if (section === "workouts" && activities.length > 1) {
+    if (isOn("workouts") && activities.length > 1) {
       const activityOptions: BadgeFilterOption[] = [
         { value: "all", label: "All", count: workouts?.length },
         ...activities.map((a) => ({ value: a, label: a, count: (workouts ?? []).filter((w) => w.activity === a).length })),
@@ -764,7 +822,7 @@ export function HealthView() {
     }
     out.push(
       timeGroup({
-        description: cur.timeDescription,
+        description: only ? only.timeDescription : "When it happened",
         presets,
         counts: presetCounts,
         value: range,
@@ -772,13 +830,15 @@ export function HealthView() {
       }),
     );
     return out;
-  }, [hasAny, defs, cur, workouts, section, setSection, activities, effActivity, presets, presetCounts, range, setActivity, setRange]);
+  }, [hasAny, defs, only, selected, workouts, activities, effActivity, presets, presetCounts, range, setActivity, setRange, toggleSection, isOn]);
   const sortNode = useMemo(
     () =>
-      hasAny ? (
-        <SortControl fields={cur.sortFields} value={cur.sort} onChange={cur.setSort} />
+      // Only one section's fields make sense at a time; across several, the
+      // list is time-ordered and there is nothing to choose between.
+      hasAny && only ? (
+        <SortControl fields={only.sortFields} value={only.sort} onChange={only.setSort} />
       ) : undefined,
-    [hasAny, cur],
+    [hasAny, only],
   );
   const toolbar = useMemo(
     () =>
@@ -834,18 +894,22 @@ export function HealthView() {
       <div
         // Remount on section change; clock-sensitive sections also remount
         // when the 12h/24h preference flips so times re-format.
-        key={`${section}:${cur.clockSensitive ? clockFormat : ""}`}
+        key={`${selected.join(",")}:${selected.some((k) => defs[k].clockSensitive) ? clockFormat : ""}`}
         className="min-h-0 flex-1"
       >
         <VirtualListView
           items={shown}
-          getKey={cur.rowKey}
+          getKey={(r) => `${r.section}:${defs[r.section].rowKey(r.item)}`}
           estimateSize={56}
-          isPending={cur.pending}
-          error={cur.error}
-          emptyIcon={cur.emptyIcon}
-          emptyMessage={baseItems.length > 0 ? cur.emptyFiltered : cur.emptyAll}
-          renderItem={cur.render}
+          isPending={pending}
+          error={anyError}
+          emptyIcon={only ? only.emptyIcon : HeartPulse}
+          emptyMessage={
+            baseItems.length > 0
+              ? (only?.emptyFiltered ?? "Nothing in the selected sections matches these filters.")
+              : (only?.emptyAll ?? "No Health data in the selected sections.")
+          }
+          renderItem={(r) => defs[r.section].render(r.item)}
         />
       </div>
     </div>
