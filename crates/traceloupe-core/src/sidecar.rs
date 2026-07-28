@@ -449,6 +449,26 @@ pub fn find_lava_db(out_dir: &Path) -> Result<PathBuf> {
 mod tests {
     use super::*;
 
+    /// Write a shell script for a test to run.
+    ///
+    /// Returns a config that runs it through `/bin/sh` rather than exec'ing it
+    /// directly, which is the whole point (#156). `cargo test` runs tests as
+    /// parallel threads of ONE process: while this thread holds a write
+    /// descriptor on a file it just created, any other test that spawns a child
+    /// hands that descriptor to the child, and the kernel then refuses to exec
+    /// the file with `ETXTBSY` — "Text file busy". Linux enforces this and macOS
+    /// does not, so it only ever failed in CI, and only sometimes.
+    ///
+    /// Handing the script to an interpreter as an ARGUMENT removes the race
+    /// rather than narrowing it: `/bin/sh` is never a file we wrote, and the
+    /// script is read as data. It also means the tests no longer depend on a
+    /// shebang or the executable bit.
+    fn sh_script(dir: &std::path::Path, name: &str, body: &str) -> EngineConfig {
+        let path = dir.join(name);
+        std::fs::write(&path, body).unwrap();
+        EngineConfig::from_source("/bin/sh", path)
+    }
+
     #[test]
     fn parses_started_progress_lines() {
         let p = parse_progress("[478/583] sms [sms] artifact started").unwrap();
@@ -507,18 +527,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn run_import_streams_progress_and_finds_output() {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-
         let tmp = tempfile::tempdir().unwrap();
-        let script = tmp.path().join("fake_ileapp.sh");
-        {
-            let mut f = std::fs::File::create(&script).unwrap();
-            // Args: -t itunes -i <backup> -o <out> --itunes_password <pw>
-            writeln!(
-                f,
-                r#"#!/bin/sh
-out=""
+        // Args: -t itunes -i <backup> -o <out> --itunes_password <pw>
+        let cfg = sh_script(
+            tmp.path(),
+            "fake_ileapp.sh",
+            r#"out=""
 while [ $# -gt 0 ]; do
   case "$1" in -o) out="$2"; shift 2;; *) shift;; esac
 done
@@ -529,13 +543,8 @@ sub="$out/iLEAPP_Output_test"
 mkdir -p "$sub"
 : > "$sub/_lava_artifacts.db"
 echo "Report generation Completed."
-"#
-            )
-            .unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-
-        let cfg = EngineConfig::frozen(&script);
+"#,
+        );
         let out = tmp.path().join("out");
         let cancel = CancelToken::new();
         let mut seen = Vec::new();
@@ -551,16 +560,12 @@ echo "Report generation Completed."
     #[cfg(unix)]
     #[test]
     fn run_import_reports_engine_failure() {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let script = tmp.path().join("boom.sh");
-        {
-            let mut f = std::fs::File::create(&script).unwrap();
-            writeln!(f, "#!/bin/sh\necho 'ImportError: broken freeze'\nexit 1").unwrap();
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let cfg = EngineConfig::frozen(&script);
+        let cfg = sh_script(
+            tmp.path(),
+            "boom.sh",
+            "echo 'ImportError: broken freeze'\nexit 1\n",
+        );
         let err = run_import(
             &cfg,
             tmp.path(),

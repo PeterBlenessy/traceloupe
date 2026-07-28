@@ -15,8 +15,15 @@ cd .claude/worktrees/<slug>
 git push -u origin <slug>          # back it up immediately
 ```
 
-The branch name always equals the worktree directory name. See AGENTS.md for the
-naming rules, build/verify commands, and cleanup steps.
+When it is merged or abandoned:
+
+```bash
+scripts/agent-cleanup.sh <slug>   # refuses rather than losing work; --force overrides
+```
+
+Run it from the main checkout, not from inside the worktree — it will tell you so
+if you forget. The branch name always equals the worktree directory name. See
+AGENTS.md for the naming rules, build/verify commands, and cleanup steps.
 
 Two more rules from AGENTS.md that are easy to violate without noticing:
 
