@@ -2679,6 +2679,27 @@ const mockContentFindings: ContentFinding[] = (
 // A finding with no date. It cannot sit on a timeline, so the charts count it
 // everywhere else and say so — the case that would otherwise leave the chart's
 // total quietly disagreeing with the list's.
+// A timestamp that decoded wrong: Apple stores seconds since 2001, and a zeroed
+// or mis-read column lands in 1970. It is not a date, so it belongs with the
+// undatable ones — before the window existed, this one finding stretched the
+// axis across half a century and squashed the other sixteen into one bar.
+mockContentFindings.push({
+  id: mockContentFindings.length + 1,
+  sourceKind: "message",
+  sourceId: 99,
+  threadId: 2,
+  threadIdentifier: "8",
+  service: "SMS",
+  occurredAt: 0,
+  fingerprint: "mockfp-harassment-epoch",
+  category: "harassment-bullying",
+  severity: 1,
+  rationale: "Message whose timestamp did not decode.",
+  stale: false,
+  dismissed: false,
+  rechecked: false,
+});
+
 mockContentFindings.push({
   id: mockContentFindings.length + 1,
   sourceKind: "note",
@@ -3605,7 +3626,16 @@ export const mockClient: TraceLoupeClient = {
     const total = (b: ChartBucket) =>
       b.confirmed.reduce((a, n) => a + n, 0) + b.unconfirmed.reduce((a, n) => a + n, 0);
 
-    const dated = matched.filter((f) => f.occurredAt != null);
+    // Same window as the backend (TIMELINE_START): a timestamp before the iPhone
+    // existed, or in the future, is a decode failure rather than a date, and one
+    // of them would stretch the axis across half a century. Mirrored here on
+    // purpose — the divergent copy of the dismissed count in this very file is
+    // what made that lesson concrete.
+    const TIMELINE_START = 1_167_609_600; // 2007-01-01
+    const horizon = Math.floor(Date.now() / 1000) + 86_400;
+    const datable = (f: (typeof matched)[0]) =>
+      f.occurredAt != null && f.occurredAt >= TIMELINE_START && f.occurredAt <= horizon;
+    const dated = matched.filter(datable);
     const stamps = dated.map((f) => f.occurredAt as number);
     const span = stamps.length ? Math.max(...stamps) - Math.min(...stamps) : 0;
     const DAY = 86400;
@@ -3659,7 +3689,18 @@ export const mockClient: TraceLoupeClient = {
       otherConversationFindings: overflow.reduce((n, b) => n + total(b), 0),
       charted: matched.length,
       undated: matched.length - dated.length,
-      dismissed: all.filter((f) => f.dismissed).length,
+      // What these charts LEFT OUT, mirroring the backend: zero when the caller
+      // asked for dismissed findings (nothing was left out), and narrowed by the
+      // severity filter like everything else. The disclosure beside the charts
+      // says "left out of every chart" — in the mock too, that has to be true.
+      dismissed: filter?.includeDismissed
+        ? 0
+        : all.filter(
+            (f) =>
+              f.dismissed &&
+              (!filter?.excludeStale || !f.stale) &&
+              (!filter?.severity || f.severity === filter.severity),
+          ).length,
     };
   },
   contentFindingSnippet: async (sourceKind, sourceId) => {
