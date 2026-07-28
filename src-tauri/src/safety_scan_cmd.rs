@@ -1351,12 +1351,15 @@ pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<Find
     Ok(marks)
 }
 
+/// Record that a finding's flagged text has been revealed.
+///
+/// Called when a finding is expanded — the one deliberate act that means it was
+/// read. Idempotent, and one-way: collapsing the row is not un-reading it.
 #[tauri::command]
-pub fn dismiss_content_finding(
+pub fn mark_content_finding_seen(
     active: State<'_, ActiveBackup>,
     fingerprint: String,
     category: String,
-    dismissed: bool,
 ) -> Result<(), String> {
     let cat = Category::parse(&category).ok_or("unknown category")?;
     let path = analysis_path(&active.path()?)?;
@@ -1365,8 +1368,35 @@ pub fn dismiss_content_finding(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    db.set_dismissed(&fingerprint, cat, dismissed, now)
+    db.mark_seen(&fingerprint, cat, now)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn dismiss_content_finding(
+    active: State<'_, ActiveBackup>,
+    fingerprint: String,
+    category: String,
+    dismissed: bool,
+    // `reason` is the user's record of the judgement when dismissing, kept so
+    // the report can show why something was rejected. Ignored when undismissing.
+    reason: Option<String>,
+) -> Result<(), String> {
+    let cat = Category::parse(&category).ok_or("unknown category")?;
+    let path = analysis_path(&active.path()?)?;
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    db.set_verdict(
+        &fingerprint,
+        cat,
+        dismissed.then_some("dismissed"),
+        reason.as_deref().filter(|_| dismissed),
+        now,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1515,6 +1545,8 @@ pub struct ContentFindingCounts {
     pub live: i64,
     pub live_fresh: i64,
     pub dismissed: i64,
+    /// Live, not-stale findings nobody has read yet.
+    pub unread: i64,
     pub serious: i64,
     pub harmful: i64,
     pub concerning: i64,
@@ -1537,6 +1569,7 @@ pub fn count_content_findings(
             live: 0,
             live_fresh: 0,
             dismissed: 0,
+            unread: 0,
             serious: 0,
             harmful: 0,
             concerning: 0,
@@ -1571,6 +1604,7 @@ pub fn count_content_findings(
         live: c.live,
         live_fresh: c.live_fresh,
         dismissed: c.dismissed,
+        unread: c.unread,
         serious: c.serious,
         harmful: c.harmful,
         concerning: c.concerning,

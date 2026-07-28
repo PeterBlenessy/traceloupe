@@ -17,6 +17,13 @@ const toggleVariants = cva(
       size: {
         default: "h-(--control-h) min-w-(--control-h) px-2",
         sm: "h-(--control-h-sm) min-w-(--control-h-sm) px-1.5",
+        // Toolbar segments are ISLAND-tall, not control-tall. A toggle group in
+        // a toolbar sits beside FilterControl and SortControl, which are
+        // islands — and at size="sm" it rendered 24px against their 30px in
+        // Notes, Messages and Safety alike. Nobody noticed because the design
+        // lint's island rule only measured `div.rounded-lg.bg-muted`, and a
+        // ToggleGroup is not one.
+        island: "h-(--island-h) min-w-(--island-h) px-1.5",
         lg: "h-(--control-h-lg) min-w-(--control-h-lg) px-2.5",
       },
     },

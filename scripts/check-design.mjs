@@ -315,13 +315,31 @@ const probe = () =>
       ...document.querySelectorAll('[data-slot="card-header"]'),
     ];
     for (const scope of islandScopes)
-    for (const el of scope.querySelectorAll("div")) {
+    // A ToggleGroup is an island too — it sits in the same row as FilterControl
+    // and SortControl and must read as their equal. It was not measured here,
+    // and rendered 24px against their 30 in Notes, Messages and Safety alike
+    // for as long as it has existed: the rule only looked for the bordered
+    // `div.rounded-lg.bg-muted` shape, which a ToggleGroup does not have.
+    for (const el of scope.querySelectorAll('div, [data-slot="toggle-group"]')) {
       const cls = (el.className || "").toString();
-      if (!/rounded-lg/.test(cls) || !/border/.test(cls) || !/bg-muted/.test(cls)) continue;
+      const isToggleGroup = el.getAttribute("data-slot") === "toggle-group";
+      if (!isToggleGroup &&
+          (!/rounded-lg/.test(cls) || !/border/.test(cls) || !/bg-muted/.test(cls)))
+        continue;
       if (!visible(el)) continue;
       islands.push({ h: el.getBoundingClientRect().height, name: label(el), fixed: fixed(el) });
       for (const seg of el.querySelectorAll("button")) {
-        if (visible(seg)) islands.push({ h: seg.getBoundingClientRect().height, name: label(seg), segment: true, fixed: fixed(el) });
+        if (!visible(seg)) continue;
+        // A ToggleGroup's items ARE the island — the group has no padding, so
+        // the item fills it. A FilterControl's button is a true segment, inset
+        // by 3px inside a taller island. Same appearance, different geometry,
+        // so they cannot share one expectation.
+        islands.push({
+          h: seg.getBoundingClientRect().height,
+          name: label(seg),
+          segment: !isToggleGroup,
+          fixed: fixed(el),
+        });
       }
     }
 

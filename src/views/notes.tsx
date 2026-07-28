@@ -412,7 +412,7 @@ export function NotesView() {
           value={viewMode}
           onValueChange={(v) => v && setViewMode(v as "flat" | "tree")}
           variant="outline"
-        size="sm"
+          size="island"
         >
           <Tooltip>
             <TooltipTrigger asChild>

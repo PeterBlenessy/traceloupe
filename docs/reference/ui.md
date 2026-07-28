@@ -400,6 +400,17 @@ Two tiles, two implementations, is how their heights diverged — 119.8px and
 renders through one `TileShell` with fixed row heights now, data and scan alike:
 whatever goes in the slots, the rows are the rows.
 
+**A ToggleGroup in a toolbar is an island**, not a control. It sits in the same
+row as `FilterControl` and `SortControl` and must read as their equal, so it
+takes `size="island"` (`--island-h`) rather than `size="sm"`. At `sm` it rendered
+24px against their 30 — in Notes, Messages and Safety alike, for as long as it
+had existed — because the island rule only looked for the bordered
+`div.rounded-lg.bg-muted` shape and a ToggleGroup does not have it. The rule
+measures both now, and knows the difference: a `FilterControl`'s button is a true
+*segment*, inset inside a taller island, while a ToggleGroup's items **are** the
+island, filling it. Same appearance, different geometry, so they cannot share one
+expectation.
+
 **Label, icon and order come from the sidebar**, not from the dashboard. Six of
 fourteen tiles had drifted to their own names and icons — "Voice memos" for
 Recordings, "Workouts" for Health, a message bubble for Safety — because the

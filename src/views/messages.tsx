@@ -353,7 +353,7 @@ function MessagesViewInner() {
         value={mode}
         onValueChange={(v) => v && switchMode(v as Mode)}
         variant="outline"
-        size="sm"
+        size="island"
       >
         <Tooltip>
           <TooltipTrigger asChild>

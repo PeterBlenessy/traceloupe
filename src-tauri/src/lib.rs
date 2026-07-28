@@ -4224,6 +4224,7 @@ pub fn run() {
             safety_scan_cmd::content_finding_snippet,
             safety_scan_cmd::safety_scan_finding_marks,
             safety_scan_cmd::dismiss_content_finding,
+            safety_scan_cmd::mark_content_finding_seen,
             logging::subscribe_logs,
             logging::set_file_logging,
             logging::log_file_path,
