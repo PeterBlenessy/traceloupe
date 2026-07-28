@@ -47,12 +47,7 @@ import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { badgeGroup, multiBadgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
-import {
-  formatDateTimeYear,
-  formatDuration,
-  formatListTime,
-  formatTimelineTime,
-} from "@/lib/format";
+import { dateFormat, formatDateTimeYear, formatDuration, formatListTime, formatTimelineTime } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { useContactResolver } from "@/lib/use-contact-resolver";
@@ -128,11 +123,9 @@ const SEVERITY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
 function formatScanRange(start: number | null, end: number | null): string {
   if (start == null && end == null) return "all history";
   const fmt = (t: number) =>
-    new Date(t * 1000).toLocaleDateString(undefined, {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    dateFormat({ day: "numeric", month: "short", year: "numeric" }).format(
+      new Date(t * 1000),
+    );
   if (start != null && end != null) {
     const s = new Date(start * 1000);
     const e = new Date(end * 1000);

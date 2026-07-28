@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react";
+import { formatCount } from "@/lib/format";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { client, type ReimportResult } from "@/lib/ipc";
@@ -38,7 +39,7 @@ function summarize(module: string, r: ReimportResult): string {
             : module === "safari"
               ? { n: r.safariVisits, noun: "Safari visits" }
               : { n: r.messages, noun: "messages" };
-  return `Re-imported ${n.toLocaleString()} ${noun}`;
+  return `Re-imported ${formatCount(n)} ${noun}`;
 }
 
 type ReimportContextValue = {

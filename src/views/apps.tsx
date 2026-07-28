@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { dateFormat } from "@/lib/format";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Boxes } from "lucide-react";
@@ -67,11 +68,7 @@ function downloadedLabel(downloaded: string): string {
   const d = new Date(downloaded);
   return Number.isNaN(d.getTime())
     ? downloaded
-    : d.toLocaleDateString(undefined, {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      });
+    : dateFormat({ day: "numeric", month: "short", year: "numeric" }).format(d);
 }
 
 export function AppsView() {

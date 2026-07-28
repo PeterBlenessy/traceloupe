@@ -49,7 +49,7 @@ import { NoBackupState,
   ListSkeleton,
   ViewHeader,
 } from "@/components/view";
-import { formatDateTime, formatListTime } from "@/lib/format";
+import { dateFormat, formatDateTime, formatListTime } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { client, type Note, type TimeRange } from "@/lib/ipc";
@@ -128,7 +128,7 @@ function dateBucket(
   if (d.getFullYear() === now.getFullYear()) {
     return {
       key: `m-${d.getMonth()}`,
-      label: d.toLocaleString(undefined, { month: "long" }),
+      label: dateFormat({ month: "long" }).format(d),
     };
   }
   return { key: `y-${d.getFullYear()}`, label: String(d.getFullYear()) };

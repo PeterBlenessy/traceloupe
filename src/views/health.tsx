@@ -11,7 +11,7 @@ import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-gro
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useSettings } from "@/components/settings-provider";
 import { NoBackupState, VirtualListView } from "@/components/view";
-import { formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
+import { dateFormat, formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { modelName } from "@/lib/device-names";
 import {
@@ -51,13 +51,13 @@ function formatDistance(m: number | null): string | null {
 /** Days are aggregated per UTC day at import; format the label in UTC so the
  *  local timezone can't shift it onto a neighbouring date. */
 function formatDayUTC(at: number): string {
-  return new Date(at * 1000).toLocaleDateString(undefined, {
+  return dateFormat({
     timeZone: "UTC",
     weekday: "short",
     year: "numeric",
     month: "short",
     day: "numeric",
-  });
+  }).format(new Date(at * 1000));
 }
 
 /** The recorded GPS trace as an inline polyline (equirectangular projection,

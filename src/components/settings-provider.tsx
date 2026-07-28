@@ -1,7 +1,13 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import type { LightboxStyle } from "@/components/media-lightbox";
 import { client, type LogLevel, type LogRecord } from "@/lib/ipc";
-import { CLOCK_KEY, readClockFormat, setClockFormat, type ClockFormat } from "@/lib/format";
+import {
+  CLOCK_KEY,
+  formatTime,
+  readClockFormat,
+  setClockFormat,
+  type ClockFormat,
+} from "@/lib/format";
 
 /** UI density: how tight rows, headers and controls pack together. Drives the
  *  global Tailwind `--spacing` scale via `data-density` on the document root. */
@@ -149,7 +155,7 @@ function printLog(r: LogRecord) {
         : r.level === "debug" || r.level === "trace"
           ? console.debug
           : console.info;
-  const t = r.atMs ? new Date(r.atMs).toLocaleTimeString() : "";
+  const t = r.atMs ? formatTime(Math.floor(r.atMs / 1000)) : "";
   fn(
     `%c[traceloupe]%c${t ? ` ${t}` : ""} ${r.message}`,
     "color:#a78bfa;font-weight:600",

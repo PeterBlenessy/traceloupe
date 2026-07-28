@@ -1,4 +1,20 @@
-/** Shared formatting helpers for epoch-seconds timestamps from the cache. */
+/**
+ * Shared formatting for the timestamps and counts the cache produces.
+ *
+ * **Every formatter here takes an explicit locale.** Passing `undefined` — the
+ * obvious thing, and what this file did — resolves to the app's LANGUAGE, and
+ * macOS lets language and Region differ: English on a Mac set to Sweden reports
+ * `AppleLocale = en_US@rg=sezzzz`, the webview answers `en-US`, and every date
+ * in the app read `Jun 8, 12:40 AM` on a machine that writes `8 juni` and keeps
+ * a 24-hour clock (#161).
+ *
+ * `formatCount` was worse: it inserted a space with a regex and used no locale
+ * at all, so it was right for Sweden by accident and wrong for every US reader.
+ *
+ * The resolved locale comes from the backend (`get_system_locale`), which folds
+ * the Region override into the locale itself because Intl ignores the `rg`
+ * extension. See `system_watch.rs`.
+ */
 
 /** User clock preference: locale default, or force 12-/24-hour. */
 export type ClockFormat = "system" | "12h" | "24h";
@@ -16,18 +32,50 @@ export function readClockFormat(): ClockFormat {
   return raw === "12h" || raw === "24h" ? raw : "system";
 }
 
-// The time-bearing formatters are rebuilt whenever the clock preference changes
-// (date-only formatters don't depend on it, so they stay constant).
+/** The locale every formatter in this file uses.
+ *
+ *  `undefined` until the backend answers, which means the first render or two
+ *  may format in the webview's default. That is the same window the app already
+ *  accepts for the accent colour, and far better than formatting in the wrong
+ *  region for the whole session. */
+let locale: string | undefined;
+
+/**
+ * Adopt the system locale. Rebuilds every formatter, including the date-only
+ * ones — they do not depend on the clock preference but they very much depend
+ * on the region.
+ */
+export function setFormatLocale(next: string) {
+  if (next === locale) return;
+  locale = next;
+  rebuild();
+}
+
+// Rebuilt whenever the clock preference OR the locale changes.
 let hour12 = hour12For(readClockFormat());
 let time = buildTime();
 let dayTime = buildDayTime();
 let dayTimeYear = buildDayTimeYear();
+let dateOnly = buildDateOnly();
+let dateYear = buildDateYear();
+let count = buildCount();
+
+function rebuild() {
+  time = buildTime();
+  dayTime = buildDayTime();
+  dayTimeYear = buildDayTimeYear();
+  dateOnly = buildDateOnly();
+  dateYear = buildDateYear();
+  dateHeader = buildDateHeader();
+  dateHeaderYear = buildDateHeaderYear();
+  count = buildCount();
+}
 
 function buildTime() {
-  return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", hour12 });
+  return new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", hour12 });
 }
 function buildDayTime() {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -36,7 +84,7 @@ function buildDayTime() {
   });
 }
 function buildDayTimeYear() {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat(locale, {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -53,17 +101,34 @@ function buildDayTimeYear() {
  */
 export function setClockFormat(pref: ClockFormat) {
   hour12 = hour12For(pref);
-  time = buildTime();
-  dayTime = buildDayTime();
-  dayTimeYear = buildDayTimeYear();
+  rebuild();
 }
 
-const dateOnly = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" });
-const dateYear = new Intl.DateTimeFormat(undefined, {
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-});
+function buildDateOnly() {
+  return new Intl.DateTimeFormat(locale, { month: "short", day: "numeric" });
+}
+function buildDateYear() {
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+function buildCount() {
+  return new Intl.NumberFormat(locale);
+}
+
+/** A date/time formatter in the system locale, for the handful of places that
+ *  need options this file does not already cover. Exported so no caller has to
+ *  reach for `Intl` — and therefore for `undefined` — themselves. */
+export function dateFormat(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat(locale, options);
+}
+
+/** The resolved locale, for the rare caller that needs to pass it on. */
+export function formatLocale(): string | undefined {
+  return locale;
+}
 
 /** Compact relative-ish label for a thread-list row. */
 export function formatListTime(epochSeconds: number | null): string {
@@ -119,17 +184,24 @@ export function formatDate(epochSeconds: number | null): string {
   return dateYear.format(new Date(epochSeconds * 1000));
 }
 
-const dateHeader = new Intl.DateTimeFormat(undefined, {
+let dateHeader = buildDateHeader();
+let dateHeaderYear = buildDateHeaderYear();
+
+function buildDateHeader() {
+  return new Intl.DateTimeFormat(locale, {
   weekday: "short",
   month: "short",
   day: "numeric",
 });
-const dateHeaderYear = new Intl.DateTimeFormat(undefined, {
+}
+function buildDateHeaderYear() {
+  return new Intl.DateTimeFormat(locale, {
   weekday: "short",
   year: "numeric",
   month: "short",
   day: "numeric",
 });
+}
 
 /** A day separator label for the timeline, e.g. "Sat, Jun 8". */
 export function formatDateHeader(epochSeconds: number | null): string {
@@ -150,15 +222,14 @@ export function formatDuration(seconds: number | null): string {
 }
 
 /**
- * A count with a thousands separator, e.g. 450897 → "450 897". Uses a
- * non-breaking space (U+00A0) so a large count never wraps mid-number.
- * Returns "" for null/undefined so callers can show their own placeholder.
+ * A count with the separator the user's REGION uses — "«redacted»" in the US,
+ * "450 897" in Sweden, "450.897" in Germany.
+ *
+ * This used to insert a space with a regex and consult no locale at all, which
+ * made it right for Sweden by accident and wrong for every US reader. Returns
+ * "" for null/undefined so callers can show their own placeholder.
  */
 export function formatCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "";
-  const neg = n < 0;
-  const digits = Math.abs(Math.trunc(n))
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return neg ? `-${digits}` : digits;
+  return count.format(Math.trunc(n));
 }

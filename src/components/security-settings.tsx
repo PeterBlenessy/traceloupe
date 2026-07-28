@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { formatCount } from "@/lib/format";
 import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -121,7 +122,7 @@ export function SecuritySettings() {
           {info.data ? (
             <>
               <span className="font-medium text-foreground">
-                {totalIndicators.toLocaleString()}
+                {formatCount(totalIndicators)}
               </span>{" "}
               indicators from {info.data.feeds.length} feeds · updated{" "}
               {info.data.generatedAt ? info.data.generatedAt.slice(0, 10) : "—"}
@@ -190,7 +191,7 @@ export function SecuritySettings() {
                       </TooltipContent>
                     </Tooltip>
                     <span className="shrink-0 tabular-nums">
-                      {f.count.toLocaleString()} indicators
+                      {formatCount(f.count)} indicators
                       {f.skipped > 0 && ` · ${f.skipped} skipped`}
                     </span>
                   </div>
