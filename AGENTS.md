@@ -284,6 +284,33 @@ Notes that are easy to get wrong:
   cannot grow, and a measured size where it can. Write what *caps* the
   collection — "it's small" is not a bound.
 
+## A check is not trusted until it has been seen failing
+
+Almost every real defect found in this repo lately was found by making a check
+fail on purpose — not by reading code and judging it correct. So when you add a
+guard, a lint rule or a test, **break something and watch it fail before you
+trust it**, and name the test after the defect it catches.
+
+There are two ways a check goes quiet, and they need different answers:
+
+- **A weak assertion** — the code could be wrong and nothing fails.
+  `cargo mutants --file <path> -p traceloupe-core -- --lib` answers this
+  directly: it changes the code and reports the changes no test noticed. A trial
+  over `dashboard.rs` took 15 minutes and found seven, in a file written with
+  deliberate guard tests. Too slow for every PR; run it when you add logic worth
+  guarding, and write tests from its report rather than from imagination.
+- **A blind check** — it runs, observes nothing, and reports success. This is the
+  more common one here: the design lint reported "Safety" while a dialog kept it
+  on Security; the home view was measured before its data arrived and a planted
+  violation passed; the mock omitted five modules so those tiles were never on
+  screen. Mutation testing cannot see any of that. The answer is that **a check
+  states what it observed and fails when it observed too little** — see the
+  `coverage` rule in `check-design.mjs` and `check-mock-parity.mjs`.
+
+Both scripts prove their own matchers on every run. If a detector stops firing
+on a deliberate violation, that is a failure in itself — a rule that cannot fail
+is indistinguishable from a rule that passes.
+
 ## Finishing up
 
 - Open a PR (or hand off) once CI-clean and the branch is pushed.
