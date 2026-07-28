@@ -16,7 +16,6 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle, } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
@@ -1903,13 +1902,40 @@ function FindingsList({
               value={sort}
               onChange={setSort}
             />
+            {/* Dismissed findings: an island in the toolbar row rather than a
+                switch on a row of its own, which cost a whole line of vertical
+                space in a panel whose job is to show as many findings as fit.
+                Only shown when there ARE dismissed findings — a toggle for an
+                empty set is a control that can do nothing. */}
+            {dismissedCount > 0 && (
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="island"
+                value={showDismissed ? "show" : ""}
+                onValueChange={(v) => setShowDismissed(v === "show")}
+              >
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <ToggleGroupItem value="show" aria-label="Show dismissed findings">
+                      <EyeOff className="size-4" />
+                    </ToggleGroupItem>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {showDismissed
+                      ? `Hide the ${dismissedCount} dismissed finding${dismissedCount === 1 ? "" : "s"}`
+                      : `Show the ${dismissedCount} dismissed finding${dismissedCount === 1 ? "" : "s"} as well`}
+                  </TooltipContent>
+                </Tooltip>
+              </ToggleGroup>
+            )}
             {/* Its own island rather than an item in the view-mode group: this
                 reveals a section, it doesn't change how rows are listed. Same
                 ToggleGroup shell so its height matches the islands beside it. */}
             <ToggleGroup
               type="single"
               variant="outline"
-              size="sm"
+              size="island"
               value={showCharts ? "charts" : ""}
               onValueChange={(v) => setShowCharts(v === "charts")}
             >
@@ -1928,7 +1954,7 @@ function FindingsList({
             <ToggleGroup
               type="single"
               variant="outline"
-              size="sm"
+              size="island"
               value={grouped ? "grouped" : "flat"}
               onValueChange={(v) => v && setGrouped(v === "grouped")}
             >
@@ -1951,21 +1977,6 @@ function FindingsList({
             </ToggleGroup>
           </div>
         </div>
-        {dismissedCount > 0 && (
-          <div className="flex items-center gap-2 pt-1">
-            <Switch
-              id="show-dismissed"
-              checked={showDismissed}
-              onCheckedChange={setShowDismissed}
-            />
-            <Label
-              htmlFor="show-dismissed"
-              className="text-xs text-muted-foreground"
-            >
-              Show dismissed ({dismissedCount})
-            </Label>
-          </div>
-        )}
       </CardHeader>
       <CardContent className="flex min-h-0 flex-1 flex-col space-y-2">
         {showCharts && analytics.data && (
