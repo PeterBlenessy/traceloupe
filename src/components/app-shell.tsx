@@ -5,18 +5,9 @@ import {
   Boxes,
   ShieldAlert,
   ShieldUser,
-  CalendarDays,
-  HeartPulse,
-  ListTodo,
-  Waypoints,
   FolderOpen,
-  Globe,
   Image,
   Loader2,
-  MessageSquare,
-  Mic,
-  NotebookText,
-  Phone,
   RefreshCw,
   Rows2,
   Rows3,
@@ -24,7 +15,6 @@ import {
   Settings,
   SlidersHorizontal,
   Terminal,
-  Users,
 } from "lucide-react";
 import {
   Sidebar,
@@ -97,26 +87,11 @@ import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
 import { useBoundedList } from "@/lib/bounded-list";
+import { nav } from "@/lib/nav";
 
-const nav = [
-  { to: "/photos", label: "Photos", icon: Image, module: "camera_roll" },
-  {
-    to: "/messages",
-    label: "Messages",
-    icon: MessageSquare,
-    module: "messages",
-  },
-  { to: "/contacts", label: "Contacts", icon: Users },
-  { to: "/calls", label: "Calls", icon: Phone, module: "calls" },
-  { to: "/safari", label: "Safari", icon: Globe, module: "safari" },
-  { to: "/notes", label: "Notes", icon: NotebookText, module: "notes" },
-  { to: "/recordings", label: "Recordings", icon: Mic, module: "recordings" },
-  { to: "/calendar", label: "Calendar", icon: CalendarDays },
-  { to: "/reminders", label: "Reminders", icon: ListTodo },
-  { to: "/health", label: "Health", icon: HeartPulse },
-  { to: "/interactions", label: "Interactions", icon: Waypoints },
-  { to: "/apps", label: "Apps", icon: Boxes },
-] as const;
+// The nav list lives in @/lib/nav so the home dashboard can order and label
+// its tiles from the SAME list — six tiles had drifted to their own names and
+// icons before it was shared (#163).
 
 export function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -275,7 +250,11 @@ export function AppShell() {
                             <span>{item.label}</span>
                           </Link>
                         </SidebarMenuButton>
-                        {"module" in item && (
+                        {/* `item.module &&` rather than `"module" in item`:
+                            the shared nav is typed, so the key is always
+                            present and only its value tells you whether this
+                            view has a re-importable module. */}
+                        {item.module && (
                           <ReimportAction
                             module={item.module}
                             label={item.label}

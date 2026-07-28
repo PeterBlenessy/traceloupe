@@ -19,7 +19,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { client, type BackupInfo } from "@/lib/ipc";
+import { client, type BackupInfo, type ContentCategory } from "@/lib/ipc";
 import { useImport } from "@/components/import-provider";
 import {
   openPerfEnd,
@@ -33,6 +33,7 @@ import {
   DashboardTilesSkeleton,
   ScanTile,
 } from "@/components/dashboard-tiles";
+import { CATEGORY_LABEL, formatSources } from "@/views/safety-scan";
 import { formatDateTime } from "@/lib/format";
 import { useBoundedList } from "@/lib/bounded-list";
 
@@ -259,6 +260,30 @@ function HomeDashboard() {
 
   const security = (securityRuns ?? []).find((r) => r.status === "done");
   const safety = (safetyScans ?? []).find((s) => s.status === "completed");
+  // Live totals across everything scanned, with the LATEST run's date and that
+  // run's coverage. Findings are scoped rather than owned by a run, so pairing
+  // one run's date with another run's findings would describe two scans in one
+  // tile without saying so — the defect the report's totals row had.
+  const { data: safetyCounts } = useQuery({
+    queryKey: ["safetyScan", "findingCounts", null],
+    queryFn: () => client.countContentFindings(undefined),
+    enabled: safety != null,
+  });
+  const { data: safetyAnalytics } = useQuery({
+    queryKey: ["safetyScan", "analytics", "home"],
+    queryFn: () => client.contentFindingAnalytics(undefined, { excludeStale: true }),
+    enabled: safety != null,
+  });
+  const { data: securityFindings } = useQuery({
+    queryKey: ["findings", security?.id ?? null],
+    queryFn: () => client.listFindings(security!.id),
+    enabled: security != null,
+  });
+
+  const topCategories = (safetyAnalytics?.byCategory ?? [])
+    .slice(0, 3)
+    .map((b) => CATEGORY_LABEL[b.key as ContentCategory] ?? b.key);
+  const newSinceLastRun = (securityFindings ?? []).filter((f) => f.isNew).length;
 
   return (
     <section className="mt-8 space-y-3">
@@ -270,28 +295,73 @@ function HomeDashboard() {
       ) : (
         <DashboardTiles metrics={metrics ?? []}>
           <ScanTile
-            label="Security Check"
-            icon="security"
-            status={security ? formatRelative(security.finishedAt ?? security.startedAt) : "never run"}
-            detail={
+            route="/security"
+            label="Security"
+            status={
               security
-                ? security.critical + security.warning > 0
-                  ? `${security.critical + security.warning} to review`
-                  : "clean"
+                ? formatRelative(security.finishedAt ?? security.startedAt)
+                : "never run"
+            }
+            bands={
+              security
+                ? [
+                    { n: security.critical, color: "var(--status-danger)", label: "critical" },
+                    { n: security.warning, color: "var(--status-warning)", label: "warning" },
+                    { n: security.info, color: "var(--muted-foreground)", label: "info" },
+                  ]
+                : undefined
+            }
+            lines={
+              security
+                ? [
+                    security.critical + security.warning + security.info === 0
+                      ? "nothing found"
+                      : `${security.critical} critical · ${security.warning} warning · ${security.info} info`,
+                    newSinceLastRun > 0
+                      ? `${newSinceLastRun} new since the run before`
+                      : "nothing new since the run before",
+                    // A clean scan against stale feeds is a weaker claim than a
+                    // clean scan against fresh ones, and nothing else says so.
+                    security.feedsGeneratedAt != null
+                      ? `feeds were ${formatRelative(security.feedsGeneratedAt)} · ${security.modules.length} modules`
+                      : `${security.modules.length} modules covered`,
+                  ]
                 : undefined
             }
             onRun={security ? undefined : () => void navigate({ to: "/security" })}
             onOpen={() => void navigate({ to: "/security" })}
           />
           <ScanTile
-            label="Safety Scan"
-            icon="messages"
-            status={safety ? formatRelative(safety.finishedAt ?? safety.startedAt) : "never run"}
-            detail={
+            route="/safety-scan"
+            label="Safety"
+            status={
+              safety ? formatRelative(safety.finishedAt ?? safety.startedAt) : "never run"
+            }
+            bands={
+              safetyCounts
+                ? [
+                    { n: safetyCounts.serious, color: "var(--status-danger)", label: "serious" },
+                    { n: safetyCounts.harmful, color: "var(--status-warning)", label: "harmful" },
+                    { n: safetyCounts.concerning, color: "var(--muted-foreground)", label: "concerning" },
+                  ]
+                : undefined
+            }
+            lines={
               safety
-                ? safety.findings > 0
-                  ? `${safety.findings} finding${safety.findings === 1 ? "" : "s"}`
-                  : "nothing flagged"
+                ? [
+                    safetyCounts && safetyCounts.live > 0
+                      ? `${safetyCounts.serious} serious · ${safetyCounts.harmful} harmful · ${safetyCounts.concerning} concerning`
+                      : "nothing flagged",
+                    // Not "unreviewed": nothing records whether a finding has
+                    // been LOOKED at, only whether it was dismissed. Saying
+                    // otherwise would be inventing a signal we do not have.
+                    safetyCounts && safetyCounts.dismissed > 0
+                      ? `${safetyCounts.dismissed} dismissed as false positives`
+                      : "",
+                    topCategories.length > 0
+                      ? topCategories.join(" · ")
+                      : `scanned ${formatSources(safety.sources)}`,
+                  ]
                 : undefined
             }
             onRun={safety ? undefined : () => void navigate({ to: "/safety-scan" })}
