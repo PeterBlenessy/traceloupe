@@ -1199,7 +1199,11 @@ function ContactAvatar({
         <span
           role={contactId != null ? "button" : undefined}
           tabIndex={contactId != null ? 0 : undefined}
-          title={contactId != null ? `Open ${name} in Contacts` : undefined}
+          // aria-label, not title: this span already has a HoverCard, and a
+          // native tooltip fighting it meant two hover affordances on one
+          // element — one of them in the browser's styling. The label still
+          // names the control for screen readers.
+          aria-label={contactId != null ? `Open ${name} in Contacts` : undefined}
           onClick={open}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") open(e);

@@ -21,6 +21,7 @@
  *   focus     every control shows a ring when TABBED to            (:focus-visible needs real keys)
  *   a11y      every control has an accessible name                 (unnamed Settings switches)
  *   tooltip   every icon-only button explains itself
+ *   native-tooltip  no `title=` / SVG `<title>` — the app has its own Tooltip
  *   spacing   gaps and padding stay on the 2px grid
  *
  * Every rule is proved on every run (see selfTest): each is shown a deliberate
@@ -109,6 +110,33 @@ const CONTRAST_ACCEPTED = [
   },
 ];
 
+/**
+ * Native browser tooltips (`title=` / SVG `<title>`) that predate this rule.
+ *
+ * NOT a blessing — a backlog. A native tooltip ignores the type ramp and the
+ * theme, waits about a second, and cannot be styled, which is exactly why the
+ * app has a shadcn Tooltip. These fourteen sites should each become one; the
+ * rule exists so no FIFTEENTH appears while that happens. Delete an entry as it
+ * is converted, and the rule starts enforcing that site.
+ */
+const NATIVE_TOOLTIP_BACKLOG = [
+  {
+    selector: "input[title]",
+    why:
+      "a collapsed search box hints its placeholder. Arguably not a tooltip at" +
+      " all — it is a form hint on an input, which is what the attribute is for.",
+  },
+  { selector: '[class*="cursor-col-resize"][title]', why: "sidebar resize handle" },
+  {
+    selector: '[class*="rounded-full"][class*="p-1"][title]',
+    why:
+      "the five icon badges on a photo tile (trashed / hidden / favorite /" +
+      " people / subtype). Left for a separate pass on purpose: the badges sit" +
+      " inside a clickable tile, so wrapping them changes pointer handling on" +
+      " the grid and wants its own verification.",
+  },
+];
+
 const near = (a, b) => Math.abs(a - b) <= 0.6;
 const failures = [];
 const fail = (rule, state, msg) => failures.push(`[${rule}] ${state}: ${msg}`);
@@ -184,7 +212,7 @@ const page = await ctx.newPage();
 
 /** Everything the rules need, read in one pass so the states stay consistent. */
 const probe = () =>
-  page.evaluate((ACCEPTED) => {
+  page.evaluate(([ACCEPTED, BACKLOG]) => {
     const visible = (el) => {
       const r = el.getBoundingClientRect();
       const cs = getComputedStyle(el);
@@ -365,6 +393,25 @@ const probe = () =>
       }
     }
 
+    // A native tooltip is a design-language break, not a bug in isolation: it
+    // renders in the browser's styling rather than the app's, at the browser's
+    // delay. The charts (#66) shipped with SVG <title> on every bar, which is
+    // how this rule came to exist.
+    const nativeTips = [];
+    for (const el of document.querySelectorAll("[title], svg title")) {
+      const isSvgTitle = el.tagName.toLowerCase() === "title";
+      const text = isSvgTitle ? el.textContent : el.getAttribute("title");
+      if (!text) continue;
+      const subject = isSvgTitle ? el.parentElement : el;
+      if (!subject || (!isSvgTitle && !visible(subject))) continue;
+      if (BACKLOG.some((b) => subject.matches(b.selector))) continue;
+      nativeTips.push(
+        `${subject.tagName.toLowerCase()} "${text.slice(0, 40)}" uses a native ${
+          isSvgTitle ? "<title>" : "title="
+        } — use the shared Tooltip so it matches every other hover in the app`,
+      );
+    }
+
     const clipped = [];
     for (const el of document.querySelectorAll("body *")) {
       if (el.children.length || !el.textContent?.trim() || !visible(el)) continue;
@@ -383,8 +430,8 @@ const probe = () =>
         clipped.push(`${label(el)} (${el2.scrollHeight}px of text in ${el2.clientHeight}px)`);
     }
 
-    return { type, controls, islands, interactive, clipped, unnamed, contrast, spacing };
-  }, CONTRAST_ACCEPTED);
+    return { type, controls, islands, interactive, clipped, unnamed, contrast, spacing, nativeTips };
+  }, [CONTRAST_ACCEPTED, NATIVE_TOOLTIP_BACKLOG]);
 
 
 /**
@@ -464,7 +511,7 @@ const checkFocus = async (state) => {
 };
 
 const check = async (state, scale) => {
-  const { type, controls, islands, interactive, clipped, unnamed, contrast, spacing } = await probe();
+  const { type, controls, islands, interactive, clipped, unnamed, contrast, spacing, nativeTips } = await probe();
 
   for (const u of unnamed)
     fail(u.kind === "name" ? "a11y" : "tooltip", state,
@@ -509,6 +556,7 @@ const check = async (state, scale) => {
   }
 
   for (const c of clipped) fail("clipping", state, c);
+  for (const t of nativeTips) fail("native-tooltip", state, t);
 };
 
 
@@ -543,7 +591,8 @@ const selfTest = async () => {
       <span style="color:#7a7a7a;background:#6f6f6f;font-size:13px">low contrast</span>
       <button style="height:28px;width:28px"><svg width="10" height="10"></svg></button>
       <button aria-label="no tooltip here" style="height:28px;width:28px"><svg width="10" height="10"></svg></button>
-      <div style="display:flex;gap:3px"><span style="font-size:13px">odd gap</span></div>`;
+      <div style="display:flex;gap:3px"><span style="font-size:13px">odd gap</span></div>
+      <span title="native tooltip" style="font-size:13px">native tip</span>`;
     card.appendChild(host);
   });
   await page.waitForTimeout(150);
@@ -593,7 +642,12 @@ const selfTest = async () => {
   }
 
   const missing = [
-    "type", "control", "island", "overlap", "clipping", "contrast", "a11y", "tooltip", "spacing",
+    // "native-tooltip" is its own rule and not folded into "tooltip" on
+    // purpose: sharing the name meant the existing icon-button probe satisfied
+    // the self-test for both, and removing the native-tooltip probe changed
+    // nothing. A rule that cannot fail reads exactly like a rule that passes.
+    "type", "control", "island", "overlap", "clipping", "contrast", "a11y", "tooltip",
+    "native-tooltip", "spacing",
   ].filter((r) => !fired.has(r));
   if (missing.length) {
     console.error(
