@@ -4126,6 +4126,7 @@ pub fn run() {
             engine_status,
             system_watch::subscribe_system_changes,
             system_watch::get_system_text_scale,
+            system_watch::get_system_locale,
             system_watch::get_full_keyboard_access,
             system_watch::get_accessibility_prefs,
             theme::get_system_selection_color,

@@ -22,6 +22,7 @@
  *   a11y      every control has an accessible name                 (unnamed Settings switches)
  *   tooltip   every icon-only button explains itself
  *   native-tooltip  no `title=` / SVG `<title>` — the app has its own Tooltip
+ *   locale    nothing formats in the webview's default locale   (#161: Region ≠ language)
  *   spacing   gaps and padding stay on the 2px grid
  *
  * Every rule is proved on every run (see selfTest): each is shown a deliberate
@@ -158,11 +159,39 @@ const CONTROL_ELEMENTS = /<(Button|button|Input|input|Select|SelectTrigger|Toggl
 const SIZE_LITERAL = /(?<![\w:-])(?:h|size|min-h)-(?:6|7|8|9|10|11|12|14)\b|(?<![\w:-])(?:h|size)-\[[^\]]*(?:px|rem)[^\]]*\]/g;
 const PALETTE_LITERAL = /(?<![\w:-])(?:text|bg|border|ring|fill)-(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3}\b/g;
 
-const walk = (dir) =>
+const walk = (dir, ext = ".tsx") =>
   readdirSync(dir).flatMap((e) => {
     const p = join(dir, e);
-    return statSync(p).isDirectory() ? walk(p) : p.endsWith(".tsx") ? [p] : [];
+    return statSync(p).isDirectory() ? walk(p, ext) : p.endsWith(ext) ? [p] : [];
   });
+
+/**
+ * Nothing formats in the webview's default locale.
+ *
+ * macOS lets language and Region differ, and the default follows the LANGUAGE —
+ * so on a Mac set to English + Sweden every date read `Jun 8, 12:40 AM` and
+ * every count used the wrong separator (#161). `src/lib/format.ts` resolves the
+ * real locale once and hands it to every formatter; a `toLocaleString()` or an
+ * `Intl.NumberFormat(undefined, …)` anywhere else silently opts back out.
+ *
+ * Only format.ts may build formatters, and only with the resolved locale.
+ */
+const LOCALE_BLIND = /\.toLocale(?:String|DateString|TimeString)\s*\(|new Intl\.\w+\(\s*undefined/g;
+
+const localePass = () => {
+  for (const file of [...walk("src"), ...walk("src", ".ts")]) {
+    if (file.endsWith("lib/format.ts")) continue; // where the locale lives
+    const src = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    for (const m of src.matchAll(LOCALE_BLIND)) {
+      const line = src.slice(0, m.index).split("\n").length;
+      fail("locale", "source",
+        `${file}:${line} formats with the webview's default locale (\`${m[0].trim()}\`) —` +
+        ` use a helper from @/lib/format, which knows the user's Region`);
+    }
+  }
+};
 
 const staticPass = () => {
   for (const file of walk("src")) {
@@ -193,6 +222,10 @@ const staticPass = () => {
 {
   const before = failures.length;
   const probe = "<Button className=\"h-9 text-emerald-500\">x</Button>";
+  if (![..."n.toLocaleString()".matchAll(LOCALE_BLIND)].length) {
+    console.error("design lint SELF-TEST failed: the locale matcher did not fire on n.toLocaleString()");
+    process.exit(2);
+  }
   for (const [re, kind] of [[SIZE_LITERAL, "size"], [PALETTE_LITERAL, "colour"]]) {
     if (![...probe.matchAll(re)].length) {
       console.error(`design lint SELF-TEST failed: the static ${kind} matcher did not fire on ${probe}`);
@@ -202,6 +235,7 @@ const staticPass = () => {
   failures.length = before;
 }
 staticPass();
+localePass();
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({

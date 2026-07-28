@@ -21,6 +21,7 @@
  * category and apply it, which is what `--system-text-scale` does.
  */
 import { useEffect } from "react";
+import { setFormatLocale } from "@/lib/format";
 import { client } from "@/lib/ipc";
 
 /** Last accent seen, reapplied synchronously on mount so the first paint
@@ -155,6 +156,18 @@ export function useSystemAccent(onLocaleChange?: () => void) {
     };
     void applyAccessibility();
 
+    // The locale to FORMAT in. Not the webview's default: macOS lets language
+    // and Region differ, and the default follows the language, so every date and
+    // number in the app was formatted for the wrong country (#161).
+    const applyLocale = async () => {
+      try {
+        setFormatLocale(await client.getSystemLocale());
+      } catch {
+        // Leave whatever is applied.
+      }
+    };
+    void applyLocale();
+
     let unlisten: (() => void) | undefined;
     void client
       .onSystemChange((c) => {
@@ -163,7 +176,11 @@ export function useSystemAccent(onLocaleChange?: () => void) {
         if (c.kind === "keyboardAccess") void applyKeyboardAccess();
         if (c.kind === "accessibility" || c.kind === "appearance")
           void applyAccessibility();
-        if (c.kind === "locale") onLocaleChange?.();
+        if (c.kind === "locale") {
+          // Re-resolve BEFORE the re-render, or the views repaint with the old
+          // locale and only correct themselves on the change after this one.
+          void applyLocale().then(() => onLocaleChange?.());
+        }
       })
       .then((fn) => {
         if (cancelled) fn();

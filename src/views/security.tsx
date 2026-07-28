@@ -22,7 +22,7 @@ import { FilterControl } from "@/components/filter-control";
 import { badgeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { feedDisplayName } from "@/lib/feeds";
-import { formatListTime, formatTimelineTime } from "@/lib/format";
+import { formatCount, formatListTime, formatTimelineTime } from "@/lib/format";
 import { useSecurityScan } from "@/components/security-scan-provider";
 import { client, type Finding, type ScanRun, type Severity } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -226,7 +226,7 @@ export function SecurityView() {
               {info.data ? (
                 <>
                   <span className="font-medium text-foreground">
-                    {totalIndicators.toLocaleString()}
+                    {formatCount(totalIndicators)}
                   </span>{" "}
                   indicators from {info.data.feeds.length} feeds · updated{" "}
                   {info.data.generatedAt ? info.data.generatedAt.slice(0, 10) : "—"}
@@ -522,7 +522,7 @@ function RunRail({
 function FeedReceipt({ run, className }: { run: ScanRun; className?: string }) {
   if (run.feeds.length === 0) return null;
   const parts = run.feeds.map(
-    (f) => `${feedDisplayName(f)} ${f.count.toLocaleString()}`,
+    (f) => `${feedDisplayName(f)} ${formatCount(f.count)}`,
   );
   const updated =
     run.feedsGeneratedAt !== null
@@ -580,7 +580,7 @@ function ResultSummary({
           </div>
           <CardDescription>
             Scanned {formatListTime(run.startedAt)} against{" "}
-            {run.indicatorCount?.toLocaleString() ?? "?"} indicators. A clean
+            {run.indicatorCount != null ? formatCount(run.indicatorCount) : "?"} indicators. A clean
             result means no traces of spyware <em>known to these feeds</em> were
             found — it does not guarantee the device is uncompromised.
             {!latest && " This is a past scan — newer scans exist."}

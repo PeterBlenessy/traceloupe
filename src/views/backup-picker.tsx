@@ -612,7 +612,7 @@ function BackupCard({
 }) {
   const [confirming, setConfirming] = useState(false);
   const date = backup.lastBackupDate
-    ? new Date(backup.lastBackupDate * 1000).toLocaleString()
+    ? formatDateTime(backup.lastBackupDate)
     : "unknown date";
   return (
     <Card

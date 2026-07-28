@@ -114,6 +114,81 @@ pub fn get_full_keyboard_access() -> bool {
     }
 }
 
+/// The locale to FORMAT in — language from the user's language, region from
+/// their Region setting.
+///
+/// macOS lets those differ, and plenty of people run one language with another
+/// region: English on a Mac set to Sweden reports `AppleLocale =
+/// en_US@rg=sezzzz`. The webview's own default locale drops the override
+/// entirely and answers `en-US`, which is why every date read `Jun 8, 12:40 AM`
+/// on a machine that writes `8 juni` and keeps a 24-hour clock.
+///
+/// **Passing the raw value through does not work**, and looks like it does:
+/// ```text
+/// en-US                408,937   Jun 8, 2024, 2:40 PM
+/// en-US-u-rg-sezzzz    408,937   Jun 8, 2024, 2:40 PM   ← the override is ignored
+/// en-SE                408 937   8 Jun 2024, 14:40      ← what the user set
+/// ```
+/// Intl does not honour the `rg` extension, so the region has to be folded into
+/// the locale itself. That is what [`system_locale`] does.
+#[tauri::command]
+pub fn get_system_locale() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        macos::apple_locale()
+            .as_deref()
+            .map(to_bcp47)
+            .unwrap_or_else(|| "en-US".to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        "en-US".to_string()
+    }
+}
+
+/// `en_US@rg=sezzzz` → `en-SE`; `sv_SE` → `sv-SE`; `en_US` → `en-US`.
+///
+/// Kept pure and separate from the AppKit call so it can be tested against the
+/// shapes macOS actually produces rather than trusted.
+pub fn to_bcp47(apple_locale: &str) -> String {
+    // Keywords hang off `@` as `key=value;key=value`. `rg` is the Region
+    // override — a region code padded to eight characters ("sezzzz", "gbzzzz").
+    let (base, keywords) = match apple_locale.split_once('@') {
+        Some((b, k)) => (b, Some(k)),
+        None => (apple_locale, None),
+    };
+    let region_override = keywords.and_then(|k| {
+        k.split(';')
+            .filter_map(|kv| kv.split_once('='))
+            .find(|(key, _)| *key == "rg")
+            .map(|(_, v)| v.trim_end_matches('z').to_ascii_uppercase())
+            .filter(|r| r.len() == 2)
+    });
+
+    let mut parts = base.split('_');
+    let language = parts.next().unwrap_or("en");
+    // A script subtag (zh_Hans_CN) sits between language and region; keep it,
+    // because dropping it turns Simplified Chinese into a guess.
+    let rest: Vec<&str> = parts.collect();
+    let (script, region) = match rest.as_slice() {
+        [s, r] => (Some(*s), Some(r.to_string())),
+        [r] if r.len() == 4 => (Some(*r), None),
+        [r] => (None, Some(r.to_string())),
+        _ => (None, None),
+    };
+
+    let mut out = String::from(language);
+    if let Some(s) = script {
+        out.push('-');
+        out.push_str(s);
+    }
+    if let Some(r) = region_override.or(region) {
+        out.push('-');
+        out.push_str(&r);
+    }
+    out
+}
+
 /// The accessibility text-size category as a multiplier for our type ramp.
 ///
 /// macOS's Text Size setting (System Settings → Accessibility → Display) does
@@ -240,6 +315,12 @@ mod macos {
         }
     }
 
+    pub fn apple_locale() -> Option<String> {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str("AppleLocale");
+        defaults.stringForKey(&key).map(|s| s.to_string())
+    }
+
     pub fn full_keyboard_access() -> bool {
         let defaults = NSUserDefaults::standardUserDefaults();
         let key = NSString::from_str("AppleKeyboardUIMode");
@@ -338,6 +419,54 @@ mod macos {
 
 #[cfg(all(test, target_os = "macos"))]
 mod tests {
+    use super::*;
+
+    /// The transformation the whole locale fix hinges on.
+    ///
+    /// Asserted against the shapes macOS actually writes, because the obvious
+    /// alternative — handing `AppleLocale` to Intl unchanged — produces a value
+    /// that is accepted and then ignored, which is indistinguishable from
+    /// working until someone looks at a date.
+    #[test]
+    fn apple_locale_folds_the_region_override_into_the_locale() {
+        for (apple, want) in [
+            // English language, Region: Sweden. The case that started this.
+            ("en_US@rg=sezzzz", "en-SE"),
+            ("en_US@rg=gbzzzz", "en-GB"),
+            // No override: the locale's own region stands.
+            ("en_US", "en-US"),
+            ("sv_SE", "sv-SE"),
+            // A script subtag must survive; dropping it makes Simplified
+            // Chinese a guess.
+            ("zh_Hans_CN", "zh-Hans-CN"),
+            ("zh_Hans_CN@rg=twzzzz", "zh-Hans-TW"),
+            // Other keywords ride alongside rg and must not be mistaken for it.
+            ("en_US@calendar=japanese;rg=sezzzz", "en-SE"),
+            ("en_US@calendar=japanese", "en-US"),
+            // Language only.
+            ("en", "en"),
+        ] {
+            assert_eq!(to_bcp47(apple), want, "{apple}");
+        }
+    }
+
+    /// Whatever the machine reports, the result must be something Intl can use.
+    #[test]
+    fn the_resolved_locale_is_well_formed() {
+        let l = get_system_locale();
+        assert!(!l.is_empty());
+        assert!(
+            !l.contains('@') && !l.contains('_'),
+            "{l} is still in Apple's form"
+        );
+        let mut parts = l.split('-');
+        assert!(
+            parts
+                .next()
+                .is_some_and(|lang| lang.len() >= 2 && lang.len() <= 3),
+            "{l} has no language subtag"
+        );
+    }
     /// Reads the real machine's setting — the point is that the plumbing works
     /// against the actual preference domain, which is where the earlier guesses
     /// about this feature went wrong. The assertion is a range, not a value, so
