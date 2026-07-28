@@ -25,6 +25,11 @@ jobs:
       # Fails the PR if any relative Markdown link points at a missing file
       # (catches links left dangling by a doc move or rename).
       - run: bash scripts/check-doc-links.sh
+      # Fails the PR if the browser mock and the backend describe different
+      # worlds. The mock is what the design lint and every screenshot measure —
+      # when it drifts, those checks quietly stop testing anything while still
+      # reporting success.
+      - run: node scripts/check-mock-parity.mjs
 
   core:
     name: Core crate (Rust, Linux)

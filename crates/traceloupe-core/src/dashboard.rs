@@ -426,6 +426,12 @@ fn spark(
         let (bucket, count) = row?;
         // Clamped rather than trusted: integer division on a degenerate span is
         // exactly the kind of arithmetic that lands one past the end.
+        //
+        // A mutation pass reports the `b - 1` here as untested, and always will:
+        // the divisor above guarantees an index inside the range, so this is
+        // defence against a bug that does not currently exist. Unreachable
+        // defence cannot be tested without constructing an impossible state —
+        // an accepted survivor, not a missing test.
         series[bucket.clamp(0, b - 1) as usize] += count;
     }
     Ok((Some(lo), Some(hi), series))
@@ -722,6 +728,123 @@ mod tests {
         assert_eq!(rec.count, 6);
         assert_eq!(rec.series.len(), 6, "six rows, six bars — not nothing");
         assert_eq!(rec.series.iter().sum::<i64>(), 6);
+    }
+
+    /// The four gaps a mutation pass found in the tests above — each one a
+    /// mutant that survived, meaning the code could be wrong there and nothing
+    /// noticed. Written from that report rather than from imagination, which is
+    /// the point of running it.
+    #[test]
+    fn the_sparkline_boundaries_are_pinned() {
+        let now = 1_760_000_000;
+        let spread = |n: i64| {
+            let db = messages_db();
+            for i in 0..n {
+                db.conn()
+                    .execute(
+                        "INSERT INTO messages (id, thread_id, sent_at, body)
+                         VALUES (?1, 1, ?2, 'x')",
+                        params![i, now - (n - i) * 10 * 86_400],
+                    )
+                    .unwrap();
+            }
+            module_metrics(db.conn(), now)
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == "messages")
+                .unwrap()
+        };
+
+        // Exactly at the floor draws; one below does not. Without both sides the
+        // comparison could be `<=` or `==` and no test would care.
+        assert_eq!(
+            spread(SPARK_MIN_ROWS - 1).series.len(),
+            0,
+            "below the floor there is no shape"
+        );
+        assert_eq!(
+            spread(SPARK_MIN_ROWS).series.len(),
+            SPARK_MIN_ROWS as usize,
+            "at the floor there is"
+        );
+
+        // `hi - lo + 1` is what keeps the newest row inside the LAST bucket. Drop
+        // the +1 and it lands one past the end — clamped, so the only visible
+        // symptom is a last bucket that is too heavy and a first that is short.
+        let m = spread(8);
+        assert_eq!(m.series.len(), 8);
+        assert_eq!(
+            m.series,
+            vec![1, 1, 1, 1, 1, 1, 1, 1],
+            "eight evenly spread rows fill eight buckets one each; a bad divisor \
+             piles them up instead"
+        );
+    }
+
+    /// The window has two ends, and only the lower one was tested. A mutant that
+    /// widened `now + 86_400` into something enormous survived, because nothing
+    /// asked what happens to a timestamp in the future.
+    #[test]
+    fn a_future_timestamp_is_not_datable_either() {
+        let db = messages_db();
+        let now = 1_760_000_000;
+        for i in 0..6i64 {
+            db.conn()
+                .execute(
+                    "INSERT INTO messages (id, thread_id, sent_at, body)
+                     VALUES (?1, 1, ?2, 'x')",
+                    params![i, now - (6 - i) * 20 * 86_400],
+                )
+                .unwrap();
+        }
+        // A year from now: a clock that was wrong when the message was written,
+        // or a field read as the wrong epoch.
+        db.conn()
+            .execute(
+                "INSERT INTO messages (id, thread_id, sent_at, body)
+                 VALUES (99, 1, ?1, 'from the future')",
+                params![now + 365 * 86_400],
+            )
+            .unwrap();
+
+        let m = module_metrics(db.conn(), now)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == "messages")
+            .unwrap();
+        assert_eq!(m.count, 7, "it is still a message");
+        assert_eq!(
+            m.last_at,
+            Some(now - 20 * 86_400),
+            "but it does not end the span"
+        );
+        assert_eq!(
+            m.series.iter().sum::<i64>(),
+            6,
+            "and it is not on the sparkline"
+        );
+    }
+
+    /// `table_exists` returning a constant `true` survived every test — nothing
+    /// asked it about a table that is not there, which is the only question it
+    /// exists to answer.
+    #[test]
+    fn a_missing_table_is_absent_rather_than_an_error() {
+        let db = messages_db();
+        assert!(table_exists(db.conn(), "messages").unwrap());
+        assert!(
+            !table_exists(db.conn(), "podcasts").unwrap(),
+            "a table the schema does not have must read as absent"
+        );
+        // And a source whose table is missing must drop out of the metrics
+        // rather than blowing up the whole dashboard.
+        db.conn().execute("DROP TABLE recordings", []).unwrap();
+        let ids: Vec<String> = module_metrics(db.conn(), 1_760_000_000)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(!ids.contains(&"recordings".to_string()));
     }
 
     #[test]
