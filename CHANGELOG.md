@@ -13,6 +13,41 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.35.0] — 2026-07-28
+
+**Dates and numbers follow your Region, the dashboard follows your sidebar, and
+Health is one timeline** instead of one section at a time.
+
+### Added
+
+- **Each dashboard tile shows what is inside it** — the messaging services in
+  Messages, the categories in Health — as small icons above the count.
+- **Health appears on the dashboard** whatever kind of Health data a backup
+  holds. It was counting workouts alone, so a backup with steps and sleep but no
+  workouts showed no Health tile at all.
+- **Security Check and Safety Scan get a full-width tile each**, with the split
+  by severity, what changed since the run before, how old the threat feeds were,
+  and what the run covered.
+- **Health is one list.** Workouts, daily activity, sleep, awards, timezones and
+  cycle tracking can now be shown together, newest first — and you can pick any
+  combination. Previously it was one section at a time with no way back to
+  seeing everything.
+
+### Fixed
+
+- **Dates, times and numbers follow your Region**, not the app's language.
+  macOS lets those differ — English with Region: Sweden — and the app was
+  formatting everything for the language: `Jun 8, 12:40 AM` where you set
+  `8 Jun, 0:40`, and the wrong thousands separator everywhere.
+- **The dashboard uses the sidebar's names, icons and order.** Six tiles had
+  drifted to their own — "Voice memos" for Recordings, "Workouts" for Health —
+  and the tiles were sorted by size, so nothing was ever in the same place
+  twice.
+- **A tile for a small number of items shows its chart.** A handful of voice
+  memos got no chart at all.
+- **A filter you have not touched no longer looks like an active filter** — it
+  was showing a chip per option in the toolbar.
+
 ## [0.34.0] — 2026-07-28
 
 **Opening a backup now shows you what's in it** — a tile for every kind of data
