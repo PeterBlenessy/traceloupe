@@ -1047,6 +1047,10 @@ export interface TraceLoupeClient {
   /** The home dashboard's tiles: every kind of data this backup yielded, with
    *  its count, span and sparkline. Loaded AFTER the home view paints — these
    *  aggregates must not land on the open-backup timing (#40). */
+  /** The locale to FORMAT in: language from the user's language, region from
+   *  their Region setting. The webview's own default drops the region override
+   *  and answers e.g. `en-US` on a Mac set to Sweden (#161). */
+  getSystemLocale(): Promise<string>;
   moduleMetrics(): Promise<ModuleMetric[]>;
   messageDateBounds(): Promise<[number, number] | null>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
@@ -1514,6 +1518,7 @@ const tauriClient: TraceLoupeClient = {
     }),
   countNoteRanges: (ranges) =>
     invoke<number[]>("count_note_ranges", { ranges }),
+  getSystemLocale: () => invoke<string>("get_system_locale"),
   moduleMetrics: () => invoke<ModuleMetric[]>("module_metrics"),
   messageDateBounds: () =>
     invoke<[number, number] | null>("message_date_bounds"),
@@ -3398,6 +3403,11 @@ export const mockClient: TraceLoupeClient = {
         return (r.lo == null || t >= r.lo) && (r.hi == null || t < r.hi);
       }).length;
     }),
+  // Deliberately NOT the browser default: the mock has to exercise a locale
+  // that DIFFERS from the webview's, because formatting in the webview's own
+  // locale is the bug (#161). en-SE is the case that found it — English
+  // language, Region Sweden.
+  getSystemLocale: async () => "en-SE",
   moduleMetrics: async () => {
     if (!mockActive) return [];
     // Mirrors the backend: every module it knows about, sources with no rows

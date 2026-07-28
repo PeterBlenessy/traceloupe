@@ -116,3 +116,44 @@ Tests in `system_watch.rs` read the machine's actual settings and assert shape
 rather than values, so they hold however the machine is configured — the point is
 that the bridge reaches the real preference domain, which is precisely where the
 guesses went wrong.
+
+## Language and Region are separate, and Intl only honours one of them
+
+macOS lets you pick a language and a Region independently. A Mac with English
+and Region: Sweden reports:
+
+```
+$ defaults read -g AppleLocale
+en_US@rg=sezzzz
+```
+
+The webview's default locale **drops the region override** and answers `en-US`.
+So `new Intl.DateTimeFormat(undefined, …)` — the obvious call, and what this app
+used everywhere — formatted every date for the United States on a machine set to
+Sweden: `Jun 8, 12:40 AM` where the user expects `8 Jun, 0:40`.
+
+**The obvious fix does not work, and looks like it does.** Passing `AppleLocale`
+through verbatim is accepted and then ignored, because Intl does not implement
+the `rg` extension:
+
+| locale | number | date |
+|---|---|---|
+| `en-US` | 408,937 | Jun 8, 2024, 2:40 PM |
+| `en-US-u-rg-sezzzz` | 408,937 | Jun 8, 2024, 2:40 PM |
+| `en-SE` | 408 937 | 8 Jun 2024, 14:40 |
+
+So the region has to be folded into the locale itself: `system_watch::to_bcp47`
+turns `en_US@rg=sezzzz` into `en-SE`, and `get_system_locale` hands that to the
+frontend. `src/lib/format.ts` holds it and every formatter in the app takes it.
+
+Two things make this stay fixed rather than drift back:
+
+- the `locale` rule in `scripts/check-design.mjs` fails on any `toLocaleString()`
+  or `Intl.*(undefined, …)` outside `format.ts`;
+- `to_bcp47` is tested against the shapes macOS actually writes — including a
+  script subtag (`zh_Hans_CN@rg=twzzzz` → `zh-Hans-TW`) and other keywords
+  riding alongside `rg`.
+
+`formatCount` deserves its own mention: it used to insert a space with a regex
+and consult no locale at all, which made it correct for Sweden by accident and
+wrong for every US reader.
