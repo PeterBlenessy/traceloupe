@@ -16,6 +16,7 @@
  * greyscale print and stay readable under "Differentiate without colour".
  */
 import { useId } from "react";
+import { dateFormat } from "@/lib/format";
 
 import { useBoundedList } from "@/lib/bounded-list";
 import {
@@ -307,7 +308,7 @@ function formatSpan(unit: Unit, buckets: ChartBucket[]): string {
   const opts: Intl.DateTimeFormatOptions =
     unit === "year" ? { year: "numeric" } : { month: "short", year: "numeric" };
   const at = (i: number) =>
-    new Intl.DateTimeFormat(undefined, { ...opts, timeZone: "UTC" }).format(
+    dateFormat({ ...opts, timeZone: "UTC" }).format(
       keyToDate(unit, buckets[i].key),
     );
   const first = at(0);
