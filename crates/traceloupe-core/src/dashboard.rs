@@ -32,25 +32,69 @@ use crate::error::Result;
 /// off the spacing grid the design lint enforces.
 pub const SPARK_BUCKETS: usize = 16;
 
+/// Below this many rows there is no shape to draw — two bars is not a chart.
+///
+/// Above it the bucket count follows the data rather than a fixed threshold.
+/// The first version suppressed the sparkline below twelve rows, which meant a
+/// handful of voice memos got nothing at all despite having perfectly good
+/// timestamps: a cliff where a scale belonged.
+pub const SPARK_MIN_ROWS: i64 = 4;
+
+/// How many buckets a set of `n` rows deserves: enough to show a shape, never
+/// more than there are rows to put in them.
+fn bucket_count(n: i64) -> usize {
+    n.clamp(SPARK_MIN_ROWS, SPARK_BUCKETS as i64) as usize
+}
+
+/// One table a module draws from.
+#[derive(Debug, Clone, Copy)]
+pub struct TableSource {
+    pub table: &'static str,
+    /// The column to take the span and the sparkline from — or any SQL
+    /// expression, which is how a TEXT date joins in. `None` for data that is
+    /// real but undated (contacts, installed apps): those tiles show a count and
+    /// nothing else, rather than a fabricated timeline.
+    pub time_column: Option<&'static str>,
+    /// What this table is called when the module shows its parts, e.g. Health's
+    /// "Workouts" / "Daily activity" / "Sleep".
+    pub facet: Option<&'static str>,
+}
+
+/// Where a module's facets come from — the small icons that say what is
+/// actually inside it, rather than one generic glyph.
+///
+/// A query rather than a table+column pair: the interesting facets are rarely
+/// on the module's own table (a message's service lives on its thread), and a
+/// join expressed here is clearer than a join modelled in types.
+#[derive(Debug, Clone, Copy)]
+pub enum FacetSource {
+    /// `SELECT label, count … ORDER BY count DESC`. Labels feed the view's
+    /// brand-icon lookup, so they are service names, bundle ids and the like.
+    Query(&'static str),
+    /// One facet per table, labelled by its `facet` and counted by its rows —
+    /// Health's categories.
+    PerTable,
+}
+
 /// One tile's definition — the whole of what makes a kind of data appear on the
 /// dashboard.
 #[derive(Debug, Clone, Copy)]
 pub struct MetricSource {
     pub id: &'static str,
+    /// Fallback label. The view prefers the sidebar's name for this route, so
+    /// the two can never drift; this is what a module the sidebar does not know
+    /// about falls back to.
     pub label: &'static str,
-    /// Where clicking the tile goes. Sent to the UI, so a new module routes
-    /// correctly without the frontend knowing it exists.
     pub route: &'static str,
-    /// Icon name the UI resolves against its own map, falling back to a generic
-    /// glyph — an unrecognised module still gets its label, link and numbers
-    /// rather than being dropped.
     pub icon: &'static str,
-    pub table: &'static str,
-    /// The column to take the span and the sparkline from. `None` for data that
-    /// is real but undated (contacts, installed apps): those tiles show a count
-    /// and nothing else, rather than a fabricated timeline.
-    pub time_column: Option<&'static str>,
+    /// One or more tables. Health is several: a backup with steps and sleep but
+    /// no workouts is still a backup with Health data in it.
+    pub tables: &'static [TableSource],
+    pub facets: Option<FacetSource>,
 }
+
+/// How many facets a tile shows before it stops.
+pub const FACET_CAP: usize = 4;
 
 /// Every kind of data that earns a tile. Extend this to extend the dashboard.
 pub const METRIC_SOURCES: &[MetricSource] = &[
@@ -59,98 +103,165 @@ pub const METRIC_SOURCES: &[MetricSource] = &[
         label: "Messages",
         route: "/messages",
         icon: "messages",
-        table: "messages",
-        time_column: Some("sent_at"),
+        tables: &[one("messages", Some("sent_at"))],
+        // A message's service lives on its thread, so this counts messages per
+        // service rather than threads per service.
+        facets: Some(FacetSource::Query(
+            "SELECT t.service, COUNT(*) FROM messages m
+             JOIN threads t ON t.id = m.thread_id
+             WHERE t.service IS NOT NULL AND t.service <> ''
+             GROUP BY t.service ORDER BY 2 DESC",
+        )),
     },
     MetricSource {
         id: "photos",
-        label: "Photos & videos",
+        label: "Photos",
         route: "/photos",
         icon: "photos",
-        table: "media_items",
-        time_column: Some("taken_at"),
+        tables: &[one("media_items", Some("taken_at"))],
+        facets: Some(FacetSource::Query(
+            "SELECT source, COUNT(*) FROM media_items
+             WHERE source IS NOT NULL AND source <> ''
+             GROUP BY source ORDER BY 2 DESC",
+        )),
     },
     MetricSource {
         id: "contacts",
         label: "Contacts",
         route: "/contacts",
         icon: "contacts",
-        table: "contacts",
-        time_column: None,
+        tables: &[one("contacts", None)],
+        facets: None,
     },
     MetricSource {
         id: "calls",
         label: "Calls",
         route: "/calls",
         icon: "calls",
-        table: "calls",
-        time_column: Some("occurred_at"),
+        tables: &[one("calls", Some("occurred_at"))],
+        facets: Some(FacetSource::Query(
+            "SELECT service, COUNT(*) FROM calls
+             WHERE service IS NOT NULL AND service <> ''
+             GROUP BY service ORDER BY 2 DESC",
+        )),
     },
     MetricSource {
         id: "safari",
-        label: "Safari history",
+        label: "Safari",
         route: "/safari",
         icon: "safari",
-        table: "safari_history",
-        time_column: Some("visited_at"),
+        tables: &[one("safari_history", Some("visited_at"))],
+        facets: None,
     },
     MetricSource {
         id: "notes",
         label: "Notes",
         route: "/notes",
         icon: "notes",
-        table: "notes",
-        time_column: Some("modified_at"),
+        tables: &[one("notes", Some("modified_at"))],
+        facets: None,
     },
     MetricSource {
         id: "recordings",
-        label: "Voice memos",
+        label: "Recordings",
         route: "/recordings",
         icon: "recordings",
-        table: "recordings",
-        time_column: Some("recorded_at"),
+        tables: &[one("recordings", Some("recorded_at"))],
+        facets: None,
     },
     MetricSource {
         id: "calendar",
         label: "Calendar",
         route: "/calendar",
         icon: "calendar",
-        table: "calendar_events",
-        time_column: Some("start_at"),
+        tables: &[one("calendar_events", Some("start_at"))],
+        facets: None,
     },
     MetricSource {
         id: "reminders",
         label: "Reminders",
         route: "/reminders",
         icon: "reminders",
-        table: "reminders",
-        time_column: Some("created_at"),
+        tables: &[one("reminders", Some("created_at"))],
+        facets: None,
     },
+    // Health is several tables on purpose: pointing this at `workouts` alone
+    // meant a backup with steps and sleep but no workouts showed no Health tile
+    // at all, which is not what "no Health data" looks like.
     MetricSource {
-        id: "workouts",
-        label: "Workouts",
+        id: "health",
+        label: "Health",
         route: "/health",
         icon: "health",
-        table: "workouts",
-        time_column: Some("start_at"),
+        tables: &[
+            TableSource {
+                table: "workouts",
+                time_column: Some("start_at"),
+                facet: Some("Workouts"),
+            },
+            TableSource {
+                table: "health_daily",
+                // An EXPRESSION, not a column: `day` is TEXT 'YYYY-MM-DD'. CAST
+                // because strftime returns text, and a text/integer comparison
+                // is lexicographic — which would silently pass the window check
+                // and then sort wrongly.
+                time_column: Some("CAST(strftime('%s', day) AS INTEGER)"),
+                facet: Some("Daily activity"),
+            },
+            TableSource {
+                table: "sleep_sessions",
+                time_column: Some("start_at"),
+                facet: Some("Sleep"),
+            },
+            TableSource {
+                table: "health_achievements",
+                time_column: Some("CAST(strftime('%s', earned_on) AS INTEGER)"),
+                facet: Some("Awards"),
+            },
+        ],
+        facets: Some(FacetSource::PerTable),
     },
     MetricSource {
         id: "interactions",
         label: "Interactions",
         route: "/interactions",
         icon: "interactions",
-        table: "interactions",
-        time_column: None,
+        tables: &[one("interactions", None)],
+        facets: Some(FacetSource::Query(
+            "SELECT bundle_id, incoming + outgoing FROM interaction_channels
+             WHERE bundle_id IS NOT NULL ORDER BY 2 DESC",
+        )),
     },
     MetricSource {
         id: "apps",
         label: "Apps",
         route: "/apps",
         icon: "apps",
-        table: "installed_apps",
-        time_column: None,
+        tables: &[one("installed_apps", None)],
+        // `installed_apps` holds only bundle ids and no ordering worth the name,
+        // so this returns candidates and the view shows the first few it has an
+        // icon for — recognisable ones rather than alphabetically first ones.
+        facets: Some(FacetSource::Query(
+            "SELECT bundle_id, 0 FROM installed_apps ORDER BY bundle_id",
+        )),
     },
 ];
+
+/// A single-table source, which most modules are.
+const fn one(table: &'static str, time_column: Option<&'static str>) -> TableSource {
+    TableSource {
+        table,
+        time_column,
+        facet: None,
+    }
+}
+
+/// One facet of a tile: what is inside it, and how much.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Facet {
+    pub label: String,
+    pub count: i64,
+}
 
 /// One tile, ready to render.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,42 +271,46 @@ pub struct ModuleMetric {
     pub route: String,
     pub icon: String,
     pub count: i64,
-    /// The period this data covers. `None` when the source has no timestamp, or
-    /// when every row's timestamp is unusable.
+    /// The period this data covers. `None` when nothing in it is datable.
     pub first_at: Option<i64>,
     pub last_at: Option<i64>,
-    /// [`SPARK_BUCKETS`] counts across `first_at..last_at`, gaps included.
-    /// Empty when there is nothing datable to draw.
+    /// Bucket counts across the span, sized to the data. Empty when there is
+    /// too little to make a shape.
     pub series: Vec<i64>,
+    /// What is inside, biggest first — services, channels, categories. The view
+    /// draws these as brand icons and falls back to the module icon when empty.
+    pub facets: Vec<Facet>,
 }
 
 /// Every tile with something in it.
 ///
 /// Sources with no rows are dropped rather than rendered empty: the dashboard's
 /// tiles are navigation, and a tile that leads to an empty view is a dead end.
-/// A module absent for a reason the user should know about (an unencrypted
-/// backup excludes Safari, calls and Health) is explained by the view, not by a
-/// disabled tile.
 pub fn module_metrics(conn: &Connection, now: i64) -> Result<Vec<ModuleMetric>> {
     let mut out = Vec::new();
     for src in METRIC_SOURCES {
-        // A source whose table has not been created yet (an older cache, a
-        // migration not yet run) is simply absent, not an error.
-        if !table_exists(conn, src.table)? {
+        // Tables a migration has not created yet are simply absent, not errors.
+        let live: Vec<&TableSource> = src
+            .tables
+            .iter()
+            .filter(|t| table_exists(conn, t.table).unwrap_or(false))
+            .collect();
+        if live.is_empty() {
             continue;
         }
-        let count: i64 =
-            conn.query_row(&format!("SELECT COUNT(*) FROM {}", src.table), [], |r| {
-                r.get(0)
+
+        let mut count = 0i64;
+        for t in &live {
+            count += conn.query_row(&format!("SELECT COUNT(*) FROM {}", t.table), [], |r| {
+                r.get::<_, i64>(0)
             })?;
+        }
         if count == 0 {
             continue;
         }
 
-        let (first_at, last_at, series) = match src.time_column {
-            None => (None, None, Vec::new()),
-            Some(col) => spark(conn, src.table, col, now)?,
-        };
+        let (first_at, last_at, series) = spark(conn, &live, now)?;
+        let facets = facets(conn, src, &live)?;
 
         out.push(ModuleMetric {
             id: src.id.to_string(),
@@ -206,12 +321,52 @@ pub fn module_metrics(conn: &Connection, now: i64) -> Result<Vec<ModuleMetric>> 
             first_at,
             last_at,
             series,
+            facets,
         });
     }
     Ok(out)
 }
 
-/// The span and the sparkline for one dated source.
+fn facets(conn: &Connection, src: &MetricSource, live: &[&TableSource]) -> Result<Vec<Facet>> {
+    let Some(source) = src.facets else {
+        return Ok(Vec::new());
+    };
+    match source {
+        FacetSource::PerTable => {
+            let mut out = Vec::new();
+            for t in live {
+                let Some(label) = t.facet else { continue };
+                let n: i64 =
+                    conn.query_row(&format!("SELECT COUNT(*) FROM {}", t.table), [], |r| {
+                        r.get(0)
+                    })?;
+                if n > 0 {
+                    out.push(Facet {
+                        label: label.to_string(),
+                        count: n,
+                    });
+                }
+            }
+            out.sort_by_key(|f| std::cmp::Reverse(f.count));
+            Ok(out)
+        }
+        FacetSource::Query(sql) => {
+            let mut stmt = conn.prepare(sql)?;
+            let rows = stmt.query_map([], |r| {
+                Ok(Facet {
+                    label: r.get::<_, String>(0)?,
+                    count: r.get::<_, i64>(1)?,
+                })
+            })?;
+            // Not truncated here: a tile shows the first few it can draw an icon
+            // for, and which those are is the view's business. Bounded by the
+            // number of distinct services / channels / installed apps.
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        }
+    }
+}
+
+/// The span and the sparkline across every table a module draws from.
 ///
 /// The same window the report's charts use: a timestamp before the iPhone
 /// existed, or in the future, is a decode failure rather than a date (Apple
@@ -220,41 +375,58 @@ pub fn module_metrics(conn: &Connection, now: i64) -> Result<Vec<ModuleMetric>> 
 /// sparkline into its last bucket.
 fn spark(
     conn: &Connection,
-    table: &str,
-    col: &str,
+    live: &[&TableSource],
     now: i64,
 ) -> Result<(Option<i64>, Option<i64>, Vec<i64>)> {
     let horizon = now + 86_400;
-    let datable = format!("{col} IS NOT NULL AND {col} >= {TIMELINE_START} AND {col} <= {horizon}");
+    // One SELECT per dated table, unioned, so a multi-table module gets one
+    // span and one shape rather than one per part.
+    let parts: Vec<String> = live
+        .iter()
+        .filter_map(|t| t.time_column.map(|c| (t.table, c)))
+        .map(|(table, col)| {
+            format!(
+                "SELECT ({col}) AS t FROM {table}
+                 WHERE ({col}) IS NOT NULL AND ({col}) >= {TIMELINE_START}
+                   AND ({col}) <= {horizon}"
+            )
+        })
+        .collect();
+    if parts.is_empty() {
+        return Ok((None, None, Vec::new()));
+    }
+    let dated = parts.join(" UNION ALL ");
 
-    let (lo, hi): (Option<i64>, Option<i64>) = conn.query_row(
-        &format!("SELECT MIN({col}), MAX({col}) FROM {table} WHERE {datable}"),
+    let (lo, hi, n): (Option<i64>, Option<i64>, i64) = conn.query_row(
+        &format!("SELECT MIN(t), MAX(t), COUNT(*) FROM ({dated})"),
         [],
-        |r| Ok((r.get(0)?, r.get(1)?)),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     let (Some(lo), Some(hi)) = (lo, hi) else {
         return Ok((None, None, Vec::new()));
     };
+    if n < SPARK_MIN_ROWS {
+        // Datable, but not enough of it to be a shape. The span still stands.
+        return Ok((Some(lo), Some(hi), Vec::new()));
+    }
 
     // Equal slices of the span. `hi - lo + 1` keeps the last row inside the last
     // bucket instead of falling one past the end, and a single-instant span
     // (lo == hi) collapses to bucket 0 rather than dividing by zero.
-    let n = SPARK_BUCKETS as i64;
-    let mut series = vec![0i64; SPARK_BUCKETS];
+    let buckets = bucket_count(n);
+    let b = buckets as i64;
+    let mut series = vec![0i64; buckets];
     let mut stmt = conn.prepare(&format!(
-        "SELECT ({col} - ?1) * ?2 / ?3 AS b, COUNT(*)
-         FROM {table} WHERE {datable}
-         GROUP BY b"
+        "SELECT (t - ?1) * ?2 / ?3 AS b, COUNT(*) FROM ({dated}) GROUP BY b"
     ))?;
-    let rows = stmt.query_map(params![lo, n, hi - lo + 1], |r| {
+    let rows = stmt.query_map(params![lo, b, hi - lo + 1], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
     })?;
     for row in rows {
         let (bucket, count) = row?;
         // Clamped rather than trusted: integer division on a degenerate span is
         // exactly the kind of arithmetic that lands one past the end.
-        let idx = bucket.clamp(0, n - 1) as usize;
-        series[idx] += count;
+        series[bucket.clamp(0, b - 1) as usize] += count;
     }
     Ok((Some(lo), Some(hi), series))
 }
@@ -297,11 +469,9 @@ mod tests {
             "health_daily",
             "Health is one tile (workouts); its series live in the view",
         ),
-        ("sleep_sessions", "Health detail"),
-        ("workout_routes", "Health detail — one row per GPS sample"),
+        ("workout_routes", "one row per GPS sample inside a workout"),
         ("activity_rings", "Health detail"),
         ("health_timezones", "Health detail"),
-        ("health_achievements", "Health detail"),
         ("cycle_tracking", "Health detail"),
         (
             "interaction_channels",
@@ -360,7 +530,10 @@ mod tests {
             .map(|r| r.unwrap())
             .collect();
 
-        let tiled: Vec<&str> = METRIC_SOURCES.iter().map(|s| s.table).collect();
+        let tiled: Vec<&str> = METRIC_SOURCES
+            .iter()
+            .flat_map(|s| s.tables.iter().map(|t| t.table))
+            .collect();
         let excused: Vec<&str> = NOT_A_TILE.iter().map(|(t, _)| *t).collect();
         let orphans: Vec<&String> = tables
             .iter()
@@ -380,19 +553,33 @@ mod tests {
     fn every_metric_source_points_at_a_real_table_and_column() {
         let db = CacheDb::open_in_memory().unwrap();
         for src in METRIC_SOURCES {
-            assert!(
-                table_exists(db.conn(), src.table).unwrap(),
-                "{} points at missing table {}",
-                src.id,
-                src.table
-            );
-            if let Some(col) = src.time_column {
-                // Reading it is the only honest check that it exists.
-                db.conn()
-                    .query_row(&format!("SELECT MIN({col}) FROM {}", src.table), [], |r| {
-                        r.get::<_, Option<i64>>(0)
-                    })
-                    .unwrap_or_else(|e| panic!("{}.{col} is not queryable: {e}", src.table));
+            for t in src.tables {
+                assert!(
+                    table_exists(db.conn(), t.table).unwrap(),
+                    "{} points at missing table {}",
+                    src.id,
+                    t.table
+                );
+                if let Some(col) = t.time_column {
+                    // Running it is the only honest check — and it catches an
+                    // expression that does not parse, which comparing strings
+                    // never would.
+                    db.conn()
+                        .query_row(&format!("SELECT MIN({col}) FROM {}", t.table), [], |r| {
+                            r.get::<_, Option<i64>>(0)
+                        })
+                        .unwrap_or_else(|e| panic!("{}.{col} is not queryable: {e}", t.table));
+                }
+            }
+            // A facet query that does not run leaves a tile silently plain.
+            if let Some(FacetSource::Query(sql)) = src.facets {
+                let mut stmt = db
+                    .conn()
+                    .prepare(sql)
+                    .unwrap_or_else(|e| panic!("{}'s facet query does not parse: {e}", src.id));
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                    .unwrap_or_else(|e| panic!("{}'s facet query does not run: {e}", src.id))
+                    .for_each(drop);
             }
         }
     }
@@ -493,7 +680,7 @@ mod tests {
     fn a_single_instant_does_not_divide_by_zero() {
         let db = messages_db();
         let now = 1_760_000_000;
-        for i in 0..3i64 {
+        for i in 0..5i64 {
             db.conn()
                 .execute(
                     "INSERT INTO messages (id, thread_id, sent_at, body) VALUES (?1, 1, ?2, 'x')",
@@ -507,8 +694,92 @@ mod tests {
             .find(|x| x.id == "messages")
             .unwrap();
         assert_eq!(msg.first_at, msg.last_at);
-        assert_eq!(msg.series.len(), SPARK_BUCKETS);
-        assert_eq!(msg.series[0], 3, "all in the first bucket");
-        assert_eq!(msg.series.iter().sum::<i64>(), 3);
+        assert_eq!(msg.series.len(), 5, "buckets follow the row count");
+        assert_eq!(msg.series[0], 5, "all in the first bucket");
+        assert_eq!(msg.series.iter().sum::<i64>(), 5);
+    }
+
+    #[test]
+    fn a_small_module_still_gets_a_shape() {
+        // The cliff this replaces: six voice memos used to render no sparkline
+        // at all, despite recordings.recorded_at being wired the whole time.
+        let db = CacheDb::open_in_memory().unwrap();
+        let now = 1_760_000_000;
+        for i in 0..6i64 {
+            db.conn()
+                .execute(
+                    "INSERT INTO recordings (id, recorded_at, title, relative_path, local_path)
+                     VALUES (?1, ?2, 'memo', 'r.m4a', '/tmp/r.m4a')",
+                    params![i, now - (6 - i) * 30 * 86_400],
+                )
+                .unwrap();
+        }
+        let rec = module_metrics(db.conn(), now)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == "recordings")
+            .unwrap();
+        assert_eq!(rec.count, 6);
+        assert_eq!(rec.series.len(), 6, "six rows, six bars — not nothing");
+        assert_eq!(rec.series.iter().sum::<i64>(), 6);
+    }
+
+    #[test]
+    fn health_counts_every_table_it_is_made_of() {
+        // Pointing Health at `workouts` alone meant a backup with steps and
+        // sleep but no workouts showed no Health tile at all.
+        let db = CacheDb::open_in_memory().unwrap();
+        let now = 1_760_000_000;
+        db.conn()
+            .execute_batch(
+                "INSERT INTO health_daily (day, metric, value_sum, samples)
+                   VALUES ('2025-01-01','steps',1000,1),('2025-02-01','steps',2000,1),
+                          ('2025-03-01','steps',3000,1),('2025-04-01','steps',4000,1);
+                 INSERT INTO sleep_sessions (id, start_at, end_at, stage)
+                   VALUES (1, 1735689600, 1735718400, 'Asleep');",
+            )
+            .unwrap();
+
+        let health = module_metrics(db.conn(), now)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == "health")
+            .expect("Health has data even with no workouts");
+        assert_eq!(health.count, 5, "four daily rows plus one sleep session");
+        assert!(!health.series.is_empty(), "dated across both tables");
+        let labels: Vec<&str> = health.facets.iter().map(|f| f.label.as_str()).collect();
+        assert_eq!(labels, vec!["Daily activity", "Sleep"], "biggest first");
+    }
+
+    #[test]
+    fn facets_say_what_is_inside_a_module() {
+        let db = messages_db();
+        db.conn()
+            .execute_batch(
+                "UPDATE threads SET service = 'iMessage' WHERE id = 1;
+                 INSERT INTO threads (id, identifier, service) VALUES (2,'t2','SMS');
+                 INSERT INTO messages (id, thread_id, sent_at, body)
+                   VALUES (1,1,1735689600,'a'),(2,1,1735689601,'b'),(3,2,1735689602,'c');",
+            )
+            .unwrap();
+        let msg = module_metrics(db.conn(), 1_760_000_000)
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == "messages")
+            .unwrap();
+        assert_eq!(
+            msg.facets,
+            vec![
+                Facet {
+                    label: "iMessage".into(),
+                    count: 2
+                },
+                Facet {
+                    label: "SMS".into(),
+                    count: 1
+                },
+            ],
+            "messages per service, biggest first — not threads per service"
+        );
     }
 }

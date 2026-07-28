@@ -352,8 +352,12 @@ export interface ModuleMetric {
   /** The period this data covers; null when the source has no timestamps. */
   firstAt: number | null;
   lastAt: number | null;
-  /** Equal-width bucket counts across the span. Empty when undated. */
+  /** Bucket counts across the span, sized to the data. Empty when there is too
+   *  little of it to be a shape. */
   series: number[];
+  /** What is inside — services, channels, Health categories — biggest first.
+   *  The view draws these as brand icons instead of one generic glyph. */
+  facets: { label: string; count: number }[];
 }
 
 /** Counts refreshed by a partial re-import (only the relevant field is set). */
@@ -3396,39 +3400,145 @@ export const mockClient: TraceLoupeClient = {
     }),
   moduleMetrics: async () => {
     if (!mockActive) return [];
-    // Mirrors the backend's shape, including the rule that a source with no
-    // rows earns no tile — the mock is what the design lint and every browser
-    // check measure, so it has to behave like the real thing.
+    // Mirrors the backend: every module it knows about, sources with no rows
+    // dropped, bucket count following the data. Deliberately covers ALL of them
+    // — five were missing before, so the design lint and every screenshot check
+    // had never once seen those tiles (#163).
     const now = Math.floor(Date.now() / 1000);
-    const spark = (stamps: number[]): Omit<ModuleMetric, "id" | "label" | "route" | "icon" | "count"> => {
-      const ok = stamps.filter((t) => t >= 1_167_609_600 && t <= now + 86_400);
-      if (!ok.length) return { firstAt: null, lastAt: null, series: [] };
-      const lo = Math.min(...ok), hi = Math.max(...ok);
-      const series = new Array(16).fill(0);
+    const TIMELINE_START = 1_167_609_600; // 2007-01-01
+    const shape = (stamps: number[]) => {
+      const ok = stamps.filter((t) => t >= TIMELINE_START && t <= now + 86_400);
+      if (ok.length < 4) {
+        return ok.length
+          ? { firstAt: Math.min(...ok), lastAt: Math.max(...ok), series: [] }
+          : { firstAt: null, lastAt: null, series: [] };
+      }
+      const lo = Math.min(...ok);
+      const hi = Math.max(...ok);
+      const n = Math.min(16, Math.max(4, ok.length));
+      const series = new Array(n).fill(0);
       for (const t of ok) {
-        const b = Math.min(15, Math.floor(((t - lo) * 16) / (hi - lo + 1)));
-        series[b] += 1;
+        series[Math.min(n - 1, Math.floor(((t - lo) * n) / (hi - lo + 1)))] += 1;
       }
       return { firstAt: lo, lastAt: hi, series };
     };
-    const sources: [string, string, string, string, number, number[]][] = [
-      ["messages", "Messages", "/messages", "messages", Object.values(mockMessages).flat().length,
-        Object.values(mockMessages).flat().map((m) => m.sentAt ?? 0).filter(Boolean)],
-      ["photos", "Photos & videos", "/photos", "photos", mockMedia.length,
-        mockMedia.map((m) => m.takenAt ?? 0).filter(Boolean)],
-      ["contacts", "Contacts", "/contacts", "contacts", mockContacts.length, []],
-      ["calls", "Calls", "/calls", "calls", mockCalls.length,
-        mockCalls.map((c) => c.occurredAt ?? 0).filter(Boolean)],
-      ["safari", "Safari history", "/safari", "safari", mockSafari.length,
-        mockSafari.map((v) => v.visitedAt ?? 0).filter(Boolean)],
-      ["notes", "Notes", "/notes", "notes", mockNotes.length,
-        mockNotes.map((n) => n.modifiedAt ?? 0).filter(Boolean)],
-      ["apps", "Apps", "/apps", "apps", mockInstalledApps.length, []],
+    const tally = (values: (string | null | undefined)[]) => {
+      const by = new Map<string, number>();
+      for (const v of values) if (v) by.set(v, (by.get(v) ?? 0) + 1);
+      return [...by.entries()]
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count);
+    };
+
+    // Read the OTHER mocks through the client rather than copying their
+    // fixtures: a third copy of "what calendar data exists" would drift from
+    // the view's, which is the whole failure this dashboard already had once.
+    const [events, reminders, workouts, sleep, interactions, channels] =
+      await Promise.all([
+        mockClient.listCalendarEvents(),
+        mockClient.listReminders(),
+        mockClient.listWorkouts(),
+        mockClient.listSleep(),
+        mockClient.listInteractions(),
+        mockClient.interactionChannels(),
+      ]);
+
+    const msgs = Object.values(mockMessages).flat();
+    const serviceOf = (threadId: number) =>
+      mockThreads.find((t) => t.id === threadId)?.service ?? null;
+
+    const sources: {
+      id: string;
+      label: string;
+      route: string;
+      icon: string;
+      count: number;
+      stamps: number[];
+      facets?: { label: string; count: number }[];
+    }[] = [
+      {
+        id: "messages", label: "Messages", route: "/messages", icon: "messages",
+        count: msgs.length,
+        stamps: msgs.map((m) => m.sentAt ?? 0),
+        facets: tally(
+          Object.entries(mockMessages).flatMap(([tid, ms]) =>
+            ms.map(() => serviceOf(Number(tid))),
+          ),
+        ),
+      },
+      {
+        id: "photos", label: "Photos", route: "/photos", icon: "photos",
+        count: mockMedia.length,
+        stamps: mockMedia.map((m) => m.takenAt ?? 0),
+        facets: tally(mockMedia.map((m) => m.source)),
+      },
+      {
+        id: "contacts", label: "Contacts", route: "/contacts", icon: "contacts",
+        count: mockContacts.length, stamps: [],
+      },
+      {
+        id: "calls", label: "Calls", route: "/calls", icon: "calls",
+        count: mockCalls.length,
+        stamps: mockCalls.map((c) => c.occurredAt ?? 0),
+        facets: tally(mockCalls.map((c) => c.service)),
+      },
+      {
+        id: "safari", label: "Safari", route: "/safari", icon: "safari",
+        count: mockSafari.length,
+        stamps: mockSafari.map((v) => v.visitedAt ?? 0),
+      },
+      {
+        id: "notes", label: "Notes", route: "/notes", icon: "notes",
+        count: mockNotes.length,
+        stamps: mockNotes.map((n) => n.modifiedAt ?? 0),
+      },
+      {
+        id: "recordings", label: "Recordings", route: "/recordings", icon: "recordings",
+        count: mockRecordings.length,
+        stamps: mockRecordings.map((r) => r.recordedAt ?? 0),
+      },
+      {
+        id: "calendar", label: "Calendar", route: "/calendar", icon: "calendar",
+        count: events.length,
+        stamps: events.map((e) => e.startAt ?? 0),
+      },
+      {
+        id: "reminders", label: "Reminders", route: "/reminders", icon: "reminders",
+        count: reminders.length,
+        stamps: reminders.map((r) => r.dueAt ?? 0),
+      },
+      {
+        id: "health", label: "Health", route: "/health", icon: "health",
+        count: workouts.length + sleep.length,
+        stamps: [
+          ...workouts.map((w) => w.startAt ?? 0),
+          ...sleep.map((x) => x.startAt ?? 0),
+        ],
+        facets: [
+          { label: "Workouts", count: workouts.length },
+          { label: "Sleep", count: sleep.length },
+        ].filter((f) => f.count > 0).sort((a, b) => b.count - a.count),
+      },
+      {
+        id: "interactions", label: "Interactions", route: "/interactions", icon: "interactions",
+        count: interactions.length, stamps: [],
+        facets: channels
+          .map((c) => ({ label: c.bundleId, count: c.incoming + c.outgoing }))
+          .sort((a, b) => b.count - a.count),
+      },
+      {
+        id: "apps", label: "Apps", route: "/apps", icon: "apps",
+        count: mockInstalledApps.length, stamps: [],
+        facets: mockInstalledApps.map((a) => ({ label: a.bundleId, count: 0 })),
+      },
     ];
+
     return sources
-      .filter(([, , , , count]) => count > 0)
-      .map(([id, label, route, icon, count, stamps]) => ({
-        id, label, route, icon, count, ...spark(stamps),
+      .filter((s) => s.count > 0)
+      .map(({ stamps, facets, ...rest }) => ({
+        ...rest,
+        facets: facets ?? [],
+        ...shape(stamps.filter(Boolean)),
       }));
   },
   messageDateBounds: async () => {
