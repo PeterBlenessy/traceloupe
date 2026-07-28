@@ -395,9 +395,24 @@ fails on any that has neither a `MetricSource` nor an entry in `NOT_A_TILE` with
 a reason. Adding `CREATE TABLE podcasts` fails the build until someone decides
 what it is. It found the six FTS shadow tables on its first run.
 
-Two tiles, two implementations, is how their heights diverged (119.8px and
-96.5px in one grid) — both kinds now render through one `TileShell` with fixed
-row heights, so a tile cannot disagree with its neighbour whatever goes in it.
+Two tiles, two implementations, is how their heights diverged — 119.8px and
+96.5px in one grid, then 144 and 122 after they were split again. Every tile
+renders through one `TileShell` with fixed row heights now, data and scan alike:
+whatever goes in the slots, the rows are the rows.
+
+**Label, icon and order come from the sidebar**, not from the dashboard. Six of
+fourteen tiles had drifted to their own names and icons — "Voice memos" for
+Recordings, "Workouts" for Health, a message bubble for Safety — because the
+dashboard carried a second list of names for destinations that already had them.
+`src/lib/nav.ts` is now that one list; the tile looks itself up by route and
+falls back to the backend's values only for a module the nav has never heard of.
+Order follows it too: busiest-first changed with every backup, so no tile's
+position was ever learnable.
+
+A tile shows **facets** where a module has parts worth naming — the services in
+Messages, the categories in Health — drawn as brand icons, or as words when
+there is no icon to draw. Unresolvable ones are dropped rather than rendered as
+`BrandIcon`'s text fallback, which turned a row of bundle ids into "COCOCOCO".
 
 ## macOS display preferences are respected
 
