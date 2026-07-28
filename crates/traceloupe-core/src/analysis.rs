@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -314,6 +314,22 @@ CREATE TABLE IF NOT EXISTS finding_verdicts (
     PRIMARY KEY (fingerprint, category)
 );
 CREATE INDEX IF NOT EXISTS idx_verdict ON finding_verdicts(verdict);
+
+-- Standing "this is fine" rules: a dismissal the user chose to apply to a whole
+-- conversation or category rather than one finding.
+--
+-- Scope is deliberately NOT "sender": a finding carries thread_identifier,
+-- category and service, but the sender lives on the message in cache.db — a
+-- different database. For a one-to-one chat "this conversation" is the same
+-- thing; for a group it is broader, which the UI says out loud.
+CREATE TABLE IF NOT EXISTS suppressions (
+    id         INTEGER PRIMARY KEY,
+    scope      TEXT NOT NULL,                  -- 'thread' | 'category'
+    value      TEXT NOT NULL,
+    reason     TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE(scope, value)
+);
 
 -- Per-Chunk classification progress. One row per chunk_key (latest state);
 -- resume skips chunks whose status is 'done' with an unchanged fingerprint,
@@ -671,6 +687,18 @@ impl AnalysisDb {
                     )?;
                 }
             }
+            // v8: standing suppression rules (#169). See the schema comment for
+            // why the scopes are conversation and category rather than sender.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS suppressions (
+                     id         INTEGER PRIMARY KEY,
+                     scope      TEXT NOT NULL,
+                     value      TEXT NOT NULL,
+                     reason     TEXT,
+                     created_at INTEGER NOT NULL,
+                     UNIQUE(scope, value)
+                 );",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -871,6 +899,9 @@ impl AnalysisDb {
             )?;
         }
         tx.commit()?;
+        // A rule set yesterday must cover what today's scan turns up, or it only
+        // ever applied to the findings that happened to exist when it was made.
+        self.apply_suppressions(at)?;
         Ok(())
     }
 
@@ -1451,6 +1482,77 @@ impl AnalysisDb {
                  reason  = excluded.reason,
                  at      = excluded.at",
             params![fingerprint, category.as_str(), verdict, reason, at],
+        )?;
+        Ok(())
+    }
+
+    /// Dismiss everything a standing rule covers, now and in future.
+    ///
+    /// A rule is a dismissal the user chose to apply broadly: "this whole
+    /// conversation is fine", "this category is noise". It is stored, and it is
+    /// applied by DISMISSING the matching findings rather than by hiding them
+    /// behind a second predicate.
+    ///
+    /// That is the safety property. A hidden finding is invisible; a dismissed
+    /// one is counted, reachable behind "Show dismissed", and carries the reason
+    /// that dismissed it. The case this app exists to catch is a conversation
+    /// that was safe until it wasn't — so a rule must never make a finding
+    /// disappear, only pre-judge it visibly.
+    pub fn add_suppression(
+        &self,
+        scope: &str,
+        value: &str,
+        reason: Option<&str>,
+        at: i64,
+    ) -> Result<usize> {
+        self.conn.execute(
+            "INSERT INTO suppressions (scope, value, reason, created_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(scope, value) DO UPDATE SET reason = excluded.reason",
+            params![scope, value, reason, at],
+        )?;
+        self.apply_suppressions(at)
+    }
+
+    /// Dismiss every finding a rule covers that is not already judged.
+    ///
+    /// Called when a rule is created and again whenever findings are written,
+    /// so a rule made today still covers what tomorrow's scan turns up. An
+    /// existing verdict is left alone: a rule must not overwrite a decision the
+    /// user made by hand.
+    pub fn apply_suppressions(&self, at: i64) -> Result<usize> {
+        Ok(self.conn.execute(
+            "INSERT INTO finding_verdicts (fingerprint, category, verdict, reason, at)
+             SELECT f.fingerprint, f.category, 'dismissed',
+                    COALESCE(s.reason, 'Matched a rule you set'), ?1
+             FROM content_findings f
+             JOIN suppressions s
+               ON (s.scope = 'thread'   AND s.value = f.thread_identifier)
+               OR (s.scope = 'category' AND s.value = f.category)
+             WHERE NOT EXISTS (SELECT 1 FROM finding_verdicts v
+                               WHERE v.fingerprint = f.fingerprint
+                                 AND v.category = f.category)
+             ON CONFLICT(fingerprint, category) DO NOTHING",
+            params![at],
+        )?)
+    }
+
+    /// Every standing rule, newest first.
+    pub fn list_suppressions(&self) -> Result<Vec<(String, String, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT scope, value, reason FROM suppressions ORDER BY created_at DESC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Drop a rule. Findings it already dismissed keep their verdict — undoing a
+    /// rule is not the same as re-opening every judgement it made, and silently
+    /// resurrecting a hundred findings would be its own surprise.
+    pub fn remove_suppression(&self, scope: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM suppressions WHERE scope = ?1 AND value = ?2",
+            params![scope, value],
         )?;
         Ok(())
     }
@@ -2790,6 +2892,123 @@ mod tests {
             assert_eq!(listed, charted, "{q:?}");
         }
     }
+    #[test]
+    fn a_rule_dismisses_rather_than_hides() {
+        // The safety property. A conversation marked fine today may not be fine
+        // next month — this app exists to catch exactly that — so a rule must
+        // never make a finding vanish. It pre-judges it VISIBLY: counted as
+        // dismissed, reachable behind "Show dismissed", carrying the reason.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..3)
+            .map(|i| NewFinding {
+                thread_identifier: Some(if i == 0 { "safe-chat" } else { "other" }.into()),
+                ..finding(&format!("r{i}"), Category::ScamFraud)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 100).unwrap();
+
+        let n = db
+            .add_suppression("thread", "safe-chat", Some("Work group, all jokes"), 200)
+            .unwrap();
+        assert_eq!(n, 1, "one existing finding matched");
+
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.live, 2, "the rule removed it from the default view");
+        assert_eq!(c.dismissed, 1, "but it is counted, not gone");
+        let reason: String = db
+            .conn()
+            .query_row(
+                "SELECT reason FROM finding_verdicts WHERE fingerprint = 'r0'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason, "Work group, all jokes", "and says why");
+    }
+
+    #[test]
+    fn a_rule_covers_findings_that_did_not_exist_when_it_was_made() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        db.add_suppression("category", "scam-fraud", Some("Junk texts"), 100)
+            .unwrap();
+
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                finding("new1", Category::ScamFraud),
+                finding("new2", Category::SelfHarm),
+            ],
+            200,
+        )
+        .unwrap();
+
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(
+            (c.live, c.dismissed),
+            (1, 1),
+            "a rule set before the scan still applies to what the scan found"
+        );
+    }
+
+    #[test]
+    fn a_rule_never_overwrites_a_decision_made_by_hand() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 100)
+            .unwrap();
+        // The user looked at it and kept it, explicitly.
+        db.set_verdict(
+            "fp1",
+            Category::ScamFraud,
+            None,
+            Some("Checked, it is real"),
+            150,
+        )
+        .unwrap();
+
+        db.add_suppression("category", "scam-fraud", Some("Junk"), 200)
+            .unwrap();
+
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(
+            c.live, 1,
+            "a broad rule must not overrule a specific judgement"
+        );
+        let reason: String = db
+            .conn()
+            .query_row("SELECT reason FROM finding_verdicts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(reason, "Checked, it is real");
+    }
+
+    #[test]
+    fn removing_a_rule_leaves_the_verdicts_it_made() {
+        // Undoing a rule is not re-opening every judgement it made; resurrecting
+        // a hundred findings silently would be its own surprise.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 100)
+            .unwrap();
+        db.add_suppression("category", "scam-fraud", None, 200)
+            .unwrap();
+        assert_eq!(
+            db.count_findings_breakdown("all", None, None).unwrap().live,
+            0
+        );
+
+        db.remove_suppression("category", "scam-fraud").unwrap();
+        assert!(db.list_suppressions().unwrap().is_empty());
+        assert_eq!(
+            db.count_findings_breakdown("all", None, None)
+                .unwrap()
+                .dismissed,
+            1,
+            "the verdict stands until the user changes it"
+        );
+    }
+
     #[test]
     fn seen_is_recorded_once_and_never_taken_back() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
