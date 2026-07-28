@@ -9,7 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ChartColumn, ExternalLink, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ChartColumn, ChevronDown, ExternalLink, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,11 +31,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from "@/components/ui/hover-card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { NoBackupState, ErrorState, ListSkeleton } from "@/components/view";
 import { SettingsLink } from "@/components/settings-dialog-context";
@@ -280,6 +275,18 @@ export function SafetyScanView() {
     queryKey: ["safetyScan", "findingCounts", selectedScan?.id ?? null],
     queryFn: () => client.countContentFindings(selectedScan?.id),
     enabled: selectedScan != null,
+  });
+
+  // Reading a finding is a fact about the user, not an edit to the data — so it
+  // refreshes the counts (the unread number moves) but deliberately does NOT
+  // invalidate the findings pages, which would re-fetch and re-render the list
+  // under the reader every time they opened a row.
+  const markSeen = useMutation({
+    mutationFn: (f: { fingerprint: string; category: string }) =>
+      client.markContentFindingSeen(f.fingerprint, f.category),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["safetyScan", "findingCounts"] });
+    },
   });
 
   const dismiss = useMutation({
@@ -551,6 +558,12 @@ export function SafetyScanView() {
                       fingerprint: f.fingerprint,
                       category: f.category,
                       dismissed,
+                    })
+                  }
+                  onSeen={(f) =>
+                    markSeen.mutate({
+                      fingerprint: f.fingerprint,
+                      category: f.category,
                     })
                   }
                 />
@@ -1569,9 +1582,13 @@ function SafetyReportDialog({
 function FindingRow({
   finding: f,
   onDismiss,
+  onSeen,
 }: {
   finding: ContentFinding;
   onDismiss: (dismissed: boolean) => void;
+  /** Called the first time the row is expanded — the deliberate act that means
+   *  the flagged text was read. */
+  onSeen: () => void;
 }) {
   const navigate = useNavigate();
   const resolve = useContactResolver();
@@ -1581,13 +1598,17 @@ function FindingRow({
   const nameOf = (h: string | null | undefined) =>
     h ? (resolve(h)?.name ?? h) : null;
   const sev = SEVERITY_META[f.severity] ?? SEVERITY_META[1];
-  // Fetch the flagged text only once the peek popover is first opened — no
-  // upfront query per finding, and the raw text never lands in a list payload.
-  const [peeked, setPeeked] = useState(false);
+  // Fetch the flagged text only once the row is EXPANDED — no upfront query per
+  // finding, and the raw text never lands in a list payload.
+  //
+  // This used to hang off a hover card, which fired while scrolling: findings
+  // nobody read were fetched from the backup and would have counted as read.
+  // Expanding is a click, so it cannot happen by accident (#169).
+  const [expanded, setExpanded] = useState(false);
   const snippet = useQuery({
     queryKey: ["findingSnippet", f.sourceKind, f.sourceId],
     queryFn: () => client.contentFindingSnippet(f.sourceKind, f.sourceId),
-    enabled: peeked,
+    enabled: expanded,
   });
   // App glyph: the real brand mark (iMessage, TikTok, …) when the service has
   // one, else a note/message fallback. `f.service` is on the finding, so the
@@ -1627,9 +1648,25 @@ function FindingRow({
       className={cn(
         "flex flex-col gap-1.5 rounded-md border px-3 py-2",
         f.dismissed && "opacity-55",
+        // Unread reads as unread, the way mail does. Without it the state lives
+        // only in the database and the scan tile, and scrolling the list tells
+        // you nothing about where you got to.
+        !f.seen && !f.dismissed && "border-l-2 border-l-foreground/40",
       )}
     >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      {/* The whole header expands. A 14px chevron is a poor target; the header
+          is the row's width, and the chevron is there to say it is clickable. */}
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => {
+          const next = !expanded;
+          setExpanded(next);
+          // One-way: collapsing is not un-reading.
+          if (next && !f.seen) onSeen();
+        }}
+        className="flex w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-sm text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      >
         <Badge className={sev.badge}>{sev.label}</Badge>
         <Badge variant="outline">{CATEGORY_LABEL[f.category]}</Badge>
         {/* Confidence signal (Developer setting, off by default): a positive
@@ -1637,20 +1674,12 @@ function FindingRow({
             two independent models agreeing. Only shown when true, so an E2B-only
             scan (nothing confirmed) isn't noisy. */}
         {showCascadeConfidence && f.rechecked && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge
-                variant="outline"
-                className="border-status-ok-line text-status-ok-text"
-              >
-                <ShieldCheck className="size-3" /> Confirmed
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent>
-              Re-checked and kept by the stronger model (E4B) — not just the fast
-              sweep tier
-            </TooltipContent>
-          </Tooltip>
+          <Badge
+            variant="outline"
+            className="border-status-ok-line text-status-ok-text"
+          >
+            <ShieldCheck className="size-3" /> Confirmed
+          </Badge>
         )}
         <span className="flex items-center gap-1 text-xs text-muted-foreground">
           {glyph("size-3.5 shrink-0")}
@@ -1664,90 +1693,93 @@ function FindingRow({
             <HeartPulse className="size-3" /> outdated
           </Badge>
         )}
-      </div>
-      <p className="text-sm">{f.rationale}</p>
-      <div className="flex flex-wrap items-center gap-1">
-        {/* Peek: hover to reveal the flagged text (fetched on demand) and the
-            jump to its source. Actions live here on the card, not a sheet. */}
-        <HoverCard openDelay={120} closeDelay={80} onOpenChange={(o) => o && setPeeked(true)}>
-          <HoverCardTrigger asChild>
-            <Button variant="ghost" size="sm" className="gap-1.5 text-xs">
-              {glyph("size-3.5")} View flagged text
-            </Button>
-          </HoverCardTrigger>
-          <HoverCardContent className="w-96 text-sm">
-            {/* Header: who sent it, when, and the app it came from. */}
-            <div className="mb-2 flex items-center gap-1.5">
-              {glyph("size-4 shrink-0")}
-              <span className="truncate text-sm font-medium">
-                {snippet.data?.sender === "Me"
-                  ? `Me → ${nameOf(snippet.data.recipient) ?? "conversation"}`
-                  : (nameOf(snippet.data?.sender) ??
-                    (f.sourceKind === "note"
-                      ? "Note"
-                      : (nameOf(f.threadIdentifier) ?? "Conversation")))}
-              </span>
-              {(() => {
-                const when = snippet.data?.occurredAt ?? f.occurredAt;
-                return when != null ? (
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {formatDateTimeYear(when)}
-                  </span>
-                ) : null;
-              })()}
-            </div>
-            {snippet.isPending ? (
-              <p className="text-xs text-muted-foreground">Loading…</p>
-            ) : snippet.data ? (
-              <blockquote className="max-h-60 overflow-y-auto border-l-2 pl-3 whitespace-pre-wrap text-muted-foreground">
+        <span className="flex-1" />
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-muted-foreground transition-transform",
+            expanded && "rotate-180",
+          )}
+        />
+      </button>
+      <p className={cn("text-sm", !f.seen && !f.dismissed && "font-medium")}>
+        {f.rationale}
+      </p>
+
+      {/* Expanded: the evidence, and the only place a verdict can be given.
+          Dismiss lives here on purpose — you cannot reject a finding you have
+          not read, which also makes "dismissed implies seen" true by
+          construction rather than a rule to maintain. */}
+      {expanded && (
+        <div className="mt-1 space-y-2 border-t pt-2">
+          {snippet.isPending ? (
+            <p className="text-xs text-muted-foreground">Loading…</p>
+          ) : snippet.data ? (
+            <>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                {glyph("size-3.5 shrink-0")}
+                <span className="truncate font-medium">
+                  {snippet.data.sender === "Me"
+                    ? `Me → ${nameOf(snippet.data.recipient) ?? "conversation"}`
+                    : (nameOf(snippet.data.sender) ??
+                      (f.sourceKind === "note" ? "Note" : "Unknown"))}
+                </span>
+                {snippet.data.occurredAt != null && (
+                  <span>· {formatDateTimeYear(snippet.data.occurredAt)}</span>
+                )}
+              </div>
+              <blockquote className="max-h-60 overflow-y-auto border-l-2 pl-3 text-sm whitespace-pre-wrap text-muted-foreground">
                 {snippet.data.text}
               </blockquote>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                The source is no longer available (it may have changed since
-                this scan).
-              </p>
-            )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              The source is no longer available (it may have changed since this
+              scan).
+            </p>
+          )}
+
+          {f.dismissed && f.dismissReason && (
+            <p className="text-xs text-muted-foreground">
+              Dismissed: {f.dismissReason}
+            </p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-1">
             {canOpen && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3 w-full"
-                onClick={openSource}
-              >
+              <Button variant="outline" size="sm" onClick={openSource}>
                 <ExternalLink className="size-4" />
                 Open {f.sourceKind === "note" ? "note" : "conversation"}
               </Button>
             )}
-          </HoverCardContent>
-        </HoverCard>
-        <span className="flex-1" />
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="gap-1.5 text-xs text-muted-foreground"
-              onClick={() => onDismiss(!f.dismissed)}
-            >
-              {f.dismissed ? (
-                <>
-                  <RotateCcw className="size-3.5" /> Restore
-                </>
-              ) : (
-                <>
-                  <EyeOff className="size-3.5" /> Dismiss
-                </>
-              )}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>
-            {f.dismissed
-              ? "Restore — it was not a false positive after all"
-              : "Dismiss as a false positive (persists across re-scans)"}
-          </TooltipContent>
-        </Tooltip>
-      </div>
+            <span className="flex-1" />
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 text-xs text-muted-foreground"
+                  onClick={() => onDismiss(!f.dismissed)}
+                >
+                  {f.dismissed ? (
+                    <>
+                      <RotateCcw className="size-3.5" /> Restore
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff className="size-3.5" /> Dismiss
+                    </>
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {f.dismissed
+                  ? "Restore — it was not a false positive after all"
+                  : "Dismiss as a false positive (persists across re-scans)"}
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1766,6 +1798,7 @@ function FindingsList({
   showDismissed,
   setShowDismissed,
   onDismiss,
+  onSeen,
 }: {
   scan: SafetyScanHistoryItem;
   /** Unfiltered totals for the pills; the rows themselves are paged (#65). */
@@ -1773,6 +1806,7 @@ function FindingsList({
   showDismissed: boolean;
   setShowDismissed: (v: boolean) => void;
   onDismiss: (f: ContentFinding, dismissed: boolean) => void;
+  onSeen: (f: ContentFinding) => void;
 }) {
   const [severity, setSeverity] = useState("all");
   const [sort, setSort] = useState<SortState>({ by: "severity", desc: true });
@@ -1992,7 +2026,11 @@ function FindingsList({
                     {groupNameOf(f)}
                   </div>
                 )}
-                <FindingRow finding={f} onDismiss={(d) => onDismiss(f, d)} />
+                <FindingRow
+                  finding={f}
+                  onDismiss={(d) => onDismiss(f, d)}
+                  onSeen={() => onSeen(f)}
+                />
               </div>
             )}
           />

@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -96,6 +96,10 @@ pub struct FindingCounts {
     /// "N more not shown" line can be computed without fetching everything.
     pub live_fresh: i64,
     pub dismissed: i64,
+    /// Live, not-stale findings whose flagged text has never been revealed —
+    /// the app's unread count. Dismissing implies reading (the control lives
+    /// inside the expansion), so a dismissed finding is never unread.
+    pub unread: i64,
     pub serious: i64,
     pub harmful: i64,
     pub concerning: i64,
@@ -234,8 +238,9 @@ pub struct FindingAnalytics {
     pub dismissed: i64,
 }
 
-const DISMISSED_EXPR: &str = "EXISTS(SELECT 1 FROM dismissals d
-                WHERE d.fingerprint = f.fingerprint AND d.category = f.category)";
+const DISMISSED_EXPR: &str = "EXISTS(SELECT 1 FROM finding_verdicts v
+                WHERE v.fingerprint = f.fingerprint AND v.category = f.category
+                  AND v.verdict = 'dismissed')";
 
 const IN_SCOPE_PREDICATE: &str = "(?1 = 'all'
      OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
@@ -292,12 +297,23 @@ CREATE INDEX IF NOT EXISTS idx_findings_category ON content_findings(category, s
 
 -- False-positive dismissals. Keyed by (fingerprint, category) — NOT finding row
 -- id — so a dismissal survives re-scans and re-imports (plan T8 AC).
-CREATE TABLE IF NOT EXISTS dismissals (
-    fingerprint  TEXT NOT NULL,
-    category     TEXT NOT NULL,
-    dismissed_at INTEGER NOT NULL,
+-- What the USER decided about a finding, and whether they have read it.
+-- Keyed by (fingerprint, category) — NOT finding row id — so a verdict survives
+-- re-scans and re-imports (plan T8 AC).
+--
+-- One table rather than "dismissals" plus a "seen" sibling: two places
+-- answering "what happened to this finding" is the shape that produced the two
+-- REPORT_FINDINGS_CAP constants and the mock that drifted from the SQL.
+CREATE TABLE IF NOT EXISTS finding_verdicts (
+    fingerprint TEXT NOT NULL,
+    category    TEXT NOT NULL,
+    verdict     TEXT,                          -- 'dismissed' | NULL
+    reason      TEXT,                          -- why, when dismissed
+    seen_at     INTEGER,                       -- NULL = nobody has looked
+    at          INTEGER NOT NULL,
     PRIMARY KEY (fingerprint, category)
 );
+CREATE INDEX IF NOT EXISTS idx_verdict ON finding_verdicts(verdict);
 
 -- Per-Chunk classification progress. One row per chunk_key (latest state);
 -- resume skips chunks whose status is 'done' with an unchanged fingerprint,
@@ -612,6 +628,49 @@ impl AnalysisDb {
                     [],
                 )?;
             }
+            // v7: what the user decided about a finding, plus whether they
+            // have read it, in one place (#169). The old `dismissals` table
+            // folds in; see the schema comment for why it is one table.
+            let has_verdicts: bool = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'finding_verdicts'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )? > 0;
+            if !has_verdicts {
+                conn.execute_batch(
+                    "CREATE TABLE finding_verdicts (
+                         fingerprint TEXT NOT NULL,
+                         category    TEXT NOT NULL,
+                         verdict     TEXT,
+                         reason      TEXT,
+                         seen_at     INTEGER,
+                         at          INTEGER NOT NULL,
+                         PRIMARY KEY (fingerprint, category)
+                     );
+                     CREATE INDEX IF NOT EXISTS idx_verdict
+                        ON finding_verdicts(verdict);",
+                )?;
+                let had_dismissals: bool = conn.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master
+                     WHERE type = 'table' AND name = 'dismissals'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )? > 0;
+                if had_dismissals {
+                    // A past dismissal carries dismissed_at across as seen_at:
+                    // the user decided something about it, which is truer than
+                    // calling every historical verdict unread.
+                    conn.execute_batch(
+                        "INSERT OR IGNORE INTO finding_verdicts
+                             (fingerprint, category, verdict, seen_at, at)
+                         SELECT fingerprint, category, 'dismissed',
+                                dismissed_at, dismissed_at
+                         FROM dismissals;
+                         DROP TABLE dismissals;",
+                    )?;
+                }
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -924,6 +983,11 @@ impl AnalysisDb {
                COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR}),
                COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT f.stale),
                COUNT(*) FILTER (WHERE {DISMISSED_EXPR}),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT f.stale
+                                AND NOT EXISTS(SELECT 1 FROM finding_verdicts v
+                                               WHERE v.fingerprint = f.fingerprint
+                                                 AND v.category = f.category
+                                                 AND v.seen_at IS NOT NULL)),
                COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND f.severity = 3),
                COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND f.severity = 2),
                COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND f.severity = 1)
@@ -937,9 +1001,10 @@ impl AnalysisDb {
                     live: r.get(0)?,
                     live_fresh: r.get(1)?,
                     dismissed: r.get(2)?,
-                    serious: r.get(3)?,
-                    harmful: r.get(4)?,
-                    concerning: r.get(5)?,
+                    unread: r.get(3)?,
+                    serious: r.get(4)?,
+                    harmful: r.get(5)?,
+                    concerning: r.get(6)?,
                 })
             })?;
         Ok(c)
@@ -962,9 +1027,7 @@ impl AnalysisDb {
                 "SELECT COUNT(*) FROM content_findings f
                  WHERE ({IN_SCOPE_PREDICATE})
                    AND f.stale = 0
-                   AND NOT EXISTS(SELECT 1 FROM dismissals d
-                                  WHERE d.fingerprint = f.fingerprint
-                                    AND d.category = f.category)"
+                   AND NOT {DISMISSED_EXPR}"
             ),
             params![sources, range_start, range_end],
             |r| r.get::<_, i64>(0),
@@ -1356,18 +1419,54 @@ impl AnalysisDb {
         dismissed: bool,
         at: i64,
     ) -> Result<()> {
-        if dismissed {
-            self.conn.execute(
-                "INSERT OR REPLACE INTO dismissals (fingerprint, category, dismissed_at)
-                 VALUES (?1, ?2, ?3)",
-                params![fingerprint, category.as_str(), at],
-            )?;
-        } else {
-            self.conn.execute(
-                "DELETE FROM dismissals WHERE fingerprint = ?1 AND category = ?2",
-                params![fingerprint, category.as_str()],
-            )?;
-        }
+        self.set_verdict(
+            fingerprint,
+            category,
+            dismissed.then_some("dismissed"),
+            None,
+            at,
+        )
+    }
+
+    /// Record what the user decided about a finding, keeping what is already
+    /// known about it.
+    ///
+    /// `ON CONFLICT DO UPDATE` rather than `INSERT OR REPLACE`: replace would
+    /// drop `seen_at`, so dismissing something would forget it had been read —
+    /// and undismissing would then mark it unread, which is not what undoing a
+    /// verdict means.
+    pub fn set_verdict(
+        &self,
+        fingerprint: &str,
+        category: Category,
+        verdict: Option<&str>,
+        reason: Option<&str>,
+        at: i64,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO finding_verdicts (fingerprint, category, verdict, reason, at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(fingerprint, category) DO UPDATE SET
+                 verdict = excluded.verdict,
+                 reason  = excluded.reason,
+                 at      = excluded.at",
+            params![fingerprint, category.as_str(), verdict, reason, at],
+        )?;
+        Ok(())
+    }
+
+    /// Mark a finding read — the first time its flagged text is revealed.
+    ///
+    /// Idempotent and one-way: `seen_at` records the FIRST look, and nothing
+    /// un-sees a finding. Collapsing the row is not un-reading it.
+    pub fn mark_seen(&self, fingerprint: &str, category: Category, at: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO finding_verdicts (fingerprint, category, seen_at, at)
+             VALUES (?1, ?2, ?3, ?3)
+             ON CONFLICT(fingerprint, category) DO UPDATE SET
+                 seen_at = COALESCE(finding_verdicts.seen_at, excluded.seen_at)",
+            params![fingerprint, category.as_str(), at],
+        )?;
         Ok(())
     }
 
@@ -2690,5 +2789,106 @@ mod tests {
                 .charted;
             assert_eq!(listed, charted, "{q:?}");
         }
+    }
+    #[test]
+    fn seen_is_recorded_once_and_never_taken_back() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("fp1", Category::SelfHarm)], 100)
+            .unwrap();
+        let counts = |db: &AnalysisDb| db.count_findings_breakdown("all", None, None).unwrap();
+
+        assert_eq!(counts(&db).unread, 1, "nobody has looked yet");
+        db.mark_seen("fp1", Category::SelfHarm, 200).unwrap();
+        assert_eq!(counts(&db).unread, 0);
+
+        // A second look does not move the first: seen_at is when you FIRST read
+        // it, and re-opening a row is not new information.
+        db.mark_seen("fp1", Category::SelfHarm, 999).unwrap();
+        let first: i64 = db
+            .conn()
+            .query_row("SELECT seen_at FROM finding_verdicts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(first, 200);
+    }
+
+    #[test]
+    fn dismissing_does_not_forget_that_a_finding_was_read() {
+        // The trap in writing a verdict: INSERT OR REPLACE drops seen_at, so
+        // dismissing would mark something unread again — and undismissing would
+        // leave it unread, which is not what undoing a verdict means.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("fp1", Category::SelfHarm)], 100)
+            .unwrap();
+
+        db.mark_seen("fp1", Category::SelfHarm, 200).unwrap();
+        db.set_dismissed("fp1", Category::SelfHarm, true, 300)
+            .unwrap();
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!((c.dismissed, c.unread), (1, 0), "dismissed, and still read");
+
+        db.set_dismissed("fp1", Category::SelfHarm, false, 400)
+            .unwrap();
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(
+            (c.dismissed, c.live, c.unread),
+            (0, 1, 0),
+            "undismissing restores it to the list WITHOUT marking it unread"
+        );
+    }
+
+    #[test]
+    fn a_v6_store_keeps_its_dismissals_when_it_gains_verdicts() {
+        // The migration users will actually run. Losing a dismissal would
+        // resurrect a false positive they had already judged.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            // The v6 shape written out by hand: SCHEMA_V1 is the CURRENT schema
+            // and has already moved on, so building the "old" store from it
+            // would test nothing.
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS finding_verdicts;
+                 CREATE TABLE dismissals (
+                     fingerprint  TEXT NOT NULL,
+                     category     TEXT NOT NULL,
+                     dismissed_at INTEGER NOT NULL,
+                     PRIMARY KEY (fingerprint, category)
+                 );
+                 INSERT INTO dismissals (fingerprint, category, dismissed_at)
+                 VALUES ('old1', 'self-harm', 4242);",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 6).unwrap();
+        }
+
+        let mut db = AnalysisDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("old1", Category::SelfHarm)], 100)
+            .unwrap();
+
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.dismissed, 1, "the old dismissal came across");
+        assert_eq!(c.live, 0);
+        assert_eq!(
+            c.unread, 0,
+            "and counts as read — the user decided something"
+        );
+        let old_table: i64 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'dismissals'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            old_table, 0,
+            "the old table is gone — nothing can write to it"
+        );
     }
 }
