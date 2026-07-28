@@ -18,6 +18,11 @@
 import { useId } from "react";
 
 import { useBoundedList } from "@/lib/bounded-list";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 import type { FindingAnalytics, ChartBucket } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -55,6 +60,46 @@ function segmentsOf(b: ChartBucket, hatchIds: string[]): Segment[] {
       });
   }
   return out;
+}
+
+/** What a bar says when you point at it.
+ *
+ *  Deliberately the app's own tooltip and not an SVG `<title>`: a native browser
+ *  tooltip ignores the type ramp, the theme and the tooltip styling every other
+ *  hover target in the app uses, and it took a second to appear. It also read
+ *  one *segment* at a time, so pointing at a month told you about a third of it.
+ *  This is the whole bucket, broken down. */
+function BucketSummary({
+  label,
+  bucket,
+}: {
+  label: string;
+  bucket: ChartBucket;
+}) {
+  const total = bucketTotal(bucket);
+  const lines: string[] = [];
+  for (let i = 2; i >= 0; i--) {
+    const n = bucket.confirmed[i] + bucket.unconfirmed[i];
+    if (n === 0) continue;
+    const unconfirmed = bucket.unconfirmed[i];
+    lines.push(
+      `${n} ${SEVERITY[i].label.toLowerCase()}` +
+        (unconfirmed > 0 ? ` · ${unconfirmed} not confirmed` : ""),
+    );
+  }
+  return (
+    <div className="space-y-0.5">
+      <div className="font-medium">
+        {label} · {total} finding{total === 1 ? "" : "s"}
+      </div>
+      {lines.map((l) => (
+        <div key={l} className="text-background/75">
+          {l}
+        </div>
+      ))}
+      {total === 0 && <div className="text-background/75">nothing flagged</div>}
+    </div>
+  );
 }
 
 export function bucketTotal(b: ChartBucket): number {
@@ -343,9 +388,7 @@ function TimeChart({
                   y={y}
                   height={h}
                   style={{ fill: s.color }}
-                >
-                  <title>{`${formatBucket(unit, b.key, withYear)}: ${s.n} ${s.label}`}</title>
-                </rect>
+                />
               );
             })}
             {total === 0 && (
@@ -369,6 +412,26 @@ function TimeChart({
                 {formatBucket(unit, b.key, withYear)}
               </text>
             )}
+            {/* The hover target is the whole COLUMN, not the drawn bar: a quiet
+                month is one pixel tall, and a tooltip you have to hunt for is
+                not a tooltip. Drawn last so it sits above the bars. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <rect
+                  x={`${i * slot}%`}
+                  width={`${slot}%`}
+                  y={TOP_PAD}
+                  height={PLOT_H}
+                  fill="transparent"
+                />
+              </TooltipTrigger>
+              <TooltipContent>
+                <BucketSummary
+                  label={formatBucket(unit, b.key, withYear)}
+                  bucket={b}
+                />
+              </TooltipContent>
+            </Tooltip>
           </g>
         );
       })}
@@ -406,40 +469,42 @@ function RankChart({
           // Proportional, not a fixed label column: the same chart renders at
           // ~320px beside the findings list and at ~670px in the report, and a
           // 9rem label left the bar narrower than its own name.
-          <div
-            key={r.key}
-            className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_1.75rem] items-center gap-2"
-          >
-            <span
-              className="truncate text-xs text-muted-foreground"
-              title={r.label}
-            >
-              {r.label}
-            </span>
-            <svg width="100%" height="10" aria-hidden="true">
-              {segs.map((s, si) => {
-                const w = (s.n / max) * 100;
-                const at = x;
-                x += w;
-                return (
-                  <rect
-                    key={si}
-                    x={`${at}%`}
-                    width={`${w}%`}
-                    y="0"
-                    height="10"
-                    rx="1"
-                    style={{ fill: s.color }}
-                  >
-                    <title>{`${r.label}: ${s.n} ${s.label}`}</title>
-                  </rect>
-                );
-              })}
-            </svg>
-            <span className="text-right text-xs tabular-nums text-muted-foreground">
-              {total}
-            </span>
-          </div>
+          <Tooltip key={r.key}>
+            <TooltipTrigger asChild>
+              {/* The whole row, not the bar: the bar can be a few pixels wide,
+                  and the label truncates in the narrow panel — so the row is
+                  also where you go to read the name in full. */}
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_1.75rem] items-center gap-2">
+                <span className="truncate text-xs text-muted-foreground">
+                  {r.label}
+                </span>
+                <svg width="100%" height="10" aria-hidden="true">
+                  {segs.map((s, si) => {
+                    const w = (s.n / max) * 100;
+                    const at = x;
+                    x += w;
+                    return (
+                      <rect
+                        key={si}
+                        x={`${at}%`}
+                        width={`${w}%`}
+                        y="0"
+                        height="10"
+                        rx="1"
+                        style={{ fill: s.color }}
+                      />
+                    );
+                  })}
+                </svg>
+                <span className="text-right text-xs tabular-nums text-muted-foreground">
+                  {total}
+                </span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              <BucketSummary label={r.label} bucket={r.bucket} />
+            </TooltipContent>
+          </Tooltip>
         );
       })}
     </div>

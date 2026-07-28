@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownLeft, ArrowUpRight, Users, Waypoints } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
@@ -86,17 +87,20 @@ function ChannelsBar({ channels }: { channels: InteractionChannel[] }) {
       </div>
       <div className="flex flex-wrap gap-2">
         {merged.map((c) => (
-          <div
-            key={c.name}
-            className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2.5 py-1.5"
-            title={`${formatCount(c.incoming)} in · ${formatCount(c.outgoing)} out`}
-          >
-            <BrandIcon slug={c.slug} name={c.name} className="size-4" />
-            <span className="text-sm">{c.name}</span>
-            <span className="text-xs font-medium tabular-nums text-muted-foreground">
-              {formatCount(c.incoming + c.outgoing)}
-            </span>
-          </div>
+          <Tooltip key={c.name}>
+            <TooltipTrigger asChild>
+              <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-2.5 py-1.5">
+                <BrandIcon slug={c.slug} name={c.name} className="size-4" />
+                <span className="text-sm">{c.name}</span>
+                <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                  {formatCount(c.incoming + c.outgoing)}
+                </span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>
+              {formatCount(c.incoming)} in · {formatCount(c.outgoing)} out
+            </TooltipContent>
+          </Tooltip>
         ))}
       </div>
     </div>
@@ -134,13 +138,15 @@ function InteractionRow({ interaction }: { interaction: Interaction }) {
           <ArrowUpRight className="ml-1 size-3" />
           {formatCount(interaction.outgoing)}
           {interaction.incomingRecipient > 0 && (
-            <span
-              className="ml-1 inline-flex items-center gap-1"
-              title="Sent to a group you were in"
-            >
-              <Users className="size-3" />
-              {formatCount(interaction.incomingRecipient)}
-            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="ml-1 inline-flex items-center gap-1">
+                  <Users className="size-3" />
+                  {formatCount(interaction.incomingRecipient)}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>Sent to a group you were in</TooltipContent>
+            </Tooltip>
           )}
         </span>
       </div>
