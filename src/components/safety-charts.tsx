@@ -17,6 +17,8 @@
  */
 import { useId } from "react";
 
+import { useBoundedList } from "@/lib/bounded-list";
+
 import type { FindingAnalytics, ChartBucket } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 
@@ -56,7 +58,10 @@ function segmentsOf(b: ChartBucket, hatchIds: string[]): Segment[] {
 }
 
 export function bucketTotal(b: ChartBucket): number {
-  return b.confirmed.reduce((a, n) => a + n, 0) + b.unconfirmed.reduce((a, n) => a + n, 0);
+  return (
+    b.confirmed.reduce((a, n) => a + n, 0) +
+    b.unconfirmed.reduce((a, n) => a + n, 0)
+  );
 }
 
 /** Diagonal hatch per severity — the unconfirmed texture.
@@ -66,21 +71,39 @@ export function bucketTotal(b: ChartBucket): number {
  *  keeps the band's colour readable; the stripes are what survive greyscale. */
 function HatchDefs({ ids }: { ids: string[] }) {
   return (
-    <defs>
-      {SEVERITY.map((s, i) => (
-        <pattern
-          key={s.label}
-          id={ids[i]}
-          width="6"
-          height="6"
-          patternUnits="userSpaceOnUse"
-          patternTransform="rotate(45)"
-        >
-          <rect width="6" height="6" style={{ fill: s.color, opacity: 0.3 }} />
-          <line x1="0" y1="0" x2="0" y2="6" style={{ stroke: s.color }} strokeWidth="2.5" />
-        </pattern>
-      ))}
-    </defs>
+    <svg
+      aria-hidden="true"
+      focusable="false"
+      className="absolute size-0"
+      style={{ position: "absolute", width: 0, height: 0 }}
+    >
+      <defs>
+        {SEVERITY.map((s, i) => (
+          <pattern
+            key={s.label}
+            id={ids[i]}
+            width="6"
+            height="6"
+            patternUnits="userSpaceOnUse"
+            patternTransform="rotate(45)"
+          >
+            <rect
+              width="6"
+              height="6"
+              style={{ fill: s.color, opacity: 0.3 }}
+            />
+            <line
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="6"
+              style={{ stroke: s.color }}
+              strokeWidth="2.5"
+            />
+          </pattern>
+        ))}
+      </defs>
+    </svg>
   );
 }
 
@@ -100,7 +123,9 @@ function keyToDate(unit: Unit, key: string): Date {
   switch (unit) {
     case "day":
     case "week":
-      return new Date(Date.UTC(y, Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10))));
+      return new Date(
+        Date.UTC(y, Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10))),
+      );
     case "month":
       return new Date(Date.UTC(y, Number(rest) - 1, 1));
     case "quarter":
@@ -153,16 +178,36 @@ function step(unit: Unit, d: Date): Date {
  *  about the data, so the gaps are filled with empty bars rather than closed up
  *  — otherwise an absence of findings arrives as an absence of *time*, and the
  *  axis silently compresses a two-year lull into nothing. */
-export function fillTimeGaps(unit: Unit, buckets: ChartBucket[]): ChartBucket[] {
+/** The most bars the axis can ever hold — see `TIMELINE_START` in analysis.rs.
+ *  Findings outside 2007..now are not datable, so the widest possible span is
+ *  ~20 years, which selects the `year` unit and one bar per year; the widest
+ *  that still selects `quarter` is ten years, or 40 bars. Declared rather than
+ *  assumed: `useBoundedList` says so out loud in dev if it is ever wrong. */
+export const MAX_TIME_BUCKETS = 48;
+
+export function fillTimeGaps(
+  unit: Unit,
+  buckets: ChartBucket[],
+): ChartBucket[] {
   if (buckets.length < 2) return buckets;
   const byKey = new Map(buckets.map((b) => [b.key, b]));
   const last = keyToDate(unit, buckets[buckets.length - 1].key).getTime();
   const out: ChartBucket[] = [];
-  // Guard against a malformed key producing a runaway loop; the unit is chosen
-  // to keep this well under a hundred.
-  for (let d = keyToDate(unit, buckets[0].key), i = 0; d.getTime() <= last && i < 600; d = step(unit, d), i++) {
+  // No truncation here. This used to stop at 600 buckets, which silently turned
+  // "the axis is wrong" into "the axis looks fine" — and it was reachable,
+  // because nothing bounded the span. The span is bounded at the source now
+  // (TIMELINE_START in analysis.rs), so this loop terminates on the data; a
+  // malformed key would trip the declared bound below rather than being cut off
+  // without a word.
+  for (
+    let d = keyToDate(unit, buckets[0].key);
+    d.getTime() <= last;
+    d = step(unit, d)
+  ) {
     const key = dateToKey(unit, d);
-    out.push(byKey.get(key) ?? { key, confirmed: [0, 0, 0], unconfirmed: [0, 0, 0] });
+    out.push(
+      byKey.get(key) ?? { key, confirmed: [0, 0, 0], unconfirmed: [0, 0, 0] },
+    );
   }
   return out;
 }
@@ -175,10 +220,28 @@ const UNIT_NOUN: Record<Unit, string> = {
   year: "year",
 };
 
-function formatBucket(unit: Unit, key: string, locale?: string): string {
+/** Does this chart cross a calendar year? A day/week/month label that omits the
+ *  year is unreadable the moment it does: a 30-month axis reads
+ *  "Jan Feb … Dec Jan Feb …" with nothing to say which January, and the hover
+ *  title on the bar repeats the ambiguity. */
+function spansYears(unit: Unit, buckets: ChartBucket[]): boolean {
+  if (buckets.length < 2) return false;
+  const y = (b: ChartBucket) => keyToDate(unit, b.key).getUTCFullYear();
+  return y(buckets[0]) !== y(buckets[buckets.length - 1]);
+}
+
+function formatBucket(
+  unit: Unit,
+  key: string,
+  withYear = false,
+  locale?: string,
+): string {
   const d = keyToDate(unit, key);
+  const year: Intl.DateTimeFormatOptions = withYear ? { year: "2-digit" } : {};
   const fmt = (o: Intl.DateTimeFormatOptions) =>
-    new Intl.DateTimeFormat(locale, { ...o, timeZone: "UTC" }).format(d);
+    new Intl.DateTimeFormat(locale, { ...o, ...year, timeZone: "UTC" }).format(
+      d,
+    );
   switch (unit) {
     case "day":
       return fmt({ day: "numeric", month: "short" });
@@ -225,10 +288,12 @@ const TOP_PAD = 13;
 function TimeChart({
   unit,
   buckets,
+  withYear,
   hatchIds,
 }: {
   unit: Unit;
   buckets: ChartBucket[];
+  withYear: boolean;
   hatchIds: string[];
 }) {
   const max = Math.max(1, ...buckets.map(bucketTotal));
@@ -244,11 +309,9 @@ function TimeChart({
     <svg
       width="100%"
       height={base + AXIS_H}
-      role="img"
       aria-hidden="true"
       className="overflow-visible"
     >
-      <HatchDefs ids={hatchIds} />
       {/* The scale, stated once. */}
       <line
         x1="0"
@@ -281,7 +344,7 @@ function TimeChart({
                   height={h}
                   style={{ fill: s.color }}
                 >
-                  <title>{`${formatBucket(unit, b.key)}: ${s.n} ${s.label}`}</title>
+                  <title>{`${formatBucket(unit, b.key, withYear)}: ${s.n} ${s.label}`}</title>
                 </rect>
               );
             })}
@@ -303,7 +366,7 @@ function TimeChart({
                 textAnchor="middle"
                 className="fill-muted-foreground text-3xs"
               >
-                {formatBucket(unit, b.key)}
+                {formatBucket(unit, b.key, withYear)}
               </text>
             )}
           </g>
@@ -347,11 +410,13 @@ function RankChart({
             key={r.key}
             className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)_1.75rem] items-center gap-2"
           >
-            <span className="truncate text-xs text-muted-foreground" title={r.label}>
+            <span
+              className="truncate text-xs text-muted-foreground"
+              title={r.label}
+            >
               {r.label}
             </span>
-            <svg width="100%" height="10" role="img" aria-hidden="true">
-              <HatchDefs ids={hatchIds} />
+            <svg width="100%" height="10" aria-hidden="true">
               {segs.map((s, si) => {
                 const w = (s.n / max) * 100;
                 const at = x;
@@ -371,7 +436,9 @@ function RankChart({
                 );
               })}
             </svg>
-            <span className="text-right text-xs tabular-nums text-muted-foreground">{total}</span>
+            <span className="text-right text-xs tabular-nums text-muted-foreground">
+              {total}
+            </span>
           </div>
         );
       })}
@@ -385,15 +452,24 @@ function Legend({ hatchIds }: { hatchIds: string[] }) {
       {SEVERITY.map((s, i) => (
         <span key={s.label} className="inline-flex items-center gap-1">
           <svg width="9" height="9" aria-hidden="true">
-            <rect width="9" height="9" rx="1" style={{ fill: SEVERITY[i].color }} />
+            <rect
+              width="9"
+              height="9"
+              rx="1"
+              style={{ fill: SEVERITY[i].color }}
+            />
           </svg>
           {s.label}
         </span>
       ))}
       <span className="inline-flex items-center gap-1">
         <svg width="9" height="9" aria-hidden="true">
-          <HatchDefs ids={hatchIds} />
-          <rect width="9" height="9" rx="1" style={{ fill: `url(#${hatchIds[2]})` }} />
+          <rect
+            width="9"
+            height="9"
+            rx="1"
+            style={{ fill: `url(#${hatchIds[2]})` }}
+          />
         </svg>
         Hatched: not confirmed by the second model
       </span>
@@ -427,7 +503,7 @@ function ChartTable({
       </thead>
       <tbody>
         {rows.map((r) => (
-          <tr key={r.label}>
+          <tr key={r.bucket.key}>
             <th scope="row">{r.label}</th>
             {r.bucket.confirmed.map((n, i) => (
               <td key={i}>{n}</td>
@@ -457,7 +533,11 @@ function Block({
     <figure className={cn("space-y-2 break-inside-avoid", className)}>
       <figcaption className="text-xs font-medium">
         {title}
-        {note && <span className="ml-1.5 font-normal text-muted-foreground">{note}</span>}
+        {note && (
+          <span className="ml-1.5 font-normal text-muted-foreground">
+            {note}
+          </span>
+        )}
       </figcaption>
       {children}
     </figure>
@@ -501,6 +581,14 @@ export function FindingCharts({
     dismissed,
   } = analytics;
   const overTime = fillTimeGaps(unit, analytics.overTime);
+  const multiYear = spansYears(unit, overTime);
+  // Every bar is in the DOM (this prints), so the count has to be provably
+  // small rather than assumed small — the #61 lesson.
+  useBoundedList(
+    "safety-scan chart buckets",
+    overTime.length,
+    MAX_TIME_BUCKETS,
+  );
 
   if (charted === 0) return null;
 
@@ -525,6 +613,11 @@ export function FindingCharts({
         className,
       )}
     >
+      {/* One copy of the patterns for every chart below: they were being emitted
+          inside each rank-chart row, so a six-row chart repeated the same three
+          ids six times. `url(#id)` resolves document-wide. */}
+      <HatchDefs ids={hatchIds} />
+
       {!panel && (
         <h2 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           Analysis
@@ -537,10 +630,18 @@ export function FindingCharts({
           note={formatSpan(unit, overTime)}
           className={full}
         >
-          <TimeChart unit={unit} buckets={overTime} hatchIds={hatchIds} />
+          <TimeChart
+            unit={unit}
+            buckets={overTime}
+            withYear={multiYear}
+            hatchIds={hatchIds}
+          />
           <ChartTable
             caption={`Findings by ${UNIT_NOUN[unit]}`}
-            rows={overTime.map((b) => ({ label: formatBucket(unit, b.key), bucket: b }))}
+            rows={overTime.map((b) => ({
+              label: formatBucket(unit, b.key, multiYear),
+              bucket: b,
+            }))}
           />
         </Block>
       )}
@@ -562,7 +663,10 @@ export function FindingCharts({
           }
         >
           <RankChart rows={conversationRows} hatchIds={hatchIds} />
-          <ChartTable caption="Findings by conversation" rows={conversationRows} />
+          <ChartTable
+            caption="Findings by conversation"
+            rows={conversationRows}
+          />
           {otherConversations > 0 && (
             <p className="text-2xs text-muted-foreground">
               {otherConversations} further conversation
@@ -583,7 +687,7 @@ export function FindingCharts({
       <p className={cn("text-2xs leading-relaxed text-muted-foreground", full)}>
         {charted} finding{charted === 1 ? "" : "s"} charted.
         {undated > 0 &&
-          ` ${undated} ${undated === 1 ? "has" : "have"} no date and ${undated === 1 ? "is" : "are"} absent from the timeline (counted everywhere else).`}
+          ` ${undated} ${undated === 1 ? "has" : "have"} no usable date — missing, or outside the range a backup can cover — and ${undated === 1 ? "is" : "are"} absent from the timeline (counted everywhere else).`}
         {dismissed > 0 &&
           ` ${dismissed} dismissed as false positive${dismissed === 1 ? "" : "s"} and left out of every chart.`}{" "}
         These are one local model's verdicts, not ground truth. Hatched portions

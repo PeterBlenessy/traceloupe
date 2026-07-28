@@ -105,6 +105,21 @@ pub struct FindingCounts {
 /// rest into a stated remainder.
 pub const CONVERSATION_CHART_CAP: usize = 12;
 
+/// The earliest instant a finding can honestly claim: 2007-01-01, before which
+/// no iPhone existed to send the message.
+///
+/// This is what BOUNDS the time chart. The bucket unit is chosen from the span
+/// the findings cover, and `Year` is the coarsest unit there is — so a single
+/// finding carrying a decoded-wrong timestamp (Apple stores seconds since 2001;
+/// read as Unix time that lands in 1970, and a zeroed field lands there too)
+/// would stretch the axis across half a century and squash every real finding
+/// into the last bar. Findings outside the window are counted as undatable
+/// alongside the ones with no timestamp at all, which is what they are.
+///
+/// With the window closed, the axis can never exceed ~40 bars: the span is at
+/// most 2007→now, which selects `Year`, which yields one bar per year.
+pub const TIMELINE_START: i64 = 1_167_609_600;
+
 /// How the report's time chart buckets its x-axis.
 ///
 /// Chosen from the span the findings cover rather than fixed, so a two-week scan
@@ -208,10 +223,14 @@ pub struct FindingAnalytics {
     pub other_conversation_findings: i64,
     /// How many findings the charts describe, under the caller's filter.
     pub charted: i64,
-    /// In scope but undated, so absent from [`Self::over_time`].
+    /// In scope but impossible to place on a timeline — no timestamp, or one
+    /// outside [`TIMELINE_START`]..now. Absent from [`Self::over_time`] and
+    /// present everywhere else.
     pub undated: i64,
-    /// Dismissed as false positives — excluded from every chart, reported so the
-    /// reader can see how much the model got wrong.
+    /// How many findings the charts LEFT OUT as false positives, under the
+    /// caller's own filter — zero when the caller asked for dismissed findings,
+    /// because then nothing was left out. It is what the disclosure beside the
+    /// charts claims, so it has to mean exactly that.
     pub dismissed: i64,
 }
 
@@ -972,18 +991,30 @@ impl AnalysisDb {
         range_start: Option<i64>,
         range_end: Option<i64>,
         q: &FindingQuery,
+        now: i64,
     ) -> Result<FindingAnalytics> {
         let scope = filtered_scope(q);
+        // A timestamp outside the window a backup can possibly cover is not a
+        // date, it is a decode failure — and one of them ruins the axis for
+        // everything else, because the unit is chosen from the span. See
+        // [`TIMELINE_START`]. `now + a day` of slack absorbs clock skew without
+        // admitting timestamps from next century.
+        let datable = format!(
+            "f.occurred_at IS NOT NULL AND f.occurred_at >= {TIMELINE_START} \
+             AND f.occurred_at <= {}",
+            now + 86_400
+        );
 
         // The bucket unit comes from the span the findings actually cover, so a
         // three-week scan and a ten-year one both produce a readable axis.
-        // Undated findings are counted here and excluded from the time chart:
-        // they cannot be placed on an axis, and dropping them silently would
-        // leave the chart's total disagreeing with the list's.
+        // Findings that cannot be placed on it are counted here and excluded:
+        // dropping them silently would leave the chart's total disagreeing with
+        // the list's.
         let (min_at, max_at, undated, charted) = self.conn.query_row(
             &format!(
-                "SELECT MIN(f.occurred_at), MAX(f.occurred_at),
-                        COUNT(*) FILTER (WHERE f.occurred_at IS NULL),
+                "SELECT MIN(CASE WHEN {datable} THEN f.occurred_at END),
+                        MAX(CASE WHEN {datable} THEN f.occurred_at END),
+                        COUNT(*) FILTER (WHERE NOT ({datable})),
                         COUNT(*)
                  FROM content_findings f WHERE {scope}"
             ),
@@ -999,12 +1030,12 @@ impl AnalysisDb {
         )?;
         let unit = match (min_at, max_at) {
             (Some(a), Some(b)) => TimeUnit::for_span(b - a),
-            // Nothing dated to measure; the axis is empty either way.
+            // Nothing datable to measure; the axis is empty either way.
             _ => TimeUnit::Month,
         };
 
         let over_time = self.bucket_counts(
-            &format!("({scope}) AND f.occurred_at IS NOT NULL"),
+            &format!("({scope}) AND {datable}"),
             unit.key_expr(),
             "ORDER BY k",
             params![sources, range_start, range_end],
@@ -1036,16 +1067,30 @@ impl AnalysisDb {
             }
         }
 
-        // Dismissed is reported whatever the current filter is: the charts leave
-        // false positives out, and the count is how the report says so.
-        let dismissed = self.conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM content_findings f
-                 WHERE ({IN_SCOPE_PREDICATE}) AND {DISMISSED_EXPR}"
-            ),
-            params![sources, range_start, range_end],
-            |r| r.get::<_, i64>(0),
-        )?;
+        // How many findings the charts LEFT OUT as false positives — not how many
+        // dismissals exist. Two things made the old count say something untrue:
+        // it ignored the severity filter, so narrowing to Serious still reported
+        // every dismissal; and when the panel's "Show dismissed" is on the
+        // findings are IN the charts, while the disclosure beside them went on
+        // claiming they had been left out. Counted with the caller's own filter,
+        // and zero when nothing was excluded, the sentence is true in every state.
+        let dismissed = if q.include_dismissed {
+            0
+        } else {
+            let shown_but_dismissed = FindingQuery {
+                include_dismissed: true,
+                ..q.clone()
+            };
+            self.conn.query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM content_findings f
+                     WHERE ({}) AND {DISMISSED_EXPR}",
+                    filtered_scope(&shown_but_dismissed)
+                ),
+                params![sources, range_start, range_end],
+                |r| r.get::<_, i64>(0),
+            )?
+        };
 
         Ok(FindingAnalytics {
             unit,
@@ -2288,6 +2333,8 @@ mod tests {
     /// 2024-03-11 is a Monday; 2024-03-17 the Sunday that closes its week.
     const MON_2024_03_11: i64 = 1_710_115_200;
     const DAY: i64 = 86_400;
+    /// A fixed clock, so the timeline window is the same on every machine.
+    const NOW: i64 = 1_760_000_000; // 2025-10-09
 
     #[test]
     fn charts_count_every_finding_not_the_page_the_report_renders() {
@@ -2299,7 +2346,7 @@ mod tests {
         let page = db
             .list_findings_in_scope_page("all", None, None, &q, 0, 500)
             .unwrap();
-        let a = db.finding_analytics("all", None, None, &q).unwrap();
+        let a = db.finding_analytics("all", None, None, &q, NOW).unwrap();
 
         assert_eq!(page.len(), 500, "page is capped");
         assert_eq!(a.charted, 600, "charts are not");
@@ -2323,14 +2370,18 @@ mod tests {
             let mut db = AnalysisDb::open_in_memory().unwrap();
             let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
             // Twenty findings spread evenly across the span, plus its endpoint.
+            // Anchored so the span ENDS at the clock: a timestamp in the future
+            // is not datable (see TIMELINE_START), which is the point of the
+            // window and would otherwise silently shorten these spans.
+            let start = NOW - span_days * DAY;
             let mut at: Vec<Option<i64>> = (0..20)
-                .map(|i| Some(MON_2024_03_11 + i * span_days * DAY / 20))
+                .map(|i| Some(start + i * span_days * DAY / 20))
                 .collect();
-            at.push(Some(MON_2024_03_11 + span_days * DAY));
+            at.push(Some(NOW));
             dated(&mut db, scan, &at);
 
             let a = db
-                .finding_analytics("all", None, None, &FindingQuery::default())
+                .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
                 .unwrap();
             assert_eq!(a.unit, want, "span of {span_days} days");
             // The point of adapting: the axis stays readable at every range.
@@ -2359,7 +2410,7 @@ mod tests {
         dated(&mut db, scan, &at);
 
         let a = db
-            .finding_analytics("all", None, None, &FindingQuery::default())
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
             .unwrap();
         assert_eq!(a.unit, TimeUnit::Week);
         let first = &a.over_time[0];
@@ -2388,13 +2439,78 @@ mod tests {
         );
 
         let a = db
-            .finding_analytics("all", None, None, &FindingQuery::default())
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
             .unwrap();
         assert_eq!(a.charted, 5);
         assert_eq!(a.undated, 3);
         assert_eq!(a.over_time.iter().map(|b| b.total()).sum::<i64>(), 2);
         // The other charts keep them: only the time axis can't place them.
         assert_eq!(a.by_category.iter().map(|b| b.total()).sum::<i64>(), 5);
+    }
+
+    #[test]
+    fn one_bad_timestamp_cannot_stretch_the_axis_across_a_century() {
+        // Apple stores seconds since 2001; read as Unix time that lands in 1970,
+        // and a zeroed column lands there too. The bucket unit is chosen from
+        // the span, and Year is the coarsest unit there is — so before the
+        // window, ONE such finding turned a year of real findings into a single
+        // bar at the right-hand edge, with fifty-odd empty ones beside it.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let mut at: Vec<Option<i64>> = (0..10)
+            .map(|i| Some(NOW - 300 * DAY + i * 30 * DAY))
+            .collect();
+        at.push(Some(0)); // 1970: a zeroed column
+        at.push(Some(978_307_200)); // 2001: the Core Data epoch read as Unix time
+        at.push(Some(NOW + 400 * DAY)); // and one in the future
+        dated(&mut db, scan, &at);
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
+            .unwrap();
+
+        assert_eq!(a.charted, 13, "every finding is still counted");
+        assert_eq!(a.undated, 3, "the three that cannot be placed say so");
+        assert_eq!(
+            a.unit,
+            TimeUnit::Month,
+            "the unit follows the ten real findings, not the outliers"
+        );
+        assert!(
+            a.over_time.len() <= 11,
+            "the axis stays readable: {} buckets",
+            a.over_time.len()
+        );
+        // And the population still reconciles.
+        assert_eq!(
+            a.over_time.iter().map(|b| b.total()).sum::<i64>() + a.undated,
+            a.charted
+        );
+    }
+
+    #[test]
+    fn the_time_axis_is_bounded_by_the_window_not_by_a_render_guard() {
+        // The whole point of TIMELINE_START: with the window closed, the widest
+        // possible span is 2007→now, which selects Year, which is one bar per
+        // year. No caller can produce an axis that needs truncating.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let at: Vec<Option<i64>> = (0..40)
+            .map(|i| Some(TIMELINE_START + i * (NOW - TIMELINE_START) / 40))
+            .collect();
+        dated(&mut db, scan, &at);
+
+        let a = db
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
+            .unwrap();
+        assert_eq!(a.unit, TimeUnit::Year);
+        let years = (NOW - TIMELINE_START) / (365 * DAY) + 2;
+        assert!(
+            (a.over_time.len() as i64) <= years,
+            "{} buckets for a {years}-year window",
+            a.over_time.len()
+        );
+        assert_eq!(a.undated, 0);
     }
 
     #[test]
@@ -2419,7 +2535,7 @@ mod tests {
             .unwrap();
 
         let a = db
-            .finding_analytics("all", None, None, &FindingQuery::default())
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
             .unwrap();
         let cat = &a.by_category[0];
         // c0/c3 are severity 1, c1/c4 severity 2, c2/c5 severity 3 — one
@@ -2443,11 +2559,76 @@ mod tests {
         db.set_dismissed("d0", Category::SelfHarm, true, 2).unwrap();
 
         let a = db
-            .finding_analytics("all", None, None, &FindingQuery::default())
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
             .unwrap();
         assert_eq!(a.charted, 3, "the dismissed one is not drawn");
         assert_eq!(a.dismissed, 1, "but the report can say so");
         assert_eq!(a.by_category[0].total(), 3);
+    }
+
+    #[test]
+    fn the_dismissed_count_is_what_the_charts_left_out_and_nothing_else() {
+        // The disclosure beside the charts reads "N dismissed as false positives
+        // and left out of every chart". That sentence has to be true in every
+        // state the panel can reach — including "Show dismissed", where they are
+        // not left out at all, and a severity filter, which the count used to
+        // ignore.
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..6)
+            .map(|i| NewFinding {
+                severity: (i % 3 + 1) as u8,
+                occurred_at: Some(MON_2024_03_11 + i),
+                ..finding(&format!("x{i}"), Category::SelfHarm)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 1).unwrap();
+        // One severity-1 (x0) and one severity-3 (x2) dismissed.
+        db.set_dismissed("x0", Category::SelfHarm, true, 2).unwrap();
+        db.set_dismissed("x2", Category::SelfHarm, true, 2).unwrap();
+
+        let all = db
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
+            .unwrap();
+        assert_eq!((all.charted, all.dismissed), (4, 2));
+
+        // Filtered to serious: only the serious dismissal was left out.
+        let serious = db
+            .finding_analytics(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    severity: Some(3),
+                    ..Default::default()
+                },
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(
+            (serious.charted, serious.dismissed),
+            (1, 1),
+            "a severity filter narrows what was left out, not just what was drawn"
+        );
+
+        // Showing dismissed: they are in the charts, so nothing was left out.
+        let shown = db
+            .finding_analytics(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    include_dismissed: true,
+                    ..Default::default()
+                },
+                NOW,
+            )
+            .unwrap();
+        assert_eq!(
+            (shown.charted, shown.dismissed),
+            (6, 0),
+            "nothing is 'left out' when the caller asked for it"
+        );
     }
 
     #[test]
@@ -2470,7 +2651,7 @@ mod tests {
         db.replace_findings(scan, &rows, 1).unwrap();
 
         let a = db
-            .finding_analytics("all", None, None, &FindingQuery::default())
+            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
             .unwrap();
         assert_eq!(a.by_conversation.len(), CONVERSATION_CHART_CAP);
         assert_eq!(a.by_conversation[0].key, "chat19", "busiest first");
@@ -2503,7 +2684,10 @@ mod tests {
             },
         ] {
             let listed = db.count_findings_matching("all", None, None, &q).unwrap();
-            let charted = db.finding_analytics("all", None, None, &q).unwrap().charted;
+            let charted = db
+                .finding_analytics("all", None, None, &q, NOW)
+                .unwrap()
+                .charted;
             assert_eq!(listed, charted, "{q:?}");
         }
     }
