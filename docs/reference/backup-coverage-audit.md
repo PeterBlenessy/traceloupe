@@ -6,7 +6,7 @@ This is the source-level companion to
 already parse) and [`app-support.md`](app-support.md) (per-app native status).
 
 The work this audit sizes is charted on
-[Map: iLEAPP-parity coverage of first-party backup data](https://github.com/PeterBlenessy/traceloupe/issues/189).
+[Map: iLEAPP-parity coverage of everything a backup contains](https://github.com/PeterBlenessy/traceloupe/issues/189).
 
 > **Method.** Numbers come from `tools/classify-ileapp-artifacts.py`, run against
 > the pinned iLEAPP checkout (`pnpm setup:engine`). Re-run it rather than
@@ -15,48 +15,85 @@ The work this audit sizes is charted on
 
 ---
 
-## The rule: what a backup can reach
+## The rule: Apple's, not ours
 
-An iOS backup stores files keyed by **domain** — HomeDomain (`/var/mobile`,
-minus exclusions), MediaDomain and CameraRollDomain, `AppDomain*` /
-`AppDomainGroup*` (an app's Documents + Library, minus `Library/Caches` and
-`tmp`), KeychainDomain, WirelessDomain, and a few system domains. Everything
-else needs a full-filesystem extraction (GrayKey/checkm8) and is **permanently**
-out of reach for a tool that reads backups. That is not a gap to close; it is a
-stated product non-goal — *"not an attempt to recover data that iOS never places
-in a backup"*.
+**iOS ships the answer on the device.** `Domains.plist` is what `backupd` reads
+to decide what goes into a backup, and `tools/data/ios-backup-domains.json` is
+its contents. Each domain declares a `RootPath` and several path lists; for a
+**local** (iTunes/Finder) backup these are the ones that matter:
 
-**Membership is a property of the domain, not of the path**, and the exclusions
-are invisible in a glob. `Library/Biome/` and `Library/CoreDuet/Knowledge/` sit
-under the same `mobile/Library` prefix as artifacts that *are* backed up — while
-`Library/CoreDuet/People/interactionC.db` right beside them is backed up, and we
-already parse it. So the classifier carries an explicit deny-list of known
-exclusions and reports anything it cannot place as `unknown` rather than
-guessing.
+| Key | Effect |
+|---|---|
+| `RelativePathsToBackupAndRestore` | included |
+| `RelativePathsToBackupToDriveAndStandardAccount` | included — *local backups specifically* |
+| `RelativePathsToBackupIgnoringProtectionClass` | included |
+| `RelativePathsToOnlyBackupEncrypted` | included **only in an encrypted backup** |
+| `RelativePathsNotToBackup` | excluded |
+| `RelativePathsNotToBackupToDrive` | excluded from local backups |
+
+Keys naming *Service* or *MegaBackup* are iCloud concerns; `*Restore*` keys
+describe the restore side, not what lands in the backup.
+
+Three things this made visible that the earlier heuristic got wrong:
+
+1. **`HomeDomain` is an allowlist.** `/var/mobile` is not backed up wholesale —
+   only its listed subpaths are. That is why `Library/Biome` and
+   `Library/CoreDuet/Knowledge` appear in *no* exclusion list: they are absent
+   by not being included. No denylist could have told us that, and the previous
+   version of this document reasoned from a denylist.
+2. **A whole class of stores is in local backups but not iCloud.**
+   `Library/Safari/History.db`, `Library/Safari/BrowserState.db` and
+   `Library/CallHistoryDB` are not in the base include list at all — they are in
+   `RelativePathsToBackupToDriveAndStandardAccount`. We parse all three today.
+3. **Several sources we ship are encrypted-backup-only** — see below.
 
 ### Current split
 
 | | Count | Meaning |
 |---|---:|---|
-| **Backup-reachable** | 355 | A backup can contain it. This is the addressable universe. |
-| **Full-filesystem only** | 84 | No backup ever contains it. Out of scope, permanently. |
-| **Unclassified** | 159 | The path alone cannot settle it — needs a real backup Manifest. |
+| **Backup-reachable** | 311 | A backup contains it. The addressable universe. |
+| **Encrypted-only** | 26 | Only in an encrypted backup. Reachable, conditionally. |
+| **Excluded** | 42 | Under a domain root but on no include list, or explicitly excluded. |
+| **Unclassified** | 219 | The iLEAPP glob is rootless (`*/NoteStore.sqlite*`) — no directory context to resolve. |
 
-The 159 are the reason the destination has no exact size yet: the tail is
-somewhere between 355 and 514 artifacts. Resolving them is
+> **These numbers replace an earlier 355 / 84 / 159**, which came from a
+> hand-written heuristic before Apple's rules were available. The heuristic
+> over-counted reachable artifacts and mis-stated the reason for the exclusions.
+
+The 219 unclassified are rootless globs, not unknown territory: iLEAPP writes
+`**/interactionC.db*` because it searches a filesystem, whereas we resolve by
+domain. Settling them means mapping each to its real directory —
 [#192](https://github.com/PeterBlenessy/traceloupe/issues/192).
+
+### Encrypted-backup-only — including things we already ship
+
+`RelativePathsToOnlyBackupEncrypted` is not an edge case. It contains sources
+TraceLoupe surfaces today:
+
+| Path | What it is |
+|---|---|
+| `Library/Safari/SafariTabs.db` | Safari open tabs (iCloud tabs) |
+| `Library/CoreDuet/People/interactionC.db` | the whole Interactions view |
+| `Health`, `MedicalID` | the whole Health view |
+| `Library/com.apple.siri.remembers` | Siri Remembers |
+| `Library/locationd/user.plist` | location |
+| `Library/DoNotDisturb/DB/*` | Focus modes |
+
+**On an unencrypted backup those views are empty, and today the app does not say
+why.** That is precisely the failure
+[#197](https://github.com/PeterBlenessy/traceloupe/issues/197) ruled against —
+"not in this kind of backup" reading as "nothing to see" — and it is not
+hypothetical or future work; it is current behaviour.
 
 ### Out of scope, permanently
 
-Categories where nothing is backup-reachable: **App Conduit · Audi Trips ·
-Browser · Burner Cache · CloudKit · Kijiji Conversations · KnowledgeC · Mobile
-Installation Logs · Reddit**. The larger exclusion families are Biome (24
-artifacts), unified logs (13), sysdiagnose, `/var/db`, `/var/log` and
-`Library/Caches`.
+The 42 excluded are out of reach whatever we decide: Biome, knowledgeC, unified
+logs, sysdiagnose, `/var/db`, `/var/log`, `Library/Caches`, and app-container
+`Library/Caches`/`tmp`.
 
-Recorded here so they are not re-investigated. **KnowledgeC is the one worth
-naming twice** — it is the artifact most often assumed present, and it is the
-clearest example of a `mobile/Library` path that a backup does not carry.
+Recorded so they are not re-investigated. **KnowledgeC is worth naming twice** —
+the artifact most often assumed present, and the clearest case of a
+`mobile/Library` path a backup does not carry.
 
 ---
 
@@ -143,16 +180,26 @@ as for first-party: most of these are flat record stores, not conversations.
 
 Stated so nobody mistakes it for more than it is:
 
-1. **The 159 unclassified artifacts** are unresolved, so the destination's size
+1. **The 219 unclassified artifacts** are unresolved, so the destination's size
    is a range, not a number ([#192](https://github.com/PeterBlenessy/traceloupe/issues/192)).
-2. **"iLEAPP has a module" is not "the data is there."** A module proves the
+2. **The domain rules are transcribed, and from iOS 16.4.**
+   `ios-backup-domains.json` comes from
+   [a third-party transcription](https://gist.github.com/leminlimez/c602c067349140fe979410ef69d39c28)
+   of an iPhone SE 3, not a file we extracted. Apple **moved** it in iOS 17.0
+   (to `MobileBackup.framework/Domains.plist`) and may have changed it.
+   Authoritative for 16.4, strongly indicative for later; verifying against a
+   real iOS 17+ copy is [#191](https://github.com/PeterBlenessy/traceloupe/issues/191).
+   One symptom is already visible: iLEAPP's `safariTabs` module targets
+   `CloudTabs.db`, which is on no 16.4 list, while `SafariTabs.db` is — the
+   filename changed and the module did not follow.
+3. **"iLEAPP has a module" is not "the data is there."** A module proves the
    artifact exists on *some* device. Whether a given backup contains rows is a
    separate question — `app-data-coverage.md` already records several stores
    (Maps, Podcasts, Journal, Wallet) that are present but empty on a real
    device.
-3. **iLEAPP is not the whole universe either.** It is the best open catalogue of
+4. **iLEAPP is not the whole universe either.** It is the best open catalogue of
    iOS artifacts, but an artifact with no iLEAPP module is not thereby absent —
    `app-support.md` records several such apps found by research alone.
-4. **Category names are iLEAPP's**, and a few are misleading: the
+5. **Category names are iLEAPP's**, and a few are misleading: the
    `Photos.sqlite-*` families are Apple first-party despite sorting oddly, and
    `Health & Fitness` holds third-party (AllTrails) rather than Apple Health.
