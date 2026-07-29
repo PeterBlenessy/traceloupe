@@ -1351,6 +1351,74 @@ pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<Find
     Ok(marks)
 }
 
+/// A standing "this is fine" rule, and how many findings it dismissed.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuppressionDto {
+    pub scope: String,
+    pub value: String,
+    pub reason: Option<String>,
+}
+
+/// Dismiss a whole conversation or category, now and in future.
+///
+/// The rule DISMISSES what it covers rather than hiding it: a dismissed finding
+/// is counted, reachable and carries the reason, where a hidden one is simply
+/// gone. A conversation that is fine today may not be next month, which is the
+/// case this app exists to catch.
+#[tauri::command]
+pub fn add_safety_suppression(
+    active: State<'_, ActiveBackup>,
+    scope: String,
+    value: String,
+    reason: Option<String>,
+) -> Result<usize, String> {
+    if scope != "thread" && scope != "category" {
+        return Err("unknown suppression scope".into());
+    }
+    let path = analysis_path(&active.path()?)?;
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    db.add_suppression(&scope, &value, reason.as_deref(), now)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_safety_suppressions(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<SuppressionDto>, String> {
+    let path = analysis_path(&active.path()?)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    Ok(db
+        .list_suppressions()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(scope, value, reason)| SuppressionDto {
+            scope,
+            value,
+            reason,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub fn remove_safety_suppression(
+    active: State<'_, ActiveBackup>,
+    scope: String,
+    value: String,
+) -> Result<(), String> {
+    let path = analysis_path(&active.path()?)?;
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    db.remove_suppression(&scope, &value)
+        .map_err(|e| e.to_string())
+}
+
 /// Record that a finding's flagged text has been revealed.
 ///
 /// Called when a finding is expanded — the one deliberate act that means it was
