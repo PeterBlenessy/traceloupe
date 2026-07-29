@@ -38,7 +38,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::BackupDecryptor;
@@ -119,9 +119,14 @@ pub struct ModuleSpec {
     pub category: Option<String>,
     /// Backup domain, e.g. `HomeDomain`.
     pub domain: String,
-    /// Relative path within the domain. A trailing `*` matches a prefix — which
-    /// is all the globbing any artifact has needed so far; more can be added
-    /// when one actually needs it.
+    /// Exact relative path within the domain.
+    ///
+    /// Deliberately not a glob. A prefix-match version of this shipped in the
+    /// first draft and was wrong in two ways: `Manifest.db` carries directory
+    /// rows, and a directory sorts before its own children, so `Library/Foo/*`
+    /// selected the directory rather than the store inside it; and `-wal` /
+    /// `-shm` siblings could win over the real file. Since no artifact needed
+    /// globbing, the fix is to not have it until one does — with tests.
     pub path: String,
     pub sql: String,
     /// Declared precondition. Parsed and stored here; honoured by the UI in a
@@ -156,12 +161,21 @@ impl ModuleSpec {
         if self.path.trim().is_empty() {
             return Err("`path` is empty".into());
         }
+        if self.path.contains('*') {
+            return Err(format!(
+                "`path` = {:?} looks like a glob; only exact paths are supported. \
+                 A `*` here would be matched literally and never find anything",
+                self.path
+            ));
+        }
         let sql = self.sql.trim();
         if sql.is_empty() {
             return Err("`sql` is empty".into());
         }
-        // Read-only by construction: a module describes what to read out of a
-        // backup, and nothing it declares should be able to modify anything.
+        // A friendly early error only. It is NOT the thing that makes a module
+        // read-only — SQLite accepts `WITH x AS (…) INSERT … RETURNING`, which
+        // passes this check and writes. The store is opened read-only in
+        // `run_module`; that is the enforcement.
         if !sql.to_ascii_lowercase().starts_with("select")
             && !sql.to_ascii_lowercase().starts_with("with")
         {
@@ -170,10 +184,22 @@ impl ModuleSpec {
         if self.columns.is_empty() {
             return Err("no `[[columns]]` declared".into());
         }
+        let mut seen_names: Vec<&str> = Vec::new();
         for c in &self.columns {
             if c.name.trim().is_empty() || c.from.trim().is_empty() {
                 return Err(format!("column {:?} has an empty `name` or `from`", c.name));
             }
+            // A row is keyed on the display name, so two columns sharing one
+            // collapse to whichever is written last — a column silently
+            // disappearing with no error at load or run.
+            if seen_names.contains(&c.name.as_str()) {
+                return Err(format!(
+                    "two columns are both named {:?} — a row is keyed on the display name, \
+                     so one would silently overwrite the other",
+                    c.name
+                ));
+            }
+            seen_names.push(&c.name);
             if c.kind == ColumnKind::Timestamp && c.epoch.is_none() {
                 return Err(format!(
                     "column {:?} is a timestamp but declares no `epoch` — \
@@ -206,7 +232,10 @@ pub type ArtifactRow = HashMap<String, serde_json::Value>;
 /// A directory that does not exist is not an error — it means no modules are
 /// installed. A file that does not parse *is*, and says which file and why.
 pub fn load_modules(dir: &Path) -> Result<Vec<ModuleSpec>> {
-    let mut out = Vec::new();
+    let mut out: Vec<ModuleSpec> = Vec::new();
+    // Keep each module's source filename so a collision can name both files —
+    // a display name gives the reader nothing to grep for.
+    let mut sources: Vec<(String, String)> = Vec::new();
     if !dir.is_dir() {
         return Ok(out);
     }
@@ -242,15 +271,19 @@ pub fn load_modules(dir: &Path) -> Result<Vec<ModuleSpec>> {
         // — `store_rows` is keyed on it and replaces. That is a data-loss bug
         // whose only symptom is an artifact that inexplicably shows another
         // artifact's contents, so it is rejected at load, naming both files.
-        if let Some(prev) = out.iter().find(|m: &&ModuleSpec| m.id == spec.id) {
+        let file = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if let Some((_, prev_file)) = sources.iter().find(|(id, _)| id == &spec.id) {
             return Err(Error::Parse(format!(
-                "artifact module {}: id {:?} is already used by {:?} — ids key stored rows, \
-                 so two modules sharing one would overwrite each other",
-                path.file_name().unwrap_or_default().to_string_lossy(),
+                "artifact module {file}: id {:?} is already used by {prev_file} — ids key \
+                 stored rows, so two modules sharing one would overwrite each other",
                 spec.id,
-                prev.name,
             )));
         }
+        sources.push((spec.id.clone(), file));
         out.push(spec);
     }
     Ok(out)
@@ -263,10 +296,7 @@ pub fn load_modules(dir: &Path) -> Result<Vec<ModuleSpec>> {
 /// the same property every hand-written source already has, and it is what
 /// keeps import time flat as the module count grows.
 fn locate(index: &ManifestIndex, spec: &ModuleSpec) -> Result<Option<crate::manifest::FileEntry>> {
-    match spec.path.strip_suffix('*') {
-        Some(prefix) => Ok(index.find_prefix(&spec.domain, prefix)?.into_iter().next()),
-        None => index.find(&spec.domain, &spec.path),
-    }
+    index.find(&spec.domain, &spec.path)
 }
 
 /// Run one module against a backup. `Ok(None)` means the backup does not
@@ -277,6 +307,13 @@ pub fn run_module(
     decryptor: Option<&BackupDecryptor>,
     work_dir: &Path,
 ) -> Result<Option<Vec<ArtifactRow>>> {
+    // `run_module` is public and `ModuleSpec` is deserializable, so a caller can
+    // reach here with a spec that never went through `load_modules`. The id is
+    // used to build a filename, so skipping validation would be a path-traversal
+    // hole (`id = "../../x"` writing decrypted backup content outside work_dir).
+    spec.validate()
+        .map_err(|why| Error::Parse(format!("artifact module {:?}: {why}", spec.id)))?;
+
     let Some(entry) = locate(index, spec)? else {
         return Ok(None);
     };
@@ -288,7 +325,11 @@ pub fn run_module(
     let dest = work_dir.join(format!("{}.sqlite", spec.id));
     index.extract_db(&entry, decryptor, &dest)?;
 
-    let conn = Connection::open(&dest)?;
+    // Opened READ-ONLY, because the `SELECT`-prefix check in `validate` is not
+    // actually sufficient: SQLite accepts `WITH x AS (…) INSERT … RETURNING a`,
+    // which starts with "with", returns named columns, and writes. The prefix
+    // check stays as a friendly early error; this is the part that enforces it.
+    let conn = Connection::open_with_flags(&dest, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let mut stmt = conn.prepare(&spec.sql)?;
     let sql_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
@@ -774,6 +815,148 @@ from = "a"
             err.contains("two.toml"),
             "the error must name the offending file: {err}"
         );
+    }
+
+    /// Regressions for the four defects a review found in this module's first
+    /// draft. Each was silent — the reason they are pinned rather than trusted.
+    #[test]
+    fn duplicate_column_names_are_rejected() {
+        // A row is keyed on the display name, so two columns called "Date"
+        // collapsed to one: a column vanishing with no error anywhere.
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(
+            tmp.path(),
+            "dup.toml",
+            r#"
+id = "x"
+name = "X"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "SELECT created, modified FROM t"
+[[columns]]
+name = "Date"
+from = "created"
+[[columns]]
+name = "Date"
+from = "modified"
+"#,
+        );
+        let err = load_modules(tmp.path())
+            .expect_err("duplicate names must fail")
+            .to_string();
+        assert!(err.contains("both named"), "{err}");
+    }
+
+    #[test]
+    fn a_glob_path_is_rejected_rather_than_silently_literal() {
+        // Prefix matching picked `Manifest.db` directory rows (a directory
+        // sorts before its own children) and `-wal`/`-shm` siblings. Removed
+        // until an artifact needs it and can test it.
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(
+            tmp.path(),
+            "glob.toml",
+            r#"
+id = "x"
+name = "X"
+domain = "HomeDomain"
+path = "Library/Foo/*"
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+from = "a"
+"#,
+        );
+        let err = load_modules(tmp.path())
+            .expect_err("a glob path must fail")
+            .to_string();
+        assert!(err.contains("looks like a glob"), "{err}");
+    }
+
+    #[test]
+    fn duplicate_id_error_names_both_files() {
+        // It used to name the previous module's *display name*, which gives the
+        // reader nothing to grep for.
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(tmp.path(), "aaa.toml", &spec_toml(""));
+        write_module(tmp.path(), "zzz.toml", &spec_toml(""));
+        let err = load_modules(tmp.path())
+            .expect_err("duplicate ids must fail")
+            .to_string();
+        assert!(err.contains("aaa.toml"), "must name the first file: {err}");
+        assert!(err.contains("zzz.toml"), "must name the second file: {err}");
+    }
+
+    /// The store is opened read-only, so a module cannot write even when its
+    /// SQL slips past the `SELECT`-prefix check — SQLite accepts
+    /// `WITH x AS (…) INSERT … RETURNING`, which starts with "with" and writes.
+    #[test]
+    fn a_writing_module_cannot_modify_the_extracted_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), "Library/Demo/demo.db", |c| {
+            c.execute_batch("CREATE TABLE events (who TEXT, at REAL);")
+                .unwrap();
+            c.execute_batch("INSERT INTO events VALUES ('alice', 0);")
+                .unwrap();
+        });
+        let mods_dir = tmp.path().join("modules");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_module(
+            &mods_dir,
+            "evil.toml",
+            r#"
+id = "evil"
+name = "Evil"
+domain = "HomeDomain"
+path = "Library/Demo/demo.db"
+sql = "WITH q AS (SELECT 'x' AS v) INSERT INTO events(who) SELECT v FROM q RETURNING who"
+[[columns]]
+name = "Who"
+from = "who"
+"#,
+        );
+        let spec = &load_modules(&mods_dir).unwrap()[0];
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let err = run_module(spec, &index, None, &tmp.path().join("work"))
+            .expect_err("a writing statement must be refused by the read-only connection");
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("readonly")
+                || msg.contains("read-only")
+                || msg.contains("attempt to write"),
+            "expected a read-only refusal, got: {err}"
+        );
+    }
+
+    /// `run_module` is public and `ModuleSpec` deserializable, so a caller could
+    /// bypass `load_modules`. The id builds a filename, so an unvalidated spec
+    /// is a path-traversal hole.
+    #[test]
+    fn run_module_validates_a_hand_built_spec() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), "Library/Demo/demo.db", |c| {
+            c.execute_batch("CREATE TABLE events (who TEXT);").unwrap();
+        });
+        let spec = ModuleSpec {
+            id: "../../escape".into(),
+            name: "Escape".into(),
+            category: None,
+            domain: "HomeDomain".into(),
+            path: "Library/Demo/demo.db".into(),
+            sql: "SELECT who FROM events".into(),
+            requires: None,
+            columns: vec![ColumnSpec {
+                name: "Who".into(),
+                from: "who".into(),
+                kind: ColumnKind::Text,
+                epoch: None,
+            }],
+        };
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let err = run_module(&spec, &index, None, &tmp.path().join("work"))
+            .expect_err("an id that escapes the work dir must be refused")
+            .to_string();
+        assert!(err.contains("may only contain"), "{err}");
     }
 
     #[test]
