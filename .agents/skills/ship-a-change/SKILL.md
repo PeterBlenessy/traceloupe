@@ -1,6 +1,6 @@
 ---
 name: ship-a-change
-description: The end-to-end loop for changing TraceLoupe — grill, file, worktree, build, prove the guards, preflight, PR, merge, clean up. Use when starting any non-trivial feature or fix in this repo, or when the user asks to build/implement/fix something.
+description: The end-to-end loop for changing TraceLoupe — grill, file, worktree, build, prove the guards, preflight, PR, merge, clean up, and turn anything that escaped into a committed check. Use when starting any non-trivial feature or fix in this repo, when the user asks to build/implement/fix something, or when reflecting on what a session should have caught.
 ---
 
 The order below is not a style preference. Every step exists because skipping it
@@ -143,6 +143,31 @@ removing the directory you are standing in leaves the shell with none.
 `scripts/release.sh X.Y.Z`, then a CHANGELOG entry written for someone who uses
 the app: what changed for them, not which module moved. The tag is created
 automatically when the release lands on main.
+
+## 9. Close the loop on what escaped
+
+Not a ritual at the end of every session — a session with nothing to report
+trains you to write filler. Do this **when there is evidence**, which means any
+time one of these happened:
+
+- the user had to point out a defect (the strongest signal there is — a gate
+  should have caught it first)
+- a patch release existed only to fix what the previous release shipped
+- a guard fired on something nobody had thought to look for
+- you did the same manual check twice
+
+Then ask one question: **what would have caught this without a human?** Answer it
+in one of three ways — add the guard, extend an existing one, or write down why
+it is not worth guarding. All three are fine. Silence is not.
+
+**The output is a commit, or it did not happen.** A script, a lint rule, a test,
+a line in AGENTS.md or a reference doc. This is the whole point: everything that
+made a session go well and stayed in the chat log is gone by the next one, while
+`preflight.sh` and `check-design.mjs` are still working months later. Judgement
+does not persist. Committed checks do.
+
+Resist the reflex to write it into a memory file instead. Memories are per
+machine and per user; the repo is what a fresh clone gets.
 
 ## When a guard catches something
 

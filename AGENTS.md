@@ -414,6 +414,14 @@ is indistinguishable from a rule that passes.
 - Parser changes need a **re-import** to populate existing caches (the cache
   migration only creates the empty structures; bump `SCHEMA_VERSION` in
   `crates/traceloupe-core/src/cache.rs`).
+- **Parsers / schemas: read `docs/reference/artifact-schemas.md` first.** Column
+  meanings, timestamp epochs, the type codes that must be looked up rather than
+  guessed, and the traps that have already produced shipped defects here — a
+  panorama that was a Live Photo frame, a thread identifier that is not a phone
+  number, a "no text so it must be a sticker" rule that matched nothing. It also
+  lists where to verify a new fact, and how to tell "absent from the backup"
+  from "offloaded to iCloud" from "the parser missed it" before you debug the
+  wrong one.
 - Domain glossary: `docs/CONTEXT.md`. Field-level data-coverage roadmap:
   `docs/reference/app-data-coverage.md`.
 - **Cutting a release: follow [`RELEASING.md`](RELEASING.md).** Never bump the
