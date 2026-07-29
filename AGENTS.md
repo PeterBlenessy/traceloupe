@@ -322,6 +322,23 @@ only whether they passed — a gate that quietly skips a step reports the same
 "OK" as one that passed it, which is the same failure as the section below seen
 from the other side.
 
+## What this repo does not carry
+
+Everything an agent needs to *verify* work is committed: `preflight.sh`, the
+guards, the `ship-a-change` skill, this file. Everything that shapes *judgement*
+sits outside it, and a fresh clone on a fresh machine does not get it:
+
+| Local-only | What is lost without it |
+| --- | --- |
+| `~/.claude/projects/<slug>/memory/` | ~29 accumulated facts. The load-bearing ones are mirrored here (worktrees, real-backup ban, done-means-shipped, measure-don't-eyeball). The rest — Apple schema quirks, why Safari/Calls import empty, WKWebView animation limits, iCloud-offload constraints — are not, and get rediscovered the hard way. |
+| Personal skills | The design half of the loop. `ship-a-change` §1 is now self-contained precisely so it does not depend on one. |
+| `.claude/settings.local.json` | Approval prompts on commands that ran unattended here. Slower, not worse. |
+| Editor plugins, model choice | Capability, not process. |
+
+So: **a clean clone reproduces the gates, not the taste.** If a session goes
+well, the durable part is what you commit — a script, a guard, a line in this
+file. What stays in a chat log or a memory file did not survive.
+
 ## A check is not trusted until it has been seen failing
 
 Almost every real defect found in this repo lately was found by making a check

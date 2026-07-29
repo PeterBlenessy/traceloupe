@@ -8,22 +8,38 @@ produced a specific defect that reached a release.
 
 ## 1. Grill before you build, and write the outcome down
 
-Use the **grill-me** skill, or ask directly. Then **file the issue before writing
-code**, with the decisions and their reasons in it.
+**Interview the user before building.** Walk down each branch of the design tree,
+resolving dependencies between decisions one at a time. Ask via the
+**AskUserQuestion** tool: your recommended answer first, plus the most plausible
+alternatives (max 4, labels ≤12 characters). Keep plain-text questions for
+genuinely free-form ones ("what would you call this?").
 
-The issue is the contract — not your memory of the conversation. It is what keeps
-scope intact across a long session, and what lets a decision be revisited without
-re-deriving it.
+**Where an answer is findable in the codebase, look instead of asking.** This is
+the line that makes grilling pay: it turns questions into verified facts —
+column names, which table a value lives in, whether a route exists — instead of
+into the user's guesses about their own schema.
+
+Then **file the issue before writing code**, with the decisions and their reasons
+in it. The issue is the contract — not your memory of the conversation. It is what
+keeps scope intact across a long session, and what lets a decision be revisited
+without re-deriving it. Use this body:
+
+```markdown
+## Outcome          <!-- one sentence: what is true when this is done -->
+## In Scope
+## Out of Scope     <!-- the half that actually prevents drift -->
+## Acceptance Criteria   <!-- checkable, not aspirational -->
+## Background       <!-- the constraints found while grilling -->
+```
+
+`Out of Scope` and `Acceptance Criteria` are the load-bearing ones. Without them
+an issue records enthusiasm rather than an agreement.
 
 Grilling repeatedly surfaces blockers the code would otherwise hit halfway
 through: a finding has no sender field, so "dismiss everything from this person"
 cannot mean what it says; the report vanished for a clean scan, which is the scan
 whose report matters most; the failure reason the tooltip promised did not exist
 anywhere.
-
-Where an answer is findable in the codebase, **look instead of asking**. Verify
-the facts you are about to build on — column names, which table a value lives in,
-whether a route exists.
 
 ## 2. Work in your own worktree
 
