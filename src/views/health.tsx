@@ -14,6 +14,7 @@ import {
   type FilterGroup,
 } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
 import { useSettings } from "@/components/settings-provider";
 import { NoBackupState, VirtualListView } from "@/components/view";
 import { dateFormat, formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
@@ -854,6 +855,14 @@ export function HealthView() {
   );
   useViewToolbar(toolbar);
 
+  // Health and MedicalID are encrypted-backup-only, so an unencrypted backup
+  // has no Health data at all — which must not read as "this person recorded
+  // none". See use-encrypted-only.ts.
+  const noHealthMessage = useEncryptedOnlyEmpty(
+    "Health data",
+    "No Health data in the selected sections.",
+  );
+
   if (active === false) {
     return (
       <NoBackupState
@@ -907,7 +916,7 @@ export function HealthView() {
           emptyMessage={
             baseItems.length > 0
               ? (only?.emptyFiltered ?? "Nothing in the selected sections matches these filters.")
-              : (only?.emptyAll ?? "No Health data in the selected sections.")
+              : (only?.emptyAll ?? noHealthMessage)
           }
           renderItem={(r) => defs[r.section].render(r.item)}
         />

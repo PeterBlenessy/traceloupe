@@ -10,6 +10,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useDebounced } from "@/lib/use-debounced";
+import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
 import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { initials } from "@/lib/contact";
 import { appMeta } from "@/lib/apps";
@@ -261,6 +262,14 @@ export function InteractionsView() {
   );
   useViewToolbar(toolbar);
 
+  // CoreDuet's interactionC.db is encrypted-backup-only, so an unencrypted
+  // backup has no interactions at all — which must not read as "this person
+  // contacted nobody". See use-encrypted-only.ts.
+  const noDataMessage = useEncryptedOnlyEmpty(
+    "Interaction history",
+    "No interaction data in this backup.",
+  );
+
   if (active === false) {
     return (
       <NoBackupState
@@ -288,9 +297,7 @@ export function InteractionsView() {
           estimateSize={68}
           isPending={isPending}
           error={error}
-          emptyMessage={
-            hasData ? "No contacts match these filters." : "No interaction data in this backup."
-          }
+          emptyMessage={hasData ? "No contacts match these filters." : noDataMessage}
           emptyIcon={Waypoints}
           items={filtered}
           getKey={(i) => i.id}
