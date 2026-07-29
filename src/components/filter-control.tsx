@@ -37,9 +37,13 @@ const PANEL_W = 416;
  */
 export function FilterControl({
   groups,
+  disabled = false,
   align = "left",
 }: {
   groups: FilterGroup[];
+  /** Nothing to filter — the control stays in place and goes inert, so the
+   *  toolbar does not reflow between selections. */
+  disabled?: boolean;
   /** Which way the popover morphs open: `"left"` anchors the funnel's right edge
    *  and grows **leftward** (the default — for a right-aligned toolbar funnel);
    *  `"right"` anchors the left edge and grows **rightward** (for a left-placed
@@ -186,6 +190,7 @@ export function FilterControl({
               ref={btnRef}
               tabIndex={controlTabIndex}
               type="button"
+              disabled={disabled}
               aria-label="Filter"
               aria-haspopup="dialog"
               aria-expanded={expanded}
