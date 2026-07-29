@@ -9,6 +9,7 @@ import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
+import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatCount, formatDate, formatDateTime } from "@/lib/format";
@@ -126,6 +127,16 @@ export function SafariView() {
         : null,
     [active, count, filterGroups, sortNode, searchNode],
   );
+  // Only the iCloud half of Tabs is encrypted-backup-only
+  // (Library/Safari/SafariTabs.db); local tabs come from BrowserState.db and
+  // are in any backup. So this explains the gap without claiming the whole
+  // section is missing.
+  const emptyTabs = useEncryptedOnlyEmpty(
+    "Tabs synced from your other Apple devices",
+    EMPTY.tab,
+  );
+  const emptyForType = type === "tab" ? emptyTabs : EMPTY[type];
+
   useViewToolbar(toolbar);
 
   if (active === false) {
@@ -151,7 +162,7 @@ export function SafariView() {
       count={count}
       error={error}
       resetKey={`${type}:${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
-      emptyMessage={search ? "No matches." : EMPTY[type]}
+      emptyMessage={search ? "No matches." : emptyForType}
       emptyIcon={Globe}
       underlap
       windowKey={(page) => [
