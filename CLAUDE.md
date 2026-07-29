@@ -26,7 +26,7 @@ if you forget. The branch name always equals the worktree directory name. See
 AGENTS.md for the naming rules, build/verify commands, and cleanup steps.
 
 For anything beyond a trivial edit, use the **`ship-a-change`** skill
-(`.claude/skills/ship-a-change/`): it is the end-to-end loop — grill, file the
+(`.agents/skills/ship-a-change/`): it is the end-to-end loop — grill, file the
 issue, worktree, build, prove the guards, preflight, PR, merge, clean up. Every
 step in it exists because skipping it produced a defect that reached a release.
 
