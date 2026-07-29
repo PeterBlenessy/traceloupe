@@ -19,7 +19,34 @@ offer **two tiers**, on top of a risk-free local Phase 1:
   private iCloud protocol with the account owner's own credentials (pyicloud
   model), re-implemented natively in **Rust** in a **separate repository/crate**
   that TraceLoupe consumes as an optional, feature-flagged dependency. Ships
-  **Notes** first (Photos falls out for free).
+  **Photos** first — see the amendment below; this originally said Notes.
+
+## Amendment (2026-07-21): two premises corrected by later research
+
+The decision above stands. Three of the specifics under it did not survive
+verification, and are corrected here rather than left to mislead a future reader.
+
+- **Photos first, not Notes.** The original ordering assumed Notes was the
+  motivating case and Photos would fall out for free. It is the other way round:
+  `icloudpd` exists precisely for Photos and is proven, while **neither
+  `pyicloud` nor `icloudpd` has any Notes support at all**. Notes is a
+  traffic-capture reverse-engineering spike, not a port, and is the harder half.
+- **Tier 2 authentication was mis-scoped.** The target is the **idmsa web SRP-6a
+  flow with no anisette**, portable from `icloudpd`'s `pyicloud_ipd`. The
+  GrandSlam/GSA system is a different mechanism whose token is not valid for
+  `ckdatabasews`; reuse its crate choices, not its approach.
+- **`transfer_state` is not an offload flag.** Phase 1 originally proposed
+  reading it as one. It is a transfer-*completion* latch and is not rewritten
+  when a file is offloaded; deletion removes the row entirely. The reliable
+  model is **structural**: row present with the blob absent means offloaded, row
+  absent means deleted. `ck_record_id` and `ck_sync_state` are a *hint* that an
+  item is recoverable, not proof — their semantics are undocumented.
+
+The practical consequence is good news: **Phase 1 is buildable now**, with no new
+test data, because the structural model needs no flag we do not already have.
+
+Route and open questions:
+[Map — recover iCloud-offloaded media](https://github.com/PeterBlenessy/traceloupe/issues/179).
 
 ## Why
 
