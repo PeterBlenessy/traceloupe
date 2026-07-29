@@ -2978,7 +2978,13 @@ function mockFindingsForScan(scanId?: number) {
 
 const mockEngineSubs = new Set<(p: EngineProgress) => void>();
 
-export const mockClient: TraceLoupeClient = {
+export /** Mock-only: `?mock=unencrypted` flips the fake backup to an unencrypted one,
+ *  so the encrypted-only empty states can be exercised by the design checks. */
+const mockUnencrypted =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("mock") === "unencrypted";
+
+const mockClient: TraceLoupeClient = {
   listBackups: async () => ({ status: "ok", backups: mockBackups }),
   defaultBackupRoot: async () =>
     "/Users/dev/Library/Application Support/MobileSync/Backup",
@@ -3150,7 +3156,11 @@ export const mockClient: TraceLoupeClient = {
           productVersion: "17.5.1",
           serialNumber: "F2LW00XYZ123",
           lastBackupDate: 1717800000,
-          isEncrypted: true,
+          // `?mock=unencrypted` renders the app as it looks against a backup
+          // made without encryption, where Health, Interactions and iCloud
+          // tabs cannot exist. Mock-only: this client is never used inside
+          // Tauri, so it cannot affect the shipped app.
+          isEncrypted: !mockUnencrypted,
         }
       : null,
   systemAccentColor: async () => null,
@@ -3186,7 +3196,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   listWorkouts: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           {
             id: 1,
@@ -3222,7 +3232,7 @@ export const mockClient: TraceLoupeClient = {
         })
       : [],
   healthDaily: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           {
             dayAt: 1717804800,
@@ -3271,7 +3281,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   listSleep: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           { id: 1, startAt: 1717822800, endAt: 1717851600, stage: "In Bed" },
           { id: 2, startAt: 1717824600, endAt: 1717837200, stage: "Deep" },
@@ -3279,7 +3289,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   listHealthAchievements: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           { id: 1, name: "NewMoveRecord", earnedAt: 1717804800, value: 1284, unit: "kcal" },
           { id: 2, name: "MoveGoal200Percent", earnedAt: 1717718400, value: 400, unit: "kcal" },
@@ -3287,7 +3297,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   listCycle: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           { id: 1, category: "Menstrual flow", detail: "Medium", loggedAt: 1717718400 },
           { id: 2, category: "Abdominal cramps", detail: null, loggedAt: 1717718400 },
@@ -3296,7 +3306,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   listHealthTimezones: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           {
             tzName: "Europe/Stockholm",
@@ -3322,7 +3332,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   healthSummary: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? {
           sampleCount: 344063,
           firstAt: 1500000000,
@@ -3346,7 +3356,7 @@ export const mockClient: TraceLoupeClient = {
           cycleCount: 0,
         },
   listInteractions: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           {
             id: 1,
@@ -3371,7 +3381,7 @@ export const mockClient: TraceLoupeClient = {
         ]
       : [],
   interactionChannels: async () =>
-    mockActive
+    mockActive && !mockUnencrypted
       ? [
           { bundleId: "com.apple.MobileSMS", incoming: 5873, outgoing: 6482 },
           { bundleId: "com.apple.InCallService", incoming: 140, outgoing: 157 },
