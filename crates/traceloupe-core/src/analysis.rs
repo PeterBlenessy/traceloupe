@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -268,7 +268,12 @@ CREATE TABLE IF NOT EXISTS scans (
     started_at   INTEGER NOT NULL,
     finished_at  INTEGER,
     chunks_total INTEGER NOT NULL DEFAULT 0,
-    chunks_done  INTEGER NOT NULL DEFAULT 0
+    chunks_done  INTEGER NOT NULL DEFAULT 0,
+    -- Why a run ended the way it did, when that needs saying (v9). Only 'failed'
+    -- carries one: cancelled and interrupted explain themselves. Without it the
+    -- history could say a scan failed and nothing more, which is what the user
+    -- could already see.
+    error        TEXT
 );
 
 -- A Content Finding: one model verdict attached to one message or note.
@@ -497,6 +502,8 @@ pub struct FindingRow {
 /// One row of the `scans` table (see SCHEMA_V1 for column semantics).
 #[derive(Debug, Clone)]
 pub struct ScanRow {
+    /// Why a failed run failed. `None` for every other status.
+    pub error: Option<String>,
     pub id: i64,
     pub model: String,
     pub range_start: Option<i64>,
@@ -529,6 +536,8 @@ pub struct ScanListRow {
     pub serious: i64,
     pub harmful: i64,
     pub concerning: i64,
+    /// Why a failed run failed — what the history's warning badge says on hover.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -699,6 +708,16 @@ impl AnalysisDb {
                      UNIQUE(scope, value)
                  );",
             )?;
+            // v9: why a failed run failed (#171). The engine had the error in
+            // hand and dropped it.
+            let has_error = conn
+                .prepare("PRAGMA table_info(scans)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "error");
+            if !has_error {
+                conn.execute("ALTER TABLE scans ADD COLUMN error TEXT", [])?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -727,6 +746,42 @@ impl AnalysisDb {
         // at backup open via repair_stranded_scans): one scan at a time means
         // any 'running' row at begin is by definition dead.
         self.repair_stranded_scans()?;
+        // One row per CONFIGURATION, not per run (#171). Running the same scope
+        // again updates that row rather than adding a twin: the history is a
+        // list of the scans you have set up, and `audit_log` keeps the record of
+        // when each actually ran.
+        //
+        // Without this, showing the scope as the row's title would produce rows
+        // with identical titles differing only by a date, which is worse than
+        // the date-as-title it replaces. `resume_scan` already worked this way.
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM scans
+                 WHERE sources = ?1
+                   AND range_start IS ?2
+                   AND range_end IS ?3
+                 ORDER BY id DESC LIMIT 1",
+                params![sources, range.0, range.1],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        if let Some(id) = existing {
+            // A re-run starts over: the previous outcome must not linger on a
+            // row that is running again, and a stale `error` would keep the
+            // warning badge on a scan that is currently fine.
+            self.conn.execute(
+                "UPDATE scans
+                    SET model = ?2, status = 'running', started_at = ?3,
+                        finished_at = NULL, error = NULL,
+                        chunks_total = 0, chunks_done = 0
+                  WHERE id = ?1",
+                params![id, model, started_at],
+            )?;
+            return Ok(id);
+        }
+
         self.conn.execute(
             "INSERT INTO scans (model, range_start, range_end, sources, status, started_at)
              VALUES (?1, ?2, ?3, ?4, 'running', ?5)",
@@ -788,12 +843,28 @@ impl AnalysisDb {
     }
 
     pub fn finish_scan(&self, scan_id: i64, status: ScanStatus, finished_at: i64) -> Result<()> {
+        self.finish_scan_with(scan_id, status, finished_at, None)
+    }
+
+    /// Finish a scan, recording why when there is anything to say.
+    ///
+    /// Only a failure carries a reason. Cancelled and interrupted explain
+    /// themselves — you stopped it, or the app closed — and inventing text for
+    /// them would be noise. A failure without one leaves the history saying "it
+    /// failed", which the user could already see.
+    pub fn finish_scan_with(
+        &self,
+        scan_id: i64,
+        status: ScanStatus,
+        finished_at: i64,
+        error: Option<&str>,
+    ) -> Result<()> {
         if status == ScanStatus::Running {
             return Err(Error::Invalid("finish_scan with status 'running'".into()));
         }
         self.conn.execute(
-            "UPDATE scans SET status = ?2, finished_at = ?3 WHERE id = ?1",
-            params![scan_id, status.as_str(), finished_at],
+            "UPDATE scans SET status = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
+            params![scan_id, status.as_str(), finished_at, error],
         )?;
         Ok(())
     }
@@ -1597,7 +1668,7 @@ impl AnalysisDb {
             .conn
             .query_row(
                 "SELECT id, model, range_start, range_end, sources, status, started_at,
-                        finished_at, chunks_total, chunks_done
+                        finished_at, chunks_total, chunks_done, error
                  FROM scans ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -1612,6 +1683,7 @@ impl AnalysisDb {
                         finished_at: r.get(7)?,
                         chunks_total: r.get(8)?,
                         chunks_done: r.get(9)?,
+                        error: r.get(10)?,
                     })
                 },
             )
@@ -1624,7 +1696,7 @@ impl AnalysisDb {
             .conn
             .query_row(
                 "SELECT id, model, range_start, range_end, sources, status, started_at,
-                        finished_at, chunks_total, chunks_done
+                        finished_at, chunks_total, chunks_done, error
                  FROM scans WHERE id = ?1",
                 params![id],
                 |r| {
@@ -1639,6 +1711,7 @@ impl AnalysisDb {
                         finished_at: r.get(7)?,
                         chunks_total: r.get(8)?,
                         chunks_done: r.get(9)?,
+                        error: r.get(10)?,
                     })
                 },
             )
@@ -1683,7 +1756,8 @@ impl AnalysisDb {
                     coalesce(count(f.id), 0),
                     coalesce(sum(f.severity = 3), 0),
                     coalesce(sum(f.severity = 2), 0),
-                    coalesce(sum(f.severity = 1), 0)
+                    coalesce(sum(f.severity = 1), 0),
+                    s.error
              FROM scans s
              LEFT JOIN content_findings f ON f.stale = 0
                 AND (s.sources = 'all'
@@ -1714,6 +1788,7 @@ impl AnalysisDb {
                 serious: r.get(9)?,
                 harmful: r.get(10)?,
                 concerning: r.get(11)?,
+                error: r.get(12)?,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2074,7 +2149,7 @@ mod tests {
         db.set_dismissed("fp1", Category::ScamFraud, true, 102)
             .unwrap();
         // New scan re-inserts the same finding — dismissal must still apply.
-        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        let scan2 = db.begin_scan("m", (None, None), "notes", 200).unwrap();
         db.replace_findings(scan2, &[finding("fp1", Category::ScamFraud)], 201)
             .unwrap();
         let rows = db.list_findings(None).unwrap();
@@ -2213,7 +2288,9 @@ mod tests {
         let scan1 = db.begin_scan("m", (None, None), "all", 100).unwrap();
         db.replace_findings(scan1, &[finding("fp1", Category::ScamFraud)], 101)
             .unwrap();
-        let scan2 = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        // A different SCOPE: begin_scan reuses the row for a configuration it
+        // already has, so "all" twice would be one scan (#171).
+        let scan2 = db.begin_scan("m", (None, None), "notes", 200).unwrap();
         db.replace_findings(scan2, &[finding("fp2", Category::SelfHarm)], 201)
             .unwrap();
         assert_eq!(db.list_findings(None).unwrap().len(), 2);
@@ -2402,8 +2479,10 @@ mod tests {
     fn stale_running_scan_repaired_at_next_begin() {
         let db = AnalysisDb::open_in_memory().unwrap();
         let dead = db.begin_scan("m", (None, None), "all", 100).unwrap();
-        // Simulate a crash: never finished. The next begin_scan repairs it.
-        let live = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        // Simulate a crash: never finished. Beginning a DIFFERENT scan repairs
+        // it — a different scope, or begin_scan would reuse the same row and
+        // there would be no stranded row left to repair.
+        let live = db.begin_scan("m", (None, None), "notes", 200).unwrap();
         let (dead_status, dead_finished): (String, Option<i64>) = db
             .conn()
             .query_row(
@@ -2480,7 +2559,9 @@ mod tests {
         .unwrap();
 
         // A second scan is left untouched, proving the delete is scoped by id.
-        let keep = db.begin_scan("m", (None, None), "all", 200).unwrap();
+        // A different SCOPE, so this is genuinely a second scan: begin_scan
+        // reuses the row for a configuration it already has (#171).
+        let keep = db.begin_scan("m", (None, None), "notes", 200).unwrap();
         db.audit(keep, 201, "scan_started", "").unwrap();
 
         db.delete_scan(scan).unwrap();
@@ -2892,6 +2973,81 @@ mod tests {
             assert_eq!(listed, charted, "{q:?}");
         }
     }
+    #[test]
+    fn re_running_a_scope_updates_its_row_instead_of_adding_one() {
+        // The history is a list of the scans you have set up, not of every time
+        // one ran — otherwise showing the scope as the title produces rows with
+        // identical titles differing only by a date.
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let first = db.begin_scan("m", (None, None), "messages", 100).unwrap();
+        db.finish_scan(first, ScanStatus::Completed, 150).unwrap();
+
+        let again = db.begin_scan("m", (None, None), "messages", 300).unwrap();
+        assert_eq!(again, first, "the same configuration is the same row");
+        assert_eq!(db.list_scans(10).unwrap().len(), 1);
+
+        let row = db.scan_by_id(first).unwrap().unwrap();
+        assert_eq!(row.status, "running", "it is running again");
+        assert_eq!(row.started_at, 300, "and the date is the LATEST run");
+        assert_eq!(row.finished_at, None, "the old outcome does not linger");
+
+        // A different scope is a different scan.
+        let other = db.begin_scan("m", (None, None), "notes", 400).unwrap();
+        assert_ne!(other, first);
+        assert_eq!(db.list_scans(10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn re_running_clears_a_previous_failure() {
+        // The warning badge is driven by `error`. Leaving it set would mark a
+        // scan that is currently running fine as failed.
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let id = db.begin_scan("m", (None, None), "messages", 100).unwrap();
+        db.finish_scan_with(id, ScanStatus::Failed, 150, Some("server died"))
+            .unwrap();
+        assert!(db.scan_by_id(id).unwrap().unwrap().error.is_some());
+
+        db.begin_scan("m", (None, None), "messages", 300).unwrap();
+        assert_eq!(
+            db.scan_by_id(id).unwrap().unwrap().error,
+            None,
+            "a re-run starts clean"
+        );
+    }
+
+    #[test]
+    fn a_failed_scan_records_why() {
+        // The badge in the history promises a reason on hover. Before this the
+        // engine had the error in hand and dropped it, so the only honest
+        // tooltip would have been "it failed" — which the status already said.
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.finish_scan_with(
+            scan,
+            ScanStatus::Failed,
+            200,
+            Some("model server exited before the first chunk"),
+        )
+        .unwrap();
+
+        let row = db.scan_by_id(scan).unwrap().unwrap();
+        assert_eq!(row.status, "failed");
+        assert_eq!(
+            row.error.as_deref(),
+            Some("model server exited before the first chunk")
+        );
+    }
+
+    #[test]
+    fn only_a_failure_carries_a_reason() {
+        // Cancelled and interrupted explain themselves — you stopped it, or the
+        // app closed. Inventing text for them would be noise in a tooltip.
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.finish_scan(scan, ScanStatus::Cancelled, 200).unwrap();
+        assert_eq!(db.scan_by_id(scan).unwrap().unwrap().error, None);
+    }
+
     #[test]
     fn a_rule_dismisses_rather_than_hides() {
         // The safety property. A conversation marked fine today may not be fine

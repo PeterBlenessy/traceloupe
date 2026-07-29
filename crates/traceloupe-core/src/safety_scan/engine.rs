@@ -373,7 +373,15 @@ pub fn run_scan(
     if let Err(e) = loop_result {
         // Best effort: a fatal storage error must not strand the scan row as
         // 'running' — that reads as a phantom in-flight scan forever.
-        let _ = analysis.finish_scan(scan_id, ScanStatus::Failed, now());
+        //
+        // The error is RECORDED, not just used to set a status. It was thrown
+        // away here, which left the history able to say a scan failed and
+        // nothing more — exactly what the user could already see (#171).
+        // Truncated because it is a label in a tooltip, not a log line; the full
+        // text has already gone to the log.
+        let mut detail = e.to_string();
+        detail.truncate(300);
+        let _ = analysis.finish_scan_with(scan_id, ScanStatus::Failed, now(), Some(&detail));
         return Err(e);
     }
 
