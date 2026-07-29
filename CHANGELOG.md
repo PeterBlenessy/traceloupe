@@ -13,6 +13,31 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.37.0] — 2026-07-29
+
+**A scan is something you keep, not an event you look back on** — the history
+lists what each scan covers, re-running one updates it in place, and a scan that
+didn't finish says why.
+
+### Added
+
+- **Run any scan again** from the history, not just the ones that stopped early.
+- **A scan that didn't finish shows a warning**, and hovering it says why —
+  including the actual error when a scan failed, which was previously discarded.
+  Hovering also turns the warning into the button that runs it again.
+- **The report opens from the findings toolbar**, so it is reachable for a scan
+  that found nothing — the one whose report is often most worth reading.
+
+### Changed
+
+- **A scan is listed by what it covers**, with the date as detail underneath.
+  Re-running the same content updates that entry rather than adding another, so
+  the history is the list of scans you have set up.
+- **The only badge is a findings count.** "Clean", "Stopped" and "Interrupted"
+  were saying what the row already said twice over.
+- **Controls that need findings are shown but inactive on an empty scan**, rather
+  than disappearing and shifting everything else around.
+
 ## [0.36.0] — 2026-07-29
 
 **Findings are something you work through** — open one to read what was flagged,
