@@ -8,11 +8,15 @@ produced a specific defect that reached a release.
 
 ## 1. Grill before you build, and write the outcome down
 
-**Interview the user before building.** Walk down each branch of the design tree,
-resolving dependencies between decisions one at a time. Ask via the
-**AskUserQuestion** tool: your recommended answer first, plus the most plausible
-alternatives (max 4, labels ≤12 characters). Keep plain-text questions for
-genuinely free-form ones ("what would you call this?").
+**Interview the user before building** — use the **`grill-me`** skill, or
+**`grill-with-docs`** when the decisions are architectural and should land in
+`docs/CONTEXT.md` and an ADR rather than only in an issue.
+
+In short: walk down each branch of the design tree, resolving dependencies
+between decisions one at a time. Ask via the **AskUserQuestion** tool: your
+recommended answer first, plus the most plausible alternatives (max 4, labels
+≤12 characters). Keep plain-text questions for genuinely free-form ones ("what
+would you call this?").
 
 **Where an answer is findable in the codebase, look instead of asking.** This is
 the line that makes grilling pay: it turns questions into verified facts —
