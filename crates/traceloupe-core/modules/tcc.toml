@@ -1,0 +1,101 @@
+# App permissions — which apps were granted access to the camera, microphone,
+# photos, contacts, location and so on, and when that was last decided.
+#
+# TCC.db is Apple's Transparency, Consent and Control store. It is confirmed
+# backup-reachable: HomeDomain.RelativePathsToBackupAndRestore lists
+# `Library/TCC` (see docs/reference/backup-coverage-audit.md).
+#
+# THREE alternatives, because two schema changes happened independently:
+#
+#   * `auth_value` (+ `auth_reason`, `auth_version`) replaced `allowed` (+
+#     `prompt_count`) in iOS 14 / Big Sur.
+#   * `last_modified` predates that change and exists on BOTH lineages — but not
+#     on the very oldest.
+#
+# They are orthogonal, which is why iLEAPP tests for them separately rather than
+# branching once. Collapsing them into two alternatives loses the date on every
+# iOS 12/13 backup — and "when was this granted" is the more interesting half of
+# the artifact. Order matters: most specific first.
+#
+# auth_value is Apple's kTCCAuthValue enum:
+#   0 Denied · 1 Unknown (never prompted) · 2 Allowed · 3 Limited
+# `allowed` on the older lineage is a plain 0/1.
+#
+# Searched CASE rather than `CASE auth_value WHEN …`, so a NULL is handled
+# explicitly: `'x' || NULL` is NULL in SQLite, which would turn an unrecorded
+# value into an empty cell instead of saying it was unrecorded.
+#
+# Service strings pass through as iOS writes them (kTCCServiceCamera,
+# kTCCServicePhotos…). Prettifying would mean inventing labels for codes we have
+# not verified, and the audit's rule for undecodable values applies to enums.
+
+id       = "tcc"
+name     = "App permissions"
+category = "Security"
+domain   = "HomeDomain"
+path     = "Library/TCC/TCC.db"
+
+sql = [
+  # iOS 14+ / Big Sur onwards.
+  """
+  SELECT client AS app,
+         service AS service,
+         CASE
+           WHEN auth_value IS NULL THEN 'Not recorded'
+           WHEN auth_value = 0 THEN 'Denied'
+           WHEN auth_value = 1 THEN 'Not decided'
+           WHEN auth_value = 2 THEN 'Allowed'
+           WHEN auth_value = 3 THEN 'Limited'
+           ELSE 'Unrecognised (' || auth_value || ')'
+         END AS decision,
+         last_modified AS decided_at
+  FROM access
+  ORDER BY client, service
+  """,
+  # iOS 12/13 lineage: `allowed`, but last_modified is still there.
+  """
+  SELECT client AS app,
+         service AS service,
+         CASE
+           WHEN allowed IS NULL THEN 'Not recorded'
+           WHEN allowed = 0 THEN 'Denied'
+           WHEN allowed = 1 THEN 'Allowed'
+           ELSE 'Unrecognised (' || allowed || ')'
+         END AS decision,
+         last_modified AS decided_at
+  FROM access
+  ORDER BY client, service
+  """,
+  # Oldest: no last_modified column at all.
+  """
+  SELECT client AS app,
+         service AS service,
+         CASE
+           WHEN allowed IS NULL THEN 'Not recorded'
+           WHEN allowed = 0 THEN 'Denied'
+           WHEN allowed = 1 THEN 'Allowed'
+           ELSE 'Unrecognised (' || allowed || ')'
+         END AS decision,
+         NULL AS decided_at
+  FROM access
+  ORDER BY client, service
+  """,
+]
+
+[[columns]]
+name = "App"
+from = "app"
+
+[[columns]]
+name = "Permission"
+from = "service"
+
+[[columns]]
+name = "Decision"
+from = "decision"
+
+[[columns]]
+name = "Decided"
+from = "decided_at"
+kind = "timestamp"
+epoch = "unix"

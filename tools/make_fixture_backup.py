@@ -395,6 +395,42 @@ def seed_photos_sqlite(path: Path) -> None:
     con.close()
 
 
+def seed_tcc_db(path: Path) -> None:
+    """TCC.db — Apple's Transparency, Consent and Control store: which apps were
+    granted the camera, microphone, photos and so on.
+
+    Modelled on the MODERN schema (`auth_value`, 0 denied / 2 allowed /
+    3 limited). The artifact module carries a second query for older devices
+    that have `allowed` instead; see crates/traceloupe-core/modules/tcc.toml.
+
+    Deliberately includes a denial and an unrecognised auth_value, so the
+    module's CASE is exercised past its happy path.
+    """
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE access ("
+        "  service TEXT, client TEXT, client_type INTEGER,"
+        "  auth_value INTEGER, auth_reason INTEGER, auth_version INTEGER,"
+        "  last_modified INTEGER)"
+    )
+    rows = [
+        ("kTCCServiceCamera", "com.example.chatapp", 0, 2, 2, 1, 1_700_000_000),
+        ("kTCCServiceMicrophone", "com.example.chatapp", 0, 2, 2, 1, 1_700_000_100),
+        ("kTCCServicePhotos", "com.example.chatapp", 0, 3, 2, 1, 1_700_000_200),
+        ("kTCCServiceLocation", "com.example.weather", 0, 0, 2, 1, 1_700_000_300),
+        ("kTCCServiceAddressBook", "com.example.social", 0, 2, 2, 1, 1_700_000_400),
+        # An auth_value the CASE does not name, so the "Unknown (n)" arm is real.
+        ("kTCCServiceReminders", "com.example.todo", 0, 9, 2, 1, 1_700_000_500),
+    ]
+    con.executemany(
+        "INSERT INTO access (service, client, client_type, auth_value,"
+        " auth_reason, auth_version, last_modified) VALUES (?,?,?,?,?,?,?)",
+        rows,
+    )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -408,11 +444,14 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_addressbook_db(ab_path)
     photos_path = workdir / "Photos.sqlite"
     seed_photos_sqlite(photos_path)
+    tcc_path = workdir / "TCC.db"
+    seed_tcc_db(tcc_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
         ("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata", calls_path.read_bytes()),
         ("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", ab_path.read_bytes()),
+        ("HomeDomain", "Library/TCC/TCC.db", tcc_path.read_bytes()),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
     # A real camera roll: the DCIM original, its V2 thumbnail, and Photos.sqlite.
