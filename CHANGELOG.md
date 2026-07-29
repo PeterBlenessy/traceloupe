@@ -13,6 +13,41 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.36.0] — 2026-07-29
+
+**Findings are something you work through** — open one to read what was flagged,
+mark it wrong and say why, and set that judgement to apply to a whole
+conversation or category.
+
+### Added
+
+- **Findings open in place.** Click one to read the flagged message right there,
+  instead of hovering a button for a popover that vanished when you moved the
+  pointer. The text can be selected and copied, and a long message is no longer
+  clipped.
+- **Findings you have not read look unread**, like mail, and the count of unread
+  ones is tracked. Opening a finding is what marks it read — nothing is marked
+  by scrolling past it.
+- **Dismissing asks why, and how far it should apply**: just this finding, the
+  whole conversation, or the whole category. A conversation or category choice
+  keeps applying to future scans.
+- **A rules list in the findings toolbar**, so anything you set to dismiss
+  automatically can be seen and undone.
+
+### Changed
+
+- **Dismiss now lives inside an opened finding**, so a finding cannot be
+  dismissed without its flagged text having been read.
+- **Findings dismissed by a rule are still counted and still there** under "Show
+  dismissed", each showing the reason it was dismissed — nothing is hidden.
+- **"Show dismissed" moved into the toolbar row**, giving the findings list a
+  line more room.
+
+### Fixed
+
+- **Toolbar buttons are the same height as the controls beside them** in
+  Messages, Notes and Safety Scan. Some were slightly shorter.
+
 ## [0.35.0] — 2026-07-28
 
 **Dates and numbers follow your Region, the dashboard follows your sidebar, and
