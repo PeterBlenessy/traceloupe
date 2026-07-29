@@ -1507,6 +1507,10 @@ pub struct ScanHistoryItem {
     pub serious: i64,
     pub harmful: i64,
     pub concerning: i64,
+    /// Why a failed run failed — what the history's warning badge says on hover.
+    /// `None` for every other status: cancelled and interrupted explain
+    /// themselves.
+    pub error: Option<String>,
 }
 
 /// Remove a past scan and everything scoped to it (findings, progress,
@@ -1546,6 +1550,7 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
             serious: s.serious,
             harmful: s.harmful,
             concerning: s.concerning,
+            error: s.error,
         })
         .collect())
 }

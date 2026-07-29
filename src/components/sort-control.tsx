@@ -49,10 +49,14 @@ export function SortControl({
   value,
   onChange,
   className,
+  disabled = false,
 }: {
   fields: SortField[];
   value: SortState;
   onChange: (next: SortState) => void;
+  /** Nothing to sort — the control stays in place and goes inert, so the
+   *  toolbar does not reflow between selections. */
+  disabled?: boolean;
   className?: string;
 }) {
   // Follows macOS Keyboard navigation, like every other control.
@@ -66,6 +70,7 @@ export function SortControl({
       )}
     >
       <select
+        disabled={disabled}
         value={value.by}
         onChange={(e) => onChange({ ...value, by: e.target.value })}
         aria-label="Sort by"
@@ -81,6 +86,7 @@ export function SortControl({
         <TooltipTrigger asChild>
           <button
             type="button"
+            disabled={disabled}
               tabIndex={controlTabIndex}
             onClick={() => onChange({ ...value, desc: !value.desc })}
             aria-label={value.desc ? "Sort descending" : "Sort ascending"}

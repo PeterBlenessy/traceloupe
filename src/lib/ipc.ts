@@ -882,6 +882,10 @@ export interface SafetyScanHistoryItem {
   serious: number;
   harmful: number;
   concerning: number;
+  /** Why a failed run failed — shown on hovering the history row's warning
+   *  badge. Null for every other status: cancelled and interrupted explain
+   *  themselves. */
+  error: string | null;
 }
 
 /** Top live-finding severity per flagged thread/note, for inline badges. */
@@ -4062,6 +4066,7 @@ export const mockClient: TraceLoupeClient = {
             // Derived, not typed in: the rail badge and the detail pane read the
             // same fixture, and two hand-kept copies are how they would drift.
             ...mockScanTotals(),
+            error: null,
           },
           {
             id: 2,
@@ -4069,18 +4074,19 @@ export const mockClient: TraceLoupeClient = {
             sources: "all",
             rangeStart: null,
             rangeEnd: null,
-            status: "cancelled" as const,
+            status: "failed" as const,
             startedAt: Math.floor(Date.now() / 1000) - 90000,
             finishedAt: Math.floor(Date.now() / 1000) - 89700,
             findings: 0,
             serious: 0,
             harmful: 0,
             concerning: 0,
+            error: "model server exited before the first chunk",
           },
           {
             id: 1,
             model: "gemma-3n-E2B-it-Q4_K_M",
-            sources: "all",
+            sources: "notes",
             rangeStart: null,
             rangeEnd: null,
             status: "completed" as const,
@@ -4093,6 +4099,7 @@ export const mockClient: TraceLoupeClient = {
             serious: 0,
             harmful: 1,
             concerning: 0,
+            error: null,
           },
           // A clean completed scan and a scan with a 4-digit count: the two row
           // states that stress the card's layout hardest (an empty-looking right
@@ -4102,7 +4109,7 @@ export const mockClient: TraceLoupeClient = {
           {
             id: 4,
             model: "gemma-4-E4B-it-Q4_K_M",
-            sources: "notes",
+            sources: "iMessage,TikTok",
             rangeStart: null,
             rangeEnd: null,
             status: "completed" as const,
@@ -4112,11 +4119,12 @@ export const mockClient: TraceLoupeClient = {
             serious: 0,
             harmful: 0,
             concerning: 0,
+            error: null,
           },
           {
             id: 5,
             model: "gemma-4-E4B-it-Q4_K_M",
-            sources: "all",
+            sources: "messages,notes",
             rangeStart: null,
             rangeEnd: null,
             status: "completed" as const,
@@ -4126,6 +4134,7 @@ export const mockClient: TraceLoupeClient = {
             serious: 12,
             harmful: 307,
             concerning: 965,
+            error: null,
           },
           ].filter((s) => !mockDeletedScanIds.has(s.id)),
           (s, i) => ({ ...s, id: 100000 + i }),
