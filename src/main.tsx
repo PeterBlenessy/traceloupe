@@ -25,6 +25,7 @@ import { SecurityView } from "@/views/security";
 import { SafetyScanView } from "@/views/safety-scan";
 import { CalendarView } from "@/views/calendar";
 import { RemindersView } from "@/views/reminders";
+import { ArtifactsView } from "@/views/artifacts";
 import { HealthView } from "@/views/health";
 import { InteractionsView } from "@/views/interactions";
 
@@ -81,6 +82,11 @@ const routes = [
     component: ContactsView,
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calls", component: CallsView }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/artifacts",
+    component: ArtifactsView,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/safari", component: SafariView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/notes", component: NotesView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),

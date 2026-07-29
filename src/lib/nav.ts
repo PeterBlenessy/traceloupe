@@ -18,6 +18,7 @@ import {
   Phone,
   ShieldAlert,
   ShieldUser,
+  Table2,
   Users,
   Waypoints,
   type LucideIcon,
@@ -48,6 +49,10 @@ export const nav: readonly NavItem[] = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
+  // The generic artifact browser. One entry for every declarative module rather
+  // than one entry each: at ~360 artifacts a flat per-artifact sidebar is not
+  // navigation. What it becomes is #195.
+  { to: "/artifacts", label: "Artifacts", icon: Table2 },
 ] as const;
 
 /** The scans, which the sidebar groups above the content views. */

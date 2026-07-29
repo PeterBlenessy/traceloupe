@@ -258,6 +258,22 @@ pub fn import_backup(
         );
     }
 
+    // Declarative artifact modules (crates/traceloupe-core/src/artifacts.rs).
+    // Runs at import like every other source. Cheap by construction: a module
+    // whose file is not in this backup costs one indexed Manifest lookup and
+    // touches nothing, so the cost scales with what the device actually has
+    // rather than with how many modules exist.
+    {
+        step!("Indexing artifacts");
+        import_artifact_modules(
+            backup_dir,
+            decryptor.as_ref(),
+            &cache,
+            work_dir,
+            &mut native,
+        );
+    }
+
     // Phase 2: self-extract + parse Contacts from AddressBook.sqlitedb, so we no
     // longer depend on iLEAPP to extract it for us.
     let native_contacts = effective.contains(&"contacts") && {
@@ -690,6 +706,56 @@ fn import_notes_native(
 
 /// Materialize the CoreDuet cross-app interaction graph from `interactionC.db`.
 /// Native-only and best-effort.
+/// Run every compiled-in artifact module and store its rows.
+///
+/// Best-effort per module, deliberately: one artifact whose store is corrupt or
+/// whose schema moved must not fail the whole import, the same way a failing
+/// parser is a warning today. Each failure becomes a warning naming the module.
+fn import_artifact_modules(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+) {
+    let specs = match crate::artifacts::builtin_modules() {
+        Ok(s) => s,
+        Err(e) => {
+            // A module that does not even parse is a build-time mistake, not a
+            // property of this backup — say so rather than blaming the device.
+            report
+                .warnings
+                .push(format!("Artifact modules: {e} (shipped module is invalid)"));
+            return;
+        }
+    };
+    let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
+        Ok(i) => i,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Artifact modules: cannot read the Manifest ({e})."));
+            return;
+        }
+    };
+    for spec in &specs {
+        match crate::artifacts::run_module(spec, &index, decryptor, work_dir) {
+            // Absent from this backup — normal, and silent.
+            Ok(None) => {}
+            Ok(Some(rows)) => {
+                if let Err(e) = crate::artifacts::store_rows(cache.conn(), &spec.id, &rows) {
+                    report
+                        .warnings
+                        .push(format!("Artifact {}: storing rows failed ({e}).", spec.id));
+                }
+            }
+            Err(e) => report
+                .warnings
+                .push(format!("Artifact {}: parse failed ({e}).", spec.id)),
+        }
+    }
+}
+
 fn import_interactions_native(
     backup_dir: &Path,
     decryptor: Option<&crate::crypto::BackupDecryptor>,
