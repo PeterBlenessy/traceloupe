@@ -25,6 +25,11 @@ Run it from the main checkout, not from inside the worktree — it will tell you
 if you forget. The branch name always equals the worktree directory name. See
 AGENTS.md for the naming rules, build/verify commands, and cleanup steps.
 
+For an effort too big for one session — where what to build is not yet
+decidable — chart it with the **`wayfinder`** skill
+(`.agents/skills/wayfinder/`) so a fresh session can pick it up from the tracker
+instead of from a conversation that has ended.
+
 For anything beyond a trivial edit, use the **`ship-a-change`** skill
 (`.agents/skills/ship-a-change/`): it is the end-to-end loop — grill, file the
 issue, worktree, build, prove the guards, preflight, PR, merge, clean up. Every
