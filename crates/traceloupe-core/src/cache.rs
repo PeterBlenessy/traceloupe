@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 49;
+const SCHEMA_VERSION: i64 = 50;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -734,6 +734,20 @@ impl CacheDb {
             // (unix seconds) at scan time, so historical reports cite the feed
             // date they actually ran against. NULL on runs from before v49.
             ensure_column(&conn, "scan_runs", "feeds_generated_at", "INTEGER")?;
+            // v50: rows produced by declarative artifact modules
+            // (see crates/traceloupe-core/src/artifacts.rs). ONE table for every
+            // artifact, with the row as a JSON payload — so the ~360th artifact
+            // costs a TOML file rather than a schema migration.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS artifact_rows (
+                    id          INTEGER PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    row_idx     INTEGER NOT NULL,
+                    payload     TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_artifact_rows
+                    ON artifact_rows(artifact_id, row_idx);",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })

@@ -485,6 +485,15 @@ mod tests {
         ),
         ("threads", "conversations — counted as part of Messages"),
         ("sqlite_sequence", "SQLite's own"),
+        // One tile over every artifact at once would be meaningless — it mixes
+        // unrelated data behind a single number. Per-artifact tiles may well be
+        // right, but that cannot be decided before the artifact list is
+        // navigable at all (#195/#209); the row lands here as "not yet",
+        // deliberately, rather than as a permanent no.
+        (
+            "artifact_rows",
+            "declarative-artifact rows; per-artifact tiles wait on the navigation decision",
+        ),
         // The full-text index and its five shadow tables. Found by this very
         // guard on its first run, which is the behaviour it exists for.
         (
