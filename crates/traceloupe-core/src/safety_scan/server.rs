@@ -2,6 +2,12 @@
 //! it on loopback under a macOS Seatbelt sandbox, wait for /health, and make
 //! sure it dies with us.
 //!
+//! "Dies with us" is not `Drop` alone — `Drop` never runs when the app process
+//! is signalled or exits out from under a scan thread, and the child then
+//! outlives us holding the GPU. See [`crate::safety_scan::reaper`] for the two
+//! halves that make it true: its own process group (so no signal aimed at us
+//! can reach it) and a process-wide SIGKILL reaper on every exit path.
+//!
 //! Sandbox policy (ADR 0002): the server process gets no network beyond its
 //! own loopback listen socket, and no file reads under /Users except the model
 //! directory (and, for dev builds, the directory the binary lives in). System
@@ -19,6 +25,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::safety_scan::reaper;
 use crate::{Error, Result};
 
 /// How many recent llama-server output lines to keep for diagnostics (e.g. to
@@ -348,9 +355,28 @@ impl LlamaServer {
             .env("MTL_SHADER_CACHE_PATH", &cfg.scratch_dir)
             .env("TMPDIR", &cfg.scratch_dir);
 
+        // Give the sidecar its OWN process group, so a signal aimed at ours —
+        // Ctrl-C in `tauri dev`, a closing terminal, the dev harness going
+        // away — cannot reach it. That matters because llama-server's graceful
+        // handler is the broken path: entering the ggml Metal teardown with
+        // residency sets live either aborts (crash report) or wedges the
+        // process forever. TraceLoupe ends it with SIGKILL and nothing else.
+        // Safe only because `reaper` guarantees something still kills it — see
+        // that module; isolation on its own would turn every Ctrl-C into an
+        // orphaned GPU server.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            cmd.process_group(0);
+        }
+
         let mut child = cmd
             .spawn()
             .map_err(|e| Error::Inference(format!("spawning llama-server: {}", e.kind())))?;
+
+        // Track it before anything can fail: from here on, every way this
+        // process can end takes the sidecar with it.
+        reaper::register(child.id() as i32);
 
         let logs: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         if let Some(out) = child.stdout.take() {
@@ -403,6 +429,7 @@ impl LlamaServer {
                 .try_wait()
                 .map_err(|e| Error::Inference(format!("try_wait: {}", e.kind())))?
             {
+                reaper::unregister(self.child.id() as i32);
                 let tail = self.output_tail();
                 return Err(Error::Inference(format!(
                     "llama-server exited during startup ({status}){}",
@@ -426,13 +453,24 @@ impl LlamaServer {
     /// True once the child process has exited. Lets a health-poll loop bail
     /// immediately instead of spinning on a dead, already-reaped child.
     pub fn has_exited(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(Some(_)))
+        let exited = matches!(self.child.try_wait(), Ok(Some(_)));
+        if exited {
+            reaper::unregister(self.child.id() as i32);
+        }
+        exited
     }
 
     /// Kill and reap the child. Idempotent.
+    ///
+    /// SIGKILL (`Child::kill`) rather than a graceful signal, deliberately:
+    /// asking llama-server to shut down runs the ggml Metal teardown, which
+    /// aborts or hangs forever when residency sets are live (see `reaper`).
+    /// Untracking comes last, so a crash between the kill and the wait still
+    /// leaves the pid covered by the reaper.
     pub fn shutdown(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        reaper::unregister(self.child.id() as i32);
     }
 }
 
@@ -519,6 +557,56 @@ mod tests {
         assert!(name.starts_with("llama-server-"));
         assert!(name.ends_with("-apple-darwin"));
         assert!(name.contains(std::env::consts::ARCH));
+    }
+
+    /// The isolation half of the #31 fix. A sidecar sharing our process group
+    /// receives every signal aimed at the group — and a graceful signal is
+    /// precisely what llama-server cannot survive: it either aborts in
+    /// `ggml_metal_rsets_free` or wedges forever in `exit()`. Its own group is
+    /// what puts SIGKILL-from-TraceLoupe on the only path in.
+    ///
+    /// Remove `cmd.process_group(0)` from `spawn` and this fails.
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_gets_its_own_process_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_binary(tmp.path(), "sleep 30");
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
+        let pid = server.pid() as i32;
+
+        let child_pgid = unsafe { libc::getpgid(pid) };
+        let our_pgid = unsafe { libc::getpgid(0) };
+        server.shutdown();
+
+        assert_eq!(
+            child_pgid, pid,
+            "the sidecar must lead its own process group"
+        );
+        assert_ne!(
+            child_pgid, our_pgid,
+            "a sidecar in OUR group receives every signal aimed at us"
+        );
+    }
+
+    /// The reaper half: a spawned sidecar is tracked, so an app death that
+    /// never runs `Drop` still takes it down — and untracked again once it is
+    /// dead, so a recycled pid is never signalled.
+    #[cfg(unix)]
+    #[test]
+    fn spawn_registers_with_the_reaper_and_shutdown_clears_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = fake_binary(tmp.path(), "sleep 30");
+        let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
+        let pid = server.pid() as i32;
+        assert!(
+            reaper::is_registered(pid),
+            "a live sidecar must be reapable from a signal handler"
+        );
+        server.shutdown();
+        assert!(
+            !reaper::is_registered(pid),
+            "a dead sidecar must be untracked, or a recycled pid gets SIGKILLed"
+        );
     }
 
     #[test]
