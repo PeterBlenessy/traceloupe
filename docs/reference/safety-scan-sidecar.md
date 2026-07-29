@@ -51,6 +51,58 @@ Silicon (sidecar placement, signing, and that the sandbox write-deny leaves
 Metal enough room on a real model run). The static binary removes the dylib
 staging problem, but the packaged run still wants a smoke test.
 
+## How it dies (the teardown contract)
+
+**TraceLoupe ends the sidecar with SIGKILL, and never asks it to shut down.**
+That is not bluntness for its own sake — on the pinned build a graceful signal
+is the *broken* path. llama-server's SIGTERM/SIGINT handler calls `exit()`,
+which runs the ggml Metal teardown; with residency sets active (macOS 15+,
+the default) that teardown does not survive being entered while inference is in
+flight. Both outcomes are reproducible:
+
+| outcome | what you see |
+|---|---|
+| **abort** | `ggml_metal_rsets_free` fails `GGML_ASSERT([rsets->data count] == 0)` → SIGABRT → macOS files a crash report against our sidecar |
+| **wedge** | `exit()` blocks forever in `std::thread::join()` while a dispatch block spins in `__ggml_metal_rsets_init_block_invoke → usleep` — measured still stuck 5 minutes later |
+
+The wedge is the worse half: the process keeps the GPU and the model's several
+GB and never exits. So two mechanisms keep SIGKILL the only way in
+(`safety_scan/reaper.rs`):
+
+1. **Its own process group** (`process_group(0)` in `spawn`) — a signal aimed
+   at *our* group (Ctrl-C in `tauri dev`, a closing terminal, a logout SIGTERM)
+   cannot reach the sidecar, so it never has a graceful signal to wedge on.
+2. **A process-wide reaper** — every live sidecar pid is registered and
+   SIGKILLed from a SIGINT/SIGTERM/SIGHUP handler *and* from `atexit`.
+
+Neither works alone. Isolation without the reaper turns every Ctrl-C into an
+orphaned GPU server; the reaper without isolation still loses the race to the
+group signal. `Drop` is the normal path but cannot be the guarantee: a scan
+holds the server on a background thread, and nothing unwinds that stack when
+the process is signalled or exits. That is what issue #31 actually recorded —
+a sidecar reparented to `launchd`, still generating tokens 32 minutes after its
+parent died.
+
+Not fixable from here: `SIGKILL` on TraceLoupe itself, and `panic = "abort"`.
+
+Upstream is aware (ggml-org/llama.cpp [#22593](https://github.com/ggml-org/llama.cpp/issues/22593),
+[#19137](https://github.com/ggml-org/llama.cpp/issues/19137)); the proposed fix
+([PR #22595](https://github.com/ggml-org/llama.cpp/pull/22595)) has been open
+since May 2026 and addresses a missing `rsets_rm` pairing, not this
+teardown-ordering case. **Bumping `LLAMA_CPP_VERSION` does not retire any of
+this** — keep the contract whatever the pin says.
+
+Verify it on hardware after a pin bump or any change to `spawn`/`shutdown`:
+
+```bash
+scripts/verify-sidecar-teardown.sh    # needs a staged binary + a real model
+```
+
+It drives both teardown shapes (group signal; app quits under a live scan
+thread) and checks the sidecar is gone, in its own process group, and left no
+crash report. The mechanism itself is covered in CI by the
+`safety_scan::{server,reaper}` unit tests.
+
 ## The sandbox (what protects your data)
 
 Every scan spawns the binary under `sandbox-exec` with a profile that:
