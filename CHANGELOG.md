@@ -13,6 +13,20 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.37.1] — 2026-07-29
+
+### Fixed
+
+- **Quitting during a Safety Scan really does stop it.** The local AI model runs
+  in a helper process, and closing TraceLoupe mid-scan could leave that helper
+  running — holding several gigabytes and the graphics card, with no window to
+  show for it. It kept going until you logged out or found it yourself. It now
+  stops with the app, however the app is closed.
+- **No more crash report from the scan helper.** Asking the helper to shut down
+  politely could make it either crash — which is what put a macOS crash report
+  on screen after a scan — or hang forever without ever exiting. TraceLoupe no
+  longer asks; it stops the helper outright, which it cannot get stuck on.
+
 ## [0.37.0] — 2026-07-29
 
 **A scan is something you keep, not an event you look back on** — the history
