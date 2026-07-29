@@ -25,6 +25,17 @@ Run it from the main checkout, not from inside the worktree — it will tell you
 if you forget. The branch name always equals the worktree directory name. See
 AGENTS.md for the naming rules, build/verify commands, and cleanup steps.
 
+For anything beyond a trivial edit, use the **`ship-a-change`** skill
+(`.claude/skills/ship-a-change/`): it is the end-to-end loop — grill, file the
+issue, worktree, build, prove the guards, preflight, PR, merge, clean up. Every
+step in it exists because skipping it produced a defect that reached a release.
+
+Before any PR:
+
+```bash
+scripts/preflight.sh --with-ui   # the whole CI gate, in CI's order
+```
+
 Two more rules from AGENTS.md that are easy to violate without noticing:
 
 > **The user's real backup is private and off-limits.** Never read it (including
