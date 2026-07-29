@@ -124,13 +124,18 @@ Gallery are very different products.
 
 ## Third-party
 
-Out of this map's scope — already charted in
-[`product-overview.md` §13.1](../product-overview.md) and tracked per-app in
-[`app-support.md`](app-support.md). For the record, the backup-reachable
-third-party artifacts iLEAPP has that we do not are led by **Booking.com (11) ·
-Home Depot (10) · Uber (10) · Waze (9) · Slack (8) · Oura Ring (7) · Withings
-(7) · Dahua/DMSS (7) · ChatGPT (6) · BeReal (5) · Box (5)** — note how few are
-chat apps, which matches the finding already recorded in `app-support.md`.
+**In scope, on the same pipeline.** The destination is everything a backup
+contains that iLEAPP can parse — whose app wrote it is not a boundary. The
+tiers in [`product-overview.md` §13.1](../product-overview.md) and the per-app
+table in [`app-support.md`](app-support.md) order the work; they do not limit
+it.
+
+The backup-reachable third-party artifacts iLEAPP has that we do not are led by
+**Booking.com (11) · Home Depot (10) · Uber (10) · Waze (9) · Slack (8) · Oura
+Ring (7) · Withings (7) · Dahua/DMSS (7) · ChatGPT (6) · BeReal (5) · Box (5)**.
+Note how few are chat apps — which matches the finding already recorded in
+`app-support.md`, and is the reason the declarative module matters here as much
+as for first-party: most of these are flat record stores, not conversations.
 
 ---
 

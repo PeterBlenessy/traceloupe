@@ -8,29 +8,48 @@ Companion to [`app-support.md`](app-support.md) (native vs iLEAPP per app); this
 file tracks *field-level* coverage within each source. For sources we do not
 read at all, see [`backup-coverage-audit.md`](backup-coverage-audit.md).
 
-> **The Photos closure below is being reopened.** The coverage map decided
-> `Photos.sqlite` goes to full iLEAPP parity (78 artifacts), which contradicts
-> the v0.19.0 closure stated in the next paragraph. What "parity" means, and
-> which `⊘` rows come back, is
-> [#196](https://github.com/PeterBlenessy/traceloupe/issues/196) — until that
-> resolves, treat the Photos `⊘` marks as under review rather than settled.
+> ## ⚠️ The closure below is retired
+>
+> **Effort is not a legitimate reason to close a row.** The
+> [coverage map](https://github.com/PeterBlenessy/traceloupe/issues/189) decided
+> that **user value decides what gets built, not implementation effort**: if
+> iLEAPP has an artifact or field and we can write our own version, we build it.
+>
+> So every `⊘ won't-implement` mark below that was justified by
+> *"disproportionate effort"* or *"low signal in real backups"* is **reopened**.
+> The declarative artifact module
+> ([#190](https://github.com/PeterBlenessy/traceloupe/issues/190)) is what makes
+> that affordable, but affordability was never the point — the reasoning was
+> wrong on its own terms.
+>
+> **The one surviving reason to skip something is a genuinely undecodable data
+> format** — e.g. the Calls `ZDISCONNECTED_CAUSE` codes, where even iLEAPP maps
+> 2 of ~10 and the rest would be guesswork. Those stay `⊘`, and must record
+> *why*, so they can be revisited if the format becomes known.
+>
+> Read the `⊘` marks below as **historical**, not as a decision. They are being
+> reworked source by source; `Photos.sqlite` goes to full parity per
+> [#196](https://github.com/PeterBlenessy/traceloupe/issues/196).
 
 **Legend:** ✅ surfaced · ◑ partial · ⬜ present in the backup, not surfaced ·
-⊘ **won't implement** (deliberate — see below) · — not present / N/A in this backup.
+⊘ **won't implement** (only for genuinely undecodable formats — see the banner) · — not present / N/A in this backup.
 
-> **📕 Field-level coverage is closed (v0.19.0).** Safari **local open tabs**
-> (`BrowserState.db`) was the last field-level item built. **Every remaining
-> `⬜` and `◑` row below is now `⊘` won't-implement** — kept in the table for
-> the record, not as a backlog. The reasons, by category:
+> **📕 Historical — the v0.19.0 closure (superseded, kept for the record).**
+> Safari **local open tabs** (`BrowserState.db`) was the last field-level item
+> built before coverage was declared closed, with every remaining `⬜`/`◑` row
+> marked `⊘`. Its four stated reasons, and what became of each:
 > - **Low signal in real backups** — e.g. Calls read/country-availability, Notes
->   account, Photos orientation/description, Messages filtered (11 rows), receiving
->   SIM: the field is nearly always empty or single-valued on a real device.
-> - **Not authoritatively decodable** — e.g. Calls `ZDISCONNECTED_CAUSE`
->   (declined/blocked/junk): even iLEAPP only maps 2 of ~10 codes; we won't guess.
-> - **Redundant** — e.g. Photos `ZMODIFICATIONDATE` (≈ the edited/added signals
->   already shown), Contacts creation/modification dates.
-> - **Disproportionate effort** — e.g. Notes hashtags/tables/checklist-items and
->   Safari redirect-graph need protobuf/attribute-run or graph reconstruction.
+>   account, Photos orientation/description, Messages filtered, receiving SIM.
+>   **Retired.** "Nearly always empty on *one* device" is not a reason; an empty
+>   field that is honestly empty still answers a question.
+> - **Disproportionate effort** — e.g. Notes hashtags/tables/checklist-items,
+>   Safari redirect-graph. **Retired.** Effort was never the right axis.
+> - **Redundant** — e.g. Photos `ZMODIFICATIONDATE`, Contacts
+>   creation/modification dates. **Case by case** — redundancy is about meaning,
+>   not cost, so these are judged individually rather than reopened wholesale.
+> - **Not authoritatively decodable** — e.g. Calls `ZDISCONNECTED_CAUSE`, where
+>   even iLEAPP maps 2 of ~10 codes. **Still the one good reason to skip**, and
+>   the only category that survives intact.
 >
 > Two things are **not** covered by this closure and remain live elsewhere:
 > **new stores/parsers** (e.g. iCloud-offloaded media — its own branch), and
