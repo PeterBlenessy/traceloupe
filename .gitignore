@@ -40,3 +40,7 @@ target
 # cargo-mutants run artifacts (see AGENTS.md: mutation testing is on demand)
 mutants.out/
 mutants.out.old/
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc
