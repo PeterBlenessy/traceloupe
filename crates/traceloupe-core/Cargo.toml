@@ -27,5 +27,8 @@ aes-kw = { workspace = true, features = ["alloc"] }
 flate2 = { workspace = true }
 tempfile = "3"
 
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3"

@@ -4547,6 +4547,7 @@ dependencies = [
  "cipher",
  "flate2",
  "hex",
+ "libc",
  "pbkdf2",
  "plist",
  "rusqlite",
