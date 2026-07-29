@@ -284,6 +284,61 @@ Notes that are easy to get wrong:
   cannot grow, and a measured size where it can. Write what *caps* the
   collection — "it's small" is not a bound.
 
+## Edit with something that fails when it misses
+
+Most self-inflicted damage in this repo has come from scripted string
+replacement, because it is **silent when it is wrong**:
+
+- a regex with `.*?` and `re.S` deleted ~500 lines of `analysis.rs`;
+- `cd X && python3 …` short-circuited because the `cd` failed, so the edit never
+  ran — and the `pnpm build` after it still reported success, so the run looked
+  green;
+- `s.replace(old, new, 1)` hit the *first* occurrence three separate times: the
+  wrong test's variable, a field added to the wrong struct, a component inserted
+  into the wrong parent.
+
+So:
+
+- **Prefer the Edit tool.** It fails loudly when `old_string` is not found or not
+  unique. That is the whole point of it.
+- If you script an edit, **assert**: the pattern was found, it matched exactly
+  once, and the file changed. `assert old in s` is the minimum.
+- **Never run a formatter over a whole file** you are changing a few lines of.
+  `prettier --write` reformatted four views and buried the real change in ~500
+  lines of churn.
+- Afterwards, **grep for what you expect** — the new string present, the old one
+  gone.
+
+## Run the whole gate with one command
+
+```bash
+scripts/preflight.sh              # hygiene, rust, frontend
+scripts/preflight.sh --with-ui    # …and the design lint
+```
+
+The gate is eight commands in a particular order, and running them by hand means
+remembering all eight every time. Preflight also prints which checks **ran**, not
+only whether they passed — a gate that quietly skips a step reports the same
+"OK" as one that passed it, which is the same failure as the section below seen
+from the other side.
+
+## What this repo does not carry
+
+Everything an agent needs to *verify* work is committed: `preflight.sh`, the
+guards, the `ship-a-change` skill, this file. Everything that shapes *judgement*
+sits outside it, and a fresh clone on a fresh machine does not get it:
+
+| Local-only | What is lost without it |
+| --- | --- |
+| `~/.claude/projects/<slug>/memory/` | ~29 accumulated facts. The load-bearing ones are mirrored here (worktrees, real-backup ban, done-means-shipped, measure-don't-eyeball). The rest — Apple schema quirks, why Safari/Calls import empty, WKWebView animation limits, iCloud-offload constraints — are not, and get rediscovered the hard way. |
+| Personal skills | The design half of the loop. `ship-a-change` §1 is now self-contained precisely so it does not depend on one. |
+| `.claude/settings.local.json` | Approval prompts on commands that ran unattended here. Slower, not worse. |
+| Editor plugins, model choice | Capability, not process. |
+
+So: **a clean clone reproduces the gates, not the taste.** If a session goes
+well, the durable part is what you commit — a script, a guard, a line in this
+file. What stays in a chat log or a memory file did not survive.
+
 ## A check is not trusted until it has been seen failing
 
 Almost every real defect found in this repo lately was found by making a check
@@ -359,6 +414,14 @@ is indistinguishable from a rule that passes.
 - Parser changes need a **re-import** to populate existing caches (the cache
   migration only creates the empty structures; bump `SCHEMA_VERSION` in
   `crates/traceloupe-core/src/cache.rs`).
+- **Parsers / schemas: read `docs/reference/artifact-schemas.md` first.** Column
+  meanings, timestamp epochs, the type codes that must be looked up rather than
+  guessed, and the traps that have already produced shipped defects here — a
+  panorama that was a Live Photo frame, a thread identifier that is not a phone
+  number, a "no text so it must be a sticker" rule that matched nothing. It also
+  lists where to verify a new fact, and how to tell "absent from the backup"
+  from "offloaded to iCloud" from "the parser missed it" before you debug the
+  wrong one.
 - Domain glossary: `docs/CONTEXT.md`. Field-level data-coverage roadmap:
   `docs/reference/app-data-coverage.md`.
 - **Cutting a release: follow [`RELEASING.md`](RELEASING.md).** Never bump the
