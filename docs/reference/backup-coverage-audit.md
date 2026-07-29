@@ -202,8 +202,9 @@ Stated so nobody mistakes it for more than it is:
    [a third-party transcription](https://gist.github.com/leminlimez/c602c067349140fe979410ef69d39c28)
    of an iPhone SE 3, not a file we extracted. Apple **moved** it in iOS 17.0
    (to `MobileBackup.framework/Domains.plist`) and may have changed it.
-   Authoritative for 16.4, strongly indicative for later; verifying against a
-   real iOS 17+ copy is [#191](https://github.com/PeterBlenessy/traceloupe/issues/191).
+   Authoritative for 16.4, strongly indicative for later. To check it against a
+   real iOS 17 copy: `scripts/fetch-test-image.sh`, then
+   `scripts/fetch-test-image.sh --list 'Domains.plist'`.
    One symptom is already visible: iLEAPP's `safariTabs` module targets
    `CloudTabs.db`, which is on no 16.4 list, while `SafariTabs.db` is — the
    filename changed and the module did not follow.
