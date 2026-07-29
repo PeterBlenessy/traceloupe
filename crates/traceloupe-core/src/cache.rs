@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 49;
+const SCHEMA_VERSION: i64 = 50;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -734,6 +734,20 @@ impl CacheDb {
             // (unix seconds) at scan time, so historical reports cite the feed
             // date they actually ran against. NULL on runs from before v49.
             ensure_column(&conn, "scan_runs", "feeds_generated_at", "INTEGER")?;
+            // v50: rows produced by declarative artifact modules
+            // (see crates/traceloupe-core/src/artifacts.rs). ONE table for every
+            // artifact, with the row as a JSON payload — so the ~360th artifact
+            // costs a TOML file rather than a schema migration.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS artifact_rows (
+                    id          INTEGER PRIMARY KEY,
+                    artifact_id TEXT NOT NULL,
+                    row_idx     INTEGER NOT NULL,
+                    payload     TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_artifact_rows
+                    ON artifact_rows(artifact_id, row_idx);",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
@@ -812,6 +826,73 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "missing table {table}");
         }
+    }
+
+    /// A cache written by the previous release must open, gain the new table,
+    /// and — the part that actually matters to someone who already uses the
+    /// app — still hold everything it held before.
+    ///
+    /// Every schema bump is a chance to lose somebody's imported backup. The
+    /// migration is additive (`CREATE TABLE IF NOT EXISTS`), but "additive"
+    /// is a claim about the code, and this is the check on it.
+    #[test]
+    fn v50_migration_adds_artifact_rows_and_keeps_existing_data() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cache.db");
+        {
+            // A cache as v49 left it: full base schema, real rows in it, the
+            // new table absent, stamped with the previous version.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            conn.execute_batch("DROP TABLE IF EXISTS artifact_rows;")
+                .unwrap();
+            conn.execute(
+                "INSERT INTO threads (id, identifier, service) VALUES (1, '+15551234', 'SMS')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages (id, thread_id, sent_at, is_from_me, body)
+                 VALUES (1, 1, 1700000000, 0, 'hello from before the upgrade')",
+                [],
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 49).unwrap();
+        }
+
+        let db = CacheDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+
+        let has_table: i64 = db
+            .conn()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='artifact_rows'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_table, 1, "the upgrade must add artifact_rows");
+
+        // The existing data is untouched — this is the assertion the user of a
+        // released build cares about.
+        let body: String = db
+            .conn()
+            .query_row("SELECT body FROM messages WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(body, "hello from before the upgrade");
+        let threads: i64 = db
+            .conn()
+            .query_row("SELECT count(*) FROM threads", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(threads, 1);
+
+        // And re-opening is idempotent: no second migration, nothing dropped.
+        let db = CacheDb::open(&path).unwrap();
+        let body: String = db
+            .conn()
+            .query_row("SELECT body FROM messages WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(body, "hello from before the upgrade");
     }
 
     #[test]

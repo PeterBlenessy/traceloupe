@@ -6,6 +6,7 @@
 
 pub mod analysis;
 pub mod analyzer;
+pub mod artifacts;
 pub mod cache;
 pub mod crypto;
 pub mod dashboard;
