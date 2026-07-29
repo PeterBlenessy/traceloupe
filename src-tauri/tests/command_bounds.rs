@@ -28,6 +28,12 @@ const BOUNDED: &[(&str, &str)] = &[
         "one count per histogram bucket; the bucket count is a UI constant",
     ),
     (
+        "list_artifacts",
+        "one entry per compiled-in artifact module (artifacts::BUILTIN) that this \
+         backup actually yielded — a compile-time list, and the rows themselves \
+         come from the windowed get_artifact_rows",
+    ),
+    (
         "module_metrics",
         "one tile per entry in dashboard::METRIC_SOURCES — a compile-time list of \
          the kinds of data the app can show, not a per-row collection. Each \

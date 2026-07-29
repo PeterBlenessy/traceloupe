@@ -896,6 +896,26 @@ export interface FindingMarks {
   notes: Record<number, 1 | 2 | 3>;
 }
 
+/** One artifact and its shape.
+ *
+ *  The UI knows no artifact by name — it renders whatever the backend
+ *  describes, which is what lets a new artifact appear with no frontend change
+ *  at all. Same principle as the dashboard's METRIC_SOURCES. */
+export type ArtifactSummary = {
+  id: string;
+  name: string;
+  category: string | null;
+  /** Column headers, in declared order. A row is an unordered map, so this is
+   *  what keeps column order stable between artifacts and between runs. */
+  columns: string[];
+  rowCount: number;
+  requiresEncryptedBackup: boolean;
+};
+
+/** One artifact row: column name → value. Already typed by the module's column
+ *  spec; timestamps arrive as Unix seconds. */
+export type ArtifactRow = Record<string, string | number | boolean | null>;
+
 export interface TraceLoupeClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
@@ -985,6 +1005,9 @@ export interface TraceLoupeClient {
   systemAccentColor(): Promise<string | null>;
   listCalendarEvents(): Promise<CalendarEvent[]>;
   listReminders(): Promise<Reminder[]>;
+  /** Artifacts this backup yielded, from the declarative modules. */
+  listArtifacts(): Promise<ArtifactSummary[]>;
+  getArtifactRows(artifactId: string, offset: number, limit: number): Promise<ArtifactRow[]>;
   listWorkouts(): Promise<Workout[]>;
   /** The GPS route of one workout, in recording order (empty if none). */
   workoutRoute(workoutId: number): Promise<RoutePoint[]>;
@@ -1477,6 +1500,9 @@ const tauriClient: TraceLoupeClient = {
   systemAccentColor: () => invoke<string | null>("get_system_accent_color"),
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
+  listArtifacts: () => invoke<ArtifactSummary[]>("list_artifacts"),
+  getArtifactRows: (artifactId, offset, limit) =>
+    invoke<ArtifactRow[]>("get_artifact_rows", { artifactId, offset, limit }),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
   workoutRoute: (workoutId) => invoke<RoutePoint[]>("workout_route", { workoutId }),
   healthDaily: () => invoke<HealthDay[]>("health_daily"),
@@ -3388,6 +3414,48 @@ const mockClient: TraceLoupeClient = {
           { bundleId: "com.toyopagroup.picaboo", incoming: 0, outgoing: 166 },
           { bundleId: "com.apple.facetime", incoming: 60, outgoing: 62 },
           { bundleId: "com.google.Gmail", incoming: 8, outgoing: 4 },
+        ]
+      : [],
+  listArtifacts: async () =>
+    mockActive
+      ? [
+          {
+            id: "tcc",
+            name: "App permissions",
+            category: "Security",
+            columns: ["App", "Permission", "Decision", "Decided"],
+            rowCount: 4,
+            requiresEncryptedBackup: false,
+          },
+        ]
+      : [],
+  getArtifactRows: async (artifactId) =>
+    mockActive && artifactId === "tcc"
+      ? [
+          {
+            App: "com.example.chatapp",
+            Permission: "kTCCServiceCamera",
+            Decision: "Allowed",
+            Decided: 1700000000,
+          },
+          {
+            App: "com.example.chatapp",
+            Permission: "kTCCServicePhotos",
+            Decision: "Limited",
+            Decided: 1700000200,
+          },
+          {
+            App: "com.example.weather",
+            Permission: "kTCCServiceLocation",
+            Decision: "Denied",
+            Decided: 1700000300,
+          },
+          {
+            App: "com.example.notprompted",
+            Permission: "kTCCServiceContacts",
+            Decision: "Not decided",
+            Decided: null,
+          },
         ]
       : [],
   listReminders: async () =>

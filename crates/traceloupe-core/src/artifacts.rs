@@ -274,6 +274,49 @@ impl ModuleSpec {
     }
 }
 
+/// One artifact, as the UI needs to describe it: what it is called and which
+/// columns it has, without the UI knowing any artifact exists by name.
+#[derive(Debug, Clone, Serialize)]
+pub struct ArtifactSummary {
+    pub id: String,
+    pub name: String,
+    pub category: Option<String>,
+    /// Column display names, in declared order — the table's headers. A JSON
+    /// row is an unordered map, so without this the UI would have to invent an
+    /// order, and it would differ between artifacts and between runs.
+    pub columns: Vec<String>,
+    pub row_count: i64,
+    /// True when this artifact needs an encrypted backup to hold anything.
+    pub requires_encrypted_backup: bool,
+}
+
+/// Every shipped artifact that has rows in this backup, with its shape.
+///
+/// Artifacts with no rows are omitted: the backup did not contain them, and a
+/// list of empty tables is not navigation. The one exception is an artifact
+/// gated on encryption, which is kept so it can explain itself rather than
+/// vanish (#197) — an absent artifact and an impossible one are different
+/// facts.
+pub fn list_artifacts(conn: &Connection) -> Result<Vec<ArtifactSummary>> {
+    let mut out = Vec::new();
+    for spec in builtin_modules()? {
+        let row_count = count_rows(conn, &spec.id)?;
+        let gated = spec.needs_encrypted_backup();
+        if row_count == 0 && !gated {
+            continue;
+        }
+        out.push(ArtifactSummary {
+            id: spec.id.clone(),
+            name: spec.name.clone(),
+            category: spec.category.clone(),
+            columns: spec.columns.iter().map(|c| c.name.clone()).collect(),
+            row_count,
+            requires_encrypted_backup: gated,
+        });
+    }
+    Ok(out)
+}
+
 /// One parsed row: column display name → value.
 pub type ArtifactRow = HashMap<String, serde_json::Value>;
 
@@ -539,12 +582,41 @@ pub fn count_rows(conn: &Connection, artifact_id: &str) -> Result<i64> {
     )?)
 }
 
-/// The modules shipped with the crate.
+/// The modules shipped with the app, compiled in.
 ///
-/// Dev/test only: `CARGO_MANIFEST_DIR` is baked at compile time and points at
-/// the machine that built the binary, so a shipped app must resolve modules
-/// some other way. Wiring that up belongs with the app layer (#209), and until
-/// then this exists so tests can run every real module.
+/// Embedded rather than read from disk because a shipped `.app` has no
+/// `modules/` directory to read — and pointing at one would mean a path that
+/// only exists on the machine that built the binary.
+///
+/// The cost is that adding an artifact is a one-line code change here as well
+/// as a TOML file, which dents #190's "adding a module is a data change". The
+/// data half still holds — the SQL, paths and columns are reviewed as data —
+/// and this list is the smallest possible seam. If it ever gets long enough to
+/// be annoying, `include_dir` removes it.
+const BUILTIN: &[(&str, &str)] = &[("tcc.toml", include_str!("../modules/tcc.toml"))];
+
+/// Parse the compiled-in modules. Errors carry the module's filename, exactly
+/// as `load_modules` does for on-disk ones.
+pub fn builtin_modules() -> Result<Vec<ModuleSpec>> {
+    let mut out: Vec<ModuleSpec> = Vec::new();
+    for (file, text) in BUILTIN {
+        let spec: ModuleSpec = toml::from_str(text)
+            .map_err(|e| Error::Parse(format!("artifact module {file}: {e}")))?;
+        spec.validate()
+            .map_err(|why| Error::Parse(format!("artifact module {file}: {why}")))?;
+        if let Some(prev) = out.iter().find(|m| m.id == spec.id) {
+            return Err(Error::Parse(format!(
+                "artifact module {file}: id {:?} is already used by {:?}",
+                spec.id, prev.name
+            )));
+        }
+        out.push(spec);
+    }
+    Ok(out)
+}
+
+/// The modules directory on disk — tests only, so they can prove the shipped
+/// TOML files themselves parse rather than only the embedded copies.
 #[cfg(test)]
 pub fn builtin_modules_dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("modules")
@@ -1413,6 +1485,27 @@ from = "nope"
                  shipping data that proves it runs"
             ),
         }
+    }
+
+    /// The compiled-in modules must be exactly the files on disk.
+    ///
+    /// They are two copies of the same thing — `include_str!` bakes the file in
+    /// at build time — so the only way they diverge is someone adding a .toml
+    /// and forgetting the BUILTIN entry. Then the module works in every test
+    /// and is simply absent from the app, which is the worst kind of quiet.
+    #[test]
+    fn embedded_modules_match_the_directory() {
+        let on_disk = load_modules(&builtin_modules_dir()).unwrap();
+        let embedded = builtin_modules().unwrap();
+        let mut a: Vec<&str> = on_disk.iter().map(|m| m.id.as_str()).collect();
+        let mut b: Vec<&str> = embedded.iter().map(|m| m.id.as_str()).collect();
+        a.sort();
+        b.sort();
+        assert_eq!(
+            a, b,
+            "a module exists on disk but is not compiled in (or vice versa) — \
+             add it to BUILTIN"
+        );
     }
 
     /// EVERY shipped module must declare a real domain, sit where the audit
