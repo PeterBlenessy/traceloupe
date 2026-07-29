@@ -49,7 +49,7 @@ and the map only gists it and links.
 <domain; which skills to consult; standing constraints for this effort>
 
 ## Decisions so far
-- [<closed ticket name>](link) — <one-line gist>
+- [<closed ticket name>](<link>) — <one-line gist>
 
 ## Not yet specified
 <in-scope fog you cannot ticket yet; graduates as the frontier advances>
