@@ -1,0 +1,69 @@
+# App permissions — which apps were granted access to the camera, microphone,
+# photos, contacts, location and so on, and when that was last decided.
+#
+# TCC.db is Apple's Transparency, Consent and Control store. It is confirmed
+# backup-reachable: HomeDomain.RelativePathsToBackupAndRestore lists
+# `Library/TCC` (see docs/reference/backup-coverage-audit.md).
+#
+# Two queries because the schema changed and the versions do not overlap:
+# modern iOS has `auth_value` (0 = denied, 2 = allowed, 3 = limited), older iOS
+# has `allowed` (0/1), and `last_modified` is absent on the oldest. The second
+# query selects NULL for the missing date so both alternatives return the same
+# column names.
+#
+# The `service` string is passed through as iOS writes it (kTCCServiceCamera,
+# kTCCServicePhotos…). Prettifying it would mean inventing labels for codes we
+# have not verified, and the audit's rule for undecodable values applies to
+# enums too: pass it through rather than guess.
+
+id       = "tcc"
+name     = "App permissions"
+category = "Security"
+domain   = "HomeDomain"
+path     = "Library/TCC/TCC.db"
+
+sql = [
+  """
+  SELECT client AS app,
+         service AS service,
+         CASE auth_value
+           WHEN 0 THEN 'Denied'
+           WHEN 2 THEN 'Allowed'
+           WHEN 3 THEN 'Limited'
+           ELSE 'Unknown (' || auth_value || ')'
+         END AS decision,
+         last_modified AS decided_at
+  FROM access
+  ORDER BY client, service
+  """,
+  """
+  SELECT client AS app,
+         service AS service,
+         CASE allowed
+           WHEN 0 THEN 'Denied'
+           WHEN 1 THEN 'Allowed'
+           ELSE 'Unknown (' || allowed || ')'
+         END AS decision,
+         NULL AS decided_at
+  FROM access
+  ORDER BY client, service
+  """,
+]
+
+[[columns]]
+name = "App"
+from = "app"
+
+[[columns]]
+name = "Permission"
+from = "service"
+
+[[columns]]
+name = "Decision"
+from = "decision"
+
+[[columns]]
+name = "Decided"
+from = "decided_at"
+kind = "timestamp"
+epoch = "unix"
