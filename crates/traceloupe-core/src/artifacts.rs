@@ -130,13 +130,59 @@ pub struct ModuleSpec {
     /// `-shm` siblings could win over the real file. Since no artifact needed
     /// globbing, the fix is to not have it until one does — with tests.
     pub path: String,
-    pub sql: String,
+    /// The query, or several to try in order — the first that *prepares*
+    /// against this backup's store wins.
+    ///
+    /// Alternatives exist because iOS renames columns between versions and a
+    /// single static SELECT cannot span that. TCC is the case that forced it:
+    /// modern devices have `auth_value` (0/2/3), older ones `allowed` (0/1),
+    /// and the two never co-exist, so `COALESCE` cannot help — the query simply
+    /// fails to prepare against the wrong one.
+    ///
+    /// Every alternative must produce the SAME output column names, since the
+    /// column spec is shared. Alias in SQL to make that so, and `SELECT NULL AS
+    /// x` where an older schema has nothing to offer.
+    #[serde(deserialize_with = "one_or_many")]
+    pub sql: Vec<String>,
     /// Declared precondition. Parsed and stored here; honoured by the UI in a
     /// later slice (#210). Apple's `RelativePathsToOnlyBackupEncrypted` covers
     /// 28 artifacts, so this is not an edge case.
     #[serde(default)]
     pub requires: Option<String>,
     pub columns: Vec<ColumnSpec>,
+}
+
+/// Accept either `sql = "…"` or `sql = ["…", "…"]`.
+///
+/// A hand-written visitor rather than `#[serde(untagged)]`, which collapses any
+/// mistake into "data did not match any variant of untagged enum". `load_modules`
+/// promises to say which file and *why*; "invalid type: integer, expected a
+/// string" is the why, and untagged throws it away.
+fn one_or_many<'de, D>(d: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Vec<String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a SQL string, or a list of alternative SQL strings")
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Vec<String>, E> {
+            Ok(vec![v.to_string()])
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Vec<String>, A::Error> {
+            let mut out = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                out.push(item);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_any(V)
 }
 
 impl ModuleSpec {
@@ -170,18 +216,20 @@ impl ModuleSpec {
                 self.path
             ));
         }
-        let sql = self.sql.trim();
-        if sql.is_empty() {
+        if self.sql.is_empty() || self.sql.iter().all(|q| q.trim().is_empty()) {
             return Err("`sql` is empty".into());
         }
-        // A friendly early error only. It is NOT the thing that makes a module
-        // read-only — SQLite accepts `WITH x AS (…) INSERT … RETURNING`, which
-        // passes this check and writes. The store is opened read-only in
-        // `run_module`; that is the enforcement.
-        if !sql.to_ascii_lowercase().starts_with("select")
-            && !sql.to_ascii_lowercase().starts_with("with")
-        {
-            return Err("`sql` must be a SELECT (or WITH … SELECT)".into());
+        for sql in &self.sql {
+            let sql = sql.trim();
+            // A friendly early error only. It is NOT the thing that makes a module
+            // read-only — SQLite accepts `WITH x AS (…) INSERT … RETURNING`, which
+            // passes this check and writes. The store is opened read-only in
+            // `run_module`; that is the enforcement.
+            if !sql.to_ascii_lowercase().starts_with("select")
+                && !sql.to_ascii_lowercase().starts_with("with")
+            {
+                return Err("`sql` must be a SELECT (or WITH … SELECT)".into());
+            }
         }
         if self.columns.is_empty() {
             return Err("no `[[columns]]` declared".into());
@@ -335,9 +383,32 @@ pub fn run_module(
     // Attribute a bad query to its module. Raw rusqlite errors say things like
     // "no such table: nosuchtable" with nothing identifying which of the
     // (eventually hundreds of) modules asked.
-    let mut stmt = conn
-        .prepare(&spec.sql)
-        .map_err(|e| Error::Parse(format!("artifact {} ({}): {e}", spec.id, spec.name)))?;
+    // Try each alternative in order; the first that prepares against THIS
+    // backup's schema wins. Failing to prepare is exactly how a version
+    // mismatch announces itself ("no such column: auth_value"), so it is the
+    // signal to fall through — until none is left, which names the module.
+    let mut prepared = None;
+    let mut errors: Vec<String> = Vec::new();
+    for (i, query) in spec.sql.iter().enumerate() {
+        match conn.prepare(query) {
+            Ok(s) => {
+                prepared = Some(s);
+                break;
+            }
+            // Every alternative's error is kept. Reporting only the last one
+            // blames the oldest-schema query for a fault in the modern query,
+            // which is exactly backwards on a modern backup.
+            Err(e) => errors.push(format!("  [{i}] {e}")),
+        }
+    }
+    let mut stmt = prepared.ok_or_else(|| {
+        Error::Parse(format!(
+            "artifact {} ({}): no `sql` alternative could run against this backup:\n{}",
+            spec.id,
+            spec.name,
+            errors.join("\n"),
+        ))
+    })?;
     let sql_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
     // Fail loudly when a declared column is not in the result set: silently
@@ -466,6 +537,17 @@ pub fn count_rows(conn: &Connection, artifact_id: &str) -> Result<i64> {
         rusqlite::params![artifact_id],
         |r| r.get(0),
     )?)
+}
+
+/// The modules shipped with the crate.
+///
+/// Dev/test only: `CARGO_MANIFEST_DIR` is baked at compile time and points at
+/// the machine that built the binary, so a shipped app must resolve modules
+/// some other way. Wiring that up belongs with the app layer (#209), and until
+/// then this exists so tests can run every real module.
+#[cfg(test)]
+pub fn builtin_modules_dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("modules")
 }
 
 #[cfg(test)]
@@ -720,6 +802,10 @@ from = "a"
     /// Build a minimal plaintext backup containing one SQLite store, so the
     /// runner can be exercised end to end without any real device data.
     fn make_backup(dir: &Path, rel: &str, build: impl FnOnce(&Connection)) {
+        make_backup_in(dir, "HomeDomain", rel, build)
+    }
+
+    fn make_backup_in(dir: &Path, domain: &str, rel: &str, build: impl FnOnce(&Connection)) {
         let file_id = "cd00000000000000000000000000000000000001";
         let blob_dir = dir.join(&file_id[..2]);
         std::fs::create_dir_all(&blob_dir).unwrap();
@@ -734,8 +820,8 @@ from = "a"
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO Files VALUES (?1, 'HomeDomain', ?2, 1, NULL)",
-            rusqlite::params![file_id, rel],
+            "INSERT INTO Files VALUES (?1, ?2, ?3, 1, NULL)",
+            rusqlite::params![file_id, domain, rel],
         )
         .unwrap();
     }
@@ -1022,7 +1108,7 @@ from = "who"
             category: None,
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
-            sql: "SELECT who FROM events".into(),
+            sql: vec!["SELECT who FROM events".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "Who".into(),
@@ -1279,6 +1365,238 @@ from = "nope"
             2,
             "each module gets its own temp store: {files:?}"
         );
+    }
+
+    /// TCC.db as a modern device writes it, matching `seed_tcc_db` in
+    /// tools/make_fixture_backup.py.
+    fn seed_tcc(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE access (
+                service TEXT, client TEXT, client_type INTEGER,
+                auth_value INTEGER, auth_reason INTEGER, auth_version INTEGER,
+                last_modified INTEGER);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, last_modified) VALUES
+                ('kTCCServiceCamera','com.example.chatapp',0,2,2,«redacted»0000000),
+                ('kTCCServiceLocation','com.example.weather',0,0,2,«redacted»0000300),
+                ('kTCCServicePhotos','com.example.chatapp',0,3,2,«redacted»0000200),
+                ('kTCCServiceReminders','com.example.todo',0,9,2,«redacted»0000500),
+                ('kTCCServiceContacts','com.example.notprompted',0,1,2,«redacted»0000600),
+                ('kTCCServiceMicrophone','com.example.norecord',0,NULL,2,«redacted»0000700);",
+        )
+        .unwrap();
+    }
+
+    /// Where each shipped module's store lives, stated HERE rather than read
+    /// from the module.
+    ///
+    /// This is the whole point. The first version of this test built its
+    /// fixture from `spec.path`, which made the assertion a tautology: a review
+    /// proved that setting the module's path to `Library/TOTALLY/WRONG/Nope.db`
+    /// still passed. Path and domain are the single most likely thing to be
+    /// wrong in a new declarative module, so the expected values live in the
+    /// test — derived from docs/reference/backup-coverage-audit.md — and the
+    /// module has to match them.
+    const FIXTURES: &[(&str, &str, &str)] = &[
+        // id, domain, relative path
+        ("tcc", "HomeDomain", "Library/TCC/TCC.db"),
+    ];
+
+    fn seed_for(id: &str) -> fn(&Connection) {
+        match id {
+            "tcc" => seed_tcc,
+            other => panic!(
+                "module {other:?} has no fixture — add one to FIXTURES and to \
+                 tools/make_fixture_backup.py, so shipping a module always means \
+                 shipping data that proves it runs"
+            ),
+        }
+    }
+
+    /// EVERY shipped module must declare a real domain, sit where the audit
+    /// says it does, load, run, and produce every column it declares.
+    ///
+    /// This is the guard that scales: it costs nothing per new artifact and
+    /// fails the moment one rots — a renamed column, a typo in the SQL or the
+    /// path, a column spec that stops matching.
+    #[test]
+    fn every_shipped_module_loads_and_runs() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        assert!(
+            !mods.is_empty(),
+            "no modules shipped — did the directory move?"
+        );
+
+        // Apple's own domain list, so a typo'd domain ("HomeDomian") cannot
+        // pass just because our fixture obligingly used it too.
+        let domains_json =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/data/ios-backup-domains.json");
+        let domains: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&domains_json).unwrap()).unwrap();
+
+        for spec in &mods {
+            let (_, domain, path) = FIXTURES
+                .iter()
+                .find(|(id, _, _)| *id == spec.id)
+                .unwrap_or_else(|| panic!("module {:?} has no FIXTURES entry", spec.id));
+
+            assert_eq!(
+                &spec.domain, domain,
+                "module {} declares a different domain than the audit records",
+                spec.id
+            );
+            assert_eq!(
+                &spec.path, path,
+                "module {} declares a different path than the audit records",
+                spec.id
+            );
+            assert!(
+                domains.get(&spec.domain).is_some() || spec.domain.starts_with("AppDomain"),
+                "module {} declares domain {:?}, which is not one iOS defines",
+                spec.id,
+                spec.domain
+            );
+
+            let tmp = tempfile::tempdir().unwrap();
+            make_backup_in(tmp.path(), domain, path, seed_for(&spec.id));
+            let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+            let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+                .unwrap_or_else(|e| panic!("module {} failed to run: {e}", spec.id))
+                .unwrap_or_else(|| panic!("module {} found nothing in its own fixture", spec.id));
+            assert!(!rows.is_empty(), "module {} produced no rows", spec.id);
+            for c in &spec.columns {
+                assert!(
+                    rows[0].contains_key(&c.name),
+                    "module {} produced no {:?} column",
+                    spec.id,
+                    c.name
+                );
+            }
+        }
+    }
+
+    /// The TCC module against the fixture: the decisions it maps, the date it
+    /// converts, and the value it refuses to guess at.
+    #[test]
+    fn tcc_module_reads_permissions() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "tcc")
+            .expect("tcc module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), &spec.path, seed_tcc);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 6);
+
+        let find = |app: &str, svc: &str| {
+            rows.iter()
+                .find(|r| {
+                    r["App"] == serde_json::json!(app) && r["Permission"] == serde_json::json!(svc)
+                })
+                .unwrap_or_else(|| panic!("no row for {app}/{svc}"))
+        };
+        assert_eq!(
+            find("com.example.chatapp", "kTCCServiceCamera")["Decision"],
+            serde_json::json!("Allowed")
+        );
+        assert_eq!(
+            find("com.example.weather", "kTCCServiceLocation")["Decision"],
+            serde_json::json!("Denied")
+        );
+        assert_eq!(
+            find("com.example.chatapp", "kTCCServicePhotos")["Decision"],
+            serde_json::json!("Limited")
+        );
+        // 1 is a documented state (kTCCAuthValueUnknown — never prompted), not a
+        // decoding failure, and must not read as one.
+        assert_eq!(
+            find("com.example.notprompted", "kTCCServiceContacts")["Decision"],
+            serde_json::json!("Not decided")
+        );
+        // NULL passes through as "not recorded". A `CASE auth_value WHEN` form
+        // could not do this — `'x' || NULL` is NULL in SQLite, so the cell would
+        // come back empty and look like a parsing bug.
+        assert_eq!(
+            find("com.example.norecord", "kTCCServiceMicrophone")["Decision"],
+            serde_json::json!("Not recorded")
+        );
+        // A value outside Apple's enum is surfaced as-is rather than guessed at.
+        assert_eq!(
+            find("com.example.todo", "kTCCServiceReminders")["Decision"],
+            serde_json::json!("Unrecognised (9)")
+        );
+        // The date arrives as a date.
+        assert_eq!(
+            find("com.example.chatapp", "kTCCServiceCamera")["Decided"],
+            serde_json::json!(1_700_000_000_i64)
+        );
+    }
+
+    /// iOS 12/13: `allowed` instead of `auth_value`, but `last_modified` is
+    /// still there. The two schema changes happened independently, and
+    /// collapsing them into one branch silently dropped the date from every
+    /// permission on those devices — a review caught it. "When was this
+    /// granted" is the more interesting half of the artifact.
+    #[test]
+    fn tcc_keeps_the_date_on_the_middle_schema() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods.iter().find(|m| m.id == "tcc").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), &spec.path, |c| {
+            c.execute_batch(
+                "CREATE TABLE access (service TEXT, client TEXT, allowed INTEGER,
+                                      prompt_count INTEGER, last_modified INTEGER);",
+            )
+            .unwrap();
+            c.execute_batch(
+                "INSERT INTO access VALUES ('kTCCServiceCamera','com.mid.app',1,«redacted»0000000);",
+            )
+            .unwrap();
+        });
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows[0]["Decision"], serde_json::json!("Allowed"));
+        assert_eq!(
+            rows[0]["Decided"],
+            serde_json::json!(1_700_000_000_i64),
+            "the date exists on this schema and must not be thrown away"
+        );
+    }
+
+    /// The older-iOS alternative runs when the modern one cannot prepare.
+    /// This is the whole reason `sql` accepts a list.
+    #[test]
+    fn tcc_falls_back_to_the_older_schema() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods.iter().find(|m| m.id == "tcc").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        // A pre-auth_value device: `allowed`, and no `last_modified` at all.
+        make_backup(tmp.path(), &spec.path, |c| {
+            c.execute_batch("CREATE TABLE access (service TEXT, client TEXT, allowed INTEGER);")
+                .unwrap();
+            c.execute_batch(
+                "INSERT INTO access VALUES ('kTCCServiceCamera','com.old.app',1),
+                                           ('kTCCServicePhotos','com.old.app',0);",
+            )
+            .unwrap();
+        });
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 2, "the older-schema query must have run");
+        assert_eq!(rows[0]["Decision"], serde_json::json!("Allowed"));
+        assert_eq!(rows[1]["Decision"], serde_json::json!("Denied"));
+        // No date exists on this schema, and that reads as absent, not as 1970.
+        assert_eq!(rows[0]["Decided"], serde_json::Value::Null);
     }
 
     #[test]
