@@ -238,6 +238,19 @@ pub fn load_modules(dir: &Path) -> Result<Vec<ModuleSpec>> {
                 path.file_name().unwrap_or_default().to_string_lossy()
             ))
         })?;
+        // Two modules sharing an id would silently overwrite each other's rows
+        // — `store_rows` is keyed on it and replaces. That is a data-loss bug
+        // whose only symptom is an artifact that inexplicably shows another
+        // artifact's contents, so it is rejected at load, naming both files.
+        if let Some(prev) = out.iter().find(|m: &&ModuleSpec| m.id == spec.id) {
+            return Err(Error::Parse(format!(
+                "artifact module {}: id {:?} is already used by {:?} — ids key stored rows, \
+                 so two modules sharing one would overwrite each other",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                spec.id,
+                prev.name,
+            )));
+        }
         out.push(spec);
     }
     Ok(out)
@@ -743,6 +756,24 @@ from = "a"
         let page = read_rows(conn, "demo", 1, 1).unwrap();
         assert_eq!(page.len(), 1);
         assert_eq!(page[0]["Who"], serde_json::json!("b"));
+    }
+
+    /// Two modules with the same id must be rejected: `store_rows` is keyed on
+    /// the id and replaces, so a collision silently destroys one artifact's
+    /// rows and shows the other's in its place.
+    #[test]
+    fn duplicate_module_ids_are_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(tmp.path(), "one.toml", &spec_toml(""));
+        write_module(tmp.path(), "two.toml", &spec_toml(""));
+        let err = load_modules(tmp.path())
+            .expect_err("two modules sharing an id must not load")
+            .to_string();
+        assert!(err.contains("already used"), "{err}");
+        assert!(
+            err.contains("two.toml"),
+            "the error must name the offending file: {err}"
+        );
     }
 
     #[test]
