@@ -8,7 +8,15 @@ changes; this file is the single source of truth for coverage.
 Companion to `../CHANGELOG.md` (milestones) and
 `../product-overview.md` §13 (roadmap rationale). For *field-level*
 coverage within each app — everything in its DB and what we surface — see
-[`app-data-coverage.md`](app-data-coverage.md).
+[`app-data-coverage.md`](app-data-coverage.md). For what a backup can hold that
+we do **not** read at all — the source-level gap, sized against iLEAPP — see
+[`backup-coverage-audit.md`](backup-coverage-audit.md).
+
+> **The first-party table below is out of date** and is being replaced by the
+> audit. It predates Health, Calendar, Reminders, CoreDuet Interactions, Device
+> info and Safari's local `BrowserState.db` tabs, all of which are native and
+> shipped. Reconciling it is part of
+> [the coverage map](https://github.com/PeterBlenessy/traceloupe/issues/189).
 
 **Last updated:** 2026-07-22 · see the CHANGELOG for the current release
 

@@ -5,7 +5,15 @@ database actually contains and whether TraceLoupe surfaces it. Tick a row (⬜ �
 ✅) the moment a field shows up in the UI.
 
 Companion to [`app-support.md`](app-support.md) (native vs iLEAPP per app); this
-file tracks *field-level* coverage within each source.
+file tracks *field-level* coverage within each source. For sources we do not
+read at all, see [`backup-coverage-audit.md`](backup-coverage-audit.md).
+
+> **The Photos closure below is being reopened.** The coverage map decided
+> `Photos.sqlite` goes to full iLEAPP parity (78 artifacts), which contradicts
+> the v0.19.0 closure stated in the next paragraph. What "parity" means, and
+> which `⊘` rows come back, is
+> [#196](https://github.com/PeterBlenessy/traceloupe/issues/196) — until that
+> resolves, treat the Photos `⊘` marks as under review rather than settled.
 
 **Legend:** ✅ surfaced · ◑ partial · ⬜ present in the backup, not surfaced ·
 ⊘ **won't implement** (deliberate — see below) · — not present / N/A in this backup.
