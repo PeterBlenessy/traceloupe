@@ -303,6 +303,19 @@ you record — not something a reader has to reverse-engineer:
 When in doubt, virtualize. The cost of virtualizing a list that stays short is a
 few lines; the cost of not virtualizing one that grows is the user's machine.
 
+**Virtualization needs a bounded ancestor, or it does the opposite.** The app
+once froze on any large list, and the cause was neither the virtualizer nor the
+queries — it was layout height. shadcn's `SidebarProvider` uses `min-h-svh`, a
+*minimum*. With no fixed-height ancestor the whole flex chain is content-driven,
+so `flex-1`, `min-h-0` and `overflow-auto` constrain nothing; the virtualizer's
+spacer inflates the document, its scroll container grows to content height, and
+it concludes every row is visible and mounts all of them. Small lists never
+tripped it because they stayed under the viewport floor.
+
+`app-shell.tsx` therefore passes `h-svh overflow-hidden`. **Keep it.** The
+diagnostic signal is a window query sweeping thousands of rows in one go — that
+means the scroller's measured `clientHeight` is huge, i.e. unbounded.
+
 **Check it, don't assert it.** `scripts/check-virtualization.mjs` inflates the
 mock fixtures to thousands of rows (the `traceloupe-mock-bulk` localStorage knob,
 which the mock client reads) and fails if an audited list stops mounting only a
@@ -424,6 +437,30 @@ A tile shows **facets** where a module has parts worth naming — the services i
 Messages, the categories in Health — drawn as brand icons, or as words when
 there is no icon to draw. Unresolvable ones are dropped rather than rendered as
 `BrandIcon`'s text fallback, which turned a row of bundle ids into "COCOCOCO".
+
+## WebKit animates less than Chromium does
+
+The app ships in a WKWebView; the shot harness runs headless Chromium. **Animation
+bugs therefore do not reproduce in the harness** — they only appear in the real
+app, so an animation is not verified until it has been seen there.
+
+- **WebKit does not animate the individual `scale` and `translate` properties**,
+  which is what Tailwind's `scale-*` / `-translate-*` utilities compile to. The
+  symptom is an element that fades but does not move or grow — it reads as
+  "instant". Animate the `transform` shorthand, or better, animate `width` and
+  `height`: a size morph is reliable. The filter popover works exactly this way —
+  one persistent node, `transition-all`, swapping width/height/radius, with
+  `overflow-hidden` to clip.
+- **`animate-in`, `zoom-in-95` and friends do not exist here** — no
+  `tailwindcss-animate` package is installed.
+- **Arbitrary transition properties containing a comma** —
+  `transition-[opacity,transform]` — silently fail to compile, giving no
+  transition at all. Use the built-in `transition` utility.
+- `index.css` zeroes all durations under `prefers-reduced-motion` inside
+  `@layer base`. An unlayered `!important` does **not** beat a layered one; that
+  is the cascade-layer rule, not a bug.
+
+Verify by reading `getComputedStyle(el).animationDuration` rather than watching.
 
 ## macOS display preferences are respected
 
