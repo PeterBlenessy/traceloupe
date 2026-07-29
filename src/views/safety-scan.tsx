@@ -1151,24 +1151,52 @@ function ScanRail({
                     variant="ghost"
                     size="icon-sm"
                     disabled={running}
-                    className="relative text-muted-foreground hover:text-foreground"
+                    className={cn(
+                      "group/rerun text-muted-foreground hover:text-foreground",
+                      // The warning is the one thing that should catch the eye
+                      // WITHOUT hovering, so it opts out of the cluster's
+                      // resting dimness. Re-run and delete still dim.
+                      endedBadly(s, s.id === liveId) && "opacity-100",
+                    )}
                     aria-label={rerunLabel(s, s.id === liveId)}
                     onClick={(e) => {
                       e.stopPropagation();
                       onResume(s.id);
                     }}
                   >
-                    <RotateCw className="size-3.5" />
-                    {endedBadly(s, s.id === liveId) && (
-                      <TriangleAlert
-                        aria-hidden="true"
-                        className={cn(
-                          "absolute -right-0.5 -bottom-0.5 size-2.5",
-                          s.status === "failed"
-                            ? "fill-status-danger text-status-danger"
-                            : "fill-status-warning text-status-warning",
-                        )}
-                      />
+                    {/* One icon, two jobs. At rest a run that ended badly shows
+                        a warning; pointing at it — or tabbing to it — turns it
+                        into the thing that fixes it. A 10px badge on a 14px
+                        glyph was too small to read as either.
+
+                        The swap is on focus-visible as well as hover: someone
+                        tabbing the rail never hovers, and would otherwise see a
+                        warning with no apparent action. */}
+                    {endedBadly(s, s.id === liveId) ? (
+                      <>
+                        {/* One amber for all three endings, not red for failed.
+                            Red is spoken for two feet away: in the findings list
+                            it means a SERIOUS finding, the safety signal this
+                            app exists to produce. A scan that errored is an
+                            operational hiccup — nothing is wrong with the user's
+                            data and it can simply be run again — so spending the
+                            strongest colour in the palette on it dilutes red
+                            where it matters.
+
+                            It also matches what was already decided here: the
+                            shape says "this did not finish normally" and the
+                            tooltip says which. Two colours re-encoded that
+                            distinction in a way nobody can decode at 14px — if
+                            you know the convention you did not need the colour,
+                            and if you do not, hovering tells you. */}
+                        <TriangleAlert
+                          aria-hidden="true"
+                          className="size-3.5 text-status-warning group-hover/rerun:hidden group-focus-visible/rerun:hidden"
+                        />
+                        <RotateCw className="hidden size-3.5 group-hover/rerun:block group-focus-visible/rerun:block" />
+                      </>
+                    ) : (
+                      <RotateCw className="size-3.5" />
                     )}
                   </Button>
                 </TooltipTrigger>
