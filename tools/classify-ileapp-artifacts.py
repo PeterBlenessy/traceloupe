@@ -65,15 +65,19 @@ from __future__ import annotations
 import argparse
 import ast
 import collections
+import fnmatch
 import glob
+import io
 import json
 import os
 import re
 import sys
+import zipfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ILEAPP = os.path.join(REPO, "engine", "iLEAPP", "scripts", "artifacts")
 DOMAINS_JSON = os.path.join(REPO, "tools", "data", "ios-backup-domains.json")
+PATH_LISTS = os.path.join(REPO, "engine", "iLEAPP", "admin", "data", "filepath-lists")
 
 INCLUDE_KEYS = (
     "RelativePathsToBackupAndRestore",
@@ -109,8 +113,12 @@ KNOWN_REACHABLE = {
     "photosMetadata": ("Photos", "backup"),
     "interactionCcontacts": ("CoreDuet interactions", "encrypted-only"),
     "health": ("Health", "encrypted-only"),
-    "notes": ("Notes", "unknown"),
-    "calendarAll": ("Calendar", "unknown"),
+    # These two were pinned `unknown` while a bare-filename glob had no
+    # directory context. Resolving globs against the device path-lists gives
+    # them one, so they now classify properly — Calendar under HomeDomain's
+    # `Library/Calendar`, NoteStore inside its app group.
+    "notes": ("Notes", "backup"),
+    "calendarAll": ("Calendar", "backup"),
 }
 
 
@@ -207,6 +215,51 @@ def covered_by(rel: str, entries: list[str]) -> bool:
     return False
 
 
+def load_device_paths() -> dict[str, list[str]]:
+    """Real device paths, indexed by basename, from the lists iLEAPP ships.
+
+    These come from full-filesystem images, which is fine for this purpose and
+    only this purpose: the image says *where a file lives*, and `Domains.plist`
+    still decides whether that location is backed up. An FFS image can never be
+    evidence that something is in a backup — it contains everything, including
+    what backups exclude.
+    """
+    by_base: dict[str, list[str]] = collections.defaultdict(list)
+    if not os.path.isdir(PATH_LISTS):
+        return by_base
+    for name in sorted(os.listdir(PATH_LISTS)):
+        if not name.endswith(".zip"):
+            continue
+        try:
+            z = zipfile.ZipFile(os.path.join(PATH_LISTS, name))
+        except Exception:
+            continue
+        for inner in z.namelist():
+            with z.open(inner) as fh:
+                for i, line in enumerate(io.TextIOWrapper(fh, encoding="utf-8", errors="replace")):
+                    if i == 0 and line.startswith("path"):
+                        continue
+                    path = line.split(",", 1)[0].strip().lower()
+                    if path:
+                        by_base[path.rsplit("/", 1)[-1]].append(path)
+    return by_base
+
+
+def resolve_on_device(globs: list[str], by_base: dict[str, list[str]]) -> str | None:
+    """Find a real device path one of these globs matches, or None."""
+    for g in globs:
+        pat = re.sub(r"^/+", "", g.replace("\\", "/").lower().lstrip("*"))
+        base_pat = pat.rsplit("/", 1)[-1]
+        want = pat if pat.startswith("*") else "*" + pat
+        for base, candidates in by_base.items():
+            if not fnmatch.fnmatch(base, base_pat):
+                continue
+            for c in candidates:
+                if fnmatch.fnmatch(c, want) or pat in c:
+                    return c
+    return None
+
+
 def classify_path(p: str, domains: dict) -> tuple[str, str]:
     """(verdict, why) for one path: backup | encrypted-only | excluded | unknown."""
     rel_full = normalise(p)
@@ -222,16 +275,21 @@ def classify_path(p: str, domains: dict) -> tuple[str, str]:
     # Tones, HomeKit), so a path must be tested against EVERY domain whose root
     # matches — not the longest or the first. Rootless fragments are also tried
     # as already-domain-relative.
-    candidates: list[tuple[str, str]] = []
-    rooted = False
+    rooted_candidates: list[tuple[str, str]] = []
     for name, d in domains.items():
         root = (d.get("root") or "").lower()
         root = re.sub(r"^/?(private/)?var/", "", root).rstrip("/")
         if root and (rel_full == root or rel_full.startswith(root + "/")):
-            candidates.append((name, rel_full[len(root):].lstrip("/")))
-            rooted = True
-        else:
-            candidates.append((name, rel_full))
+            rooted_candidates.append((name, rel_full[len(root):].lstrip("/")))
+
+    # A path that sits under a known domain root is NOT a fragment, and must be
+    # judged only against the domains that actually own that root. Applying the
+    # fragment fallback to it as well is how every Biome path came back
+    # "backup": `mobile/library/biome/...` matched ManagedPreferencesDomain's
+    # single-segment entry `mobile`, a domain rooted at /var/Managed Preferences
+    # that has nothing to do with it.
+    rooted = bool(rooted_candidates)
+    candidates = rooted_candidates or [(name, rel_full) for name in domains]
 
     encrypted, excluded = None, None
     for name, rel in candidates:
@@ -268,6 +326,21 @@ def classify(paths: list[str], domains: dict) -> tuple[str, list[str]]:
     return "excluded", sorted({w for _, w in verdicts})
 
 
+# The other half of the guard: things a backup provably cannot contain. Without
+# this, a matcher that says "yes" too easily looks like a matcher that got
+# better — the counts go up and everything reads like progress.
+#
+# It earned its place immediately. Resolving rootless globs to real device paths
+# made every Biome artifact classify as *backup*, because
+# `mobile/library/biome/...` matched ManagedPreferencesDomain's single-segment
+# entry `mobile` — a domain rooted at /var/Managed Preferences with nothing to
+# do with Biome. Only a negative expectation catches that shape of error.
+KNOWN_UNREACHABLE = {
+    "Biome": "Biome — Apple excludes it from backups entirely",
+    "KnowledgeC": "knowledgeC — never in a backup",
+}
+
+
 def self_test(ok: list[dict]) -> int:
     by = {a["file"].removesuffix(".py"): a for a in ok}
     failures, missing = [], []
@@ -285,12 +358,31 @@ def self_test(ok: list[dict]) -> int:
             failures.append(f"{label}: expected {expected}, got {got} — {why}")
     for m in missing:
         print(f"  WARN  {m}: no such iLEAPP module — renamed upstream?")
+
+    for category, why in sorted(KNOWN_UNREACHABLE.items()):
+        rows = [a for a in ok if a["category"] == category]
+        if not rows:
+            print(f"  WARN  {category}: no artifacts found — renamed upstream?")
+            continue
+        wrong = [a for a in rows if a["reach"] in ("backup", "encrypted-only")]
+        if wrong:
+            print(f"  FAIL  {category:22} {len(wrong)}/{len(rows)} marked reachable")
+            failures.append(
+                f"{category}: {len(wrong)} of {len(rows)} classified reachable — {why}. "
+                f"First: {wrong[0]['file']} via {wrong[0]['why'][0] if wrong[0]['why'] else '?'}"
+            )
+        else:
+            print(f"  ok    {category:22} all {len(rows)} unreachable")
+
     if failures:
         print(f"\n{len(failures)} known source(s) classified wrongly:")
         for f in failures:
             print(f"  - {f}")
         return 1
-    print(f"\nself-test ok — all {len(KNOWN_REACHABLE)} known sources classify as expected")
+    print(
+        f"\nself-test ok — {len(KNOWN_REACHABLE)} known sources classify as expected, "
+        f"and {len(KNOWN_UNREACHABLE)} known-unreachable categories stayed unreachable"
+    )
     return 0
 
 
@@ -315,6 +407,27 @@ def main() -> int:
     for a in ok:
         a["reach"], a["why"] = classify(a["paths"], domains)
 
+    # Second pass. A rootless glob (`**/interactionC.db*`) carries no directory,
+    # so the domain rules cannot place it — iLEAPP writes them that way because
+    # it searches a filesystem, while backups are addressed by (domain, path).
+    # The device path-lists iLEAPP ships supply the missing directory; the
+    # domain rules then decide reachability exactly as before.
+    resolved = 0
+    by_base = load_device_paths()
+    if by_base:
+        for a in ok:
+            if a["reach"] != "unknown":
+                continue
+            hit = resolve_on_device(a["paths"], by_base)
+            if not hit:
+                continue
+            verdict, why = classify_path(hit, domains)
+            if verdict == "unknown":
+                continue
+            a["reach"], a["why"] = verdict, [f"{why} (via device path {hit})"]
+            a["resolved_path"] = hit
+            resolved += 1
+
     if args.json:
         json.dump(ok + broken, open(args.json, "w"), indent=1)
 
@@ -323,6 +436,10 @@ def main() -> int:
 
     counts = collections.Counter(a["reach"] for a in ok)
     print(f"iLEAPP artifacts parsed: {len(ok)}" + (f"  (unreadable: {len(broken)})" if broken else ""))
+    if by_base:
+        print(f"  ({len(by_base):,} device basenames loaded; {resolved} rootless globs resolved)")
+    else:
+        print("  (no device path-lists found — rootless globs left unresolved)")
     for reach in ("backup", "encrypted-only", "excluded", "unknown"):
         print(f"  {counts[reach]:4}  {reach}")
     for b in broken:

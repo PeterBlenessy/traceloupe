@@ -51,19 +51,31 @@ Three things this made visible that the earlier heuristic got wrong:
 
 | | Count | Meaning |
 |---|---:|---|
-| **Backup-reachable** | 311 | A backup contains it. The addressable universe. |
-| **Encrypted-only** | 26 | Only in an encrypted backup. Reachable, conditionally. |
-| **Excluded** | 42 | Under a domain root but on no include list, or explicitly excluded. |
-| **Unclassified** | 219 | The iLEAPP glob is rootless (`*/NoteStore.sqlite*`) — no directory context to resolve. |
+| **Backup-reachable** | 363 | A backup contains it. The addressable universe. |
+| **Encrypted-only** | 28 | Only in an encrypted backup. Reachable, conditionally. |
+| **Excluded** | 135 | Under a domain root but on no include list, or explicitly excluded. |
+| **Unclassified** | 72 | Neither the glob nor the device path-lists place it. |
 
-> **These numbers replace an earlier 355 / 84 / 159**, which came from a
-> hand-written heuristic before Apple's rules were available. The heuristic
-> over-counted reachable artifacts and mis-stated the reason for the exclusions.
+> **These numbers have moved twice.** A hand-written heuristic gave 355/84/159;
+> Apple's domain rules gave 311/26/42/219; resolving rootless globs against real
+> device paths gives the figures above. Re-run the tool rather than quoting any
+> of them from memory.
 
-The 219 unclassified are rootless globs, not unknown territory: iLEAPP writes
-`**/interactionC.db*` because it searches a filesystem, whereas we resolve by
-domain. Settling them means mapping each to its real directory —
-[#192](https://github.com/PeterBlenessy/traceloupe/issues/192).
+### Resolving rootless globs
+
+iLEAPP writes `**/interactionC.db*` because it searches a filesystem, whereas a
+backup is addressed by `(domain, relativePath)` — so a bare filename cannot be
+placed by the domain rules alone. iLEAPP also ships **file-path lists extracted
+from real devices** (`admin/data/filepath-lists/*.csv.zip`, ~243k distinct
+basenames), and matching a glob against those supplies the missing directory.
+**148 of the 219 unknowns resolve this way.**
+
+This does *not* use a full-filesystem image to claim backup membership. The
+image says only **where a file lives**; `Domains.plist` still decides whether
+that location is backed up. The distinction matters — an FFS image contains
+everything, including precisely what backups exclude.
+
+The remaining 72 are mostly apps absent from those particular test devices.
 
 ### Encrypted-backup-only — including things we already ship
 
@@ -87,9 +99,12 @@ hypothetical or future work; it is current behaviour.
 
 ### Out of scope, permanently
 
-The 42 excluded are out of reach whatever we decide: Biome, knowledgeC, unified
-logs, sysdiagnose, `/var/db`, `/var/log`, `Library/Caches`, and app-container
-`Library/Caches`/`tmp`.
+The 135 excluded are out of reach whatever we decide: Biome (24), knowledgeC,
+unified logs, sysdiagnose, `/var/db`, `/var/log`, `Library/Caches`, and
+app-container `Library/Caches`/`tmp`. The count grew from 42 because resolving
+rootless globs let many artifacts be judged that previously could not be —
+`Library/Caches` cases especially, including **app snapshots**, which this
+document previously listed as a gap worth building.
 
 Recorded so they are not re-investigated. **KnowledgeC is worth naming twice** —
 the artifact most often assumed present, and the clearest case of a
@@ -136,7 +151,7 @@ Backup-reachable, iLEAPP parses them, we do not. This is the map's work list.
 | **User Activity** | 3 | Keyboard usage stats, **dynamic lexicon** (learned typed words) |
 | **Location** | 3 | `locationd`, `routined` (significant locations), Weather locations |
 | **Fitness** | 2 | Workout location data + analysis |
-| **Device Usage** | 2 | App snapshots, last-used dates |
+| **Device Usage** | 1 | Last-used dates. ~~App snapshots~~ — **not reachable**: they live in an app container's `Library/Caches/Snapshots`, which backups exclude |
 | **Accounts · Core Accessories · IOS Build** | 6 | Account data, accessory pairings, system version |
 | **Singles** | 12 | Apple Mail, Wallet transactions, Find My devices, notifications, TCC app permissions, data usage, known Wi-Fi networks, Control Center config, OS migrations, Spotlight index, Identity Lookup, Mobile Backup plist |
 
