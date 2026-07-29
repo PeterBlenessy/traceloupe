@@ -66,9 +66,6 @@ impl Epoch {
     /// Convert to Unix seconds. Returns None for values that cannot be a date,
     /// so a bad row degrades to "no date" instead of poisoning the artifact.
     pub fn to_unix_seconds(self, raw: f64) -> Option<i64> {
-        if !raw.is_finite() {
-            return None;
-        }
         let secs = match self {
             Epoch::Unix => raw,
             Epoch::UnixMs => raw / 1_000.0,
@@ -78,6 +75,11 @@ impl Epoch {
         // A backup cannot contain a date before iOS existed or far in the
         // future; treating those as "no date" is the rule app-data-coverage.md
         // already applies to messages whose timestamp does not decode.
+        //
+        // This also handles NaN and ±inf: every comparison against NaN is
+        // false, so `contains` rejects them. An explicit `is_finite` guard used
+        // to sit above and was dead code — mutation testing showed removing it
+        // changed nothing.
         if !(0.0..=4_102_444_800.0).contains(&secs) {
             return None;
         }
@@ -330,7 +332,12 @@ pub fn run_module(
     // which starts with "with", returns named columns, and writes. The prefix
     // check stays as a friendly early error; this is the part that enforces it.
     let conn = Connection::open_with_flags(&dest, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut stmt = conn.prepare(&spec.sql)?;
+    // Attribute a bad query to its module. Raw rusqlite errors say things like
+    // "no such table: nosuchtable" with nothing identifying which of the
+    // (eventually hundreds of) modules asked.
+    let mut stmt = conn
+        .prepare(&spec.sql)
+        .map_err(|e| Error::Parse(format!("artifact {} ({}): {e}", spec.id, spec.name)))?;
     let sql_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
     // Fail loudly when a declared column is not in the result set: silently
@@ -516,7 +523,9 @@ epoch = "cocoa"
     #[test]
     fn malformed_modules_fail_by_name_and_reason() {
         let cases: Vec<(&str, &str, &str)> = vec![
-            ("bad-toml", "id = \"x\"\nname =", "artifact module"),
+            // The needle must be something only the TOML parser produces; "artifact
+            // module" is the shared prefix of every error in this function.
+            ("bad-toml", "id = \"x\"\nname =", "TOML parse error"),
             (
                 "no-epoch",
                 r#"
@@ -572,6 +581,76 @@ name = "A"
 from = "a"
 "#,
                 "unknown `requires`",
+            ),
+            (
+                "empty-id",
+                r#"
+id = ""
+name = "X"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "`id` is empty",
+            ),
+            (
+                "empty-domain",
+                r#"
+id = "x"
+name = "X"
+domain = ""
+path = "a/b.db"
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "`domain` is empty",
+            ),
+            (
+                "empty-path",
+                r#"
+id = "x"
+name = "X"
+domain = "HomeDomain"
+path = ""
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "`path` is empty",
+            ),
+            (
+                "empty-sql",
+                r#"
+id = "x"
+name = "X"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = ""
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "`sql` is empty",
+            ),
+            (
+                "empty-column",
+                r#"
+id = "x"
+name = "X"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+from = ""
+"#,
+                "empty `name` or `from`",
             ),
             (
                 "bad-id",
@@ -957,6 +1036,249 @@ from = "who"
             .expect_err("an id that escapes the work dir must be refused")
             .to_string();
         assert!(err.contains("may only contain"), "{err}");
+    }
+
+    /// Every `ColumnKind`, against every SQLite storage class it can meet.
+    ///
+    /// This is the module format's whole typing contract, and it was the least
+    /// tested thing in the file: a review found `Bool`, `Integer` and `Real`
+    /// could each be replaced with "always null" — or `Bool` with "always true"
+    /// — without a single test noticing.
+    #[test]
+    fn every_column_kind_converts() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), "Library/Demo/demo.db", |c| {
+            c.execute_batch(
+                "CREATE TABLE t (s TEXT, i INTEGER, r REAL, b INTEGER, blob BLOB, n TEXT);
+                 INSERT INTO t VALUES ('hi', 42, 1.5, 1, x'00ff', NULL);
+                 INSERT INTO t VALUES ('bye', -7, -0.5, 0, x'01', NULL);",
+            )
+            .unwrap();
+        });
+        let mods_dir = tmp.path().join("modules");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_module(
+            &mods_dir,
+            "kinds.toml",
+            r#"
+id = "kinds"
+name = "Kinds"
+domain = "HomeDomain"
+path = "Library/Demo/demo.db"
+sql = "SELECT s, i, r, b, blob, n, i AS i_as_text FROM t ORDER BY rowid"
+[[columns]]
+name = "S"
+from = "s"
+[[columns]]
+name = "I"
+from = "i"
+kind = "integer"
+[[columns]]
+name = "R"
+from = "r"
+kind = "real"
+[[columns]]
+name = "B"
+from = "b"
+kind = "bool"
+[[columns]]
+name = "Blob"
+from = "blob"
+[[columns]]
+name = "N"
+from = "n"
+[[columns]]
+name = "IAsText"
+from = "i_as_text"
+"#,
+        );
+        let spec = &load_modules(&mods_dir).unwrap()[0];
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+
+        assert_eq!(rows[0]["S"], serde_json::json!("hi"));
+        assert_eq!(rows[0]["I"], serde_json::json!(42));
+        assert_eq!(rows[1]["I"], serde_json::json!(-7), "negatives survive");
+        assert_eq!(rows[0]["R"], serde_json::json!(1.5));
+        assert_eq!(rows[1]["R"], serde_json::json!(-0.5));
+        // `true` and `false` must BOTH be produced — "always true" was a
+        // surviving mutation.
+        assert_eq!(rows[0]["B"], serde_json::json!(true));
+        assert_eq!(rows[1]["B"], serde_json::json!(false));
+        // A blob is not text; rendering its bytes as a string would be noise.
+        assert_eq!(rows[0]["Blob"], serde_json::Value::Null);
+        assert_eq!(rows[0]["N"], serde_json::Value::Null);
+        // A number read as text is coerced rather than dropped, so a module
+        // author who omits `kind` still gets the value.
+        assert_eq!(rows[0]["IAsText"], serde_json::json!("42"));
+    }
+
+    /// `WITH … SELECT` is promised by both the code comment and the error
+    /// string. Deleting that half of the check — rejecting every CTE module —
+    /// used to pass.
+    #[test]
+    fn a_with_cte_module_is_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(
+            tmp.path(),
+            "cte.toml",
+            r#"
+id = "cte"
+name = "CTE"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "WITH q AS (SELECT 1 AS a) SELECT a FROM q"
+[[columns]]
+name = "A"
+from = "a"
+kind = "integer"
+"#,
+        );
+        assert_eq!(load_modules(tmp.path()).unwrap().len(), 1);
+    }
+
+    /// Only `*.toml` is a module. Without the filter a stray `README.md` or
+    /// `.DS_Store` beside the modules becomes a hard load failure that takes
+    /// every artifact down with it.
+    #[test]
+    fn non_toml_files_are_ignored() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(tmp.path(), "demo.toml", &spec_toml(""));
+        std::fs::write(tmp.path().join("README.md"), "# not a module").unwrap();
+        std::fs::write(tmp.path().join(".DS_Store"), [0u8, 1, 2]).unwrap();
+        let mods = load_modules(tmp.path()).unwrap();
+        assert_eq!(mods.len(), 1, "only the .toml file is a module");
+    }
+
+    /// Rows come back in `row_idx` order even when storage order disagrees.
+    /// The previous assertion passed by accident: rows were inserted in order,
+    /// so a scan happened to return them right, and deleting `ORDER BY` from
+    /// `read_rows` changed nothing.
+    #[test]
+    fn rows_are_ordered_by_row_idx_not_insertion_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::cache::CacheDb::open(&tmp.path().join("cache.db")).unwrap();
+        let conn = db.conn();
+        // Drop the (artifact_id, row_idx) index first. With it in place SQLite
+        // satisfies the WHERE clause from the index and hands back rows already
+        // in row_idx order, so removing `ORDER BY` from `read_rows` changed
+        // nothing and this test passed either way. Without the index a scan
+        // returns rowid order, which is what makes the ordering contract real
+        // rather than a coincidence of the current schema.
+        conn.execute_batch("DROP INDEX IF EXISTS idx_artifact_rows")
+            .unwrap();
+        // Insert deliberately out of order, so storage order != row_idx order.
+        for (idx, who) in [(2_i64, "third"), (0, "first"), (1, "second")] {
+            conn.execute(
+                "INSERT INTO artifact_rows (artifact_id, row_idx, payload) VALUES ('demo', ?1, ?2)",
+                rusqlite::params![idx, format!(r#"{{"Who":"{who}"}}"#)],
+            )
+            .unwrap();
+        }
+        let back = read_rows(conn, "demo", 0, 10).unwrap();
+        let names: Vec<&str> = back.iter().map(|r| r["Who"].as_str().unwrap()).collect();
+        assert_eq!(names, ["first", "second", "third"], "row_idx decides order");
+    }
+
+    #[test]
+    fn store_rows_reports_how_many_it_wrote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::cache::CacheDb::open(&tmp.path().join("cache.db")).unwrap();
+        let mut r: ArtifactRow = HashMap::new();
+        r.insert("Who".into(), serde_json::json!("a"));
+        assert_eq!(store_rows(db.conn(), "demo", &[r.clone(), r]).unwrap(), 2);
+        assert_eq!(store_rows(db.conn(), "demo", &[]).unwrap(), 0);
+    }
+
+    /// A corrupt payload names the artifact rather than surfacing a bare serde
+    /// error from nowhere.
+    #[test]
+    fn a_corrupt_stored_row_is_reported_with_its_artifact() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::cache::CacheDb::open(&tmp.path().join("cache.db")).unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO artifact_rows (artifact_id, row_idx, payload) VALUES ('demo', 0, 'not json')",
+                [],
+            )
+            .unwrap();
+        let err = read_rows(db.conn(), "demo", 0, 10)
+            .expect_err("a corrupt payload must be an error")
+            .to_string();
+        assert!(err.contains("demo"), "{err}");
+    }
+
+    /// Invalid SQL must name the module. A raw rusqlite "no such table" says
+    /// nothing about which of (eventually) hundreds of modules asked.
+    #[test]
+    fn invalid_sql_names_the_module() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), "Library/Demo/demo.db", |c| {
+            c.execute_batch("CREATE TABLE events (who TEXT);").unwrap();
+        });
+        let mods_dir = tmp.path().join("modules");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_module(
+            &mods_dir,
+            "broken.toml",
+            r#"
+id = "broken"
+name = "Broken Module"
+domain = "HomeDomain"
+path = "Library/Demo/demo.db"
+sql = "SELECT nope FROM nosuchtable"
+[[columns]]
+name = "Nope"
+from = "nope"
+"#,
+        );
+        let spec = &load_modules(&mods_dir).unwrap()[0];
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let err = run_module(spec, &index, None, &tmp.path().join("work"))
+            .expect_err("invalid SQL must fail")
+            .to_string();
+        assert!(err.contains("broken"), "must name the module id: {err}");
+        assert!(err.contains("Broken Module"), "must name the module: {err}");
+    }
+
+    /// Two modules must not extract over each other's temp store.
+    #[test]
+    fn modules_extract_to_separate_temp_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), "Library/Demo/demo.db", |c| {
+            c.execute_batch("CREATE TABLE events (who TEXT, at REAL);")
+                .unwrap();
+            c.execute_batch("INSERT INTO events VALUES ('alice', 0);")
+                .unwrap();
+        });
+        let mods_dir = tmp.path().join("modules");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_module(&mods_dir, "one.toml", &spec_toml(""));
+        write_module(
+            &mods_dir,
+            "two.toml",
+            &spec_toml("").replace("id = \"demo\"", "id = \"demo2\""),
+        );
+        let mods = load_modules(&mods_dir).unwrap();
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let work = tmp.path().join("work");
+        for m in &mods {
+            run_module(m, &index, None, &work).unwrap().unwrap();
+        }
+        let files: Vec<String> = std::fs::read_dir(&work)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".sqlite"))
+            .collect();
+        assert_eq!(
+            files.len(),
+            2,
+            "each module gets its own temp store: {files:?}"
+        );
     }
 
     #[test]
