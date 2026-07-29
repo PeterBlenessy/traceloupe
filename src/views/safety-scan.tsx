@@ -9,7 +9,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ChartColumn, ChevronDown, ExternalLink, Filter, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, } from "lucide-react";
+  Square, ChartColumn, ChevronDown, ExternalLink, Filter, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, TriangleAlert, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -572,14 +572,16 @@ export function SafetyScanView() {
               liveId={liveId}
               onResume={resumeScan}
               running={running}
-              onOpenReport={setReportScan}
             />
             <div className="flex min-h-0 min-w-0 flex-col space-y-4">
               {/* The report lives behind the history card's doc icon; the detail
                   side is just the findings. Rail selection handles navigation. */}
-              {(findingCounts.data?.live ?? 0) > 0 ||
-              (findingCounts.data?.dismissed ?? 0) > 0 ? (
-                <FindingsList
+              {/* Rendered for EVERY selected scan, findings or not. The report
+                  lives in its toolbar now, and a scan that found nothing has
+                  the report most worth reading — "nothing was found" is a
+                  result. Its finding-specific controls disable rather than
+                  disappear (#171). */}
+              <FindingsList
                   scan={selectedScan}
                   counts={findingCounts.data}
                   showDismissed={showDismissed}
@@ -598,25 +600,11 @@ export function SafetyScanView() {
                       category: f.category,
                     })
                   }
+                  onOpenReport={() => setReportScan(selectedScan)}
                   onRule={(scope, value, reason) =>
                     addRule.mutate({ scope, value, reason })
                   }
                 />
-              ) : (
-                <Card>
-                  <CardContent className="flex flex-col items-center gap-2 py-10 text-center text-sm text-muted-foreground">
-                    {selectedScan.status === "completed" ? (
-                      <>
-                        <ShieldCheck className="size-6 text-status-ok-text" />
-                        Nothing flagged in this scan's scope. Open the report for
-                        the full summary.
-                      </>
-                    ) : (
-                      "No findings for this scan yet."
-                    )}
-                  </CardContent>
-                </Card>
-              )}
             </div>
           </div>
         ) : (
@@ -800,18 +788,37 @@ function ScanProgress({
 }
 
 /** A label for a scan's status, in user terms. */
-const SCAN_STATUS_LABEL: Record<string, string> = {
-  completed: "Completed",
-  cancelled: "Stopped",
-  failed: "Failed",
-  running: "Running",
-  interrupted: "Interrupted",
-};
-
 /** Date-led identity for a scan: people remember *when* they scanned; the
  *  period covered is a property, shown in the subtitle. */
+/** What a scan IS: the content it covers and the period it covers it over.
+ *
+ *  The date used to be the title, which made a scan look like an event. It is a
+ *  configuration — re-running one updates its row rather than adding another
+ *  (#171) — so the date moved down to the metadata line where it belongs. */
 function scanTitle(s: SafetyScanHistoryItem): string {
-  return formatTimelineTime(s.startedAt);
+  return `${formatSources(s.sources)} · ${formatScanRange(s.rangeStart, s.rangeEnd)}`;
+}
+
+/** Why a run ended the way it did, for the warning badge's tooltip.
+ *
+ *  Two of the three explain themselves and need nothing stored; only a failure
+ *  carries a message, and if it did not, this badge would promise a reason and
+ *  answer "it failed" — which the row already said. */
+/** What the re-run button is called, which depends on what it will do. */
+function rerunLabel(s: SafetyScanHistoryItem, live: boolean): string {
+  if (live) return "This scan is running";
+  return endedBadly(s, live) ? "Finish this scan" : "Run this scan again";
+}
+
+function endedBadly(s: SafetyScanHistoryItem, live: boolean): string | null {
+  if (s.status === "running" && !live)
+    return "The app closed while this was running. Progress is kept — run it again to finish.";
+  if (s.status === "interrupted")
+    return "The app closed while this was running. Progress is kept — run it again to finish.";
+  if (s.status === "cancelled") return "You stopped this scan. Progress is kept.";
+  if (s.status === "failed")
+    return s.error ? `This scan failed: ${s.error}` : "This scan failed.";
+  return null;
 }
 
 /** Human label for a scan's content scope — "all"/"messages"/"notes", or a
@@ -859,9 +866,6 @@ function ScanOutcomeBadge({
     );
   // A scan cut short mid-run — a stranded 'running' row (not live) or one
   // repaired to 'interrupted' — still found what it found before it stopped.
-  const interrupted =
-    scan.status === "interrupted" || (scan.status === "running" && !live);
-
   // The outcome pill: the findings count, or a verdict/status when there are
   // none. "Clean" is a completed scan's verdict — a stopped/failed/interrupted
   // scan with zero findings just didn't get to look, so it shows its status.
@@ -914,31 +918,16 @@ function ScanOutcomeBadge({
           </ul>
         </TooltipContent>
       </Tooltip>
-    ) : scan.status === "completed" ? (
-      <Badge
-        variant="outline"
-        className="shrink-0 border-status-ok-line text-status-ok-text"
-      >
-        Clean
-      </Badge>
     ) : (
-      <Badge variant="outline" className="shrink-0 text-muted-foreground">
-        {SCAN_STATUS_LABEL[scan.status] ?? scan.status}
+      // Zero findings, whatever the status. The pill is ONLY ever a findings
+      // count now (#171) — "Clean", "Stopped" and "Interrupted" were a second
+      // vocabulary saying what the row already said twice over, and anything
+      // abnormal is said once, on the re-run action.
+      <Badge variant="outline" className="shrink-0 tabular-nums text-muted-foreground">
+        0
       </Badge>
     );
 
-  // Interrupted scans keep their findings pill; the state is shown as a label
-  // to its LEFT. With zero findings the outcome badge already reads
-  // "Interrupted", so it isn't doubled up.
-  if (interrupted && scan.findings > 0)
-    return (
-      <div className="flex shrink-0 items-center gap-1.5">
-        <Badge variant="outline" className="shrink-0 text-muted-foreground">
-          Interrupted
-        </Badge>
-        {outcome}
-      </div>
-    );
   return outcome;
 }
 
@@ -951,7 +940,6 @@ function ScanRail({
   liveId,
   onResume,
   running,
-  onOpenReport,
 }: {
   scans: SafetyScanHistoryItem[];
   selectedId: number;
@@ -963,7 +951,6 @@ function ScanRail({
   /** A scan is already in flight — no other scan can be resumed meanwhile. */
   running: boolean;
   /** Open the report document for a scan (owned by the parent view). */
-  onOpenReport: (scan: SafetyScanHistoryItem) => void;
 }) {
   const qc = useQueryClient();
   const [outcome, setOutcome] = useState("all");
@@ -1128,14 +1115,12 @@ function ScanRail({
                 </span>
                 <ScanOutcomeBadge scan={s} live={s.id === liveId} />
               </div>
+              {/* Metadata about the run, not its outcome. The status used to
+                  be repeated here AND as a pill; the pill is now only ever a
+                  findings count, and anything abnormal is said once, on the
+                  re-run action. */}
               <div className="text-xs text-muted-foreground">
-                {formatSources(s.sources)}
-                {" · "}
-                {formatScanRange(s.rangeStart, s.rangeEnd)}
-                {" · "}
-                {s.status === "running" && s.id !== liveId
-                  ? "Interrupted"
-                  : (SCAN_STATUS_LABEL[s.status] ?? s.status)}
+                Last run {formatTimelineTime(s.startedAt)}
               </div>
             </div>
             {/* In normal flow, so the right edge is permanently theirs and
@@ -1149,46 +1134,49 @@ function ScanRail({
                 right-aligned, so the icons form straight columns down the list
                 instead of shifting row to row. Sized from the same control
                 token as the buttons, so it can't drift from them. */}
-            <div className="flex min-w-[calc(3*var(--control-h-sm)+0.25rem)] shrink-0 items-center justify-end gap-0.5 opacity-45 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+            <div className="flex min-w-[calc(2*var(--control-h-sm)+0.25rem)] shrink-0 items-center justify-end gap-0.5 opacity-45 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100">
+              {/* Re-run, on EVERY row — a scan is a configuration, so running it
+                  again is the primary thing you do with one, not a recovery
+                  action reserved for the ones that broke.
+
+                  A run that ended abnormally carries a warning badge here and
+                  the tooltip gives the reason. One shape for all three endings
+                  rather than a glyph each: the badge means "this did not finish
+                  normally", and the tooltip says which. Colour reinforces —
+                  amber for stopped/interrupted, red for failed — so it still
+                  reads with "Differentiate without colour" on. */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="text-muted-foreground hover:text-foreground"
-                    aria-label="Open scan report"
+                    disabled={running}
+                    className="relative text-muted-foreground hover:text-foreground"
+                    aria-label={rerunLabel(s, s.id === liveId)}
                     onClick={(e) => {
                       e.stopPropagation();
-                      onOpenReport(s);
+                      onResume(s.id);
                     }}
                   >
-                    <FileText className="size-3.5" />
+                    <RotateCw className="size-3.5" />
+                    {endedBadly(s, s.id === liveId) && (
+                      <TriangleAlert
+                        aria-hidden="true"
+                        className={cn(
+                          "absolute -right-0.5 -bottom-0.5 size-2.5",
+                          s.status === "failed"
+                            ? "fill-status-danger text-status-danger"
+                            : "fill-status-warning text-status-warning",
+                        )}
+                      />
+                    )}
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Open the report for this scan</TooltipContent>
+                <TooltipContent>
+                  {endedBadly(s, s.id === liveId) ??
+                    "Run this scan again over the same content"}
+                </TooltipContent>
               </Tooltip>
-              {/* Resume lives on the card of the scan it continues — not in the
-                  report — so it's next to the run it acts on. Shown for any
-                  non-completed scan when nothing else is running. */}
-              {!running && s.status !== "completed" && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="text-muted-foreground hover:text-foreground"
-                      aria-label="Resume this scan"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onResume(s.id);
-                      }}
-                    >
-                      <RotateCw className="size-3.5" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Resume this scan where it stopped</TooltipContent>
-                </Tooltip>
-              )}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -2020,6 +2008,7 @@ function FindingsList({
   onDismiss,
   onSeen,
   onRule,
+  onOpenReport,
 }: {
   scan: SafetyScanHistoryItem;
   /** Unfiltered totals for the pills; the rows themselves are paged (#65). */
@@ -2029,6 +2018,7 @@ function FindingsList({
   onDismiss: (f: ContentFinding, dismissed: boolean, reason?: string) => void;
   onSeen: (f: ContentFinding) => void;
   onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
+  onOpenReport: () => void;
 }) {
   const [severity, setSeverity] = useState("all");
   const [sort, setSort] = useState<SortState>({ by: "severity", desc: true });
@@ -2063,6 +2053,10 @@ function FindingsList({
   });
   const total = matching.data?.matching ?? 0;
   const dismissedCount = counts?.dismissed ?? 0;
+  // Disabled, not hidden. The rail is master–detail, so controls that vanish and
+  // reappear per selection reflow the row under the pointer — and a control that
+  // changes between states is worse than one that is merely wrong (#171).
+  const noFindings = (counts?.live ?? 0) === 0 && dismissedCount === 0;
 
   // The same charts the report prints, over the panel's CURRENT filter — the
   // aggregates share the page query's scope predicate, so narrowing to Serious
@@ -2084,7 +2078,9 @@ function FindingsList({
   });
   const threadLabel = useThreadLabel();
 
-  if ((counts?.live ?? 0) === 0 && dismissedCount === 0) return null;
+  // No early return for an empty scan. The panel is where the report lives, and
+  // a scan that found nothing has the report most worth reading — "nothing was
+  // found" is a result (#171). The controls that need findings go inert instead.
   return (
     <Card className="flex min-h-0 flex-1 flex-col">
       <CardHeader className="shrink-0">
@@ -2101,6 +2097,7 @@ function FindingsList({
           </div>
           <div className="flex items-center gap-2">
             <FilterControl
+              disabled={noFindings}
               groups={[
                 badgeGroup({
                   key: "severity",
@@ -2118,6 +2115,7 @@ function FindingsList({
               ]}
             />
             <SortControl
+              disabled={noFindings}
               fields={[
                 { value: "severity", label: "Severity" },
                 { value: "date", label: "Date" },
@@ -2125,6 +2123,24 @@ function FindingsList({
               value={sort}
               onChange={setSort}
             />
+            {/* Always enabled, even with nothing found: "nothing was found" is
+                a result, and it used to be the one thing the empty state told
+                you to go and read. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={onOpenReport}
+                >
+                  <FileText className="size-4" /> Report
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                The scan written up as a printable document
+              </TooltipContent>
+            </Tooltip>
             <SuppressionChip />
             {/* Dismissed findings: an island in the toolbar row rather than a
                 switch on a row of its own, which cost a whole line of vertical
@@ -2165,7 +2181,11 @@ function FindingsList({
             >
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <ToggleGroupItem value="charts" aria-label="Show analysis">
+                  <ToggleGroupItem
+                    value="charts"
+                    aria-label="Show analysis"
+                    disabled={noFindings}
+                  >
                     <ChartColumn className="size-4" />
                   </ToggleGroupItem>
                 </TooltipTrigger>
@@ -2181,6 +2201,7 @@ function FindingsList({
               size="island"
               value={grouped ? "grouped" : "flat"}
               onValueChange={(v) => v && setGrouped(v === "grouped")}
+              disabled={noFindings}
             >
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -2273,7 +2294,9 @@ function FindingsList({
         </div>
         {total === 0 && !matching.isPending && (
           <p className="text-xs text-muted-foreground">
-            No findings match the current filter.
+            {noFindings
+              ? "Nothing was flagged in this scan's scope. A clean scan is a review aid, not a guarantee — spot-check important conversations yourself."
+              : "No findings match the current filter."}
           </p>
         )}
       </CardContent>
