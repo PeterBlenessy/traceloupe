@@ -119,6 +119,24 @@ The **frontier** is the open, unblocked, unassigned children.
 
 ## Chart a map
 
+0. **Look for prior art first — including work that never landed.** Fog you chart
+   over an existing answer is worse than no map, because it sends a future
+   session to re-derive something already written.
+
+   ```bash
+   git branch -a --no-merged main                       # unmerged branches
+   git log --oneline main..<branch>                     # what is on one
+   git diff --stat main...<branch>                      # and which files
+   gh issue list --search "<topic>" --state all
+   ls docs/plans docs/research docs/adr
+   ```
+
+   Unmerged branches are the trap: `main` looked complete for this repo's first
+   map while a branch held a 427-line PRD that answered two of its four tickets.
+   Old branches also predate reorganisations, so they will not merge cleanly —
+   whether to rebase them or declare them superseded is itself a `wayfinder:task`
+   ticket, and it blocks whatever it might answer.
+
 1. **Name the destination** — `grill-with-docs`. It fixes the scope, so it is
    settled first.
 2. **Grill again, breadth-first** — fan out across the whole space rather than
