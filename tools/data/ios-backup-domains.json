@@ -1,0 +1,858 @@
+{
+ "BackupDomain": {
+  "keys": {
+   "RelativePathsToBackupAndRestore": [
+    "Backup/Preferences"
+   ]
+  },
+  "root": "# empty"
+ },
+ "BooksDomain": {
+  "keys": {
+   "RelativePathAggregateDictionaryGroups": [
+    " "
+   ],
+   "RelativePathsNotToBackup": [],
+   "RelativePathsNotToBackupToDrive": [],
+   "RelativePathsOfSystemFilesToAlwaysRestore": [],
+   "RelativePathsToBackupAndRestore": [],
+   "RelativePathsToRestoreOnly": []
+  },
+  "root": "/var/mobile/Media/Books"
+ },
+ "CameraRollDomain": {
+  "keys": {
+   "RelativePathAggregateDictionaryGroups": [
+    "Media/DCIM",
+    "Media/PhotoData"
+   ],
+   "RelativePathsNotToBackup": [
+    "Media/PhotoData/Caches",
+    "Media/PhotoData/changes",
+    "Media/PhotoData/changes-shm",
+    "Media/PhotoData/changes-wal",
+    "Media/PhotoData/PhotoCloudSharingData",
+    "Media/PhotoData/Sync",
+    "Media/PhotoData/OutgoingTemp"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "Media/PhotoData/Metadata",
+    "Media/PhotoData/Thumbnails",
+    "Media/PhotoData/CMMAssets",
+    "Media/PhotoData/Mutations/PhotoData/CMMAssets",
+    "Media/PhotoData/CPL"
+   ],
+   "RelativePathsOfSystemFilesToAlwaysRemoveOnRestore": [
+    "Media/Photos",
+    "Media/PhotoData/Caches",
+    "Media/PhotoData/PhotoCloudSharingData",
+    "Media/PhotoData/Sync",
+    "Media/PhotoData/Metadata/PhotoData/Sync",
+    "Media/PhotoData/Metadata/PhotoData/PhotoCloudSharingData",
+    "Media/PhotoData/CPL"
+   ],
+   "RelativePathsToBackgroundRestore": [
+    "Media/DCIM",
+    "Media/PhotoData/Mutations",
+    "Media/PhotoData/CPLAssets",
+    "Media/Deferred"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Media/DCIM",
+    "Media/PhotoData",
+    "Media/Memories/Library/PersistedMemories",
+    "Media/MediaAnalysis/.backup",
+    "Media/Deferred"
+   ],
+   "RelativePathsToBackupIgnoringProtectionClass": [
+    "Media/DCIM"
+   ],
+   "RelativePathsToRemoveOnRestore": [
+    "Media/Photos",
+    "Media/PhotoData/Caches",
+    "Media/PhotoData/PhotoCloudSharingData",
+    "Media/PhotoData/Sync",
+    "Media/PhotoData/Metadata/PhotoData/Sync",
+    "Media/PhotoData/Metadata/PhotoData/PhotoCloudSharingData",
+    "Media/PhotoData/CPL"
+   ]
+  },
+  "root": "/var/mobile"
+ },
+ "DatabaseDomain": {
+  "keys": {
+   "RelativePathsNotToMigrate": [
+    "lsd/com.apple.lsdidentifiers.plist"
+   ],
+   "RelativePathsNotToRemoveIfNotRestored": [
+    "timezone/localtime"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "lsd/com.apple.lsdidentifiers.plist",
+    "timezone/localtime",
+    "com.apple.xpc.launchd",
+    "PlugInKit-Annotations"
+   ]
+  },
+  "root": "/var/db"
+ },
+ "HealthDomain": {
+  "keys": {
+   "RelativePathsNotToBackup": [
+    "Health/Local"
+   ],
+   "RelativePathsNotToBackupInMegaBackup": [
+    "Health",
+    "Health/Local"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "Health"
+   ],
+   "RelativePathsToBackupAndRestore": [],
+   "RelativePathsToOnlyBackupEncrypted": [
+    "Health",
+    "locationd/user.plist",
+    "MedicalID"
+   ],
+   "RelativePathsToRemoveOnRestore": [
+    "Health"
+   ],
+   "RelativePathsToRestoreOnly": [
+    "Health",
+    "locationd/user.plist",
+    "MedicalID"
+   ]
+  },
+  "root": "/var/mobile/Library"
+ },
+ "HomeDomain": {
+  "keys": {
+   "RelativePathAggregateDictionaryGroups": [
+    "Library/Voicemail",
+    "Library/Safari/Bookmarks.db",
+    "Library/SMS/sms.db",
+    "Library/Cookies",
+    "Library/Preferences",
+    "Library/WebKit/Databases ",
+    "Library/Caches/com.apple.WebAppCache",
+    "Library/Calendar",
+    "Library/AddressBook",
+    "Library/Notes"
+   ],
+   "RelativePathsNotToBackup": [
+    "Library/Keyboard/Typology",
+    "Library/Calendar/Attachments",
+    "Library/Preferences/com.apple.AOSNotification.notbackedup.plist",
+    "Library/Preferences/com.apple.AOSNotification.FMFAccounts.notbackedup.plist",
+    "Library/Preferences/com.apple.AOSNotification.FMIPAccounts.notbackedup.plist",
+    "Library/Preferences/com.apple.AOSNotification.public.notbackedup.plist",
+    "Library/Preferences/com.apple.appleaccount.notbackedup.plist",
+    "Library/Preferences/com.apple.assistant.plist",
+    "Library/Preferences/com.apple.assistant.languages.plist",
+    "Library/Preferences/com.apple.assistant.logging.plist",
+    "Library/Preferences/com.apple.atc.plist",
+    "Library/Preferences/com.apple.BTServer.airplane.plist",
+    "Library/Preferences/com.apple.DataMigration.plist",
+    "Library/Preferences/com.apple.calaccessd.keepalive",
+    "Library/Preferences/com.apple.carrier.plist",
+    "Library/Preferences/com.apple.icloud.findmydeviced.public.notbackedup.plist",
+    "Library/Preferences/com.apple.icloud.findmydeviced.notbackedup.plist",
+    "Library/Preferences/com.apple.icloud.findmydeviced.watch.notbackedup.plist",
+    "Library/Preferences/com.apple.icloud.findmydeviced.FMIPAccounts.notbackedup.plist",
+    "Library/Preferences/com.apple.locationd.notbackedup.plist",
+    "Library/Preferences/com.apple.managedconfiguration.notbackedup.plist",
+    "Library/Preferences/com.apple.migration.plist",
+    "Library/Preferences/com.apple.mmcs.plist",
+    "Library/Preferences/com.apple.mobilephone.sortmapping.plist",
+    "Library/Preferences/com.apple.operator.plist",
+    "Library/Preferences/com.apple.preferences.volume-limit.plist",
+    "Library/Preferences/com.apple.purplebuddy.notbackedup.plist",
+    "Library/Preferences/com.apple.siri.backedup.encrypted.plist",
+    "Library/Preferences/com.apple.youtubeframework.notbackedup.plist",
+    "Library/SpringBoard/transientSettings.plist",
+    "Library/Safari/SyncedTabsMetadata.plist",
+    "Library/MobileBluetooth/com.apple.MobileBluetooth.ledevices.other.db",
+    "Library/Preferences/com.apple.iokit.IOMobileGraphicsFamily.plist",
+    "Library/Preferences/com.apple.icloud.fmfd.notbackedup.plist",
+    "Library/Preferences/com.apple.coreduetd.batterysaver.state.plist",
+    "Library/Preferences/com.apple.icloud.fmflocatord.notbackedup.plist",
+    "Library/Preferences/com.apple.stockholm.awd.plist",
+    "Library/Preferences/com.apple.stockholm.plist",
+    "Library/Preferences/com.apple.seld.plist",
+    "Library/Preferences/nfcd.plist",
+    "Library/Voicemail/OfflineCache",
+    "Library/Safari/BookmarksSyncMetadata.plist",
+    "Library/Caches/com.apple.WebAppCache",
+    "Library/SpringBoard/PushStore",
+    "Library/Preferences/com.apple.indigo.plist",
+    "Library/Preferences/com.apple.rtcreporting.plist",
+    "Library/Preferences/com.apple.homed.notbackedup.plist",
+    "Library/Preferences/com.apple.voicetrigger.notbackedup.plist",
+    "Library/com.apple.AppleMediaServices.notbackedup",
+    "Library/Preferences/com.apple.AppleMediaServices.notbackedup",
+    "Library/Preferences/com.apple.settings.storage.plist",
+    "Library/Preferences/com.apple.palette.chestnut.plist",
+    "Library/Preferences/group.com.apple.Livability.plist",
+    "Library/Preferences/com.apple.mobilerepaird.plist",
+    "Library/Preferences/com.apple.mobilerepair.DisplayRepair.plist",
+    "Library/Preferences/com.apple.mobilerepair.BatteryRepair.plist",
+    "Library/Preferences/com.apple.NewDeviceOutreach.plist",
+    "Library/Application Support/com.apple.palette.green.plist",
+    "Library/Application Support/com.apple.palette.green.bin",
+    "Library/Preferences/com.apple.smartcharging.topoffprotection.plist",
+    "Library/SplashBoard",
+    "Library/Preferences/com.apple.coreaudio.device.plist",
+    "Library/Preferences/com.apple.powerd.lowpowermode.state.plist",
+    "Library/Preferences/com.apple.carrier_1.plist",
+    "Library/Preferences/com.apple.operator_1.plist",
+    "Library/Preferences/com.apple.carrier_2.plist",
+    "Library/Preferences/com.apple.operator_2.plist",
+    "Library/Preferences/com.apple.carrier_1.merged.plist",
+    "Library/Preferences/com.apple.operator_1.merged.plist",
+    "Library/Preferences/com.apple.carrier_2.merged.plist",
+    "Library/Preferences/com.apple.operator_2.merged.plist",
+    "Library/Preferences/com.apple.carrier.bootstrap.plist",
+    "Library/Preferences/com.apple.carrier.default.plist",
+    "Library/Preferences/com.apple.carrier.merged.plist",
+    "Library/Preferences/com.apple.operator.merged.plist",
+    "Library/Preferences/com.apple.carrier.bootstrap.merged.plist",
+    "Library/Preferences/com.apple.cameracapture.volatile.plist",
+    "Library/Preferences/com.apple.stockholm.tsmreg.plist",
+    "Library/Preferences/com.apple.nfcacd.plist",
+    "Library/Preferences/com.apple.MobileAsset.plist",
+    "Library/Preferences/com.apple.MobileSoftwareUpdate.plist",
+    "Library/Preferences/com.apple.mobilerepaird.systemhealth.plist",
+    "Library/Passes/Discovery",
+    "Library/Preferences/com.apple.private.health.feature-properties.AFibBurden.companion.plist",
+    "Library/Preferences/com.apple.private.health.feature-properties.CardioFitness.companion.plist",
+    "Library/Preferences/com.apple.private.health.feature-properties.ElectrocardiogramV2Recording.companion.plist",
+    "Library/Preferences/com.apple.private.health.feature-properties.IrregularRhythmNotificationsV2.companion.plist",
+    "Library/Preferences/com.apple.private.health.feature-properties.MenstrualCycles.companion.plist",
+    "Library/Preferences/com.apple.private.health.feature-properties.MenstrualCyclesHeartRateInput.companion.plist",
+    "Library/Preferences/com.apple.private.health.feature-properties.OxygenSaturationRecording.companion.plist",
+    "Library/Maps",
+    "Library/IdentityServices/Persistence/DoNotBackup"
+   ],
+   "RelativePathsNotToBackupInMegaBackup": [
+    "Library/Accessibility/TTY/TTYCallHistory.sqlite",
+    "Library/Accessibility/TTY/TTYCallHistory.sqlite-shm",
+    "Library/Accessibility/TTY/TTYCallHistory.sqlite-wal",
+    "Library/VoiceTrigger/SAT",
+    "Library/PersonalizationPortrait",
+    "Library/DuetExpertCenter/D2DBackups",
+    "Library/Preferences/com.apple.speakerrecognition.plist",
+    "Library/Safari/SafariTabs.db",
+    "Library/Preferences/com.apple.announce.announcements.plist"
+   ],
+   "RelativePathsNotToBackupToDrive": [
+    "Library/MusicLibrary/AccountCache.sqlitedb",
+    "Library/Spotlight/Backup/encrypted_ranking_metadata.dat",
+    "Library/DuetExpertCenter/Backups"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "Library/Accessibility/TTY/TTYCallHistory.sqlite",
+    "Library/Accessibility/TTY/TTYCallHistory.sqlite-shm",
+    "Library/Accessibility/TTY/TTYCallHistory.sqlite-wal",
+    "Library/VoiceTrigger/SAT",
+    "Library/Mobile Documents",
+    "Library/Application Support/CloudDocs",
+    "Library/PersonalizationPortrait",
+    "Library/DuetExpertCenter/D2DBackups",
+    "Library/Preferences/com.apple.speakerrecognition.plist",
+    "Library/Safari/SafariTabs.db",
+    "Library/Application Support/FileProvider",
+    "Library/CloudStorage",
+    "Library/Preferences/com.apple.announce.announcements.plist"
+   ],
+   "RelativePathsNotToCheckIfModifiedDuringBackup": [
+    "Library/Application Support/CloudDocs/backup",
+    "Library/Application Support/FileProvider"
+   ],
+   "RelativePathsNotToMigrate": [
+    "Library/DataAccess/DeviceSpecificInfo.plist",
+    "Library/Preferences/com.apple.GMM.plist",
+    "Library/Preferences/com.apple.MobileBluetooth.devices.plist",
+    "Library/Preferences/com.apple.MobileBluetooth.security.plist",
+    "Library/Preferences/com.apple.MobileBluetooth.services.plist",
+    "Library/WebKit/Form Values"
+   ],
+   "RelativePathsNotToRemoveIfNotRestored": [
+    "Library/IdentityServices/Persistence/DoNotBackup"
+   ],
+   "RelativePathsNotToRestore": [
+    "Library/AggregateDictionary/ADDataStore.sqlitedb",
+    "Library/Calendar/Attachments",
+    "Library/Logs/ADDataStore.sqlitedb",
+    "Library/BackBoard",
+    "Library/Preferences/com.apple.AOSNotification.FMIPAccounts.notbackedup.plist",
+    "Library/Preferences/com.apple.AOSNotification.FMFAccounts.notbackedup.plist",
+    "Library/Preferences/com.apple.calaccessd.keepalive",
+    "Library/Preferences/com.apple.migration.plist",
+    "Library/Preferences/com.apple.mmcs.plist",
+    "Library/Preferences/com.apple.siri.backedup.encrypted.plist",
+    "Library/Health",
+    "Library/Safari/SyncedTabsMetadata.plist",
+    "Library/MobileBluetooth/com.apple.MobileBluetooth.ledevices.other.db",
+    "Library/Preferences/com.apple.MobileBluetooth.ledevices.plist",
+    "Library/Preferences/com.apple.iokit.IOMobileGraphicsFamily.plist",
+    "Library/Preferences/com.apple.stockholm.awd.plist",
+    "Library/Preferences/com.apple.stockholm.plist",
+    "Library/Preferences/com.apple.seld.plist",
+    "Library/Preferences/nfcd.plist",
+    "Library/Voicemail/OfflineCache",
+    "Library/Safari/BookmarksSyncMetadata.plist",
+    "Library/Caches/com.apple.WebAppCache",
+    "Library/Mail/Recents",
+    "Library/Mail/Recents-shm",
+    "Library/Mail/Recents-wal",
+    "Library/SpringBoard/PushStore",
+    "Library/Preferences/com.apple.indigo.plist",
+    "Library/Preferences/com.apple.rtcreporting.plist",
+    "Library/Preferences/com.apple.homed.notbackedup.plist",
+    "Library/Preferences/com.apple.voicetrigger.notbackedup.plist",
+    "Library/com.apple.AppleMediaServices.notbackedup",
+    "Library/Preferences/com.apple.AppleMediaServices.notbackedup",
+    "Library/Preferences/com.apple.settings.storage.plist",
+    "Library/Preferences/com.apple.palette.chestnut.plist",
+    "Library/Preferences/group.com.apple.Livability.plist",
+    "Library/Preferences/com.apple.mobilerepaird.plist",
+    "Library/Preferences/com.apple.mobilerepair.DisplayRepair.plist",
+    "Library/Preferences/com.apple.mobilerepair.BatteryRepair.plist",
+    "Library/Preferences/com.apple.NewDeviceOutreach.plist",
+    "Library/Application Support/com.apple.palette.green.plist",
+    "Library/Application Support/com.apple.palette.green.bin",
+    "Library/Preferences/com.apple.smartcharging.topoffprotection.plist",
+    "Library/SplashBoard",
+    "Library/Preferences/com.apple.coreaudio.device.plist",
+    "Library/Preferences/com.apple.carrier.plist",
+    "Library/Preferences/com.apple.operator.plist",
+    "Library/Preferences/com.apple.carrier_1.plist",
+    "Library/Preferences/com.apple.operator_1.plist",
+    "Library/Preferences/com.apple.carrier_2.plist",
+    "Library/Preferences/com.apple.operator_2.plist",
+    "Library/Preferences/com.apple.carrier_1.merged.plist",
+    "Library/Preferences/com.apple.operator_1.merged.plist",
+    "Library/Preferences/com.apple.carrier_2.merged.plist",
+    "Library/Preferences/com.apple.operator_2.merged.plist",
+    "Library/Preferences/com.apple.carrier.bootstrap.plist",
+    "Library/Preferences/com.apple.carrier.default.plist",
+    "Library/Preferences/com.apple.carrier.merged.plist",
+    "Library/Preferences/com.apple.operator.merged.plist",
+    "Library/Preferences/com.apple.carrier.bootstrap.merged.plist",
+    "Library/Preferences/com.apple.cameracapture.volatile.plist",
+    "Library/Preferences/com.apple.stockholm.tsmreg.plist",
+    "Library/Preferences/com.apple.nfcacd.plist",
+    "Library/Preferences/com.apple.MobileAsset.plist",
+    "Library/Preferences/com.apple.MobileSoftwareUpdate.plist",
+    "Library/Preferences/com.apple.mobilerepaird.systemhealth.plist",
+    "Library/Passes/Discovery",
+    "Library/Maps",
+    "Library/IdentityServices/Persistence/DoNotBackup"
+   ],
+   "RelativePathsOfSystemFilesToAlwaysRemoveOnRestore": [
+    "Library/Preferences/com.apple.migration.plist"
+   ],
+   "RelativePathsOfSystemFilesToAlwaysRestore": [
+    "Library/MusicLibrary/AccountCache.sqlitedb",
+    "Library/Preferences/com.apple.MobileBackup.DemotedApps.plist"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Demo.mov",
+    "Library/com.apple.itunesstored",
+    "Library/AddressBook",
+    "Library/Accounts",
+    "Library/Application Support/com.apple.Home/Wallpapers",
+    "Library/BulletinBoard",
+    "Library/Calendar",
+    "Library/ConfigurationProfiles",
+    "Library/UserConfigurationProfiles",
+    "Library/Cookies",
+    "Library/DataAccess",
+    "Library/DeviceRegistry",
+    "Library/DeviceRegistry.state",
+    "Library/Mail/Accounts.plist",
+    "Library/Mail/AutoFetchEnabled",
+    "Library/Mail/MailboxCollections.plist",
+    "Library/Messages",
+    "Library/MobileInstallation/ApplicationAttributes.plist",
+    "Library/MusicLibrary/AccountCache.sqlitedb",
+    "Library/Notes",
+    "Library/Passes",
+    "Library/Preferences",
+    "Library/RemoteNotification",
+    "Library/Safari/Bookmarks.db",
+    "Library/SMS/sms.db",
+    "Library/SMS/Drafts",
+    "Library/SpringBoard",
+    "Library/TCC",
+    "Library/YouTube/Bookmarks.plist",
+    "Library/Voicemail",
+    "Library/WebClips",
+    "Library/WebKit/Databases",
+    "Library/WebKit/Form Values",
+    "Library/WebKit/GeolocationSites.plist",
+    "Library/MobileBluetooth",
+    "Library/Accessibility",
+    "Library/NanoBackup",
+    "Library/FrontBoard",
+    "Library/Spotlight/applications.mdplist",
+    "Library/Fonts",
+    "Library/ControlCenter/ModuleConfiguration.plist",
+    "Library/Spotlight/Backup/encrypted_ranking_metadata.dat",
+    "Library/Application Support/com.apple.ProtectedCloudStorage/Backup",
+    "Library/UserNotifications",
+    "Library/DoNotDisturb/DB/Assertions.json",
+    "Library/DoNotDisturb/DB/Settings.json",
+    "Library/Avatar/avatars.version",
+    "Library/Avatar/avatars.db",
+    "Library/VoiceShortcuts",
+    "Library/Avatar/CoreDataBackend",
+    "Documents/DemoPhotoLibraryTemplate",
+    "Library/NickNameCache",
+    "Library/com.apple.internal.ck",
+    "Library/Reminders",
+    "Library/Shortcuts",
+    "Library/MessagesMetaData",
+    "Library/Application Support/com.apple.Home/demoMode",
+    "Library/Mobile Documents",
+    "Library/Application Support/CloudDocs",
+    "Library/DuetExpertCenter/Backups",
+    "Library/Wallpapers",
+    "Library/ExposureNotification",
+    "Library/Photos/Libraries",
+    "Library/DoNotDisturb/DB/GlobalConfiguration.json",
+    "Library/Application Support/FileProvider",
+    "Library/CloudStorage",
+    "Library/com.apple.PrivacyDisclosure"
+   ],
+   "RelativePathsToBackupToDriveAndStandardAccount": [
+    "Library/Safari/History.db",
+    "Library/Safari/History.db-wal",
+    "Library/Safari/History.db-shm",
+    "Library/Safari/BrowserState.db",
+    "Library/Safari/BrowserState.db-wal",
+    "Library/Safari/BrowserState.db-shm",
+    "Library/CallHistoryDB",
+    "Library/CallHistoryTransactions",
+    "Library/Recents/Recents",
+    "Library/Recents/Recents-shm",
+    "Library/Recents/Recents-wal"
+   ],
+   "RelativePathsToIgnoreExclusionsForDrive": [
+    "Library/SMS"
+   ],
+   "RelativePathsToOnlyBackupEncrypted": [
+    "Library/VoiceTrigger/SAT",
+    "Library/com.apple.geod",
+    "Library/com.apple.siri.remembers",
+    "Library/CoreDuet/People/interactionC.db",
+    "Library/CoreDuet/People/interactionC.db-shm",
+    "Library/CoreDuet/People/interactionC.db-wal",
+    "Library/PersonalizationPortrait",
+    "Library/DuetExpertCenter/D2DBackups",
+    "Library/Preferences/com.apple.speakerrecognition.plist",
+    "Library/Safari/SafariTabs.db",
+    "Library/DoNotDisturb/DB/ModeConfigurations.json",
+    "Library/DoNotDisturb/DB/ModeConfigurationsSecure.json",
+    "Library/DoNotDisturb/DB/Settings.sqlite",
+    "Library/DoNotDisturb/DB/Settings.sqlite-wal",
+    "Library/DoNotDisturb/DB/Settings.sqlite-shm"
+   ],
+   "RelativePathsToRemoveOnRestore": [
+    "Library/MediaStream",
+    "Library/Preferences/com.apple.migration.plist"
+   ],
+   "RelativePathsToRestoreOnly": [
+    "Library/Caches/com.apple.mobilesafari/Thumbnails",
+    "Library/Caches/Safari/Thumbnails",
+    "Library/Duet",
+    "Library/Logs/Duet/DuetLST.duetlog",
+    "Library/Safari/History.plist",
+    "Library/Safari/SuspendState.plist",
+    "Library/Keyboard",
+    "Library/VoiceTrigger/SAT",
+    "Library/com.apple.geod",
+    "Library/com.apple.siri.remembers",
+    "Library/CoreDuet/People/interactionC.db",
+    "Library/CoreDuet/People/interactionC.db-shm",
+    "Library/CoreDuet/People/interactionC.db-wal",
+    "Library/PersonalizationPortrait",
+    "Library/DuetExpertCenter/D2DBackups",
+    "Library/Preferences/com.apple.speakerrecognition.plist",
+    "Library/Safari/SafariTabs.db",
+    "Library/DoNotDisturb/DB/ModeConfigurations.json",
+    "Library/DoNotDisturb/DB/ModeConfigurationsSecure.json",
+    "Library/DoNotDisturb/DB/Settings.sqlite",
+    "Library/DoNotDisturb/DB/Settings.sqlite-wal",
+    "Library/DoNotDisturb/DB/Settings.sqlite-shm",
+    "Library/Preferences/com.apple.announce.announcements.plist"
+   ]
+  },
+  "root": "/var/mobile"
+ },
+ "HomeKitDomain": {
+  "keys": {
+   "RelativePathsNotToBackupInMegaBackup": [
+    "Library/homed/datastore.sqlite",
+    "Library/homed/datastore.sqlite-shm",
+    "Library/homed/datastore.sqlite-wal",
+    "Library/homed/plain-metadata.config",
+    "Library/homed/datastore3.sqlite",
+    "Library/homed/datastore3.sqlite-shm",
+    "Library/homed/datastore3.sqlite-wal"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "Library/homed/datastore.sqlite",
+    "Library/homed/datastore.sqlite-shm",
+    "Library/homed/datastore.sqlite-wal",
+    "Library/homed/plain-metadata.config",
+    "Library/homed/datastore3.sqlite",
+    "Library/homed/datastore3.sqlite-shm",
+    "Library/homed/datastore3.sqlite-wal"
+   ],
+   "RelativePathsToBackupAndRestore": [],
+   "RelativePathsToOnlyBackupEncrypted": [
+    "Library/homed/protected-home.config",
+    "Library/homed/transaction-journal",
+    "Library/homed/protected-metadata.config",
+    "Library/homed/datastore.sqlite",
+    "Library/homed/datastore.sqlite-shm",
+    "Library/homed/datastore.sqlite-wal",
+    "Library/homed/plain-metadata.config",
+    "Library/homed/datastore3.sqlite",
+    "Library/homed/datastore3.sqlite-shm",
+    "Library/homed/datastore3.sqlite-wal"
+   ],
+   "RelativePathsToRestoreOnly": [
+    "Library/homed/protected-home.config",
+    "Library/homed/transaction-journal",
+    "Library/homed/protected-metadata.config",
+    "Library/homed/datastore.sqlite",
+    "Library/homed/datastore.sqlite-shm",
+    "Library/homed/datastore.sqlite-wal",
+    "Library/homed/plain-metadata.config",
+    "Library/homed/datastore3.sqlite",
+    "Library/homed/datastore3.sqlite-shm",
+    "Library/homed/datastore3.sqlite-wal"
+   ]
+  },
+  "root": "/var/mobile"
+ },
+ "InstallDomain": {
+  "keys": {
+   "RelativePathsOfSystemFilesToAlwaysRestore": [
+    "Library/MobileInstallation/BackedUpState"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Library/MobileInstallation/BackedUpState"
+   ]
+  },
+  "root": "/var/installd"
+ },
+ "KeyboardDomain": {
+  "keys": {
+   "RelativePathsNotToBackup": [
+    "Library/Keyboard/Typology",
+    "Library/Keyboard/CoreDataUbiquitySupport",
+    "Library/Keyboard/appusagedatabase.plist",
+    "Library/Keyboard/app_usage_database.plist"
+   ],
+   "RelativePathsNotToBackupToDrive": [
+    "Library/Keyboard/BigramLearning_ja_JP.db.bundle",
+    "Library/Keyboard/LearningSet_zh_Hans.plist",
+    "Library/Keyboard/LearningSet_zh_Hant.plist",
+    "Library/Keyboard/PhraseLearning_ja_JP.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hans.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hans_Stroke.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hant_Cangjie.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hant_Stroke.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hant_Sucheng.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hant_pinyin.db.bundle",
+    "Library/Keyboard/PhraseLearning_zh_Hant_zhuyin.db.bundle",
+    "Library/Keyboard/completion-learning-dictionary-zh-Hans",
+    "Library/Keyboard/completion-learning-dictionary-zh-Hant",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hans.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hant_pinyin.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hant_zhuyin.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hant_Cangjie.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hans_Stroke.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hant_Stroke.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hant_Sucheng.db",
+    "Library/Keyboard/DynamicPhraseLexicon_zh_Hans_Wubixing.db",
+    "Library/Keyboard/DynamicPhraseLexicon_ja_JP.db",
+    "Library/DynamicBigramPhraseLexicon_ja_JP.db",
+    "Library/Keyboard/Lexierra_ja_JP-dynamic-text.dat",
+    "Library/Keyboard/LexicalLearning_ja_JP.dat"
+   ],
+   "RelativePathsNotToRestore": [
+    "Library/Keyboard/Typology",
+    "Library/Keyboard/CoreDataUbiquitySupport",
+    "Library/Keyboard/appusagedatabase.plist",
+    "Library/Keyboard/app_usage_database.plist"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Library/Keyboard"
+   ]
+  },
+  "root": "/var/mobile"
+ },
+ "KeychainDomain": {
+  "keys": {
+   "RelativePathAggregateDictionaryGroups": [
+    "keychain-backup.plist"
+   ],
+   "RelativePathsNotToBackup": [
+    "ocspcache.sqlite3"
+   ],
+   "RelativePathsNotToBackupInMegaBackup": [
+    "keychain-backup.plist"
+   ],
+   "RelativePathsNotToBackupToDrive": [
+    "keychain-ota-backup.plist"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "keychain-backup.plist"
+   ],
+   "RelativePathsNotToCheckIfModifiedDuringBackup": [
+    " "
+   ],
+   "RelativePathsNotToRestore": [
+    "ocspcache.sqlite3"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "keychain-backup.plist",
+    "keychain-ota-backup.plist",
+    "TrustStore.sqlite3"
+   ]
+  },
+  "root": "/var/Keychains"
+ },
+ "ManagedPreferencesDomain": {
+  "keys": {
+   "RelativePathsToBackupAndRestore": [
+    "mobile"
+   ]
+  },
+  "root": "/var/Managed Preferences"
+ },
+ "MediaDomain": {
+  "keys": {
+   "RelativePathAggregateDictionaryGroups": [
+    "Media/Recordings",
+    "Library/SMS",
+    "Media/iTunes_Control/Device/Trainer",
+    "Media/PhotosStreamsData",
+    "Media/iTunes_Control/iTunes",
+    "Library/Recordings"
+   ],
+   "RelativePathDomainRedirects": [
+    "Media/DCIM",
+    "Media/PhotoData"
+   ],
+   "RelativePathsNotToBackupAndRestoreToAppleTVs": [
+    "Media/iTunes_Control/iTunes/MediaLibrary.sqlitedb"
+   ],
+   "RelativePathsNotToBackupToDrive": [
+    "Media/iTunes_Control/iTunes"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "Media/PhotoStreamsData"
+   ],
+   "RelativePathsNotToRemoveIfNotRestored": [
+    "Media/iTunes_Control/iTunes/iTunesPrefs.plist"
+   ],
+   "RelativePathsOfSystemFilesToAlwaysRestore": [
+    "Media/iTunes_Control/iTunes"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Library/SMS/Attachments",
+    "Library/SMS/Parts",
+    "Library/SMS/StickerCache",
+    "Library/SMS/Recents",
+    "Media/iTunes_Control/Device/Trainer",
+    "Media/Recordings",
+    "Media/PhotoStreamsData",
+    "Media/iTunes_Control/iTunes/iTunesPrefs.plist",
+    "Media/iTunes_Control/iTunes/MobileSync.plist",
+    "Media/iTunes_Control/iTunes/iPhotoAlbumPrefs",
+    "Media/iTunes_Control/iTunes/ApertureAlbumPrefs",
+    "Media/iTunes_Control/iTunes/PSAlbumAlbums",
+    "Media/iTunes_Control/iTunes/PSElementsAlbums",
+    "Media/iTunes_Control/iTunes/PhotosFolderPrefs",
+    "Media/iTunes_Control/iTunes/PhotosFolderAlbums",
+    "Media/iTunes_Control/iTunes/PhotosFolderName",
+    "Media/iTunes_Control/iTunes/MediaLibrary.sqlitedb",
+    "Media/Vibrations",
+    "Library/Recordings"
+   ],
+   "RelativePathsToIgnoreExclusionsForDrive": [
+    "LibrarySMS"
+   ],
+   "RelativePathsToRestoreOnlyFromService": [
+    "Media/Purchases"
+   ]
+  },
+  "root": "/var/mobile"
+ },
+ "MobileDeviceDomain": {
+  "keys": {
+   "RelativePathsToBackupAndRestore": []
+  },
+  "root": "/var/MobileDevice"
+ },
+ "NetworkDomain": {
+  "keys": {
+   "RelativePathsToBackupAndRestore": [
+    "Library/Preferences/com.apple.symptomsd.plist"
+   ]
+  },
+  "root": "/var/networkd"
+ },
+ "ProtectedDomain": {
+  "keys": {
+   "RelativePathsNotToBackup": [
+    "trustd/private/ocspcache.sqlite3",
+    "trustd/private/caissuercache.sqlite3"
+   ],
+   "RelativePathsNotToRestore": [
+    "trustd/private/ocspcache.sqlite3",
+    "trustd/private/caissuercache.sqlite3"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "trustd/private/TrustStore.sqlite3",
+    "trustd/private/CARevocation.plist",
+    "trustd/private/CTExceptions.plist",
+    "trustd/private/TransparentConnectionPins.plist",
+    "trustd/private/com.apple.security.exception_reset_counter.plist"
+   ]
+  },
+  "root": "/var/protected"
+ },
+ "RootDomain": {
+  "keys": {
+   "RelativePathsNotToBackup": [
+    "Library/Preferences/com.apple.mmcs.plist",
+    "Library/Preferences/com.apple.coreservices.appleidauthenticationinfo.plist",
+    "Library/Preferences/com.apple.osanalytics.OTATaskingAgent.plist",
+    "Library/Preferences/com.apple.rtcreporting.plist",
+    "Library/Preferences/com.apple.xpc.activity2.plist",
+    "Library/Preferences/com.apple.cltm.plist",
+    "Library/Preferences/com.apple.MobileAsset.plist",
+    "Library/Preferences/com.apple.powerd.bdc.plist",
+    "Library/Preferences/com.apple.wifi.manager.plist",
+    "Library/Caches/locationd/cache_unencrypted.db"
+   ],
+   "RelativePathsNotToCheckIfModifiedDuringBackup": [
+    "Library/Caches/Backup",
+    "Library/Caches/Backup/properties.plist",
+    "Library/Caches/Backup/placeholder_entitlements.plist"
+   ],
+   "RelativePathsNotToRestore": [
+    "Library/Preferences/com.apple.mmcs.plist",
+    "Library/Preferences/com.apple.coreservices.appleidauthenticationinfo.plist",
+    "Library/Preferences/com.apple.osanalytics.OTATaskingAgent.plist",
+    "Library/Preferences/com.apple.rtcreporting.plist",
+    "Library/Preferences/com.apple.xpc.activity2.plist",
+    "Library/Preferences/com.apple.cltm.plist",
+    "Library/Preferences/com.apple.MobileAsset.plist",
+    "Library/Preferences/com.apple.powerd.bdc.plist",
+    "Library/Preferences/com.apple.wifi.manager.plist",
+    "Library/Caches/locationd/cache_unencrypted.db"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Library/Caches/locationd/clients.plist",
+    "Library/Caches/locationd/gyroCal.db",
+    "Library/Caches/locationd/significant.plist",
+    "Library/Caches/locationd/significantVisitAuth.plist",
+    "Library/Caches/locationd/significantVisitInterest.plist",
+    "Library/Caches/Backup/properties.plist",
+    "Library/Caches/Backup/placeholder_entitlements.plist",
+    "Library/Caches/Backup/enable_cloudkit",
+    "Library/Preferences",
+    "Library/Caches/locationd/consolidated.db"
+   ]
+  },
+  "root": "/var/root"
+ },
+ "SystemPreferencesDomain": {
+  "keys": {
+   "RelativePathsNotToBackup": [
+    "SystemConfiguration/NetworkInterfaces.plist"
+   ],
+   "RelativePathsNotToBackupInMegaBackup": [
+    "com.apple.wifi.known-networks.plist",
+    "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
+    "SystemConfiguration/com.apple.wifi.plist"
+   ],
+   "RelativePathsNotToBackupToService": [
+    "com.apple.wifi.known-networks.plist",
+    "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
+    "SystemConfiguration/com.apple.wifi.plist"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "SystemConfiguration",
+    "com.apple.networkextension.plist",
+    "com.apple.networkextension.control.plist"
+   ],
+   "RelativePathsToOnlyBackupEncrypted": [
+    "com.apple.wifi.known-networks.plist",
+    "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
+    "SystemConfiguration/com.apple.wifi.plist"
+   ],
+   "RelativePathsToRestoreOnly": [
+    "com.apple.wifi.known-networks.plist",
+    "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
+    "SystemConfiguration/com.apple.wifi.plist"
+   ]
+  },
+  "root": "/var/preferences"
+ },
+ "TonesDomain": {
+  "keys": {
+   "RelativePathAggregateDictionaryGroups": [
+    " "
+   ],
+   "RelativePathsNotToBackup": [],
+   "RelativePathsNotToBackupToDrive": [],
+   "RelativePathsToBackupAndRestore": [
+    "Media/iTunes_Control/iTunes/Ringtones.plist"
+   ],
+   "RelativePathsToRestoreOnly": [
+    "Media/Purchases",
+    "Media/iTunes_Control/Ringtones"
+   ]
+  },
+  "root": "/var/mobile"
+ },
+ "WirelessDomain": {
+  "keys": {
+   "RelativePathsNotToBackup": [
+    "Library/Preferences/com.apple.commcenter.attach_apn.plist",
+    "Library/Preferences/com.apple.commcenter.carrier_bundle.plist",
+    "Library/Preferences/com.apple.commcenter.device_specific_nobackup.plist",
+    "Library/Preferences/com.apple.commcenter.omadm_apns.plist",
+    "Library/Preferences/no_backup",
+    "Library/Preferences/com.apple.awdd.plist",
+    "Library/Preferences/com.apple.awdd.persistent.plist"
+   ],
+   "RelativePathsNotToMigrate": [
+    "Library/Logs/IQAgent"
+   ],
+   "RelativePathsNotToRestore": [
+    "Library/Preferences/com.apple.commcenter.attach_apn.plist",
+    "Library/Preferences/com.apple.commcenter.carrier_bundle.plist",
+    "Library/Preferences/com.apple.commcenter.device_specific_nobackup.plist",
+    "Library/Preferences/com.apple.commcenter.omadm_apns.plist",
+    "Library/Preferences/no_backup",
+    "Library/Preferences/com.apple.awdd.plist",
+    "Library/Preferences/com.apple.awdd.persistent.plist"
+   ],
+   "RelativePathsToBackupAndRestore": [
+    "Library/Databases",
+    "Library/CallHistory",
+    "Library/Preferences"
+   ]
+  },
+  "root": "/var/wireless"
+ }
+}
