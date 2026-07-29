@@ -1174,14 +1174,24 @@ function ScanRail({
                         warning with no apparent action. */}
                     {endedBadly(s, s.id === liveId) ? (
                       <>
+                        {/* One amber for all three endings, not red for failed.
+                            Red is spoken for two feet away: in the findings list
+                            it means a SERIOUS finding, the safety signal this
+                            app exists to produce. A scan that errored is an
+                            operational hiccup — nothing is wrong with the user's
+                            data and it can simply be run again — so spending the
+                            strongest colour in the palette on it dilutes red
+                            where it matters.
+
+                            It also matches what was already decided here: the
+                            shape says "this did not finish normally" and the
+                            tooltip says which. Two colours re-encoded that
+                            distinction in a way nobody can decode at 14px — if
+                            you know the convention you did not need the colour,
+                            and if you do not, hovering tells you. */}
                         <TriangleAlert
                           aria-hidden="true"
-                          className={cn(
-                            "size-3.5 group-hover/rerun:hidden group-focus-visible/rerun:hidden",
-                            s.status === "failed"
-                              ? "text-status-danger"
-                              : "text-status-warning",
-                          )}
+                          className="size-3.5 text-status-warning group-hover/rerun:hidden group-focus-visible/rerun:hidden"
                         />
                         <RotateCw className="hidden size-3.5 group-hover/rerun:block group-focus-visible/rerun:block" />
                       </>
