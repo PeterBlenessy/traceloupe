@@ -58,9 +58,21 @@ fn main() {
 
         // The reachability claim, checked against a real backup rather than
         // against Apple's rules alone.
-        match index.find(&spec.domain, &spec.path) {
-            Ok(Some(e)) => println!("   ✓ present in this backup (fileID {})", &e.file_id[..8]),
-            Ok(None) => {
+        // `artifacts::locate`, not a lookup of our own: a module's `path` may be a
+        // PATTERN, and an exact `find` would report a store the runner reads
+        // perfectly well as missing.
+        match artifacts::locate(&index, spec) {
+            Ok(found) if !found.is_empty() => {
+                println!(
+                    "   ✓ present in this backup ({})",
+                    found
+                        .iter()
+                        .map(|e| format!("{} {}", &e.file_id[..8], e.relative_path))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            Ok(_) => {
                 println!("   ✗ NOT in this backup — the audit says it should be");
                 failures += 1;
                 continue;

@@ -3594,6 +3594,30 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "watch_apps",
+            name: "Apple Watch apps",
+            category: "Device",
+            description:
+              "Apps installed on the Apple Watch paired with this iPhone, and which iPhone app each belongs to.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "App",
+              "Companion app",
+              "Version",
+              "Build",
+              "On the watch",
+              "Minimum watchOS",
+              "Paired device",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "bluetooth_nearby",
             name: "Nearby Bluetooth",
             category: "Device",
@@ -3972,6 +3996,29 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "watch_apps"
+        ? [
+            {
+              App: "com.example.chatapp.watchkitapp",
+              "Companion app": "com.example.chatapp",
+              Version: "2.4",
+              Build: "2401",
+              "On the watch": true,
+              "Minimum watchOS": "9.6",
+              // What the `*` matched — the paired device, not the whole path.
+              "Paired device": "48BEB26F-3064-4BEF-A616-AB96D8C5BD15",
+            },
+            {
+              App: "com.example.todo.watchkitapp",
+              "Companion app": "com.example.todo",
+              Version: "1.0",
+              Build: null,
+              // Listed for the watch, but not on it.
+              "On the watch": false,
+              "Minimum watchOS": null,
+              "Paired device": "48BEB26F-3064-4BEF-A616-AB96D8C5BD15",
+            },
+          ]
       : mockActive && artifactId === "bluetooth_nearby"
         ? [
             // Named first, then the anonymous rotating addresses — nothing dropped.

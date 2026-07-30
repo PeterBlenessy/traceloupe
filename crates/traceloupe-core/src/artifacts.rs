@@ -298,6 +298,14 @@ pub struct ModuleSpec {
     /// How the host should present it. Defaults to a table.
     #[serde(default)]
     pub shape: Shape,
+    /// The column that records WHICH matched store a row came from.
+    ///
+    /// Required when `path` contains a `*`, because a pattern can match several
+    /// stores and nothing in a row says which one produced it. Two accounts'
+    /// records merged into one anonymous table is worse than reading only one:
+    /// it looks complete.
+    #[serde(default)]
+    pub path_column: Option<String>,
     /// Which existing view hosts this artifact, or `standalone`.
     ///
     /// Required, and deliberately not defaulted. The agreed rule is that data
@@ -446,12 +454,55 @@ impl ModuleSpec {
         if self.path.trim().is_empty() {
             return Err("`path` is empty".into());
         }
-        if self.path.contains('*') {
+        // `*` is allowed now, and means "any run of characters WITHIN one path
+        // segment". Never across `/`, which is what makes the two failures the
+        // first attempt at globbing hit impossible: a directory row cannot swallow
+        // its own children, and a pattern cannot reach down a level it did not ask
+        // for.
+        if self.path.contains("**") {
             return Err(format!(
-                "`path` = {:?} looks like a glob; only exact paths are supported. \
-                 A `*` here would be matched literally and never find anything",
+                "`path` = {:?} contains `**`. A `*` never crosses `/` — say each \
+                 segment you mean, so the pattern cannot quietly reach a level deeper \
+                 than it looks",
                 self.path
             ));
+        }
+        for segment in self.path.split('/') {
+            if segment == "*" && self.path.split('/').filter(|s| *s == "*").count() > 2 {
+                return Err(format!(
+                    "`path` = {:?} is mostly wildcard. A pattern that vague will match \
+                     stores this module was never written for, and their columns will \
+                     silently be null",
+                    self.path
+                ));
+            }
+        }
+        // A pattern without a `path_column` reads several stores into one table
+        // with nothing saying which row came from where. That is worse than
+        // reading only the first, because the result looks complete.
+        if self.path.contains('*') {
+            match &self.path_column {
+                None => {
+                    return Err(format!(
+                        "`path` = {:?} is a pattern and can match several stores, but no \
+                         `path_column` is declared — rows from different stores would be \
+                         indistinguishable in one table",
+                        self.path
+                    ))
+                }
+                Some(col) if !self.columns.iter().any(|c| &c.name == col) => {
+                    return Err(format!(
+                        "`path_column` = {col:?} is not one of the declared columns"
+                    ))
+                }
+                Some(_) => {}
+            }
+        } else if self.path_column.is_some() {
+            return Err(
+                "`path_column` is declared but `path` is exact — every row comes from the \
+                 same store, so the column would repeat one value"
+                    .into(),
+            );
         }
         // EXACTLY one source. Both would be ambiguous about which one produced a
         // row; neither leaves a module that loads, validates and reads nothing.
@@ -506,11 +557,17 @@ impl ModuleSpec {
         }
         let mut seen_names: Vec<&str> = Vec::new();
         for c in &self.columns {
-            let is_key_column = self
+            let is_plist_key = self
                 .plist
                 .as_ref()
                 .and_then(|p| p.key_column.as_ref())
                 .is_some_and(|k| k == &c.name);
+            let is_path_column = self.path_column.as_ref().is_some_and(|k| k == &c.name);
+            // Both are filled by the runner rather than read from the store, so
+            // both may omit `from` — but they are different mistakes and must not
+            // share an error message, or a path column would be told about
+            // `plist.key_column`.
+            let is_key_column = is_plist_key || is_path_column;
             if c.name.trim().is_empty() {
                 return Err(format!("column {:?} has an empty `name`", c.name));
             }
@@ -525,7 +582,14 @@ impl ModuleSpec {
             // to get it, or what to make of it, is dead. Accepting it silently let
             // an author write `from = ["SSID"]` there and quietly get the key
             // instead of the field they named.
-            if is_key_column {
+            if is_path_column && !c.from.is_empty() {
+                return Err(format!(
+                    "column {:?} is the `path_column`, so its value is the store the row came \
+                     from — a `from` would be ignored",
+                    c.name
+                ));
+            }
+            if is_plist_key {
                 if !c.from.is_empty() {
                     return Err(format!(
                         "column {:?} is the `plist.key_column`, so its value is the entry's \
@@ -874,8 +938,103 @@ pub fn load_modules(dir: &Path) -> Result<Vec<ModuleSpec>> {
 /// contain costs one indexed lookup and never touches the filesystem. That is
 /// the same property every hand-written source already has, and it is what
 /// keeps import time flat as the module count grows.
-fn locate(index: &ManifestIndex, spec: &ModuleSpec) -> Result<Option<crate::manifest::FileEntry>> {
-    index.find(&spec.domain, &spec.path)
+/// Public so the validator can ask the same question the runner asks. It used its
+/// own exact `index.find`, which reported the first pattern module as absent from
+/// a backup that contains it — a check that disagrees with the thing it checks is
+/// worse than no check.
+pub fn locate(index: &ManifestIndex, spec: &ModuleSpec) -> Result<Vec<crate::manifest::FileEntry>> {
+    if !spec.path.contains('*') {
+        return Ok(index.find(&spec.domain, &spec.path)?.into_iter().collect());
+    }
+
+    // A `LIKE` to narrow it in SQL, then a segment-aware match in Rust, because
+    // `%` crosses `/` and the whole point of `*` is that it does not.
+    let like = spec.path.replace('*', "%");
+    let mut out = Vec::new();
+    for entry in index.find_relative_like(&like)? {
+        if entry.domain != spec.domain {
+            continue;
+        }
+        if !path_matches(&spec.path, &entry.relative_path) {
+            continue;
+        }
+        // The other trap the first attempt hit: a `-wal`/`-shm` sibling is not the
+        // store, and a pattern ending in `*` would happily take one.
+        if entry.relative_path.ends_with("-wal") || entry.relative_path.ends_with("-shm") {
+            continue;
+        }
+        out.push(entry);
+    }
+    // Deterministic: the manifest's order is not, and an artifact whose rows
+    // reorder between runs looks like it changed when nothing did.
+    out.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(out)
+}
+
+/// Does `path` match `pattern`, where `*` matches within ONE segment?
+fn path_matches(pattern: &str, path: &str) -> bool {
+    path_captures(pattern, path).is_some()
+}
+
+/// The parts of `path` the wildcards matched, or `None` if it does not match.
+///
+/// Segment-by-segment rather than one regex over the whole string, so `*` cannot
+/// cross `/` however the pattern is written.
+///
+/// The captures are what `path_column` shows. The full path would be honest and
+/// nearly useless: every row would carry the same forty characters of boilerplate
+/// around the handful that identify the store. In
+/// `Library/DeviceRegistry/*/AppConduit/ACXRemoteAppList.plist` the `*` IS the
+/// paired device, and that is the whole answer to "which one did this come from".
+fn path_captures(pattern: &str, path: &str) -> Option<Vec<String>> {
+    let p: Vec<&str> = pattern.split('/').collect();
+    let s: Vec<&str> = path.split('/').collect();
+    if p.len() != s.len() {
+        return None;
+    }
+    let mut caught = Vec::new();
+    for (pat, seg) in p.iter().zip(s.iter()) {
+        if !segment_matches(pat, seg) {
+            return None;
+        }
+        if pat.contains('*') {
+            caught.push((*seg).to_string());
+        }
+    }
+    Some(caught)
+}
+
+/// `*` matches any run of characters inside a single segment, including none.
+fn segment_matches(pattern: &str, segment: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == segment;
+    }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let mut rest = segment;
+    // The literal before the first `*` must be a prefix.
+    if let Some(first) = parts.first() {
+        match rest.strip_prefix(first) {
+            Some(r) => rest = r,
+            None => return false,
+        }
+    }
+    // The literal after the last `*` must be a suffix.
+    if let Some(last) = parts.last() {
+        if parts.len() > 1 {
+            match rest.strip_suffix(last) {
+                Some(r) => rest = r,
+                None => return false,
+            }
+        }
+    }
+    // Everything between must appear in order.
+    for middle in parts.iter().skip(1).take(parts.len().saturating_sub(2)) {
+        match rest.find(middle) {
+            Some(i) => rest = &rest[i + middle.len()..],
+            None => return false,
+        }
+    }
+    true
 }
 
 /// Run one module against a backup. `Ok(None)` means the backup does not
@@ -893,12 +1052,11 @@ pub fn run_module(
     spec.validate()
         .map_err(|why| Error::Parse(format!("artifact module {:?}: {why}", spec.id)))?;
 
-    let Some(entry) = locate(index, spec)? else {
+    let entries = locate(index, spec)?;
+    if entries.is_empty() {
         return Ok(None);
-    };
+    }
 
-    // Checked after the rows are produced, below — declared here so the two
-    // source paths share one rule rather than each remembering it.
     fn enforce_shape(spec: &ModuleSpec, rows: Vec<ArtifactRow>) -> Result<Vec<ArtifactRow>> {
         if spec.shape == Shape::Facts && rows.len() > 1 {
             // Not truncated to the first: a store that grew a second record is a
@@ -915,13 +1073,48 @@ pub fn run_module(
         Ok(rows)
     }
 
+    // A pattern can match several stores — one per account, per container, per
+    // mailbox. All of them are read and their rows concatenated: an app with two
+    // accounts has two stores and both are the user's data, and picking one would
+    // silently report half.
+    //
+    // Which store a row came from is not guessable from the row, so a module
+    // matching several SHOULD declare `path_column` and `validate` insists on it.
+    // Without that, two accounts' records would be indistinguishable in one table —
+    // which is worse than not reading the second, because it looks complete.
+    let mut all: Vec<ArtifactRow> = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        let mut rows = run_one(spec, index, decryptor, work_dir, entry, i)?;
+        if let Some(col) = &spec.path_column {
+            // What the wildcards matched, not the whole path: the varying part is
+            // what identifies the store, and the rest is the same on every row.
+            let which = path_captures(&spec.path, &entry.relative_path)
+                .map(|c| c.join("/"))
+                .unwrap_or_else(|| entry.relative_path.clone());
+            for row in &mut rows {
+                row.insert(col.clone(), serde_json::Value::String(which.clone()));
+            }
+        }
+        all.extend(rows);
+    }
+    enforce_shape(spec, all).map(Some)
+}
+
+/// One store, one set of rows.
+fn run_one(
+    spec: &ModuleSpec,
+    index: &ManifestIndex,
+    decryptor: Option<&BackupDecryptor>,
+    work_dir: &Path,
+    entry: &crate::manifest::FileEntry,
+    nth: usize,
+) -> Result<Vec<ArtifactRow>> {
     // A property list is read straight from memory: no sidecars to checkpoint, no
     // temp store to open read-only, so none of the SQLite machinery below applies —
     // including the work dir, which a plist module never writes to.
     if let Some(pl) = &spec.plist {
-        let bytes = index.read_bytes(&entry, decryptor)?;
-        let rows = run_plist_module(spec, pl, &bytes)?;
-        return enforce_shape(spec, rows).map(Some);
+        let bytes = index.read_bytes(entry, decryptor)?;
+        return run_plist_module(spec, pl, &bytes);
     }
 
     std::fs::create_dir_all(work_dir).map_err(|e| Error::Io {
@@ -929,8 +1122,11 @@ pub fn run_module(
         source: e,
     })?;
 
-    let dest = work_dir.join(format!("{}.sqlite", spec.id));
-    index.extract_db(&entry, decryptor, &dest)?;
+    // `nth` in the name: a pattern matching several stores would otherwise have
+    // each extraction overwrite the last, and every one of them would read the
+    // final store's rows.
+    let dest = work_dir.join(format!("{}.{nth}.sqlite", spec.id));
+    index.extract_db(entry, decryptor, &dest)?;
 
     // Opened READ-ONLY, because the `SELECT`-prefix check in `validate` is not
     // actually sufficient: SQLite accepts `WITH x AS (…) INSERT … RETURNING a`,
@@ -972,6 +1168,11 @@ pub fn run_module(
     // emitting nulls would make a renamed upstream column look like an artifact
     // that simply has no data.
     for c in &spec.columns {
+        // The `path_column` has no `from`: the runner fills it with the store the
+        // row came from, so the SQL neither can nor should return it.
+        if c.from.is_empty() {
+            continue;
+        }
         // Exactly one segment: `validate` rejected anything else before we got
         // here, and it runs at the top of `run_module`.
         let from = &c.from[0];
@@ -991,6 +1192,9 @@ pub fn run_module(
     while let Some(row) = rows.next()? {
         let mut out: ArtifactRow = HashMap::new();
         for c in &spec.columns {
+            if c.from.is_empty() {
+                continue; // filled by the runner, not by the query
+            }
             // Checked above: exactly one segment, and present in the result set.
             let idx = sql_names.iter().position(|n| n == &c.from[0]).unwrap();
             let raw: rusqlite::types::Value = row.get(idx)?;
@@ -998,7 +1202,7 @@ pub fn run_module(
         }
         rows_out.push(out);
     }
-    enforce_shape(spec, rows_out).map(Some)
+    Ok(rows_out)
 }
 
 /// Read rows out of a property list, per the module's `[plist]` block.
@@ -1461,6 +1665,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "location_clients.toml",
         include_str!("../modules/location_clients.toml"),
+    ),
+    (
+        "watch_apps.toml",
+        include_str!("../modules/watch_apps.toml"),
     ),
 ];
 
@@ -2078,32 +2286,224 @@ from = "modified"
         assert!(err.contains("both named"), "{err}");
     }
 
+    /// A `*` in `path` is a pattern now, and the rules around it are what stop it
+    /// repeating the failures that got globbing removed the first time.
+    ///
+    /// Prefix matching picked up directory rows (a directory sorts before its own
+    /// children) and `-wal`/`-shm` siblings. Both are impossible here because `*`
+    /// never crosses `/` and the sidecars are excluded by name — see
+    /// `a_pattern_reads_every_matching_store` for the behavioural half.
     #[test]
-    fn a_glob_path_is_rejected_rather_than_silently_literal() {
-        // Prefix matching picked `Manifest.db` directory rows (a directory
-        // sorts before its own children) and `-wal`/`-shm` siblings. Removed
-        // until an artifact needs it and can test it.
-        let tmp = tempfile::tempdir().unwrap();
-        write_module(
-            tmp.path(),
-            "glob.toml",
-            r#"
+    fn path_pattern_rules_are_enforced_at_load() {
+        let module = |path: &str, extra: &str| {
+            format!(
+                r#"
 id = "x"
 name = "X"
 description = "X."
 surface = "standalone"
 domain = "HomeDomain"
-path = "Library/Foo/*"
-sql = "SELECT a FROM t"
+path = "{path}"
+{extra}
+sql = "SELECT a AS a FROM t"
+
 [[columns]]
 name = "A"
 from = "a"
-"#,
+
+[[columns]]
+name = "Store"
+"#
+            )
+        };
+        let fails = |src: String, needle: &str| {
+            let tmp = tempfile::tempdir().unwrap();
+            write_module(tmp.path(), "m.toml", &src);
+            let err = load_modules(tmp.path())
+                .expect_err("should have been rejected")
+                .to_string();
+            assert!(err.contains(needle), "{err}");
+        };
+
+        // A pattern with nothing saying which store a row came from.
+        fails(
+            module("Library/Foo/*/store.db", ""),
+            "no `path_column` is declared",
         );
-        let err = load_modules(tmp.path())
-            .expect_err("a glob path must fail")
-            .to_string();
-        assert!(err.contains("looks like a glob"), "{err}");
+        // `**` would cross `/` — the exact thing that made prefix matching wrong.
+        fails(
+            module("Library/**/store.db", "path_column = \"Store\""),
+            "contains `**`",
+        );
+        // A `path_column` on an exact path repeats one value on every row.
+        fails(
+            module("Library/Foo/store.db", "path_column = \"Store\""),
+            "`path` is exact",
+        );
+        // Naming a column that does not exist.
+        fails(
+            module("Library/Foo/*/store.db", "path_column = \"Nope\""),
+            "not one of the declared columns",
+        );
+
+        // And the well-formed shape loads.
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(
+            tmp.path(),
+            "m.toml",
+            &module("Library/Foo/*/store.db", "path_column = \"Store\""),
+        );
+        let mods = load_modules(tmp.path()).expect("a well-formed pattern should load");
+        assert_eq!(mods.len(), 1);
+    }
+
+    /// A pattern reads EVERY matching store, and each row says which one it came
+    /// from.
+    ///
+    /// This is the behaviour the whole feature exists for: an app with two
+    /// accounts has two stores, and reading one of them would report half the
+    /// user's data as all of it. It also pins the two traps that got globbing
+    /// removed the first time — a `-wal` sidecar beside a matched store, and a
+    /// directory row that sorts before its own children.
+    #[test]
+    fn a_pattern_reads_every_matching_store() {
+        let spec: ModuleSpec = toml::from_str(
+            r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "AppDomainGroup-group.example"
+path = "accounts/*/chat.db"
+path_column = "Store"
+sql = "SELECT who AS who FROM t"
+
+[[columns]]
+name = "Who"
+from = "who"
+
+[[columns]]
+name = "Store"
+"#,
+        )
+        .unwrap();
+
+        // Two accounts, each with its own store — plus the traps.
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = Connection::open(tmp.path().join("Manifest.db")).unwrap();
+        manifest
+            .execute_batch(
+                "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);",
+            )
+            .unwrap();
+        let add = |id: &str, rel: &str, build: Option<&dyn Fn(&Connection)>| {
+            let dir = tmp.path().join(&id[..2]);
+            std::fs::create_dir_all(&dir).unwrap();
+            if let Some(b) = build {
+                let c = Connection::open(dir.join(id)).unwrap();
+                b(&c);
+            } else {
+                std::fs::write(dir.join(id), b"not a store").unwrap();
+            }
+            manifest
+                .execute(
+                    "INSERT INTO Files VALUES (?1, ?2, ?3, 1, NULL)",
+                    rusqlite::params![id, "AppDomainGroup-group.example", rel],
+                )
+                .unwrap();
+        };
+        let seed = |name: &'static str| {
+            move |c: &Connection| {
+                c.execute_batch("CREATE TABLE t (who TEXT);").unwrap();
+                c.execute("INSERT INTO t VALUES (?1)", rusqlite::params![name])
+                    .unwrap();
+            }
+        };
+        let alice = seed("alice");
+        let bob = seed("bob");
+        add(
+            "aa00000000000000000000000000000000000001",
+            "accounts/a1/chat.db",
+            Some(&alice),
+        );
+        add(
+            "aa00000000000000000000000000000000000002",
+            "accounts/a2/chat.db",
+            Some(&bob),
+        );
+        // TRAP 1: a sidecar beside a matched store.
+        add(
+            "aa00000000000000000000000000000000000003",
+            "accounts/a1/chat.db-wal",
+            None,
+        );
+        // TRAP 2: the directory row, which sorts before its own children.
+        add(
+            "aa00000000000000000000000000000000000004",
+            "accounts/a1",
+            None,
+        );
+        // A store one level deeper: `*` must not reach it.
+        add(
+            "aa00000000000000000000000000000000000005",
+            "accounts/a3/sub/chat.db",
+            Some(&alice),
+        );
+        drop(manifest);
+
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(&spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+
+        // BOTH accounts, and only those: not the sidecar, not the directory, not
+        // the store a level deeper.
+        assert_eq!(rows.len(), 2, "got {rows:#?}");
+        let mut who: Vec<&str> = rows.iter().map(|r| r["Who"].as_str().unwrap()).collect();
+        who.sort();
+        assert_eq!(who, vec!["alice", "bob"]);
+
+        // And each row says which store produced it — without that the two
+        // accounts would be indistinguishable in one table.
+        // The captured segment, not the whole path — `accounts/…/chat.db` is the
+        // same on every row and says nothing.
+        let mut stores: Vec<&str> = rows.iter().map(|r| r["Store"].as_str().unwrap()).collect();
+        stores.sort();
+        assert_eq!(stores, vec!["a1", "a2"]);
+    }
+
+    /// Segment matching, which is what keeps `*` from crossing `/`.
+    #[test]
+    fn a_pattern_captures_only_the_part_that_varied() {
+        assert_eq!(
+            path_captures("a/*/c.db", "a/b/c.db"),
+            Some(vec!["b".to_string()])
+        );
+        // Several wildcards: all of them, in order.
+        assert_eq!(
+            path_captures("a/*/x/*.db", "a/one/x/two.db"),
+            Some(vec!["one".to_string(), "two.db".to_string()])
+        );
+        assert_eq!(path_captures("a/b.db", "a/b.db"), Some(vec![]));
+        assert_eq!(path_captures("a/*/c.db", "a/b/x/c.db"), None);
+    }
+
+    #[test]
+    fn a_star_never_crosses_a_slash() {
+        assert!(path_matches("a/*/c.db", "a/b/c.db"));
+        assert!(path_matches("a/ig-*.db", "a/ig-12345.db"));
+        assert!(
+            path_matches("a/*/c.db", "a//c.db"),
+            "an empty segment matches"
+        );
+        // The failure that removed globbing the first time: a pattern reaching
+        // down a level it did not ask for.
+        assert!(!path_matches("a/*/c.db", "a/b/x/c.db"));
+        assert!(!path_matches("a/*", "a/b/c.db"));
+        // And the directory row itself is a different path, so it cannot match a
+        // pattern that names a file.
+        assert!(!path_matches("a/*/c.db", "a/b"));
+        assert!(!path_matches("a/ig-*.db", "a/ig-12345.db-wal"));
     }
 
     #[test]
@@ -2183,6 +2583,7 @@ from = "who"
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
             shape: Shape::Table,
+            path_column: None,
             plist: None,
             sql: vec!["SELECT who FROM events".into()],
             requires: None,
@@ -2980,6 +3381,48 @@ from = "nope"
         out
     }
 
+    /// The paired watch's app list. One app that IS on the watch and one that is
+    /// only listed, because `isLocallyAvailable` is the difference between "this
+    /// app exists for the watch" and "this app is on it".
+    fn seed_watch_apps() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut app = Dictionary::new();
+        app.insert(
+            "companionAppBundleID".into(),
+            Value::String("com.example.chatapp".into()),
+        );
+        app.insert("bundleShortVersion".into(), Value::String("2.4".into()));
+        app.insert("bundleVersion".into(), Value::String("2401".into()));
+        app.insert("isLocallyAvailable".into(), Value::Boolean(true));
+        app.insert("minimumOSVersion".into(), Value::String("9.6".into()));
+        // Deliberately unread.
+        app.insert("sequenceNumber".into(), Value::Integer(6.into()));
+
+        let mut absent = Dictionary::new();
+        absent.insert(
+            "companionAppBundleID".into(),
+            Value::String("com.example.todo".into()),
+        );
+        absent.insert("bundleShortVersion".into(), Value::String("1.0".into()));
+        absent.insert("isLocallyAvailable".into(), Value::Boolean(false));
+
+        let mut list = Dictionary::new();
+        list.insert(
+            "com.example.chatapp.watchkitapp".into(),
+            Value::Dictionary(app),
+        );
+        list.insert(
+            "com.example.todo.watchkitapp".into(),
+            Value::Dictionary(absent),
+        );
+
+        let mut root = Dictionary::new();
+        root.insert("appList".into(), Value::Dictionary(list));
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -3058,6 +3501,13 @@ from = "nope"
             "RootDomain",
             "Library/Caches/locationd/clients.plist",
         ),
+        (
+            "watch_apps",
+            "HomeDomain",
+            // The pattern itself: there is no exact path, because the segment is
+            // the paired device's UUID.
+            "Library/DeviceRegistry/*/AppConduit/ACXRemoteAppList.plist",
+        ),
     ];
 
     /// How a module's fixture store is built. Two kinds, because a module now has
@@ -3084,6 +3534,7 @@ from = "nope"
             "alarms" | "sleep_schedule" => return Seed::Bytes(seed_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
+            "watch_apps" => return Seed::Bytes(seed_watch_apps),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
@@ -3319,9 +3770,19 @@ from = "nope"
             );
 
             let tmp = tempfile::tempdir().unwrap();
+            // A PATTERN is seeded at a concrete path, so the module has to match
+            // it for real. Writing the fixture at the literal pattern would let
+            // `*` match itself and prove nothing — the store would be found by a
+            // module whose pattern was wrong in every other respect.
+            let concrete = path.replace('*', "48BEB26F-3064-4BEF-A616-AB96D8C5BD15");
+            assert!(
+                !concrete.contains('*'),
+                "module {}: a `*` survived into the fixture path",
+                spec.id
+            );
             match seed_for(&spec.id) {
-                Seed::Sql(f) => make_backup_in(tmp.path(), domain, path, f),
-                Seed::Bytes(f) => make_backup_bytes_in(tmp.path(), domain, path, &f()),
+                Seed::Sql(f) => make_backup_in(tmp.path(), domain, &concrete, f),
+                Seed::Bytes(f) => make_backup_bytes_in(tmp.path(), domain, &concrete, &f()),
             }
             let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
             let rows = run_module(spec, &index, None, &tmp.path().join("work"))
@@ -4406,6 +4867,7 @@ from = "a"
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
             shape: Shape::Table,
+            path_column: None,
             plist: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
@@ -4438,6 +4900,7 @@ from = "a"
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
             shape: Shape::Table,
+            path_column: None,
             plist: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
