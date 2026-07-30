@@ -24,10 +24,10 @@ const BASE = process.argv[2] ?? "http://localhost:5173";
 const CASES = [
   { view: "Interactions", mustSay: /only included in encrypted backups/i },
   { view: "Health", mustSay: /only included in encrypted backups/i },
-  // A declarative artifact declaring `requires = "encrypted-backup"` must
-  // explain itself exactly as the hand-built views do — same wording, from the
-  // same hook, so there is one sentence for this situation rather than two.
-  { view: "Artifacts", mustSay: /only included in encrypted backups/i, select: "Focus modes" },
+  // The artifact case is covered again once a gated artifact has a host view to
+  // be checked in. Today's only gated example is a mock one whose surface is
+  // Device, and the standalone Artifacts destination no longer exists — see
+  // #220. Re-add here when a real gated artifact ships.
 ];
 
 const browser = await chromium.launch();

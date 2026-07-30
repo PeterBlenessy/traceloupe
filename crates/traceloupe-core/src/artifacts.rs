@@ -2031,13 +2031,17 @@ from = "a"
 
         // No surface at all.
         write_module(tmp.path(), "nosurface.toml", &base("description = \"X.\""));
-        let err = load_modules(tmp.path()).expect_err("missing surface must fail").to_string();
+        let err = load_modules(tmp.path())
+            .expect_err("missing surface must fail")
+            .to_string();
         assert!(err.contains("surface"), "{err}");
 
         // No description.
         let tmp2 = tempfile::tempdir().unwrap();
         write_module(tmp2.path(), "nodesc.toml", &base("surface = \"apps\""));
-        let err = load_modules(tmp2.path()).expect_err("missing description must fail").to_string();
+        let err = load_modules(tmp2.path())
+            .expect_err("missing description must fail")
+            .to_string();
         assert!(err.contains("description"), "{err}");
 
         // An empty description is as useless as none.
@@ -2047,7 +2051,9 @@ from = "a"
             "blankdesc.toml",
             &base("surface = \"apps\"\ndescription = \"   \""),
         );
-        let err = load_modules(tmp3.path()).expect_err("blank description must fail").to_string();
+        let err = load_modules(tmp3.path())
+            .expect_err("blank description must fail")
+            .to_string();
         assert!(err.contains("say in one sentence"), "{err}");
 
         // A typo'd surface must not silently mean "nowhere".
@@ -2057,7 +2063,9 @@ from = "a"
             "badsurface.toml",
             &base("surface = \"aps\"\ndescription = \"X.\""),
         );
-        let err = load_modules(tmp4.path()).expect_err("unknown surface must fail").to_string();
+        let err = load_modules(tmp4.path())
+            .expect_err("unknown surface must fail")
+            .to_string();
         assert!(err.contains("surface"), "{err}");
     }
 
