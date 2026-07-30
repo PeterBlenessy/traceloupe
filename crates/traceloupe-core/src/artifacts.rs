@@ -1369,6 +1369,14 @@ const BUILTIN: &[(&str, &str)] = &[
         "wifi_private_mac.toml",
         include_str!("../modules/wifi_private_mac.toml"),
     ),
+    (
+        "bluetooth_nearby.toml",
+        include_str!("../modules/bluetooth_nearby.toml"),
+    ),
+    (
+        "device_locale.toml",
+        include_str!("../modules/device_locale.toml"),
+    ),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -2686,6 +2694,59 @@ from = "nope"
         out
     }
 
+    /// `…ledevices.other.db` — devices seen but never paired. Same schema as the
+    /// paired store.
+    ///
+    /// Two named, two anonymous, so the ordering rule (named first, nothing
+    /// dropped) is exercised rather than asserted. `ResolvedAddress` is left NULL
+    /// throughout because that is what the real store holds — an unpaired sighting
+    /// cannot be resolved — which is why no column reads it.
+    fn seed_bluetooth_nearby(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE OtherDevices(Uuid TEXT, Name TEXT, NameOrigin INT,
+                Address TEXT, ResolvedAddress TEXT, LastSeenTime INT,
+                LastConnectionTime INT, GATTServiceChangeConfig INT, Tags TEXT,
+                iCloudIdentifier TEXT);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO OtherDevices (Uuid, Name, Address, ResolvedAddress, LastSeenTime) VALUES
+                ('11111111-0000-0000-0000-000000000001',NULL,'Random AA:BB:CC:DD:EE:01',NULL,4000000),
+                ('11111111-0000-0000-0000-000000000002','Garage Opener','Public CC:6A:10:54:65:FF',NULL,4352299),
+                ('11111111-0000-0000-0000-000000000003','','Random AA:BB:CC:DD:EE:03',NULL,4100000),
+                ('11111111-0000-0000-0000-000000000004','Fitness Band','Random ED:FD:03:AC:36:76',NULL,4337974);",
+        )
+        .unwrap();
+    }
+
+    /// `.GlobalPreferences.plist` — a SINGLE-RECORD plist: the root dictionary is
+    /// the row. Includes an array-valued setting, so indexing into one is
+    /// exercised, and internal counters the module deliberately does not read.
+    fn seed_device_locale() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert(
+            "AppleLanguages".into(),
+            Value::Array(vec![
+                Value::String("en-US".into()),
+                // A second preference exists and is deliberately not shown.
+                Value::String("sv-SE".into()),
+            ]),
+        );
+        root.insert("AppleLocale".into(), Value::String("en_US".into()));
+        root.insert("AKLastLocale".into(), Value::String("en_US".into()));
+        root.insert("AppleICUForce24HourTime".into(), Value::Boolean(true));
+        root.insert(
+            "ApplePasscodeKeyboards".into(),
+            Value::Array(vec![Value::String("en_US@sw=QWERTY;hw=Automatic".into())]),
+        );
+        // Internal, unread.
+        root.insert("PKKeychainVersionKey".into(), Value::Integer(8.into()));
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -2734,6 +2795,16 @@ from = "nope"
             "SystemPreferencesDomain",
             "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
         ),
+        (
+            "bluetooth_nearby",
+            "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
+            "Library/Database/com.apple.MobileBluetooth.ledevices.other.db",
+        ),
+        (
+            "device_locale",
+            "HomeDomain",
+            "Library/Preferences/.GlobalPreferences.plist",
+        ),
     ];
 
     /// How a module's fixture store is built. Two kinds, because a module now has
@@ -2750,10 +2821,12 @@ from = "nope"
             "bluetooth_paired" => seed_bluetooth_paired,
             "data_usage" => seed_data_usage,
             "sim_cards" => seed_sim_cards,
+            "bluetooth_nearby" => seed_bluetooth_nearby,
             // Not SQL at all: return early rather than pretend.
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
             "wifi_private_mac" => return Seed::Bytes(seed_wifi_private_mac),
+            "device_locale" => return Seed::Bytes(seed_device_locale),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \

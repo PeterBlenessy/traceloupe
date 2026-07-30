@@ -722,6 +722,54 @@ def build_private_mac_plist() -> bytes:
     )
 
 
+def seed_bluetooth_nearby(path: Path) -> None:
+    """…ledevices.other.db — devices seen in range but never paired.
+
+    `ResolvedAddress` stays NULL throughout, which is what the real store holds:
+    resolving a rotating address needs the key exchanged during pairing, so an
+    unpaired sighting cannot be resolved. No column reads it.
+    """
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE OtherDevices(Uuid TEXT, Name TEXT, NameOrigin INT,"
+        " Address TEXT, ResolvedAddress TEXT, LastSeenTime INT,"
+        " LastConnectionTime INT, GATTServiceChangeConfig INT, Tags TEXT,"
+        " iCloudIdentifier TEXT)"
+    )
+    con.executemany(
+        "INSERT INTO OtherDevices (Uuid, Name, Address, ResolvedAddress, LastSeenTime)"
+        " VALUES (?,?,?,?,?)",
+        [
+            ("11111111-0000-0000-0000-000000000001", None, "Random AA:BB:CC:DD:EE:01", None, 4_000_000),
+            ("11111111-0000-0000-0000-000000000002", "Garage Opener", "Public CC:6A:10:54:65:FF", None, 4_352_299),
+            ("11111111-0000-0000-0000-000000000003", "", "Random AA:BB:CC:DD:EE:03", None, 4_100_000),
+            ("11111111-0000-0000-0000-000000000004", "Fitness Band", "Random ED:FD:03:AC:36:76", None, 4_337_974),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
+def build_global_preferences_plist() -> bytes:
+    """.GlobalPreferences.plist — a SINGLE-RECORD artifact: the root dictionary is
+    the row, so the module declares neither `rows` nor `key_column`.
+
+    `AppleLanguages` has a second entry that is deliberately not shown: a second
+    preferred language is real, but it is not what the device is set to.
+    """
+    return plistlib.dumps(
+        {
+            "AppleLanguages": ["en-US", "sv-SE"],
+            "AppleLocale": "en_US",
+            "AKLastLocale": "en_US",
+            "AppleICUForce24HourTime": True,
+            "ApplePasscodeKeyboards": ["en_US@sw=QWERTY;hw=Automatic"],
+            "PKKeychainVersionKey": 8,  # internal, unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -745,6 +793,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_data_usage(usage_path)
     cell_path = workdir / "CellularUsage.db"
     seed_cellular_usage(cell_path)
+    nearby_path = workdir / "ledevices.other.db"
+    seed_bluetooth_nearby(nearby_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -773,6 +823,17 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "SystemPreferencesDomain",
             "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
             build_private_mac_plist(),
+        ),
+
+        (
+            "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
+            "Library/Database/com.apple.MobileBluetooth.ledevices.other.db",
+            nearby_path.read_bytes(),
+        ),
+        (
+            "HomeDomain",
+            "Library/Preferences/.GlobalPreferences.plist",
+            build_global_preferences_plist(),
         ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
