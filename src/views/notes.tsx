@@ -201,6 +201,8 @@ export function NotesView() {
   const urlSearch = useSearch({ strict: false }) as {
     id?: number;
     from?: string;
+    /** The finding this was opened from, handed back on return (#224). */
+    finding?: number;
   };
   useEffect(() => {
     if (urlSearch.id != null) setSelectedId(urlSearch.id);
@@ -497,7 +499,12 @@ export function NotesView() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void navigate({ to: "/safety-scan" })}
+                onClick={() =>
+                  void navigate({
+                    to: "/safety-scan",
+                    search: urlSearch.finding ? { finding: urlSearch.finding } : {},
+                  })
+                }
               >
                 <ArrowLeft className="size-4" /> Back to Safety Scan
               </Button>
@@ -528,7 +535,7 @@ export function NotesView() {
               <VirtualList
                 key={clockFormat}
                 items={rows}
-                underlap
+                underlap={urlSearch.from !== "safety"}
                 getKey={(r) => r.key}
                 estimateSize={64}
                 renderItem={(r) =>

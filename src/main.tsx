@@ -57,9 +57,13 @@ const routes = [
       service?: string;
       from?: "safety";
       message?: number;
+      /** The finding this was opened from, so the return chip can go back to
+       *  it rather than to the top of the list (#224). */
+      finding?: number;
     } => {
       const t = Number(search.thread);
       const m = Number(search.message);
+      const fid = Number(search.finding);
       const service =
         typeof search.service === "string" ? search.service : undefined;
       return {
@@ -67,6 +71,7 @@ const routes = [
         ...(service ? { service } : {}),
         ...(search.from === "safety" ? { from: "safety" as const } : {}),
         ...(Number.isFinite(m) ? { message: m } : {}),
+        ...(Number.isFinite(fid) && fid > 0 ? { finding: fid } : {}),
       };
     },
     component: MessagesView,
@@ -92,7 +97,18 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/apps", component: AppsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/security", component: SecurityView }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/safety-scan", component: SafetyScanView }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/safety-scan",
+    // `?finding=<id>` returns to a specific finding — the round trip out to a
+    // conversation and back. Without it the return could only ever land on the
+    // top of the list, which is not "back" (#224).
+    validateSearch: (search: Record<string, unknown>): { finding?: number } => {
+      const f = Number(search.finding);
+      return Number.isFinite(f) && f > 0 ? { finding: f } : {};
+    },
+    component: SafetyScanView,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/calendar", component: CalendarView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/reminders", component: RemindersView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/health", component: HealthView }),

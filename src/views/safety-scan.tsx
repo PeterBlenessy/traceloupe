@@ -1681,16 +1681,22 @@ function FindingRow({
     (f.sourceKind === "note" && f.sourceId != null);
   const openSource = () => {
     if (f.sourceKind === "message" && f.threadId != null) {
+      // `finding` rides along so the return chip can come back to THIS finding
+      // rather than the top of the list (#224).
       navigate({
         to: "/messages",
         search: {
           thread: f.threadId,
           message: f.sourceId ?? undefined,
           from: "safety",
+          finding: f.id,
         },
       });
     } else if (f.sourceKind === "note" && f.sourceId != null) {
-      navigate({ to: "/notes", search: { id: f.sourceId, from: "safety" } });
+      navigate({
+        to: "/notes",
+        search: { id: f.sourceId, from: "safety", finding: f.id },
+      });
     }
   };
   return (
