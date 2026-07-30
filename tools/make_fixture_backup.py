@@ -770,6 +770,56 @@ def build_global_preferences_plist() -> bytes:
     )
 
 
+def build_clock_plist() -> bytes:
+    """com.apple.mobiletimerd.plist — BOTH collections the real file holds.
+
+    `MTAlarms` (ordinary alarms) and `MTSleepAlarms` (the sleep schedule) are two
+    different artifacts sharing one file, read by two modules. Each element is
+    wrapped in Apple's `$MTAlarm` class marker, which the modules step over — a
+    fixture without the wrapper would let a module drop that path segment and
+    still pass.
+    """
+    def at(secs: int) -> datetime:
+        return datetime.fromtimestamp(secs, tz=timezone.utc).replace(tzinfo=None)
+
+    return plistlib.dumps(
+        {
+            "MTAlarms": {
+                "MTAlarms": [
+                    {
+                        "$MTAlarm": {
+                            "MTAlarmHour": 10,
+                            "MTAlarmMinute": 41,
+                            "MTAlarmEnabled": False,
+                            "MTAlarmAllowsSnooze": True,
+                            "MTAlarmLastModifiedDate": at(1_722_177_663),
+                            "MTAlarmDismissDate": at(1_722_177_663),
+                            "MTAlarmID": "4ABC24C8-A16E-440D-A56D-0F7C2D46825E",
+                            "MTAlarmRepeatSchedule": 0,  # undocumented, unread
+                        }
+                    }
+                ],
+                "MTSleepAlarms": [
+                    {
+                        "$MTAlarm": {
+                            "MTAlarmHour": 6,
+                            "MTAlarmMinute": 0,
+                            "MTAlarmBedtimeHour": 22,
+                            "MTAlarmBedtimeMinute": 45,
+                            "MTAlarmEnabled": False,
+                            "MTAlarmSleepTrackingKey": True,
+                            "MTAlarmKeepOffUntilDate": at(1_689_849_000),
+                            "MTAlarmLastModifiedDate": at(1_722_076_501),
+                        }
+                    }
+                ],
+            },
+            "MTTimerDefaultDuration": 900.0,  # unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -834,6 +884,12 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/.GlobalPreferences.plist",
             build_global_preferences_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimerd.plist",
+            build_clock_plist(),
         ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]

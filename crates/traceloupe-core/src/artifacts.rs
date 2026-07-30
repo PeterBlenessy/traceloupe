@@ -1377,6 +1377,11 @@ const BUILTIN: &[(&str, &str)] = &[
         "device_locale.toml",
         include_str!("../modules/device_locale.toml"),
     ),
+    ("alarms.toml", include_str!("../modules/alarms.toml")),
+    (
+        "sleep_schedule.toml",
+        include_str!("../modules/sleep_schedule.toml"),
+    ),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -2747,6 +2752,62 @@ from = "nope"
         out
     }
 
+    /// `com.apple.mobiletimerd.plist` — BOTH collections, because the real file has
+    /// both and two modules read it.
+    ///
+    /// Each element is wrapped in Apple's `$MTAlarm` class marker, which the
+    /// modules step over; a fixture without the wrapper would let a module drop
+    /// that path segment and still pass.
+    fn seed_clock() -> Vec<u8> {
+        use plist::{Date, Dictionary, Value};
+        fn at(secs: u64) -> Value {
+            Value::Date(Date::from(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            ))
+        }
+        fn wrap(d: Dictionary) -> Value {
+            let mut outer = Dictionary::new();
+            outer.insert("$MTAlarm".into(), Value::Dictionary(d));
+            Value::Dictionary(outer)
+        }
+
+        let mut alarm = Dictionary::new();
+        alarm.insert("MTAlarmHour".into(), Value::Integer(10.into()));
+        alarm.insert("MTAlarmMinute".into(), Value::Integer(41.into()));
+        alarm.insert("MTAlarmEnabled".into(), Value::Boolean(false));
+        alarm.insert("MTAlarmAllowsSnooze".into(), Value::Boolean(true));
+        alarm.insert("MTAlarmLastModifiedDate".into(), at(1_722_177_663));
+        alarm.insert("MTAlarmDismissDate".into(), at(1_722_177_663));
+        alarm.insert(
+            "MTAlarmID".into(),
+            Value::String("4ABC24C8-A16E-440D-A56D-0F7C2D46825E".into()),
+        );
+        // Undocumented and deliberately unread.
+        alarm.insert("MTAlarmRepeatSchedule".into(), Value::Integer(0.into()));
+
+        let mut sleep = Dictionary::new();
+        sleep.insert("MTAlarmHour".into(), Value::Integer(6.into()));
+        sleep.insert("MTAlarmMinute".into(), Value::Integer(0.into()));
+        sleep.insert("MTAlarmBedtimeHour".into(), Value::Integer(22.into()));
+        sleep.insert("MTAlarmBedtimeMinute".into(), Value::Integer(45.into()));
+        sleep.insert("MTAlarmEnabled".into(), Value::Boolean(false));
+        sleep.insert("MTAlarmSleepTrackingKey".into(), Value::Boolean(true));
+        sleep.insert("MTAlarmKeepOffUntilDate".into(), at(1_689_849_000));
+        sleep.insert("MTAlarmLastModifiedDate".into(), at(1_722_076_501));
+
+        let mut inner = Dictionary::new();
+        inner.insert("MTAlarms".into(), Value::Array(vec![wrap(alarm)]));
+        inner.insert("MTSleepAlarms".into(), Value::Array(vec![wrap(sleep)]));
+        let mut root = Dictionary::new();
+        root.insert("MTAlarms".into(), Value::Dictionary(inner));
+        // Other keys in the real file, none of them read.
+        root.insert("MTTimerDefaultDuration".into(), Value::Real(900.0));
+
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -2805,6 +2866,16 @@ from = "nope"
             "HomeDomain",
             "Library/Preferences/.GlobalPreferences.plist",
         ),
+        (
+            "alarms",
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimerd.plist",
+        ),
+        (
+            "sleep_schedule",
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimerd.plist",
+        ),
     ];
 
     /// How a module's fixture store is built. Two kinds, because a module now has
@@ -2827,6 +2898,8 @@ from = "nope"
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
             "wifi_private_mac" => return Seed::Bytes(seed_wifi_private_mac),
             "device_locale" => return Seed::Bytes(seed_device_locale),
+            // One fixture, two modules: the store really does hold both.
+            "alarms" | "sleep_schedule" => return Seed::Bytes(seed_clock),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \

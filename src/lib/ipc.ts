@@ -3579,6 +3579,53 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "alarms",
+            name: "Alarms",
+            category: "Device",
+            description:
+              "Clock alarms set on this iPhone — the time each is for, whether it is switched on, and when it was last changed.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Hour",
+              "Minute",
+              "On",
+              "Snooze allowed",
+              "Last changed",
+              "Last dismissed",
+              "Identifier",
+            ],
+            timestampColumns: ["Last changed", "Last dismissed"],
+            byteColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "sleep_schedule",
+            name: "Sleep schedule",
+            category: "Device",
+            description:
+              "The bedtime and wake time set on this iPhone, and whether sleep tracking was switched on.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Wake hour",
+              "Wake minute",
+              "Bedtime hour",
+              "Bedtime minute",
+              "On",
+              "Sleep tracking",
+              "Off until",
+              "Last changed",
+            ],
+            timestampColumns: ["Off until", "Last changed"],
+            byteColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "device_locale",
             name: "Language and region",
             category: "Device",
@@ -3861,6 +3908,31 @@ const mockClient: TraceLoupeClient = {
               Address: "Random AA:BB:CC:DD:EE:03",
               "Seen counter": 4100000,
               Identifier: "11111111-0000-0000-0000-000000000003",
+            },
+          ]
+      : mockActive && artifactId === "alarms"
+        ? [
+            {
+              Hour: 10,
+              Minute: 41,
+              On: false,
+              "Snooze allowed": true,
+              "Last changed": 1722177663,
+              "Last dismissed": 1722177663,
+              Identifier: "4ABC24C8-A16E-440D-A56D-0F7C2D46825E",
+            },
+          ]
+      : mockActive && artifactId === "sleep_schedule"
+        ? [
+            {
+              "Wake hour": 6,
+              "Wake minute": 0,
+              "Bedtime hour": 22,
+              "Bedtime minute": 45,
+              On: false,
+              "Sleep tracking": true,
+              "Off until": 1689849000,
+              "Last changed": 1722076501,
             },
           ]
       : mockActive && artifactId === "device_locale"
