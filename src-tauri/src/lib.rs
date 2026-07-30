@@ -2669,6 +2669,95 @@ async fn health_summary(active: State<'_, ActiveBackup>) -> Result<query::Health
     .map_err(|e| e.to_string())?
 }
 
+/// Whether the stored artifact rows came from the module set installed now.
+///
+/// The view needs this to avoid claiming a backup "contained none" when the
+/// truth is that no module has run against it — which is what a cache imported
+/// before the modules existed looks like.
+#[tauri::command]
+async fn artifacts_extraction_state(
+    active: State<'_, ActiveBackup>,
+) -> Result<traceloupe_core::artifacts::ExtractionState, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        traceloupe_core::artifacts::extraction_state(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Run the artifact modules against the already-open backup.
+///
+/// Deliberately explicit rather than automatic on view open: extraction needs
+/// the decryptor, and rebuilding that can block on a Touch ID prompt. A prompt
+/// must not appear because someone clicked a sidebar entry.
+#[tauri::command]
+async fn extract_artifacts(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    gate: State<'_, ImportGate>,
+) -> Result<Vec<String>, String> {
+    let _gate = gate.0.lock().await;
+    let cache_path = active.path()?;
+    let id_dir = cache_path
+        .parent()
+        .ok_or_else(|| "unexpected cache layout".to_string())?;
+    let backup_id = id_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| "unexpected cache layout".to_string())?
+        .to_string();
+    let data_dir = id_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "unexpected cache layout".to_string())?;
+    let work_dir = data_dir.join("work").join(&backup_id);
+
+    let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+    let source_dir = cache
+        .get_meta("source_dir")
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            "this backup's source path isn't recorded; re-import fully once".to_string()
+        })?;
+    drop(cache);
+
+    // Same key-rebuild path as a single-module re-import: the session may not
+    // hold the keys, and reopen_decryptor can block on Touch ID, so it runs off
+    // the async executor.
+    let mut decryptor = session.get();
+    if decryptor.is_none() {
+        let cp = cache_path.clone();
+        let bid = backup_id.clone();
+        let app_k = app.clone();
+        let rebuilt =
+            tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&app_k, &cp, &bid))
+                .await
+                .ok()
+                .flatten();
+        if let Some(d) = rebuilt {
+            session.set(Some(d.clone()));
+            decryptor = Some(d);
+        }
+    }
+
+    logging::info(&app, "\u{25b6} Extracting artifacts\u{2026}".to_string());
+    let src = PathBuf::from(&source_dir);
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+        Ok(import::extract_artifacts_now(
+            &src,
+            decryptor.as_deref(),
+            &cache,
+            &work_dir,
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Which artifacts this backup yielded, and their shape. The UI renders
 /// whatever arrives — it knows no artifact by name, which is the whole point of
 /// the declarative modules.
@@ -4276,7 +4365,9 @@ pub fn run() {
             safety_scan_cmd::delete_safety_scan,
             theme::get_system_accent_color,
             list_artifacts,
-            get_artifact_rows
+            get_artifact_rows,
+            artifacts_extraction_state,
+            extract_artifacts
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -916,6 +916,13 @@ export type ArtifactSummary = {
  *  spec; timestamps arrive as Unix seconds. */
 export type ArtifactRow = Record<string, string | number | boolean | null>;
 
+/** Why the Artifacts view might have nothing to show.
+ *
+ *  "The backup contained none" and "nobody has looked yet" are different facts.
+ *  Saying the first when the second is true is a claim the user cannot check —
+ *  and it is what a cache imported before the modules existed looks like. */
+export type ExtractionState = "up-to-date" | "never-run" | "stale";
+
 export interface TraceLoupeClient {
   listBackups(root?: string): Promise<DiscoveryResult>;
   /** The default Finder/MobileSync backup folder, for seeding the picker. */
@@ -1007,6 +1014,10 @@ export interface TraceLoupeClient {
   listReminders(): Promise<Reminder[]>;
   /** Artifacts this backup yielded, from the declarative modules. */
   listArtifacts(): Promise<ArtifactSummary[]>;
+  /** Whether the stored rows came from the module set installed now. */
+  artifactsExtractionState(): Promise<ExtractionState>;
+  /** Run the modules against the already-open backup; returns any warnings. */
+  extractArtifacts(): Promise<string[]>;
   getArtifactRows(artifactId: string, offset: number, limit: number): Promise<ArtifactRow[]>;
   listWorkouts(): Promise<Workout[]>;
   /** The GPS route of one workout, in recording order (empty if none). */
@@ -1501,6 +1512,8 @@ const tauriClient: TraceLoupeClient = {
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listArtifacts: () => invoke<ArtifactSummary[]>("list_artifacts"),
+  artifactsExtractionState: () => invoke<ExtractionState>("artifacts_extraction_state"),
+  extractArtifacts: () => invoke<string[]>("extract_artifacts"),
   getArtifactRows: (artifactId, offset, limit) =>
     invoke<ArtifactRow[]>("get_artifact_rows", { artifactId, offset, limit }),
   listWorkouts: () => invoke<Workout[]>("list_workouts"),
@@ -3006,6 +3019,10 @@ const mockEngineSubs = new Set<(p: EngineProgress) => void>();
 
 export /** Mock-only: `?mock=unencrypted` flips the fake backup to an unencrypted one,
  *  so the encrypted-only empty states can be exercised by the design checks. */
+/** Mock-only: flips once extractArtifacts() is called, so the never-run →
+ *  extracted transition can be driven in the design checks. */
+let mockArtifactsExtracted = false;
+
 const mockUnencrypted =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("mock") === "unencrypted";
@@ -3416,8 +3433,13 @@ const mockClient: TraceLoupeClient = {
           { bundleId: "com.google.Gmail", incoming: 8, outgoing: 4 },
         ]
       : [],
+  artifactsExtractionState: async () => (mockArtifactsExtracted ? "up-to-date" : "never-run"),
+  extractArtifacts: async () => {
+    mockArtifactsExtracted = true;
+    return [];
+  },
   listArtifacts: async () =>
-    mockActive
+    mockActive && mockArtifactsExtracted
       ? [
           {
             id: "tcc",

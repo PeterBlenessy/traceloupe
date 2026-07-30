@@ -290,6 +290,53 @@ pub struct ArtifactSummary {
     pub requires_encrypted_backup: bool,
 }
 
+/// The cache key recording which modules produced the stored rows.
+const EXTRACTED_MODULES_KEY: &str = "artifacts_extracted_modules";
+
+/// A stable fingerprint of the current module set: sorted ids, comma-joined.
+///
+/// A boolean "have we extracted" would not survive adding a module — someone who
+/// extracted with two installed and later has five would keep seeing two, with
+/// nothing to say why. Comparing the actual set catches both "never run" and
+/// "run with a smaller set".
+pub fn module_set_fingerprint(specs: &[ModuleSpec]) -> String {
+    let mut ids: Vec<&str> = specs.iter().map(|s| s.id.as_str()).collect();
+    ids.sort_unstable();
+    ids.join(",")
+}
+
+/// Why the Artifacts view might have nothing to show.
+///
+/// "The backup contained none" and "nobody has looked yet" are different facts,
+/// and saying the first when the second is true is a claim the user cannot
+/// check. Same class of mistake as an encryption-gated view rendering as merely
+/// empty (#203).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExtractionState {
+    /// Rows were produced by exactly the modules installed now.
+    UpToDate,
+    /// No module has ever run against this backup.
+    NeverRun,
+    /// Rows exist, but from a different (usually smaller) module set.
+    Stale,
+}
+
+/// Whether the stored rows came from the module set installed right now.
+pub fn extraction_state(cache: &crate::cache::CacheDb) -> Result<ExtractionState> {
+    let want = module_set_fingerprint(&builtin_modules()?);
+    match cache.get_meta(EXTRACTED_MODULES_KEY)? {
+        None => Ok(ExtractionState::NeverRun),
+        Some(have) if have == want => Ok(ExtractionState::UpToDate),
+        Some(_) => Ok(ExtractionState::Stale),
+    }
+}
+
+/// Record that the current module set has been run against this backup.
+pub fn mark_extracted(cache: &crate::cache::CacheDb, specs: &[ModuleSpec]) -> Result<()> {
+    cache.set_meta(EXTRACTED_MODULES_KEY, &module_set_fingerprint(specs))
+}
+
 /// Every shipped artifact that has rows in this backup, with its shape.
 ///
 /// Artifacts with no rows are omitted: the backup did not contain them, and a
@@ -1762,6 +1809,79 @@ from = "a"
         );
         let spec = &load_modules(&mods_dir).unwrap()[0];
         assert!(spec.needs_encrypted_backup());
+    }
+
+    /// The three states the Artifacts view has to tell apart.
+    ///
+    /// A bare "have we extracted" boolean would pass the first two and fail the
+    /// third — which is the case that bites a user who updates the app.
+    #[test]
+    fn extraction_state_distinguishes_never_run_stale_and_current() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::cache::CacheDb::open(&tmp.path().join("cache.db")).unwrap();
+        let specs = builtin_modules().unwrap();
+
+        // A cache imported before any module existed.
+        assert_eq!(extraction_state(&db).unwrap(), ExtractionState::NeverRun);
+
+        // Extracted with a set that is not the current one — e.g. the app has
+        // gained a module since.
+        db.set_meta(EXTRACTED_MODULES_KEY, "something,else")
+            .unwrap();
+        assert_eq!(extraction_state(&db).unwrap(), ExtractionState::Stale);
+
+        // Extracted with exactly what is installed now.
+        mark_extracted(&db, &specs).unwrap();
+        assert_eq!(extraction_state(&db).unwrap(), ExtractionState::UpToDate);
+
+        // Adding a module makes an up-to-date cache stale again — the case a
+        // boolean cannot see.
+        let mut more = specs.clone();
+        more.push(ModuleSpec {
+            id: "later_addition".into(),
+            name: "Later".into(),
+            category: None,
+            domain: "HomeDomain".into(),
+            path: "a/b.db".into(),
+            sql: vec!["SELECT a FROM t".into()],
+            requires: None,
+            columns: vec![ColumnSpec {
+                name: "A".into(),
+                from: "a".into(),
+                kind: ColumnKind::Text,
+                epoch: None,
+            }],
+        });
+        assert_ne!(
+            module_set_fingerprint(&specs),
+            module_set_fingerprint(&more),
+            "the fingerprint must change when a module is added"
+        );
+    }
+
+    /// The fingerprint is order-independent, so a reshuffled BUILTIN list does
+    /// not make every cache look stale.
+    #[test]
+    fn module_set_fingerprint_ignores_order() {
+        let mk = |id: &str| ModuleSpec {
+            id: id.into(),
+            name: id.into(),
+            category: None,
+            domain: "HomeDomain".into(),
+            path: "a/b.db".into(),
+            sql: vec!["SELECT a FROM t".into()],
+            requires: None,
+            columns: vec![ColumnSpec {
+                name: "A".into(),
+                from: "a".into(),
+                kind: ColumnKind::Text,
+                epoch: None,
+            }],
+        };
+        assert_eq!(
+            module_set_fingerprint(&[mk("a"), mk("b")]),
+            module_set_fingerprint(&[mk("b"), mk("a")])
+        );
     }
 
     #[test]

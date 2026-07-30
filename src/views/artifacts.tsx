@@ -14,10 +14,11 @@
  * show them instead.
  */
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Boxes, Table2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useViewToolbar } from "@/components/toolbar-context";
@@ -125,6 +126,7 @@ function ArtifactTable({
 }
 
 export function ArtifactsView() {
+  const queryClient = useQueryClient();
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -134,6 +136,27 @@ export function ArtifactsView() {
     queryFn: () => client.listArtifacts(),
     enabled: active === true,
   });
+  const { data: extraction } = useQuery({
+    queryKey: ["artifactsExtractionState"],
+    queryFn: () => client.artifactsExtractionState(),
+    enabled: active === true,
+  });
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+
+  async function runExtraction() {
+    setExtracting(true);
+    setExtractError(null);
+    try {
+      await client.extractArtifacts();
+      await queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      await queryClient.invalidateQueries({ queryKey: ["artifactsExtractionState"] });
+    } catch (e) {
+      setExtractError(String(e));
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rawSearch, setRawSearch] = useState("");
@@ -230,12 +253,38 @@ export function ArtifactsView() {
     );
   }
 
-  if (!listPending && list.length === 0) {
+  // Three different truths, and only one of them is "the device had none".
+  //
+  // A backup imported before a module existed has no rows, and saying "contained
+  // none" there is a claim the user cannot check — it was the first thing the
+  // owner hit on the first real run. `stale` is the same problem one update
+  // later: rows exist, but from a smaller module set.
+  const needsExtraction = extraction === "never-run" || extraction === "stale";
+  if (!listPending && (needsExtraction || list.length === 0)) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
         <p className="max-w-md text-sm text-muted-foreground">
-          This backup contained none of the artifacts TraceLoupe can read yet.
+          {extraction === "never-run"
+            ? "This backup was imported before these artifacts could be read, so nothing has been extracted from it yet."
+            : extraction === "stale"
+              ? "TraceLoupe can read more artifacts than were extracted from this backup."
+              : "This backup contained none of the artifacts TraceLoupe can read yet."}
         </p>
+        {needsExtraction && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button onClick={runExtraction} disabled={extracting} size="sm">
+                {extracting ? "Extracting…" : "Extract artifacts"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Reads them from the backup on disk — no need to re-import it
+            </TooltipContent>
+          </Tooltip>
+        )}
+        {extractError && (
+          <p className="max-w-md select-text text-xs text-destructive">{extractError}</p>
+        )}
       </div>
     );
   }

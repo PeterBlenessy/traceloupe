@@ -711,6 +711,22 @@ fn import_notes_native(
 /// Best-effort per module, deliberately: one artifact whose store is corrupt or
 /// whose schema moved must not fail the whole import, the same way a failing
 /// parser is a warning today. Each failure becomes a warning naming the module.
+/// Run the artifact modules against an ALREADY-IMPORTED backup.
+///
+/// Same code as the import step, exposed so a backup imported before a module
+/// existed can gain it without a full re-import. Re-importing to pick up one new
+/// artifact would be a disproportionate thing to ask.
+pub fn extract_artifacts_now(
+    backup_dir: &Path,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+) -> Vec<String> {
+    let mut report = ImportReport::default();
+    import_artifact_modules(backup_dir, decryptor, cache, work_dir, &mut report);
+    report.warnings
+}
+
 fn import_artifact_modules(
     backup_dir: &Path,
     decryptor: Option<&crate::crypto::BackupDecryptor>,
@@ -753,6 +769,13 @@ fn import_artifact_modules(
                 .warnings
                 .push(format!("Artifact {}: parse failed ({e}).", spec.id)),
         }
+    }
+    // Record WHICH modules ran, so a later app version with more of them can
+    // tell this backup apart from one nobody has looked at.
+    if let Err(e) = crate::artifacts::mark_extracted(cache, &specs) {
+        report.warnings.push(format!(
+            "Artifact modules: recording the module set failed ({e})."
+        ));
     }
 }
 

@@ -54,6 +54,16 @@ for (const { view, mustSay, select } of CASES) {
   await page.getByText(view, { exact: true }).first().click().catch(() => {});
   await page.waitForTimeout(900);
 
+  // Artifacts are only present once they have been extracted from the backup —
+  // a cache imported before a module existed has none. The guard has to walk
+  // through that, or it measures the "nothing extracted yet" screen and reports
+  // a missing explanation that is not actually missing.
+  const extract = page.getByRole("button", { name: /Extract artifacts/ });
+  if (await extract.count()) {
+    await extract.first().click().catch(() => {});
+    await page.waitForTimeout(1200);
+  }
+
   // Some views need a selection before the state under test is on screen.
   if (select) {
     await page.getByText(select, { exact: false }).first().click().catch(() => {});
