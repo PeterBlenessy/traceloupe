@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo} from "react";
 import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
@@ -87,7 +87,7 @@ import { ReimportProvider, useReimport } from "@/components/reimport-provider";
 import { client, type LogLevel } from "@/lib/ipc";
 import { formatCount, type ClockFormat } from "@/lib/format";
 import { useBoundedList } from "@/lib/bounded-list";
-import { nav } from "@/lib/nav";
+import { nav, standaloneArtifactsNav, type NavItem } from "@/lib/nav";
 
 // The nav list lives in @/lib/nav so the home dashboard can order and label
 // its tiles from the SAME list — six tiles had drifted to their own names and
@@ -141,6 +141,22 @@ export function AppShell() {
   });
   // With no backup open there is no Device view to show — the header must lead
   // back to the backup picker instead.
+  // The standalone Artifacts entry appears ONLY if some module declares it fits
+  // nowhere else. Everything shipped today folds into an existing view, so the
+  // entry is absent — a sidebar item leading to an empty screen is worse than no
+  // item at all.
+  const { data: artifactList } = useQuery({
+    queryKey: ["artifacts"],
+    queryFn: () => client.listArtifacts(),
+  });
+  const navItems: readonly NavItem[] = useMemo(
+    () =>
+      (artifactList ?? []).some((a) => a.surface === "standalone")
+        ? [...nav, standaloneArtifactsNav]
+        : nav,
+    [artifactList],
+  );
+
   const { data: hasBackup } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -238,7 +254,7 @@ export function AppShell() {
                 <SidebarGroupLabel>Content</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {nav.map((item) => (
+                    {navItems.map((item) => (
                       <SidebarMenuItem key={item.to}>
                         <SidebarMenuButton
                           asChild

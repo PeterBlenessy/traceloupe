@@ -31,6 +31,20 @@ export type NavItem = {
   module?: string;
 };
 
+/** The destination for artifacts that fit nowhere else.
+ *
+ *  NOT in `nav`, deliberately. Artifacts fold into the view closest in meaning —
+ *  permissions into Apps — and a sidebar entry leading to a screen with nothing
+ *  in it is worse than no entry. The shell appends this only when some module
+ *  actually declares `surface = "standalone"`, which is a claim that has to be
+ *  argued for rather than a default.
+ */
+export const standaloneArtifactsNav: NavItem = {
+  to: "/artifacts",
+  label: "Artifacts",
+  icon: Table2,
+};
+
 export const nav: readonly NavItem[] = [
   { to: "/photos", label: "Photos", icon: Image, module: "camera_roll" },
   {
@@ -49,10 +63,7 @@ export const nav: readonly NavItem[] = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
-  // The generic artifact browser. One entry for every declarative module rather
-  // than one entry each: at ~360 artifacts a flat per-artifact sidebar is not
-  // navigation. What it becomes is #195.
-  { to: "/artifacts", label: "Artifacts", icon: Table2 },
+
 ] as const;
 
 /** The scans, which the sidebar groups above the content views. */

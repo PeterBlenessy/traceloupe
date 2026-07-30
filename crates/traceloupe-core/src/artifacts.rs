@@ -112,11 +112,51 @@ pub struct ColumnSpec {
     pub epoch: Option<Epoch>,
 }
 
+/// Where an artifact is shown.
+///
+/// Not a free string: the set of hosts is small and known, and a typo must not
+/// silently become "nowhere".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Surface {
+    /// Inside the Apps view, against the app it belongs to.
+    Apps,
+    /// Inside the Contacts view.
+    Contacts,
+    /// Inside the Device view.
+    Device,
+    /// Its own destination — only for data that fits nowhere else.
+    Standalone,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModuleSpec {
     /// Stable identifier; also the key rows are stored under.
     pub id: String,
     pub name: String,
+    /// One plain-language sentence: what this is, for someone who has never
+    /// heard of the store it comes from.
+    ///
+    /// Required. A module that cannot say what it is in a sentence is not
+    /// finished — the Artifacts view shipped without this and was unintelligible
+    /// to the person who commissioned it.
+    pub description: String,
+    /// Which existing view hosts this artifact, or `standalone`.
+    ///
+    /// Required, and deliberately not defaulted. The agreed rule is that data
+    /// folds into the view closest in meaning, with its own destination only for
+    /// genuinely outstanding data — and that rule was drifted from within one
+    /// slice of shipping it. Making the author state a home is how it stops
+    /// being a convention someone has to remember.
+    pub surface: Surface,
+    /// Which output column holds the value the host view joins on — a bundle id
+    /// for `surface = "apps"`, a handle for Contacts.
+    ///
+    /// Required whenever the surface is not standalone: a hosted artifact that
+    /// cannot be attached to a row is not hosted, it is just floating in someone
+    /// else's view.
+    #[serde(default)]
+    pub join_column: Option<String>,
     #[serde(default)]
     pub category: Option<String>,
     /// Backup domain, e.g. `HomeDomain`.
@@ -203,6 +243,9 @@ impl ModuleSpec {
                 self.id
             ));
         }
+        if self.description.trim().is_empty() {
+            return Err("`description` is empty — say in one sentence what this is".into());
+        }
         if self.domain.trim().is_empty() {
             return Err("`domain` is empty".into());
         }
@@ -258,6 +301,24 @@ impl ModuleSpec {
                 ));
             }
         }
+        // A hosted artifact must say what to attach itself to.
+        if self.surface != Surface::Standalone {
+            match &self.join_column {
+                None => {
+                    return Err(format!(
+                        "`surface` is {:?} but no `join_column` is declared — the host view \
+                         needs to know which column identifies the row it belongs to",
+                        self.surface
+                    ))
+                }
+                Some(col) if !self.columns.iter().any(|c| &c.name == col) => {
+                    return Err(format!(
+                        "`join_column` = {col:?} is not one of the declared columns"
+                    ))
+                }
+                Some(_) => {}
+            }
+        }
         if let Some(r) = &self.requires {
             if r != "encrypted-backup" {
                 return Err(format!(
@@ -281,6 +342,12 @@ pub struct ArtifactSummary {
     pub id: String,
     pub name: String,
     pub category: Option<String>,
+    /// One sentence describing the artifact, shown wherever it is hosted.
+    pub description: String,
+    /// Which view hosts it.
+    pub surface: Surface,
+    /// The column the host view joins on, when hosted.
+    pub join_column: Option<String>,
     /// Column display names, in declared order — the table's headers. A JSON
     /// row is an unordered map, so without this the UI would have to invent an
     /// order, and it would differ between artifacts and between runs.
@@ -356,6 +423,9 @@ pub fn list_artifacts(conn: &Connection) -> Result<Vec<ArtifactSummary>> {
             id: spec.id.clone(),
             name: spec.name.clone(),
             category: spec.category.clone(),
+            description: spec.description.clone(),
+            surface: spec.surface,
+            join_column: spec.join_column.clone(),
             columns: spec.columns.iter().map(|c| c.name.clone()).collect(),
             row_count,
             requires_encrypted_backup: gated,
@@ -678,6 +748,8 @@ mod tests {
             r#"
 id = "demo"
 name = "Demo"
+description = "A demo artifact."
+surface = "standalone"
 domain = "HomeDomain"
 path = "Library/Demo/demo.db"
 sql = "SELECT who, at FROM events"
@@ -732,6 +804,8 @@ epoch = "cocoa"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = "SELECT at FROM t"
@@ -747,6 +821,8 @@ kind = "timestamp"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = "DELETE FROM t"
@@ -761,6 +837,8 @@ from = "a"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = "SELECT a FROM t"
@@ -773,6 +851,8 @@ columns = []
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = "SELECT a FROM t"
@@ -787,6 +867,8 @@ from = "a"
                 "empty-id",
                 r#"
 id = ""
+description = "Case fixture."
+surface = "standalone"
 name = "X"
 domain = "HomeDomain"
 path = "a/b.db"
@@ -802,6 +884,8 @@ from = "a"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = ""
 path = "a/b.db"
 sql = "SELECT a FROM t"
@@ -816,6 +900,8 @@ from = "a"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = ""
 sql = "SELECT a FROM t"
@@ -830,6 +916,8 @@ from = "a"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = ""
@@ -844,6 +932,8 @@ from = "a"
                 r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = "SELECT a FROM t"
@@ -857,6 +947,8 @@ from = ""
                 "bad-id",
                 r#"
 id = "x y"
+description = "Case fixture."
+surface = "standalone"
 name = "X"
 domain = "HomeDomain"
 path = "a/b.db"
@@ -1114,6 +1206,8 @@ from = "a"
             r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "a/b.db"
 sql = "SELECT created, modified FROM t"
@@ -1143,6 +1237,8 @@ from = "modified"
             r#"
 id = "x"
 name = "X"
+description = "X."
+surface = "standalone"
 domain = "HomeDomain"
 path = "Library/Foo/*"
 sql = "SELECT a FROM t"
@@ -1190,6 +1286,8 @@ from = "a"
             "evil.toml",
             r#"
 id = "evil"
+description = "evil artifact."
+surface = "standalone"
 name = "Evil"
 domain = "HomeDomain"
 path = "Library/Demo/demo.db"
@@ -1224,6 +1322,9 @@ from = "who"
         let spec = ModuleSpec {
             id: "../../escape".into(),
             name: "Escape".into(),
+            description: "A test artifact.".into(),
+            surface: Surface::Standalone,
+            join_column: None,
             category: None,
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
@@ -1267,6 +1368,8 @@ from = "who"
             "kinds.toml",
             r#"
 id = "kinds"
+description = "kinds artifact."
+surface = "standalone"
 name = "Kinds"
 domain = "HomeDomain"
 path = "Library/Demo/demo.db"
@@ -1332,6 +1435,8 @@ from = "i_as_text"
             "cte.toml",
             r#"
 id = "cte"
+description = "cte artifact."
+surface = "standalone"
 name = "CTE"
 domain = "HomeDomain"
 path = "a/b.db"
@@ -1431,6 +1536,8 @@ kind = "integer"
             "broken.toml",
             r#"
 id = "broken"
+description = "broken artifact."
+surface = "standalone"
 name = "Broken Module"
 domain = "HomeDomain"
 path = "Library/Demo/demo.db"
@@ -1642,7 +1749,7 @@ from = "nope"
                 .unwrap_or_else(|| panic!("no row for {app}/{svc}"))
         };
         assert_eq!(
-            find("com.example.chatapp", "kTCCServiceCamera")["Decision"],
+            find("com.example.chatapp", "Camera")["Decision"],
             serde_json::json!("Allowed")
         );
         assert_eq!(
@@ -1650,9 +1757,14 @@ from = "nope"
             serde_json::json!("Denied")
         );
         assert_eq!(
-            find("com.example.chatapp", "kTCCServicePhotos")["Decision"],
+            find("com.example.chatapp", "Photos")["Decision"],
             serde_json::json!("Limited")
         );
+        // `kTCCServiceLocation` and `kTCCServiceContacts` stay RAW on purpose:
+        // they are not in the module's mapping, and an unmapped code must show
+        // as itself rather than be given an invented label. Ugly and true beats
+        // tidy and possibly wrong.
+        //
         // 1 is a documented state (kTCCAuthValueUnknown — never prompted), not a
         // decoding failure, and must not read as one.
         assert_eq!(
@@ -1663,17 +1775,17 @@ from = "nope"
         // could not do this — `'x' || NULL` is NULL in SQLite, so the cell would
         // come back empty and look like a parsing bug.
         assert_eq!(
-            find("com.example.norecord", "kTCCServiceMicrophone")["Decision"],
+            find("com.example.norecord", "Microphone")["Decision"],
             serde_json::json!("Not recorded")
         );
         // A value outside Apple's enum is surfaced as-is rather than guessed at.
         assert_eq!(
-            find("com.example.todo", "kTCCServiceReminders")["Decision"],
+            find("com.example.todo", "Reminders")["Decision"],
             serde_json::json!("Unrecognised (9)")
         );
         // The date arrives as a date.
         assert_eq!(
-            find("com.example.chatapp", "kTCCServiceCamera")["Decided"],
+            find("com.example.chatapp", "Camera")["Decided"],
             serde_json::json!(1_700_000_000_i64)
         );
     }
@@ -1797,6 +1909,8 @@ from = "nope"
             "gated.toml",
             r#"
 id = "gated"
+description = "gated artifact."
+surface = "standalone"
 name = "Gated thing"
 domain = "HomeDomain"
 path = "Library/Nowhere/x.db"
@@ -1840,6 +1954,9 @@ from = "a"
         more.push(ModuleSpec {
             id: "later_addition".into(),
             name: "Later".into(),
+            description: "A test artifact.".into(),
+            surface: Surface::Standalone,
+            join_column: None,
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
@@ -1866,6 +1983,9 @@ from = "a"
         let mk = |id: &str| ModuleSpec {
             id: id.into(),
             name: id.into(),
+            description: "A test artifact.".into(),
+            surface: Surface::Standalone,
+            join_column: None,
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
@@ -1882,6 +2002,92 @@ from = "a"
             module_set_fingerprint(&[mk("a"), mk("b")]),
             module_set_fingerprint(&[mk("b"), mk("a")])
         );
+    }
+
+    /// A module cannot skip declaring where it belongs, or explaining itself.
+    ///
+    /// Both are required rather than defaulted, because the agreed rule — fold
+    /// into the view closest in meaning, own destination only for genuinely
+    /// outstanding data — was drifted from within one slice of shipping it. A
+    /// default would let the next author drift the same way silently.
+    #[test]
+    fn a_module_must_declare_its_surface_and_describe_itself() {
+        let base = |extra: &str| {
+            format!(
+                r#"
+id = "x"
+name = "X"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "SELECT a FROM t"
+{extra}
+[[columns]]
+name = "A"
+from = "a"
+"#
+            )
+        };
+        let tmp = tempfile::tempdir().unwrap();
+
+        // No surface at all.
+        write_module(tmp.path(), "nosurface.toml", &base("description = \"X.\""));
+        let err = load_modules(tmp.path())
+            .expect_err("missing surface must fail")
+            .to_string();
+        assert!(err.contains("surface"), "{err}");
+
+        // No description.
+        let tmp2 = tempfile::tempdir().unwrap();
+        write_module(tmp2.path(), "nodesc.toml", &base("surface = \"apps\""));
+        let err = load_modules(tmp2.path())
+            .expect_err("missing description must fail")
+            .to_string();
+        assert!(err.contains("description"), "{err}");
+
+        // An empty description is as useless as none.
+        let tmp3 = tempfile::tempdir().unwrap();
+        write_module(
+            tmp3.path(),
+            "blankdesc.toml",
+            &base("surface = \"apps\"\ndescription = \"   \""),
+        );
+        let err = load_modules(tmp3.path())
+            .expect_err("blank description must fail")
+            .to_string();
+        assert!(err.contains("say in one sentence"), "{err}");
+
+        // A typo'd surface must not silently mean "nowhere".
+        let tmp4 = tempfile::tempdir().unwrap();
+        write_module(
+            tmp4.path(),
+            "badsurface.toml",
+            &base("surface = \"aps\"\ndescription = \"X.\""),
+        );
+        let err = load_modules(tmp4.path())
+            .expect_err("unknown surface must fail")
+            .to_string();
+        assert!(err.contains("surface"), "{err}");
+    }
+
+    /// Every shipped module folds into an existing view. The moment one declares
+    /// `standalone`, that is a deliberate claim it fits nowhere — and this test
+    /// failing is the prompt to check that claim rather than to update the list.
+    #[test]
+    fn shipped_modules_fold_into_existing_views() {
+        for spec in builtin_modules().unwrap() {
+            assert_ne!(
+                spec.surface,
+                Surface::Standalone,
+                "module {} claims it fits nowhere — is that true, or is there a \
+                 view closer in meaning?",
+                spec.id
+            );
+            assert!(
+                spec.description.len() > 20,
+                "module {}'s description is too short to explain anything",
+                spec.id
+            );
+        }
     }
 
     #[test]
