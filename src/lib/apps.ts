@@ -25,10 +25,19 @@ const CATALOG: Record<string, AppMeta> = {
   "net.whatsapp.WhatsApp": { name: "WhatsApp", support: "native", slug: "whatsapp" },
   "com.burbn.instagram": { name: "Instagram", support: "native", slug: "instagram" },
   "com.zhiliaoapp.musically": { name: "TikTok", support: "native", slug: "tiktok" },
+  // BOTH ids, and the App Store one is the second. `org.telegram.messenger` is
+  // Telegram's ANDROID package name — it was the only entry here, so on a real
+  // iPhone we imported Telegram's chats and then showed the app as unsupported.
+  // Kept because forks and sideloaded builds do use it; the App Store build is
+  // what an ordinary backup contains (verified on Josh Hickman's iOS 17 image).
   "org.telegram.messenger": { name: "Telegram", support: "native", slug: "telegram" },
+  "ph.telegra.Telegraph": { name: "Telegram", support: "native", slug: "telegram" },
   "com.facebook.Messenger": { name: "Messenger", support: "native", slug: "messenger" },
   "com.kik.chat": { name: "Kik", support: "native", slug: "kik" },
+  // Same mistake as Telegram: `com.imo.imoim` is imo's Android package. The iOS
+  // build is `co.babypenguin.imo` (verified on the same image).
   "com.imo.imoim": { name: "imo", support: "native" },
+  "co.babypenguin.imo": { name: "imo", support: "native" },
   "ch.threema.iapp": { name: "Threema", support: "native", slug: "threema" },
   "ch.swisscows.messenger.teleguardapp": { name: "TeleGuard", support: "native" },
   "com.viber": { name: "Viber", support: "native", slug: "viber" },
