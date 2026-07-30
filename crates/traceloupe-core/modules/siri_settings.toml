@@ -27,10 +27,14 @@
 # (a set of opaque hashes), and the several build/schema version counters. The
 # usual rule — a code nobody has verified is decoration.
 #
-# `Output Voice / Gender` IS an undocumented integer, and it is shown as one
-# rather than mapped. Apple's ordering here is not published and guessing it would
-# print a confident wrong label on a personal attribute, which is the worst place
-# to be wrong. The raw value is honest; a reader who knows the mapping can use it.
+# `Output Voice / Gender` is NOT read. It is an undocumented integer, and Apple's
+# ordering is unpublished — mapping it would print a confident wrong label on a
+# personal attribute, the worst place to be wrong. It shipped briefly as a raw
+# number, which was defensible in a table and is not here: these columns are now
+# folded into the Device view's identity grid beside the model and serial, and
+# "Voice variant: 2" among them reads as a fact about the device rather than as a
+# code nobody has decoded. The same value, moved somewhere more prominent, stopped
+# being honest enough.
 #
 # VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
 # image): voice "nora", en-US, cloud sync on. Reproduce with:
@@ -40,6 +44,9 @@ id          = "siri_settings"
 name        = "Siri"
 description = "How Siri is set up on this device — the voice it speaks with, the language it uses, and whether its data syncs to iCloud."
 surface     = "device"
+# ONE record, so its columns are FACTS folded into the Device view's identity
+# summary rather than a one-row table of their own.
+shape       = "facts"
 category    = "Device"
 domain      = "HomeDomain"
 path        = "Library/Preferences/com.apple.assistant.backedup.plist"
@@ -54,11 +61,6 @@ from = ["Output Voice", "Language"]
 [[columns]]
 name = "Voice name"
 from = ["Output Voice", "Name"]
-
-[[columns]]
-name = "Voice variant"
-from = ["Output Voice", "Gender"]
-kind = "integer"
 
 [[columns]]
 name = "Custom voice"

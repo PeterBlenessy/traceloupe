@@ -195,6 +195,26 @@ pub struct PlistSpec {
     pub key_strip_prefix: Option<String>,
 }
 
+/// How a host should PRESENT an artifact — as rows, or as facts.
+///
+/// The format made everything a table, and a meaningful share of the device tail
+/// is not tabular: iLEAPP's "Identifiers" category alone is 16 artifacts that are
+/// mostly single values — UDID, IMEI/IMSI, advertising identifier, AirDrop id,
+/// device name. Sixteen one-row tables is an absurd way to show sixteen facts,
+/// and two modules already shipped that way (`device_locale`, `siri_settings`)
+/// read worse as tables than they would as more rows in the identity grid the
+/// Device view already has.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Shape {
+    /// Many rows: a table of its own. The default, and right for most artifacts.
+    #[default]
+    Table,
+    /// ONE record, whose columns are label/value pairs the host folds into its
+    /// own summary rather than giving a table.
+    Facts,
+}
+
 /// Where an artifact is shown.
 ///
 /// Not a free string: the set of hosts is small and known, and a typo must not
@@ -275,6 +295,9 @@ pub struct ModuleSpec {
     /// finished — the Artifacts view shipped without this and was unintelligible
     /// to the person who commissioned it.
     pub description: String,
+    /// How the host should present it. Defaults to a table.
+    #[serde(default)]
+    pub shape: Shape,
     /// Which existing view hosts this artifact, or `standalone`.
     ///
     /// Required, and deliberately not defaulted. The agreed rule is that data
@@ -616,6 +639,19 @@ impl ModuleSpec {
                 );
             }
         }
+        // A facts artifact is folded into its host's own summary, and only the
+        // Device view has one to fold into. Declared on any other surface it would
+        // fall through that host's table path and render as the one-row table this
+        // shape exists to avoid — silently, which is the worst kind of wrong.
+        // Relax this when a second host learns to show facts.
+        if self.shape == Shape::Facts && self.surface != Surface::Device {
+            return Err(format!(
+                "`shape = \"facts\"` with `surface = {:?}`: only the Device view folds facts \
+                 into its own summary, so anywhere else this would silently render as the \
+                 one-row table the shape exists to avoid",
+                self.surface
+            ));
+        }
         if let Some(r) = &self.requires {
             if r != "encrypted-backup" {
                 return Err(format!(
@@ -650,6 +686,8 @@ pub struct ArtifactSummary {
     pub description: String,
     /// Which view hosts it.
     pub surface: Surface,
+    /// How the host should present it — rows, or facts folded into its summary.
+    pub shape: Shape,
     /// The column the host view joins on, when hosted.
     pub join_column: Option<String>,
     /// What the host may show on the row itself, before expanding.
@@ -742,6 +780,7 @@ pub fn list_artifacts(conn: &Connection) -> Result<Vec<ArtifactSummary>> {
             category: spec.category.clone(),
             description: spec.description.clone(),
             surface: spec.surface,
+            shape: spec.shape,
             join_column: spec.join_column.clone(),
             highlight: spec.highlight.clone(),
             columns: spec.columns.iter().map(|c| c.name.clone()).collect(),
@@ -858,12 +897,31 @@ pub fn run_module(
         return Ok(None);
     };
 
+    // Checked after the rows are produced, below — declared here so the two
+    // source paths share one rule rather than each remembering it.
+    fn enforce_shape(spec: &ModuleSpec, rows: Vec<ArtifactRow>) -> Result<Vec<ArtifactRow>> {
+        if spec.shape == Shape::Facts && rows.len() > 1 {
+            // Not truncated to the first: a store that grew a second record is a
+            // shape change, and quietly showing one of two would report a device
+            // fact that is no longer singular as though it still were.
+            return Err(Error::Parse(format!(
+                "artifact {}: declared `shape = \"facts\"` but produced {} records. Facts are \
+                 folded into the Device view's identity summary, which can hold one of each — \
+                 if this store really has several, it is a table",
+                spec.id,
+                rows.len()
+            )));
+        }
+        Ok(rows)
+    }
+
     // A property list is read straight from memory: no sidecars to checkpoint, no
     // temp store to open read-only, so none of the SQLite machinery below applies —
     // including the work dir, which a plist module never writes to.
     if let Some(pl) = &spec.plist {
         let bytes = index.read_bytes(&entry, decryptor)?;
-        return run_plist_module(spec, pl, &bytes).map(Some);
+        let rows = run_plist_module(spec, pl, &bytes)?;
+        return enforce_shape(spec, rows).map(Some);
     }
 
     std::fs::create_dir_all(work_dir).map_err(|e| Error::Io {
@@ -940,7 +998,7 @@ pub fn run_module(
         }
         rows_out.push(out);
     }
-    Ok(Some(rows_out))
+    enforce_shape(spec, rows_out).map(Some)
 }
 
 /// Read rows out of a property list, per the module's `[plist]` block.
@@ -2124,6 +2182,7 @@ from = "who"
             category: None,
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
+            shape: Shape::Table,
             plist: None,
             sql: vec!["SELECT who FROM events".into()],
             requires: None,
@@ -3054,6 +3113,7 @@ from = "nope"
             category: None,
             description: "d".into(),
             surface: Surface::Device,
+            shape: Shape::Table,
             join_column: None,
             highlight: None,
             columns: vec![],
@@ -4345,6 +4405,7 @@ from = "a"
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
+            shape: Shape::Table,
             plist: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
@@ -4376,6 +4437,7 @@ from = "a"
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
+            shape: Shape::Table,
             plist: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
