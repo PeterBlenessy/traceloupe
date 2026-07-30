@@ -319,6 +319,8 @@ function MessagesViewInner() {
     service?: string;
     from?: "safety";
     message?: number;
+    /** The finding this was opened from, handed back on return (#224). */
+    finding?: number;
   };
   useEffect(() => {
     if (search.thread != null) {
@@ -424,7 +426,12 @@ function MessagesViewInner() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => void navigate({ to: "/safety-scan" })}
+                onClick={() =>
+                  void navigate({
+                    to: "/safety-scan",
+                    search: search.finding ? { finding: search.finding } : {},
+                  })
+                }
               >
                 <ArrowLeft className="size-4" /> Back to Safety Scan
               </Button>
@@ -469,6 +476,18 @@ function MessagesViewInner() {
 }
 
 /** Master-detail view: the thread list on the left, one conversation on the right. */
+/** True when the view was opened from a Safety Scan finding, so the return bar is
+ *  showing above the list.
+ *
+ *  Matters because `underlap` lets a list scroll beneath the translucent title
+ *  bar and is only sound when the list is the view's topmost element. With the
+ *  bar above it, the list's offset covered the bar's button — visible but
+ *  unclickable (#224). */
+function useFromSafety(): boolean {
+  const s = useSearch({ strict: false }) as { from?: string };
+  return s.from === "safety";
+}
+
 function Conversations({
   selectedId,
   onSelect,
@@ -496,6 +515,7 @@ function Conversations({
   scrollToMessage?: number | null;
   onScrolledToMessage?: () => void;
 }) {
+  const fromSafety = useFromSafety();
   // Gate on an open backup (React Query dedups this with the parent's copy), so
   // list_threads isn't fired while `hasActiveBackup` is still resolving.
   const { data: active } = useQuery({
@@ -595,7 +615,7 @@ function Conversations({
               items={visibleThreads!}
               getKey={(t) => t.id}
               estimateSize={64}
-              underlap
+              underlap={!fromSafety}
               renderItem={(t) => (
                 <div className="px-2 py-0.5">
                   <ThreadRow
@@ -704,6 +724,7 @@ function Timeline({
   serviceGroups: FilterGroup[];
   modesNode: React.ReactNode;
 }) {
+  const fromSafety = useFromSafety();
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
   const { data: active } = useQuery({
@@ -855,7 +876,7 @@ function Timeline({
     <div className="relative flex h-full flex-col">
       <LazyVirtualList<TimelineMessage>
         count={total ?? 0}
-        underlap
+        underlap={!fromSafety}
         startAtBottom={!order.desc}
         resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
         persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
