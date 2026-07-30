@@ -3564,6 +3564,21 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "sim_cards",
+            name: "SIM cards",
+            category: "Device",
+            description:
+              "Which SIMs have been in this device, the phone number each carried, and the slot it used.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Slot", "Phone number", "SIM serial (ICCID)", "Last updated"],
+            timestampColumns: ["Last updated"],
+            byteColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "bluetooth_paired",
             name: "Bluetooth pairings",
             category: "Device",
@@ -3715,6 +3730,21 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "sim_cards"
+        ? [
+            {
+              Slot: 1,
+              "Phone number": "+15550100",
+              "SIM serial (ICCID)": "8901260971148676693",
+              "Last updated": 1704307200,
+            },
+            {
+              Slot: 2,
+              "Phone number": "+15550199",
+              "SIM serial (ICCID)": "8944500000000000001",
+              "Last updated": 1703307200,
+            },
+          ]
       : mockActive && artifactId === "bluetooth_paired"
         ? [
             {

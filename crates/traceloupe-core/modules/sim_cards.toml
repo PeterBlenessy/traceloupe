@@ -1,0 +1,84 @@
+# SIM cards — which SIMs have been in this device, the phone number each carried,
+# and when the record was last touched.
+#
+# `CellularUsage.db` is written by the cellular stack. It is confirmed
+# backup-reachable: it lives in `WirelessDomain`, whose `Library/Databases` is
+# backed up (see docs/reference/backup-coverage-audit.md) — the same store family
+# as `data_usage`.
+#
+# WHAT THE COLUMNS ACTUALLY ARE
+#
+# The names in the schema are not the names of the things. Per iLEAPP's
+# `subscriberInfo.py`, which reports these as device info under "Cellular / SIM
+# Cards":
+#
+#   * `subscriber_id`  is the **ICCID** — the SIM card's own serial number.
+#   * `subscriber_mdn` is the **MSISDN** — the phone number the SIM carried.
+#   * `last_update_time` is a Cocoa / Core Data timestamp.
+#   * `slot_id` is the physical or eSIM slot.
+#
+# So the display names say what the values are rather than repeating the column
+# names, and the technical terms are kept where a reader expects them (ICCID next
+# to the serial) rather than dropped.
+#
+# This is a small artifact — one row per SIM — and a disproportionately useful
+# one: the device's OWN number is a fact the rest of the app never had, and it is
+# what ties this backup to a subscriber. A single row is not a reason to skip an
+# artifact.
+#
+# WHAT IS DELIBERATELY LEFT OUT
+#
+# `bundle_info` sits in the same store: 8 rows of `bundle_id` + `flags`, every
+# flag identical (48) on the validation image, all but one a watch app. An
+# undocumented integer with one observed value is decoration, not data — the same
+# call `bluetooth_paired.toml` makes about `NameOrigin`. If someone establishes
+# what the flag means, it earns a module then.
+#
+# The remaining `subscriber_info` columns (`home_budget`, `roaming_budget`,
+# `low_data_mode`, `privacy_proxy`, …) are all NULL on the validation image, so
+# there is nothing to show and nothing to verify a reading against.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "sim_cards"
+name        = "SIM cards"
+description = "Which SIMs have been in this device, the phone number each carried, and the slot it used."
+surface     = "device"
+category    = "Device"
+domain      = "WirelessDomain"
+path        = "Library/Databases/CellularUsage.db"
+
+sql = [
+  """
+  SELECT slot_id AS slot,
+         subscriber_mdn AS phone_number,
+         subscriber_id AS iccid,
+         last_update_time AS updated_at
+  FROM subscriber_info
+  ORDER BY slot_id, iccid
+  """,
+]
+
+[[columns]]
+name = "Slot"
+from = "slot"
+kind = "integer"
+
+[[columns]]
+name = "Phone number"
+from = "phone_number"
+
+# The technical term belongs in the header: a DFIR reader looks for "ICCID", and
+# "SIM serial" alone would leave them guessing whether it is the same thing.
+[[columns]]
+name = "SIM serial (ICCID)"
+from = "iccid"
+
+[[columns]]
+name = "Last updated"
+from = "updated_at"
+kind = "timestamp"
+epoch = "cocoa"
