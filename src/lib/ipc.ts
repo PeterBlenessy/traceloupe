@@ -3424,13 +3424,32 @@ const mockClient: TraceLoupeClient = {
             name: "App permissions",
             category: "Security",
             columns: ["App", "Permission", "Decision", "Decided"],
-            rowCount: 4,
+            rowCount: mockUnencrypted ? 4 : 4,
             requiresEncryptedBackup: false,
+          },
+          // Mock-only: an artifact that CANNOT exist in an unencrypted backup,
+          // so the explanation path has something to render. No shipped module
+          // is gated yet — the mechanism is ready for the first one that is
+          // (Apple's list has 28 candidates; see the coverage audit).
+          {
+            id: "mock_gated",
+            name: "Focus modes",
+            category: "Device",
+            columns: ["Mode", "Enabled", "Changed"],
+            rowCount: mockUnencrypted ? 0 : 2,
+            requiresEncryptedBackup: true,
           },
         ]
       : [],
   getArtifactRows: async (artifactId) =>
-    mockActive && artifactId === "tcc"
+    mockActive && artifactId === "mock_gated"
+      ? mockUnencrypted
+        ? []
+        : [
+            { Mode: "Sleep", Enabled: true, Changed: 1700000000 },
+            { Mode: "Work", Enabled: false, Changed: 1700000400 },
+          ]
+      : mockActive && artifactId === "tcc"
       ? [
           {
             App: "com.example.chatapp",
