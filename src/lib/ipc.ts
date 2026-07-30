@@ -3579,6 +3579,28 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "siri_settings",
+            name: "Siri",
+            category: "Device",
+            description:
+              "How Siri is set up on this device — the voice it speaks with, the language it uses, and whether its data syncs to iCloud.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Voice language",
+              "Voice name",
+              "Voice variant",
+              "Custom voice",
+              "Syncs to iCloud",
+              "Recognises voices",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "alarms",
             name: "Alarms",
             category: "Device",
@@ -3908,6 +3930,19 @@ const mockClient: TraceLoupeClient = {
               Address: "Random AA:BB:CC:DD:EE:03",
               "Seen counter": 4100000,
               Identifier: "11111111-0000-0000-0000-000000000003",
+            },
+          ]
+      : mockActive && artifactId === "siri_settings"
+        ? [
+            {
+              "Voice language": "en-US",
+              "Voice name": "nora",
+              // Shown as the raw integer: Apple's ordering is unpublished, and a
+              // confident wrong label on a personal attribute is the worst kind.
+              "Voice variant": 2,
+              "Custom voice": true,
+              "Syncs to iCloud": true,
+              "Recognises voices": false,
             },
           ]
       : mockActive && artifactId === "alarms"

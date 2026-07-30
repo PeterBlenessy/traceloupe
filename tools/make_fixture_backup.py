@@ -820,6 +820,28 @@ def build_clock_plist() -> bytes:
     )
 
 
+def build_siri_plist() -> bytes:
+    """com.apple.assistant.backedup.plist — Siri's backed-up preferences.
+
+    Includes the nested `Output Voice` dictionary the module reaches into, and the
+    undocumented `Footprint` key it deliberately leaves alone.
+    """
+    return plistlib.dumps(
+        {
+            "Output Voice": {
+                "Language": "en-US",
+                "Name": "nora",
+                "Gender": 2,
+                "Custom": True,
+                "Footprint": 2,  # undocumented, unread
+            },
+            "Cloud Sync Enabled": True,
+            "MultiUser VoiceIdentification Enabled": False,
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -890,6 +912,12 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimerd.plist",
             build_clock_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.assistant.backedup.plist",
+            build_siri_plist(),
         ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]

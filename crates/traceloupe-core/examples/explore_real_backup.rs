@@ -109,8 +109,10 @@ fn main() {
             let bytes = index
                 .read_bytes(&entry, decryptor.as_ref())
                 .expect("decrypt the plist");
-            let root = plist::Value::from_reader(std::io::Cursor::new(&bytes))
-                .expect("parse the property list");
+            // Resolved the same way the runner resolves it, or the explorer would
+            // show `$objects`/`$top` for an archive while a module sees the real
+            // tree — and an author would design against the wrong shape.
+            let root = traceloupe_core::nska::resolve(&bytes).expect("parse the property list");
             println!("── {domain}:{path}\n");
             // Paths rather than a pretty-print: a module declares a key PATH, so
             // that is what needs reading off. Arrays collapse to one representative
