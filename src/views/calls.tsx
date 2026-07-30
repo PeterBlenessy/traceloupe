@@ -15,7 +15,6 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item";
-import { useSettings } from "@/components/settings-provider";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { useTimePresets } from "@/components/time-filter";
@@ -25,6 +24,8 @@ import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
+import { ContactAvatar } from "@/components/contact-avatar";
+import { useSettings } from "@/components/settings-provider";
 import { cn } from "@/lib/utils";
 import { client, type Call, type TimeRange } from "@/lib/ipc";
 
@@ -179,6 +180,9 @@ function serviceLabel(call: Call): string | null {
 }
 
 function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | null }) {
+  // The same global setting Messages honours. Two views disagreeing about a
+  // display preference is its own bug.
+  const { showAvatars } = useSettings();
   const { Icon, className } = callVisual(call);
   const missed = call.answered === false && call.direction === "incoming";
   const duration = formatDuration(call.durationS);
@@ -196,7 +200,25 @@ function CallRow({ call, contact }: { call: Call; contact: ResolvedContact | nul
   return (
     <Item>
       <ItemMedia>
-        <Icon className={cn("size-5", className)} />
+        {/* The person first, the call type second — the photo is how anyone
+            recognises a row at a glance, which is why Messages leads with it.
+            The call icon becomes a corner badge so nothing is lost: missed vs
+            answered and FaceTime vs phone still read from the same spot. */}
+        {showAvatars ? (
+          <div className="relative shrink-0">
+            <ContactAvatar
+              resolved={contact}
+              name={title}
+              handle={call.address}
+              className="size-8"
+            />
+            <span className="absolute -bottom-0.5 -right-0.5 rounded-full bg-background p-0.5">
+              <Icon className={cn("size-3", className)} />
+            </span>
+          </div>
+        ) : (
+          <Icon className={cn("size-5", className)} />
+        )}
       </ItemMedia>
       <ItemContent>
         <ItemTitle className={cn("truncate", missed && "text-destructive")}>
