@@ -1,0 +1,76 @@
+# Siri — whether Siri is set up on this device, which voice it speaks with, and
+# whether its data syncs to iCloud.
+#
+# `com.apple.assistant.backedup.plist` is the assistant's backed-up preferences —
+# the "backedup" in the name is Apple's, and is a fair hint that it survives into
+# a backup. Confirmed reachable via `HomeDomain`'s `Library/Preferences` (see
+# docs/reference/backup-coverage-audit.md).
+#
+# A SINGLE-RECORD artifact, like `device_locale`: the root dictionary is the row.
+#
+# WHY THE VOICE MATTERS ENOUGH TO SHIP
+#
+# "Which voice" sounds cosmetic and is not. `Output Voice / Language` is the
+# language Siri was configured to LISTEN and reply in, which can differ from the
+# device language in `device_locale` — a device set to English with Siri in
+# Swedish says something about its user that neither setting says alone. The voice
+# name and gender are shown beside it because Apple's own labels are what a reader
+# would see in Settings, and a module that showed only the language would make the
+# two artifacts look like duplicates when they are not.
+#
+# `MultiUser VoiceIdentification Enabled` is whether the device was taught to tell
+# voices apart — a HomePod-adjacent feature that implies a shared household
+# device.
+#
+# NOT READ: `Output Voice / Footprint` (an undocumented integer),
+# `Compact Voice Trigger Discovery Notification Presented For Bluetooth Device`
+# (a set of opaque hashes), and the several build/schema version counters. The
+# usual rule — a code nobody has verified is decoration.
+#
+# `Output Voice / Gender` IS an undocumented integer, and it is shown as one
+# rather than mapped. Apple's ordering here is not published and guessing it would
+# print a confident wrong label on a personal attribute, which is the worst place
+# to be wrong. The raw value is honest; a reader who knows the mapping can use it.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): voice "nora", en-US, cloud sync on. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "siri_settings"
+name        = "Siri"
+description = "How Siri is set up on this device — the voice it speaks with, the language it uses, and whether its data syncs to iCloud."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.assistant.backedup.plist"
+
+[plist]
+# The root dictionary is ONE record.
+
+[[columns]]
+name = "Voice language"
+from = ["Output Voice", "Language"]
+
+[[columns]]
+name = "Voice name"
+from = ["Output Voice", "Name"]
+
+[[columns]]
+name = "Voice variant"
+from = ["Output Voice", "Gender"]
+kind = "integer"
+
+[[columns]]
+name = "Custom voice"
+from = ["Output Voice", "Custom"]
+kind = "bool"
+
+[[columns]]
+name = "Syncs to iCloud"
+from = "Cloud Sync Enabled"
+kind = "bool"
+
+[[columns]]
+name = "Recognises voices"
+from = "MultiUser VoiceIdentification Enabled"
+kind = "bool"

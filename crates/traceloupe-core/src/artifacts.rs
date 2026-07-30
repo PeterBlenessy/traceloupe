@@ -945,7 +945,21 @@ pub fn run_module(
 
 /// Read rows out of a property list, per the module's `[plist]` block.
 fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<Vec<ArtifactRow>> {
-    let root = plist::Value::from_reader(std::io::Cursor::new(bytes)).map_err(|e| {
+    // `nska::resolve` rather than `Value::from_reader`: Apple wraps a great deal of
+    // structured data in NSKeyedArchiver, which is not a plain plist but a
+    // FLATTENED OBJECT GRAPH — a `$objects` array whose members reference each
+    // other by UID. Read as a plist it looks like `$version`/`$archiver`/`$top`
+    // and none of the data is at a path a module could name.
+    //
+    // The decoder already existed for the native parsers, and it returns a
+    // non-archived plist untouched, so this costs nothing for the modules that do
+    // not need it and unlocks the class for the ones that do.
+    //
+    // ONE THING A MODULE AUTHOR MUST KNOW: `resolve` unwraps a sole `$top` root,
+    // so for the common single-root archive the paths start INSIDE the root object
+    // — `rows = ["root"]` finds nothing. An archive with several roots keeps them
+    // as a dictionary keyed by root name.
+    let root = crate::nska::resolve(bytes).map_err(|e| {
         Error::Parse(format!(
             "artifact {}: {}:{} is not a readable property list: {e}",
             spec.id, spec.domain, spec.path
@@ -1381,6 +1395,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "sleep_schedule.toml",
         include_str!("../modules/sleep_schedule.toml"),
+    ),
+    (
+        "siri_settings.toml",
+        include_str!("../modules/siri_settings.toml"),
     ),
 ];
 
@@ -2808,6 +2826,30 @@ from = "nope"
         out
     }
 
+    /// Siri's backed-up preferences, with the nested `Output Voice` dictionary the
+    /// module reaches into, and the undocumented keys it deliberately leaves.
+    fn seed_siri() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut voice = Dictionary::new();
+        voice.insert("Language".into(), Value::String("en-US".into()));
+        voice.insert("Name".into(), Value::String("nora".into()));
+        voice.insert("Gender".into(), Value::Integer(2.into()));
+        voice.insert("Custom".into(), Value::Boolean(true));
+        // Undocumented, unread.
+        voice.insert("Footprint".into(), Value::Integer(2.into()));
+
+        let mut root = Dictionary::new();
+        root.insert("Output Voice".into(), Value::Dictionary(voice));
+        root.insert("Cloud Sync Enabled".into(), Value::Boolean(true));
+        root.insert(
+            "MultiUser VoiceIdentification Enabled".into(),
+            Value::Boolean(false),
+        );
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -2876,6 +2918,11 @@ from = "nope"
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimerd.plist",
         ),
+        (
+            "siri_settings",
+            "HomeDomain",
+            "Library/Preferences/com.apple.assistant.backedup.plist",
+        ),
     ];
 
     /// How a module's fixture store is built. Two kinds, because a module now has
@@ -2900,6 +2947,7 @@ from = "nope"
             "device_locale" => return Seed::Bytes(seed_device_locale),
             // One fixture, two modules: the store really does hold both.
             "alarms" | "sleep_schedule" => return Seed::Bytes(seed_clock),
+            "siri_settings" => return Seed::Bytes(seed_siri),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
@@ -3315,6 +3363,101 @@ from = "nope"
         // this must not hide.
         let legacy = by("legacy-entry");
         assert_eq!(legacy["Security"], serde_json::Value::Null);
+    }
+
+    /// A module can read an NSKEYEDARCHIVER archive, not only a plain plist.
+    ///
+    /// Apple wraps a great deal of structured data this way, and an archive is not
+    /// a plist with the data at nameable paths — it is a FLATTENED OBJECT GRAPH.
+    /// Read raw it presents `$version` / `$archiver` / `$top` / `$objects`, and
+    /// every real key sits behind a UID reference. A module could not name a path
+    /// into it at all.
+    ///
+    /// This builds a genuine archive by hand — the same shape the device writes,
+    /// with UID references into `$objects` — and runs a module over it. Building
+    /// one rather than resolving a captured blob is the point: it fails if the
+    /// runner ever stops resolving, which a fixture of already-plain values could
+    /// not detect.
+    #[test]
+    fn a_module_can_read_a_keyed_archive() {
+        use plist::{Dictionary, Uid, Value};
+
+        // $objects[0] is the "$null" sentinel; the rest are the real objects,
+        // referenced by index.
+        let mut record = Dictionary::new();
+        record.insert(
+            "NS.keys".into(),
+            Value::Array(vec![Value::Uid(Uid::new(3))]),
+        );
+        record.insert(
+            "NS.objects".into(),
+            Value::Array(vec![Value::Uid(Uid::new(4))]),
+        );
+        let mut class = Dictionary::new();
+        class.insert("$classname".into(), Value::String("NSDictionary".into()));
+        class.insert(
+            "$classes".into(),
+            Value::Array(vec![
+                Value::String("NSDictionary".into()),
+                Value::String("NSObject".into()),
+            ]),
+        );
+        record.insert("$class".into(), Value::Uid(Uid::new(5)));
+
+        let objects = Value::Array(vec![
+            Value::String("$null".into()),          // 0
+            Value::Dictionary(record),              // 1 — the root object
+            Value::String("unused".into()),         // 2
+            Value::String("deviceName".into()),     // 3 — a key
+            Value::String("Example iPhone".into()), // 4 — its value
+            Value::Dictionary(class),               // 5
+        ]);
+        let mut top = Dictionary::new();
+        top.insert("root".into(), Value::Uid(Uid::new(1)));
+
+        let mut archive = Dictionary::new();
+        archive.insert("$version".into(), Value::Integer(100_000.into()));
+        archive.insert("$archiver".into(), Value::String("NSKeyedArchiver".into()));
+        archive.insert("$top".into(), Value::Dictionary(top));
+        archive.insert("$objects".into(), objects);
+        let mut bytes = Vec::new();
+        plist::to_writer_binary(&mut bytes, &Value::Dictionary(archive)).unwrap();
+
+        // Read as a raw plist this would have no `deviceName` anywhere — only
+        // `$objects`, `$top` and a UID.
+        let raw = plist::Value::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        assert!(
+            raw.as_dictionary().unwrap().contains_key("$objects"),
+            "the fixture is not actually an archive"
+        );
+
+        let spec: ModuleSpec = toml::from_str(
+            r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+
+[plist]
+# NOT rows = ["root"]: a sole `$top` root is UNWRAPPED by the resolver, so paths
+# start inside the root object. An archive with several roots keeps them.
+
+[[columns]]
+name = "Device"
+from = "deviceName"
+"#,
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_bytes_in(tmp.path(), "HomeDomain", "a/b.plist", &bytes);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(&spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["Device"], serde_json::json!("Example iPhone"));
     }
 
     /// The shapes a `[plist]` module can point at, and what each must do.
