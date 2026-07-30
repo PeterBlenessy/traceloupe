@@ -447,8 +447,9 @@ def seed_accounts3(path: Path) -> None:
     con.executescript(
         """CREATE TABLE ZACCOUNT (
              Z_PK INTEGER PRIMARY KEY, ZACTIVE INTEGER, ZAUTHENTICATED INTEGER,
-             ZACCOUNTTYPE INTEGER, ZDATE TIMESTAMP, ZACCOUNTDESCRIPTION VARCHAR,
-             ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR, ZUSERNAME VARCHAR);
+             ZACCOUNTTYPE INTEGER, ZPARENTACCOUNT INTEGER, ZDATE TIMESTAMP,
+             ZACCOUNTDESCRIPTION VARCHAR, ZIDENTIFIER VARCHAR,
+             ZOWNINGBUNDLEID VARCHAR, ZUSERNAME VARCHAR);
            CREATE TABLE ZACCOUNTTYPE (
              Z_PK INTEGER PRIMARY KEY, ZACCOUNTTYPEDESCRIPTION VARCHAR,
              ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR);"""
@@ -459,18 +460,30 @@ def seed_accounts3(path: Path) -> None:
         [
             (1, "Gmail", "com.apple.account.Google"),
             (2, "Holiday Calendar", "com.apple.account.HolidayCalendar"),
+            # No description: the module's middle COALESCE rung must fall to the
+            # type's own reverse-DNS identifier.
+            (3, None, "com.apple.account.undescribed"),
         ],
     )
+    # ZIDENTIFIER holds GUIDs, as on a real device. The module must never print one
+    # as a service name; a friendly string here would hide that.
     con.executemany(
-        "INSERT INTO ZACCOUNT (Z_PK, ZACTIVE, ZAUTHENTICATED, ZACCOUNTTYPE, ZDATE,"
-        " ZACCOUNTDESCRIPTION, ZIDENTIFIER, ZOWNINGBUNDLEID, ZUSERNAME)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO ZACCOUNT (Z_PK, ZACTIVE, ZAUTHENTICATED, ZACCOUNTTYPE,"
+        " ZPARENTACCOUNT, ZDATE, ZACCOUNTDESCRIPTION, ZIDENTIFIER,"
+        " ZOWNINGBUNDLEID, ZUSERNAME) VALUES (?,?,?,?,?,?,?,?,?,?)",
         [
-            (1, 1, 1, 1, 726_000_000, "Gmail", "acct-1", "com.apple.mobilemail", "person@example.com"),
-            (2, 1, 1, 2, 725_000_000, "US Holidays", "acct-2", "dataaccessd", None),
+            (1, 1, 1, 1, None, 726_000_000, "Gmail",
+             "6D60660E-344F-4E62-97A0-0A9EA8174CDE", "com.apple.mobilemail", "person@example.com"),
+            (2, 1, 1, 2, None, 725_000_000, "US Holidays",
+             "AD041785-D028-495F-9008-62F26C114CBA", "dataaccessd", None),
             # No ZACCOUNTTYPE row: only the LEFT JOIN keeps this one.
-            (3, 0, 0, None, 724_000_000, None, "com.apple.account.orphaned", "appstored", "local"),
-            (4, None, None, 1, 723_000_000, "Unrecorded", "acct-4", "accountsd", None),
+            (3, 0, 0, None, None, 724_000_000, None,
+             "B61380AE-7269-4769-A39F-69D7935848EA", "appstored", "local"),
+            (4, None, None, 1, None, 723_000_000, "Unrecorded",
+             "C9FA6B49-5667-4CE7-A88A-60C0543E82B5", "accountsd", None),
+            # A CHILD of account 1 — what makes one sign-in look like duplicates.
+            (5, 1, 1, 3, 1, 722_000_000, None,
+             "0EE306D8-66AF-47E5-8FD1-CF2EAF5DC8C2", "accountsd", None),
         ],
     )
     con.commit()

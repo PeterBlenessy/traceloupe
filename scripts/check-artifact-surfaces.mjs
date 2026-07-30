@@ -22,6 +22,19 @@ import { readFileSync, readdirSync } from "node:fs";
 const root = new URL("..", import.meta.url);
 const read = (p) => readFileSync(new URL(p, root), "utf8");
 
+/** serde's `rename_all = "kebab-case"`, exactly: a separator before EVERY capital
+ *  after the first, then lowercased.
+ *
+ *  Not the usual `([a-z0-9])([A-Z])` shortcut, which requires a lowercase before
+ *  the capital and so disagrees with serde on consecutive capitals — it would
+ *  render `TCC` as `tcc` where serde emits `t-c-c`, and then report a correct TOML
+ *  as declaring an unknown surface. */
+function kebab(variant) {
+  return [...variant]
+    .map((c, i) => (c >= "A" && c <= "Z" ? (i === 0 ? c.toLowerCase() : "-" + c.toLowerCase()) : c))
+    .join("");
+}
+
 /** Surfaces the Rust enum allows, so a typo in a TOML is a different failure
  *  from a missing host and does not get reported as one. */
 function knownSurfaces() {
@@ -29,10 +42,14 @@ function knownSurfaces() {
   const block = src.match(/pub enum Surface \{([\s\S]*?)\n\}/);
   if (!block) throw new Error("could not find `pub enum Surface` in artifacts.rs");
   // Variants are CamelCase in Rust and kebab-case in TOML (serde
-  // rename_all = "kebab-case").
-  const variants = [...block[1].matchAll(/^\s{4}([A-Z][A-Za-z]*),/gm)].map((m) =>
-    m[1].replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase(),
-  );
+  // rename_all = "kebab-case"). Tolerate a payload or an explicit discriminant,
+  // and digits in the name: `Foo(String),`, `Foo = 1,` and `Ios17,` all failed the
+  // first version of this pattern and vanished from the list silently, which
+  // turns a valid surface into "not one of the enum's variants" — a confident
+  // wrong diagnosis.
+  const variants = [
+    ...block[1].matchAll(/^\s{4}([A-Z][A-Za-z0-9]*)\s*(?:\([^)]*\))?\s*(?:=[^,]+)?,/gm),
+  ].map((m) => kebab(m[1]));
   if (variants.length < 2) {
     throw new Error(
       `parsed only ${variants.length} Surface variants — the parse is wrong, and a check ` +
@@ -70,11 +87,46 @@ function withoutComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 }
 
+/** View files that are actually reachable — imported by main.tsx AND used as a
+ *  route's `component`.
+ *
+ *  Without this the check's whole test for "is it hosted" was the presence of the
+ *  call text in some file under src/views. A view could contain
+ *  `useHostedArtifacts("device")`, never be added to the router, and the check
+ *  would print ok — which is #231 verbatim: rows extracted, stored, rendered
+ *  nowhere. check-view-intro.mjs does not cover it either, since that walks
+ *  nav.ts and an unrouted view is not in nav.ts. */
+function routedViewFiles() {
+  const src = read("src/main.tsx");
+  // component name -> the @/views/… module it came from
+  const from = new Map();
+  for (const m of src.matchAll(/import\s*\{([^}]+)\}\s*from\s*"@\/views\/([^"]+)"/g)) {
+    for (const name of m[1].split(",").map((n) => n.trim().split(/\s+as\s+/).pop())) {
+      if (name) from.set(name, `${m[2]}.tsx`);
+    }
+  }
+  const routed = new Set();
+  for (const m of src.matchAll(/component:\s*([A-Za-z0-9_]+)/g)) {
+    const file = from.get(m[1]);
+    if (file) routed.add(file);
+  }
+  if (routed.size === 0) {
+    throw new Error(
+      "parsed no routed views from main.tsx — the parse is wrong, and a check that " +
+        "believes nothing is routed would report every module as homeless",
+    );
+  }
+  return routed;
+}
+
 /** Which surfaces a view actually asks for. */
 function hostedSurfaces() {
   const dir = new URL("src/views/", root);
+  const routed = routedViewFiles();
   const hosts = new Map();
   for (const file of readdirSync(dir).filter((f) => f.endsWith(".tsx"))) {
+    // A view nobody can navigate to hosts nothing, however much it says it does.
+    if (!routed.has(file)) continue;
     const src = withoutComments(readFileSync(new URL(file, dir), "utf8"));
     for (const m of src.matchAll(/useHostedArtifacts\(\s*"([^"]+)"/g)) {
       const list = hosts.get(m[1]) ?? [];
@@ -113,8 +165,8 @@ for (const { file, surface } of modules) {
   if (!where || where.length === 0) {
     failures.push(
       `${file}: declares surface "${surface}" but NO view calls ` +
-        `useHostedArtifacts("${surface}") — its rows would be extracted and stored, ` +
-        `and then rendered nowhere`,
+        `useHostedArtifacts("${surface}") from a ROUTED view — its rows would be ` +
+        `extracted and stored, and then rendered nowhere`,
     );
     continue;
   }

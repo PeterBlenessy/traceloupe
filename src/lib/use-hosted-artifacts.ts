@@ -85,6 +85,14 @@ export function useHostedArtifacts(host: string, enabled: boolean): {
 
   return {
     hosted,
-    isPending: listPending || rowQueries.some((q) => q.isPending),
+    // `fetchStatus !== "idle"` matters: an artifact with `rowCount === 0` has its
+    // row query DISABLED, and a disabled query in TanStack Query v5 stays
+    // `status: "pending"` forever. Folding that in raw meant a single zero-row
+    // artifact left `isPending` true for good — and a consumer gating a skeleton
+    // on it would show that skeleton permanently. Zero-row artifacts are not
+    // hypothetical: an encryption-gated artifact is deliberately listed with
+    // `row_count == 0` (#197).
+    isPending:
+      listPending || rowQueries.some((q) => q.isPending && q.fetchStatus !== "idle"),
   };
 }

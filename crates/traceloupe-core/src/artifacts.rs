@@ -1708,25 +1708,42 @@ from = "nope"
         c.execute_batch(
             "CREATE TABLE ZACCOUNT (
                 Z_PK INTEGER PRIMARY KEY, ZACTIVE INTEGER, ZAUTHENTICATED INTEGER,
-                ZACCOUNTTYPE INTEGER, ZDATE TIMESTAMP, ZACCOUNTDESCRIPTION VARCHAR,
-                ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR, ZUSERNAME VARCHAR);
+                ZACCOUNTTYPE INTEGER, ZPARENTACCOUNT INTEGER, ZDATE TIMESTAMP,
+                ZACCOUNTDESCRIPTION VARCHAR, ZIDENTIFIER VARCHAR,
+                ZOWNINGBUNDLEID VARCHAR, ZUSERNAME VARCHAR);
              CREATE TABLE ZACCOUNTTYPE (
                 Z_PK INTEGER PRIMARY KEY, ZACCOUNTTYPEDESCRIPTION VARCHAR,
                 ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR);",
         )
         .unwrap();
         // 726000000 Cocoa seconds = 2024-01-03T…Z, comfortably inside iOS 17.
+        // ZIDENTIFIER values are GUIDs, as on a real device — the point of the
+        // module's three-rung COALESCE is that this column is NOT a service name,
+        // and a fixture that put a friendly string here would hide that.
         c.execute_batch(
             "INSERT INTO ZACCOUNTTYPE (Z_PK, ZACCOUNTTYPEDESCRIPTION, ZIDENTIFIER) VALUES
                 (1,'Gmail','com.apple.account.Google'),
-                (2,'Holiday Calendar','com.apple.account.HolidayCalendar');
+                (2,'Holiday Calendar','com.apple.account.HolidayCalendar'),
+                -- No description: the middle COALESCE rung must fall to the type's
+                -- own reverse-DNS identifier, not to the account GUID.
+                (3,NULL,'com.apple.account.undescribed');
              INSERT INTO ZACCOUNT
-                (Z_PK, ZACTIVE, ZAUTHENTICATED, ZACCOUNTTYPE, ZDATE,
+                (Z_PK, ZACTIVE, ZAUTHENTICATED, ZACCOUNTTYPE, ZPARENTACCOUNT, ZDATE,
                  ZACCOUNTDESCRIPTION, ZIDENTIFIER, ZOWNINGBUNDLEID, ZUSERNAME) VALUES
-                (1,1,1,1,726000000,'Gmail','acct-1','com.apple.mobilemail','person@example.com'),
-                (2,1,1,2,725000000,'US Holidays','acct-2','dataaccessd',NULL),
-                (3,0,0,NULL,724000000,NULL,'com.apple.account.orphaned','appstored','local'),
-                (4,NULL,NULL,1,723000000,'Unrecorded','acct-4','accountsd',NULL);",
+                (1,1,1,1,NULL,726000000,'Gmail',
+                 '6D60660E-344F-4E62-97A0-0A9EA8174CDE','com.apple.mobilemail','person@example.com'),
+                (2,1,1,2,NULL,725000000,'US Holidays',
+                 'AD041785-D028-495F-9008-62F26C114CBA','dataaccessd',NULL),
+                -- No ZACCOUNTTYPE row: only the LEFT JOIN keeps this one, and the
+                -- last COALESCE rung must name it rather than print its GUID.
+                (3,0,0,NULL,NULL,724000000,NULL,
+                 'B61380AE-7269-4769-A39F-69D7935848EA','appstored','local'),
+                (4,NULL,NULL,1,NULL,723000000,'Unrecorded',
+                 'C9FA6B49-5667-4CE7-A88A-60C0543E82B5','accountsd',NULL),
+                -- A CHILD of account 1: on real data these are what make one
+                -- sign-in look like several duplicate rows.
+                (5,1,1,3,1,722000000,NULL,
+                 '0EE306D8-66AF-47E5-8FD1-CF2EAF5DC8C2','accountsd',NULL);",
         )
         .unwrap();
     }
@@ -1866,6 +1883,79 @@ from = "nope"
         );
     }
 
+    /// Every `Surface` variant must be in the UI's union type, and vice versa.
+    ///
+    /// `serialised_keys_match_the_ui_contract` pins the field NAMES but not this:
+    /// `src/lib/ipc.ts` declares `surface` as a string union, and
+    /// `useHostedArtifacts(host: string)` compares against a plain `string`, so a
+    /// new Rust variant could ship, be declared by a module, and never appear in
+    /// the union — with TypeScript raising nothing, because nothing narrows it.
+    /// `check-artifact-surfaces.mjs` reads the Rust enum rather than the union, so
+    /// it does not cover this either.
+    #[test]
+    fn the_ui_surface_union_matches_the_rust_enum() {
+        // The match is what makes this exhaustive: adding a variant to `Surface`
+        // without adding it here is a COMPILE error, not a passing test. A plain
+        // array would silently omit the new one.
+        fn name(s: Surface) -> &'static str {
+            match s {
+                Surface::Apps => "apps",
+                Surface::Contacts => "contacts",
+                Surface::Device => "device",
+                Surface::Standalone => "standalone",
+            }
+        }
+        let all = [
+            Surface::Apps,
+            Surface::Contacts,
+            Surface::Device,
+            Surface::Standalone,
+        ];
+        // Taken from serde, not from `name` — so this also catches a
+        // `rename_all` change, which would alter the wire format silently.
+        let mut from_rust: Vec<String> = all
+            .iter()
+            .map(|s| {
+                let json = serde_json::to_value(s).unwrap();
+                let wire = json
+                    .as_str()
+                    .expect("a Surface serialises to a string")
+                    .to_string();
+                assert_eq!(wire, name(*s), "serde renamed a Surface variant");
+                wire
+            })
+            .collect();
+
+        let ipc = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/ipc.ts"),
+        )
+        .expect("read src/lib/ipc.ts");
+        let line = ipc
+            .lines()
+            .find(|l| l.trim_start().starts_with("surface:"))
+            .expect("no `surface:` field in ipc.ts — did ArtifactSummary change shape?");
+        let mut from_ts: Vec<String> = line
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            from_ts.len() > 1,
+            "parsed {} members from {line:?} — the parse is wrong, so this compared \
+             against nothing",
+            from_ts.len()
+        );
+
+        from_rust.sort();
+        from_ts.sort();
+        assert_eq!(
+            from_rust, from_ts,
+            "the Surface enum and ipc.ts's `surface` union have drifted — a module \
+             could declare a surface the UI's type does not know about"
+        );
+    }
+
     /// The compiled-in modules must be exactly the files on disk.
     ///
     /// They are two copies of the same thing — `include_str!` bakes the file in
@@ -1949,6 +2039,131 @@ from = "nope"
                 );
             }
         }
+    }
+
+    /// The accounts module: a service is always NAMED, a sub-account says what it
+    /// is part of, and a GUID never reaches the Service column.
+    ///
+    /// The first draft fell back to `ZACCOUNT.ZIDENTIFIER` believing it held
+    /// "com.apple.account.Google". It holds a per-account GUID — measured on the
+    /// validation image — so the fallback would have printed a UUID in a column
+    /// headed "Service". The three rungs and this test exist because of that.
+    #[test]
+    fn accounts_module_names_every_service_and_never_shows_a_guid() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "accounts")
+            .expect("accounts module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), &spec.path, seed_accounts);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        // 5 accounts, and the parent joins must not multiply them.
+        assert_eq!(rows.len(), 5, "the parent LEFT JOINs changed the row count");
+
+        let services: Vec<String> = rows
+            .iter()
+            .map(|r| r["Service"].as_str().unwrap_or_default().to_string())
+            .collect();
+        // Rung 1: a described type gives a readable name.
+        assert!(services.contains(&"Gmail".to_string()));
+        // Rung 2: a type with no description falls to its reverse-DNS identifier.
+        assert!(
+            services.contains(&"com.apple.account.undescribed".to_string()),
+            "a type row with a NULL description should fall back to its own \
+             identifier, got {services:?}"
+        );
+        // Rung 3: no type row at all still gets a name, not a GUID.
+        assert!(
+            services.contains(&"Unrecorded service type".to_string()),
+            "an account with no type row should be named, got {services:?}"
+        );
+        // The whole point: nothing that looks like a GUID reaches this column.
+        for svc in &services {
+            assert!(
+                !(svc.len() == 36 && svc.matches('-').count() == 4),
+                "a GUID reached the Service column: {svc:?}"
+            );
+        }
+
+        // The sub-account explains itself rather than looking like a duplicate.
+        let child = rows
+            .iter()
+            .find(|r| r["Service"] == serde_json::json!("com.apple.account.undescribed"))
+            .expect("the child account is present");
+        assert_eq!(
+            child["Part of"],
+            serde_json::json!("Gmail"),
+            "a sub-account should name the account it belongs to"
+        );
+        // A top-level account is part of nothing, and must say so as null rather
+        // than as an empty string.
+        let parent = rows
+            .iter()
+            .find(|r| r["Service"] == serde_json::json!("Gmail"))
+            .expect("the parent account is present");
+        assert_eq!(parent["Part of"], serde_json::Value::Null);
+
+        // Cocoa epoch, not Unix: 726000000 Cocoa = 1704307200 Unix (2024-01-03).
+        assert_eq!(parent["Added"], serde_json::json!(1_704_307_200_i64));
+
+        // NULL flags stay distinguishable from "no".
+        let unrecorded = rows
+            .iter()
+            .find(|r| r["Label"] == serde_json::json!("Unrecorded"))
+            .expect("the NULL-flag account is present");
+        assert_eq!(unrecorded["Status"], serde_json::json!("Not recorded"));
+        assert_eq!(unrecorded["Signed in"], serde_json::json!("Not recorded"));
+    }
+
+    /// The Bluetooth module: the two counters stay integers, and the resolved
+    /// address is kept apart from the advertised one.
+    #[test]
+    fn bluetooth_module_keeps_counters_as_numbers_and_addresses_apart() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "bluetooth_paired")
+            .expect("bluetooth module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        // `make_backup` defaults to HomeDomain; this store lives in a system
+        // container, and a domain mismatch shows up as the module simply finding
+        // nothing.
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, seed_bluetooth_paired);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+
+        let watch = rows
+            .iter()
+            .find(|r| r["Device"] == serde_json::json!("Example Watch"))
+            .expect("the watch is present");
+        // The counters must arrive as NUMBERS and be left exactly as stored. If
+        // either were ever declared a timestamp these would come back converted,
+        // and the module would be printing invented dates.
+        assert_eq!(watch["Connection counter"], serde_json::json!(9639));
+        assert_eq!(watch["Seen counter"], serde_json::json!(4_315_986));
+        // A rotating Random address resolving to a different Public one is the
+        // pair worth showing; collapsing the columns would lose it.
+        assert_eq!(
+            watch["Address"],
+            serde_json::json!("Random 50:32:66:45:35:EF")
+        );
+        assert_eq!(
+            watch["Resolves to"],
+            serde_json::json!("Public F8:6F:C1:4E:FF:6A")
+        );
+        // An unresolved address stays null rather than repeating the advertised one.
+        let tag = rows
+            .iter()
+            .find(|r| r["Device"] == serde_json::json!("Nameless Tag"))
+            .expect("the tag is present");
+        assert_eq!(tag["Resolves to"], serde_json::Value::Null);
     }
 
     /// The TCC module against the fixture: the decisions it maps, the date it

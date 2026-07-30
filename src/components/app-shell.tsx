@@ -134,7 +134,8 @@ export function AppShell() {
     "traceloupe-sidebar-open",
     true,
   );
-  // The open backup's device, shown as the sidebar header (which opens /device).
+  // The open backup's device, shown as the sidebar header (which opens `/` — the
+  // landing IS the Device view once a backup is open; there is no /device route).
   const { data: deviceInfo } = useQuery({
     queryKey: ["deviceInfo"],
     queryFn: () => client.deviceInfo(),

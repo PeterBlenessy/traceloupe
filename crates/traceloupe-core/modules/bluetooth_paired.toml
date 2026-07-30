@@ -17,9 +17,21 @@
 # So they are declared as plain integers, named as counters, and left
 # unconverted. Guessing an epoch would print a confident wrong date, and a wrong
 # date in a forensic tool is worse than no date — someone would build a timeline
-# on it. They are still worth showing: sorting by them orders the pairings
-# relative to each other, which is a real question ("which of these was used most
-# recently?") answered without claiming a wall-clock time.
+# on it.
+#
+# AND THE ORDERING DOES NOT CLAIM TO BE RECENCY EITHER. An earlier draft ordered
+# by `LastConnectionTime DESC` and called it "most recently used", which is the
+# same guess in a different costume: if the counter is boot- or uptime-relative
+# then a device connected just after the last boot sorts last, and the ordering
+# means the opposite of what it says. Rows are ordered by name, which is
+# deterministic and claims nothing. The counters are shown so a reader can compare
+# them; interpreting them is not something this module is in a position to do.
+#
+# ONE SQL ALTERNATIVE. As in accounts.toml, no schema change is documented for
+# this store, and inventing a fallback would mean guessing which column might be
+# absent on an iOS I have not seen. `run_module` tries alternatives until one
+# prepares, so a missing column means this artifact reports nothing rather than
+# something false.
 #
 # `NameOrigin` is deliberately omitted. It is a small integer (2 throughout the
 # validation image) with no documented meaning I could verify, and a column
@@ -55,7 +67,7 @@ sql = [
          LastSeenTime AS last_seen_counter,
          Uuid AS uuid
   FROM PairedDevices
-  ORDER BY LastConnectionTime DESC, Name
+  ORDER BY Name, Uuid
   """,
 ]
 
@@ -71,8 +83,9 @@ from = "address"
 name = "Resolves to"
 from = "resolved_address"
 
-# Named "counter", not "last connected", because it is not a time. See the note
-# above: the value is device-relative and iLEAPP passes it through raw too.
+# Named "counter", not "last connected", because it is not a time, and not sorted
+# on for the same reason. See the note above: the value is device-relative and
+# iLEAPP passes it through raw too.
 [[columns]]
 name = "Connection counter"
 from = "last_connection_counter"

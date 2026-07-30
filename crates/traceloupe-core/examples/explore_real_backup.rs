@@ -106,7 +106,12 @@ fn main() {
                 });
 
             let dest = work.join("explore.sqlite");
-            let _ = std::fs::remove_file(&dest);
+            // The sidecars too: `extract_db` writes `-wal`/`-shm` and only tries
+            // to checkpoint them away, discarding the result. Removing just the
+            // main file could leave a previous run's WAL beside a fresh store.
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(work.join(format!("explore.sqlite{suffix}")));
+            }
             index
                 .extract_db(&entry, decryptor.as_ref(), &dest)
                 .expect("decrypt + extract the store");
