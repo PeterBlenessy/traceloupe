@@ -1,0 +1,77 @@
+# Sleep schedule — the bedtime and wake time set on this iPhone, and whether sleep
+# tracking is on.
+#
+# The second collection in `com.apple.mobiletimerd.plist`: `MTSleepAlarms`, beside
+# the ordinary `MTAlarms` that `alarms.toml` reads. Same file, different artifact —
+# a sleep schedule has a bedtime, a wind-down and tracking flags that an ordinary
+# alarm does not.
+#
+# WHY IT IS NOT FOLDED INTO `alarms`
+#
+# It would fit the same columns only by leaving the bedtime fields out, and those
+# are the interesting half: an alarm says when someone gets up, a sleep schedule
+# says when they intended to go to bed and whether the phone was watching. Showing
+# them as one list would also imply the device has two alarms when it has one alarm
+# and one schedule.
+#
+# WAKE AND BEDTIME ARE BOTH HOUR+MINUTE PAIRS, for the same reason as in
+# `alarms.toml`: that is how the store holds them, and joining them here would be
+# choosing a clock format on the reader's behalf.
+#
+# `MTAlarmKeepOffUntilDate` is read: a schedule switched off until a date is not
+# the same as one that was never set, and the date says which.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): bedtime 22:45, wake 06:00, switched off, tracking off. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "sleep_schedule"
+name        = "Sleep schedule"
+description = "The bedtime and wake time set on this iPhone, and whether sleep tracking was switched on."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.mobiletimerd.plist"
+
+[plist]
+rows = ["MTAlarms", "MTSleepAlarms"]
+
+[[columns]]
+name = "Wake hour"
+from = ["$MTAlarm", "MTAlarmHour"]
+kind = "integer"
+
+[[columns]]
+name = "Wake minute"
+from = ["$MTAlarm", "MTAlarmMinute"]
+kind = "integer"
+
+[[columns]]
+name = "Bedtime hour"
+from = ["$MTAlarm", "MTAlarmBedtimeHour"]
+kind = "integer"
+
+[[columns]]
+name = "Bedtime minute"
+from = ["$MTAlarm", "MTAlarmBedtimeMinute"]
+kind = "integer"
+
+[[columns]]
+name = "On"
+from = ["$MTAlarm", "MTAlarmEnabled"]
+kind = "bool"
+
+[[columns]]
+name = "Sleep tracking"
+from = ["$MTAlarm", "MTAlarmSleepTrackingKey"]
+kind = "bool"
+
+[[columns]]
+name = "Off until"
+from = ["$MTAlarm", "MTAlarmKeepOffUntilDate"]
+kind = "timestamp"
+
+[[columns]]
+name = "Last changed"
+from = ["$MTAlarm", "MTAlarmLastModifiedDate"]
+kind = "timestamp"

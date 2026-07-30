@@ -157,6 +157,7 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   | `check-clickable.mjs` | a control that looks clickable but a real click lands elsewhere | #224 |
   | `check-view-intro.mjs` | a view that cannot introduce itself with no backup open | #221 |
   | `check-artifact-surfaces.mjs` | a module whose `surface` no view hosts, so its rows render nowhere | #231 |
+  | `check-artifact-overlap.mjs` | a module reading a store the native importer already parses | — |
 
   A host view must never know which artifact it is showing. Two things a module
   declares rather than the view inferring: **column kinds** (`timestamp`, `bytes`)

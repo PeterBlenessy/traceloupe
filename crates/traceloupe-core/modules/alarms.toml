@@ -1,0 +1,76 @@
+# Alarms — the clock alarms set on this iPhone, what time each is for, whether it
+# is switched on, and when it was last changed.
+#
+# `com.apple.mobiletimerd.plist` is the Clock app's daemon preferences.
+# Backup-reachable via `HomeDomain`'s `Library/Preferences` (see
+# docs/reference/backup-coverage-audit.md).
+#
+# TWO COLLECTIONS IN ONE FILE. `MTAlarms` holds ordinary alarms; `MTSleepAlarms`
+# holds the sleep schedule, which is a different thing with different fields and
+# gets its own module (`sleep_schedule.toml`). Sharing a file is not duplication —
+# reading the same collection twice would be, and the overlap guard distinguishes
+# the two.
+#
+# EACH ELEMENT IS WRAPPED. The array holds `{ "$MTAlarm": { … } }`, so every column
+# descends through that one key. That wrapper is Apple's class marker, not data,
+# and there is nothing useful to show from it — the path steps over it rather than
+# the module pretending it is a level of meaning.
+#
+# HOUR AND MINUTE ARE SEPARATE, because that is how the store holds them and this
+# format has no expression language to join them. Two honest integers beat one
+# invented string: a module that formatted "10:41" would be choosing a clock
+# convention on the reader's behalf, and the app already has a setting for that.
+#
+# `MTAlarmRepeatSchedule` is an integer that is 0 here and undocumented elsewhere.
+# It is not read. Same call as `NameOrigin` in bluetooth_paired.toml: a code
+# nobody has verified is not made into a friendly label.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): one alarm at 10:41, switched off, last changed 2024-07-28. Reproduce
+# with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "alarms"
+name        = "Alarms"
+description = "Clock alarms set on this iPhone — the time each is for, whether it is switched on, and when it was last changed."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.mobiletimerd.plist"
+
+[plist]
+rows = ["MTAlarms", "MTAlarms"]
+
+[[columns]]
+name = "Hour"
+from = ["$MTAlarm", "MTAlarmHour"]
+kind = "integer"
+
+[[columns]]
+name = "Minute"
+from = ["$MTAlarm", "MTAlarmMinute"]
+kind = "integer"
+
+[[columns]]
+name = "On"
+from = ["$MTAlarm", "MTAlarmEnabled"]
+kind = "bool"
+
+[[columns]]
+name = "Snooze allowed"
+from = ["$MTAlarm", "MTAlarmAllowsSnooze"]
+kind = "bool"
+
+[[columns]]
+name = "Last changed"
+from = ["$MTAlarm", "MTAlarmLastModifiedDate"]
+kind = "timestamp"
+
+[[columns]]
+name = "Last dismissed"
+from = ["$MTAlarm", "MTAlarmDismissDate"]
+kind = "timestamp"
+
+[[columns]]
+name = "Identifier"
+from = ["$MTAlarm", "MTAlarmID"]
