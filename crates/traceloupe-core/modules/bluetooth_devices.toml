@@ -1,0 +1,73 @@
+# Bluetooth devices — the classic (non-LE) accessories this iPhone has paired
+# with: headphones, speakers, car kits, watches.
+#
+# The companion to `bluetooth_paired`, which reads the LOW-ENERGY register. These
+# are two different stores describing two different radios, and a device can be in
+# either or both — an Apple Watch appears in both, AirPods only here. Reading one
+# and calling it "Bluetooth" would under-report by exactly the devices people
+# actually wear.
+#
+# `com.apple.MobileBluetooth.devices.plist` is confirmed backup-reachable: the
+# same `SysSharedContainerDomain-systemgroup.com.apple.bluetooth` container as the
+# LE store, whose `Library/Preferences` is backed up (see
+# docs/reference/backup-coverage-audit.md).
+#
+# THE KEY IS THE ADDRESS. Each entry is keyed by the device's MAC
+# (`08:65:18:75:5E:75`) with everything else inside, so `key_column` is what makes
+# the address reachable at all. No prefix to strip here — the key is already the
+# value.
+#
+# THREE NAMES, AND THEY ARE NOT THE SAME THING
+#
+#   * `UserNameKey`  — what the owner called it: "This Is's AirPods".
+#   * `Name`         — what the device calls itself: "AirPods 3".
+#   * `DefaultName`  — its class: "Headphones".
+#
+# All three are kept. The user's name is the one that identifies a person's
+# belongings; the device's own name is the one that identifies the hardware model;
+# and they disagree often enough that collapsing them loses whichever the reader
+# needed. On the validation image one device is "Josh's AirPods" / "AirPods" — a
+# name that is evidence of a second person, and which the model name alone would
+# not have shown.
+#
+# There are 82 keys per device on the validation image, nearly all of them radio
+# state (`LastAVCTPVersion`, `initiateSDPMirroringState`, codec flags). None are
+# read: an artifact is what a reader can use, and an undocumented protocol version
+# is not. If one turns out to mean something, it earns a column then.
+#
+# No timestamps: this store records no dates at all — checked, rather than
+# assumed. The LE store's counters are the nearest thing, and they are not dates
+# either (see bluetooth_paired.toml).
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 5 devices, including two sets of AirPods named after different people.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "bluetooth_devices"
+name        = "Bluetooth devices"
+description = "Classic Bluetooth accessories this iPhone has paired with — headphones, speakers, car kits — with the name the owner gave each one."
+surface     = "device"
+category    = "Device"
+domain      = "SysSharedContainerDomain-systemgroup.com.apple.bluetooth"
+path        = "Library/Preferences/com.apple.MobileBluetooth.devices.plist"
+
+[plist]
+# The root dictionary IS the collection, keyed by MAC address.
+key_column = "Address"
+
+# No `from`: this column IS the entry's key.
+[[columns]]
+name = "Address"
+
+[[columns]]
+name = "Named by owner"
+from = "UserNameKey"
+
+[[columns]]
+name = "Device name"
+from = "Name"
+
+[[columns]]
+name = "Kind"
+from = "DefaultName"

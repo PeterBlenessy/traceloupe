@@ -97,6 +97,14 @@ pub enum ColumnKind {
     Real,
     Bool,
     Timestamp,
+    /// Raw bytes rendered as colon-separated lowercase hex — `6a:22:32:98:f4:df`.
+    ///
+    /// Apple stores identifiers as `Data` constantly: MAC addresses, rotation
+    /// keys, hardware ids. `text` gives null for those (they are not UTF-8, and
+    /// pretending otherwise was a bug worth fixing), so without this the value is
+    /// simply unreachable. Colon-separated because that is how a MAC is written
+    /// everywhere else, and a MAC is overwhelmingly what a 6-byte `Data` is.
+    Hex,
     /// A byte count, rendered as a human size by the UI.
     ///
     /// Declared rather than inferred for the same reason `Timestamp` is: the
@@ -1168,6 +1176,18 @@ fn convert_plist(v: &plist::Value, c: &ColumnSpec) -> Result<serde_json::Value> 
             plist::Value::Integer(i) => as_i64(i).map_or(J::Null, |n| J::from(n as f64)),
             _ => J::Null,
         },
+        ColumnKind::Hex => match v {
+            plist::Value::Data(d) => J::String(
+                d.iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(":"),
+            ),
+            // Already text: a store that writes the same field as a string on some
+            // devices should not become null on those.
+            plist::Value::String(s) => J::String(s.clone()),
+            _ => J::Null,
+        },
         ColumnKind::Text => match v {
             plist::Value::String(s) => J::String(s.clone()),
             // Formatted from the Integer itself rather than through i64, so a
@@ -1233,6 +1253,17 @@ fn convert(raw: &rusqlite::types::Value, c: &ColumnSpec) -> serde_json::Value {
         ColumnKind::Real => match raw {
             V::Real(f) => J::from(*f),
             V::Integer(i) => J::from(*i as f64),
+            _ => J::Null,
+        },
+        // A SQLite BLOB is the same idea as a plist Data.
+        ColumnKind::Hex => match raw {
+            V::Blob(b) => J::String(
+                b.iter()
+                    .map(|x| format!("{x:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(":"),
+            ),
+            V::Text(s) => J::String(s.clone()),
             _ => J::Null,
         },
         ColumnKind::Text => match raw {
@@ -1329,6 +1360,14 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "wifi_networks.toml",
         include_str!("../modules/wifi_networks.toml"),
+    ),
+    (
+        "bluetooth_devices.toml",
+        include_str!("../modules/bluetooth_devices.toml"),
+    ),
+    (
+        "wifi_private_mac.toml",
+        include_str!("../modules/wifi_private_mac.toml"),
     ),
 ];
 
@@ -2556,6 +2595,97 @@ from = "nope"
         out
     }
 
+    /// `com.apple.MobileBluetooth.devices.plist`: entries keyed by MAC address,
+    /// with the three different names the store keeps.
+    ///
+    /// One device deliberately has a `UserNameKey` naming someone OTHER than the
+    /// owner, because that disagreement is the reason all three names are kept —
+    /// and one has no user name at all, so the column must be null rather than
+    /// falling back to the model.
+    fn seed_bluetooth_devices() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+
+        let mut a = Dictionary::new();
+        a.insert("UserNameKey".into(), Value::String("Alex's AirPods".into()));
+        a.insert("Name".into(), Value::String("AirPods 3".into()));
+        a.insert("DefaultName".into(), Value::String("Headphones".into()));
+        // Radio state, deliberately unread.
+        a.insert("LastAVCTPVersion".into(), Value::Data(vec![0x01, 0x04]));
+        root.insert("08:65:18:75:5E:75".into(), Value::Dictionary(a));
+
+        // A second person's device on this phone.
+        let mut b = Dictionary::new();
+        b.insert("UserNameKey".into(), Value::String("Sam's AirPods".into()));
+        b.insert("Name".into(), Value::String("AirPods".into()));
+        b.insert("DefaultName".into(), Value::String("Headphones".into()));
+        root.insert("7C:04:D0:89:89:A0".into(), Value::Dictionary(b));
+
+        // Never renamed: no UserNameKey at all.
+        let mut c = Dictionary::new();
+        c.insert("Name".into(), Value::String("Apple Watch".into()));
+        c.insert("DefaultName".into(), Value::String("Watch".into()));
+        root.insert("F8:6F:C1:4E:FF:6A".into(), Value::Dictionary(c));
+
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
+    /// The private-MAC store: rows in an ARRAY under a key with spaces, the
+    /// address six raw bytes nested a level down.
+    ///
+    /// One network's address is marked INVALID, because bytes that are present but
+    /// not in use are not an address this phone presented — and showing them
+    /// without the flag would say it did.
+    fn seed_wifi_private_mac() -> Vec<u8> {
+        use plist::{Date, Dictionary, Value};
+        fn at(secs: u64) -> Value {
+            Value::Date(Date::from(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs),
+            ))
+        }
+        fn mac(valid: bool, bytes: Vec<u8>) -> Value {
+            let mut d = Dictionary::new();
+            d.insert("PRIVATE_MAC_ADDRESS_VALID".into(), Value::Boolean(valid));
+            d.insert("PRIVATE_MAC_ADDRESS_VALUE".into(), Value::Data(bytes));
+            Value::Dictionary(d)
+        }
+
+        let mut first = Dictionary::new();
+        first.insert("SSID_STR".into(), Value::String("HomeNet".into()));
+        first.insert("BSSID".into(), Value::String("6a:22:32:98:f4:df".into()));
+        first.insert("IsOpenNetwork".into(), Value::Boolean(false));
+        first.insert("PresentInKnownNetworks".into(), Value::Boolean(true));
+        first.insert("lastJoined".into(), at(1_689_450_273));
+        first.insert("MacGenerationTimeStamp".into(), at(1_700_312_363));
+        first.insert(
+            "PRIVATE_MAC_ADDRESS".into(),
+            mac(true, vec![0x8a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f]),
+        );
+
+        let mut second = Dictionary::new();
+        second.insert("SSID_STR".into(), Value::String("Cafe Wifi".into()));
+        second.insert("IsOpenNetwork".into(), Value::Boolean(true));
+        second.insert("PresentInKnownNetworks".into(), Value::Boolean(false));
+        second.insert("lastJoined".into(), at(1_700_000_000));
+        second.insert("MacGenerationTimeStamp".into(), at(1_699_000_000));
+        // Present but NOT in use.
+        second.insert(
+            "PRIVATE_MAC_ADDRESS".into(),
+            mac(false, vec![0x00, 0x11, 0x22, 0x33, 0x44, 0x55]),
+        );
+
+        let mut root = Dictionary::new();
+        root.insert(
+            "List of scanned networks with private mac".into(),
+            Value::Array(vec![Value::Dictionary(first), Value::Dictionary(second)]),
+        );
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -2594,6 +2724,16 @@ from = "nope"
             "SystemPreferencesDomain",
             "com.apple.wifi.known-networks.plist",
         ),
+        (
+            "bluetooth_devices",
+            "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
+            "Library/Preferences/com.apple.MobileBluetooth.devices.plist",
+        ),
+        (
+            "wifi_private_mac",
+            "SystemPreferencesDomain",
+            "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
+        ),
     ];
 
     /// How a module's fixture store is built. Two kinds, because a module now has
@@ -2612,6 +2752,8 @@ from = "nope"
             "sim_cards" => seed_sim_cards,
             // Not SQL at all: return early rather than pretend.
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
+            "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
+            "wifi_private_mac" => return Seed::Bytes(seed_wifi_private_mac),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
@@ -3192,6 +3334,26 @@ from = "a"
             serde_json::json!(u64::MAX.to_string())
         );
 
+        // `hex` is what makes an identifier stored as bytes reachable at all —
+        // `text` correctly gives null for it.
+        let hex = ColumnSpec {
+            name: "H".into(),
+            from: vec!["h".into()],
+            kind: ColumnKind::Hex,
+            epoch: None,
+        };
+        let mac = plist::Value::Data(vec![0x8a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f]);
+        assert_eq!(
+            convert_plist(&mac, &hex).unwrap(),
+            serde_json::json!("8a:1b:2c:3d:4e:5f")
+        );
+        assert_eq!(convert_plist(&mac, &text).unwrap(), serde_json::Value::Null);
+        // The same idea from SQLite: a BLOB.
+        assert_eq!(
+            convert(&rusqlite::types::Value::Blob(vec![0x00, 0xff]), &hex),
+            serde_json::json!("00:ff")
+        );
+
         // A timestamp column meeting a number with no epoch: an error naming the
         // column, not a column of silent nulls.
         let ts = ColumnSpec {
@@ -3215,6 +3377,69 @@ from = "a"
             convert_plist(&d, &ts).unwrap(),
             serde_json::json!(1_700_000_000_i64)
         );
+    }
+
+    /// The two plist modules added alongside `wifi_networks`: one keyed by MAC
+    /// with three different names, one whose rows are an ARRAY and whose headline
+    /// value is six raw bytes.
+    #[test]
+    fn the_bluetooth_and_private_mac_modules_read_their_stores() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let run = |id: &str, bytes: Vec<u8>| {
+            let spec = mods.iter().find(|m| m.id == id).expect("module ships");
+            let tmp = tempfile::tempdir().unwrap();
+            make_backup_bytes_in(tmp.path(), &spec.domain, &spec.path, &bytes);
+            let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+            run_module(spec, &index, None, &tmp.path().join("work"))
+                .unwrap()
+                .unwrap()
+        };
+
+        let bt = run("bluetooth_devices", seed_bluetooth_devices());
+        assert_eq!(bt.len(), 3);
+        let alex = bt
+            .iter()
+            .find(|r| r["Address"] == serde_json::json!("08:65:18:75:5E:75"))
+            .expect("keyed by address");
+        // The three names are three different facts and must not collapse.
+        assert_eq!(alex["Named by owner"], serde_json::json!("Alex's AirPods"));
+        assert_eq!(alex["Device name"], serde_json::json!("AirPods 3"));
+        assert_eq!(alex["Kind"], serde_json::json!("Headphones"));
+        // A device the owner never renamed: null, NOT the model name. Falling back
+        // would invent a name the store does not have.
+        let watch = bt
+            .iter()
+            .find(|r| r["Device name"] == serde_json::json!("Apple Watch"))
+            .unwrap();
+        assert_eq!(watch["Named by owner"], serde_json::Value::Null);
+
+        let wifi = run("wifi_private_mac", seed_wifi_private_mac());
+        assert_eq!(wifi.len(), 2, "rows come from the array");
+        let home = wifi
+            .iter()
+            .find(|r| r["Network"] == serde_json::json!("HomeNet"))
+            .unwrap();
+        // Six raw bytes, nested a level down, rendered the way a MAC is written.
+        assert_eq!(
+            home["Private address"],
+            serde_json::json!("8a:1b:2c:3d:4e:5f")
+        );
+        assert_eq!(home["Address valid"], serde_json::json!(true));
+        assert_eq!(home["Last joined"], serde_json::json!(1_689_450_273_i64));
+
+        // Bytes present but marked invalid: both shown, so the flag can qualify
+        // the address rather than the address implying it was used.
+        let cafe = wifi
+            .iter()
+            .find(|r| r["Network"] == serde_json::json!("Cafe Wifi"))
+            .unwrap();
+        assert_eq!(cafe["Address valid"], serde_json::json!(false));
+        assert_eq!(
+            cafe["Private address"],
+            serde_json::json!("00:11:22:33:44:55")
+        );
+        assert_eq!(cafe["Open network"], serde_json::json!(true));
+        assert_eq!(cafe["Still known"], serde_json::json!(false));
     }
 
     /// A `rows` path that does not exist must FAIL, not report an empty artifact.
