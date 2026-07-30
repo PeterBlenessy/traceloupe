@@ -79,10 +79,12 @@ if [ "$WITH_UI" -eq 1 ]; then
   run "design lint"   env BASE="http://localhost:$PORT" node scripts/check-design.mjs
   run "encrypted-empty" node scripts/check-encrypted-empty.mjs "http://localhost:$PORT"
   run "clickable"      node scripts/check-clickable.mjs "http://localhost:$PORT"
+  run "view-intro"     node scripts/check-view-intro.mjs "http://localhost:$PORT"
 else
   RESULTS+=("skip  design lint (pass --with-ui)")
   RESULTS+=("skip  encrypted-empty (pass --with-ui)")
   RESULTS+=("skip  clickable (pass --with-ui)")
+  RESULTS+=("skip  view-intro (pass --with-ui)")
 fi
 
 # --- say what ran, not just whether it passed ------------------------------
