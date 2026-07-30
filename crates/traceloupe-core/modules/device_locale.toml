@@ -1,0 +1,58 @@
+# Language and region — the language this iPhone is set to, its region format, and
+# how it shows the time.
+#
+# `.GlobalPreferences.plist` is the system-wide defaults domain: the settings that
+# are not any one app's. Backup-reachable via `HomeDomain`'s `Library/Preferences`
+# (see docs/reference/backup-coverage-audit.md).
+#
+# A SINGLE-RECORD artifact — the first. The root dictionary IS the row, so
+# `[plist]` declares no `rows` and no `key_column`. That distinction matters: with
+# a `key_column` this same file would become one row per setting name, which is a
+# different and much less useful artifact.
+#
+# `AppleLanguages` is an ARRAY in preference order, so the first element is the
+# language actually in use and the path indexes it directly. The rest of the
+# order is not shown: a second preferred language is real but it is not what the
+# device is set to, and one column cannot honestly be both.
+#
+# Only settings a reader can act on are read. The file also holds
+# `AKLastIDMSEnvironment`, `PKKeychainVersionKey`, `AppleLanguagesSchemaVersion`
+# and similar — internal version counters with no documented meaning, which are
+# decoration rather than data (the same call `bluetooth_devices` makes about
+# codec flags).
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): en-US, en_US, 24-hour time on. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "device_locale"
+name        = "Language and region"
+description = "The language this iPhone is set to, its region format, and whether it shows a 24-hour clock."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/.GlobalPreferences.plist"
+
+[plist]
+# No `rows` and no `key_column`: the root dictionary is ONE record.
+
+[[columns]]
+name = "Language"
+from = ["AppleLanguages", "0"]
+
+[[columns]]
+name = "Region format"
+from = "AppleLocale"
+
+[[columns]]
+name = "Last known locale"
+from = "AKLastLocale"
+
+[[columns]]
+name = "24-hour clock"
+from = "AppleICUForce24HourTime"
+kind = "bool"
+
+[[columns]]
+name = "Passcode keyboard"
+from = ["ApplePasscodeKeyboards", "0"]

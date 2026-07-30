@@ -1,0 +1,83 @@
+# Nearby Bluetooth devices — low-energy devices this iPhone SAW but never paired
+# with: other people's phones and watches, headphones, trackers, appliances.
+#
+# The third Bluetooth store, and the one that is about the surroundings rather
+# than the device. `bluetooth_paired` is what this phone joined; `bluetooth_devices`
+# is what it joined over the classic radio; this is what was simply in range.
+#
+# Backup-reachable: the same
+# `SysSharedContainerDomain-systemgroup.com.apple.bluetooth` container, whose
+# `Library/Database` is backed up (see docs/reference/backup-coverage-audit.md).
+#
+# WHAT THIS ACTUALLY CONTAINS, MEASURED
+#
+# 1056 rows on the validation image, of which exactly **5 carry a name**. The
+# other 1051 are rotating random addresses — the privacy feature working as
+# designed, and no more identifying than a car passing the window.
+#
+# All 1056 ship. Dropping the unnamed ones would be tidier and would also be
+# throwing away the record of how busy a place was, which is not this module's
+# call to make. Instead they are ORDERED so the named ones come first: nothing is
+# hidden, and the rows a reader can act on are at the top. The five on the
+# validation image are a garage-door opener, a Fitbit, a HomePod, and two of the
+# owner's own devices — which is a fair picture of what this artifact is for.
+#
+# NO "RESOLVES TO" COLUMN, unlike the paired store
+#
+# `OtherDevices` has a `ResolvedAddress` column and it is NULL on all 1056 rows.
+# That is not a quirk of this image: resolving a rotating address to the device's
+# real one needs the identity key exchanged during PAIRING, so by definition an
+# unpaired sighting cannot be resolved. The column exists in the schema and can
+# never hold anything here. Shipping it would have put an always-empty column
+# beside a populated one in the sibling artifact, implying these devices simply
+# had not been resolved yet rather than that they cannot be.
+#
+# Caught by the guard that requires every declared column to carry a value in at
+# least one fixture row — this column was copied from `bluetooth_paired` without
+# checking, which is exactly the mistake it exists for.
+#
+# The counters are NOT dates, exactly as in `bluetooth_paired` — device-relative
+# values that iLEAPP passes through raw. They are shown unconverted and named as
+# counters, and rows are not ordered by them, because ordering on a counter of
+# unknown origin would claim a recency it cannot support.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 1056 sightings, 5 named. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "bluetooth_nearby"
+name        = "Nearby Bluetooth"
+description = "Low-energy Bluetooth devices this iPhone saw in range but never paired with — other people's devices, trackers and appliances."
+surface     = "device"
+category    = "Device"
+domain      = "SysSharedContainerDomain-systemgroup.com.apple.bluetooth"
+path        = "Library/Database/com.apple.MobileBluetooth.ledevices.other.db"
+
+sql = [
+  """
+  SELECT Name AS name,
+         Address AS address,
+         LastSeenTime AS last_seen_counter,
+         Uuid AS uuid
+  FROM OtherDevices
+  ORDER BY (Name IS NULL OR Name = ''), Name, Address
+  """,
+]
+
+[[columns]]
+name = "Device"
+from = "name"
+
+[[columns]]
+name = "Address"
+from = "address"
+
+# A counter, not a time. See bluetooth_paired.toml for the measurement.
+[[columns]]
+name = "Seen counter"
+from = "last_seen_counter"
+kind = "integer"
+
+[[columns]]
+name = "Identifier"
+from = "uuid"
