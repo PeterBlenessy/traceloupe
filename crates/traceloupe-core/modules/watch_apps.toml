@@ -1,0 +1,85 @@
+# Apps on the paired Apple Watch — what is installed on the watch this iPhone is
+# paired with, which iPhone app each belongs to, and which are actually on the
+# watch right now.
+#
+# The FIRST module to need a path pattern, and the reason patterns exist.
+# `Library/DeviceRegistry/<uuid>/AppConduit/ACXRemoteAppList.plist` is keyed by
+# the paired device's own UUID, so there is no exact path to write: it differs on
+# every phone, and a phone paired with two watches has two of them.
+#
+# That is also why `path_column` is not optional for a pattern. With two paired
+# devices this artifact is two lists, and merged into one table with nothing
+# saying which watch a row came from it would read as one watch with twice the
+# apps. The column holds the matched path, whose UUID identifies the device.
+#
+# Backup-reachable via `HomeDomain`'s `Library/DeviceRegistry` (see
+# docs/reference/backup-coverage-audit.md).
+#
+# WHY THIS IS ON THE DEVICE SURFACE AND NOT IN APPS
+#
+# `companionAppBundleID` would join to the iPhone app, and "this app also has a
+# watch app" is a true and mildly interesting fact. But the artifact is about the
+# WATCH — including watch apps whose companion is not installed, and Apple's own
+# apps that ship with watchOS. Hosting it in Apps would show only the intersection
+# and quietly drop the rest, which is the wrong half: what is on the watch is the
+# question, not which iPhone apps happen to extend to it.
+#
+# `isLocallyAvailable` matters more than it looks: an app can be listed here and
+# not actually be on the watch. Shipping the list without the flag would report
+# apps as installed that are not.
+#
+# NOT READ: the 33 keys per app include `requiredCapabilities`, `backgroundModes`,
+# `architectureSlices`, `sequenceNumber`, `complicationPrincipalClass` and a
+# per-language display-name table (85 locales). None of them answer a question a
+# reader has, and the localisation table would drown the artifact in a column per
+# language.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 47 apps on one paired watch. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "watch_apps"
+name        = "Apple Watch apps"
+description = "Apps installed on the Apple Watch paired with this iPhone, and which iPhone app each belongs to."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/DeviceRegistry/*/AppConduit/ACXRemoteAppList.plist"
+# Which paired device this row came from. Required for a pattern, and meaningful
+# here: the UUID in the path IS the device. It holds what the `*` matched — the
+# UUID alone — rather than the whole path, which would repeat forty characters of
+# boilerplate on every row around the part that identifies anything.
+path_column = "Paired device"
+
+[plist]
+rows       = ["appList"]
+key_column = "App"
+
+# No `from`: this column IS the entry's key.
+[[columns]]
+name = "App"
+
+[[columns]]
+name = "Companion app"
+from = "companionAppBundleID"
+
+[[columns]]
+name = "Version"
+from = "bundleShortVersion"
+
+[[columns]]
+name = "Build"
+from = "bundleVersion"
+
+[[columns]]
+name = "On the watch"
+from = "isLocallyAvailable"
+kind = "bool"
+
+[[columns]]
+name = "Minimum watchOS"
+from = "minimumOSVersion"
+
+# No `from`: filled by the runner with the store this row came from.
+[[columns]]
+name = "Paired device"

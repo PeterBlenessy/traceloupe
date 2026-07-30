@@ -875,6 +875,38 @@ def build_location_clients_plist() -> bytes:
     )
 
 
+def build_watch_apps_plist() -> bytes:
+    """ACXRemoteAppList.plist — apps on the paired Apple Watch.
+
+    Seeded at a CONCRETE DeviceRegistry path, because the module's `path` is a
+    pattern: the segment is the paired device's UUID and differs on every phone.
+    Writing it at the literal pattern would let `*` match itself and prove nothing.
+
+    One app is on the watch and one is only listed — `isLocallyAvailable` is the
+    difference between "this app exists for the watch" and "it is on it".
+    """
+    return plistlib.dumps(
+        {
+            "appList": {
+                "com.example.chatapp.watchkitapp": {
+                    "companionAppBundleID": "com.example.chatapp",
+                    "bundleShortVersion": "2.4",
+                    "bundleVersion": "2401",
+                    "isLocallyAvailable": True,
+                    "minimumOSVersion": "9.6",
+                    "sequenceNumber": 6,  # unread
+                },
+                "com.example.todo.watchkitapp": {
+                    "companionAppBundleID": "com.example.todo",
+                    "bundleShortVersion": "1.0",
+                    "isLocallyAvailable": False,
+                },
+            }
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -957,6 +989,14 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "RootDomain",
             "Library/Caches/locationd/clients.plist",
             build_location_clients_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            # A real UUID segment, matched by the module's pattern.
+            "Library/DeviceRegistry/48BEB26F-3064-4BEF-A616-AB96D8C5BD15"
+            "/AppConduit/ACXRemoteAppList.plist",
+            build_watch_apps_plist(),
         ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
