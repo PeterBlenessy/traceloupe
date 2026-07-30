@@ -7,6 +7,7 @@
  */
 import {
   Boxes,
+  Smartphone,
   CalendarDays,
   Globe,
   HeartPulse,
@@ -63,6 +64,7 @@ export const nav: readonly NavItem[] = [
   { to: "/health", label: "Health", icon: HeartPulse },
   { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
+  { to: "/device", label: "Device", icon: Smartphone },
 
 ] as const;
 

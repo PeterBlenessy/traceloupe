@@ -47,26 +47,6 @@ function cellText(value: ArtifactRow[string], isDate: boolean): string {
   return String(value);
 }
 
-/** Columns whose values look like Unix-second timestamps.
- *
- *  The backend does not currently say which columns are dates — only their
- *  names — so this infers it from the values. Inference is the wrong long-term
- *  answer and is marked as such: the module already knows, and the summary
- *  should carry the column kind. Kept narrow (a plausible-date range on a
- *  number) so a count or an id cannot be mistaken for a date. */
-function dateColumns(columns: string[], rows: ArtifactRow[]): Set<string> {
-  const out = new Set<string>();
-  for (const col of columns) {
-    const values = rows.map((r) => r[col]).filter((v) => v !== null && v !== undefined);
-    if (values.length === 0) continue;
-    const allPlausibleDates = values.every(
-      (v) => typeof v === "number" && v > 946_684_800 && v < 4_102_444_800,
-    );
-    if (allPlausibleDates) out.add(col);
-  }
-  return out;
-}
-
 function ArtifactTable({
   artifact,
   rows,
@@ -76,7 +56,7 @@ function ArtifactTable({
   rows: ArtifactRow[];
   search: string;
 }) {
-  const dates = useMemo(() => dateColumns(artifact.columns, rows), [artifact.columns, rows]);
+  const dates = useMemo(() => new Set(artifact.timestampColumns ?? []), [artifact]);
   return (
     <div className="min-w-full">
       <div
@@ -131,11 +111,19 @@ export function ArtifactsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const { data: artifacts, isPending: listPending } = useQuery({
+  const { data: allArtifacts, isPending: listPending } = useQuery({
     queryKey: ["artifacts"],
     queryFn: () => client.listArtifacts(),
     enabled: active === true,
   });
+  // Only the artifacts that belong HERE. This view listed every artifact
+  // regardless of surface — a leftover from before #220 moved hosted ones into
+  // the view closest in meaning — so a permission hosted in Apps was also shown
+  // on this screen, and a reader had no way to tell which place was the real one.
+  const artifacts = useMemo(
+    () => (allArtifacts ?? []).filter((a) => a.surface === "standalone"),
+    [allArtifacts],
+  );
   const { data: extraction } = useQuery({
     queryKey: ["artifactsExtractionState"],
     queryFn: () => client.artifactsExtractionState(),

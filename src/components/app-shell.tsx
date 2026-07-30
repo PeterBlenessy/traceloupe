@@ -291,7 +291,16 @@ export function AppShell() {
             </SidebarFooter>
           </Sidebar>
           <SidebarResizeEdge onPointerDown={(e) => startResize(e, "right")} />
-          <SidebarInset>
+          {/* `min-w-0` because shadcn's SidebarInset is `flex w-full flex-1` with
+              no min-width, and a flex item's min-width defaults to `auto` — so
+              content wider than the window expands <main> instead of being
+              contained by it. Measured: with the Device view's nowrap artifact
+              tables rendered, main's right edge sat at 1252 in an 1100px window,
+              and since nothing scrolls horizontally at that level the
+              overflowing columns were unreachable rather than merely awkward.
+              Set here rather than in components/ui/sidebar.tsx so re-adding the
+              shadcn component cannot silently drop it. */}
+          <SidebarInset className="min-w-0">
             {/* The bar clearance lives as PADDING on this clipping wrapper (not
                 on SidebarInset) so its padding-box reaches the window top:
                 overflow clips at the padding box, which lets an opted-in list

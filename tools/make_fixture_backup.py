@@ -431,6 +431,87 @@ def seed_tcc_db(path: Path) -> None:
     con.close()
 
 
+def seed_accounts3(path: Path) -> None:
+    """Accounts3.sqlite — accountsd's register of every service signed in on the
+    device. A Core Data store, hence the Z-prefixed names.
+
+    Includes the cases the module claims to handle: an account whose ZACCOUNTTYPE
+    row is MISSING (the module LEFT JOINs, so it survives; iLEAPP's inner join
+    would drop it and the count would fall silently), a NULL username, and a NULL
+    ZACTIVE. See crates/traceloupe-core/modules/accounts.toml.
+
+    ZDATE is Cocoa/Core Data seconds (since 2001-01-01), not Unix — the module
+    declares `epoch = "cocoa"`. 726000000 is 2024-01-03.
+    """
+    con = sqlite3.connect(path)
+    con.executescript(
+        """CREATE TABLE ZACCOUNT (
+             Z_PK INTEGER PRIMARY KEY, ZACTIVE INTEGER, ZAUTHENTICATED INTEGER,
+             ZACCOUNTTYPE INTEGER, ZDATE TIMESTAMP, ZACCOUNTDESCRIPTION VARCHAR,
+             ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR, ZUSERNAME VARCHAR);
+           CREATE TABLE ZACCOUNTTYPE (
+             Z_PK INTEGER PRIMARY KEY, ZACCOUNTTYPEDESCRIPTION VARCHAR,
+             ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR);"""
+    )
+    con.executemany(
+        "INSERT INTO ZACCOUNTTYPE (Z_PK, ZACCOUNTTYPEDESCRIPTION, ZIDENTIFIER)"
+        " VALUES (?,?,?)",
+        [
+            (1, "Gmail", "com.apple.account.Google"),
+            (2, "Holiday Calendar", "com.apple.account.HolidayCalendar"),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO ZACCOUNT (Z_PK, ZACTIVE, ZAUTHENTICATED, ZACCOUNTTYPE, ZDATE,"
+        " ZACCOUNTDESCRIPTION, ZIDENTIFIER, ZOWNINGBUNDLEID, ZUSERNAME)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        [
+            (1, 1, 1, 1, 726_000_000, "Gmail", "acct-1", "com.apple.mobilemail", "person@example.com"),
+            (2, 1, 1, 2, 725_000_000, "US Holidays", "acct-2", "dataaccessd", None),
+            # No ZACCOUNTTYPE row: only the LEFT JOIN keeps this one.
+            (3, 0, 0, None, 724_000_000, None, "com.apple.account.orphaned", "appstored", "local"),
+            (4, None, None, 1, 723_000_000, "Unrecorded", "acct-4", "accountsd", None),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
+def seed_bluetooth_paired(path: Path) -> None:
+    """com.apple.MobileBluetooth.ledevices.paired.db — bluetoothd's register of
+    completed LE pairings.
+
+    `LastSeenTime` / `LastConnectionTime` are device-relative counters, NOT any
+    epoch — iLEAPP passes them through raw too. The module declares them as
+    integers on purpose; see crates/traceloupe-core/modules/bluetooth_paired.toml.
+
+    One row advertises a Random address that resolves to a different Public one,
+    which is the pair the module exists to show.
+    """
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE PairedDevices(Uuid TEXT, Name TEXT, NameOrigin INT,"
+        " Address TEXT, ResolvedAddress TEXT, LastSeenTime INT,"
+        " LastConnectionTime INT, GATTServiceChangeConfig INT, Tags TEXT,"
+        " iCloudIdentifier TEXT)"
+    )
+    con.executemany(
+        "INSERT INTO PairedDevices (Uuid, Name, NameOrigin, Address,"
+        " ResolvedAddress, LastSeenTime, LastConnectionTime, iCloudIdentifier)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        [
+            ("E3B37CA8-1AA5-AD44-B0FE-A617BB09B64A", "Fitness Band", 2,
+             "Public B4:C2:6A:7F:D3:7A", "Public B4:C2:6A:7F:D3:7A", 395_626, 2_143, ""),
+            ("6C0C35A0-84CE-3572-2E72-4CF3D03BD1AF", "Example Watch", 2,
+             "Random 50:32:66:45:35:EF", "Public F8:6F:C1:4E:FF:6A", 4_315_986, 9_639, ""),
+            ("C4E4E254-6060-26CA-7C80-EE01F3C5C346", "Nameless Tag", 2,
+             "Random E8:F0:58:00:C0:FB", None, 748_458, 3_662, None),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -446,12 +527,22 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_photos_sqlite(photos_path)
     tcc_path = workdir / "TCC.db"
     seed_tcc_db(tcc_path)
+    accounts_path = workdir / "Accounts3.sqlite"
+    seed_accounts3(accounts_path)
+    bt_path = workdir / "ledevices.paired.db"
+    seed_bluetooth_paired(bt_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
         ("HomeDomain", "Library/CallHistoryDB/CallHistory.storedata", calls_path.read_bytes()),
         ("HomeDomain", "Library/AddressBook/AddressBook.sqlitedb", ab_path.read_bytes()),
         ("HomeDomain", "Library/TCC/TCC.db", tcc_path.read_bytes()),
+        ("HomeDomain", "Library/Accounts/Accounts3.sqlite", accounts_path.read_bytes()),
+        (
+            "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
+            "Library/Database/com.apple.MobileBluetooth.ledevices.paired.db",
+            bt_path.read_bytes(),
+        ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
     # A real camera roll: the DCIM original, its V2 thumbnail, and Photos.sqlite.

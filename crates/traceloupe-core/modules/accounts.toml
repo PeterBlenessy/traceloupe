@@ -1,0 +1,107 @@
+# Configured accounts — which services are signed in on this device, when each
+# was added, and whether it is still active.
+#
+# `Accounts3.sqlite` is Apple's accountsd store: the single register behind
+# Settings › Mail/Contacts/Calendars, iCloud, Game Center and every third-party
+# service that uses the system account plumbing. It is confirmed
+# backup-reachable: HomeDomain backs up `Library/Accounts` (see
+# docs/reference/backup-coverage-audit.md).
+#
+# WHY THIS IS ON THE DEVICE SURFACE AND NOT IN APPS
+#
+# `ZOWNINGBUNDLEID` looks like a bundle id you could attach to an installed app,
+# and the first draft of this module tried exactly that. On real data every
+# owner is a *system daemon* — `accountsd`, `dataaccessd`, `appstored`,
+# `purplebuddy`, `com.apple.AuthKit` — because the daemon, not the app, registers
+# the account. Joining against the installed-app list attached almost nothing.
+# The artifact describes how the device is configured, so it belongs to the
+# device. See #231.
+#
+# A Core Data store, hence the Z-prefixed names. Two joins matter:
+#
+#   * ZACCOUNTTYPE gives the human-readable service name
+#     (`ZACCOUNTTYPEDESCRIPTION` — "Gmail", "Holiday Calendar"), which beats
+#     ZACCOUNT's own `ZIDENTIFIER` ("com.apple.account.Google") for a reader.
+#   * LEFT JOIN, not the inner join iLEAPP's `accountData.py` uses. An account
+#     whose type row is missing is still an account that exists on the device,
+#     and dropping it would under-report silently — the failure mode this project
+#     cares most about. On the validation image all 19 rows have a type, so this
+#     costs nothing and guards the case where it would.
+#
+# `ZDATE` is a Cocoa / Core Data timestamp (seconds since 2001-01-01), declared
+# as `epoch = "cocoa"` rather than converted in SQL, so the conversion is the
+# one the rest of the app uses. Verified against the validation image: it yields
+# 2024-01-17 on a device imaged in 2024. Treating it as Unix would have read
+# 1970.
+#
+# ZACTIVE / ZAUTHENTICATED are 0/1 flags, mapped to words. A NULL is reported as
+# unrecorded rather than folded into "No": "we do not know" and "no" are
+# different answers, and an artifact that cannot tell them apart is one a reader
+# cannot trust.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 19 accounts across 12 services. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "accounts"
+name        = "Accounts"
+description = "Which services are signed in on this device — mail, calendars, iCloud, Game Center and more — with when each was added."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Accounts/Accounts3.sqlite"
+
+sql = [
+  """
+  SELECT COALESCE(t.ZACCOUNTTYPEDESCRIPTION, a.ZIDENTIFIER) AS service,
+         a.ZUSERNAME AS username,
+         a.ZACCOUNTDESCRIPTION AS label,
+         a.ZOWNINGBUNDLEID AS owner,
+         a.ZDATE AS added_at,
+         CASE
+           WHEN a.ZACTIVE IS NULL THEN 'Not recorded'
+           WHEN a.ZACTIVE = 0 THEN 'Inactive'
+           WHEN a.ZACTIVE = 1 THEN 'Active'
+           ELSE 'Unrecognised (' || a.ZACTIVE || ')'
+         END AS active,
+         CASE
+           WHEN a.ZAUTHENTICATED IS NULL THEN 'Not recorded'
+           WHEN a.ZAUTHENTICATED = 0 THEN 'No'
+           WHEN a.ZAUTHENTICATED = 1 THEN 'Yes'
+           ELSE 'Unrecognised (' || a.ZAUTHENTICATED || ')'
+         END AS authenticated
+  FROM ZACCOUNT a
+  LEFT JOIN ZACCOUNTTYPE t ON t.Z_PK = a.ZACCOUNTTYPE
+  ORDER BY a.ZDATE DESC, service
+  """,
+]
+
+[[columns]]
+name = "Service"
+from = "service"
+
+[[columns]]
+name = "Account"
+from = "username"
+
+[[columns]]
+name = "Label"
+from = "label"
+
+[[columns]]
+name = "Added"
+from = "added_at"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Status"
+from = "active"
+
+[[columns]]
+name = "Signed in"
+from = "authenticated"
+
+[[columns]]
+name = "Registered by"
+from = "owner"

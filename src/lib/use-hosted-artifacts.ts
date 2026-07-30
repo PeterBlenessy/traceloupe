@@ -23,7 +23,10 @@ const PAGE = 5000;
 
 export type HostedArtifact = {
   artifact: ArtifactSummary;
-  /** join value (lowercased) → its rows. */
+  /** Every row, for a host that shows the artifact whole. */
+  rows: ArtifactRow[];
+  /** join value (lowercased) → its rows. Empty when the artifact does not join,
+   *  which is the normal case on a surface that is a list of one. */
   byKey: Map<string, ArtifactRow[]>;
 };
 
@@ -42,8 +45,11 @@ export function useHostedArtifacts(host: string, enabled: boolean): {
     enabled,
   });
 
+  // No `&& a.joinColumn`: a Device-surface artifact has nothing to join on,
+  // because the Device view is a list of one thing. Requiring a join column here
+  // would silently drop every such artifact from its own host.
   const mine = useMemo(
-    () => (artifacts ?? []).filter((a) => a.surface === host && a.joinColumn),
+    () => (artifacts ?? []).filter((a) => a.surface === host),
     [artifacts, host],
   );
 
@@ -59,18 +65,20 @@ export function useHostedArtifacts(host: string, enabled: boolean): {
     return mine.map((artifact, i) => {
       const rows = rowQueries[i]?.data ?? [];
       const byKey = new Map<string, ArtifactRow[]>();
-      const col = artifact.joinColumn!;
-      for (const row of rows) {
-        const raw = row[col];
-        if (raw === null || raw === undefined) continue;
-        // Bundle ids are case-stable in practice, but matching case-insensitively
-        // costs nothing and a mismatch here silently drops a row from its app.
-        const key = String(raw).toLowerCase();
-        const list = byKey.get(key);
-        if (list) list.push(row);
-        else byKey.set(key, [row]);
+      const col = artifact.joinColumn;
+      if (col) {
+        for (const row of rows) {
+          const raw = row[col];
+          if (raw === null || raw === undefined) continue;
+          // Bundle ids are case-stable in practice, but matching case-insensitively
+          // costs nothing and a mismatch here silently drops a row from its app.
+          const key = String(raw).toLowerCase();
+          const list = byKey.get(key);
+          if (list) list.push(row);
+          else byKey.set(key, [row]);
+        }
       }
-      return { artifact, byKey };
+      return { artifact, rows, byKey };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mine, rowQueries.map((q) => q.data).join("|")]);

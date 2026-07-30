@@ -1,0 +1,88 @@
+# Paired Bluetooth devices — the low-energy accessories this iPhone is paired
+# with: watches, fitness trackers, headphones, tags.
+#
+# `com.apple.MobileBluetooth.ledevices.paired.db` is bluetoothd's register of
+# completed LE pairings. It is confirmed backup-reachable: the store lives in
+# `SysSharedContainerDomain-systemgroup.com.apple.bluetooth`, whose
+# `Library/Database` is backed up (see docs/reference/backup-coverage-audit.md).
+#
+# WHY THE TWO TIME COLUMNS ARE NOT DATES
+#
+# `LastSeenTime` and `LastConnectionTime` hold values like `395626` and `2143`.
+# Those are not any epoch — not Unix, not Cocoa, not WebKit; as Unix seconds
+# `395626` is January 1970 and as Cocoa it is 2001. They are device-relative
+# counters. The authoritative reference agrees: iLEAPP's `bluetoothPairedLE.py`
+# passes both through **raw** and does not even report `LastSeenTime`.
+#
+# So they are declared as plain integers, named as counters, and left
+# unconverted. Guessing an epoch would print a confident wrong date, and a wrong
+# date in a forensic tool is worse than no date — someone would build a timeline
+# on it. They are still worth showing: sorting by them orders the pairings
+# relative to each other, which is a real question ("which of these was used most
+# recently?") answered without claiming a wall-clock time.
+#
+# `NameOrigin` is deliberately omitted. It is a small integer (2 throughout the
+# validation image) with no documented meaning I could verify, and a column
+# reading "2" tells a reader nothing. An artifact has to be intelligible; a field
+# nobody can interpret is not data, it is decoration.
+#
+# `Address` and `ResolvedAddress` carry Apple's own `Public `/`Random ` prefix in
+# the stored string and are kept verbatim. `Random` marks a rotating privacy
+# address, and the pair is the interesting part: on the validation image an Apple
+# Watch advertises `Random 50:32:66:45:35:EF` but resolves to
+# `Public F8:6F:C1:4E:FF:6A` — the device's real identity behind the rotating
+# one. Collapsing the two columns would lose exactly that.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 3 paired devices — a Garmin vívoactive 4, a Fitbit Versa 3 and an Apple
+# Watch. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "bluetooth_paired"
+name        = "Bluetooth pairings"
+description = "Low-energy Bluetooth accessories this iPhone is paired with — watches, trackers, headphones and tags — with the address each advertises."
+surface     = "device"
+category    = "Device"
+domain      = "SysSharedContainerDomain-systemgroup.com.apple.bluetooth"
+path        = "Library/Database/com.apple.MobileBluetooth.ledevices.paired.db"
+
+sql = [
+  """
+  SELECT Name AS name,
+         Address AS address,
+         ResolvedAddress AS resolved_address,
+         LastConnectionTime AS last_connection_counter,
+         LastSeenTime AS last_seen_counter,
+         Uuid AS uuid
+  FROM PairedDevices
+  ORDER BY LastConnectionTime DESC, Name
+  """,
+]
+
+[[columns]]
+name = "Device"
+from = "name"
+
+[[columns]]
+name = "Address"
+from = "address"
+
+[[columns]]
+name = "Resolves to"
+from = "resolved_address"
+
+# Named "counter", not "last connected", because it is not a time. See the note
+# above: the value is device-relative and iLEAPP passes it through raw too.
+[[columns]]
+name = "Connection counter"
+from = "last_connection_counter"
+kind = "integer"
+
+[[columns]]
+name = "Seen counter"
+from = "last_seen_counter"
+kind = "integer"
+
+[[columns]]
+name = "Identifier"
+from = "uuid"

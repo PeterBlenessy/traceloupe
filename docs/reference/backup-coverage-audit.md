@@ -191,6 +191,35 @@ as for first-party: most of these are flat record stores, not conversations.
 
 ---
 
+## Settling a candidate against a real backup
+
+This audit says what Apple's rules imply. Before writing a module, check the
+implication against a real device with `explore_real_backup`, which decrypts a
+backup with the app's own decryptor and reads its Manifest:
+
+```bash
+# Is this store actually in a backup? (SQL LIKE, % wildcards)
+cargo run -p traceloupe-core --example explore_real_backup -- <dir> <password> \
+    list '%voicemail%'
+
+# What is its real schema, and does anything populate it?
+cargo run -p traceloupe-core --example explore_real_backup -- <dir> <password> \
+    schema HomeDomain Library/Accounts/Accounts3.sqlite
+
+# Does a candidate query return the rows you expect?
+cargo run -p traceloupe-core --example explore_real_backup -- <dir> <password> \
+    sql HomeDomain Library/Accounts/Accounts3.sqlite 'SELECT ... LIMIT 5'
+```
+
+Use Josh Hickman's public image (`scripts/fetch-test-image.sh`) — **never the
+owner's own backup** (AGENTS.md). It pays for itself immediately: the row counts
+are what killed voicemail as a candidate (present but empty on the validation
+image, so nothing would have been proven) and what redirected the accounts module
+off the Apps surface (every owning bundle id is a system daemon, so the join
+attached nothing).
+
+---
+
 ## Known weaknesses of this audit
 
 Stated so nobody mistakes it for more than it is:
