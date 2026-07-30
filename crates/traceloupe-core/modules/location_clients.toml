@@ -1,0 +1,85 @@
+# Location access — which apps and system services asked this iPhone for its
+# location, and when each last stopped receiving it.
+#
+# `clients.plist` is locationd's register of everything that has requested
+# location. It sits under `Library/Caches/`, which is USUALLY excluded from
+# backups — but not here: this one is in `RootDomain`, whose backup rules include
+# it, and the file is present in the real backup's manifest (verified, not
+# assumed; see docs/reference/backup-coverage-audit.md for how that is decided).
+#
+# HOW THIS DIFFERS FROM THE PERMISSION IN `tcc`
+#
+# TCC records the DECISION — "this app may use location". This records the USE:
+# that the app actually held a location session, and roughly when it let go. An
+# app can be allowed and never ask; an app can have asked long before the current
+# decision was made. Shown side by side in the Apps view, the pair is more than
+# either alone, which is why this joins on the bundle id rather than living on the
+# device surface.
+#
+# THE KEY IS A COMPOUND, AND THERE IS A BETTER SOURCE
+#
+# Entries are keyed like `icom.zhiliaoapp.musically:` or
+# `lcom.apple.Maps:p/System/Library/LocationBundles/NavdLocationBundleiOS.bundle`
+# — a one-character kind marker, the bundle id, a colon, then an optional
+# sub-bundle. Parsing that would mean guessing what the marker means. 102 of the
+# 189 entries carry an explicit `BundleId` instead, so the join uses that and the
+# raw key is kept beside it as "Client": the key is what distinguishes an app's
+# several location sessions from one another, and dropping it would collapse them.
+#
+# Entries with no `BundleId` are system location bundles with no app to attach to.
+# They still produce rows — the artifact is honest about what asked — and the Apps
+# view simply has nothing to hang them on, which is the correct outcome rather
+# than a reason to filter them out of the store.
+#
+# BOTH TIMESTAMPS SHIP. `LocationTimeStopped` (57 entries) and
+# `ReceivingLocationInformationTimeStopped` (68) are different fields that
+# co-occur on some clients and not others; without knowing why, collapsing them
+# with a COALESCE would invent a single fact out of two. They are Cocoa reals, so
+# `epoch = "cocoa"` — a plist Date needs none, a plist NUMBER does.
+#
+# `SupportedAuthorizationMask` is an undocumented bitmask and is not read.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 189 clients including TikTok, Gmail and Apple Maps. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "location_clients"
+name        = "Location access"
+description = "Apps and services that asked this iPhone for its location, and when each last stopped receiving it."
+surface     = "apps"
+join_column = "App"
+category    = "Security"
+domain      = "RootDomain"
+path        = "Library/Caches/locationd/clients.plist"
+
+[plist]
+# The root dictionary is the collection; its keys are the client identifiers.
+key_column = "Client"
+
+[[columns]]
+name = "App"
+from = "BundleId"
+
+# No `from`: this column IS the entry's key.
+[[columns]]
+name = "Client"
+
+[[columns]]
+name = "Bundle path"
+from = "BundlePath"
+
+[[columns]]
+name = "Registered"
+from = "Registered"
+
+[[columns]]
+name = "Stopped receiving"
+from = "ReceivingLocationInformationTimeStopped"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Location stopped"
+from = "LocationTimeStopped"
+kind = "timestamp"
+epoch = "cocoa"

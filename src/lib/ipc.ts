@@ -3510,6 +3510,28 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "location_clients",
+            name: "Location access",
+            category: "Security",
+            description:
+              "Apps and services that asked this iPhone for its location, and when each last stopped receiving it.",
+            surface: "apps" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Client",
+              "Bundle path",
+              "Registered",
+              "Stopped receiving",
+              "Location stopped",
+            ],
+            timestampColumns: ["Stopped receiving", "Location stopped"],
+            byteColumns: [],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "data_usage",
             name: "Data usage",
             category: "Network",
@@ -3801,7 +3823,35 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Bundle ids MUST match mockInstalledApps, or Apps has nothing to attach
     // these to and the hosted path silently renders nothing.
-    mockActive && artifactId === "data_usage"
+    mockActive && artifactId === "location_clients"
+      ? [
+          {
+            App: "net.whatsapp.WhatsApp",
+            Client: "inet.whatsapp.WhatsApp:",
+            "Bundle path": "/private/var/containers/Bundle/Application/WhatsApp.app",
+            Registered: "Yes",
+            "Stopped receiving": 1722629788,
+            "Location stopped": 1722629700,
+          },
+          {
+            // Same app, a second session — only the key tells them apart.
+            App: "net.whatsapp.WhatsApp",
+            Client: "lnet.whatsapp.WhatsApp:p/System/Library/LocationBundles/Nav.bundle",
+            "Bundle path": null,
+            Registered: null,
+            "Stopped receiving": null,
+            "Location stopped": 1722598764,
+          },
+          {
+            App: "com.burbn.instagram",
+            Client: "icom.burbn.instagram:",
+            "Bundle path": "/private/var/containers/Bundle/Application/Instagram.app",
+            Registered: "Yes",
+            "Stopped receiving": 1722092872,
+            "Location stopped": 1722092862,
+          },
+        ]
+      : mockActive && artifactId === "data_usage"
       ? [
           {
             App: "net.whatsapp.WhatsApp",
