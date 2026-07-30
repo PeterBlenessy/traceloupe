@@ -1692,6 +1692,78 @@ from = "nope"
         assert_eq!(rows[0]["Decided"], serde_json::Value::Null);
     }
 
+    /// The listing distinguishes "not in this backup" from "cannot be in this
+    /// backup".
+    ///
+    /// An artifact with no rows is normally omitted — a list of empty tables is
+    /// not navigation. An artifact gated on encryption is kept even when empty,
+    /// so it can explain itself instead of vanishing (#197). Dropping it would
+    /// make an unencrypted backup look like a device that never had the data.
+    #[test]
+    fn a_gated_artifact_is_listed_even_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::cache::CacheDb::open(&tmp.path().join("cache.db")).unwrap();
+        let conn = db.conn();
+
+        // Every shipped module, with no rows stored for any of them.
+        let listed = list_artifacts(conn).unwrap();
+        let specs = builtin_modules().unwrap();
+        for spec in &specs {
+            let present = listed.iter().any(|a| a.id == spec.id);
+            if spec.needs_encrypted_backup() {
+                assert!(
+                    present,
+                    "gated artifact {} must stay listed so it can explain itself",
+                    spec.id
+                );
+                let a = listed.iter().find(|a| a.id == spec.id).unwrap();
+                assert!(a.requires_encrypted_backup, "and must say it is gated");
+                assert_eq!(a.row_count, 0);
+            } else {
+                assert!(
+                    !present,
+                    "empty non-gated artifact {} must not clutter the list",
+                    spec.id
+                );
+            }
+        }
+
+        // Once it has rows it is listed for the ordinary reason.
+        let mut row: ArtifactRow = HashMap::new();
+        row.insert("App".into(), serde_json::json!("com.example"));
+        store_rows(conn, &specs[0].id, &[row]).unwrap();
+        let listed = list_artifacts(conn).unwrap();
+        let a = listed.iter().find(|a| a.id == specs[0].id).unwrap();
+        assert_eq!(a.row_count, 1);
+        assert_eq!(a.columns, vec!["App", "Permission", "Decision", "Decided"]);
+    }
+
+    /// A module declaring an unknown precondition is rejected, so a typo in
+    /// `requires` cannot silently mean "no precondition at all".
+    #[test]
+    fn a_gated_module_round_trips_through_the_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mods_dir = tmp.path().join("modules");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+        write_module(
+            &mods_dir,
+            "gated.toml",
+            r#"
+id = "gated"
+name = "Gated thing"
+domain = "HomeDomain"
+path = "Library/Nowhere/x.db"
+requires = "encrypted-backup"
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+from = "a"
+"#,
+        );
+        let spec = &load_modules(&mods_dir).unwrap()[0];
+        assert!(spec.needs_encrypted_backup());
+    }
+
     #[test]
     fn requires_is_parsed() {
         let tmp = tempfile::tempdir().unwrap();

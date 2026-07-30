@@ -28,6 +28,16 @@
 # Service strings pass through as iOS writes them (kTCCServiceCamera,
 # kTCCServicePhotos…). Prettifying would mean inventing labels for codes we have
 # not verified, and the audit's rule for undecodable values applies to enums.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 289 rows, which is exactly the count iLEAPP records for the same image
+# — two independent parsers agreeing. The distribution also justified passing
+# unknowns through rather than guessing: alongside 0/2/3 the device carried
+# **auth_value = 4**, which is in none of Apple's documented enum. It renders as
+# "Unrecognised (4)". A confident ELSE would have mislabelled it.
+#
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
 
 id       = "tcc"
 name     = "App permissions"
