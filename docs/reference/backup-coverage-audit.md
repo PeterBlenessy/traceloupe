@@ -191,6 +191,45 @@ as for first-party: most of these are flat record stores, not conversations.
 
 ---
 
+## The device corpus, and why disk is the constraint
+
+Every parser and module in this repo is validated against **one** device — Josh
+Hickman's iOS 17.3 iPhone 11. That is one device's apps, one iOS version, one set
+of schema shapes. It is why `tcc.toml`'s third SQL alternative and
+`data_usage.toml`'s WWAN-only fallback have never run against a real device, and
+why 72 of iLEAPP's artifacts stay unclassifiable: they declare rootless globs that
+only a device with the app installed can resolve.
+
+So the corpus is the constraint on coverage, and **disk is the constraint on the
+corpus**. One image is a ~22 GB archive that unpacks to ~34 GB of full filesystem
+plus a ~2 GB backup — 56 GB per device, of which we need the 2 GB.
+
+The policy, encoded in `scripts/fetch-test-image.sh` rather than left to memory:
+
+```bash
+scripts/fetch-test-image.sh --list     # what exists, what is here, what is reclaimable
+scripts/fetch-test-image.sh ios16      # fetch → extract the backup → delete the archive
+scripts/fetch-test-image.sh --prune    # drop archives and FFS trees
+```
+
+- **Keep** unpacked backups. They are the artifact, and re-fetching one costs 22 GB
+  to get 2 GB back.
+- **Delete** archives once the backup is out, and the full-filesystem trees. An FFS
+  image is evidence of a file's shape and location — never of backup membership,
+  which `Domains.plist` decides — so it answers no question this project asks.
+- **Check space before downloading**, not 20 GB in.
+
+`tools/data/dfir-images.json` is the catalogue of what exists, so a fresh session
+does not re-research it. It deliberately records no "have this one" flag: what is
+on disk is what is on disk, and a committed flag goes stale the moment someone
+prunes. Ask the script.
+
+With no arguments, `validate_against_real_backup` runs every module against
+**every** backup in the corpus. A validator that must be pointed at one device at a
+time becomes a validator that is only ever run against the newest one.
+
+---
+
 ## What is left, as a number that goes down
 
 `classify-ileapp-artifacts.py` says which of iLEAPP's artifacts a backup can

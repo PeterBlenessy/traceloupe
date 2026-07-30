@@ -1,0 +1,70 @@
+{
+  "_readme": [
+    "Public DFIR research images we can validate against. Committed so a fresh",
+    "session knows what exists without re-researching it, and so 'we tested against",
+    "a real device' names WHICH device.",
+    "",
+    "Every entry is a full-filesystem image that ALSO contains an iTunes/Finder",
+    "backup. Only the backup half is kept locally: it is what this app reads, it is",
+    "~2 GB against ~22 GB for the archive, and disk is the binding constraint (see",
+    "scripts/fetch-test-image.sh, which deletes the archive once the backup is out).",
+    "",
+    "SOURCE AND TERMS: Josh Hickman's research images, hosted by Digital Corpora,",
+    "which states its images 'are freely available and may be used without prior",
+    "authorization or IRB approval'.",
+    "  index: https://thebinaryhick.blog/public_images/",
+    "",
+    "`backup_password` is the password Hickman sets on the backup and publishes in",
+    "the accompanying documentation. It is not a secret and it protects nothing —",
+    "these are synthetic research devices.",
+    "",
+    "`have` is not recorded here: what is on disk is what is on disk, and a flag in",
+    "a committed file would go stale the moment someone prunes. Ask the script."
+  ],
+  "images": [
+    {
+      "id": "ios17",
+      "ios": "17.3",
+      "device": "iPhone 11",
+      "archive": "iOS_17_Public_Image.tar.gz",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS17/iOS_17_Public_Image.tar.gz",
+      "archive_bytes": 22132295131,
+      "backup_glob": "*/Backup/*",
+      "backup_password": "MyPassword123",
+      "notes": "The image every parser and module in the repo is currently validated against. «redacted» manifest entries, 57 third-party apps."
+    },
+    {
+      "id": "ios16",
+      "ios": "16.5",
+      "device": "iPhone 12",
+      "archive": "iOS_16_Public_Image.tar.gz",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS16/iOS_16_Public_Image.tar.gz",
+      "archive_bytes": null,
+      "backup_glob": "*/Backup/*",
+      "backup_password": null,
+      "notes": "Not yet fetched. Second-newest schema lineage; the one most likely to disagree with iOS 17 on Core Data shapes."
+    },
+    {
+      "id": "ios15",
+      "ios": "15.x",
+      "device": "iPhone",
+      "archive": "iOS_15_Public_Image.tar.gz",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS15/iOS_15_Public_Image.tar.gz",
+      "archive_bytes": null,
+      "backup_glob": "*/Backup/*",
+      "backup_password": null,
+      "notes": "Not yet fetched. Old enough to exercise the fallback SQL alternatives (e.g. DataUsage without ZWIFIIN) that currently have no real device behind them."
+    },
+    {
+      "id": "ios13",
+      "ios": "13.3.1",
+      "device": "iPhone",
+      "archive": "iOS_13_Public_Image.tar.gz",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS13/iOS_13_Public_Image.tar.gz",
+      "archive_bytes": null,
+      "backup_glob": "*/Backup/*",
+      "backup_password": null,
+      "notes": "Not yet fetched. The lineage tcc.toml's third SQL alternative was written for (allowed + no last_modified) and which nothing has ever run against."
+    }
+  ]
+}
