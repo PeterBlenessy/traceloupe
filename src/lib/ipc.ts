@@ -916,6 +916,13 @@ export type ArtifactSummary = {
   /** Column headers, in declared order. A row is an unordered map, so this is
    *  what keeps column order stable between artifacts and between runs. */
   columns: string[];
+  /** Which of `columns` are timestamps, declared by the module's own `kind`.
+   *
+   *  The renderer used to infer this from values (does every number fall inside a
+   *  plausible date range?) over a fact the module already states. The Bluetooth
+   *  pairings module is why that mattered: its two counters are integers that
+   *  must not be rendered as dates. */
+  timestampColumns: string[];
   rowCount: number;
   requiresEncryptedBackup: boolean;
 };
@@ -3479,7 +3486,59 @@ const mockClient: TraceLoupeClient = {
             surface: "apps" as const,
             joinColumn: "App",
             columns: ["App", "Permission", "Decision", "Decided"],
-            rowCount: mockUnencrypted ? 4 : 4,
+            timestampColumns: ["Decided"],
+            rowCount: 5,
+            requiresEncryptedBackup: false,
+          },
+          // The two device-surface modules, with the shapes the real ones
+          // declare. Values mirror what `explore_real_backup` printed for Josh
+          // Hickman's public iOS 17 image, with the names changed — a mock that
+          // does not match the real shape is how the hosted path came to render
+          // nothing in the app while looking correct here (#232).
+          {
+            id: "accounts",
+            name: "Accounts",
+            category: "Device",
+            description:
+              "Which services are signed in on this device — mail, calendars, iCloud, Game Center and more — with when each was added.",
+            surface: "device" as const,
+            joinColumn: null,
+            columns: [
+              "Service",
+              "Account",
+              "Label",
+              "Part of",
+              "Added",
+              "Status",
+              "Signed in",
+              "Registered by",
+            ],
+            timestampColumns: ["Added"],
+            rowCount: 4,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "bluetooth_paired",
+            name: "Bluetooth pairings",
+            category: "Device",
+            description:
+              "Low-energy Bluetooth accessories this iPhone is paired with — watches, trackers, headphones and tags — with the address each advertises.",
+            surface: "device" as const,
+            joinColumn: null,
+            columns: [
+              "Device",
+              "Address",
+              "Resolves to",
+              "Connection counter",
+              "Seen counter",
+              "Identifier",
+            ],
+            // Deliberately EMPTY: the two counters are device-relative, not
+            // dates. If they were ever declared as timestamps the renderer would
+            // print a confident 1970s date, which is the bug the module's own
+            // comment explains at length.
+            timestampColumns: [],
+            rowCount: 3,
             requiresEncryptedBackup: false,
           },
           // Mock-only: an artifact that CANNOT exist in an unencrypted backup,
@@ -3494,13 +3553,96 @@ const mockClient: TraceLoupeClient = {
             surface: "device" as const,
             joinColumn: "Mode",
             columns: ["Mode", "Enabled", "Changed"],
+            timestampColumns: ["Changed"],
             rowCount: mockUnencrypted ? 0 : 2,
             requiresEncryptedBackup: true,
           },
         ]
       : [],
   getArtifactRows: async (artifactId) =>
-    mockActive && artifactId === "mock_gated"
+    mockActive && artifactId === "accounts"
+      ? [
+          {
+            Service: "Gmail",
+            Account: "person@example.com",
+            Label: "Gmail",
+            "Part of": null,
+            Added: 1704326400,
+            Status: "Active",
+            "Signed in": "Yes",
+            "Registered by": "com.apple.mobilemail",
+          },
+          {
+            Service: "CardDAV",
+            Account: null,
+            Label: null,
+            // A sub-account: on real data these are what make one sign-in look
+            // like several duplicate rows until the parent is shown.
+            "Part of": "Gmail",
+            Added: 1704326300,
+            Status: "Active",
+            "Signed in": "Yes",
+            "Registered by": "com.apple.accounts.accountsd",
+          },
+          {
+            Service: "Holiday Calendar",
+            Account: null,
+            Label: "US Holidays",
+            "Part of": null,
+            Added: 1703326400,
+            Status: "Active",
+            "Signed in": "Yes",
+            "Registered by": "dataaccessd",
+          },
+          {
+            Service: "iCloud",
+            Account: "person@example.com",
+            Label: "iCloud",
+            "Part of": null,
+            Added: 1702326400,
+            Status: "Active",
+            "Signed in": "Yes",
+            "Registered by": "com.apple.purplebuddy",
+          },
+          {
+            Service: "Game Center",
+            Account: "person@example.com",
+            Label: null,
+            "Part of": null,
+            Added: 1701326400,
+            Status: "Inactive",
+            "Signed in": "No",
+            "Registered by": "appstored",
+          },
+        ]
+      : mockActive && artifactId === "bluetooth_paired"
+        ? [
+            {
+              Device: "Example Watch",
+              Address: "Random 50:32:66:45:35:EF",
+              "Resolves to": "Public F8:6F:C1:4E:FF:6A",
+              "Connection counter": 9639,
+              "Seen counter": 4315986,
+              Identifier: "6C0C35A0-84CE-3572-2E72-4CF3D03BD1AF",
+            },
+            {
+              Device: "Fitness Band",
+              Address: "Public B4:C2:6A:7F:D3:7A",
+              "Resolves to": "Public B4:C2:6A:7F:D3:7A",
+              "Connection counter": 2143,
+              "Seen counter": 395626,
+              Identifier: "E3B37CA8-1AA5-AD44-B0FE-A617BB09B64A",
+            },
+            {
+              Device: "Nameless Tag",
+              Address: "Random E8:F0:58:00:C0:FB",
+              "Resolves to": null,
+              "Connection counter": 3662,
+              "Seen counter": 748458,
+              Identifier: "C4E4E254-6060-26CA-7C80-EE01F3C5C346",
+            },
+          ]
+      : mockActive && artifactId === "mock_gated"
       ? mockUnencrypted
         ? []
         : [

@@ -156,6 +156,7 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   | `check-encrypted-empty.mjs` | claiming a backup has no data when nobody has looked yet | #216 |
   | `check-clickable.mjs` | a control that looks clickable but a real click lands elsewhere | #224 |
   | `check-view-intro.mjs` | a view that cannot introduce itself with no backup open | #221 |
+  | `check-artifact-surfaces.mjs` | a module whose `surface` no view hosts, so its rows render nowhere | #231 |
 
   `check-view-intro.mjs` walks every `{ to, label }` pair in `nav.ts` — so a **new
   destination is covered the day it lands**, not the day someone remembers the

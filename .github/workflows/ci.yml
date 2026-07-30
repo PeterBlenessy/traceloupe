@@ -30,6 +30,8 @@ jobs:
       # when it drifts, those checks quietly stop testing anything while still
       # reporting success.
       - run: node scripts/check-mock-parity.mjs
+      # A module's surface must have a host view, or its rows render nowhere (#231).
+      - run: node scripts/check-artifact-surfaces.mjs
 
   core:
     name: Core crate (Rust, Linux)

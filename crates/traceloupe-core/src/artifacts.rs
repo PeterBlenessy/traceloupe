@@ -129,6 +129,57 @@ pub enum Surface {
     Standalone,
 }
 
+/// The container-domain families, which are **not** in
+/// `tools/data/ios-backup-domains.json`.
+///
+/// That file holds the 19 domains iOS names outright (`HomeDomain`,
+/// `MediaDomain`, …). Everything sandboxed instead gets a domain built at backup
+/// time from a family prefix and an identifier —
+/// `AppDomain-com.example.app`,
+/// `AppDomainGroup-group.com.apple.notes`,
+/// `SysSharedContainerDomain-systemgroup.com.apple.bluetooth`. There is no
+/// enumerable list of them, because the set depends on what is installed, so a
+/// module's domain is checked against the *families* instead.
+///
+/// This existed as a bare `starts_with("AppDomain")` in one test, which accepted
+/// the three `AppDomain*` families and rejected the two `Sys*Container` ones — so
+/// the first module in a system container (Bluetooth) failed a check that was
+/// right to exist and wrong about the rules.
+pub const CONTAINER_DOMAIN_PREFIXES: &[&str] = &[
+    "AppDomain-",
+    "AppDomainGroup-",
+    "AppDomainPlugin-",
+    "SysContainerDomain-",
+    "SysSharedContainerDomain-",
+];
+
+/// Whether `domain` is a container domain, and so cannot appear in the static
+/// list. The identifier after the prefix must be non-empty: `AppDomain-` alone
+/// names nothing, and accepting it would let a truncated domain through.
+pub fn is_container_domain(domain: &str) -> bool {
+    CONTAINER_DOMAIN_PREFIXES
+        .iter()
+        .any(|p| domain.len() > p.len() && domain.starts_with(p))
+}
+
+impl Surface {
+    /// Whether the host attaches each row to one of its own rows, and so needs a
+    /// `join_column`.
+    ///
+    /// Apps and Contacts are lists of many things, and an artifact shown there is
+    /// shown *against* one of them — a permission belongs to an app. Device is a
+    /// list of one, so there is nothing to attach to and no column could identify
+    /// it; the artifact is shown whole. Requiring a join column there would force
+    /// every module to nominate an arbitrary one, which is how a required field
+    /// becomes a field nobody means.
+    pub fn attaches_to_a_row(self) -> bool {
+        match self {
+            Surface::Apps | Surface::Contacts => true,
+            Surface::Device | Surface::Standalone => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModuleSpec {
     /// Stable identifier; also the key rows are stored under.
@@ -301,22 +352,23 @@ impl ModuleSpec {
                 ));
             }
         }
-        // A hosted artifact must say what to attach itself to.
-        if self.surface != Surface::Standalone {
-            match &self.join_column {
-                None => {
-                    return Err(format!(
-                        "`surface` is {:?} but no `join_column` is declared — the host view \
-                         needs to know which column identifies the row it belongs to",
-                        self.surface
-                    ))
-                }
-                Some(col) if !self.columns.iter().any(|c| &c.name == col) => {
-                    return Err(format!(
-                        "`join_column` = {col:?} is not one of the declared columns"
-                    ))
-                }
-                Some(_) => {}
+        // An artifact attached to a row must say which row.
+        if self.surface.attaches_to_a_row() && self.join_column.is_none() {
+            return Err(format!(
+                "`surface` is {:?} but no `join_column` is declared — the host view \
+                 needs to know which column identifies the row it belongs to",
+                self.surface
+            ));
+        }
+        // Checked whenever one is declared, including on a surface that does not
+        // require it: a `join_column` naming a column that does not exist is a
+        // typo either way, and silently ignoring it on `device` would let the
+        // same mistake through unnoticed.
+        if let Some(col) = &self.join_column {
+            if !self.columns.iter().any(|c| &c.name == col) {
+                return Err(format!(
+                    "`join_column` = {col:?} is not one of the declared columns"
+                ));
             }
         }
         if let Some(r) = &self.requires {
@@ -337,7 +389,14 @@ impl ModuleSpec {
 
 /// One artifact, as the UI needs to describe it: what it is called and which
 /// columns it has, without the UI knowing any artifact exists by name.
+/// `camelCase` because the UI reads `joinColumn`, `rowCount` and
+/// `requiresEncryptedBackup` (src/lib/ipc.ts). Without this the struct
+/// serialised as snake_case and every one of those was `undefined` in the real
+/// app, so no hosted artifact rendered at all — while the mock, which returns
+/// camelCase, made the whole feature look fine under `pnpm dev` (#232).
+/// `serialised_keys_match_the_ui_contract` now pins it.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArtifactSummary {
     pub id: String,
     pub name: String,
@@ -352,6 +411,15 @@ pub struct ArtifactSummary {
     /// row is an unordered map, so without this the UI would have to invent an
     /// order, and it would differ between artifacts and between runs.
     pub columns: Vec<String>,
+    /// Which of `columns` are timestamps, from the module's own `kind`.
+    ///
+    /// The UI used to infer this by testing whether every value in a column fell
+    /// inside a plausible Unix-seconds range. That was guesswork over a fact the
+    /// module already states, and the Bluetooth module is where it would have
+    /// bitten: its two counters are integers that must NOT be read as dates, and
+    /// the only thing standing between them and a fabricated 1970s timestamp was
+    /// the range heuristic happening to exclude them.
+    pub timestamp_columns: Vec<String>,
     pub row_count: i64,
     /// True when this artifact needs an encrypted backup to hold anything.
     pub requires_encrypted_backup: bool,
@@ -427,6 +495,12 @@ pub fn list_artifacts(conn: &Connection) -> Result<Vec<ArtifactSummary>> {
             surface: spec.surface,
             join_column: spec.join_column.clone(),
             columns: spec.columns.iter().map(|c| c.name.clone()).collect(),
+            timestamp_columns: spec
+                .columns
+                .iter()
+                .filter(|c| c.kind == ColumnKind::Timestamp)
+                .map(|c| c.name.clone())
+                .collect(),
             row_count,
             requires_encrypted_backup: gated,
         });
@@ -710,7 +784,14 @@ pub fn count_rows(conn: &Connection, artifact_id: &str) -> Result<i64> {
 /// data half still holds — the SQL, paths and columns are reviewed as data —
 /// and this list is the smallest possible seam. If it ever gets long enough to
 /// be annoying, `include_dir` removes it.
-const BUILTIN: &[(&str, &str)] = &[("tcc.toml", include_str!("../modules/tcc.toml"))];
+const BUILTIN: &[(&str, &str)] = &[
+    ("tcc.toml", include_str!("../modules/tcc.toml")),
+    ("accounts.toml", include_str!("../modules/accounts.toml")),
+    (
+        "bluetooth_paired.toml",
+        include_str!("../modules/bluetooth_paired.toml"),
+    ),
+];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
 /// as `load_modules` does for on-disk ones.
@@ -1615,6 +1696,83 @@ from = "nope"
         .unwrap();
     }
 
+    /// Accounts3.sqlite as accountsd writes it — the Core Data column names and
+    /// the two joined tables, matching what `explore_real_backup` printed for
+    /// Josh Hickman's iOS 17 image.
+    ///
+    /// The rows deliberately include the cases the module claims to handle: an
+    /// account whose type row is MISSING (so the LEFT JOIN is what keeps it —
+    /// an inner join drops it and the count silently falls), a NULL username, and
+    /// a NULL `ZACTIVE`.
+    fn seed_accounts(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE ZACCOUNT (
+                Z_PK INTEGER PRIMARY KEY, ZACTIVE INTEGER, ZAUTHENTICATED INTEGER,
+                ZACCOUNTTYPE INTEGER, ZPARENTACCOUNT INTEGER, ZDATE TIMESTAMP,
+                ZACCOUNTDESCRIPTION VARCHAR, ZIDENTIFIER VARCHAR,
+                ZOWNINGBUNDLEID VARCHAR, ZUSERNAME VARCHAR);
+             CREATE TABLE ZACCOUNTTYPE (
+                Z_PK INTEGER PRIMARY KEY, ZACCOUNTTYPEDESCRIPTION VARCHAR,
+                ZIDENTIFIER VARCHAR, ZOWNINGBUNDLEID VARCHAR);",
+        )
+        .unwrap();
+        // 726000000 Cocoa seconds = 2024-01-03T…Z, comfortably inside iOS 17.
+        // ZIDENTIFIER values are GUIDs, as on a real device — the point of the
+        // module's three-rung COALESCE is that this column is NOT a service name,
+        // and a fixture that put a friendly string here would hide that.
+        c.execute_batch(
+            "INSERT INTO ZACCOUNTTYPE (Z_PK, ZACCOUNTTYPEDESCRIPTION, ZIDENTIFIER) VALUES
+                (1,'Gmail','com.apple.account.Google'),
+                (2,'Holiday Calendar','com.apple.account.HolidayCalendar'),
+                -- No description: the middle COALESCE rung must fall to the type's
+                -- own reverse-DNS identifier, not to the account GUID.
+                (3,NULL,'com.apple.account.undescribed');
+             INSERT INTO ZACCOUNT
+                (Z_PK, ZACTIVE, ZAUTHENTICATED, ZACCOUNTTYPE, ZPARENTACCOUNT, ZDATE,
+                 ZACCOUNTDESCRIPTION, ZIDENTIFIER, ZOWNINGBUNDLEID, ZUSERNAME) VALUES
+                (1,1,1,1,NULL,726000000,'Gmail',
+                 '6D60660E-344F-4E62-97A0-0A9EA8174CDE','com.apple.mobilemail','person@example.com'),
+                (2,1,1,2,NULL,725000000,'US Holidays',
+                 'AD041785-D028-495F-9008-62F26C114CBA','dataaccessd',NULL),
+                -- No ZACCOUNTTYPE row: only the LEFT JOIN keeps this one, and the
+                -- last COALESCE rung must name it rather than print its GUID.
+                (3,0,0,NULL,NULL,724000000,NULL,
+                 'B61380AE-7269-4769-A39F-69D7935848EA','appstored','local'),
+                (4,NULL,NULL,1,NULL,723000000,'Unrecorded',
+                 'C9FA6B49-5667-4CE7-A88A-60C0543E82B5','accountsd',NULL),
+                -- A CHILD of account 1: on real data these are what make one
+                -- sign-in look like several duplicate rows.
+                (5,1,1,3,«redacted»000000,NULL,
+                 '0EE306D8-66AF-47E5-8FD1-CF2EAF5DC8C2','accountsd',NULL);",
+        )
+        .unwrap();
+    }
+
+    /// The paired-LE store as bluetoothd writes it, including Apple's own
+    /// `Public `/`Random ` prefix inside the address strings and the two
+    /// device-relative counters that are NOT dates.
+    fn seed_bluetooth_paired(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE PairedDevices(Uuid TEXT, Name TEXT, NameOrigin INT,
+                Address TEXT, ResolvedAddress TEXT, LastSeenTime INT,
+                LastConnectionTime INT, GATTServiceChangeConfig INT, Tags TEXT,
+                iCloudIdentifier TEXT);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO PairedDevices
+                (Uuid, Name, NameOrigin, Address, ResolvedAddress, LastSeenTime,
+                 LastConnectionTime, iCloudIdentifier) VALUES
+                ('E3B37CA8-1AA5-AD44-B0FE-A617BB09B64A','Fitness Band',2,
+                 'Public B4:C2:6A:7F:D3:7A','Public B4:C2:6A:7F:D3:7A',395626,2143,''),
+                ('6C0C35A0-84CE-3572-2E72-4CF3D03BD1AF','Example Watch',2,
+                 'Random 50:32:66:45:35:EF','Public F8:6F:C1:4E:FF:6A',4315986,9639,''),
+                ('C4E4E254-6060-26CA-7C80-EE01F3C5C346','Nameless Tag',2,
+                 'Random E8:F0:58:00:C0:FB',NULL,748458,3662,NULL);",
+        )
+        .unwrap();
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -1628,17 +1786,174 @@ from = "nope"
     const FIXTURES: &[(&str, &str, &str)] = &[
         // id, domain, relative path
         ("tcc", "HomeDomain", "Library/TCC/TCC.db"),
+        (
+            "accounts",
+            "HomeDomain",
+            "Library/Accounts/Accounts3.sqlite",
+        ),
+        (
+            "bluetooth_paired",
+            "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
+            "Library/Database/com.apple.MobileBluetooth.ledevices.paired.db",
+        ),
     ];
 
     fn seed_for(id: &str) -> fn(&Connection) {
         match id {
             "tcc" => seed_tcc,
+            "accounts" => seed_accounts,
+            "bluetooth_paired" => seed_bluetooth_paired,
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
                  shipping data that proves it runs"
             ),
         }
+    }
+
+    /// The JSON the UI receives must have the field names the UI reads.
+    ///
+    /// `ArtifactSummary` shipped without `rename_all = "camelCase"` while
+    /// `src/lib/ipc.ts` declared `joinColumn` / `rowCount` /
+    /// `requiresEncryptedBackup`. In the real app all three were `undefined`, so
+    /// `useHostedArtifacts` matched nothing and the Apps view showed no
+    /// permissions — but the **mock** returns camelCase, so every browser check
+    /// and every screenshot looked correct, and the Rust side was validated
+    /// separately against a real backup without ever crossing IPC. Both halves
+    /// were tested; the seam between them was not (#232).
+    ///
+    /// So this reads the TypeScript and compares. It is deliberately a Rust test
+    /// rather than a lint: only serde can say what the wire format actually is.
+    #[test]
+    fn serialised_keys_match_the_ui_contract() {
+        let summary = ArtifactSummary {
+            id: "x".into(),
+            name: "X".into(),
+            category: None,
+            description: "d".into(),
+            surface: Surface::Device,
+            join_column: None,
+            columns: vec![],
+            timestamp_columns: vec![],
+            row_count: 0,
+            requires_encrypted_backup: false,
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        let mut actual: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
+
+        let ipc = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/ipc.ts"),
+        )
+        .expect("read src/lib/ipc.ts");
+        let start = ipc
+            .find("export type ArtifactSummary = {")
+            .expect("no ArtifactSummary type in ipc.ts — did it move?");
+        let body = &ipc[start..start + ipc[start..].find("\n};").expect("unterminated type")];
+        // `name: type;` at one indent level, skipping doc comments.
+        let mut declared: Vec<String> = body
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                if t.starts_with('*') || t.starts_with("/*") || t.starts_with("//") {
+                    return None;
+                }
+                let (name, _) = t.split_once(':')?;
+                let name = name.trim().trim_end_matches('?');
+                if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                    return None;
+                }
+                Some(name.to_string())
+            })
+            .collect();
+        assert!(
+            declared.len() > 5,
+            "parsed only {} fields from ipc.ts — the parse is wrong, and a comparison \
+             against nothing passes for the wrong reason: {declared:?}",
+            declared.len()
+        );
+
+        actual.sort();
+        declared.sort();
+        assert_eq!(
+            actual, declared,
+            "ArtifactSummary's JSON keys and src/lib/ipc.ts have drifted. The UI reads the \
+             names on the right; serde sends the names on the left. A field the UI cannot \
+             find is `undefined`, which reads as a legitimately absent value rather than as \
+             an error."
+        );
+    }
+
+    /// Every `Surface` variant must be in the UI's union type, and vice versa.
+    ///
+    /// `serialised_keys_match_the_ui_contract` pins the field NAMES but not this:
+    /// `src/lib/ipc.ts` declares `surface` as a string union, and
+    /// `useHostedArtifacts(host: string)` compares against a plain `string`, so a
+    /// new Rust variant could ship, be declared by a module, and never appear in
+    /// the union — with TypeScript raising nothing, because nothing narrows it.
+    /// `check-artifact-surfaces.mjs` reads the Rust enum rather than the union, so
+    /// it does not cover this either.
+    #[test]
+    fn the_ui_surface_union_matches_the_rust_enum() {
+        // The match is what makes this exhaustive: adding a variant to `Surface`
+        // without adding it here is a COMPILE error, not a passing test. A plain
+        // array would silently omit the new one.
+        fn name(s: Surface) -> &'static str {
+            match s {
+                Surface::Apps => "apps",
+                Surface::Contacts => "contacts",
+                Surface::Device => "device",
+                Surface::Standalone => "standalone",
+            }
+        }
+        let all = [
+            Surface::Apps,
+            Surface::Contacts,
+            Surface::Device,
+            Surface::Standalone,
+        ];
+        // Taken from serde, not from `name` — so this also catches a
+        // `rename_all` change, which would alter the wire format silently.
+        let mut from_rust: Vec<String> = all
+            .iter()
+            .map(|s| {
+                let json = serde_json::to_value(s).unwrap();
+                let wire = json
+                    .as_str()
+                    .expect("a Surface serialises to a string")
+                    .to_string();
+                assert_eq!(wire, name(*s), "serde renamed a Surface variant");
+                wire
+            })
+            .collect();
+
+        let ipc = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/ipc.ts"),
+        )
+        .expect("read src/lib/ipc.ts");
+        let line = ipc
+            .lines()
+            .find(|l| l.trim_start().starts_with("surface:"))
+            .expect("no `surface:` field in ipc.ts — did ArtifactSummary change shape?");
+        let mut from_ts: Vec<String> = line
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .map(|s| s.to_string())
+            .collect();
+        assert!(
+            from_ts.len() > 1,
+            "parsed {} members from {line:?} — the parse is wrong, so this compared \
+             against nothing",
+            from_ts.len()
+        );
+
+        from_rust.sort();
+        from_ts.sort();
+        assert_eq!(
+            from_rust, from_ts,
+            "the Surface enum and ipc.ts's `surface` union have drifted — a module \
+             could declare a surface the UI's type does not know about"
+        );
     }
 
     /// The compiled-in modules must be exactly the files on disk.
@@ -1700,10 +2015,12 @@ from = "nope"
                 spec.id
             );
             assert!(
-                domains.get(&spec.domain).is_some() || spec.domain.starts_with("AppDomain"),
-                "module {} declares domain {:?}, which is not one iOS defines",
+                domains.get(&spec.domain).is_some() || is_container_domain(&spec.domain),
+                "module {} declares domain {:?}, which is neither one of the 19 domains iOS \
+                 names outright nor a container domain ({})",
                 spec.id,
-                spec.domain
+                spec.domain,
+                CONTAINER_DOMAIN_PREFIXES.join(", ")
             );
 
             let tmp = tempfile::tempdir().unwrap();
@@ -1722,6 +2039,131 @@ from = "nope"
                 );
             }
         }
+    }
+
+    /// The accounts module: a service is always NAMED, a sub-account says what it
+    /// is part of, and a GUID never reaches the Service column.
+    ///
+    /// The first draft fell back to `ZACCOUNT.ZIDENTIFIER` believing it held
+    /// "com.apple.account.Google". It holds a per-account GUID — measured on the
+    /// validation image — so the fallback would have printed a UUID in a column
+    /// headed "Service". The three rungs and this test exist because of that.
+    #[test]
+    fn accounts_module_names_every_service_and_never_shows_a_guid() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "accounts")
+            .expect("accounts module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup(tmp.path(), &spec.path, seed_accounts);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        // 5 accounts, and the parent joins must not multiply them.
+        assert_eq!(rows.len(), 5, "the parent LEFT JOINs changed the row count");
+
+        let services: Vec<String> = rows
+            .iter()
+            .map(|r| r["Service"].as_str().unwrap_or_default().to_string())
+            .collect();
+        // Rung 1: a described type gives a readable name.
+        assert!(services.contains(&"Gmail".to_string()));
+        // Rung 2: a type with no description falls to its reverse-DNS identifier.
+        assert!(
+            services.contains(&"com.apple.account.undescribed".to_string()),
+            "a type row with a NULL description should fall back to its own \
+             identifier, got {services:?}"
+        );
+        // Rung 3: no type row at all still gets a name, not a GUID.
+        assert!(
+            services.contains(&"Unrecorded service type".to_string()),
+            "an account with no type row should be named, got {services:?}"
+        );
+        // The whole point: nothing that looks like a GUID reaches this column.
+        for svc in &services {
+            assert!(
+                !(svc.len() == 36 && svc.matches('-').count() == 4),
+                "a GUID reached the Service column: {svc:?}"
+            );
+        }
+
+        // The sub-account explains itself rather than looking like a duplicate.
+        let child = rows
+            .iter()
+            .find(|r| r["Service"] == serde_json::json!("com.apple.account.undescribed"))
+            .expect("the child account is present");
+        assert_eq!(
+            child["Part of"],
+            serde_json::json!("Gmail"),
+            "a sub-account should name the account it belongs to"
+        );
+        // A top-level account is part of nothing, and must say so as null rather
+        // than as an empty string.
+        let parent = rows
+            .iter()
+            .find(|r| r["Service"] == serde_json::json!("Gmail"))
+            .expect("the parent account is present");
+        assert_eq!(parent["Part of"], serde_json::Value::Null);
+
+        // Cocoa epoch, not Unix: 726000000 Cocoa = 1704307200 Unix (2024-01-03).
+        assert_eq!(parent["Added"], serde_json::json!(1_704_307_200_i64));
+
+        // NULL flags stay distinguishable from "no".
+        let unrecorded = rows
+            .iter()
+            .find(|r| r["Label"] == serde_json::json!("Unrecorded"))
+            .expect("the NULL-flag account is present");
+        assert_eq!(unrecorded["Status"], serde_json::json!("Not recorded"));
+        assert_eq!(unrecorded["Signed in"], serde_json::json!("Not recorded"));
+    }
+
+    /// The Bluetooth module: the two counters stay integers, and the resolved
+    /// address is kept apart from the advertised one.
+    #[test]
+    fn bluetooth_module_keeps_counters_as_numbers_and_addresses_apart() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "bluetooth_paired")
+            .expect("bluetooth module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        // `make_backup` defaults to HomeDomain; this store lives in a system
+        // container, and a domain mismatch shows up as the module simply finding
+        // nothing.
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, seed_bluetooth_paired);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+
+        let watch = rows
+            .iter()
+            .find(|r| r["Device"] == serde_json::json!("Example Watch"))
+            .expect("the watch is present");
+        // The counters must arrive as NUMBERS and be left exactly as stored. If
+        // either were ever declared a timestamp these would come back converted,
+        // and the module would be printing invented dates.
+        assert_eq!(watch["Connection counter"], serde_json::json!(9639));
+        assert_eq!(watch["Seen counter"], serde_json::json!(4_315_986));
+        // A rotating Random address resolving to a different Public one is the
+        // pair worth showing; collapsing the columns would lose it.
+        assert_eq!(
+            watch["Address"],
+            serde_json::json!("Random 50:32:66:45:35:EF")
+        );
+        assert_eq!(
+            watch["Resolves to"],
+            serde_json::json!("Public F8:6F:C1:4E:FF:6A")
+        );
+        // An unresolved address stays null rather than repeating the advertised one.
+        let tag = rows
+            .iter()
+            .find(|r| r["Device"] == serde_json::json!("Nameless Tag"))
+            .expect("the tag is present");
+        assert_eq!(tag["Resolves to"], serde_json::Value::Null);
     }
 
     /// The TCC module against the fixture: the decisions it maps, the date it
