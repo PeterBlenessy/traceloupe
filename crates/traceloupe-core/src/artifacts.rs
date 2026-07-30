@@ -1400,6 +1400,10 @@ const BUILTIN: &[(&str, &str)] = &[
         "siri_settings.toml",
         include_str!("../modules/siri_settings.toml"),
     ),
+    (
+        "location_clients.toml",
+        include_str!("../modules/location_clients.toml"),
+    ),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -2850,6 +2854,73 @@ from = "nope"
         out
     }
 
+    /// locationd's client register: entries keyed by a compound identifier, some
+    /// carrying an explicit `BundleId` and some not.
+    ///
+    /// The cases the module claims: an app client whose bundle id is present (so
+    /// the Apps join works), the SAME app with a second sub-bundle session (so the
+    /// key is what tells them apart), and a system location bundle with no
+    /// `BundleId` at all — which must still produce a row rather than be filtered
+    /// out of the store.
+    fn seed_location_clients() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+
+        let mut app = Dictionary::new();
+        app.insert(
+            "BundleId".into(),
+            Value::String("com.example.chatapp".into()),
+        );
+        app.insert(
+            "BundlePath".into(),
+            Value::String("/private/var/containers/Bundle/Application/ChatApp.app".into()),
+        );
+        app.insert("Registered".into(), Value::String("".into()));
+        // Cocoa seconds, NOT a plist Date: the module must declare an epoch.
+        app.insert(
+            "ReceivingLocationInformationTimeStopped".into(),
+            Value::Real(744_322_588.28),
+        );
+        root.insert("icom.example.chatapp:".into(), Value::Dictionary(app));
+
+        // Same app, a different session — only the key separates them.
+        let mut app2 = Dictionary::new();
+        app2.insert(
+            "BundleId".into(),
+            Value::String("com.example.chatapp".into()),
+        );
+        app2.insert("LocationTimeStopped".into(), Value::Real(744_291_564.14));
+        root.insert(
+            "lcom.example.chatapp:p/System/Library/LocationBundles/Nav.bundle".into(),
+            Value::Dictionary(app2),
+        );
+
+        // A system bundle with NO BundleId: still a row, just nothing to attach to.
+        let mut sys = Dictionary::new();
+        sys.insert(
+            "BundlePath".into(),
+            Value::String("/System/Library/LocationBundles/TraceHarvest.bundle".into()),
+        );
+        sys.insert("Registered".into(), Value::String("".into()));
+        sys.insert(
+            "ReceivingLocationInformationTimeStopped".into(),
+            Value::Real(744_000_000.0),
+        );
+        // Undocumented bitmask, deliberately unread.
+        sys.insert(
+            "SupportedAuthorizationMask".into(),
+            Value::Integer(7.into()),
+        );
+        root.insert(
+            "p/System/Library/LocationBundles/TraceHarvest.bundle".into(),
+            Value::Dictionary(sys),
+        );
+
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -2923,6 +2994,11 @@ from = "nope"
             "HomeDomain",
             "Library/Preferences/com.apple.assistant.backedup.plist",
         ),
+        (
+            "location_clients",
+            "RootDomain",
+            "Library/Caches/locationd/clients.plist",
+        ),
     ];
 
     /// How a module's fixture store is built. Two kinds, because a module now has
@@ -2948,6 +3024,7 @@ from = "nope"
             // One fixture, two modules: the store really does hold both.
             "alarms" | "sleep_schedule" => return Seed::Bytes(seed_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
+            "location_clients" => return Seed::Bytes(seed_location_clients),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
