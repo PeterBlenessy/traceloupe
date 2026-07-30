@@ -1,0 +1,156 @@
+# Network data usage — how much each app sent and received, over Wi-Fi and over
+# the cellular network, and which system process carried it.
+#
+# `DataUsage.sqlite` is the store behind Settings › Cellular › Cellular Data. It
+# is confirmed backup-reachable: it lives in `WirelessDomain`, whose
+# `Library/Databases` is backed up (see docs/reference/backup-coverage-audit.md).
+#
+# A Core Data store with two tables that matter: `ZLIVEUSAGE` holds one row per
+# accounting bucket, `ZPROCESS` names who used it. The join is
+# `ZPROCESS.Z_PK = ZLIVEUSAGE.ZHASPROCESS`, which is many-to-one on a primary key
+# and so cannot multiply rows.
+#
+# TWO ALTERNATIVES, and here the schema variance is real. iLEAPP's `DataUsage.py`
+# tests `does_column_exist_in_db('ZLIVEUSAGE', 'ZWIFIIN')` and falls back to a
+# WWAN-only query — older devices record cellular but not Wi-Fi. That is a
+# documented, dated difference rather than a guess, which is why this module has a
+# fallback where `accounts.toml` and `bluetooth_paired.toml` do not. The fallback
+# reports Wi-Fi as NULL, so "no Wi-Fi columns on this device" reads as unrecorded
+# rather than as zero traffic.
+#
+# WHY THIS AGGREGATES
+#
+# 1959 usage rows across 672 processes on the validation image. Attached to an app
+# in the Apps view, the useful answer is "how much did this app use, over what
+# period", not two dozen accounting buckets. So rows are summed per
+# (bundle, process) with the record count and the first/last bucket timestamps
+# kept — nothing is hidden, it is just not repeated.
+#
+# WHY THE PROCESS NAME IS ITS OWN COLUMN
+#
+# `ZPROCNAME` is a compound like `nsurlsessiond/com.apple.mobileslideshow` — the
+# daemon that actually moved the bytes, then the app it did it for. That is
+# forensically interesting on its own (traffic attributed to Photos but carried by
+# the background download daemon), so the daemon is shown rather than discarded.
+# iLEAPP splits on `/` and keeps the first part; this does the same, and keeps the
+# bundle id from `ZBUNDLENAME` for the join.
+#
+# WHAT IS DELIBERATELY NOT FILTERED
+#
+# iLEAPP excludes `ZKIND != 257`. On the validation image there is no 257 at all —
+# the rollup row is **ZKIND = 255**, a `CumulativeUsageTracker` process whose total
+# (7 133 191 259 bytes) is the sum of every other row. Copying the 257 constant
+# would therefore have let the device-wide total through as though it were one more
+# app, double-counting everything. Rather than swap one magic number for another,
+# this module requires a non-null `ZBUNDLENAME`: the rollup has none, so it is
+# excluded by what it *is* rather than by a constant that differs between devices.
+# 671 of 672 processes on the validation image have a bundle id, so the cost is the
+# one row that should go.
+#
+# Timestamps are Cocoa / Core Data seconds (since 2001-01-01), declared as
+# `epoch = "cocoa"`.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 1959 usage rows collapse to 671 per-app totals, topped by the App Store
+# at 2.77 GB and TikTok at 300 MB. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "data_usage"
+name        = "Data usage"
+description = "How much data each app sent and received, over Wi-Fi and cellular, and which system process carried it."
+surface     = "apps"
+join_column = "App"   # the bundle id, so Apps can attach these to the right app
+category    = "Network"
+domain      = "WirelessDomain"
+path        = "Library/Databases/DataUsage.sqlite"
+
+sql = [
+  # Modern lineage: Wi-Fi and WWAN both recorded.
+  """
+  SELECT p.ZBUNDLENAME AS app,
+         CASE
+           WHEN instr(p.ZPROCNAME, '/') > 0
+             THEN substr(p.ZPROCNAME, 1, instr(p.ZPROCNAME, '/') - 1)
+           ELSE p.ZPROCNAME
+         END AS process,
+         COUNT(*) AS records,
+         CAST(SUM(COALESCE(l.ZWIFIIN, 0)) AS INTEGER) AS wifi_in,
+         CAST(SUM(COALESCE(l.ZWIFIOUT, 0)) AS INTEGER) AS wifi_out,
+         CAST(SUM(COALESCE(l.ZWWANIN, 0)) AS INTEGER) AS wwan_in,
+         CAST(SUM(COALESCE(l.ZWWANOUT, 0)) AS INTEGER) AS wwan_out,
+         MIN(l.ZTIMESTAMP) AS first_seen,
+         MAX(l.ZTIMESTAMP) AS last_seen
+  FROM ZLIVEUSAGE l
+  JOIN ZPROCESS p ON p.Z_PK = l.ZHASPROCESS
+  WHERE p.ZBUNDLENAME IS NOT NULL
+  GROUP BY app, process
+  ORDER BY (wwan_in + wwan_out + wifi_in + wifi_out) DESC, app
+  """,
+  # Older lineage: no ZWIFIIN/ZWIFIOUT columns at all. Wi-Fi is reported as NULL
+  # ("not recorded"), never as 0, which would claim this device used no Wi-Fi.
+  """
+  SELECT p.ZBUNDLENAME AS app,
+         CASE
+           WHEN instr(p.ZPROCNAME, '/') > 0
+             THEN substr(p.ZPROCNAME, 1, instr(p.ZPROCNAME, '/') - 1)
+           ELSE p.ZPROCNAME
+         END AS process,
+         COUNT(*) AS records,
+         NULL AS wifi_in,
+         NULL AS wifi_out,
+         CAST(SUM(COALESCE(l.ZWWANIN, 0)) AS INTEGER) AS wwan_in,
+         CAST(SUM(COALESCE(l.ZWWANOUT, 0)) AS INTEGER) AS wwan_out,
+         MIN(l.ZTIMESTAMP) AS first_seen,
+         MAX(l.ZTIMESTAMP) AS last_seen
+  FROM ZLIVEUSAGE l
+  JOIN ZPROCESS p ON p.Z_PK = l.ZHASPROCESS
+  WHERE p.ZBUNDLENAME IS NOT NULL
+  GROUP BY app, process
+  ORDER BY (wwan_in + wwan_out) DESC, app
+  """,
+]
+
+[[columns]]
+name = "App"
+from = "app"
+
+[[columns]]
+name = "Carried by"
+from = "process"
+
+[[columns]]
+name = "Cellular down"
+from = "wwan_in"
+kind = "bytes"
+
+[[columns]]
+name = "Cellular up"
+from = "wwan_out"
+kind = "bytes"
+
+[[columns]]
+name = "Wi-Fi down"
+from = "wifi_in"
+kind = "bytes"
+
+[[columns]]
+name = "Wi-Fi up"
+from = "wifi_out"
+kind = "bytes"
+
+[[columns]]
+name = "Records"
+from = "records"
+kind = "integer"
+
+[[columns]]
+name = "First"
+from = "first_seen"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Last"
+from = "last_seen"
+kind = "timestamp"
+epoch = "cocoa"

@@ -158,6 +158,16 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   | `check-view-intro.mjs` | a view that cannot introduce itself with no backup open | #221 |
   | `check-artifact-surfaces.mjs` | a module whose `surface` no view hosts, so its rows render nowhere | #231 |
 
+  A host view must never know which artifact it is showing. Two things a module
+  declares rather than the view inferring: **column kinds** (`timestamp`, `bytes`)
+  so a value is formatted from the fact rather than from a range guess, and
+  **`[highlight]`** — what may be shown on the host's own row before anything is
+  expanded. The Apps view had that hard-coded to TCC's shape (a literal
+  `"Decision"` column, the values `Allowed`/`Limited`, the phrase "none granted"),
+  which only became visible when a second apps-surface module shipped and the row
+  read "Data usage: none granted". A module with no `[highlight]` gets a record
+  count and nothing invented for it.
+
   `check-view-intro.mjs` walks every `{ to, label }` pair in `nav.ts` — so a **new
   destination is covered the day it lands**, not the day someone remembers the
   list — and for each one requires a `NoBackupState` that is **on screen**, with a
