@@ -842,6 +842,39 @@ def build_siri_plist() -> bytes:
     )
 
 
+def build_location_clients_plist() -> bytes:
+    """locationd's clients.plist — everything that asked for location.
+
+    Covers an app client with a BundleId, the SAME app with a second sub-bundle
+    session (only the key separates them), and a system bundle with no BundleId,
+    which must still produce a row rather than be filtered out.
+
+    Timestamps are Cocoa REALS, not plist Dates, so the module has to declare an
+    epoch — a fixture using Dates would hide that.
+    """
+    return plistlib.dumps(
+        {
+            "icom.example.chatapp:": {
+                "BundleId": "com.example.chatapp",
+                "BundlePath": "/private/var/containers/Bundle/Application/ChatApp.app",
+                "Registered": "",
+                "ReceivingLocationInformationTimeStopped": 744_322_588.28,
+            },
+            "lcom.example.chatapp:p/System/Library/LocationBundles/Nav.bundle": {
+                "BundleId": "com.example.chatapp",
+                "LocationTimeStopped": 744_291_564.14,
+            },
+            "p/System/Library/LocationBundles/TraceHarvest.bundle": {
+                "BundlePath": "/System/Library/LocationBundles/TraceHarvest.bundle",
+                "Registered": "",
+                "ReceivingLocationInformationTimeStopped": 744_000_000.0,
+                "SupportedAuthorizationMask": 7,  # undocumented, unread
+            },
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -918,6 +951,12 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.assistant.backedup.plist",
             build_siri_plist(),
+        ),
+
+        (
+            "RootDomain",
+            "Library/Caches/locationd/clients.plist",
+            build_location_clients_plist(),
         ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
