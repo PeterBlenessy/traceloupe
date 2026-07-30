@@ -1075,6 +1075,57 @@ pub struct ThreadSummaryDto {
 ///
 /// `scan_id` restricts to one scan (the history view shows the selected scan's
 /// findings); None returns all.
+/// Where a finding sits in the current filter and order, or None when the filter
+/// excludes it.
+///
+/// The findings panel is virtualized, so returning to a specific finding needs an
+/// index rather than an id (#224). Computed with the same ordering the page query
+/// uses, so the two cannot disagree.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub fn content_finding_rank(
+    active: State<'_, ActiveBackup>,
+    scan_id: Option<i64>,
+    severity: Option<u8>,
+    include_dismissed: bool,
+    sort_by: String,
+    desc: bool,
+    group_by_thread: bool,
+    exclude_stale: bool,
+    finding_id: i64,
+) -> Result<Option<i64>, String> {
+    let path = analysis_path(&active.path()?)?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
+    let q = FindingQuery {
+        severity,
+        include_dismissed,
+        sort: if sort_by == "date" {
+            FindingSort::Date
+        } else {
+            FindingSort::Severity
+        },
+        desc,
+        group_by_thread,
+        exclude_stale,
+    };
+    // Same scope derivation as the page query: a scan shows everything inside its
+    // sources + range, and no scan selected means everything.
+    match scan_id {
+        Some(id) => match db.scan_by_id(id).map_err(|e| e.to_string())? {
+            Some(sc) => db
+                .finding_rank(&sc.sources, sc.range_start, sc.range_end, &q, finding_id)
+                .map_err(|e| e.to_string()),
+            None => Ok(None),
+        },
+        None => db
+            .finding_rank("all", None, None, &q, finding_id)
+            .map_err(|e| e.to_string()),
+    }
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn list_content_findings(
