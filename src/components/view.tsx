@@ -350,6 +350,9 @@ export function NoBackupState({
   /** One or two sentences on what the view is. */
   lead: string;
   /** Capability highlights — what the user can actually do in this view. */
+  /** What a person can do in this view. Optional in the type, but
+   *  scripts/check-view-intro.mjs requires at least one for every view in
+   *  nav.ts — a no-backup screen with no capabilities is only prose. */
   features?: { label: string; detail: string }[];
   /** Closing line, typically the local/privacy assurance. */
   note?: string;

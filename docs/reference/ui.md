@@ -157,10 +157,20 @@ grow. The rule of thumb: **compose shadcn/ui primitives and the shared
   | `check-clickable.mjs` | a control that looks clickable but a real click lands elsewhere | #224 |
   | `check-view-intro.mjs` | a view that cannot introduce itself with no backup open | #221 |
 
-  `check-view-intro.mjs` walks every label in `nav.ts` — so a **new destination
-  is covered the day it lands**, not the day someone remembers the list — and for
-  each one requires a `NoBackupState` with a lead of at least 40 characters and at
-  least one named capability. It asserts on the `data-slot`s that `NoBackupState`
+  `check-view-intro.mjs` walks every `{ to, label }` pair in `nav.ts` — so a **new
+  destination is covered the day it lands**, not the day someone remembers the
+  list — and for each one requires a `NoBackupState` that is **on screen**, with a
+  heading, a lead of at least 40 characters, and at least one named capability.
+
+  Two things it does that a first draft of it did not, both found by review:
+  it asserts **arrival** (`location.pathname` must equal the entry's `to`) rather
+  than trusting the click, because a swallowed click left the *previous* view on
+  screen and it got measured and reported as this one's pass — so every view but
+  the first inherited its predecessor's intro. That is not hypothetical: the
+  sidebar's Scans group hardcodes its two labels in `app-shell.tsx`, so renaming
+  `scanNav`'s `label` makes the click miss forever. And it asserts **geometry**,
+  because an intro can sit in the DOM off-screen and `querySelector` cannot tell
+  the difference — the same class as #224. It asserts on the `data-slot`s that `NoBackupState`
   renders (`view-intro`, `view-intro-lead`, `view-intro-feature`) rather than on
   Tailwind classes, which change for visual reasons and would fail the check for
   the wrong cause. It deliberately checks *substance, not wording*: what a view
