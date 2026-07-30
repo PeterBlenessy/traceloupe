@@ -25,7 +25,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { useDebounced } from "@/lib/use-debounced";
 import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
 import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
-import { formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { client, type ArtifactRow, type ArtifactSummary } from "@/lib/ipc";
 
@@ -40,9 +40,10 @@ const PAGE = 5000;
  *  date — the whole reason the module declares an epoch. Everything else is
  *  shown as the module produced it: this view must not second-guess a value,
  *  because it cannot know what the artifact meant by it. */
-function cellText(value: ArtifactRow[string], isDate: boolean): string {
+function cellText(value: ArtifactRow[string], isDate: boolean, isBytes = false): string {
   if (value === null || value === undefined) return "—";
   if (isDate && typeof value === "number") return formatDateTime(value);
+  if (isBytes && typeof value === "number") return formatBytes(value);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);
 }
@@ -57,6 +58,7 @@ function ArtifactTable({
   search: string;
 }) {
   const dates = useMemo(() => new Set(artifact.timestampColumns ?? []), [artifact]);
+  const bytes = useMemo(() => new Set(artifact.byteColumns ?? []), [artifact]);
   return (
     <div className="min-w-full">
       <div
@@ -95,7 +97,7 @@ function ArtifactTable({
                   row[c] === null && "text-muted-foreground",
                 )}
               >
-                {cellText(row[c], dates.has(c))}
+                {cellText(row[c], dates.has(c), bytes.has(c))}
               </span>
             ))}
           </div>

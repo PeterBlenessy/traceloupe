@@ -913,6 +913,15 @@ export type ArtifactSummary = {
   /** The column whose value identifies the host row (a bundle id for Apps), so
    *  a host can attach rows without knowing what the artifact is. */
   joinColumn: string | null;
+  /** What a host may show on the row itself, before anything is expanded —
+   *  declared by the module, so a host never needs to know which artifact it is
+   *  looking at. `null` means the row shows only a record count. */
+  highlight: {
+    column: string;
+    whenColumn: string | null;
+    whenAnyOf: string[];
+    noneLabel: string | null;
+  } | null;
   /** Column headers, in declared order. A row is an unordered map, so this is
    *  what keeps column order stable between artifacts and between runs. */
   columns: string[];
@@ -923,6 +932,9 @@ export type ArtifactSummary = {
    *  pairings module is why that mattered: its two counters are integers that
    *  must not be rendered as dates. */
   timestampColumns: string[];
+  /** Which of `columns` are byte counts, declared by the module's `kind`. Rendered
+   *  as human sizes — raw bytes are unreadable at the scale data usage reaches. */
+  byteColumns: string[];
   rowCount: number;
   requiresEncryptedBackup: boolean;
 };
@@ -3485,9 +3497,41 @@ const mockClient: TraceLoupeClient = {
               "Which apps were allowed to use the camera, microphone, photos, contacts and location — and when that was decided.",
             surface: "apps" as const,
             joinColumn: "App",
+            highlight: {
+              column: "Permission",
+              whenColumn: "Decision",
+              whenAnyOf: ["Allowed", "Limited"],
+              noneLabel: "none granted",
+            },
             columns: ["App", "Permission", "Decision", "Decided"],
             timestampColumns: ["Decided"],
+            byteColumns: [],
             rowCount: 5,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "data_usage",
+            name: "Data usage",
+            category: "Network",
+            description:
+              "How much data each app sent and received, over Wi-Fi and cellular, and which system process carried it.",
+            surface: "apps" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Carried by",
+              "Cellular down",
+              "Cellular up",
+              "Wi-Fi down",
+              "Wi-Fi up",
+              "Records",
+              "First",
+              "Last",
+            ],
+            timestampColumns: ["First", "Last"],
+            byteColumns: ["Cellular down", "Cellular up", "Wi-Fi down", "Wi-Fi up"],
+            rowCount: 4,
             requiresEncryptedBackup: false,
           },
           // The two device-surface modules, with the shapes the real ones
@@ -3503,6 +3547,7 @@ const mockClient: TraceLoupeClient = {
               "Which services are signed in on this device — mail, calendars, iCloud, Game Center and more — with when each was added.",
             surface: "device" as const,
             joinColumn: null,
+            highlight: null,
             columns: [
               "Service",
               "Account",
@@ -3514,6 +3559,7 @@ const mockClient: TraceLoupeClient = {
               "Registered by",
             ],
             timestampColumns: ["Added"],
+            byteColumns: [],
             rowCount: 4,
             requiresEncryptedBackup: false,
           },
@@ -3525,6 +3571,7 @@ const mockClient: TraceLoupeClient = {
               "Low-energy Bluetooth accessories this iPhone is paired with — watches, trackers, headphones and tags — with the address each advertises.",
             surface: "device" as const,
             joinColumn: null,
+            highlight: null,
             columns: [
               "Device",
               "Address",
@@ -3538,6 +3585,7 @@ const mockClient: TraceLoupeClient = {
             // print a confident 1970s date, which is the bug the module's own
             // comment explains at length.
             timestampColumns: [],
+            byteColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -3552,15 +3600,67 @@ const mockClient: TraceLoupeClient = {
             description: "Which Focus modes exist on the device and when each was last changed.",
             surface: "device" as const,
             joinColumn: "Mode",
+            highlight: null,
             columns: ["Mode", "Enabled", "Changed"],
             timestampColumns: ["Changed"],
+            byteColumns: [],
             rowCount: mockUnencrypted ? 0 : 2,
             requiresEncryptedBackup: true,
           },
         ]
       : [],
   getArtifactRows: async (artifactId) =>
-    mockActive && artifactId === "accounts"
+    // Bundle ids MUST match mockInstalledApps, or Apps has nothing to attach
+    // these to and the hosted path silently renders nothing.
+    mockActive && artifactId === "data_usage"
+      ? [
+          {
+            App: "net.whatsapp.WhatsApp",
+            "Carried by": "WhatsApp",
+            "Cellular down": 481233920,
+            "Cellular up": 92341760,
+            "Wi-Fi down": 2914512896,
+            "Wi-Fi up": 402653184,
+            Records: 6,
+            First: 1700851484,
+            Last: 1722190914,
+          },
+          {
+            App: "com.burbn.instagram",
+            "Carried by": "nsurlsessiond",
+            "Cellular down": 1073741824,
+            "Cellular up": 51628130,
+            "Wi-Fi down": 8589934592,
+            "Wi-Fi up": 214748364,
+            Records: 9,
+            First: 1701078640,
+            Last: 1722179466,
+          },
+          {
+            App: "com.zhiliaoapp.musically",
+            "Carried by": "TikTok",
+            "Cellular down": 249049925,
+            "Cellular up": 51377128,
+            // Never recorded on this lineage, as distinct from zero traffic.
+            "Wi-Fi down": null,
+            "Wi-Fi up": null,
+            Records: 3,
+            First: 1707165210,
+            Last: 1722101455,
+          },
+          {
+            App: "com.apple.AppStore",
+            "Carried by": "appstored",
+            "Cellular down": 2715051824,
+            "Cellular up": 51628130,
+            "Wi-Fi down": 0,
+            "Wi-Fi up": 0,
+            Records: 7,
+            First: 1700851484,
+            Last: 1722190914,
+          },
+        ]
+      : mockActive && artifactId === "accounts"
       ? [
           {
             Service: "Gmail",

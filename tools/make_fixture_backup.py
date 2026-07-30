@@ -525,6 +525,53 @@ def seed_bluetooth_paired(path: Path) -> None:
     con.close()
 
 
+def seed_data_usage(path: Path) -> None:
+    """DataUsage.sqlite — per-app network usage, the store behind Settings ›
+    Cellular › Cellular Data.
+
+    Modern lineage (Wi-Fi and WWAN both present); the module carries a WWAN-only
+    fallback for older devices, as iLEAPP does. See
+    crates/traceloupe-core/modules/data_usage.toml.
+
+    Includes the ROLLUP row: no bundle id, and a total equal to the sum of every
+    other row. The module must exclude it, and iLEAPP's `ZKIND != 257` constant
+    would not — on a real iOS 17 device the rollup is ZKIND 255.
+    """
+    con = sqlite3.connect(path)
+    con.executescript(
+        """CREATE TABLE ZLIVEUSAGE (
+             Z_PK INTEGER PRIMARY KEY, ZKIND INTEGER, ZHASPROCESS INTEGER,
+             ZTIMESTAMP TIMESTAMP, ZWIFIIN FLOAT, ZWIFIOUT FLOAT,
+             ZWWANIN FLOAT, ZWWANOUT FLOAT);
+           CREATE TABLE ZPROCESS (
+             Z_PK INTEGER PRIMARY KEY, ZFIRSTTIMESTAMP TIMESTAMP,
+             ZTIMESTAMP TIMESTAMP, ZBUNDLENAME VARCHAR, ZPROCNAME VARCHAR,
+             ZEXTENSIONNAME VARCHAR);"""
+    )
+    con.executemany(
+        "INSERT INTO ZPROCESS (Z_PK, ZBUNDLENAME, ZPROCNAME) VALUES (?,?,?)",
+        [
+            (1, "com.example.chatapp", "ChatApp/com.example.chatapp"),
+            (2, "com.example.photos", "nsurlsessiond/com.example.photos"),
+            (3, "com.example.plain", "plainproc"),
+            (4, None, "CumulativeUsageTracker"),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO ZLIVEUSAGE (Z_PK, ZKIND, ZHASPROCESS, ZTIMESTAMP, ZWIFIIN,"
+        " ZWIFIOUT, ZWWANIN, ZWWANOUT) VALUES (?,?,?,?,?,?,?,?)",
+        [
+            (1, 0, 1, 726_000_000, 1000, 2000, 3000, 4000),
+            (2, 0, 1, 726_001_000, 500, 600, 700, 800),
+            (3, 0, 2, 725_000_000, 0, 0, 900_000, 10_000),
+            (4, 0, 3, 724_000_000, 10, 20, 30, 40),
+            (5, 255, 4, 726_002_000, 1510, 2620, 903_730, 14_840),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -544,6 +591,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_accounts3(accounts_path)
     bt_path = workdir / "ledevices.paired.db"
     seed_bluetooth_paired(bt_path)
+    usage_path = workdir / "DataUsage.sqlite"
+    seed_data_usage(usage_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -556,6 +605,7 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "Library/Database/com.apple.MobileBluetooth.ledevices.paired.db",
             bt_path.read_bytes(),
         ),
+        ("WirelessDomain", "Library/Databases/DataUsage.sqlite", usage_path.read_bytes()),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
     # A real camera roll: the DCIM original, its V2 thumbnail, and Photos.sqlite.
