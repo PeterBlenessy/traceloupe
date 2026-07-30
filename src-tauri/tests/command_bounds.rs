@@ -28,6 +28,11 @@ const BOUNDED: &[(&str, &str)] = &[
         "one count per histogram bucket; the bucket count is a UI constant",
     ),
     (
+        "extract_artifacts",
+        "one warning per compiled-in artifact module that failed (artifacts::BUILTIN) \
+         — a compile-time list, and usually empty",
+    ),
+    (
         "list_artifacts",
         "one entry per compiled-in artifact module (artifacts::BUILTIN) that this \
          backup actually yielded — a compile-time list, and the rows themselves \
