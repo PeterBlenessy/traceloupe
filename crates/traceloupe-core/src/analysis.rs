@@ -555,6 +555,26 @@ impl ChunkStatus {
     }
 }
 
+/// Whether finding `f` falls inside scan `s`'s scope — its sources and time range.
+///
+/// **Defined once, on purpose.** This decides both what a scan *counts* and what
+/// survives when a scan is *deleted*, and having those written separately is
+/// exactly how #218 happened: counting moved to scope while deletion stayed keyed
+/// on `scan_id`, so removing an old scan destroyed findings that newer scans were
+/// still displaying. Two copies of a rule are a rule that will disagree with
+/// itself.
+///
+/// Requires the aliases `s` (scans) and `f` (content_findings).
+const SCOPE_PREDICATE: &str = "
+    (s.sources = 'all'
+     OR ((',' || s.sources || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
+     OR ((',' || s.sources || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
+     OR (f.source_kind = 'message' AND f.service IS NOT NULL
+         AND (',' || s.sources || ',') LIKE ('%,' || f.service || ',%')))
+    AND (s.range_start IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= s.range_start)
+    AND (s.range_end IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= s.range_end)
+";
+
 impl AnalysisDb {
     /// Open (creating and migrating as needed) the analysis DB at `path`.
     pub fn open(path: &Path) -> Result<Self> {
@@ -1724,7 +1744,76 @@ impl AnalysisDb {
     /// included) has `scan_id REFERENCES scans(id)`, so leaving any behind makes
     /// the final delete fail. Dismissals are keyed by fingerprint (not scan) and
     /// are left intact so a re-scan still honours them.
+    /// Delete a scan, keeping everything another scan still accounts for.
+    ///
+    /// A finding's `scan_id` records which run *first classified its chunk*, not
+    /// which runs display it — classification is cached per chunk, so a re-scan
+    /// over covered data attributes nothing to its own id. Deleting by `scan_id`
+    /// therefore destroyed rows later scans were counting by scope, and took the
+    /// cached classification with them, so a re-scan had to pay the model cost
+    /// again to rediscover findings that were already known.
+    ///
+    /// So findings and chunk progress are **repointed** to a surviving scan, and
+    /// only findings that no remaining scope covers are removed. `foreign_keys`
+    /// is ON, which is why repointing must happen before the scan row goes.
     pub fn delete_scan(&self, id: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Per-scan OUTPUT genuinely belongs to the scan: a report and its
+        // per-thread summaries describe that run, and the audit log records it.
+        tx.execute("DELETE FROM summaries WHERE scan_id = ?1", params![id])?;
+        tx.execute("DELETE FROM audit_log WHERE scan_id = ?1", params![id])?;
+
+        // Who inherits provenance for rows outliving this scan: the newest
+        // remaining one, arbitrarily but stably. The column is provenance, not
+        // ownership — `chunk_is_done` keys on chunk_key + fingerprint, not on it.
+        let heir: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM scans WHERE id != ?1 ORDER BY id DESC LIMIT 1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        if let Some(heir) = heir {
+            tx.execute(
+                "UPDATE content_findings SET scan_id = ?2 WHERE scan_id = ?1",
+                params![id, heir],
+            )?;
+            tx.execute(
+                "UPDATE chunk_progress SET scan_id = ?2 WHERE scan_id = ?1",
+                params![id, heir],
+            )?;
+            tx.execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+
+            // Then drop only what no surviving scope accounts for — otherwise
+            // narrowing down to one scan would leave findings nothing displays.
+            tx.execute(
+                &format!(
+                    "DELETE FROM content_findings WHERE id IN (
+                         SELECT f.id FROM content_findings f
+                         WHERE NOT EXISTS (SELECT 1 FROM scans s WHERE {SCOPE_PREDICATE})
+                     )"
+                ),
+                [],
+            )?;
+        } else {
+            // The last scan: nothing can cover these and nothing can reference
+            // the scan row, so they go with it.
+            tx.execute("DELETE FROM content_findings", [])?;
+            tx.execute("DELETE FROM chunk_progress", [])?;
+            tx.execute("DELETE FROM scans WHERE id = ?1", params![id])?;
+        }
+
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The old ownership-based delete, test-only: it exists so the regression
+    /// test can demonstrate the bug it replaced rather than assert against a
+    /// remembered description of it.
+    #[cfg(test)]
+    fn delete_scan_by_ownership(&self, id: i64) -> Result<()> {
         self.conn.execute(
             "DELETE FROM content_findings WHERE scan_id = ?1",
             params![id],
@@ -1750,7 +1839,7 @@ impl AnalysisDb {
     /// data look "Clean". Counting by scope means every scan shows the findings
     /// that fall within it, so two scans over the same data agree.
     pub fn list_scans(&self, limit: i64) -> Result<Vec<ScanListRow>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT s.id, s.model, s.range_start, s.range_end, s.sources, s.status,
                     s.started_at, s.finished_at,
                     coalesce(count(f.id), 0),
@@ -1759,21 +1848,9 @@ impl AnalysisDb {
                     coalesce(sum(f.severity = 1), 0),
                     s.error
              FROM scans s
-             LEFT JOIN content_findings f ON f.stale = 0
-                AND (s.sources = 'all'
-                     OR ((',' || s.sources || ',') LIKE '%,notes,%'
-                         AND f.source_kind = 'note')
-                     OR ((',' || s.sources || ',') LIKE '%,messages,%'
-                         AND f.source_kind = 'message')
-                     OR (f.source_kind = 'message' AND f.service IS NOT NULL
-                         AND (',' || s.sources || ',')
-                             LIKE ('%,' || f.service || ',%')))
-                AND (s.range_start IS NULL OR f.occurred_at IS NULL
-                     OR f.occurred_at >= s.range_start)
-                AND (s.range_end IS NULL OR f.occurred_at IS NULL
-                     OR f.occurred_at <= s.range_end)
-             GROUP BY s.id ORDER BY s.id DESC LIMIT ?1",
-        )?;
+             LEFT JOIN content_findings f ON f.stale = 0 AND {SCOPE_PREDICATE}
+             GROUP BY s.id ORDER BY s.id DESC LIMIT ?1"
+        ))?;
         let rows = stmt.query_map(params![limit], |r| {
             Ok(ScanListRow {
                 id: r.get(0)?,
@@ -2526,6 +2603,164 @@ mod tests {
             Some("Nothing flagged.")
         );
         assert_eq!(db.get_summary(scan, "thread", "x").unwrap(), None);
+    }
+
+    /// Deleting an older scan must not change what a newer, overlapping scan
+    /// counts — the bug in #218.
+    ///
+    /// Findings are counted by SCOPE, so a finding classified by scan 1 is also
+    /// displayed by scan 2 when scan 2's sources and range contain it. Deleting
+    /// by `scan_id` therefore destroyed rows scan 2 was showing, and took the
+    /// cached classification with them.
+    ///
+    /// The old implementation is kept as `delete_scan_by_ownership` so this test
+    /// demonstrates the bug rather than describing it.
+    #[test]
+    fn deleting_an_older_scan_keeps_what_a_newer_one_counts() {
+        let finding = || NewFinding {
+            source_kind: SourceKind::Message,
+            source_id: Some(1),
+            thread_identifier: Some("t".into()),
+            occurred_at: Some(1_000),
+            fingerprint: "fp1".into(),
+            category: Category::ScamFraud,
+            severity: 2,
+            rationale: "x".into(),
+            service: Some("iMessage".into()),
+        };
+
+        // Two scans over the SAME data. The first classifies and owns the rows;
+        // the second reuses the cached chunk, so nothing is attributed to it.
+        let build = || {
+            let mut db = AnalysisDb::open_in_memory().unwrap();
+            let old = db.begin_scan("m", (None, None), "all", 100).unwrap();
+            db.record_chunk(old, "k", "fp1", ChunkStatus::Done, true, 101)
+                .unwrap();
+            db.replace_findings(old, &[finding()], 105).unwrap();
+            let new = db
+                .begin_scan("m", (Some(1), Some(9_999)), "all", 200)
+                .unwrap();
+            (db, old, new)
+        };
+
+        let count_for = |db: &AnalysisDb, id: i64| {
+            db.list_scans(50)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == id)
+                .map(|r| r.findings)
+        };
+
+        // Both scans count the one finding, by scope.
+        let (db, old, new) = build();
+        assert_eq!(count_for(&db, old), Some(1));
+        assert_eq!(count_for(&db, new), Some(1), "scope counting, not scan_id");
+
+        // THE BUG: the ownership-based delete drops the newer scan's count too.
+        let (db, old, new) = build();
+        db.delete_scan_by_ownership(old).unwrap();
+        assert_eq!(
+            count_for(&db, new),
+            Some(0),
+            "this is the bug being fixed — if it is no longer 0, the old \
+             implementation has changed and this test no longer demonstrates anything"
+        );
+
+        // THE FIX: scope-aware delete leaves the newer scan intact.
+        let (db, old, new) = build();
+        db.delete_scan(old).unwrap();
+        assert!(
+            db.scan_by_id(old).unwrap().is_none(),
+            "the scan itself is gone"
+        );
+        assert_eq!(
+            count_for(&db, new),
+            Some(1),
+            "the surviving scan still counts the finding it displays"
+        );
+
+        // And the cached classification survives, so a re-scan does not have to
+        // pay the model cost again to rediscover what was already known.
+        assert!(
+            db.chunk_is_done("k", "fp1").unwrap(),
+            "chunk_progress must survive — it is keyed on chunk_key+fingerprint, \
+             not on the scan that happened to write it"
+        );
+    }
+
+    /// Deleting the LAST scan leaves nothing orphaned.
+    #[test]
+    fn deleting_the_last_scan_removes_its_findings() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let only = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.record_chunk(only, "k", "fp", ChunkStatus::Done, false, 101)
+            .unwrap();
+        db.replace_findings(
+            only,
+            &[NewFinding {
+                source_kind: SourceKind::Message,
+                source_id: Some(1),
+                thread_identifier: Some("t".into()),
+                occurred_at: Some(100),
+                fingerprint: "fp".into(),
+                category: Category::ScamFraud,
+                severity: 2,
+                rationale: "x".into(),
+                service: Some("iMessage".into()),
+            }],
+            105,
+        )
+        .unwrap();
+
+        db.delete_scan(only).unwrap();
+        for table in ["content_findings", "chunk_progress", "scans"] {
+            let n: i64 = db
+                .conn()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 0, "{table} must be empty after the last scan is deleted");
+        }
+    }
+
+    /// A finding outside every surviving scope is removed rather than stranded.
+    #[test]
+    fn deleting_a_scan_drops_findings_no_survivor_covers() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        // Scan over everything, with a NOTE finding.
+        let broad = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.replace_findings(
+            broad,
+            &[NewFinding {
+                source_kind: SourceKind::Note,
+                source_id: Some(7),
+                thread_identifier: None,
+                occurred_at: Some(500),
+                fingerprint: "fpn".into(),
+                category: Category::SelfHarm,
+                severity: 3,
+                rationale: "x".into(),
+                service: None,
+            }],
+            105,
+        )
+        .unwrap();
+        // The only survivor covers messages, so the note is in nobody's scope.
+        let messages_only = db.begin_scan("m", (None, None), "messages", 200).unwrap();
+
+        db.delete_scan(broad).unwrap();
+        let n: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM content_findings", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 0, "a note finding survives no messages-only scope");
+        assert_eq!(
+            db.list_scans(50)
+                .unwrap()
+                .into_iter()
+                .find(|r| r.id == messages_only)
+                .map(|r| r.findings),
+            Some(0)
+        );
     }
 
     #[test]
