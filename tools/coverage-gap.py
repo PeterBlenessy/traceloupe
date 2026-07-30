@@ -34,6 +34,10 @@ overstates what we do.
 Feed it the classifier's output first:
 
   python3 tools/classify-ileapp-artifacts.py --json /tmp/ileapp.json
+
+The classifier needs an iLEAPP checkout at `engine/iLEAPP` (`pnpm setup:engine`),
+which a git WORKTREE does not have — it is ignored, so only the main checkout
+carries it. Run the classifier there and point this at the JSON.
 """
 
 from __future__ import annotations
@@ -119,6 +123,8 @@ ALIASES = {
     # ICCID and number live. iLEAPP splits the same store across two categories.
     "siminfo": ("module (sim_cards)", "SIM - UUID — NOT the Unique Label Store"),
     "cellular": ("module (sim_cards, data_usage)", "Cellular Wireless — partially"),
+    "mobilebackupplist": ("module (backup_sizing)", "Mobile Backup Plist — PreflightSizing"),
+    "wifiknownnetworks": ("module (wifi_networks)", "known networks and their join times"),
 }
 
 # iLEAPP categories that are not products we could "support" — they name a store
