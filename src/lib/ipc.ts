@@ -905,6 +905,14 @@ export type ArtifactSummary = {
   id: string;
   name: string;
   category: string | null;
+  /** One sentence describing what this is, in plain language. */
+  description: string;
+  /** Which view hosts it. `standalone` is for data that fits nowhere else — the
+   *  agreed rule is to fold into the view closest in meaning. */
+  surface: "apps" | "contacts" | "device" | "standalone";
+  /** The column whose value identifies the host row (a bundle id for Apps), so
+   *  a host can attach rows without knowing what the artifact is. */
+  joinColumn: string | null;
   /** Column headers, in declared order. A row is an unordered map, so this is
    *  what keeps column order stable between artifacts and between runs. */
   columns: string[];
@@ -3443,8 +3451,12 @@ const mockClient: TraceLoupeClient = {
       ? [
           {
             id: "tcc",
-            name: "App permissions",
+            name: "Permissions",
             category: "Security",
+            description:
+              "Which apps were allowed to use the camera, microphone, photos, contacts and location — and when that was decided.",
+            surface: "apps" as const,
+            joinColumn: "App",
             columns: ["App", "Permission", "Decision", "Decided"],
             rowCount: mockUnencrypted ? 4 : 4,
             requiresEncryptedBackup: false,
@@ -3457,6 +3469,9 @@ const mockClient: TraceLoupeClient = {
             id: "mock_gated",
             name: "Focus modes",
             category: "Device",
+            description: "Which Focus modes exist on the device and when each was last changed.",
+            surface: "device" as const,
+            joinColumn: "Mode",
             columns: ["Mode", "Enabled", "Changed"],
             rowCount: mockUnencrypted ? 0 : 2,
             requiresEncryptedBackup: true,
@@ -3472,33 +3487,20 @@ const mockClient: TraceLoupeClient = {
             { Mode: "Work", Enabled: false, Changed: 1700000400 },
           ]
       : mockActive && artifactId === "tcc"
-      ? [
-          {
-            App: "com.example.chatapp",
-            Permission: "kTCCServiceCamera",
-            Decision: "Allowed",
-            Decided: 1700000000,
-          },
-          {
-            App: "com.example.chatapp",
-            Permission: "kTCCServicePhotos",
-            Decision: "Limited",
-            Decided: 1700000200,
-          },
-          {
-            App: "com.example.weather",
-            Permission: "kTCCServiceLocation",
-            Decision: "Denied",
-            Decided: 1700000300,
-          },
-          {
-            App: "com.example.notprompted",
-            Permission: "kTCCServiceContacts",
-            Decision: "Not decided",
-            Decided: null,
-          },
-        ]
-      : [],
+        ? // Bundle ids MUST match mockInstalledApps, or the Apps view has nothing
+          // to attach these to and the hosted-artifact path silently renders
+          // nothing — which is exactly what happened the first time.
+          [
+            { App: "net.whatsapp.WhatsApp", Permission: "Camera", Decision: "Allowed", Decided: 1700000000 },
+            { App: "net.whatsapp.WhatsApp", Permission: "Microphone", Decision: "Allowed", Decided: 1700000100 },
+            { App: "net.whatsapp.WhatsApp", Permission: "Contacts", Decision: "Allowed", Decided: 1700000150 },
+            { App: "net.whatsapp.WhatsApp", Permission: "Photos", Decision: "Limited", Decided: 1700000200 },
+            { App: "net.whatsapp.WhatsApp", Permission: "Tracking", Decision: "Denied", Decided: 1700000250 },
+            { App: "com.burbn.instagram", Permission: "Camera", Decision: "Allowed", Decided: 1700000300 },
+            { App: "com.burbn.instagram", Permission: "kTCCServiceLocation", Decision: "Denied", Decided: 1700000350 },
+            { App: "com.zhiliaoapp.musically", Permission: "Microphone", Decision: "Not decided", Decided: null },
+          ]
+        : [],
   listReminders: async () =>
     mockActive
       ? [

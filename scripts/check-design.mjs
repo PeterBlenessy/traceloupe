@@ -48,8 +48,7 @@ const BASE = process.env.BASE || "http://localhost:1420";
  */
 const VIEWS = [
   "Photos", "Messages", "Contacts", "Calls", "Safari", "Notes", "Recordings",
-  "Calendar", "Reminders", "Health", "Interactions", "Apps", "Artifacts",
-  "Security", "Safety",
+  "Calendar", "Reminders", "Health", "Interactions", "Apps", "Security", "Safety",
 ];
 const DEEP = new Set(["Messages", "Notes", "Safety", "Contacts", "Photos"]);
 

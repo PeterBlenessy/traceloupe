@@ -1,15 +1,18 @@
 import { useMemo, useState } from "react";
 import { dateFormat } from "@/lib/format";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Boxes } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import {
   Item, ItemActions, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { useSettings } from "@/components/settings-provider";
 import { NoBackupState, ListSearch, VirtualListView } from "@/components/view";
+import { ArtifactTable } from "@/components/artifact-table";
+import { useHostedArtifacts, type HostedArtifact } from "@/lib/use-hosted-artifacts";
 import { appMeta, SUPPORT_LABEL, type AppSupport } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { cn } from "@/lib/utils";
@@ -86,6 +89,32 @@ export function AppsView() {
     enabled: active === true,
   });
   const [q, setQ] = useState("");
+  // Artifacts that declare `surface = "apps"`, keyed by the bundle id they
+  // belong to. Apps never learns what any of them are — the module says where it
+  // belongs and which column identifies the row, and this attaches it.
+  const { hosted } = useHostedArtifacts("apps", active === true);
+  // A backup imported before these modules existed has no rows, and permissions
+  // would simply be absent with nothing saying why — the same trap #216 fixed.
+  const { data: extraction } = useQuery({
+    queryKey: ["artifactsExtractionState"],
+    queryFn: () => client.artifactsExtractionState(),
+    enabled: active === true,
+  });
+  const queryClient = useQueryClient();
+  const [extracting, setExtracting] = useState(false);
+  const needsExtraction = extraction === "never-run" || extraction === "stale";
+
+  async function runExtraction() {
+    setExtracting(true);
+    try {
+      await client.extractArtifacts();
+      await queryClient.invalidateQueries({ queryKey: ["artifacts"] });
+      await queryClient.invalidateQueries({ queryKey: ["artifactRows"] });
+      await queryClient.invalidateQueries({ queryKey: ["artifactsExtractionState"] });
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   // TraceLoupe-recoverable apps first, system apps last; each group by name.
   // Prefer the backup's own App Store name over the built-in catalog name.
@@ -177,6 +206,11 @@ export function AppsView() {
           { label: "App Store detail", detail: "Seller, genre, subgenre, age rating, and release year." },
           { label: "Install receipt", detail: "When each app was downloaded, and the Apple ID that installed it." },
           { label: "Cross-link", detail: "Jump from a supported app to its chats in Messages." },
+          {
+            label: "Permissions",
+            detail:
+              "See what each app was allowed to reach — camera, microphone, photos, contacts, location — and when that was decided.",
+          },
         ]}
         note="Read locally on this Mac — nothing is uploaded."
       />
@@ -184,6 +218,34 @@ export function AppsView() {
   }
 
   return (
+    <div className="flex h-full flex-col">
+      {/* Offered, not automatic: extraction rebuilds the decryptor, which can
+          block on Touch ID, and a prompt must not appear because someone opened
+          a view. */}
+      {needsExtraction && (
+        <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">
+            {extraction === "never-run"
+              ? "App permissions have not been read from this backup yet."
+              : "TraceLoupe can read more about these apps than was extracted."}
+          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button size="sm" variant="ghost" onClick={runExtraction} disabled={extracting}>
+                {extracting ? "Reading…" : "Read them now"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Reads from the backup on disk — no re-import needed</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
+      {/* `underlap` lets the list scroll beneath the translucent title bar, and
+          is documented as "only sensible when the list is the view's topmost
+          element". With the extraction prompt above it that stops being true —
+          the list's offset covered the prompt's button, leaving it visible but
+          unclickable, which is exactly the failure in #224's "Back to Safety
+          Scan". So underlap is off whenever the prompt is showing. */}
+      <div className="min-h-0 flex-1">
     <VirtualListView
       title="Apps"
       count={filtered.length}
@@ -191,17 +253,39 @@ export function AppsView() {
       error={error}
       emptyMessage="No installed-app list in this backup."
       emptyIcon={Boxes}
-      underlap
+      underlap={!needsExtraction}
       items={filtered}
       getKey={(a) => a.bundleId}
-      renderItem={(a) => <AppItem app={a} iconUri={iconMap.get(a.bundleId)} />}
+      renderItem={(a) => (
+        <AppItem app={a} iconUri={iconMap.get(a.bundleId)} hosted={hosted} />
+      )}
     />
+      </div>
+    </div>
   );
 }
 
-function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
+/** The hosted artifacts that have rows for this app. */
+function artifactsFor(hosted: HostedArtifact[], bundleId: string) {
+  const key = bundleId.toLowerCase();
+  return hosted
+    .map((h) => ({ artifact: h.artifact, rows: h.byKey.get(key) ?? [] }))
+    .filter((h) => h.rows.length > 0);
+}
+
+function AppItem({
+  app,
+  iconUri,
+  hosted,
+}: {
+  app: AppRow;
+  iconUri?: string;
+  hosted: HostedArtifact[];
+}) {
   const navigate = useNavigate();
   const label = SUPPORT_LABEL[app.support];
+  const [expanded, setExpanded] = useState(false);
+  const mine = artifactsFor(hosted, app.bundleId);
 
   return (
     // Card-per-app (outline + soft card fill): with four classes of info per
@@ -293,6 +377,67 @@ function AppItem({ app, iconUri }: { app: AppRow; iconUri?: string }) {
         <ItemDescription className="truncate font-mono text-2xs text-muted-foreground/60">
           {app.bundleId}
         </ItemDescription>
+
+        {/* A summary on the row itself, not only once expanded: what this app was
+            allowed to reach is the kind of thing you want to see while scanning
+            the list, without opening anything. Granted first — a denial is less
+            interesting than an app holding the camera. */}
+        {mine.length > 0 && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {mine.map(({ artifact, rows }) => {
+              const granted = rows
+                .filter((r) => r["Decision"] === "Allowed" || r["Decision"] === "Limited")
+                .map((r) => String(r[artifact.columns[1]] ?? ""))
+                .filter(Boolean);
+              const shown = granted.slice(0, 3);
+              const rest = granted.length - shown.length;
+              return (
+                <Tooltip key={artifact.id}>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((v) => !v)}
+                      className="flex flex-wrap items-center gap-1 rounded-md text-2xs text-muted-foreground hover:text-foreground"
+                    >
+                      <span className="font-medium">{artifact.name}:</span>
+                      {shown.length > 0 ? (
+                        <>
+                          {shown.map((g) => (
+                            <Badge key={g} variant="secondary" className="px-1.5 py-0">
+                              {g}
+                            </Badge>
+                          ))}
+                          {rest > 0 && <span>+{rest}</span>}
+                        </>
+                      ) : (
+                        <span>none granted</span>
+                      )}
+                      <span className="underline decoration-dotted">
+                        {expanded ? "hide" : `${rows.length} recorded`}
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>{artifact.description}</TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Inline expansion rather than a detail panel: the list virtualizer
+            measures each row, so a row can grow. Reversible if per-app data
+            outgrows it. */}
+        {expanded &&
+          mine.map(({ artifact, rows }) => (
+            <div key={artifact.id} className="mt-2 rounded-md border bg-background/40 p-2">
+              <p className="mb-1 text-2xs text-muted-foreground">{artifact.description}</p>
+              <ArtifactTable
+                artifact={artifact}
+                rows={rows}
+                hideColumns={artifact.joinColumn ? [artifact.joinColumn] : []}
+              />
+            </div>
+          ))}
       </ItemContent>
       {app.support === "native" && (
         <ItemActions>
