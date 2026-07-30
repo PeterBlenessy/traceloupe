@@ -3564,6 +3564,42 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "bluetooth_nearby",
+            name: "Nearby Bluetooth",
+            category: "Device",
+            description:
+              "Low-energy Bluetooth devices this iPhone saw in range but never paired with — other people's devices, trackers and appliances.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Device", "Address", "Seen counter", "Identifier"],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 4,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "device_locale",
+            name: "Language and region",
+            category: "Device",
+            description:
+              "The language this iPhone is set to, its region format, and whether it shows a 24-hour clock.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Language",
+              "Region format",
+              "Last known locale",
+              "24-hour clock",
+              "Passcode keyboard",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "bluetooth_devices",
             name: "Bluetooth devices",
             category: "Device",
@@ -3799,6 +3835,44 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "bluetooth_nearby"
+        ? [
+            // Named first, then the anonymous rotating addresses — nothing dropped.
+            {
+              Device: "Garage Opener",
+              Address: "Public CC:6A:10:54:65:FF",
+              "Seen counter": 4352299,
+              Identifier: "11111111-0000-0000-0000-000000000002",
+            },
+            {
+              Device: "Fitness Band",
+              Address: "Random ED:FD:03:AC:36:76",
+              "Seen counter": 4337974,
+              Identifier: "11111111-0000-0000-0000-000000000004",
+            },
+            {
+              Device: null,
+              Address: "Random AA:BB:CC:DD:EE:01",
+              "Seen counter": 4000000,
+              Identifier: "11111111-0000-0000-0000-000000000001",
+            },
+            {
+              Device: "",
+              Address: "Random AA:BB:CC:DD:EE:03",
+              "Seen counter": 4100000,
+              Identifier: "11111111-0000-0000-0000-000000000003",
+            },
+          ]
+      : mockActive && artifactId === "device_locale"
+        ? [
+            {
+              Language: "en-US",
+              "Region format": "en_US",
+              "Last known locale": "en_US",
+              "24-hour clock": true,
+              "Passcode keyboard": "en_US@sw=QWERTY;hw=Automatic",
+            },
+          ]
       : mockActive && artifactId === "bluetooth_devices"
         ? [
             {
