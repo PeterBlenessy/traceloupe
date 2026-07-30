@@ -60,6 +60,39 @@ fn filtered_scope(q: &FindingQuery) -> String {
     w
 }
 
+/// The ORDER BY a page of findings uses, without LIMIT/OFFSET.
+///
+/// **Defined once**, because both a page and a finding's *rank within* that page
+/// order have to agree exactly. Returning to a specific finding (#224) means
+/// counting how many rows sort before it, and a rank computed under even
+/// slightly different ordering scrolls to the wrong row — the same "one rule,
+/// two copies" mistake that #218 was.
+///
+/// Built from enums and integers, never from caller text.
+fn order_by(q: &FindingQuery) -> String {
+    let dir = if q.desc { "DESC" } else { "ASC" };
+    let mut tail = String::from("ORDER BY ");
+    if q.group_by_thread {
+        // Notes have no thread; they gather at the end under their own heading,
+        // which is where the grouped view has always put them.
+        tail.push_str("f.thread_identifier IS NULL, f.thread_identifier, ");
+    }
+    match q.sort {
+        FindingSort::Severity => {
+            // Severity first, recency inside a band.
+            tail.push_str(&format!("f.severity {dir}, f.occurred_at {dir}"));
+        }
+        FindingSort::Date => tail.push_str(&format!("f.occurred_at {dir}")),
+    }
+    // A total order, so paging is well-defined. Findings routinely share a
+    // severity AND a timestamp, and SQL leaves ties unspecified — today's plan
+    // happens to return them by rowid, but an index over (severity,
+    // occurred_at) would be enough to change that, and then a row sits on two
+    // pages while another sits on none.
+    tail.push_str(&format!(", f.id {dir}"));
+    tail
+}
+
 /// How the Findings panel orders a page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FindingSort {
@@ -1041,28 +1074,7 @@ impl AnalysisDb {
         limit: i64,
     ) -> Result<Vec<FindingRow>> {
         let where_clause = filtered_scope(q);
-        // Built from enums and integers, never from caller text.
-        let dir = if q.desc { "DESC" } else { "ASC" };
-        let mut tail = String::from("ORDER BY ");
-        if q.group_by_thread {
-            // Notes have no thread; they gather at the end under their own
-            // heading, which is where the grouped view has always put them.
-            tail.push_str("f.thread_identifier IS NULL, f.thread_identifier, ");
-        }
-        match q.sort {
-            FindingSort::Severity => {
-                // Severity first, recency inside a band — the same order the
-                // panel produced with `severity * 1e12 + occurred_at`.
-                tail.push_str(&format!("f.severity {dir}, f.occurred_at {dir}"));
-            }
-            FindingSort::Date => tail.push_str(&format!("f.occurred_at {dir}")),
-        }
-        // A total order, so paging is well-defined. Findings routinely share a
-        // severity AND a timestamp, and SQL leaves the order among ties
-        // unspecified — today's plan happens to return them by rowid, but adding
-        // an index over (severity, occurred_at) would be enough to change that,
-        // and then a row sits on two pages while another sits on none.
-        tail.push_str(&format!(", f.id {dir} LIMIT {limit} OFFSET {offset}"));
+        let tail = format!("{} LIMIT {limit} OFFSET {offset}", order_by(q));
         self.query_findings_tail(
             &where_clause,
             &tail,
@@ -1088,6 +1100,46 @@ impl AnalysisDb {
             params![sources, range_start, range_end],
             |r| r.get(0),
         )?)
+    }
+
+    /// Where a finding sits in the current filter and order — its row index, or
+    /// None when the filter excludes it.
+    ///
+    /// This is what lets "Back to Safety Scan" return to the finding somebody
+    /// started from rather than to the top of the list (#224). The findings panel
+    /// is virtualized and paged, so it needs an index, not an id.
+    ///
+    /// `ROW_NUMBER()` over the *same* `order_by(q)` the page query uses, rather
+    /// than a hand-written "count rows that sort before this one". That
+    /// comparison would need to reproduce the lexicographic order across three
+    /// keys with NULLs in two of them, and any disagreement scrolls to the wrong
+    /// row. Sharing the ordering string makes disagreement impossible.
+    pub fn finding_rank(
+        &self,
+        sources: &str,
+        range_start: Option<i64>,
+        range_end: Option<i64>,
+        q: &FindingQuery,
+        finding_id: i64,
+    ) -> Result<Option<i64>> {
+        let sql = format!(
+            "SELECT rn FROM (
+                 SELECT f.id AS fid,
+                        ROW_NUMBER() OVER ({order}) - 1 AS rn
+                 FROM content_findings f
+                 WHERE {where_clause}
+             ) WHERE fid = ?4",
+            order = order_by(q),
+            where_clause = filtered_scope(q),
+        );
+        Ok(self
+            .conn
+            .query_row(
+                &sql,
+                params![sources, range_start, range_end, finding_id],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     /// The numbers the filter pills show, in one round trip.
@@ -2405,6 +2457,113 @@ mod tests {
             (rows[0].serious, rows[0].harmful, rows[0].concerning),
             (1, 1, 0)
         );
+    }
+
+    /// A finding's rank must be the index the paged list actually puts it at —
+    /// under every filter and both sort orders. If the two disagree, returning to
+    /// a finding scrolls to the wrong row, which is worse than not scrolling.
+    ///
+    /// Checked by asking for the rank and then fetching a one-row page at that
+    /// offset: the row that comes back must be the finding. That compares the two
+    /// queries against each other rather than against my belief about the order.
+    #[test]
+    fn a_findings_rank_matches_the_page_it_lands_on() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+
+        // Deliberately messy: shared severities, shared timestamps, a NULL
+        // timestamp, notes with no thread — every tie-break and NULL the
+        // ordering has to cope with.
+        let new_f = |sev: u8, at: Option<i64>, kind: SourceKind, thread: Option<&str>, fp: &str| {
+            NewFinding {
+                source_kind: kind,
+                source_id: Some(1),
+                thread_identifier: thread.map(|t| t.to_string()),
+                occurred_at: at,
+                fingerprint: fp.into(),
+                category: Category::ScamFraud,
+                severity: sev,
+                rationale: "x".into(),
+                service: Some("iMessage".into()),
+            }
+        };
+        let findings = vec![
+            new_f(3, Some(500), SourceKind::Message, Some("t1"), "a"),
+            new_f(3, Some(500), SourceKind::Message, Some("t1"), "b"),
+            new_f(2, Some(400), SourceKind::Message, Some("t2"), "c"),
+            new_f(1, None, SourceKind::Note, None, "d"),
+            new_f(2, Some(400), SourceKind::Note, None, "e"),
+        ];
+        db.replace_findings(scan, &findings, 105).unwrap();
+
+        for sort in [FindingSort::Severity, FindingSort::Date] {
+            for desc in [true, false] {
+                for group in [true, false] {
+                    let q = FindingQuery {
+                        severity: None,
+                        include_dismissed: true,
+                        sort,
+                        desc,
+                        group_by_thread: group,
+                        exclude_stale: false,
+                    };
+                    let all = db
+                        .list_findings_in_scope_page("all", None, None, &q, 0, 100)
+                        .unwrap();
+                    assert_eq!(all.len(), 5);
+                    for (i, row) in all.iter().enumerate() {
+                        let rank = db
+                            .finding_rank("all", None, None, &q, row.id)
+                            .unwrap()
+                            .unwrap_or_else(|| panic!("no rank for finding {}", row.id));
+                        assert_eq!(
+                            rank, i as i64,
+                            "rank disagrees with the page order (sort={sort:?} desc={desc} group={group})"
+                        );
+                        // And the page at that offset really is this row.
+                        let one = db
+                            .list_findings_in_scope_page("all", None, None, &q, rank, 1)
+                            .unwrap();
+                        assert_eq!(one[0].id, row.id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A finding the current filter excludes has no rank, so the caller can say
+    /// so instead of scrolling somewhere arbitrary.
+    #[test]
+    fn a_filtered_out_finding_has_no_rank() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 100).unwrap();
+        db.replace_findings(
+            scan,
+            &[NewFinding {
+                source_kind: SourceKind::Message,
+                source_id: Some(1),
+                thread_identifier: Some("t".into()),
+                occurred_at: Some(500),
+                fingerprint: "a".into(),
+                category: Category::ScamFraud,
+                severity: 1,
+                rationale: "x".into(),
+                service: Some("iMessage".into()),
+            }],
+            105,
+        )
+        .unwrap();
+        let id = db
+            .list_findings_in_scope_page("all", None, None, &FindingQuery::default(), 0, 10)
+            .unwrap()[0]
+            .id;
+
+        // Filtering to a severity it does not have removes it from the order.
+        let q = FindingQuery {
+            severity: Some(3),
+            ..FindingQuery::default()
+        };
+        assert_eq!(db.finding_rank("all", None, None, &q, id).unwrap(), None);
     }
 
     #[test]
