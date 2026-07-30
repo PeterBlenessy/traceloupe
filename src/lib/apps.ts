@@ -30,6 +30,7 @@ const CATALOG: Record<string, AppMeta> = {
   "com.kik.chat": { name: "Kik", support: "native", slug: "kik" },
   "com.imo.imoim": { name: "imo", support: "native" },
   "ch.threema.iapp": { name: "Threema", support: "native", slug: "threema" },
+  "ch.swisscows.messenger.teleguardapp": { name: "TeleGuard", support: "native" },
   "com.viber": { name: "Viber", support: "native", slug: "viber" },
   "com.microsoft.skype.teams": { name: "Microsoft Teams", support: "native" },
   "com.linkedin.LinkedIn": { name: "LinkedIn", support: "native", slug: "linkedin" },
@@ -62,6 +63,9 @@ const SERVICE_SLUGS: Record<string, string> = {
   Kik: "kik",
   Snapchat: "snapchat",
   Signal: "signal",
+  // No brand mark shipped for TeleGuard, so no slug — `serviceSlug` returns null
+  // and the chip falls back to its text label, which is correct rather than a
+  // wrong logo.
 };
 
 /** The brand slug for a Messages service label (filter chips), or null. */
