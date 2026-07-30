@@ -1,0 +1,91 @@
+# Private Wi-Fi addresses — the randomised MAC address this iPhone presented to
+# each network, and when it last rotated.
+#
+# Since iOS 14 the phone shows a DIFFERENT, per-network hardware address instead
+# of its real one ("Private Wi-Fi Address" in Settings). This store is the record
+# of which address it used where. That is worth reading on its own terms: it is
+# the identifier a network operator's logs would have recorded, so it is what ties
+# this device to a sighting on someone else's infrastructure — and it is not the
+# device's real MAC, which is the point of the feature.
+#
+# Backup-reachable: `SystemPreferencesDomain`, which iOS backs up (see
+# docs/reference/backup-coverage-audit.md).
+#
+# THE ROWS ARE AN ARRAY, not a dictionary — the first module of that shape. They
+# live under a single key whose name contains SPACES ("List of scanned networks
+# with private mac"), which is why `plist.rows` is a list of segments rather than
+# a dotted string.
+#
+# HOW THIS DIFFERS FROM `wifi_networks`, AND WHY BOTH SHIP
+#
+# Same 17 networks on the validation image, different questions. `wifi_networks`
+# reads the KNOWN-networks store and answers "what has this phone joined, and
+# when". This one answers "what did this phone look like to each of them". The
+# overlap is the SSID; everything that matters here — the private address, whether
+# the network was open, whether it is still in the known list — is not in the
+# other store at all. Merging them is not possible anyway: a module reads one file.
+#
+# THE ADDRESS IS SIX RAW BYTES, nested under `PRIVATE_MAC_ADDRESS`. `text` gives
+# null for it (correctly — it is not UTF-8), so it is declared `kind = "hex"`,
+# which renders it colon-separated the way a MAC is written everywhere else.
+# `PRIVATE_MAC_ADDRESS_VALID` is kept beside it: an address that is present but
+# marked invalid is not an address this phone used, and showing the bytes without
+# the flag would imply it was.
+#
+# `SSID_STR` is a plain string here, unlike the known-networks store where the
+# name is only reliably in the key. Read directly.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 17 networks with their private addresses, join times and rotation
+# timestamps. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "wifi_private_mac"
+name        = "Private Wi-Fi addresses"
+description = "The randomised hardware address this iPhone presented to each Wi-Fi network, and when it last changed."
+surface     = "device"
+category    = "Network"
+domain      = "SystemPreferencesDomain"
+path        = "SystemConfiguration/com.apple.wifi-private-mac-networks.plist"
+
+[plist]
+# An ARRAY under one key. Segments, not a dotted path — the key has spaces in it.
+rows = ["List of scanned networks with private mac"]
+
+[[columns]]
+name = "Network"
+from = "SSID_STR"
+
+[[columns]]
+name = "Private address"
+from = ["PRIVATE_MAC_ADDRESS", "PRIVATE_MAC_ADDRESS_VALUE"]
+kind = "hex"
+
+[[columns]]
+name = "Address valid"
+from = ["PRIVATE_MAC_ADDRESS", "PRIVATE_MAC_ADDRESS_VALID"]
+kind = "bool"
+
+[[columns]]
+name = "Access point"
+from = "BSSID"
+
+[[columns]]
+name = "Open network"
+from = "IsOpenNetwork"
+kind = "bool"
+
+[[columns]]
+name = "Still known"
+from = "PresentInKnownNetworks"
+kind = "bool"
+
+[[columns]]
+name = "Last joined"
+from = "lastJoined"
+kind = "timestamp"
+
+[[columns]]
+name = "Address generated"
+from = "MacGenerationTimeStamp"
+kind = "timestamp"

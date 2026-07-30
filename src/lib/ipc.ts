@@ -3564,6 +3564,45 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "bluetooth_devices",
+            name: "Bluetooth devices",
+            category: "Device",
+            description:
+              "Classic Bluetooth accessories this iPhone has paired with — headphones, speakers, car kits — with the name the owner gave each one.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Address", "Named by owner", "Device name", "Kind"],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "wifi_private_mac",
+            name: "Private Wi-Fi addresses",
+            category: "Network",
+            description:
+              "The randomised hardware address this iPhone presented to each Wi-Fi network, and when it last changed.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Network",
+              "Private address",
+              "Address valid",
+              "Access point",
+              "Open network",
+              "Still known",
+              "Last joined",
+              "Address generated",
+            ],
+            timestampColumns: ["Last joined", "Address generated"],
+            byteColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "wifi_networks",
             name: "Wi-Fi networks",
             category: "Network",
@@ -3760,6 +3799,52 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "bluetooth_devices"
+        ? [
+            {
+              Address: "08:65:18:75:5E:75",
+              "Named by owner": "Alex's AirPods",
+              "Device name": "AirPods 3",
+              Kind: "Headphones",
+            },
+            {
+              Address: "7C:04:D0:89:89:A0",
+              "Named by owner": "Sam's AirPods",
+              "Device name": "AirPods",
+              Kind: "Headphones",
+            },
+            {
+              // Never renamed: null, not a fallback to the model.
+              Address: "F8:6F:C1:4E:FF:6A",
+              "Named by owner": null,
+              "Device name": "Apple Watch",
+              Kind: "Watch",
+            },
+          ]
+      : mockActive && artifactId === "wifi_private_mac"
+        ? [
+            {
+              Network: "HomeNet",
+              "Private address": "8a:1b:2c:3d:4e:5f",
+              "Address valid": true,
+              "Access point": "6a:22:32:98:f4:df",
+              "Open network": false,
+              "Still known": true,
+              "Last joined": 1689450273,
+              "Address generated": 1700312363,
+            },
+            {
+              Network: "Cafe Wifi",
+              "Private address": "00:11:22:33:44:55",
+              // Present but not in use.
+              "Address valid": false,
+              "Access point": null,
+              "Open network": true,
+              "Still known": false,
+              "Last joined": 1700000000,
+              "Address generated": 1699000000,
+            },
+          ]
       : mockActive && artifactId === "wifi_networks"
         ? [
             {

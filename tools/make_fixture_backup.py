@@ -652,6 +652,76 @@ def build_known_networks_plist() -> bytes:
     )
 
 
+def build_bluetooth_devices_plist() -> bytes:
+    """com.apple.MobileBluetooth.devices.plist — classic (non-LE) accessories,
+    keyed by MAC address.
+
+    One device is named after someone other than the owner, which is why the
+    module keeps the owner's name, the device's own name and its class as three
+    separate columns; one was never renamed, so its owner-name column must be null
+    rather than falling back to the model.
+    """
+    return plistlib.dumps(
+        {
+            "08:65:18:75:5E:75": {
+                "UserNameKey": "Alex's AirPods",
+                "Name": "AirPods 3",
+                "DefaultName": "Headphones",
+                "LastAVCTPVersion": b"\x01\x04",  # radio state, deliberately unread
+            },
+            "7C:04:D0:89:89:A0": {
+                "UserNameKey": "Sam's AirPods",
+                "Name": "AirPods",
+                "DefaultName": "Headphones",
+            },
+            "F8:6F:C1:4E:FF:6A": {"Name": "Apple Watch", "DefaultName": "Watch"},
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
+def build_private_mac_plist() -> bytes:
+    """com.apple.wifi-private-mac-networks.plist — the randomised address the phone
+    presented to each network. Rows are an ARRAY under a key containing spaces.
+
+    One address is marked invalid: bytes that are present but not in use are not
+    an address this phone presented.
+    """
+    def at(secs: int) -> datetime:
+        return datetime.fromtimestamp(secs, tz=timezone.utc).replace(tzinfo=None)
+
+    return plistlib.dumps(
+        {
+            "List of scanned networks with private mac": [
+                {
+                    "SSID_STR": "HomeNet",
+                    "BSSID": "6a:22:32:98:f4:df",
+                    "IsOpenNetwork": False,
+                    "PresentInKnownNetworks": True,
+                    "lastJoined": at(1_689_450_273),
+                    "MacGenerationTimeStamp": at(1_700_312_363),
+                    "PRIVATE_MAC_ADDRESS": {
+                        "PRIVATE_MAC_ADDRESS_VALID": True,
+                        "PRIVATE_MAC_ADDRESS_VALUE": b"\x8a\x1b\x2c\x3d\x4e\x5f",
+                    },
+                },
+                {
+                    "SSID_STR": "Cafe Wifi",
+                    "IsOpenNetwork": True,
+                    "PresentInKnownNetworks": False,
+                    "lastJoined": at(1_700_000_000),
+                    "MacGenerationTimeStamp": at(1_699_000_000),
+                    "PRIVATE_MAC_ADDRESS": {
+                        "PRIVATE_MAC_ADDRESS_VALID": False,
+                        "PRIVATE_MAC_ADDRESS_VALUE": b"\x00\x11\x22\x33\x44\x55",
+                    },
+                },
+            ]
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -693,6 +763,16 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "SystemPreferencesDomain",
             "com.apple.wifi.known-networks.plist",
             build_known_networks_plist(),
+        ),
+        (
+            "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
+            "Library/Preferences/com.apple.MobileBluetooth.devices.plist",
+            build_bluetooth_devices_plist(),
+        ),
+        (
+            "SystemPreferencesDomain",
+            "SystemConfiguration/com.apple.wifi-private-mac-networks.plist",
+            build_private_mac_plist(),
         ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
