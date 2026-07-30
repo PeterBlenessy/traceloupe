@@ -35,6 +35,9 @@ import {
 } from "@/components/dashboard-tiles";
 import { CATEGORY_LABEL, formatSources } from "@/views/safety-scan";
 import { formatDateTime } from "@/lib/format";
+import { ArtifactTable } from "@/components/artifact-table";
+import { useHostedArtifacts } from "@/lib/use-hosted-artifacts";
+import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
 import { useBoundedList } from "@/lib/bounded-list";
 
 export function BackupPicker() {
@@ -546,8 +549,175 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
         </p>
       )}
 
+      <DeviceMoreInformation />
+
       <HomeDashboard />
     </div>
+  );
+}
+
+/**
+ * The device-level artifacts, behind a "More information" disclosure.
+ *
+ * These are `surface = "device"` modules — configured accounts, Bluetooth
+ * pairings, and whatever future TOML declares itself device-level. They belong
+ * with the device, and the device view is this one: `/` is the app's single home
+ * and IS the Device view once a backup is open, which is why the old standalone
+ * `/device` route was merged in here in the first place.
+ *
+ * Collapsed by default, deliberately. The fields above answer "what device is
+ * this?" in six rows; these tables answer follow-up questions and are much
+ * longer, so putting them inline would bury the dashboard under them. It is a
+ * disclosure rather than a separate destination for the same reason the route was
+ * merged: one home, not two.
+ *
+ * It knows no artifact by name — a new device-level module appears here with no
+ * change to this file.
+ */
+function DeviceMoreInformation() {
+  const { hosted } = useHostedArtifacts("device", true);
+  const { data: extraction } = useQuery({
+    queryKey: ["artifactsExtractionState"],
+    queryFn: () => client.artifactsExtractionState(),
+  });
+  const qc = useQueryClient();
+  const [extracting, setExtracting] = useState(false);
+  // Controlled, and the component must stay mounted while it is true. Both
+  // matter: reading the details invalidates the artifact queries, which briefly
+  // leaves nothing to show, and an uncontrolled Collapsible that unmounts loses
+  // its open state — measured, the section snapped shut the moment "Read them
+  // now" was pressed, dropping the user back to a collapsed row with no idea
+  // whether anything had happened.
+  const [open, setOpen] = useState(false);
+  const needsExtraction = extraction === "never-run" || extraction === "stale";
+
+  async function runExtraction() {
+    setExtracting(true);
+    try {
+      await client.extractArtifacts();
+      await qc.invalidateQueries({ queryKey: ["artifacts"] });
+      await qc.invalidateQueries({ queryKey: ["artifactRows"] });
+      await qc.invalidateQueries({ queryKey: ["artifactsExtractionState"] });
+    } catch (e) {
+      toast.error("Couldn't read the device details", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  // An artifact with no rows is not evidence of anything, and a disclosure that
+  // opens onto empty tables is worse than one that is not offered.
+  const withRows = hosted.filter((h) => h.rows.length > 0);
+  // EXCEPT the encryption-gated ones. An artifact that needs an encrypted backup
+  // is deliberately listed with `rowCount === 0` so it can say WHY it is empty
+  // instead of vanishing (#197) — "absent" and "impossible here" are different
+  // facts, and collapsing them is the failure that whole thread exists to
+  // prevent. Filtering purely on `rows.length > 0` silently dropped them, and
+  // since #220 moved hosted artifacts out of the standalone view there was no
+  // other screen left that would explain them: they rendered nowhere at all.
+  const gatedAndEmpty = hosted.filter(
+    (h) => h.rows.length === 0 && h.artifact.requiresEncryptedBackup,
+  );
+  const nothingToShow =
+    withRows.length === 0 && gatedAndEmpty.length === 0 && !needsExtraction && !extracting;
+  // Never offered when there is nothing to disclose and nothing to read. But once
+  // it is open, it stays — a control that vanishes under the pointer is worse than
+  // one that admits it found nothing, and unmounting would also discard `open`.
+  if (nothingToShow && !open) return null;
+
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="mt-6">
+      {/* NESTING ORDER MATTERS: `CollapsibleTrigger` must be the OUTER `asChild`,
+          with `TooltipTrigger` inside it, both landing on one real button.
+          Measured, because this is not guessable: with the tooltip outermost the
+          trigger's `data-state` stayed "closed" after a click on a fully settled
+          page — the disclosure simply could not be opened — and that held both for
+          a plain `CollapsibleTrigger` wrapped in `TooltipTrigger asChild` and for
+          the two composed the other way round. Reversing them opens it. If a
+          future edit flips these, the control goes dead silently, so leave the
+          order alone. */}
+      <Tooltip>
+        <CollapsibleTrigger asChild>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className="group inline-flex items-center gap-1 text-xs font-medium text-foreground hover:text-primary"
+            >
+              <ChevronRight className="size-3.5 transition-transform group-data-[state=open]:rotate-90" />
+              More information
+              {withRows.length > 0 && (
+                <span className="text-muted-foreground">
+                  ({withRows.length === 1 ? "1 record set" : `${withRows.length} record sets`})
+                </span>
+              )}
+            </button>
+          </TooltipTrigger>
+        </CollapsibleTrigger>
+        <TooltipContent>
+          Accounts, Bluetooth pairings and other device-level detail from this backup
+        </TooltipContent>
+      </Tooltip>
+      <CollapsibleContent>
+        {needsExtraction && (
+          <div className="mt-3 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs">
+            <span className="text-muted-foreground">
+              {extraction === "never-run"
+                ? "Device details have not been read from this backup yet."
+                : "TraceLoupe can read more about this device than was extracted."}
+            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button size="sm" variant="ghost" onClick={runExtraction} disabled={extracting}>
+                  {extracting ? "Reading…" : "Read them now"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Reads from the backup on disk — no re-import needed
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        )}
+        {nothingToShow && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            This backup carried no device-level records TraceLoupe can read yet.
+          </p>
+        )}
+        {withRows.map((h) => (
+          <section key={h.artifact.id} className="mt-4">
+            <h2 className="text-sm font-semibold">{h.artifact.name}</h2>
+            <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+              {h.artifact.description}
+            </p>
+            <ArtifactTable artifact={h.artifact} rows={h.rows} />
+          </section>
+        ))}
+        {gatedAndEmpty.map((h) => (
+          <GatedArtifactNote
+            key={h.artifact.id}
+            name={h.artifact.name}
+            description={h.artifact.description}
+          />
+        ))}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** An encryption-gated artifact that is empty because it CANNOT hold anything in
+ *  this backup — said out loud, rather than filtered away. Uses the shared hook so
+ *  the wording matches every other gated surface instead of drifting from it. */
+function GatedArtifactNote({ name, description }: { name: string; description: string }) {
+  const message = useEncryptedOnlyEmpty(name, `No rows in ${name}.`);
+  return (
+    <section className="mt-4">
+      <h2 className="text-sm font-semibold">{name}</h2>
+      <p className="text-xs leading-relaxed text-muted-foreground">{description}</p>
+      <p className="mt-1.5 rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+        {message}
+      </p>
+    </section>
   );
 }
 

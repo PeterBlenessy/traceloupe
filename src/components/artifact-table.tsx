@@ -30,22 +30,16 @@ export function cellText(value: ArtifactRow[string], isDate: boolean): string {
   return String(value);
 }
 
-/** Columns whose values look like Unix-second timestamps.
+/** Which columns render as dates: the ones the module DECLARED as timestamps.
  *
- *  Inferred from values because the summary carries column names but not their
- *  kinds. That is the wrong long-term answer and is marked as such — the module
- *  already knows, and the kind belongs in the summary. Kept narrow (a plausible
- *  date range, numbers only) so a count or an id cannot be mistaken for a date. */
-export function dateColumns(columns: string[], rows: ArtifactRow[]): Set<string> {
-  const out = new Set<string>();
-  for (const col of columns) {
-    const values = rows.map((r) => r[col]).filter((v) => v !== null && v !== undefined);
-    if (values.length === 0) continue;
-    if (values.every((v) => typeof v === "number" && v > 946_684_800 && v < 4_102_444_800)) {
-      out.add(col);
-    }
-  }
-  return out;
+ *  This used to be inferred from the values — "is every number in a plausible
+ *  date range?" — which guessed at a fact the module already states. The
+ *  Bluetooth pairings module is the case that makes the difference concrete: its
+ *  two columns hold device-relative counters, and the only thing keeping them
+ *  from rendering as 1970s dates was the range test happening to exclude them.
+ *  A counter that grew past 2001 would have started printing dates. */
+export function dateColumns(artifact: ArtifactSummary): Set<string> {
+  return new Set(artifact.timestampColumns ?? []);
 }
 
 export function ArtifactTable({
@@ -65,38 +59,53 @@ export function ArtifactTable({
     () => artifact.columns.filter((c) => !hideColumns.includes(c)),
     [artifact.columns, hideColumns],
   );
-  const dates = useMemo(() => dateColumns(columns, rows), [columns, rows]);
+  const dates = useMemo(() => dateColumns(artifact), [artifact]);
 
   if (rows.length === 0) return null;
 
+  // A real <table>, not flex rows. Equal-width `flex-1` columns truncated every
+  // cell to the same narrow width, which turned a MAC address into
+  // "Random 50:32:66:4…" and a UUID into "6C0C35A0-84CE-3…". In a tool whose
+  // whole job is showing what a backup says, a value you cannot read is not
+  // shown. A table sizes each column to its content and keeps the header aligned
+  // with the body for free; anything still too wide scrolls horizontally inside
+  // its own container rather than stretching the view.
   return (
-    <div className={cn("min-w-0", className)}>
-      <div className="flex gap-3 border-b pb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground/70">
-        {columns.map((c) => (
-          <span key={c} className="min-w-0 flex-1 truncate">
-            {c}
-          </span>
-        ))}
-      </div>
-      {/* No per-cell tooltip: a native `title=` is banned (it looks nothing like
-          the rest of the app) and wrapping every cell in the shared Tooltip is a
-          lot of machinery for a hover nobody asked for. Cells are selectable so
-          a long value can be copied out instead. */}
-      {rows.map((row, i) => (
-        <div key={i} className="flex gap-3 py-1 text-xs">
-          {columns.map((c) => (
-            <span
-              key={c}
-              className={cn(
-                "min-w-0 flex-1 select-text truncate",
-                row[c] === null && "text-muted-foreground",
-              )}
-            >
-              {cellText(row[c], dates.has(c))}
-            </span>
+    <div className={cn("min-w-0 overflow-x-auto", className)}>
+      <table className="w-full border-collapse text-xs">
+        <thead>
+          <tr className="border-b">
+            {columns.map((c) => (
+              <th
+                key={c}
+                scope="col"
+                className="whitespace-nowrap pr-4 pb-1 text-left text-2xs font-medium uppercase tracking-wide text-muted-foreground/70 last:pr-0"
+              >
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i}>
+              {columns.map((c) => (
+                <td
+                  key={c}
+                  className={cn(
+                    // `select-text` so a value can still be copied out; nothing
+                    // is truncated now, so there is nothing hidden to copy.
+                    "whitespace-nowrap py-1 pr-4 align-top select-text last:pr-0",
+                    row[c] === null && "text-muted-foreground",
+                  )}
+                >
+                  {cellText(row[c], dates.has(c))}
+                </td>
+              ))}
+            </tr>
           ))}
-        </div>
-      ))}
+        </tbody>
+      </table>
     </div>
   );
 }

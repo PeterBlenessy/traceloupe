@@ -55,6 +55,7 @@ fi
 run "releases"        bash scripts/check-releases.sh
 run "doc links"       bash scripts/check-doc-links.sh
 run "mock parity"     node scripts/check-mock-parity.mjs
+run "surfaces"        node scripts/check-artifact-surfaces.mjs
 
 # --- rust ------------------------------------------------------------------
 run "fmt"             cargo fmt --all -- --check
