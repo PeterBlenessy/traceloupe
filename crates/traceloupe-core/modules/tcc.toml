@@ -158,6 +158,18 @@ sql = [
   """,
 ]
 
+# What the Apps view may show on the row itself, before anything is expanded.
+# The view used to hard-code this — it filtered a literal "Decision" column for
+# "Allowed"/"Limited" and printed "none granted" — which is artifact-specific
+# knowledge in a view whose premise is that it knows no artifact by name. It
+# showed up the moment a second apps-surface module shipped, as
+# "Data usage: none granted".
+[highlight]
+column      = "Permission"
+when_column = "Decision"
+when_any_of = ["Allowed", "Limited"]
+none_label  = "none granted"
+
 [[columns]]
 name = "App"
 from = "app"

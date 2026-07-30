@@ -233,3 +233,36 @@ export function formatCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "";
   return count.format(Math.trunc(n));
 }
+
+/**
+ * A byte count as a human size — "2.77 GB", "512 kB".
+ *
+ * Decimal units (kB/MB/GB), because that is what iOS itself reports for cellular
+ * data, and a module's numbers should match the figure the user can check in
+ * Settings rather than being 7% smaller for a reason nobody can see.
+ *
+ * Lives here because this is the only file allowed to build an `Intl` formatter —
+ * a `toLocaleString()` elsewhere silently opts out of the resolved locale, and
+ * the design lint fails on it. Raw bytes are unreadable at this scale
+ * (`2766679954`), which is the whole point: an artifact nobody can read has not
+ * shown anything.
+ */
+export function formatBytes(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return "";
+  const bytes = Math.trunc(n);
+  if (Math.abs(bytes) < 1000) return `${count.format(bytes)} B`;
+  const units = ["kB", "MB", "GB", "TB", "PB"];
+  let value = bytes / 1000;
+  let unit = 0;
+  while (Math.abs(value) >= 1000 && unit < units.length - 1) {
+    value /= 1000;
+    unit += 1;
+  }
+  // Two decimals below 10, one below 100, none above — so the column stays
+  // narrow without throwing away significant digits on small values.
+  const digits = Math.abs(value) < 10 ? 2 : Math.abs(value) < 100 ? 1 : 0;
+  return `${new Intl.NumberFormat(locale, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(value)} ${units[unit]}`;
+}

@@ -97,6 +97,12 @@ pub enum ColumnKind {
     Real,
     Bool,
     Timestamp,
+    /// A byte count, rendered as a human size by the UI.
+    ///
+    /// Declared rather than inferred for the same reason `Timestamp` is: the
+    /// module knows, and nothing else can tell a byte count from any other large
+    /// integer.
+    Bytes,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -110,6 +116,31 @@ pub struct ColumnSpec {
     /// Required when `kind = "timestamp"`, meaningless otherwise.
     #[serde(default)]
     pub epoch: Option<Epoch>,
+}
+
+/// What a host view may show about an artifact ON THE ROW, before anything is
+/// expanded.
+///
+/// Optional, and declared by the module rather than inferred, because the Apps
+/// view was doing this by hard-coding TCC: it filtered on a literal `"Decision"`
+/// column for the literal values `"Allowed"`/`"Limited"` and printed "none
+/// granted" when it found none. That is artifact-specific knowledge in a view
+/// whose whole premise is that it knows no artifact by name — and the moment a
+/// SECOND apps-surface module shipped it produced "Data usage: none granted",
+/// which is not a claim data usage can make.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HighlightSpec {
+    /// The column whose values are worth showing inline.
+    pub column: String,
+    /// Only badge a row when this column matches — omit to badge every row.
+    #[serde(default)]
+    pub when_column: Option<String>,
+    #[serde(default)]
+    pub when_any_of: Vec<String>,
+    /// What to say when nothing matched. Omit and the host says nothing at all,
+    /// which is the right default: silence claims less than a phrase.
+    #[serde(default)]
+    pub none_label: Option<String>,
 }
 
 /// Where an artifact is shown.
@@ -210,6 +241,9 @@ pub struct ModuleSpec {
     pub join_column: Option<String>,
     #[serde(default)]
     pub category: Option<String>,
+    /// What the host may show on the row itself, before expanding.
+    #[serde(default)]
+    pub highlight: Option<HighlightSpec>,
     /// Backup domain, e.g. `HomeDomain`.
     pub domain: String,
     /// Exact relative path within the domain.
@@ -371,6 +405,38 @@ impl ModuleSpec {
                 ));
             }
         }
+        // A highlight naming a column that does not exist would silently show
+        // nothing, which is indistinguishable from an artifact that legitimately
+        // has nothing to highlight.
+        if let Some(h) = &self.highlight {
+            let has = |name: &str| self.columns.iter().any(|c| c.name == name);
+            if !has(&h.column) {
+                return Err(format!(
+                    "`highlight.column` = {:?} is not one of the declared columns",
+                    h.column
+                ));
+            }
+            if let Some(w) = &h.when_column {
+                if !has(w) {
+                    return Err(format!(
+                        "`highlight.when_column` = {w:?} is not one of the declared columns"
+                    ));
+                }
+                if h.when_any_of.is_empty() {
+                    return Err(
+                        "`highlight.when_column` is set but `when_any_of` is empty — the \
+                         condition could never match, so nothing would ever be highlighted"
+                            .into(),
+                    );
+                }
+            } else if !h.when_any_of.is_empty() {
+                return Err(
+                    "`highlight.when_any_of` is set but `when_column` is not — there is \
+                     nothing to compare it against"
+                        .into(),
+                );
+            }
+        }
         if let Some(r) = &self.requires {
             if r != "encrypted-backup" {
                 return Err(format!(
@@ -407,10 +473,14 @@ pub struct ArtifactSummary {
     pub surface: Surface,
     /// The column the host view joins on, when hosted.
     pub join_column: Option<String>,
+    /// What the host may show on the row itself, before expanding.
+    pub highlight: Option<HighlightSpec>,
     /// Column display names, in declared order — the table's headers. A JSON
     /// row is an unordered map, so without this the UI would have to invent an
     /// order, and it would differ between artifacts and between runs.
     pub columns: Vec<String>,
+    /// Which of `columns` are byte counts, from the module's own `kind`.
+    pub byte_columns: Vec<String>,
     /// Which of `columns` are timestamps, from the module's own `kind`.
     ///
     /// The UI used to infer this by testing whether every value in a column fell
@@ -494,11 +564,18 @@ pub fn list_artifacts(conn: &Connection) -> Result<Vec<ArtifactSummary>> {
             description: spec.description.clone(),
             surface: spec.surface,
             join_column: spec.join_column.clone(),
+            highlight: spec.highlight.clone(),
             columns: spec.columns.iter().map(|c| c.name.clone()).collect(),
             timestamp_columns: spec
                 .columns
                 .iter()
                 .filter(|c| c.kind == ColumnKind::Timestamp)
+                .map(|c| c.name.clone())
+                .collect(),
+            byte_columns: spec
+                .columns
+                .iter()
+                .filter(|c| c.kind == ColumnKind::Bytes)
                 .map(|c| c.name.clone())
                 .collect(),
             row_count,
@@ -695,7 +772,10 @@ fn convert(raw: &rusqlite::types::Value, c: &ColumnSpec) -> serde_json::Value {
             V::Null => J::Null,
             _ => J::Null,
         },
-        ColumnKind::Integer => match raw {
+        // Bytes arrive as an integer count and are formatted by the UI. Core
+        // Data stores these as FLOAT (DataUsage's ZWIFIIN and friends are
+        // declared FLOAT), so the Real arm is the one that actually fires.
+        ColumnKind::Integer | ColumnKind::Bytes => match raw {
             V::Integer(i) => J::from(*i),
             V::Real(f) => J::from(*f as i64),
             _ => J::Null,
@@ -790,6 +870,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "bluetooth_paired.toml",
         include_str!("../modules/bluetooth_paired.toml"),
+    ),
+    (
+        "data_usage.toml",
+        include_str!("../modules/data_usage.toml"),
     ),
 ];
 
@@ -1406,6 +1490,7 @@ from = "who"
             description: "A test artifact.".into(),
             surface: Surface::Standalone,
             join_column: None,
+            highlight: None,
             category: None,
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
@@ -1773,6 +1858,48 @@ from = "nope"
         .unwrap();
     }
 
+    /// DataUsage.sqlite as the modern lineage writes it, with both Wi-Fi and WWAN
+    /// columns — matching what `explore_real_backup` printed for the validation
+    /// image.
+    ///
+    /// The rows cover the cases the module claims to handle: several buckets for
+    /// one app (so the aggregation is exercised rather than assumed), a compound
+    /// `daemon/bundle` process name, a bare process name with no slash, and the
+    /// ROLLUP row with a NULL bundle id whose total is the sum of everything else
+    /// — the one the module must exclude, and which iLEAPP's `ZKIND != 257`
+    /// constant would not catch here (this device's rollup is ZKIND 255).
+    fn seed_data_usage(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE ZLIVEUSAGE (
+                Z_PK INTEGER PRIMARY KEY, ZKIND INTEGER, ZHASPROCESS INTEGER,
+                ZTIMESTAMP TIMESTAMP, ZWIFIIN FLOAT, ZWIFIOUT FLOAT,
+                ZWWANIN FLOAT, ZWWANOUT FLOAT);
+             CREATE TABLE ZPROCESS (
+                Z_PK INTEGER PRIMARY KEY, ZFIRSTTIMESTAMP TIMESTAMP,
+                ZTIMESTAMP TIMESTAMP, ZBUNDLENAME VARCHAR, ZPROCNAME VARCHAR,
+                ZEXTENSIONNAME VARCHAR);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO ZPROCESS (Z_PK, ZBUNDLENAME, ZPROCNAME) VALUES
+                (1,'com.example.chatapp','ChatApp/com.example.chatapp'),
+                (2,'com.example.photos','nsurlsessiond/com.example.photos'),
+                -- No slash: the substr must not eat the whole name.
+                (3,'com.example.plain','plainproc'),
+                -- The ROLLUP: no bundle id, and a total that is the sum of the
+                -- rest. If it were ever included, every figure would double.
+                (4,NULL,'CumulativeUsageTracker');
+             INSERT INTO ZLIVEUSAGE
+                (Z_PK, ZKIND, ZHASPROCESS, ZTIMESTAMP, ZWIFIIN, ZWIFIOUT, ZWWANIN, ZWWANOUT) VALUES
+                (1,0,1,726000000,1000,2000,3000,4000),
+                (2,0,1,726001000,500,600,700,800),
+                (3,0,2,725000000,0,0,900000,10000),
+                (4,0,3,724000000,10,20,30,40),
+                (5,255,4,726002000,1510,2620,903730,14840);",
+        )
+        .unwrap();
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -1796,6 +1923,11 @@ from = "nope"
             "SysSharedContainerDomain-systemgroup.com.apple.bluetooth",
             "Library/Database/com.apple.MobileBluetooth.ledevices.paired.db",
         ),
+        (
+            "data_usage",
+            "WirelessDomain",
+            "Library/Databases/DataUsage.sqlite",
+        ),
     ];
 
     fn seed_for(id: &str) -> fn(&Connection) {
@@ -1803,6 +1935,7 @@ from = "nope"
             "tcc" => seed_tcc,
             "accounts" => seed_accounts,
             "bluetooth_paired" => seed_bluetooth_paired,
+            "data_usage" => seed_data_usage,
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
@@ -1833,8 +1966,10 @@ from = "nope"
             description: "d".into(),
             surface: Surface::Device,
             join_column: None,
+            highlight: None,
             columns: vec![],
             timestamp_columns: vec![],
+            byte_columns: vec![],
             row_count: 0,
             requires_encrypted_backup: false,
         };
@@ -1849,15 +1984,26 @@ from = "nope"
             .find("export type ArtifactSummary = {")
             .expect("no ArtifactSummary type in ipc.ts — did it move?");
         let body = &ipc[start..start + ipc[start..].find("\n};").expect("unterminated type")];
-        // `name: type;` at one indent level, skipping doc comments.
+        // Top-level fields ONLY, which means the indent has to be checked rather
+        // than trimmed away. Trimming first read the fields of a NESTED object
+        // (`highlight`'s `column`, `whenColumn`, …) as though they were fields of
+        // ArtifactSummary itself. The comment claimed "at one indent level" while
+        // the code did not enforce it; a review flagged it as a latent false
+        // failure, and adding `highlight` made it a real one.
+        const INDENT: &str = "  ";
         let mut declared: Vec<String> = body
             .lines()
             .filter_map(|l| {
-                let t = l.trim();
-                if t.starts_with('*') || t.starts_with("/*") || t.starts_with("//") {
+                // Exactly one indent level: two spaces, then something that is not
+                // a space.
+                let rest = l.strip_prefix(INDENT)?;
+                if rest.starts_with(' ') {
                     return None;
                 }
-                let (name, _) = t.split_once(':')?;
+                if rest.starts_with('*') || rest.starts_with("/*") || rest.starts_with("//") {
+                    return None;
+                }
+                let (name, _) = rest.split_once(':')?;
                 let name = name.trim().trim_end_matches('?');
                 if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                     return None;
@@ -2117,6 +2263,182 @@ from = "nope"
             .expect("the NULL-flag account is present");
         assert_eq!(unrecorded["Status"], serde_json::json!("Not recorded"));
         assert_eq!(unrecorded["Signed in"], serde_json::json!("Not recorded"));
+    }
+
+    /// A `highlight` that could never fire must be rejected at load time, not
+    /// silently show nothing — "this artifact has nothing to highlight" and "this
+    /// module's highlight is broken" look identical on screen.
+    #[test]
+    fn a_highlight_that_cannot_match_is_rejected() {
+        let base = r#"
+id          = "h"
+name        = "H"
+description = "d"
+surface     = "standalone"
+domain      = "HomeDomain"
+path        = "Library/X/x.db"
+sql         = ["SELECT a AS a, b AS b FROM t"]
+
+[[columns]]
+name = "A"
+from = "a"
+
+[[columns]]
+name = "B"
+from = "b"
+"#;
+        let cases: &[(&str, &str)] = &[
+            // A column that does not exist.
+            (
+                "[highlight]
+column = \"Nope\"
+",
+                "highlight.column",
+            ),
+            // A condition column that does not exist.
+            (
+                "[highlight]
+column = \"A\"
+when_column = \"Nope\"
+when_any_of = [\"x\"]
+",
+                "highlight.when_column",
+            ),
+            // A condition with nothing to match against: never fires.
+            (
+                "[highlight]
+column = \"A\"
+when_column = \"B\"
+when_any_of = []
+",
+                "when_any_of",
+            ),
+            // Values with no column to compare them to.
+            (
+                "[highlight]
+column = \"A\"
+when_any_of = [\"x\"]
+",
+                "when_column",
+            ),
+        ];
+        for (extra, expect) in cases {
+            let spec: ModuleSpec = toml::from_str(&format!(
+                "{base}
+{extra}"
+            ))
+            .unwrap();
+            let err = spec
+                .validate()
+                .expect_err(&format!("should have been rejected: {extra}"));
+            assert!(
+                err.contains(expect),
+                "error {err:?} does not mention {expect:?}"
+            );
+        }
+
+        // And the valid shape loads.
+        let ok: ModuleSpec = toml::from_str(&format!(
+            "{base}
+[highlight]
+column = \"A\"
+when_column = \"B\"
+when_any_of = [\"yes\"]
+"
+        ))
+        .unwrap();
+        ok.validate().expect("a well-formed highlight should load");
+    }
+
+    /// The data-usage module: buckets are summed per app, the rollup row is
+    /// excluded, and a process name without a slash survives intact.
+    #[test]
+    fn data_usage_module_aggregates_and_excludes_the_rollup() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "data_usage")
+            .expect("data_usage module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, seed_data_usage);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+
+        // Three apps, not four: the rollup has no bundle id and must not appear.
+        assert_eq!(rows.len(), 3, "got {rows:#?}");
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r["Carried by"] == serde_json::json!("CumulativeUsageTracker")),
+            "the device-wide rollup was included — every figure would double"
+        );
+
+        let chat = rows
+            .iter()
+            .find(|r| r["App"] == serde_json::json!("com.example.chatapp"))
+            .expect("the chat app is present");
+        // Two buckets summed: 3000+700 down, 4000+800 up, 1000+500 / 2000+600 wifi.
+        assert_eq!(chat["Cellular down"], serde_json::json!(3700));
+        assert_eq!(chat["Cellular up"], serde_json::json!(4800));
+        assert_eq!(chat["Wi-Fi down"], serde_json::json!(1500));
+        assert_eq!(chat["Wi-Fi up"], serde_json::json!(2600));
+        assert_eq!(chat["Records"], serde_json::json!(2));
+        // The daemon, split off the compound ZPROCNAME.
+        assert_eq!(chat["Carried by"], serde_json::json!("ChatApp"));
+        // Cocoa epoch on both ends of the range: 726000000 -> 1704307200.
+        assert_eq!(chat["First"], serde_json::json!(1_704_307_200_i64));
+        assert_eq!(chat["Last"], serde_json::json!(1_704_308_200_i64));
+
+        // A daemon carrying traffic for an app it is not: the interesting case.
+        let photos = rows
+            .iter()
+            .find(|r| r["App"] == serde_json::json!("com.example.photos"))
+            .expect("the photos app is present");
+        assert_eq!(photos["Carried by"], serde_json::json!("nsurlsessiond"));
+
+        // No slash in ZPROCNAME: the substr must not eat the whole name.
+        let plain = rows
+            .iter()
+            .find(|r| r["App"] == serde_json::json!("com.example.plain"))
+            .expect("the plain-named process is present");
+        assert_eq!(plain["Carried by"], serde_json::json!("plainproc"));
+    }
+
+    /// The older DataUsage lineage has no Wi-Fi columns at all. The fallback query
+    /// must run, and must report Wi-Fi as UNRECORDED rather than as zero traffic —
+    /// "we cannot know" and "none" are different claims.
+    #[test]
+    fn data_usage_falls_back_when_the_wifi_columns_are_absent() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods.iter().find(|m| m.id == "data_usage").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, |c| {
+            c.execute_batch(
+                "CREATE TABLE ZLIVEUSAGE (
+                    Z_PK INTEGER PRIMARY KEY, ZKIND INTEGER, ZHASPROCESS INTEGER,
+                    ZTIMESTAMP TIMESTAMP, ZWWANIN FLOAT, ZWWANOUT FLOAT);
+                 CREATE TABLE ZPROCESS (
+                    Z_PK INTEGER PRIMARY KEY, ZBUNDLENAME VARCHAR, ZPROCNAME VARCHAR);
+                 INSERT INTO ZPROCESS (Z_PK, ZBUNDLENAME, ZPROCNAME)
+                    VALUES (1,'com.example.old','OldApp/com.example.old');
+                 INSERT INTO ZLIVEUSAGE (Z_PK, ZKIND, ZHASPROCESS, ZTIMESTAMP, ZWWANIN, ZWWANOUT)
+                    VALUES (1,0,1,726000000,1234,5678);",
+            )
+            .unwrap();
+        });
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .expect("the fallback query should have run");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["Cellular down"], serde_json::json!(1234));
+        assert_eq!(rows[0]["Cellular up"], serde_json::json!(5678));
+        // NOT 0: this device never recorded Wi-Fi, which is not the same as
+        // recording that no Wi-Fi was used.
+        assert_eq!(rows[0]["Wi-Fi down"], serde_json::Value::Null);
+        assert_eq!(rows[0]["Wi-Fi up"], serde_json::Value::Null);
     }
 
     /// The Bluetooth module: the two counters stay integers, and the resolved
@@ -2399,6 +2721,7 @@ from = "a"
             description: "A test artifact.".into(),
             surface: Surface::Standalone,
             join_column: None,
+            highlight: None,
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
@@ -2428,6 +2751,7 @@ from = "a"
             description: "A test artifact.".into(),
             surface: Surface::Standalone,
             join_column: None,
+            highlight: None,
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),

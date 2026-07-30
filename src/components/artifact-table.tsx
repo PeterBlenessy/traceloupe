@@ -13,7 +13,7 @@
  */
 import { useMemo } from "react";
 
-import { formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ArtifactRow, ArtifactSummary } from "@/lib/ipc";
 
@@ -23,9 +23,14 @@ import type { ArtifactRow, ArtifactSummary } from "@/lib/ipc";
  *  the reason the module declares an epoch at all. Everything else shows as the
  *  module produced it: this component must not second-guess a value, because it
  *  cannot know what the artifact meant by it. */
-export function cellText(value: ArtifactRow[string], isDate: boolean): string {
+export function cellText(
+  value: ArtifactRow[string],
+  isDate: boolean,
+  isBytes = false,
+): string {
   if (value === null || value === undefined) return "—";
   if (isDate && typeof value === "number") return formatDateTime(value);
+  if (isBytes && typeof value === "number") return formatBytes(value);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);
 }
@@ -60,6 +65,7 @@ export function ArtifactTable({
     [artifact.columns, hideColumns],
   );
   const dates = useMemo(() => dateColumns(artifact), [artifact]);
+  const bytes = useMemo(() => new Set(artifact.byteColumns ?? []), [artifact]);
 
   if (rows.length === 0) return null;
 
@@ -99,7 +105,7 @@ export function ArtifactTable({
                     row[c] === null && "text-muted-foreground",
                   )}
                 >
-                  {cellText(row[c], dates.has(c))}
+                  {cellText(row[c], dates.has(c), bytes.has(c))}
                 </td>
               ))}
             </tr>

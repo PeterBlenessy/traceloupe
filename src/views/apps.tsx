@@ -380,15 +380,29 @@ function AppItem({
 
         {/* A summary on the row itself, not only once expanded: what this app was
             allowed to reach is the kind of thing you want to see while scanning
-            the list, without opening anything. Granted first — a denial is less
-            interesting than an app holding the camera. */}
+            the list, without opening anything.
+            
+            WHAT to badge comes from the module's own `highlight`, not from this
+            file. It used to filter a literal "Decision" column for
+            "Allowed"/"Limited" and print "none granted" — TCC's shape, hard-coded
+            into a view whose premise is that it knows no artifact by name. The
+            second apps-surface module made that visible as the nonsense
+            "Data usage: none granted". A module with no `highlight` gets the
+            record count and nothing invented on its behalf. */}
         {mine.length > 0 && (
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {mine.map(({ artifact, rows }) => {
-              const granted = rows
-                .filter((r) => r["Decision"] === "Allowed" || r["Decision"] === "Limited")
-                .map((r) => String(r[artifact.columns[1]] ?? ""))
-                .filter(Boolean);
+              const h = artifact.highlight;
+              const matching = h
+                ? rows.filter(
+                    (r) =>
+                      !h.whenColumn ||
+                      h.whenAnyOf.includes(String(r[h.whenColumn] ?? "")),
+                  )
+                : [];
+              const granted = h
+                ? matching.map((r) => String(r[h.column] ?? "")).filter(Boolean)
+                : [];
               const shown = granted.slice(0, 3);
               const rest = granted.length - shown.length;
               return (
@@ -409,9 +423,12 @@ function AppItem({
                           ))}
                           {rest > 0 && <span>+{rest}</span>}
                         </>
-                      ) : (
-                        <span>none granted</span>
-                      )}
+                      ) : h?.noneLabel ? (
+                        // Only the phrase the MODULE supplies. Saying nothing is
+                        // the right default — silence claims less than a wrong
+                        // sentence.
+                        <span>{h.noneLabel}</span>
+                      ) : null}
                       <span className="underline decoration-dotted">
                         {expanded ? "hide" : `${rows.length} recorded`}
                       </span>
