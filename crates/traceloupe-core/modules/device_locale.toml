@@ -29,6 +29,9 @@ id          = "device_locale"
 name        = "Language and region"
 description = "The language this iPhone is set to, its region format, and whether it shows a 24-hour clock."
 surface     = "device"
+# ONE record, so its columns are FACTS folded into the Device view's identity
+# summary rather than a one-row table of their own.
+shape       = "facts"
 category    = "Device"
 domain      = "HomeDomain"
 path        = "Library/Preferences/.GlobalPreferences.plist"

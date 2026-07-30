@@ -35,6 +35,7 @@ import {
 } from "@/components/dashboard-tiles";
 import { CATEGORY_LABEL, formatSources } from "@/views/safety-scan";
 import { formatDateTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { ArtifactTable } from "@/components/artifact-table";
 import { useHostedArtifacts } from "@/lib/use-hosted-artifacts";
 import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
@@ -541,6 +542,12 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
         <div className="mt-2.5 overflow-hidden rounded-lg border sm:col-span-2">
           <DeviceRow label="Encryption" value={encryption} />
         </div>
+        {/* Artifacts that declare themselves FACTS rather than tables land here,
+            beside the fields read straight from the manifest. A device fact is a
+            device fact whichever store it came from, and the reader should not
+            have to know that "iOS version" is manifest metadata while "Siri
+            language" is a parsed preference. */}
+        <DeviceFacts />
       </div>
       {info?.isEncrypted === false && (
         <p className="mt-2 text-xs text-muted-foreground">
@@ -549,10 +556,125 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
         </p>
       )}
 
+      <DeviceExtractionPrompt />
+
       <DeviceMoreInformation />
 
       <HomeDashboard />
     </div>
+  );
+}
+
+/**
+ * The offer to read the device artifacts, at the identity level.
+ *
+ * It used to live INSIDE the "More information" disclosure, which was fine while
+ * everything it produced was also inside that disclosure. Now that facts fold into
+ * the identity grid, a prompt hidden behind a collapsed section is the only way to
+ * populate fields that appear somewhere else entirely — so the grid would sit
+ * half-empty with no visible way to fill it, and nothing on screen would explain
+ * why. Measured the same way it was found: with the disclosure shut, no facts
+ * appeared and no control offered to change that.
+ */
+function DeviceExtractionPrompt() {
+  const { data: extraction } = useQuery({
+    queryKey: ["artifactsExtractionState"],
+    queryFn: () => client.artifactsExtractionState(),
+  });
+  const qc = useQueryClient();
+  const [extracting, setExtracting] = useState(false);
+  if (extraction !== "never-run" && extraction !== "stale") return null;
+
+  async function run() {
+    setExtracting(true);
+    try {
+      await client.extractArtifacts();
+      await qc.invalidateQueries({ queryKey: ["artifacts"] });
+      await qc.invalidateQueries({ queryKey: ["artifactRows"] });
+      await qc.invalidateQueries({ queryKey: ["artifactsExtractionState"] });
+    } catch (e) {
+      toast.error("Couldn't read the device details", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setExtracting(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs">
+      <span className="text-muted-foreground">
+        {extraction === "never-run"
+          ? "More about this device has not been read from the backup yet."
+          : "TraceLoupe can read more about this device than was extracted."}
+      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="sm" variant="ghost" onClick={run} disabled={extracting}>
+            {extracting ? "Reading…" : "Read it now"}
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Reads from the backup on disk — no re-import needed</TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
+/**
+ * Facts-shaped device artifacts, folded into the identity grid above.
+ *
+ * The module format made everything a table, and much of the device tail is not
+ * tabular — iLEAPP's "Identifiers" category alone is 16 artifacts that are mostly
+ * single values (UDID, IMEI, advertising id, AirDrop id, device name). Sixteen
+ * one-row tables is an absurd way to show sixteen facts, and the two modules that
+ * shipped that way read worse than they would as rows here.
+ *
+ * A fact with no value is not shown at all rather than as a dash: an empty row in
+ * this grid would claim the device HAS the setting and left it blank, when the
+ * store simply did not record it.
+ */
+function DeviceFacts() {
+  const { hosted } = useHostedArtifacts("device", true);
+  const facts = hosted
+    .filter((h) => h.artifact.shape === "facts")
+    .flatMap((h) => {
+      const row = h.rows[0];
+      if (!row) return [];
+      return h.artifact.columns
+        .map((c) => ({ key: `${h.artifact.id}:${c}`, label: c, value: row[c] }))
+        .filter((f) => f.value !== null && f.value !== undefined && f.value !== "");
+    });
+  if (facts.length === 0) return null;
+
+  // Split across the SAME two columns the manifest fields use. A full-width block
+  // underneath read as a separate section that nothing had announced — and the
+  // whole point of folding facts in here is that a device fact is a device fact
+  // whichever store it came from.
+  const half = Math.ceil(facts.length / 2);
+  const columns = [facts.slice(0, half), facts.slice(half)].filter((c) => c.length > 0);
+
+  return (
+    <>
+      {columns.map((col, i) => (
+        <div
+          key={col[0].key}
+          className={cn(
+            "mt-2.5 overflow-hidden rounded-lg border",
+            // Matches the manifest cards: the second column loses its top margin
+            // once the grid is side by side.
+            i === 1 && "sm:mt-2.5",
+          )}
+        >
+          {col.map((f) => (
+            <DeviceRow
+              key={f.key}
+              label={f.label}
+              value={typeof f.value === "boolean" ? (f.value ? "Yes" : "No") : String(f.value)}
+            />
+          ))}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -580,8 +702,6 @@ function DeviceMoreInformation() {
     queryKey: ["artifactsExtractionState"],
     queryFn: () => client.artifactsExtractionState(),
   });
-  const qc = useQueryClient();
-  const [extracting, setExtracting] = useState(false);
   // Controlled, and the component must stay mounted while it is true. Both
   // matter: reading the details invalidates the artifact queries, which briefly
   // leaves nothing to show, and an uncontrolled Collapsible that unmounts loses
@@ -591,25 +711,12 @@ function DeviceMoreInformation() {
   const [open, setOpen] = useState(false);
   const needsExtraction = extraction === "never-run" || extraction === "stale";
 
-  async function runExtraction() {
-    setExtracting(true);
-    try {
-      await client.extractArtifacts();
-      await qc.invalidateQueries({ queryKey: ["artifacts"] });
-      await qc.invalidateQueries({ queryKey: ["artifactRows"] });
-      await qc.invalidateQueries({ queryKey: ["artifactsExtractionState"] });
-    } catch (e) {
-      toast.error("Couldn't read the device details", {
-        description: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setExtracting(false);
-    }
-  }
 
   // An artifact with no rows is not evidence of anything, and a disclosure that
   // opens onto empty tables is worse than one that is not offered.
-  const withRows = hosted.filter((h) => h.rows.length > 0);
+  // Tables only: a facts artifact is already in the identity grid above, and
+  // showing it here as well would put the same values on screen twice.
+  const withRows = hosted.filter((h) => h.artifact.shape !== "facts" && h.rows.length > 0);
   // EXCEPT the encryption-gated ones. An artifact that needs an encrypted backup
   // is deliberately listed with `rowCount === 0` so it can say WHY it is empty
   // instead of vanishing (#197) — "absent" and "impossible here" are different
@@ -618,10 +725,10 @@ function DeviceMoreInformation() {
   // since #220 moved hosted artifacts out of the standalone view there was no
   // other screen left that would explain them: they rendered nowhere at all.
   const gatedAndEmpty = hosted.filter(
-    (h) => h.rows.length === 0 && h.artifact.requiresEncryptedBackup,
+    (h) =>
+      h.artifact.shape !== "facts" && h.rows.length === 0 && h.artifact.requiresEncryptedBackup,
   );
-  const nothingToShow =
-    withRows.length === 0 && gatedAndEmpty.length === 0 && !needsExtraction && !extracting;
+  const nothingToShow = withRows.length === 0 && gatedAndEmpty.length === 0 && !needsExtraction;
   // Never offered when there is nothing to disclose and nothing to read. But once
   // it is open, it stays — a control that vanishes under the pointer is worse than
   // one that admits it found nothing, and unmounting would also discard `open`.
@@ -660,25 +767,6 @@ function DeviceMoreInformation() {
         </TooltipContent>
       </Tooltip>
       <CollapsibleContent>
-        {needsExtraction && (
-          <div className="mt-3 flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-1.5 text-xs">
-            <span className="text-muted-foreground">
-              {extraction === "never-run"
-                ? "Device details have not been read from this backup yet."
-                : "TraceLoupe can read more about this device than was extracted."}
-            </span>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button size="sm" variant="ghost" onClick={runExtraction} disabled={extracting}>
-                  {extracting ? "Reading…" : "Read them now"}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                Reads from the backup on disk — no re-import needed
-              </TooltipContent>
-            </Tooltip>
-          </div>
-        )}
         {nothingToShow && (
           <p className="mt-3 text-xs text-muted-foreground">
             This backup carried no device-level records TraceLoupe can read yet.

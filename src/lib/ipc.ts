@@ -910,6 +910,10 @@ export type ArtifactSummary = {
   /** Which view hosts it. `standalone` is for data that fits nowhere else — the
    *  agreed rule is to fold into the view closest in meaning. */
   surface: "apps" | "contacts" | "device" | "standalone";
+  /** How the host should present it. `facts` means ONE record whose columns are
+   *  label/value pairs folded into the host's own summary — sixteen one-row tables
+   *  is an absurd way to show sixteen device facts. */
+  shape: "table" | "facts";
   /** The column whose value identifies the host row (a bundle id for Apps), so
    *  a host can attach rows without knowing what the artifact is. */
   joinColumn: string | null;
@@ -3496,6 +3500,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Which apps were allowed to use the camera, microphone, photos, contacts and location — and when that was decided.",
             surface: "apps" as const,
+            shape: "table" as const,
             joinColumn: "App",
             highlight: {
               column: "Permission",
@@ -3516,6 +3521,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Apps and services that asked this iPhone for its location, and when each last stopped receiving it.",
             surface: "apps" as const,
+            shape: "table" as const,
             joinColumn: "App",
             highlight: null,
             columns: [
@@ -3538,6 +3544,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "How much data each app sent and received, over Wi-Fi and cellular, and which system process carried it.",
             surface: "apps" as const,
+            shape: "table" as const,
             joinColumn: "App",
             highlight: null,
             columns: [
@@ -3568,6 +3575,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Which services are signed in on this device — mail, calendars, iCloud, Game Center and more — with when each was added.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3592,6 +3600,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Low-energy Bluetooth devices this iPhone saw in range but never paired with — other people's devices, trackers and appliances.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: ["Device", "Address", "Seen counter", "Identifier"],
@@ -3607,12 +3616,12 @@ const mockClient: TraceLoupeClient = {
             description:
               "How Siri is set up on this device — the voice it speaks with, the language it uses, and whether its data syncs to iCloud.",
             surface: "device" as const,
+            shape: "facts" as const,
             joinColumn: null,
             highlight: null,
             columns: [
               "Voice language",
               "Voice name",
-              "Voice variant",
               "Custom voice",
               "Syncs to iCloud",
               "Recognises voices",
@@ -3629,6 +3638,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Clock alarms set on this iPhone — the time each is for, whether it is switched on, and when it was last changed.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3652,6 +3662,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "The bedtime and wake time set on this iPhone, and whether sleep tracking was switched on.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3676,6 +3687,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "The language this iPhone is set to, its region format, and whether it shows a 24-hour clock.",
             surface: "device" as const,
+            shape: "facts" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3697,6 +3709,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Classic Bluetooth accessories this iPhone has paired with — headphones, speakers, car kits — with the name the owner gave each one.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: ["Address", "Named by owner", "Device name", "Kind"],
@@ -3712,6 +3725,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "The randomised hardware address this iPhone presented to each Wi-Fi network, and when it last changed.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3736,6 +3750,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Every Wi-Fi network this iPhone has joined, when it was added, when it was last joined, and the access point it saw.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3766,6 +3781,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Which SIMs have been in this device, the phone number each carried, and the slot it used.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: ["Slot", "Phone number", "SIM serial (ICCID)", "Last updated"],
@@ -3781,6 +3797,7 @@ const mockClient: TraceLoupeClient = {
             description:
               "Low-energy Bluetooth accessories this iPhone is paired with — watches, trackers, headphones and tags — with the address each advertises.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: null,
             highlight: null,
             columns: [
@@ -3810,6 +3827,7 @@ const mockClient: TraceLoupeClient = {
             category: "Device",
             description: "Which Focus modes exist on the device and when each was last changed.",
             surface: "device" as const,
+            shape: "table" as const,
             joinColumn: "Mode",
             highlight: null,
             columns: ["Mode", "Enabled", "Changed"],
@@ -3987,9 +4005,6 @@ const mockClient: TraceLoupeClient = {
             {
               "Voice language": "en-US",
               "Voice name": "nora",
-              // Shown as the raw integer: Apple's ordering is unpublished, and a
-              // confident wrong label on a personal attribute is the worst kind.
-              "Voice variant": 2,
               "Custom voice": true,
               "Syncs to iCloud": true,
               "Recognises voices": false,
