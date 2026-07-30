@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch} from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
@@ -2062,6 +2062,10 @@ function FindingsList({
   // ~3 MB of JSON at 8000 findings, re-sent and re-derived on every
   // invalidation. Filtering, ordering and grouping happen in SQLite now, and the
   // rows arrive a page at a time (#65).
+  // Returning from a conversation opened via a finding (#224). The panel is
+  // virtualized, so the finding has to be resolved to a row INDEX under whatever
+  // filters are active now — which may differ from when the user left.
+  const returnTo = useSearch({ strict: false }) as { finding?: number };
   const page = useMemo(
     () => ({
       severity:
@@ -2073,6 +2077,14 @@ function FindingsList({
     }),
     [severity, showDismissed, sort, grouped],
   );
+
+  // Resolve the finding to a row index. Null means the current filter excludes
+  // it — which must be said rather than silently scrolling nowhere.
+  const { data: returnRank, isFetched: rankFetched } = useQuery({
+    queryKey: ["contentFindingRank", scan?.id ?? null, page, returnTo.finding],
+    queryFn: () => client.contentFindingRank(scan?.id ?? null, page, returnTo.finding!),
+    enabled: returnTo.finding != null,
+  });
 
   // How many rows the CURRENT filter matches — the virtualizer's count, from the
   // same predicate the page query uses, so the list can't run out early or leave
@@ -2280,9 +2292,18 @@ function FindingsList({
         {/* Fills the card, which fills the grid row, which fills the window
             (#79) — no fixed fraction, so a tall window shows more rows. */}
         <div className="flex min-h-0 flex-1 flex-col">
+          {/* The filter may have changed since the user left, so the finding
+              they came back for can be genuinely absent from this list. Saying
+              so beats scrolling nowhere and looking broken. */}
+          {returnTo.finding != null && rankFetched && returnRank == null && (
+            <p className="border-b px-3 py-1.5 text-xs text-muted-foreground">
+              The finding you came from isn't in the current filter.
+            </p>
+          )}
           <LazyVirtualList
             count={total}
             estimateSize={72}
+            scrollToRow={returnRank ?? null}
             windowKey={(p) => [
               "safetyScan",
               "findings",

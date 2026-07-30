@@ -56,6 +56,7 @@ export function LazyVirtualList<T>({
   renderPlaceholder,
   estimateSize = 56,
   startAtBottom = false,
+  scrollToRow,
   resetKey,
   persistKey,
   jumpTo,
@@ -74,6 +75,14 @@ export function LazyVirtualList<T>({
   estimateSize?: number;
   /** Open scrolled to the newest (bottom) row. */
   startAtBottom?: boolean;
+  /** Scroll to this row index once, whenever the value changes.
+   *
+   *  For arriving at a specific row rather than at the top — returning to the
+   *  Safety Scan finding you came from (#224). By INDEX, not a pixel offset, for
+   *  the same reason the restore path uses an index: `scrollToIndex` accounts
+   *  for measured row heights and settles, where a computed offset is wrong the
+   *  moment a row measures differently. */
+  scrollToRow?: number | null;
   /** Re-scroll to the bottom whenever this value changes (e.g. a thread id). */
   resetKey?: unknown;
   /** Persist & restore the scroll position under this key (localStorage). Also
@@ -166,6 +175,26 @@ export function LazyVirtualList<T>({
       el.scrollTop = startAtBottom || saved >= count - 2 ? el.scrollHeight : 0;
     }
   }, [count, anchorKey, startAtBottom, persistKey, virtualizer]);
+
+  // A one-shot scroll to a requested row, independent of the anchor/restore
+  // logic above: that runs once per key, this runs whenever a caller asks for a
+  // different target.
+  const scrolledToRow = useRef<number | null | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (
+      scrollToRow == null ||
+      count <= 0 ||
+      scrollToRow < 0 ||
+      scrollToRow >= count ||
+      scrolledToRow.current === scrollToRow
+    ) {
+      return;
+    }
+    scrolledToRow.current = scrollToRow;
+    // Centred rather than "start": the row a user is returning to reads better
+    // with its neighbours around it than pinned under the toolbar.
+    virtualizer.scrollToIndex(scrollToRow, { align: "center" });
+  }, [scrollToRow, count, virtualizer]);
 
   // Persist the top visible row's INDEX (debounced, and flushed on unmount / key
   // change so navigating away always records the exact spot) for restore above.

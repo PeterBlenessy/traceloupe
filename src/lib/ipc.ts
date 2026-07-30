@@ -1022,6 +1022,14 @@ export interface TraceLoupeClient {
   listReminders(): Promise<Reminder[]>;
   /** Artifacts this backup yielded, from the declarative modules. */
   listArtifacts(): Promise<ArtifactSummary[]>;
+  /** Row index of a finding under these filters, or null when filtered out —
+   *  for returning to the finding a conversation was opened from (#224). */
+  contentFindingRank(
+    scanId: number | null,
+    /** The FILTERS only — a rank is a property of the order, not of a window. */
+    page: Omit<ContentFindingPage, "offset" | "limit">,
+    findingId: number,
+  ): Promise<number | null>;
   /** Whether the stored rows came from the module set installed now. */
   artifactsExtractionState(): Promise<ExtractionState>;
   /** Run the modules against the already-open backup; returns any warnings. */
@@ -1520,6 +1528,17 @@ const tauriClient: TraceLoupeClient = {
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
   listArtifacts: () => invoke<ArtifactSummary[]>("list_artifacts"),
+  contentFindingRank: (scanId, page, findingId) =>
+    invoke<number | null>("content_finding_rank", {
+      scanId,
+      severity: page.severity,
+      includeDismissed: page.includeDismissed,
+      sortBy: page.sortBy,
+      desc: page.desc,
+      groupByThread: page.groupByThread,
+      excludeStale: page.excludeStale ?? false,
+      findingId,
+    }),
   artifactsExtractionState: () => invoke<ExtractionState>("artifacts_extraction_state"),
   extractArtifacts: () => invoke<string[]>("extract_artifacts"),
   getArtifactRows: (artifactId, offset, limit) =>
@@ -3446,6 +3465,8 @@ const mockClient: TraceLoupeClient = {
     mockArtifactsExtracted = true;
     return [];
   },
+  contentFindingRank: async (_scanId, _page, findingId) =>
+    mockActive && findingId > 0 ? 1 : null,
   listArtifacts: async () =>
     mockActive && mockArtifactsExtracted
       ? [
