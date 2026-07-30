@@ -25,6 +25,11 @@
 //! cargo run -p traceloupe-core --example explore_real_backup -- \
 //!     <backup-dir> <password> sql HomeDomain Library/Voicemail/voicemail.db \
 //!     'SELECT sender, duration FROM voicemail LIMIT 5'
+//!
+//! # `plist` — the shape of a property list: key paths, types, sample values
+//! cargo run -p traceloupe-core --example explore_real_backup -- \
+//!     <backup-dir> <password> plist SystemPreferencesDomain \
+//!     com.apple.wifi.known-networks.plist
 //! ```
 //!
 //! **Never point this at the owner's own backup** (AGENTS.md). Use Josh
@@ -44,6 +49,7 @@ fn usage() -> ! {
          \x20 list   <like-pattern>                  paths matching a SQL LIKE pattern\n\
          \x20 schema <domain> <relative-path>        CREATE statements + row counts\n\
          \x20 sql    <domain> <relative-path> <sql>  run a query, print the rows\n\
+         \x20 plist  <domain> <relative-path>        key paths, types, sample values\n\
          \n\
          Pass - as the password for an unencrypted backup."
     );
@@ -88,6 +94,30 @@ fn main() {
                 println!("  (nothing — this store is NOT in this backup)");
             }
         }
+        "plist" => {
+            let (domain, path) = match (args.get(3), args.get(4)) {
+                (Some(d), Some(p)) => (d.as_str(), p.as_str()),
+                _ => usage(),
+            };
+            let entry = index
+                .find(domain, path)
+                .expect("query the manifest")
+                .unwrap_or_else(|| {
+                    eprintln!("NOT IN THIS BACKUP: {domain}:{path}");
+                    std::process::exit(1);
+                });
+            let bytes = index
+                .read_bytes(&entry, decryptor.as_ref())
+                .expect("decrypt the plist");
+            let root = plist::Value::from_reader(std::io::Cursor::new(&bytes))
+                .expect("parse the property list");
+            println!("── {domain}:{path}\n");
+            // Paths rather than a pretty-print: a module declares a key PATH, so
+            // that is what needs reading off. Arrays collapse to one representative
+            // element with its index shown as [n], because 400 identical shapes
+            // teach nothing that the first does not.
+            dump_plist(&root, &mut Vec::new(), 0);
+        }
         "schema" | "sql" => {
             let (domain, path) = match (args.get(3), args.get(4)) {
                 (Some(d), Some(p)) => (d.as_str(), p.as_str()),
@@ -130,6 +160,78 @@ fn main() {
             }
         }
         _ => usage(),
+    }
+}
+
+/// How deep to descend. Deep enough for real artifacts, shallow enough that a
+/// pathological plist cannot fill the terminal.
+const MAX_DEPTH: usize = 6;
+
+fn dump_plist(v: &plist::Value, at: &mut Vec<String>, depth: usize) {
+    let here = if at.is_empty() {
+        "(root)".to_string()
+    } else {
+        at.join(" / ")
+    };
+    match v {
+        plist::Value::Dictionary(d) => {
+            println!(
+                "{:indent$}{here}  <dict, {} keys>",
+                "",
+                d.len(),
+                indent = depth * 2
+            );
+            if depth >= MAX_DEPTH {
+                return;
+            }
+            for (k, val) in d.iter() {
+                at.push(k.clone());
+                dump_plist(val, at, depth + 1);
+                at.pop();
+            }
+        }
+        plist::Value::Array(a) => {
+            println!(
+                "{:indent$}{here}  <array, {} items>",
+                "",
+                a.len(),
+                indent = depth * 2
+            );
+            if depth >= MAX_DEPTH {
+                return;
+            }
+            // One representative element: this is where a module's `rows` path
+            // points, and the first element's shape is the row shape.
+            if let Some(first) = a.first() {
+                at.push("[0]".into());
+                dump_plist(first, at, depth + 1);
+                at.pop();
+            }
+        }
+        scalar => {
+            let (kind, sample) = describe(scalar);
+            println!(
+                "{:indent$}{here}  <{kind}> {sample}",
+                "",
+                indent = depth * 2
+            );
+        }
+    }
+}
+
+fn describe(v: &plist::Value) -> (&'static str, String) {
+    match v {
+        plist::Value::String(s) => (
+            "string",
+            format!("{:?}", s.chars().take(60).collect::<String>()),
+        ),
+        plist::Value::Integer(i) => ("integer", i.to_string()),
+        plist::Value::Real(f) => ("real", f.to_string()),
+        plist::Value::Boolean(b) => ("bool", b.to_string()),
+        plist::Value::Date(d) => ("date", format!("{d:?}")),
+        plist::Value::Data(d) => ("data", format!("<{} bytes>", d.len())),
+        plist::Value::Uid(u) => ("uid", format!("{}", u.get())),
+        _ => ("?", String::new()),
     }
 }
 

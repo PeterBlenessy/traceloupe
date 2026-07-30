@@ -1,0 +1,97 @@
+# Known Wi-Fi networks — every network this iPhone has joined, when it was first
+# added, when the user last joined it, and the access point it saw.
+#
+# The first module to read a PROPERTY LIST rather than a SQLite store. Roughly
+# 44% of the artifact tail is SQL-shaped and plists are the largest category that
+# is not (#236), so this is the artifact that opens the other half.
+#
+# `com.apple.wifi.known-networks.plist` is confirmed backup-reachable: it lives in
+# `SystemPreferencesDomain`, which iOS backs up (see
+# docs/reference/backup-coverage-audit.md).
+#
+# THE ROWS ARE A DICTIONARY, AND THE KEY IS THE DATA
+#
+# This store is not a list. Its root is a dictionary whose KEYS name the networks
+# — `wifi.network.ssid.Matt_Foley` — and whose values hold everything else. That
+# is why `[plist]` has a `key_column`: without it the network's own name would be
+# unreachable, because nothing inside the entry repeats it as text. Apple's
+# `wifi.network.ssid.` namespace is stripped, and only when it really is the
+# prefix; a key that has stopped matching is shown whole rather than silently
+# trimmed to something else.
+#
+# The `SSID` field IS present inside each entry, but as raw `Data` — 10 bytes for
+# "Matt_Foley" — and it only ever repeats what the key already says. The key is
+# the better source: it is always a string, where the Data field is bytes that
+# are not required to be UTF-8. So the name comes from the key, and the column
+# declares no `from` at all, which is the one case where that is allowed.
+#
+# WHY THE DATES NEED NO EPOCH
+#
+# They are plist `Date` values, which are already absolute times — unlike a SQLite
+# timestamp, which is a bare number and needs the module to say what it counts
+# from. `epoch` is therefore not required for a plist module, and declaring one
+# here would have nothing to convert.
+#
+# BSSID is the access point's MAC address, nested under `__OSSpecific__`. It is
+# worth reaching for: the SSID says which network the phone trusted, the BSSID
+# says which physical radio it actually associated with — the pair is what
+# distinguishes a real network from something impersonating its name.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 17 known networks, with join dates from July 2023 to January 2024.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+#
+# Inspect the shape of any plist with:
+#   cargo run -p traceloupe-core --example explore_real_backup -- <dir> <pw> \
+#       plist SystemPreferencesDomain com.apple.wifi.known-networks.plist
+
+id          = "wifi_networks"
+name        = "Wi-Fi networks"
+description = "Every Wi-Fi network this iPhone has joined, when it was added, when it was last joined, and the access point it saw."
+surface     = "device"
+category    = "Network"
+domain      = "SystemPreferencesDomain"
+path        = "com.apple.wifi.known-networks.plist"
+
+[plist]
+# The root dictionary IS the collection: one entry per network.
+key_column        = "Network"
+key_strip_prefix  = "wifi.network.ssid."
+
+# No `from`: this column IS the entry's key, per `plist.key_column` above.
+[[columns]]
+name = "Network"
+
+[[columns]]
+name = "Security"
+from = "SupportedSecurityTypes"
+
+[[columns]]
+name = "Access point"
+from = ["__OSSpecific__", "BSSID"]
+
+[[columns]]
+name = "Channel"
+from = ["__OSSpecific__", "CHANNEL"]
+kind = "integer"
+
+[[columns]]
+name = "Hidden"
+from = "Hidden"
+kind = "bool"
+
+[[columns]]
+name = "Joined by user"
+from = "JoinedByUserAt"
+kind = "timestamp"
+
+[[columns]]
+name = "Added"
+from = "AddedAt"
+kind = "timestamp"
+
+[[columns]]
+name = "Last seen"
+from = "LastDiscoveredAt"
+kind = "timestamp"

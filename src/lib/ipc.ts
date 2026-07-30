@@ -3564,6 +3564,30 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "wifi_networks",
+            name: "Wi-Fi networks",
+            category: "Network",
+            description:
+              "Every Wi-Fi network this iPhone has joined, when it was added, when it was last joined, and the access point it saw.",
+            surface: "device" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Network",
+              "Security",
+              "Access point",
+              "Channel",
+              "Hidden",
+              "Joined by user",
+              "Added",
+              "Last seen",
+            ],
+            timestampColumns: ["Joined by user", "Added", "Last seen"],
+            byteColumns: [],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "sim_cards",
             name: "SIM cards",
             category: "Device",
@@ -3730,6 +3754,40 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "wifi_networks"
+        ? [
+            {
+              Network: "HomeNet",
+              Security: "WPA2 Personal",
+              "Access point": "6a:22:32:98:f4:df",
+              Channel: 153,
+              Hidden: false,
+              "Joined by user": 1688243921,
+              Added: 1688243920,
+              "Last seen": 1689450218,
+            },
+            {
+              Network: "Hilton Garden Inn Guest",
+              Security: "OWE Transition",
+              "Access point": "70:a7:41:67:ac:9d",
+              Channel: 6,
+              Hidden: false,
+              "Joined by user": 1715116642,
+              Added: 1715116642,
+              "Last seen": 1715168820,
+            },
+            {
+              // No __OSSpecific__ subtree on this one: absent, not zero.
+              Network: "Cafe Wifi",
+              Security: "None",
+              "Access point": null,
+              Channel: null,
+              Hidden: true,
+              "Joined by user": null,
+              Added: 1700000000,
+              "Last seen": null,
+            },
+          ]
       : mockActive && artifactId === "sim_cards"
         ? [
             {

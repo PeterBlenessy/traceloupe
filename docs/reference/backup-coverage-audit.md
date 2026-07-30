@@ -198,6 +198,11 @@ implication against a real device with `explore_real_backup`, which decrypts a
 backup with the app's own decryptor and reads its Manifest:
 
 ```bash
+# The SHAPE of a property list: key paths, types, sample values. The plist
+# equivalent of `schema`, and the thing to read before writing a `[plist]` block.
+cargo run -p traceloupe-core --example explore_real_backup -- <dir> <password> \
+    plist SystemPreferencesDomain com.apple.wifi.known-networks.plist
+
 # Is this store actually in a backup? (SQL LIKE, % wildcards)
 cargo run -p traceloupe-core --example explore_real_backup -- <dir> <password> \
     list '%voicemail%'

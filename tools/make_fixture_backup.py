@@ -606,6 +606,47 @@ def seed_cellular_usage(path: Path) -> None:
     con.close()
 
 
+def build_known_networks_plist() -> bytes:
+    """com.apple.wifi.known-networks.plist — the first PLIST-backed artifact.
+
+    A root dictionary whose KEYS name the networks, which is why the module needs
+    `plist.key_column`. Mirrors what `explore_real_backup ... plist` printed for
+    the validation image. See crates/traceloupe-core/modules/wifi_networks.toml.
+
+    Includes a network with no `__OSSpecific__` subtree and a key that does not
+    carry Apple's `wifi.network.ssid.` prefix, so the module's "trim only when it
+    really is the prefix" rule is exercised rather than assumed.
+    """
+    def at(secs: int) -> datetime:
+        # NAIVE UTC: plistlib's binary writer subtracts a naive epoch, so an
+        # aware datetime raises. The value is still UTC; only the tzinfo is
+        # dropped.
+        return datetime.fromtimestamp(secs, tz=timezone.utc).replace(tzinfo=None)
+
+    return plistlib.dumps(
+        {
+            "wifi.network.ssid.HomeNet": {
+                "SSID": b"HomeNet",
+                "SupportedSecurityTypes": "WPA2 Personal",
+                "Hidden": False,
+                "JoinedByUserAt": at(1_688_243_921),
+                "AddedAt": at(1_688_243_920),
+                "LastDiscoveredAt": at(1_689_450_218),
+                "__OSSpecific__": {"BSSID": "6a:22:32:98:f4:df", "CHANNEL": 153},
+            },
+            "wifi.network.ssid.Cafe Wifi": {
+                "SSID": b"Cafe Wifi",
+                "SupportedSecurityTypes": "None",
+                "Hidden": True,
+                "AddedAt": at(1_700_000_000),
+            },
+            # No namespace prefix: must be shown whole.
+            "legacy-entry": {"SSID": b"\xff\xfe\x00A", "AddedAt": at(1_710_000_000)},
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -643,6 +684,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
         ),
         ("WirelessDomain", "Library/Databases/DataUsage.sqlite", usage_path.read_bytes()),
         ("WirelessDomain", "Library/Databases/CellularUsage.db", cell_path.read_bytes()),
+        (
+            "SystemPreferencesDomain",
+            "com.apple.wifi.known-networks.plist",
+            build_known_networks_plist(),
+        ),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
     # A real camera roll: the DCIM original, its V2 thumbnail, and Photos.sqlite.
