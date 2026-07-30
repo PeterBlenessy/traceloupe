@@ -84,11 +84,18 @@ jobs:
       # extremes. It self-tests its own detectors first, so a rule that quietly
       # stops matching fails instead of reporting OK forever.
       - run: pnpm exec playwright install --with-deps chromium
-      - name: Design lint
+      # All four browser checks share the one dev server. The last three were
+      # previously in scripts/preflight.sh only, which meant they ran when an
+      # agent remembered `--with-ui` and never otherwise — a guard nothing
+      # enforces is a guard that decays. They gate merges now.
+      - name: Browser checks
         run: |
           pnpm exec vite --port 1420 --strictPort &
           npx wait-on http://localhost:1420 -t 60000
           node scripts/check-design.mjs
+          node scripts/check-encrypted-empty.mjs http://localhost:1420
+          node scripts/check-clickable.mjs http://localhost:1420
+          node scripts/check-view-intro.mjs http://localhost:1420
       # Stage the llama-server sidecar so `bundle.externalBin` resolves — Tauri
       # validates it at cargo-check time. The binary is git-ignored (see
       # docs/reference/safety-scan-sidecar.md); the fast pre-built download satisfies the
