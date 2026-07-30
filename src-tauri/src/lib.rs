@@ -2669,6 +2669,40 @@ async fn health_summary(active: State<'_, ActiveBackup>) -> Result<query::Health
     .map_err(|e| e.to_string())?
 }
 
+/// Which artifacts this backup yielded, and their shape. The UI renders
+/// whatever arrives — it knows no artifact by name, which is the whole point of
+/// the declarative modules.
+#[tauri::command]
+async fn list_artifacts(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<traceloupe_core::artifacts::ArtifactSummary>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        traceloupe_core::artifacts::list_artifacts(cache.conn()).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A page of one artifact's rows.
+#[tauri::command]
+async fn get_artifact_rows(
+    active: State<'_, ActiveBackup>,
+    artifact_id: String,
+    offset: i64,
+    limit: i64,
+) -> Result<Vec<traceloupe_core::artifacts::ArtifactRow>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        traceloupe_core::artifacts::read_rows(cache.conn(), &artifact_id, offset, limit)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn list_reminders(active: State<'_, ActiveBackup>) -> Result<Vec<query::Reminder>, String> {
     let path = active.path()?;
@@ -4240,7 +4274,9 @@ pub fn run() {
             safety_scan_cmd::generate_thread_summary,
             safety_scan_cmd::list_safety_scans,
             safety_scan_cmd::delete_safety_scan,
-            theme::get_system_accent_color
+            theme::get_system_accent_color,
+            list_artifacts,
+            get_artifact_rows
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
