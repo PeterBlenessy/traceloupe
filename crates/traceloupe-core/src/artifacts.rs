@@ -109,8 +109,20 @@ pub enum ColumnKind {
 pub struct ColumnSpec {
     /// Display name.
     pub name: String,
-    /// The SQL result column this reads.
-    pub from: String,
+    /// Where the value comes from: a SQL result column, or a key path into a
+    /// property list.
+    ///
+    /// One string for the common case (`from = "SSID"`), a list to descend
+    /// (`from = ["__OSSpecific__", "BSSID"]`). A list rather than a dotted string
+    /// because plist keys contain dots — this store's own top-level keys look
+    /// like `wifi.network.ssid.Matt_Foley` — so dotted paths would be ambiguous
+    /// exactly where they are most needed.
+    ///
+    /// Omitted only for the column named by `plist.key_column`, whose value comes
+    /// from the entry's key and so has no source to name. Required everywhere
+    /// else — a column with no source would silently be all nulls.
+    #[serde(default, deserialize_with = "one_or_many_path")]
+    pub from: Vec<String>,
     #[serde(default)]
     pub kind: ColumnKind,
     /// Required when `kind = "timestamp"`, meaningless otherwise.
@@ -141,6 +153,38 @@ pub struct HighlightSpec {
     /// which is the right default: silence claims less than a phrase.
     #[serde(default)]
     pub none_label: Option<String>,
+}
+
+/// How to read rows out of a property list.
+///
+/// The other half of the artifact tail. Roughly 44% of iLEAPP's artifacts read a
+/// SQLite store, which is all `sql` can express; plists are the largest category
+/// it cannot touch (#236). Everything downstream — the runner, `artifact_rows`,
+/// column kinds, surfaces, `[highlight]` and every guard — is unchanged. Only how
+/// a module names its source and projects rows is new.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlistSpec {
+    /// Key path to the container holding the rows. Empty means the root itself,
+    /// which is the single-record case (a settings plist IS one row).
+    #[serde(default, deserialize_with = "one_or_many_path")]
+    pub rows: Vec<String>,
+    /// When the container is a DICTIONARY, the key of each entry becomes this
+    /// column.
+    ///
+    /// Not a nicety: in `com.apple.wifi.known-networks.plist` the network's name
+    /// is the key (`wifi.network.ssid.Matt_Foley`) and nothing inside the entry
+    /// repeats it as text. Without this the identifying field of the artifact
+    /// would be unreachable.
+    #[serde(default)]
+    pub key_column: Option<String>,
+    /// Dropped from the front of each key before it becomes `key_column`.
+    ///
+    /// Apple namespaces those keys; `wifi.network.ssid.` is noise on every row.
+    /// Declared rather than inferred, and if a key does not start with it the key
+    /// is used whole — quietly trimming something else would hide a store whose
+    /// shape has changed.
+    #[serde(default)]
+    pub key_strip_prefix: Option<String>,
 }
 
 /// Where an artifact is shown.
@@ -267,8 +311,12 @@ pub struct ModuleSpec {
     /// Every alternative must produce the SAME output column names, since the
     /// column spec is shared. Alias in SQL to make that so, and `SELECT NULL AS
     /// x` where an older schema has nothing to offer.
-    #[serde(deserialize_with = "one_or_many")]
+    #[serde(default, deserialize_with = "one_or_many")]
     pub sql: Vec<String>,
+    /// Read a property list instead of running SQL. Exactly one of `sql` and
+    /// `plist` must be declared.
+    #[serde(default)]
+    pub plist: Option<PlistSpec>,
     /// Declared precondition. Parsed and stored here; honoured by the UI in a
     /// later slice (#210). Apple's `RelativePathsToOnlyBackupEncrypted` covers
     /// 28 artifacts, so this is not an edge case.
@@ -283,6 +331,36 @@ pub struct ModuleSpec {
 /// mistake into "data did not match any variant of untagged enum". `load_modules`
 /// promises to say which file and *why*; "invalid type: integer, expected a
 /// string" is the why, and untagged throws it away.
+/// The same one-or-many shape as `one_or_many`, for a key path rather than SQL.
+/// Separate so the "expecting" message names the right thing — a wrong type here
+/// should say what a `from` may be, not what a query may be.
+fn one_or_many_path<'de, D>(d: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Vec<String>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a column name, or a list of keys forming a path into a property list")
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<Vec<String>, E> {
+            Ok(vec![v.to_string()])
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> std::result::Result<Vec<String>, A::Error> {
+            let mut out = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                out.push(item);
+            }
+            Ok(out)
+        }
+    }
+    d.deserialize_any(V)
+}
+
 fn one_or_many<'de, D>(d: D) -> std::result::Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -344,8 +422,41 @@ impl ModuleSpec {
                 self.path
             ));
         }
-        if self.sql.is_empty() || self.sql.iter().all(|q| q.trim().is_empty()) {
-            return Err("`sql` is empty".into());
+        // EXACTLY one source. Both would be ambiguous about which one produced a
+        // row; neither leaves a module that loads, validates and reads nothing.
+        let has_sql = !self.sql.is_empty() && !self.sql.iter().all(|q| q.trim().is_empty());
+        match (has_sql, self.plist.is_some()) {
+            (false, false) => return Err("no source: declare either `sql` or `[plist]`".into()),
+            (true, true) => {
+                return Err(
+                    "both `sql` and `[plist]` are declared — a module reads one store one way"
+                        .into(),
+                )
+            }
+            _ => {}
+        }
+        if let Some(pl) = &self.plist {
+            if pl.rows.iter().any(|k| k.trim().is_empty()) {
+                return Err("`plist.rows` contains an empty key".into());
+            }
+            if let Some(k) = &pl.key_column {
+                if k.trim().is_empty() {
+                    return Err("`plist.key_column` is empty".into());
+                }
+                if !self.columns.iter().any(|c| &c.name == k) {
+                    return Err(format!(
+                        "`plist.key_column` = {k:?} is not one of the declared columns — the \
+                         key would be read and then have nowhere to go"
+                    ));
+                }
+            }
+            if pl.key_strip_prefix.is_some() && pl.key_column.is_none() {
+                return Err(
+                    "`plist.key_strip_prefix` is set but `key_column` is not — there is no \
+                     key being read for it to trim"
+                        .into(),
+                );
+            }
         }
         for sql in &self.sql {
             let sql = sql.trim();
@@ -364,8 +475,65 @@ impl ModuleSpec {
         }
         let mut seen_names: Vec<&str> = Vec::new();
         for c in &self.columns {
-            if c.name.trim().is_empty() || c.from.trim().is_empty() {
-                return Err(format!("column {:?} has an empty `name` or `from`", c.name));
+            let is_key_column = self
+                .plist
+                .as_ref()
+                .and_then(|p| p.key_column.as_ref())
+                .is_some_and(|k| k == &c.name);
+            if c.name.trim().is_empty() {
+                return Err(format!("column {:?} has an empty `name`", c.name));
+            }
+            if !is_key_column && c.from.is_empty() {
+                return Err(format!(
+                    "column {:?} declares no `from` — it would be all nulls. Only the \
+                     `plist.key_column` may omit it, because its value is the entry's key",
+                    c.name
+                ));
+            }
+            // The key column's value IS the key, so anything describing where else
+            // to get it, or what to make of it, is dead. Accepting it silently let
+            // an author write `from = ["SSID"]` there and quietly get the key
+            // instead of the field they named.
+            if is_key_column {
+                if !c.from.is_empty() {
+                    return Err(format!(
+                        "column {:?} is the `plist.key_column`, so its value is the entry's \
+                         key — a `from` would be ignored",
+                        c.name
+                    ));
+                }
+                if c.kind != ColumnKind::Text {
+                    return Err(format!(
+                        "column {:?} is the `plist.key_column` and a plist key is always \
+                         text, so `kind` cannot be {:?}",
+                        c.name, c.kind
+                    ));
+                }
+                if c.epoch.is_some() {
+                    return Err(format!(
+                        "column {:?} is the `plist.key_column`; an `epoch` has nothing to \
+                         convert there",
+                        c.name
+                    ));
+                }
+            }
+            // A SQL column reads ONE result name. Checked here rather than in the
+            // runner, where it lived first: `run_module` returns early when the
+            // store is not in the backup, so on any device lacking it the mistake
+            // never surfaced at all.
+            if self.plist.is_none() && c.from.len() > 1 {
+                return Err(format!(
+                    "column {:?} declares a key path of {} segments, but this module reads \
+                     SQL, where `from` names a single result column",
+                    c.name,
+                    c.from.len()
+                ));
+            }
+            if c.from.iter().any(|k| k.trim().is_empty()) {
+                return Err(format!(
+                    "column {:?} has an empty key in its `from` path",
+                    c.name
+                ));
             }
             // A row is keyed on the display name, so two columns sharing one
             // collapse to whichever is written last — a column silently
@@ -378,7 +546,10 @@ impl ModuleSpec {
                 ));
             }
             seen_names.push(&c.name);
-            if c.kind == ColumnKind::Timestamp && c.epoch.is_none() {
+            // A plist `Date` is already an absolute time, so an epoch would have
+            // nothing to convert; a NUMBER in a plist still needs one. Required for
+            // SQL, where every timestamp arrives as a bare number.
+            if c.kind == ColumnKind::Timestamp && c.epoch.is_none() && self.plist.is_none() {
                 return Err(format!(
                     "column {:?} is a timestamp but declares no `epoch` — \
                      without it the date cannot be converted and would render as a raw number",
@@ -679,10 +850,19 @@ pub fn run_module(
         return Ok(None);
     };
 
+    // A property list is read straight from memory: no sidecars to checkpoint, no
+    // temp store to open read-only, so none of the SQLite machinery below applies —
+    // including the work dir, which a plist module never writes to.
+    if let Some(pl) = &spec.plist {
+        let bytes = index.read_bytes(&entry, decryptor)?;
+        return run_plist_module(spec, pl, &bytes).map(Some);
+    }
+
     std::fs::create_dir_all(work_dir).map_err(|e| Error::Io {
         path: work_dir.to_path_buf(),
         source: e,
     })?;
+
     let dest = work_dir.join(format!("{}.sqlite", spec.id));
     index.extract_db(&entry, decryptor, &dest)?;
 
@@ -726,12 +906,15 @@ pub fn run_module(
     // emitting nulls would make a renamed upstream column look like an artifact
     // that simply has no data.
     for c in &spec.columns {
-        if !sql_names.iter().any(|n| n == &c.from) {
+        // Exactly one segment: `validate` rejected anything else before we got
+        // here, and it runs at the top of `run_module`.
+        let from = &c.from[0];
+        if !sql_names.iter().any(|n| n == from) {
             return Err(Error::Parse(format!(
                 "artifact {}: column {:?} reads `{}`, which the SQL does not return (returns: {})",
                 spec.id,
                 c.name,
-                c.from,
+                from,
                 sql_names.join(", ")
             )));
         }
@@ -742,13 +925,280 @@ pub fn run_module(
     while let Some(row) = rows.next()? {
         let mut out: ArtifactRow = HashMap::new();
         for c in &spec.columns {
-            let idx = sql_names.iter().position(|n| n == &c.from).unwrap();
+            // Checked above: exactly one segment, and present in the result set.
+            let idx = sql_names.iter().position(|n| n == &c.from[0]).unwrap();
             let raw: rusqlite::types::Value = row.get(idx)?;
             out.insert(c.name.clone(), convert(&raw, c));
         }
         rows_out.push(out);
     }
     Ok(Some(rows_out))
+}
+
+/// Read rows out of a property list, per the module's `[plist]` block.
+fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<Vec<ArtifactRow>> {
+    let root = plist::Value::from_reader(std::io::Cursor::new(bytes)).map_err(|e| {
+        Error::Parse(format!(
+            "artifact {}: {}:{} is not a readable property list: {e}",
+            spec.id, spec.domain, spec.path
+        ))
+    })?;
+
+    // Walk to the container. A missing key is an ERROR, not an empty artifact:
+    // "this key is gone" and "this device has none of these" are different facts,
+    // and the second is what an empty result would claim.
+    let mut node = &root;
+    for (i, key) in pl.rows.iter().enumerate() {
+        node = match step(node, key) {
+            Some(v) => v,
+            None => {
+                return Err(Error::Parse(format!(
+                    "artifact {}: `plist.rows` path {:?} stops at {:?} — {} in {}:{}",
+                    spec.id,
+                    pl.rows.join(" / "),
+                    pl.rows[..=i].join(" / "),
+                    // A wrong TYPE and a missing KEY are different mistakes, and
+                    // saying "that key is not there" about a scalar sends the
+                    // author looking for the wrong thing.
+                    match node {
+                        plist::Value::Dictionary(_) => "there is no such key".to_string(),
+                        plist::Value::Array(a) => format!(
+                            "that is an array of {} items and this is not an index",
+                            a.len()
+                        ),
+                        other => format!(
+                            "that is {}, which cannot be descended into",
+                            kind_name(other)
+                        ),
+                    },
+                    spec.domain,
+                    spec.path
+                )));
+            }
+        };
+    }
+
+    // (key, row) pairs, decided by what the module ASKED FOR rather than by what
+    // the shape happens to be.
+    //
+    // The first version inferred: a dictionary became many rows whenever `rows`
+    // was non-empty. That made three different mistakes look like success —
+    // a `rows` path landing on a scalar produced one row of nulls; descending to a
+    // nested single RECORD produced one null row per field of it; and an empty
+    // root dictionary produced a phantom row. All of them loaded, validated and
+    // ran green. `key_column` is the declaration that says "this container holds
+    // many things, keyed", so it is what decides.
+    let entries: Vec<(Option<&str>, &plist::Value)> = match (node, pl.key_column.is_some()) {
+        (plist::Value::Array(items), false) => items.iter().map(|v| (None, v)).collect(),
+        (plist::Value::Array(_), true) => {
+            return Err(Error::Parse(format!(
+                "artifact {}: `plist.key_column` is declared but {} is an ARRAY, whose \
+                 entries have no keys — every row's key would be blank",
+                spec.id,
+                describe_at(&pl.rows)
+            )))
+        }
+        (plist::Value::Dictionary(d), true) => {
+            d.iter().map(|(k, v)| (Some(k.as_str()), v)).collect()
+        }
+        // A dictionary with no `key_column` is ONE record — a settings plist is a
+        // row. Empty means nothing was recorded, which is zero rows, not one row
+        // of nulls.
+        (plist::Value::Dictionary(d), false) => {
+            if d.is_empty() {
+                Vec::new()
+            } else {
+                vec![(None, node)]
+            }
+        }
+        (other, _) => {
+            return Err(Error::Parse(format!(
+                "artifact {}: {} is {}, which holds no rows — `plist.rows` should point at \
+                 a dictionary or an array",
+                spec.id,
+                describe_at(&pl.rows),
+                kind_name(other)
+            )))
+        }
+    };
+
+    let mut out = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let mut row: ArtifactRow = HashMap::new();
+        if let Some(col) = &pl.key_column {
+            let k = key.unwrap_or_default();
+            // Trim only when it really is the prefix. Trimming blindly would hide
+            // a key whose shape has changed, which is the interesting case.
+            let shown = match &pl.key_strip_prefix {
+                Some(prefix) => k.strip_prefix(prefix.as_str()).unwrap_or(k),
+                None => k,
+            };
+            row.insert(col.clone(), serde_json::Value::String(shown.to_string()));
+        }
+        for c in &spec.columns {
+            if Some(&c.name) == pl.key_column.as_ref() {
+                continue; // already filled from the key
+            }
+            let cell = match lookup_path(value, &c.from) {
+                Some(v) => convert_plist(v, c)
+                    .map_err(|e| Error::Parse(format!("artifact {}: {e}", spec.id)))?,
+                None => serde_json::Value::Null,
+            };
+            row.insert(c.name.clone(), cell);
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// One step along a path: a dictionary key, or an array index.
+///
+/// Array indexing exists because Apple nests records under arrays routinely
+/// (`Root / Items / 0 / …`), and a dictionary-only walk made every such artifact
+/// unreachable. No ambiguity: a dictionary is indexed by key and an array by
+/// number, and which one applies is decided by the node, not by the segment.
+fn step<'a>(node: &'a plist::Value, segment: &str) -> Option<&'a plist::Value> {
+    match node {
+        plist::Value::Dictionary(d) => d.get(segment),
+        plist::Value::Array(a) => segment.parse::<usize>().ok().and_then(|i| a.get(i)),
+        _ => None,
+    }
+}
+
+/// Descend a key path. `None` when any segment is missing — which becomes a null
+/// cell, because a key absent from ONE record is ordinary (not every network is
+/// hidden, not every account has a label), unlike the `rows` path being wrong.
+fn lookup_path<'a>(value: &'a plist::Value, path: &[String]) -> Option<&'a plist::Value> {
+    let mut node = value;
+    for key in path {
+        node = step(node, key)?;
+    }
+    Some(node)
+}
+
+/// Names a plist value's kind for an error message.
+fn kind_name(v: &plist::Value) -> &'static str {
+    match v {
+        plist::Value::Array(_) => "an array",
+        plist::Value::Dictionary(_) => "a dictionary",
+        plist::Value::Boolean(_) => "a boolean",
+        plist::Value::Data(_) => "raw data",
+        plist::Value::Date(_) => "a date",
+        plist::Value::Real(_) => "a number",
+        plist::Value::Integer(_) => "a number",
+        plist::Value::String(_) => "a string",
+        plist::Value::Uid(_) => "a uid",
+        _ => "an unknown value",
+    }
+}
+
+/// How to refer to where `plist.rows` points, in an error.
+fn describe_at(rows: &[String]) -> String {
+    if rows.is_empty() {
+        "the root".to_string()
+    } else {
+        format!("`plist.rows` path {:?}", rows.join(" / "))
+    }
+}
+
+/// A plist value as JSON, coerced by the column's declared kind.
+///
+/// `Err` for a mistake the module could not have detected at load time — a
+/// timestamp column meeting a number when no `epoch` was declared. Everything
+/// else that cannot be represented is a null cell, which is an honest "not this".
+fn convert_plist(v: &plist::Value, c: &ColumnSpec) -> Result<serde_json::Value> {
+    use serde_json::Value as J;
+    // plist Integers are i128-backed and Apple writes plenty of ids as u64 above
+    // i64::MAX (persistent ids, address-shaped values). `as_signed` alone turns
+    // those into nulls, so the unsigned half is tried too.
+    fn as_i64(i: &plist::Integer) -> Option<i64> {
+        i.as_signed()
+            .or_else(|| i.as_unsigned().and_then(|u| i64::try_from(u).ok()))
+    }
+    Ok(match c.kind {
+        ColumnKind::Timestamp => match v {
+            // A plist Date is already absolute; no epoch is involved. It still
+            // goes through the same plausibility clamp as every other timestamp:
+            // an out-of-range value reaching the UI is not merely odd, it makes
+            // `Intl.DateTimeFormat.format` throw on a non-finite Date.
+            plist::Value::Date(d) => {
+                let t: std::time::SystemTime = (*d).into();
+                let secs = match t.duration_since(std::time::UNIX_EPOCH) {
+                    Ok(dur) => dur.as_secs() as f64,
+                    // Before 1970. `duration()` is the positive gap by which the
+                    // time precedes the epoch, so negating it is the real value.
+                    Err(e) => -(e.duration().as_secs() as f64),
+                };
+                Epoch::Unix.to_unix_seconds(secs).map_or(J::Null, J::from)
+            }
+            // A number still needs the module to say what epoch it is in — and
+            // if it did not, saying so beats a column of silent nulls. This is
+            // the case `validate` cannot catch, because the value's type is only
+            // known here.
+            plist::Value::Integer(_) | plist::Value::Real(_) if c.epoch.is_none() => {
+                return Err(Error::Parse(format!(
+                    "column {:?} is a timestamp and this store holds it as a NUMBER, but no \
+                     `epoch` is declared. A plist `Date` needs none; a number does — say \
+                     which epoch it counts from",
+                    c.name
+                )))
+            }
+            plist::Value::Integer(i) => as_i64(i)
+                .and_then(|n| c.epoch.and_then(|e| e.to_unix_seconds(n as f64)))
+                .map_or(J::Null, J::from),
+            plist::Value::Real(f) => c
+                .epoch
+                .and_then(|e| e.to_unix_seconds(*f))
+                .map_or(J::Null, J::from),
+            _ => J::Null,
+        },
+        ColumnKind::Bool => match v {
+            plist::Value::Boolean(b) => J::Bool(*b),
+            plist::Value::Integer(i) => as_i64(i).map_or(J::Null, |n| J::Bool(n != 0)),
+            _ => J::Null,
+        },
+        ColumnKind::Integer | ColumnKind::Bytes => match v {
+            plist::Value::Integer(i) => as_i64(i).map_or(J::Null, J::from),
+            plist::Value::Real(f) => J::from(*f as i64),
+            plist::Value::Boolean(b) => J::from(i64::from(*b)),
+            _ => J::Null,
+        },
+        ColumnKind::Real => match v {
+            plist::Value::Real(f) => J::from(*f),
+            plist::Value::Integer(i) => as_i64(i).map_or(J::Null, |n| J::from(n as f64)),
+            _ => J::Null,
+        },
+        ColumnKind::Text => match v {
+            plist::Value::String(s) => J::String(s.clone()),
+            // Formatted from the Integer itself rather than through i64, so a
+            // value too large for i64 still prints instead of vanishing.
+            plist::Value::Integer(i) => J::String(format!("{i}")),
+            plist::Value::Real(f) => J::String(f.to_string()),
+            plist::Value::Boolean(b) => J::String(if *b { "Yes" } else { "No" }.into()),
+            // Apple stores plenty of text as Data — an SSID is raw bytes. Decoded
+            // when it really is UTF-8; NULL otherwise, matching what the SQL path
+            // does with a blob. The first version fabricated "<10 bytes>", which
+            // is a string: it would flow into the row store, exports and search as
+            // though it were content.
+            //
+            // Only C0 controls disqualify it, and not tab/newline/carriage return —
+            // multi-line text in a plist is ordinary.
+            plist::Value::Data(d) => match std::str::from_utf8(d) {
+                Ok(t)
+                    if !t.is_empty()
+                        && !t
+                            .chars()
+                            .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')) =>
+                {
+                    J::String(t.to_string())
+                }
+                _ => J::Null,
+            },
+            // A nested container has no single text form, and inventing one
+            // (JSON? a count?) would be this file guessing on a module's behalf.
+            _ => J::Null,
+        },
+    })
 }
 
 fn convert(raw: &rusqlite::types::Value, c: &ColumnSpec) -> serde_json::Value {
@@ -876,6 +1326,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/data_usage.toml"),
     ),
     ("sim_cards.toml", include_str!("../modules/sim_cards.toml")),
+    (
+        "wifi_networks.toml",
+        include_str!("../modules/wifi_networks.toml"),
+    ),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -965,6 +1419,61 @@ epoch = "cocoa"
             // The needle must be something only the TOML parser produces; "artifact
             // module" is the shared prefix of every error in this function.
             ("bad-toml", "id = \"x\"\nname =", "TOML parse error"),
+            // A module with BOTH sources: which one produced a row would be
+            // unanswerable.
+            (
+                "two-sources",
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+sql = "SELECT a FROM t"
+[plist]
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "both `sql` and `[plist]`",
+            ),
+            // A key that is read and then has nowhere to go.
+            (
+                "key-column-not-declared",
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+[plist]
+key_column = "Nope"
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "`plist.key_column`",
+            ),
+            // Trimming a prefix off a key nobody reads.
+            (
+                "strip-without-key",
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+[plist]
+key_strip_prefix = "wifi."
+[[columns]]
+name = "A"
+from = "a"
+"#,
+                "`key_column` is not",
+            ),
             (
                 "no-epoch",
                 r#"
@@ -1091,7 +1600,7 @@ sql = ""
 name = "A"
 from = "a"
 "#,
-                "`sql` is empty",
+                "no source: declare either `sql` or `[plist]`",
             ),
             (
                 "empty-column",
@@ -1107,7 +1616,40 @@ sql = "SELECT a FROM t"
 name = "A"
 from = ""
 "#,
-                "empty `name` or `from`",
+                "empty key in its `from` path",
+            ),
+            // A column with no `from` at all. Allowed ONLY for a plist key
+            // column; here it would be a column of nothing but nulls.
+            (
+                "no-from",
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "SELECT a FROM t"
+[[columns]]
+name = "A"
+"#,
+                "declares no `from`",
+            ),
+            (
+                "empty-column-name",
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.db"
+sql = "SELECT a FROM t"
+[[columns]]
+name = " "
+from = "a"
+"#,
+                "has an empty `name`",
             ),
             (
                 "bad-id",
@@ -1190,7 +1732,20 @@ from = "a"
         let conn = Connection::open(&store).unwrap();
         build(&conn);
         drop(conn);
+        finish_manifest(dir, domain, rel, file_id);
+    }
 
+    /// The same, for a store that is NOT a database — a property list is raw
+    /// bytes, and `extract_db`'s checkpointing has nothing to do with it.
+    fn make_backup_bytes_in(dir: &Path, domain: &str, rel: &str, bytes: &[u8]) {
+        let file_id = "cd00000000000000000000000000000000000001";
+        let blob_dir = dir.join(&file_id[..2]);
+        std::fs::create_dir_all(&blob_dir).unwrap();
+        std::fs::write(blob_dir.join(file_id), bytes).unwrap();
+        finish_manifest(dir, domain, rel, file_id);
+    }
+
+    fn finish_manifest(dir: &Path, domain: &str, rel: &str, file_id: &str) {
         let conn = Connection::open(dir.join("Manifest.db")).unwrap();
         conn.execute_batch(
             "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);",
@@ -1495,11 +2050,12 @@ from = "who"
             category: None,
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
+            plist: None,
             sql: vec!["SELECT who FROM events".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "Who".into(),
-                from: "who".into(),
+                from: vec!["who".into()],
                 kind: ColumnKind::Text,
                 epoch: None,
             }],
@@ -1932,6 +2488,74 @@ from = "nope"
         .unwrap();
     }
 
+    /// `com.apple.wifi.known-networks.plist` as iOS writes it: a ROOT DICTIONARY
+    /// whose keys name the networks, values holding the rest, and the access point
+    /// nested under `__OSSpecific__`.
+    ///
+    /// The cases the module claims to handle: a key that does NOT carry Apple's
+    /// `wifi.network.ssid.` prefix (so blind trimming would be caught), a network
+    /// missing the whole `__OSSpecific__` subtree, and a network joined
+    /// automatically rather than by the user.
+    ///
+    /// The `SSID` Data field is present because the real store has it, but NO
+    /// column reads it — the key is the better source, and the module says why.
+    /// `convert_plist`'s Data arm is covered by a unit test instead, so this
+    /// docstring does not claim coverage that does not exist.
+    fn seed_wifi_networks() -> Vec<u8> {
+        use plist::{Date, Dictionary, Value};
+
+        fn at(secs: i64) -> Value {
+            Value::Date(Date::from(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs as u64),
+            ))
+        }
+
+        let mut root = Dictionary::new();
+
+        let mut home = Dictionary::new();
+        home.insert("SSID".into(), Value::Data(b"HomeNet".to_vec()));
+        home.insert(
+            "SupportedSecurityTypes".into(),
+            Value::String("WPA2 Personal".into()),
+        );
+        home.insert("Hidden".into(), Value::Boolean(false));
+        home.insert("JoinedByUserAt".into(), at(1_688_243_921));
+        home.insert("JoinedBySystemAt".into(), at(1_689_450_000));
+        home.insert("AddedAt".into(), at(1_688_243_920));
+        home.insert("LastDiscoveredAt".into(), at(1_689_450_218));
+        let mut os = Dictionary::new();
+        os.insert("BSSID".into(), Value::String("6a:22:32:98:f4:df".into()));
+        os.insert("CHANNEL".into(), Value::Integer(153.into()));
+        home.insert("__OSSpecific__".into(), Value::Dictionary(os));
+        root.insert("wifi.network.ssid.HomeNet".into(), Value::Dictionary(home));
+
+        // No `__OSSpecific__` at all: the access point and channel must come back
+        // null rather than failing the whole artifact.
+        let mut cafe = Dictionary::new();
+        cafe.insert("SSID".into(), Value::Data(b"Cafe Wifi".to_vec()));
+        cafe.insert(
+            "SupportedSecurityTypes".into(),
+            Value::String("None".into()),
+        );
+        cafe.insert("Hidden".into(), Value::Boolean(true));
+        cafe.insert("AddedAt".into(), at(1_700_000_000));
+        root.insert(
+            "wifi.network.ssid.Cafe Wifi".into(),
+            Value::Dictionary(cafe),
+        );
+
+        // A key WITHOUT the namespace: `key_strip_prefix` must leave it alone
+        // rather than trim something else off the front.
+        let mut odd = Dictionary::new();
+        odd.insert("SSID".into(), Value::Data(vec![0xff, 0xfe, 0x00, 0x41]));
+        odd.insert("AddedAt".into(), at(1_710_000_000));
+        root.insert("legacy-entry".into(), Value::Dictionary(odd));
+
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -1965,21 +2589,35 @@ from = "nope"
             "WirelessDomain",
             "Library/Databases/CellularUsage.db",
         ),
+        (
+            "wifi_networks",
+            "SystemPreferencesDomain",
+            "com.apple.wifi.known-networks.plist",
+        ),
     ];
 
-    fn seed_for(id: &str) -> fn(&Connection) {
-        match id {
+    /// How a module's fixture store is built. Two kinds, because a module now has
+    /// two kinds of source.
+    enum Seed {
+        Sql(fn(&Connection)),
+        Bytes(fn() -> Vec<u8>),
+    }
+
+    fn seed_for(id: &str) -> Seed {
+        Seed::Sql(match id {
             "tcc" => seed_tcc,
             "accounts" => seed_accounts,
             "bluetooth_paired" => seed_bluetooth_paired,
             "data_usage" => seed_data_usage,
             "sim_cards" => seed_sim_cards,
+            // Not SQL at all: return early rather than pretend.
+            "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
                  shipping data that proves it runs"
             ),
-        }
+        })
     }
 
     /// The JSON the UI receives must have the field names the UI reads.
@@ -2208,7 +2846,10 @@ from = "nope"
             );
 
             let tmp = tempfile::tempdir().unwrap();
-            make_backup_in(tmp.path(), domain, path, seed_for(&spec.id));
+            match seed_for(&spec.id) {
+                Seed::Sql(f) => make_backup_in(tmp.path(), domain, path, f),
+                Seed::Bytes(f) => make_backup_bytes_in(tmp.path(), domain, path, &f()),
+            }
             let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
             let rows = run_module(spec, &index, None, &tmp.path().join("work"))
                 .unwrap_or_else(|e| panic!("module {} failed to run: {e}", spec.id))
@@ -2218,6 +2859,23 @@ from = "nope"
                 assert!(
                     rows[0].contains_key(&c.name),
                     "module {} produced no {:?} column",
+                    spec.id,
+                    c.name
+                );
+                // And it must actually READ something somewhere. `contains_key`
+                // is satisfied by a null, so a mistyped source — `__OSSPecific__`,
+                // a renamed SQL alias — produced a full set of columns full of
+                // nothing and shipped green. The SQL path has a hard guard for
+                // this (a declared column absent from the result set is an
+                // error); the plist path cannot have one, because a key missing
+                // from a single record is legitimate. The fixture is where it can
+                // be pinned: every declared column is there to carry a value, so
+                // at least one fixture row must give it one.
+                assert!(
+                    rows.iter().any(|r| !r[&c.name].is_null()),
+                    "module {}: column {:?} is null in EVERY fixture row — either its \
+                     source is wrong, or the fixture does not exercise it. Both are worth \
+                     failing on: a column that never carries a value is not a column.",
                     spec.id,
                     c.name
                 );
@@ -2301,6 +2959,295 @@ from = "nope"
             .expect("the NULL-flag account is present");
         assert_eq!(unrecorded["Status"], serde_json::json!("Not recorded"));
         assert_eq!(unrecorded["Signed in"], serde_json::json!("Not recorded"));
+    }
+
+    /// The Wi-Fi module — the first that reads a property list rather than SQL.
+    ///
+    /// Covers what the plist source has to get right: the row identity coming from
+    /// the entry's KEY, a namespace prefix trimmed only when it is really there, a
+    /// nested path into a subtree, a subtree that is absent on some rows, and a
+    /// plist Date arriving as an absolute time with no epoch declared.
+    #[test]
+    fn wifi_module_reads_a_property_list() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "wifi_networks")
+            .expect("wifi_networks module ships");
+        assert!(spec.plist.is_some(), "this module reads a plist, not SQL");
+        assert!(spec.sql.is_empty());
+
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_bytes_in(tmp.path(), &spec.domain, &spec.path, &seed_wifi_networks());
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+
+        let by = |name: &str| {
+            rows.iter()
+                .find(|r| r["Network"] == serde_json::json!(name))
+                .unwrap_or_else(|| panic!("no row for {name:?}, got {rows:#?}"))
+        };
+
+        // The name came from the KEY, with Apple's namespace trimmed off.
+        let home = by("HomeNet");
+        assert_eq!(home["Security"], serde_json::json!("WPA2 Personal"));
+        // A nested path reached into __OSSpecific__.
+        assert_eq!(home["Access point"], serde_json::json!("6a:22:32:98:f4:df"));
+        assert_eq!(home["Channel"], serde_json::json!(153));
+        assert_eq!(home["Hidden"], serde_json::json!(false));
+        // A plist Date is absolute: no epoch is declared, and none is needed.
+        assert_eq!(home["Joined by user"], serde_json::json!(1_688_243_921_i64));
+        // Each date column asserted, so swapping AddedAt for LastDiscoveredAt
+        // cannot pass — they are adjacent keys of the same type in the same dict,
+        // which is exactly the mix-up nothing else would catch.
+        assert_eq!(home["Added"], serde_json::json!(1_688_243_920_i64));
+        assert_eq!(home["Last seen"], serde_json::json!(1_689_450_218_i64));
+        assert_eq!(
+            home["Joined automatically"],
+            serde_json::json!(1_689_450_000_i64)
+        );
+
+        // A key with a SPACE survives, and its missing __OSSpecific__ subtree
+        // yields nulls rather than failing the artifact.
+        let cafe = by("Cafe Wifi");
+        assert_eq!(cafe["Hidden"], serde_json::json!(true));
+        assert_eq!(cafe["Access point"], serde_json::Value::Null);
+        assert_eq!(cafe["Channel"], serde_json::Value::Null);
+        // Absent key, not a false date.
+        assert_eq!(cafe["Joined by user"], serde_json::Value::Null);
+        // Never auto-joined either — and that is a null, not a zero date.
+        assert_eq!(cafe["Joined automatically"], serde_json::Value::Null);
+        assert_eq!(cafe["Added"], serde_json::json!(1_700_000_000_i64));
+
+        // A key WITHOUT the namespace is shown whole. Trimming blindly would have
+        // silently mangled it, and a store whose shape changed is exactly what
+        // this must not hide.
+        let legacy = by("legacy-entry");
+        assert_eq!(legacy["Security"], serde_json::Value::Null);
+    }
+
+    /// The shapes a `[plist]` module can point at, and what each must do.
+    ///
+    /// Every one of these passed as "success" in the first version: a scalar
+    /// became one row of nulls, a nested single record became one null row per
+    /// field, an empty dictionary became a phantom row, and a `key_column` over an
+    /// array gave every row a blank key. They load and validate — only running
+    /// them tells them apart, which is why they are pinned here.
+    #[test]
+    fn plist_row_containers_are_read_as_declared() {
+        use plist::{Dictionary, Value};
+
+        fn store(v: Value) -> Vec<u8> {
+            let mut out = Vec::new();
+            plist::to_writer_binary(&mut out, &v).unwrap();
+            out
+        }
+        fn run(toml_src: &str, bytes: &[u8]) -> Result<Option<Vec<ArtifactRow>>> {
+            let spec: ModuleSpec = toml::from_str(toml_src).unwrap();
+            let tmp = tempfile::tempdir().unwrap();
+            make_backup_bytes_in(tmp.path(), "HomeDomain", "a/b.plist", bytes);
+            let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+            let work = tmp.path().join("work");
+            run_module(&spec, &index, None, &work)
+        }
+        let base = |extra: &str| {
+            format!(
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+
+[plist]
+{extra}
+
+[[columns]]
+name = "A"
+from = "a"
+"#
+            )
+        };
+        let keyed = |extra: &str| {
+            format!(
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+
+[plist]
+key_column = "K"
+{extra}
+
+[[columns]]
+name = "K"
+
+[[columns]]
+name = "A"
+from = "a"
+"#
+            )
+        };
+
+        // A `rows` path onto a SCALAR is a mistake, not one empty row.
+        let mut root = Dictionary::new();
+        root.insert("scalar".into(), Value::String("nope".into()));
+        let err = run(
+            &base("rows = [\"scalar\"]"),
+            &store(Value::Dictionary(root)),
+        )
+        .expect_err("a scalar holds no rows");
+        assert!(err.to_string().contains("a string"), "{err}");
+
+        // A dictionary with no `key_column` is ONE record — not one row per field.
+        let mut inner = Dictionary::new();
+        inner.insert("a".into(), Value::String("value".into()));
+        inner.insert("b".into(), Value::String("other".into()));
+        let mut root = Dictionary::new();
+        root.insert("Settings".into(), Value::Dictionary(inner));
+        let rows = run(
+            &base("rows = [\"Settings\"]"),
+            &store(Value::Dictionary(root)),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(rows.len(), 1, "a nested record is one row, got {rows:#?}");
+        assert_eq!(rows[0]["A"], serde_json::json!("value"));
+
+        // An EMPTY dictionary recorded nothing. One row of nulls would claim a
+        // record exists.
+        let rows = run(&base(""), &store(Value::Dictionary(Dictionary::new())))
+            .unwrap()
+            .unwrap();
+        assert!(rows.is_empty(), "an empty store is no rows, got {rows:#?}");
+
+        // A `key_column` over an ARRAY would give every row a blank key.
+        let arr = Value::Array(vec![Value::Dictionary(Dictionary::new())]);
+        let mut root = Dictionary::new();
+        root.insert("items".into(), arr);
+        let err = run(
+            &keyed("rows = [\"items\"]"),
+            &store(Value::Dictionary(root)),
+        )
+        .expect_err("an array has no keys");
+        assert!(err.to_string().contains("ARRAY"), "{err}");
+
+        // Descending THROUGH an array by index, which a dictionary-only walk made
+        // impossible and which Apple's stores need routinely.
+        let mut rec = Dictionary::new();
+        rec.insert("a".into(), Value::String("deep".into()));
+        let mut root = Dictionary::new();
+        root.insert("items".into(), Value::Array(vec![Value::Dictionary(rec)]));
+        let rows = run(
+            &base("rows = [\"items\", \"0\"]"),
+            &store(Value::Dictionary(root)),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["A"], serde_json::json!("deep"));
+    }
+
+    /// `Data` is text only when it really is text, and a timestamp column that
+    /// meets a bare number with no declared epoch says so rather than nulling.
+    #[test]
+    fn plist_values_convert_or_say_why_not() {
+        let text = ColumnSpec {
+            name: "T".into(),
+            from: vec!["t".into()],
+            kind: ColumnKind::Text,
+            epoch: None,
+        };
+        let utf8 = plist::Value::Data(b"HomeNet".to_vec());
+        assert_eq!(
+            convert_plist(&utf8, &text).unwrap(),
+            serde_json::json!("HomeNet")
+        );
+        // Multi-line text is ordinary and must survive.
+        let lines = plist::Value::Data(b"one\ntwo".to_vec());
+        assert_eq!(
+            convert_plist(&lines, &text).unwrap(),
+            serde_json::json!("one\ntwo")
+        );
+        // Not UTF-8: NULL, matching what the SQL path does with a blob. A
+        // fabricated "<4 bytes>" would flow into the store and search as content.
+        let binary = plist::Value::Data(vec![0xff, 0xfe, 0x00, 0x41]);
+        assert_eq!(
+            convert_plist(&binary, &text).unwrap(),
+            serde_json::Value::Null
+        );
+
+        // A u64 above i64::MAX — Apple writes persistent ids this way — must not
+        // vanish.
+        let big = plist::Value::Integer(plist::Integer::from(u64::MAX));
+        assert_eq!(
+            convert_plist(&big, &text).unwrap(),
+            serde_json::json!(u64::MAX.to_string())
+        );
+
+        // A timestamp column meeting a number with no epoch: an error naming the
+        // column, not a column of silent nulls.
+        let ts = ColumnSpec {
+            name: "When".into(),
+            from: vec!["w".into()],
+            kind: ColumnKind::Timestamp,
+            epoch: None,
+        };
+        let err = convert_plist(&plist::Value::Integer(1_700_000_000.into()), &ts)
+            .expect_err("a number timestamp with no epoch is unreadable");
+        assert!(err.to_string().contains("When"), "{err}");
+        assert!(err.to_string().contains("epoch"), "{err}");
+
+        // A Date needs no epoch, and goes through the same plausibility clamp as
+        // every other timestamp — an absurd value is null, not a number the UI
+        // will throw on.
+        let d = plist::Value::Date(plist::Date::from(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000),
+        ));
+        assert_eq!(
+            convert_plist(&d, &ts).unwrap(),
+            serde_json::json!(1_700_000_000_i64)
+        );
+    }
+
+    /// A `rows` path that does not exist must FAIL, not report an empty artifact.
+    /// "this key is gone" and "this device has none of these" are different facts,
+    /// and only the first is a bug worth chasing.
+    #[test]
+    fn a_missing_plist_rows_path_is_an_error_not_an_empty_result() {
+        let spec: ModuleSpec = toml::from_str(
+            r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+
+[plist]
+rows = ["NoSuchKey"]
+
+[[columns]]
+name = "A"
+from = "a"
+"#,
+        )
+        .unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_bytes_in(tmp.path(), "HomeDomain", "a/b.plist", &seed_wifi_networks());
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let err = run_module(&spec, &index, None, &tmp.path().join("work"))
+            .expect_err("a missing rows path should be an error");
+        let msg = err.to_string();
+        assert!(msg.contains("NoSuchKey"), "unhelpful error: {msg}");
+        assert!(msg.contains("plist.rows"), "unhelpful error: {msg}");
     }
 
     /// The SIM module: the ICCID and the number come from the columns that really
@@ -2807,11 +3754,12 @@ from = "a"
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
+            plist: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "A".into(),
-                from: "a".into(),
+                from: vec!["a".into()],
                 kind: ColumnKind::Text,
                 epoch: None,
             }],
@@ -2837,11 +3785,12 @@ from = "a"
             category: None,
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
+            plist: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "A".into(),
-                from: "a".into(),
+                from: vec!["a".into()],
                 kind: ColumnKind::Text,
                 epoch: None,
             }],
