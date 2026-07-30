@@ -191,6 +191,29 @@ as for first-party: most of these are flat record stores, not conversations.
 
 ---
 
+## What is left, as a number that goes down
+
+`classify-ileapp-artifacts.py` says which of iLEAPP's artifacts a backup can
+contain. `coverage-gap.py` says which of those we read:
+
+```bash
+python3 tools/classify-ileapp-artifacts.py --json /tmp/ileapp.json
+python3 tools/coverage-gap.py            # summary + the biggest gaps
+python3 tools/coverage-gap.py --all      # every untouched category
+```
+
+It reads our coverage **from the source** — `APP_CHAT_MODULES`, the module TOMLs,
+the parser files, the app catalog — so a parser added tomorrow counts without
+anyone editing the tool.
+
+It reports a category as **touched**, never as finished. iLEAPP groups artifacts
+by product, and a category is rarely all-or-nothing: "Clock" is Alarms, Stopwatch,
+Timers and WorldClock and we read one of four. Saying "we support Clock" is
+exactly the kind of claim that stops someone looking, so the tool refuses to make
+it — the alias table records what each claim rests on, including what it excludes.
+
+---
+
 ## Settling a candidate against a real backup
 
 This audit says what Apple's rules imply. Before writing a module, check the
