@@ -32,6 +32,11 @@
 # from. `epoch` is therefore not required for a plist module, and declaring one
 # here would have nothing to convert.
 #
+# Both join columns are present because they answer different questions. On the
+# validation image 16 of 17 networks carry `JoinedByUserAt` and 13 carry
+# `JoinedBySystemAt`; a network with only the latter was never deliberately
+# chosen, which is exactly the one worth noticing.
+#
 # BSSID is the access point's MAC address, nested under `__OSSpecific__`. It is
 # worth reaching for: the SSID says which network the phone trusted, the BSSID
 # says which physical radio it actually associated with — the pair is what
@@ -84,6 +89,15 @@ kind = "bool"
 [[columns]]
 name = "Joined by user"
 from = "JoinedByUserAt"
+kind = "timestamp"
+
+# Auto-join. Without this, the 13 of 17 networks on the validation image that
+# carry `JoinedBySystemAt` showed "Joined by user: —", which reads as "never
+# joined" rather than "joined without anyone tapping it" — the more interesting
+# of the two for a network the owner may not remember.
+[[columns]]
+name = "Joined automatically"
+from = "JoinedBySystemAt"
 kind = "timestamp"
 
 [[columns]]

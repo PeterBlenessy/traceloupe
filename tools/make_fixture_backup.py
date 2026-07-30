@@ -613,9 +613,13 @@ def build_known_networks_plist() -> bytes:
     `plist.key_column`. Mirrors what `explore_real_backup ... plist` printed for
     the validation image. See crates/traceloupe-core/modules/wifi_networks.toml.
 
-    Includes a network with no `__OSSpecific__` subtree and a key that does not
-    carry Apple's `wifi.network.ssid.` prefix, so the module's "trim only when it
-    really is the prefix" rule is exercised rather than assumed.
+    Includes a network with no `__OSSpecific__` subtree, one joined automatically
+    rather than by the user, and a key that does not carry Apple's
+    `wifi.network.ssid.` prefix — so the module's "trim only when it really is the
+    prefix" rule is exercised rather than assumed.
+
+    The `SSID` Data field is here because the real store has it, but no column
+    reads it: the key is the better source and the module says why.
     """
     def at(secs: int) -> datetime:
         # NAIVE UTC: plistlib's binary writer subtracts a naive epoch, so an
@@ -630,6 +634,7 @@ def build_known_networks_plist() -> bytes:
                 "SupportedSecurityTypes": "WPA2 Personal",
                 "Hidden": False,
                 "JoinedByUserAt": at(1_688_243_921),
+                "JoinedBySystemAt": at(1_689_450_000),
                 "AddedAt": at(1_688_243_920),
                 "LastDiscoveredAt": at(1_689_450_218),
                 "__OSSpecific__": {"BSSID": "6a:22:32:98:f4:df", "CHANNEL": 153},
