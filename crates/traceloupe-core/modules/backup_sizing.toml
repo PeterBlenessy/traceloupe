@@ -1,0 +1,54 @@
+# Backup size by domain — how much of this backup each part of the device
+# accounts for, as iOS itself measured it before making the backup.
+#
+# `com.apple.MobileBackup.plist` is the backup daemon's own preferences, and its
+# `PreflightSizing` key is a dictionary of DOMAIN → BYTES: the size iOS computed
+# for every domain it was about to write. Backup-reachable via `HomeDomain`'s
+# `Library/Preferences` (see docs/reference/backup-coverage-audit.md).
+#
+# WHY IT IS WORTH READING
+#
+# It is the only place the backup describes ITSELF. "This backup is 4 GB" is a
+# file listing; "3.2 GB of it is CameraRollDomain and 400 MB is one app's group
+# container" is a shape, and it answers a question a reader actually has — where
+# did the data go — without walking 14,000 manifest entries. It also names domains
+# that are IN the backup, which is a cross-check on the coverage audit's rules
+# rather than a restatement of them.
+#
+# THE ROWS ARE NAME → NUMBER, which is why `value_column` exists. Each entry is a
+# domain and a byte count; there is no dictionary of fields to name, so a `from`
+# would be reaching into an integer. `key_column` takes the domain,
+# `value_column` takes the size.
+#
+# The size is `kind = "bytes"`, so 2535424 renders as "2.54 MB" — a per-domain
+# figure in raw bytes is a column nobody reads.
+#
+# NOT READ: the other twelve keys are backup-daemon internals
+# (`FetchMissingKeysAtNextUnlock`, `RemoteConfigurationExpiration` and similar)
+# with no documented meaning and no reader-facing question behind them.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 42 domains sized. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "backup_sizing"
+name        = "Backup size by domain"
+description = "How much of this backup each part of the device accounts for, as iOS measured it before writing the backup."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.MobileBackup.plist"
+
+[plist]
+rows         = ["PreflightSizing"]
+key_column   = "Domain"
+value_column = "Size"
+
+# No `from`: this column IS the entry's key.
+[[columns]]
+name = "Domain"
+
+# No `from`: this column IS the entry's value.
+[[columns]]
+name = "Size"
+kind = "bytes"

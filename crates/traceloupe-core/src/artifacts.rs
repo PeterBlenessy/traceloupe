@@ -185,6 +185,15 @@ pub struct PlistSpec {
     /// would be unreachable.
     #[serde(default)]
     pub key_column: Option<String>,
+    /// The column holding a row whose value is a SCALAR rather than a dictionary.
+    ///
+    /// Two real shapes need this and neither is expressible without it: a dict of
+    /// name → number (`MobileBackup.plist`'s `PreflightSizing` is domain → bytes)
+    /// and an array of plain strings (Control Center's module identifiers). In
+    /// both the row IS the value, so there is no key path to name — every `from`
+    /// would be reaching into a string.
+    #[serde(default)]
+    pub value_column: Option<String>,
     /// Dropped from the front of each key before it becomes `key_column`.
     ///
     /// Apple namespaces those keys; `wifi.network.ssid.` is noise on every row.
@@ -532,6 +541,13 @@ impl ModuleSpec {
                     ));
                 }
             }
+            if let Some(k) = &pl.value_column {
+                if !self.columns.iter().any(|c| &c.name == k) {
+                    return Err(format!(
+                        "`plist.value_column` = {k:?} is not one of the declared columns"
+                    ));
+                }
+            }
             if pl.key_strip_prefix.is_some() && pl.key_column.is_none() {
                 return Err(
                     "`plist.key_strip_prefix` is set but `key_column` is not — there is no \
@@ -562,7 +578,12 @@ impl ModuleSpec {
                 .as_ref()
                 .and_then(|p| p.key_column.as_ref())
                 .is_some_and(|k| k == &c.name);
-            let is_path_column = self.path_column.as_ref().is_some_and(|k| k == &c.name);
+            let is_path_column = self.path_column.as_ref().is_some_and(|k| k == &c.name)
+                || self
+                    .plist
+                    .as_ref()
+                    .and_then(|p| p.value_column.as_ref())
+                    .is_some_and(|k| k == &c.name);
             // Both are filled by the runner rather than read from the store, so
             // both may omit `from` — but they are different mistakes and must not
             // share an error message, or a path column would be told about
@@ -1319,9 +1340,37 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
             };
             row.insert(col.clone(), serde_json::Value::String(shown.to_string()));
         }
+        // A row whose value is a scalar: the value IS the row, so it goes in the
+        // declared column and no key path is walked. Declaring one and meeting a
+        // CONTAINER is a mis-declaration, not a null — the module has misread the
+        // store's shape, and a column of nulls would hide that.
+        if let Some(col) = &pl.value_column {
+            match value {
+                plist::Value::Dictionary(_) | plist::Value::Array(_) => {
+                    return Err(Error::Parse(format!(
+                        "artifact {}: `plist.value_column` is declared but a row is {} — a \
+                         value column is for rows that ARE a value (a number, a string), not \
+                         for containers with fields to name",
+                        spec.id,
+                        kind_name(value)
+                    )))
+                }
+                scalar => {
+                    let c = spec
+                        .columns
+                        .iter()
+                        .find(|c| &c.name == col)
+                        .expect("validated to exist");
+                    row.insert(col.clone(), convert_plist(scalar, c)?);
+                }
+            }
+        }
         for c in &spec.columns {
             if Some(&c.name) == pl.key_column.as_ref() {
                 continue; // already filled from the key
+            }
+            if Some(&c.name) == pl.value_column.as_ref() {
+                continue; // already filled from the value
             }
             let cell = match lookup_path(value, &c.from) {
                 Some(v) => convert_plist(v, c)
@@ -1669,6 +1718,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "watch_apps.toml",
         include_str!("../modules/watch_apps.toml"),
+    ),
+    (
+        "backup_sizing.toml",
+        include_str!("../modules/backup_sizing.toml"),
     ),
 ];
 
@@ -3423,6 +3476,32 @@ from = "nope"
         out
     }
 
+    /// MobileBackup.plist — a dictionary of DOMAIN → BYTES, the shape
+    /// `value_column` exists for. Includes the daemon internals the module leaves.
+    fn seed_backup_sizing() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut sizing = Dictionary::new();
+        sizing.insert("KeyboardDomain".into(), Value::Integer(2_535_424.into()));
+        sizing.insert(
+            "CameraRollDomain".into(),
+            Value::Integer(3_221_225_472_i64.into()),
+        );
+        sizing.insert(
+            "AppDomainGroup-group.com.example.chat".into(),
+            Value::Integer(175_961.into()),
+        );
+        let mut root = Dictionary::new();
+        root.insert("PreflightSizing".into(), Value::Dictionary(sizing));
+        // Unread daemon internals.
+        root.insert(
+            "FetchMissingKeysAtNextUnlock".into(),
+            Value::Integer(0.into()),
+        );
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -3502,6 +3581,11 @@ from = "nope"
             "Library/Caches/locationd/clients.plist",
         ),
         (
+            "backup_sizing",
+            "HomeDomain",
+            "Library/Preferences/com.apple.MobileBackup.plist",
+        ),
+        (
             "watch_apps",
             "HomeDomain",
             // The pattern itself: there is no exact path, because the segment is
@@ -3535,6 +3619,7 @@ from = "nope"
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
             "watch_apps" => return Seed::Bytes(seed_watch_apps),
+            "backup_sizing" => return Seed::Bytes(seed_backup_sizing),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \

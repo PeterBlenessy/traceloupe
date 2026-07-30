@@ -3594,6 +3594,22 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "backup_sizing",
+            name: "Backup size by domain",
+            category: "Device",
+            description:
+              "How much of this backup each part of the device accounts for, as iOS measured it before writing the backup.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Domain", "Size"],
+            timestampColumns: [],
+            byteColumns: ["Size"],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "watch_apps",
             name: "Apple Watch apps",
             category: "Device",
@@ -3996,6 +4012,12 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "backup_sizing"
+        ? [
+            { Domain: "CameraRollDomain", Size: 3221225472 },
+            { Domain: "KeyboardDomain", Size: 2535424 },
+            { Domain: "AppDomainGroup-group.com.example.chat", Size: 175961 },
+          ]
       : mockActive && artifactId === "watch_apps"
         ? [
             {
