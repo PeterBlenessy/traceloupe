@@ -53,6 +53,8 @@ fn main() {
         .expect("open + decrypt Manifest.db");
     println!("✓ Manifest.db opened");
 
+    report_uncatalogued_apps(&index);
+
     let specs = artifacts::builtin_modules().expect("shipped modules parse");
     println!("\n{} shipped module(s):", specs.len());
 
@@ -121,6 +123,58 @@ fn main() {
     } else {
         println!("✗ {failures} module(s) failed against real data");
         std::process::exit(1);
+    }
+}
+
+/// Apps installed on this device that the catalogue says nothing about.
+///
+/// The check that would have caught a real bug rather than luck catching it: the
+/// catalogue listed Telegram under `org.telegram.messenger` and imo under
+/// `com.imo.imoim` — both ANDROID package names. On a real iPhone we imported
+/// their chats and then showed the apps as unsupported, and nothing anywhere
+/// noticed, because only a real device knows what a real bundle id looks like.
+///
+/// It cannot run in CI (there is no device there), so it runs where the evidence
+/// is. It reports rather than fails: an app we say nothing about is usually just
+/// an app we do not support yet, and only a human can tell that from a wrong id.
+fn report_uncatalogued_apps(index: &ManifestIndex) {
+    let catalog = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/lib/apps.ts"),
+    )
+    .unwrap_or_default();
+
+    let mut installed: Vec<String> = Vec::new();
+    let _ = index.for_each_path(|domain, _| {
+        // `AppDomain-<bundle>`, `AppDomainGroup-group.<bundle>` and
+        // `AppDomainPlugin-<bundle>` all carry an app identifier.
+        if let Some((prefix, rest)) = domain.split_once('-') {
+            if prefix == "AppDomain" && !rest.starts_with("com.apple") {
+                installed.push(rest.to_string());
+            }
+        }
+    });
+    installed.sort();
+    installed.dedup();
+
+    let missing: Vec<&String> = installed
+        .iter()
+        .filter(|b| !catalog.contains(&format!("\"{b}\"")))
+        .collect();
+
+    println!(
+        "\n── app catalogue: {} of {} installed third-party apps are catalogued",
+        installed.len() - missing.len(),
+        installed.len()
+    );
+    if !missing.is_empty() {
+        println!("   not in src/lib/apps.ts — each is either unsupported, or supported under");
+        println!("   the WRONG bundle id (which is how Telegram and imo were invisible):");
+        for b in missing.iter().take(40) {
+            println!("     {b}");
+        }
+        if missing.len() > 40 {
+            println!("     … and {} more", missing.len() - 40);
+        }
     }
 }
 
