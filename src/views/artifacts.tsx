@@ -277,9 +277,19 @@ export function ArtifactsView() {
       )}
 
       <div className="min-h-0 flex-1">
+        {/* Three different facts, three different messages. An artifact absent
+            because the app was never installed is not in `list` at all; one
+            that CANNOT exist in this backup explains that; one that exists and
+            is simply empty says so. Collapsing any two is the failure this
+            whole thread exists to prevent — so the gated case is decided by
+            asking the artifact, not by inferring it from a zero row count. */}
         {selected && selected.rowCount === 0 ? (
           <div className="flex h-full items-center justify-center p-8 text-center">
-            <p className="max-w-md text-sm text-muted-foreground">{gatedMessage}</p>
+            <p className="max-w-md text-sm text-muted-foreground">
+              {selected.requiresEncryptedBackup
+                ? gatedMessage
+                : `No rows in ${selected.name}.`}
+            </p>
           </div>
         ) : selected && !rowsPending ? (
           <ArtifactTable artifact={selected} rows={filtered} search={search} />

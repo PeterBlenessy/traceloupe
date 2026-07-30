@@ -24,6 +24,10 @@ const BASE = process.argv[2] ?? "http://localhost:5173";
 const CASES = [
   { view: "Interactions", mustSay: /only included in encrypted backups/i },
   { view: "Health", mustSay: /only included in encrypted backups/i },
+  // A declarative artifact declaring `requires = "encrypted-backup"` must
+  // explain itself exactly as the hand-built views do — same wording, from the
+  // same hook, so there is one sentence for this situation rather than two.
+  { view: "Artifacts", mustSay: /only included in encrypted backups/i, select: "Focus modes" },
 ];
 
 const browser = await chromium.launch();
@@ -46,9 +50,15 @@ if (await open.count()) {
 // Navigate by clicking, never by page.goto: the mock's "a backup is open" flag
 // lives in page memory, so a full navigation resets it and every view falls
 // back to its no-backup state — which has no empty list to check at all.
-for (const { view, mustSay } of CASES) {
+for (const { view, mustSay, select } of CASES) {
   await page.getByText(view, { exact: true }).first().click().catch(() => {});
   await page.waitForTimeout(900);
+
+  // Some views need a selection before the state under test is on screen.
+  if (select) {
+    await page.getByText(select, { exact: false }).first().click().catch(() => {});
+    await page.waitForTimeout(600);
+  }
 
   // Prove we arrived. A silent navigation failure reads exactly like a view
   // that explained itself.
@@ -59,6 +69,7 @@ for (const { view, mustSay } of CASES) {
     failures.push(`${view}: clicking it left the app showing "${heading}" — wrong view measured`);
     continue;
   }
+
 
   const body = (await page.locator("body").innerText()).replace(/\s+/g, " ");
   if (/No backup open/i.test(body)) {
