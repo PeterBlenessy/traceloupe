@@ -907,6 +907,25 @@ def build_watch_apps_plist() -> bytes:
     )
 
 
+def build_mobile_backup_plist() -> bytes:
+    """com.apple.MobileBackup.plist — PreflightSizing is a dict of DOMAIN -> BYTES.
+
+    The shape `plist.value_column` exists for: the row IS a number, so there is no
+    dictionary of fields to name. Includes a daemon-internal key the module leaves.
+    """
+    return plistlib.dumps(
+        {
+            "PreflightSizing": {
+                "KeyboardDomain": 2_535_424,
+                "CameraRollDomain": 3_221_225_472,
+                "AppDomainGroup-group.com.example.chat": 175_961,
+            },
+            "FetchMissingKeysAtNextUnlock": 0,  # unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -989,6 +1008,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "RootDomain",
             "Library/Caches/locationd/clients.plist",
             build_location_clients_plist(),
+        ),
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.MobileBackup.plist",
+            build_mobile_backup_plist(),
         ),
 
         (

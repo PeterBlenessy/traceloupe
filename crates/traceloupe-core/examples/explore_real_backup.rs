@@ -50,6 +50,7 @@ fn usage() -> ! {
          \x20 schema <domain> <relative-path>        CREATE statements + row counts\n\
          \x20 sql    <domain> <relative-path> <sql>  run a query, print the rows\n\
          \x20 plist  <domain> <relative-path>        key paths, types, sample values\n\
+         \x20 raw    <domain> <relative-path>        what kind of file it is, and its head\n\
          \n\
          Pass - as the password for an unencrypted backup."
     );
@@ -93,6 +94,45 @@ fn main() {
             if hits.is_empty() {
                 println!("  (nothing — this store is NOT in this backup)");
             }
+        }
+        // The first bytes of any file, whatever it is. Needed because "what kind of
+        // file is this even" is the first question about a candidate, and `schema`
+        // and `plist` both assume an answer.
+        "raw" => {
+            let (domain, path) = match (args.get(3), args.get(4)) {
+                (Some(d), Some(p)) => (d.as_str(), p.as_str()),
+                _ => usage(),
+            };
+            let entry = index
+                .find(domain, path)
+                .expect("query the manifest")
+                .unwrap_or_else(|| {
+                    eprintln!("NOT IN THIS BACKUP: {domain}:{path}");
+                    std::process::exit(1);
+                });
+            let bytes = index
+                .read_bytes(&entry, decryptor.as_ref())
+                .expect("decrypt the file");
+            let kind = if bytes.starts_with(b"SQLite format 3") {
+                "SQLite"
+            } else if bytes.starts_with(b"bplist00") {
+                "binary plist"
+            } else if bytes.starts_with(b"<?xml") {
+                "XML"
+            } else if bytes.first().is_some_and(|b| *b == b'{' || *b == b'[') {
+                "JSON (probably)"
+            } else {
+                "unrecognised"
+            };
+            println!(
+                "── {domain}:{path}\n{} bytes, looks like: {kind}\n",
+                bytes.len()
+            );
+            let head: String = String::from_utf8_lossy(&bytes[..bytes.len().min(600)])
+                .chars()
+                .map(|c| if c.is_control() && c != '\n' { '.' } else { c })
+                .collect();
+            println!("{head}");
         }
         "plist" => {
             let (domain, path) = match (args.get(3), args.get(4)) {
