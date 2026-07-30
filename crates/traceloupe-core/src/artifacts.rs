@@ -875,6 +875,7 @@ const BUILTIN: &[(&str, &str)] = &[
         "data_usage.toml",
         include_str!("../modules/data_usage.toml"),
     ),
+    ("sim_cards.toml", include_str!("../modules/sim_cards.toml")),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -1900,6 +1901,37 @@ from = "nope"
         .unwrap();
     }
 
+    /// CellularUsage.db's `subscriber_info`, with the column names the schema
+    /// really uses — `subscriber_id` for the ICCID and `subscriber_mdn` for the
+    /// number, which is precisely the pair a fixture using friendly names would
+    /// stop the module from getting wrong.
+    ///
+    /// Two SIMs, so the slot ordering is exercised, and the mostly-NULL tail of
+    /// the table is present so the module cannot accidentally depend on it.
+    fn seed_sim_cards(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE subscriber_info (
+                ROWID INTEGER PRIMARY KEY AUTOINCREMENT, subscriber_id TEXT,
+                subscriber_mdn TEXT, tag INTEGER, last_update_time INTEGER,
+                slot_id INTEGER, home_budget INTEGER, roaming_budget INTEGER,
+                user_entered_bill_end_dom INTEGER, low_data_mode INTEGER,
+                reliable_network_fallback INTEGER, smart_data_mode INTEGER,
+                interface_cost INTEGER, privacy_proxy INTEGER);
+             CREATE TABLE bundle_info (
+                ROWID INTEGER PRIMARY KEY AUTOINCREMENT, bundle_id TEXT, flags INTEGER);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO subscriber_info
+                (subscriber_id, subscriber_mdn, tag, last_update_time, slot_id) VALUES
+                ('8901260971148676693','+15550100',1,726000000,1),
+                ('8944500000000000001','+15550199',1,725000000,2);
+             -- Present but deliberately unread: an opaque flag with one value.
+             INSERT INTO bundle_info (bundle_id, flags) VALUES ('com.example.watchapp',48);",
+        )
+        .unwrap();
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -1928,6 +1960,11 @@ from = "nope"
             "WirelessDomain",
             "Library/Databases/DataUsage.sqlite",
         ),
+        (
+            "sim_cards",
+            "WirelessDomain",
+            "Library/Databases/CellularUsage.db",
+        ),
     ];
 
     fn seed_for(id: &str) -> fn(&Connection) {
@@ -1936,6 +1973,7 @@ from = "nope"
             "accounts" => seed_accounts,
             "bluetooth_paired" => seed_bluetooth_paired,
             "data_usage" => seed_data_usage,
+            "sim_cards" => seed_sim_cards,
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
@@ -2263,6 +2301,50 @@ from = "nope"
             .expect("the NULL-flag account is present");
         assert_eq!(unrecorded["Status"], serde_json::json!("Not recorded"));
         assert_eq!(unrecorded["Signed in"], serde_json::json!("Not recorded"));
+    }
+
+    /// The SIM module: the ICCID and the number come from the columns that really
+    /// hold them, and the Cocoa timestamp converts.
+    ///
+    /// The names are the trap here — `subscriber_id` sounds like a subscriber and
+    /// is a card serial; `subscriber_mdn` is the phone number. Reading them the
+    /// other way round would produce two plausible-looking strings in the wrong
+    /// columns, which no schema check would catch.
+    #[test]
+    fn sim_cards_module_reads_the_iccid_and_the_number() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "sim_cards")
+            .expect("sim_cards module ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, seed_sim_cards);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 2, "both SIMs, ordered by slot");
+        assert_eq!(rows[0]["Slot"], serde_json::json!(1));
+        assert_eq!(rows[1]["Slot"], serde_json::json!(2));
+        // An ICCID is 19-20 digits; a phone number starts with '+'. Asserting the
+        // shape of each catches the two columns being swapped, which is the whole
+        // risk in this store.
+        let iccid = rows[0]["SIM serial (ICCID)"].as_str().unwrap();
+        let number = rows[0]["Phone number"].as_str().unwrap();
+        assert_eq!(iccid, "8901260971148676693");
+        assert!(
+            iccid.chars().all(|c| c.is_ascii_digit()) && iccid.len() >= 18,
+            "the ICCID column does not hold an ICCID: {iccid:?}"
+        );
+        assert!(
+            number.starts_with('+'),
+            "the phone-number column does not hold a number: {number:?}"
+        );
+        // Cocoa, not Unix: 726000000 -> 1704307200.
+        assert_eq!(
+            rows[0]["Last updated"],
+            serde_json::json!(1_704_307_200_i64)
+        );
     }
 
     /// A `highlight` that could never fire must be rejected at load time, not

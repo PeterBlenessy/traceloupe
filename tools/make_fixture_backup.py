@@ -572,6 +572,40 @@ def seed_data_usage(path: Path) -> None:
     con.close()
 
 
+def seed_cellular_usage(path: Path) -> None:
+    """CellularUsage.db — the SIMs that have been in the device.
+
+    Column names are the real ones and they mislead on purpose: `subscriber_id`
+    holds the SIM's ICCID and `subscriber_mdn` the phone number. A fixture with
+    friendly names would let the module read them the wrong way round unnoticed.
+    See crates/traceloupe-core/modules/sim_cards.toml.
+    """
+    con = sqlite3.connect(path)
+    con.executescript(
+        """CREATE TABLE subscriber_info (
+             ROWID INTEGER PRIMARY KEY AUTOINCREMENT, subscriber_id TEXT,
+             subscriber_mdn TEXT, tag INTEGER, last_update_time INTEGER,
+             slot_id INTEGER, home_budget INTEGER, roaming_budget INTEGER,
+             user_entered_bill_end_dom INTEGER, low_data_mode INTEGER,
+             reliable_network_fallback INTEGER, smart_data_mode INTEGER,
+             interface_cost INTEGER, privacy_proxy INTEGER);
+           CREATE TABLE bundle_info (
+             ROWID INTEGER PRIMARY KEY AUTOINCREMENT, bundle_id TEXT, flags INTEGER);"""
+    )
+    con.executemany(
+        "INSERT INTO subscriber_info (subscriber_id, subscriber_mdn, tag,"
+        " last_update_time, slot_id) VALUES (?,?,?,?,?)",
+        [
+            ("8901260971148676693", "+15550100", 1, 726_000_000, 1),
+            ("8944500000000000001", "+15550199", 1, 725_000_000, 2),
+        ],
+    )
+    # Present but deliberately unread: an opaque flag with a single value.
+    con.execute("INSERT INTO bundle_info (bundle_id, flags) VALUES ('com.example.watchapp',48)")
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -593,6 +627,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_bluetooth_paired(bt_path)
     usage_path = workdir / "DataUsage.sqlite"
     seed_data_usage(usage_path)
+    cell_path = workdir / "CellularUsage.db"
+    seed_cellular_usage(cell_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -606,6 +642,7 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             bt_path.read_bytes(),
         ),
         ("WirelessDomain", "Library/Databases/DataUsage.sqlite", usage_path.read_bytes()),
+        ("WirelessDomain", "Library/Databases/CellularUsage.db", cell_path.read_bytes()),
     ]
     files += [("MediaDomain", rel, blob) for rel, _mime, blob in GALLERY_PHOTOS]
     # A real camera roll: the DCIM original, its V2 thumbnail, and Photos.sqlite.
