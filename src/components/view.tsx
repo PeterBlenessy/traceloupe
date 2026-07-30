@@ -350,6 +350,9 @@ export function NoBackupState({
   /** One or two sentences on what the view is. */
   lead: string;
   /** Capability highlights — what the user can actually do in this view. */
+  /** What a person can do in this view. Optional in the type, but
+   *  scripts/check-view-intro.mjs requires at least one for every view in
+   *  nav.ts — a no-backup screen with no capabilities is only prose. */
   features?: { label: string; detail: string }[];
   /** Closing line, typically the local/privacy assurance. */
   note?: string;
@@ -362,18 +365,29 @@ export function NoBackupState({
     // Top-aligned (not vertically centered): the sidebar items are top-aligned,
     // so a centered hero reads as floating/misaligned next to them.
     <div className="flex h-full items-start justify-center overflow-y-auto p-6">
-      <div className="w-full max-w-xl pt-16 pb-8 text-center">
+      {/* `data-slot`s so a check can assert this screen introduces the view
+          without matching on Tailwind classes, which change for visual reasons
+          and would make the check fail for the wrong cause. See
+          scripts/check-view-intro.mjs. */}
+      <div data-slot="view-intro" className="w-full max-w-xl pt-16 pb-8 text-center">
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent-text)]">
           <Icon className="size-6" />
         </div>
         <h2 className="text-lg font-semibold">{title}</h2>
-        <p className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">
+        <p
+          data-slot="view-intro-lead"
+          className="mx-auto mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground"
+        >
           {lead}
         </p>
         {features && features.length > 0 && (
           <ul className="mx-auto mt-5 grid max-w-md gap-2.5 text-left sm:grid-cols-2">
             {features.map((f) => (
-              <li key={f.label} className="rounded-lg border bg-card/40 p-3">
+              <li
+                key={f.label}
+                data-slot="view-intro-feature"
+                className="rounded-lg border bg-card/40 p-3"
+              >
                 <div className="text-xs font-medium">{f.label}</div>
                 <div className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                   {f.detail}
