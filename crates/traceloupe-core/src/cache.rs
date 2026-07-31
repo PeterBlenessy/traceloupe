@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 53;
+const SCHEMA_VERSION: i64 = 54;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -785,6 +785,23 @@ impl CacheDb {
             )?;
             ensure_column(&conn, "safari_history", "redirect_source", "TEXT")?;
             ensure_column(&conn, "safari_history", "redirect_destination", "TEXT")?;
+            // v54: evidence of messages that are GONE — not the recoverable ones
+            // (those keep their row and are flagged by `messages.deleted_at`),
+            // but ones whose content no longer exists anywhere in sms.db.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS message_deletions (
+                    id           INTEGER PRIMARY KEY,
+                    -- 'recorded' = iOS's own sync_deleted_messages row;
+                    -- 'gap'      = a ROWID that was allocated and has no row.
+                    source       TEXT NOT NULL,
+                    guid         TEXT,       -- 'recorded' only
+                    after_rowid  INTEGER,    -- 'gap' only: last surviving row before
+                    before_rowid INTEGER,    -- 'gap' only: first surviving row after
+                    missing      INTEGER,    -- 'gap' only: how many ROWIDs absent
+                    after_at     INTEGER,    -- when the message before the gap was sent
+                    before_at    INTEGER
+                );",
+            )?;
             // v53: which Apple device wrote the Health data, per (model, OS
             // build). Health survives device migration, so this is a device
             // history reaching back past devices the person no longer owns.

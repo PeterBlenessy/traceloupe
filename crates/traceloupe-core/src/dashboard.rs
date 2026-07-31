@@ -492,6 +492,11 @@ mod tests {
             "per-channel breakdown inside Interactions",
         ),
         ("threads", "conversations — counted as part of Messages"),
+        (
+            "message_deletions",
+            "evidence about messages that are gone — shown inside Messages, and \
+             counting it as a data tile would imply we hold their content",
+        ),
         ("sqlite_sequence", "SQLite's own"),
         // One tile over every artifact at once would be meaningless — it mixes
         // unrelated data behind a single number. Per-artifact tiles may well be
