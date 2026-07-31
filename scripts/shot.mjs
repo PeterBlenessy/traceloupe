@@ -37,7 +37,7 @@ const NAV = {
   "/photos": "Photos", "/messages": "Messages", "/contacts": "Contacts",
   "/calls": "Calls", "/safari": "Safari", "/notes": "Notes",
   "/recordings": "Recordings", "/calendar": "Calendar", "/reminders": "Reminders",
-  "/health": "Health", "/interactions": "Interactions", "/apps": "Apps",
+  "/health": "Health", "/apps": "Apps",
   // The two scan views were missing, which meant the screenshot harness could
   // not reach precisely the views most often being changed.
   "/security": "Security", "/safety-scan": "Safety",

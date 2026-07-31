@@ -2,11 +2,11 @@
  * Guard: views whose data is encrypted-backup-only must say so when the backup
  * is not encrypted — instead of rendering a bare "nothing here".
  *
- * iOS puts `interactionC.db`, `Health`/`MedicalID` and `SafariTabs.db` on
+ * iOS puts `Health`/`MedicalID` and `SafariTabs.db` on
  * `Domains.plist`'s `RelativePathsToOnlyBackupEncrypted` list, so an
  * unencrypted backup genuinely cannot carry them (see
- * docs/reference/backup-coverage-audit.md). Saying only "No interaction data in
- * this backup" claims the person contacted nobody, which is a different and far
+ * docs/reference/backup-coverage-audit.md). Saying only "No health data in
+ * this backup" claims the person recorded none, which is a different and far
  * stronger statement than "this kind of backup cannot hold it". Telling those
  * two apart is the app's whole job.
  *
@@ -22,7 +22,10 @@ const BASE = process.argv[2] ?? "http://localhost:5173";
 // Each view, and the wording that proves it explained itself rather than
 // shrugging. `mustNotSay` is the generic message it used to fall back to.
 const CASES = [
-  { view: "Interactions", mustSay: /only included in encrypted backups/i },
+  // Interactions was removed in #222 — Contacts already shows per-person
+  // message counts, linked to the conversation, which is what that view was
+  // reaching for. Its CoreDuet store still feeds Security Check, but nothing
+  // renders it, so there is no view left to check here.
   { view: "Health", mustSay: /only included in encrypted backups/i },
   // The artifact case is covered again once a gated artifact has a host view to
   // be checked in. Today's only gated example is a mock one whose surface is
