@@ -1,0 +1,49 @@
+# The device Health last recorded on — model and OS version, as iOS itself
+# records them.
+#
+# `healthdb.sqlite`'s `device_context` is a single row iOS keeps current. It is
+# the one place the OS VERSION appears as a version (`iOS 17.3`) rather than as
+# a build code, which is why this is worth a module of its own next to
+# `health_device_os_history` — that one can only report builds.
+#
+# A SINGLE-RECORD artifact, so `shape = "facts"`: one device, three facts about
+# it, which is a different presentation from the tables the other two produce.
+#
+# Note this is `healthdb.sqlite`, NOT `healthdb_secure.sqlite` — adjacent files
+# with different contents, and the unsecured one is where the device context
+# lives.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): iPhone12,1 running iOS 17.3, recorded 2024-08-02. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "health_current_device"
+name        = "Health device"
+description = "The model and OS version of the device Health was last recording on, as iOS records them."
+surface     = "device"
+category    = "Device"
+shape       = "facts"
+domain      = "HealthDomain"
+path        = "Health/healthdb.sqlite"
+
+sql = """
+SELECT
+    product_type_name                              AS "Model identifier",
+    currentOS_name || ' ' || currentOS_version     AS "OS version",
+    date_modified                                  AS "Last recorded"
+FROM device_context
+"""
+
+[[columns]]
+name = "Model identifier"
+from = "Model identifier"
+
+[[columns]]
+name = "OS version"
+from = "OS version"
+
+[[columns]]
+name = "Last recorded"
+from = "Last recorded"
+kind = "timestamp"
+epoch = "cocoa"
