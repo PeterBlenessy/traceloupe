@@ -131,6 +131,17 @@ pub struct ColumnSpec {
     /// else — a column with no source would silently be all nulls.
     #[serde(default, deserialize_with = "one_or_many_path")]
     pub from: Vec<String>,
+    /// A CONSTANT for this column, instead of a value read from the store.
+    ///
+    /// Exists for the join: `surface = "apps"` needs a bundle id in a column, and
+    /// an app's own store never repeats its bundle id inside itself — it is
+    /// implied by the file's location. Without this, an app-scoped artifact can
+    /// be read but not attached to the app it belongs to, which is the difference
+    /// between hosted and floating.
+    ///
+    /// Mutually exclusive with `from`: a column reads from one place.
+    #[serde(default)]
+    pub value: Option<String>,
     #[serde(default)]
     pub kind: ColumnKind,
     /// Required when `kind = "timestamp"`, meaningless otherwise.
@@ -170,6 +181,29 @@ pub struct HighlightSpec {
 /// it cannot touch (#236). Everything downstream — the runner, `artifact_rows`,
 /// column kinds, surfaces, `[highlight]` and every guard — is unchanged. Only how
 /// a module names its source and projects rows is new.
+/// Read a plain-text LOG instead of a database or a property list.
+///
+/// Some apps keep their most useful history only in their own logs — Life360
+/// writes every location fix it uploads into `MainApplication/Logs/*.log` and
+/// nowhere else in the backup. Without this a whole class of artifact is
+/// unreachable no matter how many SQL modules exist.
+///
+/// The supported shape is one record per LINE, as a JSON object following a
+/// fixed marker. That is what these logs actually look like: a human-readable
+/// prefix (timestamp, subsystem, level) and then a structured payload. Lines
+/// without the marker are ordinary log chatter and are skipped, not errors —
+/// a log is mostly not records, unlike a table, which is only records.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LogSpec {
+    /// Marker that introduces a record. The rest of the line, after this text,
+    /// must be a JSON object; `from` paths then descend into it.
+    ///
+    /// Matched literally, not as a regex: these markers are fixed strings in the
+    /// app's source, and a regex here would invite a module to encode parsing
+    /// rules that belong in code with tests.
+    pub json_after: String,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PlistSpec {
     /// Key path to the container holding the rows. Empty means the root itself,
@@ -370,10 +404,13 @@ pub struct ModuleSpec {
     /// x` where an older schema has nothing to offer.
     #[serde(default, deserialize_with = "one_or_many")]
     pub sql: Vec<String>,
-    /// Read a property list instead of running SQL. Exactly one of `sql` and
-    /// `plist` must be declared.
+    /// Read a property list instead of running SQL. Exactly one of `sql`,
+    /// `plist` and `log` must be declared.
     #[serde(default)]
     pub plist: Option<PlistSpec>,
+    /// Read a plain-text log instead of a database or a property list.
+    #[serde(default)]
+    pub log: Option<LogSpec>,
     /// Declared precondition. Parsed and stored here; honoured by the UI in a
     /// later slice (#210). Apple's `RelativePathsToOnlyBackupEncrypted` covers
     /// 28 artifacts, so this is not an edge case.
@@ -472,16 +509,30 @@ impl ModuleSpec {
         if self.path.trim().is_empty() {
             return Err("`path` is empty".into());
         }
-        // `*` is allowed now, and means "any run of characters WITHIN one path
-        // segment". Never across `/`, which is what makes the two failures the
-        // first attempt at globbing hit impossible: a directory row cannot swallow
-        // its own children, and a pattern cannot reach down a level it did not ask
-        // for.
-        if self.path.contains("**") {
+        // `*` means "any run of characters WITHIN one path segment", never across
+        // `/`. That is what makes the two failures the first attempt at globbing
+        // hit impossible: a directory row cannot swallow its own children, and a
+        // pattern cannot reach down a level it did not ask for.
+        //
+        // `**` is the deliberate exception, and ONLY as a whole segment. One app
+        // can write the same store from several processes at different depths —
+        // Life360 logs live under `MainApplication/Logs/`, `SidecarLPSE/` and
+        // `PushNotificationServiceExtension/` — and a within-segment `*` cannot
+        // span that, so the module would have to pick one directory and drop the
+        // rest silently, looking complete while holding a quarter of the records.
+        //
+        // Mixed into a segment (`foo**bar`) it stays rejected: that reads like a
+        // wider `*` rather than a level-spanning token, which is exactly the
+        // quiet reach this rule exists to prevent.
+        if let Some(seg) = self
+            .path
+            .split('/')
+            .find(|seg| seg.contains("**") && *seg != "**")
+        {
             return Err(format!(
-                "`path` = {:?} contains `**`. A `*` never crosses `/` — say each \
-                 segment you mean, so the pattern cannot quietly reach a level deeper \
-                 than it looks",
+                "`path` = {:?} has {seg:?}, which mixes `**` into a segment. `**` spans \
+                 whole segments and must stand alone between slashes; a `*` inside a \
+                 segment never crosses `/`",
                 self.path
             ));
         }
@@ -525,15 +576,29 @@ impl ModuleSpec {
         // EXACTLY one source. Both would be ambiguous about which one produced a
         // row; neither leaves a module that loads, validates and reads nothing.
         let has_sql = !self.sql.is_empty() && !self.sql.iter().all(|q| q.trim().is_empty());
-        match (has_sql, self.plist.is_some()) {
-            (false, false) => return Err("no source: declare either `sql` or `[plist]`".into()),
-            (true, true) => {
+        let sources = [has_sql, self.plist.is_some(), self.log.is_some()];
+        match sources.iter().filter(|on| **on).count() {
+            0 => {
+                return Err("no source: declare one of `sql`, `[plist]` or `[log]`".into());
+            }
+            1 => {}
+            _ => {
                 return Err(
-                    "both `sql` and `[plist]` are declared — a module reads one store one way"
+                    "more than one of `sql`, `[plist]` and `[log]` is declared — a module \
+                     reads one store one way"
                         .into(),
                 )
             }
-            _ => {}
+        }
+        if let Some(lg) = &self.log {
+            if lg.json_after.trim().is_empty() {
+                return Err(
+                    "`log.json_after` is empty — every line would match and none would parse"
+                        .into(),
+                );
+            }
+            // `from` is checked per-column below, where the runner-filled and
+            // constant cases are already understood.
         }
         if let Some(pl) = &self.plist {
             if pl.rows.iter().any(|k| k.trim().is_empty()) {
@@ -632,10 +697,18 @@ impl ModuleSpec {
             if c.name.trim().is_empty() {
                 return Err(format!("column {:?} has an empty `name`", c.name));
             }
-            if !is_key_column && c.from.is_empty() {
+            if c.value.is_some() && !c.from.is_empty() {
+                return Err(format!(
+                    "column {:?} declares both `value` and `from` — a column reads from one \
+                     place, and which one won would be invisible in the output",
+                    c.name
+                ));
+            }
+            if !is_key_column && c.from.is_empty() && c.value.is_none() {
                 return Err(format!(
                     "column {:?} declares no `from` — it would be all nulls. Only the \
-                     `plist.key_column` may omit it, because its value is the entry's key",
+                     `plist.key_column` may omit it, because its value is the entry's key, \
+                     or declare a constant `value`",
                     c.name
                 ));
             }
@@ -677,7 +750,7 @@ impl ModuleSpec {
             // runner, where it lived first: `run_module` returns early when the
             // store is not in the backup, so on any device lacking it the mistake
             // never surfaced at all.
-            if self.plist.is_none() && c.from.len() > 1 {
+            if self.plist.is_none() && self.log.is_none() && c.from.len() > 1 {
                 return Err(format!(
                     "column {:?} declares a key path of {} segments, but this module reads \
                      SQL, where `from` names a single result column",
@@ -1010,7 +1083,9 @@ pub fn locate(index: &ManifestIndex, spec: &ModuleSpec) -> Result<Vec<crate::man
 
     // A `LIKE` to narrow it in SQL, then a segment-aware match in Rust, because
     // `%` crosses `/` and the whole point of `*` is that it does not.
-    let like = spec.path.replace('*', "%");
+    // `**` first: replacing `*` alone would leave `%%/`, which requires a literal
+    // `/` the pattern does not actually demand — `**` can match nothing at all.
+    let like = spec.path.replace("**/", "%").replace('*', "%");
     let mut out = Vec::new();
     for entry in index.find_relative_like(&like)? {
         if entry.domain != spec.domain {
@@ -1050,19 +1125,52 @@ fn path_matches(pattern: &str, path: &str) -> bool {
 fn path_captures(pattern: &str, path: &str) -> Option<Vec<String>> {
     let p: Vec<&str> = pattern.split('/').collect();
     let s: Vec<&str> = path.split('/').collect();
-    if p.len() != s.len() {
-        return None;
-    }
-    let mut caught = Vec::new();
-    for (pat, seg) in p.iter().zip(s.iter()) {
-        if !segment_matches(pat, seg) {
-            return None;
+    walk_segments(&p, &s)
+}
+
+/// Match pattern segments against path segments, with `**` spanning whole
+/// segments and `*` confined to one.
+///
+/// `**` exists because one app can write the same log from several processes at
+/// DIFFERENT DEPTHS — Life360 keeps them under `MainApplication/Logs/`,
+/// `SidecarLPSE/` and `PushNotificationServiceExtension/`. A single-segment `*`
+/// cannot span that, so a module would have to pick one directory and silently
+/// drop three quarters of the records, which is worse than not reading them:
+/// the artifact would look complete.
+///
+/// It is deliberately a separate token from `*`. Making `*` cross `/` would have
+/// been less code and would have quietly widened every pattern already shipped —
+/// the exact mistake `segment_matches` was written to prevent.
+fn walk_segments(p: &[&str], s: &[&str]) -> Option<Vec<String>> {
+    match p.split_first() {
+        // Pattern exhausted: a match only if the path is too.
+        None => s.is_empty().then(Vec::new),
+        Some((pat, rest)) if *pat == "**" => {
+            // Try the shortest span first, so `**` stays as tight as it can and
+            // the capture names the least boilerplate.
+            for take in 0..=s.len() {
+                if let Some(mut tail) = walk_segments(rest, &s[take..]) {
+                    let mut caught = vec![s[..take].join("/")];
+                    caught.append(&mut tail);
+                    return Some(caught);
+                }
+            }
+            None
         }
-        if pat.contains('*') {
-            caught.push((*seg).to_string());
+        Some((pat, rest)) => {
+            let (seg, srest) = s.split_first()?;
+            if !segment_matches(pat, seg) {
+                return None;
+            }
+            let mut tail = walk_segments(rest, srest)?;
+            let mut caught = Vec::new();
+            if pat.contains('*') {
+                caught.push((*seg).to_string());
+            }
+            caught.append(&mut tail);
+            Some(caught)
         }
     }
-    Some(caught)
 }
 
 /// `*` matches any run of characters inside a single segment, including none.
@@ -1156,6 +1264,14 @@ pub fn run_module(
                 row.insert(col.clone(), serde_json::Value::String(which.clone()));
             }
         }
+        // Constants are filled here rather than in each runner, so `value` means
+        // the same thing for a SQL, plist and log module.
+        for c in spec.columns.iter().filter(|c| c.value.is_some()) {
+            let v = serde_json::Value::String(c.value.clone().unwrap_or_default());
+            for row in &mut rows {
+                row.insert(c.name.clone(), v.clone());
+            }
+        }
         all.extend(rows);
     }
     enforce_shape(spec, all).map(Some)
@@ -1176,6 +1292,11 @@ fn run_one(
     if let Some(pl) = &spec.plist {
         let bytes = index.read_bytes(entry, decryptor)?;
         return run_plist_module(spec, pl, &bytes);
+    }
+    // A log is read from memory too — text, no sidecars, no temp store.
+    if let Some(lg) = &spec.log {
+        let bytes = index.read_bytes(entry, decryptor)?;
+        return run_log_module(spec, lg, &bytes);
     }
 
     std::fs::create_dir_all(work_dir).map_err(|e| Error::Io {
@@ -1267,6 +1388,95 @@ fn run_one(
 }
 
 /// Read rows out of a property list, per the module's `[plist]` block.
+/// Rows from a plain-text log: one per line carrying `json_after`.
+///
+/// Read lossily on purpose. A log is an append-only file the app may be writing
+/// when the backup is taken, so a truncated multi-byte character at the tail is
+/// normal — and rejecting the whole file for it would lose every complete record
+/// before it. Individual lines that do not parse are skipped for the same
+/// reason: one malformed record is not evidence the other «redacted» are wrong.
+fn run_log_module(spec: &ModuleSpec, lg: &LogSpec, bytes: &[u8]) -> Result<Vec<ArtifactRow>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some(at) = line.find(&lg.json_after) else {
+            continue;
+        };
+        let payload = line[at + lg.json_after.len()..].trim();
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(payload) else {
+            continue;
+        };
+        let mut row: ArtifactRow = HashMap::new();
+        for c in &spec.columns {
+            // An empty `from` means the runner fills it (the path column) or it is
+            // a constant. Descending an empty path would return the whole payload
+            // and stringify the entire record into that column.
+            if c.from.is_empty() {
+                continue;
+            }
+            let cell = match lookup_json(&value, &c.from) {
+                Some(v) => convert_json(v, c),
+                None => serde_json::Value::Null,
+            };
+            row.insert(c.name.clone(), cell);
+        }
+        out.push(row);
+    }
+    Ok(out)
+}
+
+/// Descend a `from` path into a JSON payload. Object keys only: these payloads
+/// are records, and an array would need an index, which no log module has needed.
+fn lookup_json<'a>(value: &'a serde_json::Value, path: &[String]) -> Option<&'a serde_json::Value> {
+    let mut node = value;
+    for key in path {
+        node = node.get(key)?;
+    }
+    Some(node)
+}
+
+/// One JSON value as the column declares it.
+///
+/// Values in these logs are stringly-typed at random — Life360 writes `battery`
+/// as a number and `charge` as `"0"` in the same object — so a numeric column
+/// accepts a numeric string, and a bool column accepts `"1"`/`"true"`. Without
+/// that, half the fields of a real record read as null.
+fn convert_json(v: &serde_json::Value, c: &ColumnSpec) -> serde_json::Value {
+    use serde_json::Value as J;
+    let as_f64 = |v: &J| -> Option<f64> {
+        v.as_f64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<f64>().ok()))
+    };
+    match c.kind {
+        ColumnKind::Timestamp => {
+            let Some(raw) = as_f64(v) else { return J::Null };
+            // No epoch declared means the value is already Unix seconds — the
+            // usual case for a JSON log, unlike a Core Data store.
+            let epoch = c.epoch.unwrap_or(Epoch::Unix);
+            epoch.to_unix_seconds(raw).map_or(J::Null, J::from)
+        }
+        ColumnKind::Integer => as_f64(v).map_or(J::Null, |f| J::from(f as i64)),
+        ColumnKind::Real => as_f64(v).map_or(J::Null, J::from),
+        ColumnKind::Bool => match v {
+            J::Bool(b) => J::Bool(*b),
+            J::Number(_) => J::Bool(as_f64(v).is_some_and(|f| f != 0.0)),
+            J::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+                "1" | "true" | "yes" => J::Bool(true),
+                "0" | "false" | "no" | "" => J::Bool(false),
+                _ => J::Null,
+            },
+            _ => J::Null,
+        },
+        // Bytes/Hex have no meaning in JSON — there is no byte string to render —
+        // so they read as text rather than silently producing something invented.
+        ColumnKind::Text | ColumnKind::Bytes | ColumnKind::Hex => match v {
+            J::String(s) => J::String(s.clone()),
+            J::Null => J::Null,
+            other => J::String(other.to_string()),
+        },
+    }
+}
+
 fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<Vec<ArtifactRow>> {
     // `nska::resolve` rather than `Value::from_reader`: Apple wraps a great deal of
     // structured data in NSKeyedArchiver, which is not a plain plist but a
@@ -1834,6 +2044,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/siri_settings.toml"),
     ),
     (
+        "life360_locations.toml",
+        include_str!("../modules/life360_locations.toml"),
+    ),
+    (
         "location_clients.toml",
         include_str!("../modules/location_clients.toml"),
     ),
@@ -1958,7 +2172,7 @@ sql = "SELECT a FROM t"
 name = "A"
 from = "a"
 "#,
-                "both `sql` and `[plist]`",
+                "more than one of `sql`, `[plist]` and `[log]`",
             ),
             // A key that is read and then has nowhere to go.
             (
@@ -2122,7 +2336,7 @@ sql = ""
 name = "A"
 from = "a"
 "#,
-                "no source: declare either `sql` or `[plist]`",
+                "no source: declare one of `sql`, `[plist]` or `[log]`",
             ),
             (
                 "empty-column",
@@ -2514,8 +2728,8 @@ name = "Store"
         );
         // `**` would cross `/` — the exact thing that made prefix matching wrong.
         fails(
-            module("Library/**/store.db", "path_column = \"Store\""),
-            "contains `**`",
+            module("Library/fo**o/store.db", "path_column = \"Store\""),
+            "mixes `**` into a segment",
         );
         // A `path_column` on an exact path repeats one value on every row.
         fails(
@@ -2767,12 +2981,14 @@ from = "who"
             shape: Shape::Table,
             path_column: None,
             plist: None,
+            log: None,
             sql: vec!["SELECT who FROM events".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "Who".into(),
                 from: vec!["who".into()],
                 kind: ColumnKind::Text,
+                value: None,
                 epoch: None,
             }],
         };
@@ -3737,6 +3953,11 @@ from = "nope"
         // id, domain, relative path
         ("tcc", "HomeDomain", "Library/TCC/TCC.db"),
         (
+            "life360_locations",
+            "AppDomainGroup-group.com.life360.safetymap",
+            "**/com.life360.safetymap*.log",
+        ),
+        (
             "accounts",
             "HomeDomain",
             "Library/Accounts/Accounts3.sqlite",
@@ -3838,6 +4059,39 @@ from = "nope"
         Bytes(fn() -> Vec<u8>),
     }
 
+    /// A Life360 log: two `X-UserContext` records among ordinary chatter.
+    ///
+    /// The chatter is the point as much as the records. A log is mostly NOT
+    /// records — including a line that merely mentions the marker's neighbours,
+    /// and one whose payload is truncated mid-write, which is what an
+    /// append-only file looks like when the backup catches it. Both must be
+    /// skipped without costing the good records around them.
+    fn seed_life360_log() -> Vec<u8> {
+        concat!(
+            "2024-07-18 08:36:25.721-0400 Life360[616:160346] I | NGL | Filter out: stale age\n",
+            "2024-07-18 08:36:26.001-0400 Life360[616:160346] I | NET | X-UserContext header set: ",
+            r#"{"flags":{"preciseLocation":"fullAccuracy"},"#,
+            r#""device":{"userActivity":"os_vehicle","charge":"1","battery":45},"#,
+            r#""geolocation":{"lat":35.615977,"lon":-78.812429,"alt":130.3,"speed":9.42,"#,
+            r#""heading":131.1,"accuracy":4.6,"timestamp":1721306184},"#,
+            r#""geolocation_meta":{"lmode":"drive"}}"#,
+            "\n",
+            "2024-07-18 08:37:02.114-0400 Life360[616:160346] I | NET | X-UserContext header set: ",
+            r#"{"flags":{"preciseLocation":"reducedAccuracy"},"#,
+            r#""device":{"userActivity":"os_walking","charge":"0","battery":44},"#,
+            r#""geolocation":{"lat":35.616,"lon":-78.8125,"alt":131.0,"speed":1.2,"#,
+            r#""heading":95.0,"accuracy":65.0,"timestamp":1721306222},"#,
+            r#""geolocation_meta":{"lmode":"foreground"}}"#,
+            "\n",
+            // Truncated mid-write: skipped, not fatal.
+            "2024-07-18 08:37:40.000-0400 Life360[616:160346] I | NET | X-UserContext header set: ",
+            r#"{"geolocation":{"lat":35.61"#,
+            "\n",
+        )
+        .as_bytes()
+        .to_vec()
+    }
+
     fn seed_for(id: &str) -> Seed {
         Seed::Sql(match id {
             "tcc" => seed_tcc,
@@ -3849,6 +4103,7 @@ from = "nope"
             "podcasts" => seed_podcasts,
             "alltrails" => seed_alltrails,
             // Not SQL at all: return early rather than pretend.
+            "life360_locations" => return Seed::Bytes(seed_life360_log),
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
             "wifi_private_mac" => return Seed::Bytes(seed_wifi_private_mac),
@@ -4100,7 +4355,12 @@ from = "nope"
             // it for real. Writing the fixture at the literal pattern would let
             // `*` match itself and prove nothing — the store would be found by a
             // module whose pattern was wrong in every other respect.
-            let concrete = path.replace('*', "48BEB26F-3064-4BEF-A616-AB96D8C5BD15");
+            // `**` becomes SEVERAL real segments, so a module claiming to span
+            // depths has to actually do it; a single replacement would let `**`
+            // match one segment and prove nothing.
+            let concrete = path
+                .replace("**", "Outer/Inner")
+                .replace('*', "48BEB26F-3064-4BEF-A616-AB96D8C5BD15");
             assert!(
                 !concrete.contains('*'),
                 "module {}: a `*` survived into the fixture path",
@@ -4141,6 +4401,66 @@ from = "nope"
                 );
             }
         }
+    }
+
+    /// The log runner must leave runner-owned columns alone.
+    ///
+    /// `run_module` fills the path column and any constants AFTER the runner, so
+    /// a runner that also wrote them would be invisible end-to-end — the later
+    /// write covers it. It is not harmless, though: descending an EMPTY `from`
+    /// returns the payload root, so the column would briefly hold the entire JSON
+    /// record, and any future caller of the runner that does not overwrite would
+    /// ship that. Asserted at the runner, which is the only place it shows.
+    #[test]
+    fn the_log_runner_leaves_runner_owned_columns_unset() {
+        let spec: ModuleSpec = toml::from_str(
+            r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "**/thing *.log"
+path_column = "Log"
+
+[log]
+json_after = "REC: "
+
+[[columns]]
+name = "Log"
+
+[[columns]]
+name = "App"
+value = "com.example.app"
+
+[[columns]]
+name = "Lat"
+from = ["geo", "lat"]
+kind = "real"
+"#,
+        )
+        .unwrap();
+        let lg = spec.log.as_ref().unwrap();
+        let rows = run_log_module(
+            &spec,
+            lg,
+            br#"noise
+REC: {"geo":{"lat":1.5}}
+more noise"#,
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 1, "one record among the chatter: {rows:#?}");
+        assert_eq!(rows[0]["Lat"], serde_json::json!(1.5));
+        assert!(
+            !rows[0].contains_key("Log"),
+            "the path column is the runner's to fill, not this one's — it held {:?}",
+            rows[0].get("Log")
+        );
+        assert!(
+            !rows[0].contains_key("App"),
+            "a constant column is filled by run_module, not from the payload"
+        );
     }
 
     /// A `*` in `plist.rows` fans out across containers, and `index_column` says
@@ -4651,6 +4971,7 @@ from = "a"
             name: "T".into(),
             from: vec!["t".into()],
             kind: ColumnKind::Text,
+            value: None,
             epoch: None,
         };
         let utf8 = plist::Value::Data(b"HomeNet".to_vec());
@@ -4686,6 +5007,7 @@ from = "a"
             name: "H".into(),
             from: vec!["h".into()],
             kind: ColumnKind::Hex,
+            value: None,
             epoch: None,
         };
         let mac = plist::Value::Data(vec![0x8a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f]);
@@ -4706,6 +5028,7 @@ from = "a"
             name: "When".into(),
             from: vec!["w".into()],
             kind: ColumnKind::Timestamp,
+            value: None,
             epoch: None,
         };
         let err = convert_plist(&plist::Value::Integer(1_700_000_000.into()), &ts)
@@ -5328,12 +5651,14 @@ from = "a"
             shape: Shape::Table,
             path_column: None,
             plist: None,
+            log: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "A".into(),
                 from: vec!["a".into()],
                 kind: ColumnKind::Text,
+                value: None,
                 epoch: None,
             }],
         });
@@ -5361,12 +5686,14 @@ from = "a"
             shape: Shape::Table,
             path_column: None,
             plist: None,
+            log: None,
             sql: vec!["SELECT a FROM t".into()],
             requires: None,
             columns: vec![ColumnSpec {
                 name: "A".into(),
                 from: vec!["a".into()],
                 kind: ColumnKind::Text,
+                value: None,
                 epoch: None,
             }],
         };

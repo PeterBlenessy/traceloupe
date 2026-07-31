@@ -52,6 +52,9 @@ fn usage() -> ! {
          \x20 plist  <domain> <relative-path>        key paths, types, sample values\n\
          \x20 raw    <domain> <relative-path>        what kind of file it is, and its head\n\
          \n\
+         \n  dump <domain> <path> <out-file>\n\
+         \x20   the whole file, decrypted, on disk — for logs and other text stores\n\
+         \n\
          Pass - as the password for an unencrypted backup."
     );
     std::process::exit(2);
@@ -94,6 +97,27 @@ fn main() {
             if hits.is_empty() {
                 println!("  (nothing — this store is NOT in this backup)");
             }
+        }
+        // The WHOLE file, decrypted, written to disk. `raw` caps at 600 bytes,
+        // which answers "what kind of file is this" but not "what is in it" —
+        // useless for a log or any other text store you need to grep.
+        "dump" => {
+            let (domain, path, out) = match (args.get(3), args.get(4), args.get(5)) {
+                (Some(d), Some(p), Some(o)) => (d.as_str(), p.as_str(), o.as_str()),
+                _ => usage(),
+            };
+            let entry = index
+                .find(domain, path)
+                .expect("query the manifest")
+                .unwrap_or_else(|| {
+                    eprintln!("NOT IN THIS BACKUP: {domain}:{path}");
+                    std::process::exit(1);
+                });
+            let bytes = index
+                .read_bytes(&entry, decryptor.as_ref())
+                .expect("decrypt the file");
+            std::fs::write(out, &bytes).expect("write the dump");
+            println!("wrote {} bytes to {out}", bytes.len());
         }
         // The first bytes of any file, whatever it is. Needed because "what kind of
         // file is this even" is the first question about a candidate, and `schema`

@@ -1,0 +1,130 @@
+# Life360 — every location fix the app uploaded, recovered from its own logs.
+#
+# WHY A LOG AND NOT A DATABASE
+#
+# Life360 keeps no location history in any store this backup contains. Its
+# databases hold circles, members and messages; the positions themselves exist
+# only as a line in `MainApplication/Logs/com.life360.safetymap <date>.log`,
+# written each time the app sends its `X-UserContext` header to the server. So
+# this is not a convenience — read the log or the artifact does not exist.
+#
+# That is what `[log]` was added for. Each record is the JSON object following a
+# fixed marker on one line; everything else in the file is ordinary chatter.
+#
+# WHAT IT IS WORTH
+#
+# One row is a timestamped position with speed, heading, altitude and the
+# activity iOS inferred (`vehicle`, `walking`, …), plus the phone's battery at
+# that moment. A day of them is a movement track. This is among the most
+# sensitive data in a backup, which is the argument for surfacing it rather than
+# leaving it in a log nobody reads.
+#
+# ACCURACY IS NOT OPTIONAL TO SHOW. A fix with 1500 m accuracy and one with 4 m
+# are different claims about where someone was, and a map that draws both as a
+# dot says the same thing about each. The column ships so the reader can tell.
+#
+# The log filename carries the session date, so `path_column` records which log
+# a row came from — 48 of them on the validation image, and a row that cannot
+# say which session produced it cannot be corroborated against anything.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): «redacted» rows from 48 logs across all three directories.
+#
+# That number was checked against the files rather than against iLEAPP. Dumping
+# all 48 logs and counting the marker directly gives «redacted» occurrences, all of
+# them parseable — so «redacted» is every record the backup contains, not merely
+# every record we managed to read.
+#
+# iLEAPP reports «redacted» for the same device. The difference is not a parsing gap:
+# iLEAPP reads the FULL-FILESYSTEM extraction, which keeps log files a backup
+# excludes. Worth knowing before treating an iLEAPP row count as a target — for
+# log artifacts it is an upper bound a backup cannot reach.
+#
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "life360_locations"
+name        = "Life360 location history"
+description = "Every position Life360 reported to its servers — time, coordinates, speed, heading and the activity iOS inferred — recovered from the app's own logs."
+surface     = "apps"
+join_column = "App"
+category    = "Location"
+domain      = "AppDomainGroup-group.com.life360.safetymap"
+path        = "**/com.life360.safetymap*.log"
+path_column = "Log"
+
+[log]
+json_after = "X-UserContext header set: "
+
+# No `from`: filled with which log file the row came from.
+[[columns]]
+name = "Log"
+
+# The bundle id the Apps view joins on. It is a constant for this module — the
+# log belongs to exactly one app — and `geolocation` has no field naming it.
+[[columns]]
+name = "App"
+value = "com.life360.safetymap"
+
+[[columns]]
+name = "Time"
+from = ["geolocation", "timestamp"]
+kind = "timestamp"
+# Life360 logs plain Unix seconds, not Cocoa — the app is not using Core Data here.
+epoch = "unix"
+
+[[columns]]
+name = "Latitude"
+from = ["geolocation", "lat"]
+kind = "real"
+
+[[columns]]
+name = "Longitude"
+from = ["geolocation", "lon"]
+kind = "real"
+
+[[columns]]
+name = "Accuracy (m)"
+from = ["geolocation", "accuracy"]
+kind = "real"
+
+[[columns]]
+name = "Altitude (m)"
+from = ["geolocation", "alt"]
+kind = "real"
+
+[[columns]]
+name = "Speed (m/s)"
+from = ["geolocation", "speed"]
+kind = "real"
+
+[[columns]]
+name = "Heading"
+from = ["geolocation", "heading"]
+kind = "real"
+
+# iOS's inferred activity — `os_vehicle`, `os_walking`, … — shipped as written.
+[[columns]]
+name = "Activity"
+from = ["device", "userActivity"]
+
+# Life360's own location mode: `drive`, `foreground`, …
+[[columns]]
+name = "Mode"
+from = ["geolocation_meta", "lmode"]
+
+# `fullAccuracy` vs `reducedAccuracy` — whether the user granted precise
+# location. A reduced-accuracy fix is deliberately coarse, not merely imprecise.
+[[columns]]
+name = "Precision"
+from = ["flags", "preciseLocation"]
+
+[[columns]]
+name = "Battery %"
+from = ["device", "battery"]
+kind = "integer"
+
+[[columns]]
+name = "Charging"
+from = ["device", "charge"]
+kind = "bool"
