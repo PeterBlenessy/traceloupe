@@ -3594,6 +3594,37 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "home_screen",
+            name: "Home screen",
+            category: "Device",
+            description:
+              "Which apps, widgets and folders are on the home screen, and which page each is on.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Page", "Identifier", "Kind", "Size"],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "dock",
+            name: "Dock",
+            category: "Device",
+            description: "The apps kept in the dock, one tap away, in the order they appear.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Position", "App"],
+            timestampColumns: [],
+            byteColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "alltrails",
             name: "AllTrails recordings",
             category: "Locations",
@@ -4065,6 +4096,23 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "home_screen"
+        ? [
+            { Page: "0", Identifier: "net.whatsapp.WhatsApp", Kind: "app", Size: "small" },
+            {
+              Page: "0",
+              // A widget: a UUID, not a bundle id — `Kind` is what says so.
+              Identifier: "A5E1414E-FD2B-486D-BAC2-B0DEED262F03",
+              Kind: "custom",
+              Size: "medium",
+            },
+            { Page: "1", Identifier: "com.burbn.instagram", Kind: "app", Size: "small" },
+          ]
+      : mockActive && artifactId === "dock"
+        ? [
+            { Position: "0", App: "com.apple.mobilephone" },
+            { Position: "1", App: "com.apple.mobilesafari" },
+          ]
       : mockActive && artifactId === "alltrails"
         ? [
             {

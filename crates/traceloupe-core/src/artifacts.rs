@@ -185,6 +185,15 @@ pub struct PlistSpec {
     /// would be unreachable.
     #[serde(default)]
     pub key_column: Option<String>,
+    /// The column recording WHICH element a `*` in `rows` matched.
+    ///
+    /// Required when `rows` contains a `*`, for the same reason `path_column` is
+    /// required for a path pattern: the wildcard collapses several containers into
+    /// one table, and without the index nothing says which one a row came from.
+    /// On a home screen that index is the PAGE, which is most of the artifact's
+    /// value — "Maps is installed" and "Maps is on page 4" are different facts.
+    #[serde(default)]
+    pub index_column: Option<String>,
     /// The column holding a row whose value is a SCALAR rather than a dictionary.
     ///
     /// Two real shapes need this and neither is expressible without it: a dict of
@@ -541,6 +550,32 @@ impl ModuleSpec {
                     ));
                 }
             }
+            let has_star = pl.rows.iter().any(|k| k == "*");
+            match (&pl.index_column, has_star) {
+                (None, true) => {
+                    return Err(
+                        "`plist.rows` contains a `*` but no `index_column` is declared — the \
+                         wildcard collapses several containers into one table and nothing \
+                         would say which one a row came from"
+                            .into(),
+                    )
+                }
+                (Some(_), false) => {
+                    return Err(
+                        "`plist.index_column` is declared but `rows` has no `*` — there is \
+                         only one container, so the column would repeat one value"
+                            .into(),
+                    )
+                }
+                _ => {}
+            }
+            if let Some(k) = &pl.index_column {
+                if !self.columns.iter().any(|c| &c.name == k) {
+                    return Err(format!(
+                        "`plist.index_column` = {k:?} is not one of the declared columns"
+                    ));
+                }
+            }
             if let Some(k) = &pl.value_column {
                 if !self.columns.iter().any(|c| &c.name == k) {
                     return Err(format!(
@@ -583,6 +618,11 @@ impl ModuleSpec {
                     .plist
                     .as_ref()
                     .and_then(|p| p.value_column.as_ref())
+                    .is_some_and(|k| k == &c.name)
+                || self
+                    .plist
+                    .as_ref()
+                    .and_then(|p| p.index_column.as_ref())
                     .is_some_and(|k| k == &c.name);
             // Both are filled by the runner rather than read from the store, so
             // both may omit `from` — but they are different mistakes and must not
@@ -1249,9 +1289,78 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
         ))
     })?;
 
+    // Walk to the container(s). A `*` in the path fans out: Apple nests records
+    // under arrays of arrays (a home screen is pages of icons), and without this a
+    // module can only ever name one page by index — which is a different artifact
+    // on every device.
+    //
+    // Each resolved container remembers which indices got it there, so
+    // `index_column` can say which page a row came from.
+    fn resolve_rows<'a>(
+        node: &'a plist::Value,
+        path: &[String],
+        at: &mut Vec<String>,
+        out: &mut Vec<(String, &'a plist::Value)>,
+    ) {
+        let Some((seg, rest)) = path.split_first() else {
+            out.push((at.join("/"), node));
+            return;
+        };
+        if seg == "*" {
+            match node {
+                plist::Value::Array(items) => {
+                    for (i, item) in items.iter().enumerate() {
+                        at.push(i.to_string());
+                        resolve_rows(item, rest, at, out);
+                        at.pop();
+                    }
+                }
+                plist::Value::Dictionary(d) => {
+                    for (k, v) in d.iter() {
+                        at.push(k.clone());
+                        resolve_rows(v, rest, at, out);
+                        at.pop();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if let Some(next) = step(node, seg) {
+            resolve_rows(next, rest, at, out);
+        }
+    }
+
     // Walk to the container. A missing key is an ERROR, not an empty artifact:
     // "this key is gone" and "this device has none of these" are different facts,
     // and the second is what an empty result would claim.
+    // The wildcard form resolves to many containers; the plain form to one, and
+    // keeps its precise error messages, which name the segment that stopped.
+    if pl.rows.iter().any(|k| k == "*") {
+        let mut found = Vec::new();
+        resolve_rows(&root, &pl.rows, &mut Vec::new(), &mut found);
+        if found.is_empty() {
+            return Err(Error::Parse(format!(
+                "artifact {}: `plist.rows` path {:?} matched nothing in {}:{}",
+                spec.id,
+                pl.rows.join(" / "),
+                spec.domain,
+                spec.path
+            )));
+        }
+        let mut all = Vec::new();
+        for (index, container) in found {
+            let mut rows = rows_from(spec, pl, container)?;
+            if let Some(col) = &pl.index_column {
+                for row in &mut rows {
+                    row.insert(col.clone(), serde_json::Value::String(index.clone()));
+                }
+            }
+            all.extend(rows);
+        }
+        return Ok(all);
+    }
+
     let mut node = &root;
     for (i, key) in pl.rows.iter().enumerate() {
         node = match step(node, key) {
@@ -1283,6 +1392,12 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
         };
     }
 
+    rows_from(spec, pl, node)
+}
+
+/// Rows from ONE resolved container. Shared by the plain and wildcard paths so
+/// they cannot drift — the wildcard form is the same reading, repeated.
+fn rows_from(spec: &ModuleSpec, pl: &PlistSpec, node: &plist::Value) -> Result<Vec<ArtifactRow>> {
     // (key, row) pairs, decided by what the module ASKED FOR rather than by what
     // the shape happens to be.
     //
@@ -1316,10 +1431,14 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
                 vec![(None, node)]
             }
         }
+        // A SCALAR is one row when the module said the value is the row. This is
+        // what `rows = ["buttonBar", "*"]` resolves to: the wildcard hands over
+        // each string, and each string is a dock entry.
+        (scalar, _) if pl.value_column.is_some() => vec![(None, scalar)],
         (other, _) => {
             return Err(Error::Parse(format!(
                 "artifact {}: {} is {}, which holds no rows — `plist.rows` should point at \
-                 a dictionary or an array",
+                 a dictionary or an array, or declare a `value_column` if the value IS the row",
                 spec.id,
                 describe_at(&pl.rows),
                 kind_name(other)
@@ -1346,6 +1465,9 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
         // store's shape, and a column of nulls would hide that.
         if let Some(col) = &pl.value_column {
             match value {
+                // Still an error for a container: a value column is for rows that
+                // ARE a value, and meeting a dictionary means the module misread
+                // the shape. The scalar case above is the intended one.
                 plist::Value::Dictionary(_) | plist::Value::Array(_) => {
                     return Err(Error::Parse(format!(
                         "artifact {}: `plist.value_column` is declared but a row is {} — a \
@@ -1725,6 +1847,11 @@ const BUILTIN: &[(&str, &str)] = &[
     ),
     ("podcasts.toml", include_str!("../modules/podcasts.toml")),
     ("alltrails.toml", include_str!("../modules/alltrails.toml")),
+    (
+        "home_screen.toml",
+        include_str!("../modules/home_screen.toml"),
+    ),
+    ("dock.toml", include_str!("../modules/dock.toml")),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -3562,6 +3689,40 @@ from = "nope"
         .unwrap();
     }
 
+    /// IconState.plist: pages of icons, and the dock.
+    ///
+    /// TWO pages, because one page could not tell a working wildcard from a path
+    /// that happened to find the only container there was.
+    fn seed_icon_state() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        fn icon(id: &str, kind: &str, size: &str) -> Value {
+            let mut d = Dictionary::new();
+            d.insert("displayIdentifier".into(), Value::String(id.into()));
+            d.insert("iconType".into(), Value::String(kind.into()));
+            d.insert("gridSize".into(), Value::String(size.into()));
+            Value::Dictionary(d)
+        }
+        let page0 = Value::Array(vec![
+            icon("com.example.chatapp", "app", "small"),
+            // A widget: the identifier is a UUID, not a bundle id.
+            icon("A5E1414E-FD2B-486D-BAC2-B0DEED262F03", "custom", "medium"),
+        ]);
+        let page1 = Value::Array(vec![icon("com.example.todo", "app", "small")]);
+
+        let mut root = Dictionary::new();
+        root.insert("iconLists".into(), Value::Array(vec![page0, page1]));
+        root.insert(
+            "buttonBar".into(),
+            Value::Array(vec![
+                Value::String("com.apple.mobilephone".into()),
+                Value::String("com.example.chatapp".into()),
+            ]),
+        );
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -3641,6 +3802,12 @@ from = "nope"
             "Library/Caches/locationd/clients.plist",
         ),
         (
+            "home_screen",
+            "HomeDomain",
+            "Library/SpringBoard/IconState.plist",
+        ),
+        ("dock", "HomeDomain", "Library/SpringBoard/IconState.plist"),
+        (
             "alltrails",
             "AppDomain-com.alltrails.AllTrails",
             "Documents/AllTrails.sqlite",
@@ -3692,6 +3859,8 @@ from = "nope"
             "location_clients" => return Seed::Bytes(seed_location_clients),
             "watch_apps" => return Seed::Bytes(seed_watch_apps),
             "backup_sizing" => return Seed::Bytes(seed_backup_sizing),
+            // One store, two modules: IconState holds pages AND the dock.
+            "home_screen" | "dock" => return Seed::Bytes(seed_icon_state),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
@@ -3972,6 +4141,89 @@ from = "nope"
                 );
             }
         }
+    }
+
+    /// A `*` in `plist.rows` fans out across containers, and `index_column` says
+    /// which one each row came from.
+    ///
+    /// Without the index the wildcard collapses five home-screen pages into one
+    /// undifferentiated list — "Maps is installed" instead of "Maps is on page 4",
+    /// which is the fact worth having. Two pages in the fixture, because one page
+    /// cannot tell a working wildcard from a path that found the only container
+    /// there was.
+    #[test]
+    fn a_rows_wildcard_fans_out_and_records_which() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = mods.iter().find(|m| m.id == "home_screen").unwrap();
+        make_backup_bytes_in(tmp.path(), &spec.domain, &spec.path, &seed_icon_state());
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        // Three icons across TWO pages, each knowing its page.
+        assert_eq!(rows.len(), 3, "{rows:#?}");
+        let pages: Vec<&str> = rows.iter().map(|r| r["Page"].as_str().unwrap()).collect();
+        assert_eq!(pages, vec!["0", "0", "1"]);
+        assert_eq!(
+            rows[2]["Identifier"],
+            serde_json::json!("com.example.todo"),
+            "the second page's icon"
+        );
+        // A widget's identifier is a UUID, not a bundle id, and `iconType` is what
+        // says so — both ship as stored rather than one being mapped to the other.
+        assert_eq!(rows[1]["Kind"], serde_json::json!("custom"));
+
+        // The DOCK is the same file, a different collection, and its rows are
+        // plain strings — the wildcard hands each one over as a row.
+        let dock = mods.iter().find(|m| m.id == "dock").unwrap();
+        let rows = run_module(dock, &index, None, &tmp.path().join("work2"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["Position"], serde_json::json!("0"));
+        assert_eq!(rows[0]["App"], serde_json::json!("com.apple.mobilephone"));
+    }
+
+    /// A wildcard with nothing to say which element matched is rejected: five
+    /// pages in one list is a different artifact from a home screen.
+    #[test]
+    fn a_rows_wildcard_without_an_index_is_rejected() {
+        let src = |extra: &str| {
+            format!(
+                r#"
+id = "x"
+name = "X"
+description = "X."
+surface = "standalone"
+domain = "HomeDomain"
+path = "a/b.plist"
+
+[plist]
+rows = ["pages", "*"]
+{extra}
+
+[[columns]]
+name = "A"
+from = "a"
+
+[[columns]]
+name = "Which"
+"#
+            )
+        };
+        let spec: ModuleSpec = toml::from_str(&src("")).unwrap();
+        let err = spec.validate().expect_err("no index_column");
+        assert!(err.contains("no `index_column`"), "{err}");
+
+        // And the reverse: an index column with no wildcard repeats one value.
+        let spec: ModuleSpec = toml::from_str(
+            &src("index_column = \"Which\"")
+                .replace("rows = [\"pages\", \"*\"]", "rows = [\"pages\"]"),
+        )
+        .unwrap();
+        let err = spec.validate().expect_err("no wildcard");
+        assert!(err.contains("no `*`"), "{err}");
     }
 
     /// AllTrails: a paused-and-resumed recording is ONE activity, and the

@@ -1,0 +1,61 @@
+# Home screen — which apps are on the device's home screen, and on which page.
+#
+# `IconState.plist` is SpringBoard's record of the layout. Backup-reachable via
+# `HomeDomain`'s `Library/SpringBoard` (see docs/reference/backup-coverage-audit.md).
+#
+# WHY THE PAGE MATTERS ENOUGH TO NEED A NEW FEATURE
+#
+# "Maps is installed" is already in the Apps view. "Maps is on page 4, bottom row"
+# is a different fact: where someone puts an app says something about how much
+# they use it, and an app buried on the last page is a different signal from one
+# on the first. The layout is also the only place a FOLDER's contents are
+# recorded.
+#
+# `iconLists` is an array of PAGES, each an array of icons — so no fixed path can
+# name them. `rows = ["iconLists", "*"]` fans out across the pages, and
+# `index_column` records which page each row came from. Without the index the
+# wildcard would collapse five pages into one undifferentiated list, which is why
+# declaring one without the other is rejected at load time.
+#
+# THE IDENTIFIER IS NOT ALWAYS A BUNDLE ID. `displayIdentifier` is a bundle id for
+# an ordinary app and a UUID for a widget or a folder, and `iconType` says which.
+# Both ship as they are: mapping a UUID to a name would need a second store this
+# module does not read, and printing a UUID under a column called "App" would
+# imply it is one.
+#
+# The dock is a separate module (`dock.toml`) because it is a separate thing in
+# the store — an array of plain bundle ids under `buttonBar`, not icon records —
+# and because "what did they keep one tap away" is its own question.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 5 pages, 18 icons on the first. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "home_screen"
+name        = "Home screen"
+description = "Which apps, widgets and folders are on the home screen, and which page each is on."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/SpringBoard/IconState.plist"
+
+[plist]
+# An array of PAGES, each an array of icons.
+rows         = ["iconLists", "*"]
+index_column = "Page"
+
+# No `from`: filled with which `*` element this row came from.
+[[columns]]
+name = "Page"
+
+[[columns]]
+name = "Identifier"
+from = "displayIdentifier"
+
+[[columns]]
+name = "Kind"
+from = "iconType"
+
+[[columns]]
+name = "Size"
+from = "gridSize"
