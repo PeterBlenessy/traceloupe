@@ -30,6 +30,25 @@ overstates what we do.
   python3 tools/coverage-gap.py                 # summary + the biggest gaps
   python3 tools/coverage-gap.py --json out.json # the full table
   python3 tools/coverage-gap.py --all           # every gap, not just the top
+  python3 tools/coverage-gap.py --present PATHS # split the gap by a real backup
+
+`--present` takes a file of `domain<TAB>relativePath` lines — what a real backup
+actually contains:
+
+  cargo run -p traceloupe-core --example explore_real_backup -- <dir> <pw> list '%' \
+      | tail -n +3 > /tmp/allpaths.txt
+
+It splits the untouched artifacts three ways, which is the difference between a
+list and a WORKLIST:
+
+  * SAME STORE — the artifact reads a file we already parse (Photos.sqlite,
+    healthdb, NoteStore). No new parsing; it is analysis we do not do on data
+    already in the cache. The cheapest work there is.
+  * UNREAD STORE — the file is in this backup and nothing reads it. Real work,
+    and provably worth doing on this device.
+  * NOT HERE — the file is not in this backup at all. Not necessarily
+    unreachable; this device just does not have that app. Needs another device
+    before it can be built OR ruled out.
 
 Feed it the classifier's output first:
 
@@ -144,6 +163,75 @@ NOT_A_GAP = {
 }
 
 
+def stores_we_read() -> list[str]:
+    """Relative paths our native parsers and modules open.
+
+    From the source, like everything else here: `import.rs`'s store literals and
+    every module's `path`. Over-inclusive on purpose — calling an artifact "same
+    store" when it is not merely misfiles it, while missing one sends someone to
+    build a parser for a file already in the cache.
+    """
+    out = []
+    src = (ROOT / "crates/traceloupe-core/src/import.rs").read_text()
+    src = re.sub(r"/\*[\s\S]*?\*/", "", src)
+    src = re.sub(r"^\s*//.*$", "", src, flags=re.M)
+    for m in re.finditer(r'"([^"]*\.(?:db|sqlite|sqlitedb|storedata|plist))"', src):
+        p = m.group(1)
+        if not p.startswith(".") and not p.startswith("cache."):
+            out.append(p)
+    for toml in (ROOT / "crates/traceloupe-core/modules").glob("*.toml"):
+        m = re.search(r'^path\s*=\s*"([^"]+)"', toml.read_text(), re.M)
+        if m:
+            out.append(m.group(1))
+    return sorted(set(out))
+
+
+def glob_to_re(g: str) -> re.Pattern:
+    """An iLEAPP path glob as a regex over a backup's relativePath.
+
+    Anchored at the END unless the glob ends in `*`, because the tail is what
+    identifies the file. Unanchored at the front: a backup's relativePath is
+    domain-relative and iLEAPP's globs start from the filesystem root.
+    """
+    g = g.lstrip("*").lstrip("/")
+    parts = [re.escape(p) for p in g.split("*")]
+    tail = "" if g.endswith("*") else "$"
+    return re.compile(".*" + ".*".join(parts) + tail, re.I)
+
+
+def split_by_backup(artifacts, untouched, paths_file: Path):
+    """Untouched artifacts, split by what a real backup contains."""
+    rows = []
+    for line in paths_file.read_text().splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2:
+            rows.append(parts[1])
+    ours = stores_we_read()
+    same, unread, absent = collections.Counter(), collections.Counter(), collections.Counter()
+    examples: dict[str, str] = {}
+    for a in artifacts:
+        if a.get("reach") not in ("backup", "encrypted-only"):
+            continue
+        cat = a.get("category")
+        if cat not in untouched:
+            continue
+        hit = None
+        for g in a.get("paths") or []:
+            rx = glob_to_re(g)
+            hit = next((p for p in rows if rx.match(p)), None)
+            if hit:
+                break
+        if hit is None:
+            absent[cat] += 1
+        elif any(hit.endswith(o) or o.endswith(hit) for o in ours):
+            same[cat] += 1
+            examples.setdefault(cat, hit)
+        else:
+            unread[cat] += 1
+            examples.setdefault(cat, hit)
+    return same, unread, absent, examples, len(rows)
+
+
 def is_photos_facet(cat: str) -> bool:
     return cat.lower().startswith(("photos.sqlite", "photos-"))
 
@@ -153,6 +241,7 @@ def main() -> int:
     ap.add_argument("--input", default="/tmp/ileapp.json", help="classify-ileapp-artifacts.py --json output")
     ap.add_argument("--json", metavar="FILE", help="write the full table")
     ap.add_argument("--all", action="store_true", help="every gap, not just the biggest")
+    ap.add_argument("--present", metavar="PATHS", help="split the gap by a real backup's manifest")
     args = ap.parse_args()
 
     path = Path(args.input)
@@ -208,6 +297,25 @@ def main() -> int:
         print(f"  {n:3}  {cat}")
     if len(shown) < len(gaps):
         print(f"  … and {len(gaps) - len(shown)} more categories ({sum(n for _, n in gaps[len(shown):])} artifacts) — pass --all")
+
+    if args.present:
+        pf = Path(args.present)
+        if not pf.exists():
+            print(f"\nmissing {pf} — see --help for how to produce it")
+            return 2
+        same, unread, absent, ex, n = split_by_backup(artifacts, {c for c, _ in gaps}, pf)
+        print(f"\n══ against a real backup ({n} manifest entries) ══")
+        print(f"\n── SAME STORE: {sum(same.values())} artifacts read a file we ALREADY parse.")
+        print("   No new parsing — analysis we do not do on data already in the cache.")
+        for c, k in same.most_common():
+            print(f"  {k:3}  {c:24} {ex.get(c, '')[:56]}")
+        print(f"\n── UNREAD STORE: {sum(unread.values())} artifacts read a file in this backup")
+        print("   that nothing reads. Real work, provably worth doing on THIS device.")
+        for c, k in unread.most_common():
+            print(f"  {k:3}  {c:24} {ex.get(c, '')[:56]}")
+        print(f"\n── NOT HERE: {sum(absent.values())} artifacts in {len(absent)} categories.")
+        print("   Not unreachable — this device just lacks the app. Needs another device")
+        print("   before it can be built OR ruled out.")
 
     if args.json:
         Path(args.json).write_text(
