@@ -8,6 +8,7 @@ import {
   CornerDownRight,
   EyeOff,
   Globe,
+  Search,
   SquareStack,
   Trash2,
 } from "lucide-react";
@@ -30,18 +31,26 @@ import {
   type HistoryVisit,
   type SafariBookmark,
   type TimeRange,
+  type WebSearch,
 } from "@/lib/ipc";
 
 /** The Safari data types, selectable via the pill filter on the title row. */
-type SafariType = "history" | "bookmark" | "reading_list" | "tab";
+type SafariType =
+  | "history"
+  | "search"
+  | "bookmark"
+  | "reading_list"
+  | "tab";
 const TYPES: { value: SafariType; label: string }[] = [
   { value: "history", label: "History" },
+  { value: "search", label: "Searches" },
   { value: "bookmark", label: "Bookmarks" },
   { value: "reading_list", label: "Reading List" },
   { value: "tab", label: "Tabs" },
 ];
 const EMPTY: Record<SafariType, string> = {
   history: "No Safari history in this backup.",
+  search: "No web searches in this backup.",
   bookmark: "No bookmarks in this backup.",
   reading_list: "No reading-list items in this backup.",
   tab: "No open tabs in this backup.",
@@ -62,6 +71,7 @@ export function SafariView() {
   const { clockFormat } = useSettings();
 
   const isHistory = type === "history";
+  const isSearch = type === "search";
   const rangeArgs = [range.lo, range.hi] as const;
 
   const { data: count, error } = useQuery({
@@ -69,7 +79,9 @@ export function SafariView() {
     queryFn: () =>
       isHistory
         ? client.countSafari(search, ...rangeArgs)
-        : client.countSafariBookmarks(type, search, ...rangeArgs),
+        : isSearch
+          ? client.countSafariSearches(search, ...rangeArgs)
+          : client.countSafariBookmarks(type, search, ...rangeArgs),
     enabled: active === true,
   });
   const { data: presetCounts } = useQuery({
@@ -78,7 +90,9 @@ export function SafariView() {
       const ranges = presets.map((p) => ({ lo: p.lo, hi: p.hi }));
       return isHistory
         ? client.countSafariRanges(search, ranges)
-        : client.countSafariBookmarkRanges(type, search, ranges);
+        : isSearch
+          ? client.countSafariSearchRanges(search, ranges)
+          : client.countSafariBookmarkRanges(type, search, ranges);
     },
     enabled: active === true,
   });
@@ -96,7 +110,7 @@ export function SafariView() {
       badgeGroup({
         key: "type",
         label: "Type",
-        description: "History, bookmarks, reading list or tabs",
+        description: "History, searches, bookmarks, reading list or tabs",
         options: TYPES.map((t) => ({ value: t.value, label: t.label })),
         value: type,
         onChange: (v) => changeType(v as SafariType),
@@ -115,16 +129,22 @@ export function SafariView() {
                 { value: "title", label: "Title" },
                 { value: "visits", label: "Visits" },
               ]
-            : [
-                { value: "date", label: "Date" },
-                { value: "title", label: "Title" },
-              ]
+            : isSearch
+              ? [
+                  { value: "date", label: "Date" },
+                  { value: "term", label: "Term" },
+                  { value: "engine", label: "Engine" },
+                ]
+              : [
+                  { value: "date", label: "Date" },
+                  { value: "title", label: "Title" },
+                ]
         }
         value={sort}
         onChange={setSort}
       />
     ),
-    [isHistory, sort, setSort],
+    [isHistory, isSearch, sort, setSort],
   );
   const searchNode = useMemo(
     () => <ListSearch value={q} onChange={setQ} placeholder="Search Safari" />,
@@ -167,7 +187,7 @@ export function SafariView() {
   }
 
   return (
-    <LazyListView<HistoryVisit | SafariBookmark>
+    <LazyListView<HistoryVisit | SafariBookmark | WebSearch>
       title="Safari"
       count={count}
       error={error}
@@ -196,6 +216,16 @@ export function SafariView() {
               sort.by,
               sort.desc,
             )
+          : isSearch
+          ? client.getSafariSearchesWindow(
+              search,
+              range.lo,
+              range.hi,
+              offset,
+              limit,
+              sort.by,
+              sort.desc,
+            )
           : client.getSafariBookmarksWindow(
               type,
               search,
@@ -210,6 +240,8 @@ export function SafariView() {
       renderItem={(item) =>
         "kind" in item ? (
           <BookmarkRow item={item} />
+        ) : "term" in item ? (
+          <SearchRow search={item} />
         ) : (
           <VisitRow visit={item} />
         )
@@ -305,6 +337,59 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
             <div className="text-muted-foreground">{`Redirected to ${visit.redirectDestination}`}</div>
           )}
         </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** A web search — typed into the search field, or recovered from a result-page
+ *  URL in history. The two are different evidence, so the row says which. */
+function SearchRow({ search }: { search: WebSearch }) {
+  const typed = search.source === "typed";
+  const inner = (
+    <>
+      <ItemMedia>
+        <Search className="size-5 text-muted-foreground" />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="truncate">{search.term}</ItemTitle>
+        <ItemDescription className="truncate">
+          {search.engine ?? (typed ? "Typed in Safari" : "Search")}
+        </ItemDescription>
+      </ItemContent>
+      <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
+        <span>{formatDateTime(search.searchedAt)}</span>
+        <span>{typed ? "Typed" : "Visited"}</span>
+      </div>
+    </>
+  );
+  // A typed search has no URL to open, so it is not a button — making it one
+  // would offer a click that does nothing.
+  const url = search.url;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        {url ? (
+          <Item
+            asChild
+            className="rounded-md transition-colors hover:bg-accent/50"
+          >
+            <button
+              type="button"
+              onClick={() => void client.openExternal(url)}
+              className="w-full text-left"
+            >
+              {inner}
+            </button>
+          </Item>
+        ) : (
+          <Item className="rounded-md">{inner}</Item>
+        )}
+      </TooltipTrigger>
+      <TooltipContent className="max-w-sm">
+        {url
+          ? `Open ${url}`
+          : "Typed into Safari's search field. Recorded without a result page, so there is nothing to open."}
       </TooltipContent>
     </Tooltip>
   );

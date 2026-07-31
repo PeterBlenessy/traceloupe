@@ -59,6 +59,10 @@ const BOUNDED: &[(&str, &str)] = &[
     ),
     ("count_safari_ranges", "one count per histogram bucket"),
     (
+        "count_safari_search_ranges",
+        "one count per histogram bucket",
+    ),
+    (
         "list_import_modules",
         "the backend's import catalog — a fixed list in the binary",
     ),
