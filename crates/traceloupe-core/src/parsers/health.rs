@@ -142,6 +142,7 @@ pub fn parse_health(
     }
     if has("objects")? && has("data_provenances")? {
         parse_timezones(&src, cache, replace)?;
+        parse_device_use(&src, cache, replace)?;
     }
     if has("ACHAchievementsPlugin_earned_instances")? {
         parse_achievements(&src, cache, replace)?;
@@ -220,6 +221,85 @@ fn parse_timezones(src: &Connection, cache: &CacheDb, replace: bool) -> Result<(
             rusqlite::params![
                 r.get::<_, String>(0)?,
                 r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                r.get::<_, i64>(2)?,
+                to_unix(r.get::<_, Option<f64>>(3)?),
+                to_unix(r.get::<_, Option<f64>>(4)?),
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Which Apple device wrote the Health data, and when.
+///
+/// Health data is never discarded on device migration — it follows the person
+/// across every iPhone and Watch they own, and every sample records the product
+/// that wrote it. So this store holds a DEVICE-OWNERSHIP TIMELINE that exists
+/// nowhere else in the backup, including devices replaced years before it was
+/// taken.
+///
+/// Stored per (model, OS build) and rolled up per model at query time, so one
+/// table serves both questions without keeping the same fact twice. Crucially
+/// there is NO `HAVING MIN != MAX` here, unlike iLEAPP's query: a device that
+/// contributed a single sample is still a device the person owned, and dropping
+/// it at parse time would make it unrecoverable. That filter belongs on the
+/// OS-history read, where a zero-length window genuinely dates nothing.
+///
+/// `UnknownDevice` and `iPhone0,0` are what iOS writes when provenance is
+/// unavailable. They name no device, and shown as rows they read as two more
+/// devices the person owned — a fabricated fact, not a cosmetic one.
+fn parse_device_use(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let prov_cols: Vec<String> = src
+        .prepare("PRAGMA table_info(data_provenances)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .collect();
+    // The model is the artifact. Older schemas (and the minimal fixtures other
+    // tests build) have a `data_provenances` without it, and there is nothing to
+    // report without a device name — so this is absence, not failure.
+    if !prov_cols.iter().any(|c| c == "origin_product_type") {
+        return Ok(());
+    }
+    let has_creation = src
+        .prepare("PRAGMA table_info(objects)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|c| c.ok())
+        .any(|c| c == "creation_date");
+    if !has_creation {
+        return Ok(());
+    }
+    let has_build = prov_cols.iter().any(|c| c == "origin_build");
+    // The build is optional; the model is not. Without it this still answers
+    // "which devices", which is the more important half.
+    let build_col = if has_build { "dp.origin_build" } else { "NULL" };
+    let sql = format!(
+        "SELECT dp.origin_product_type, {build_col}, COUNT(*),
+                MIN(o.creation_date), MAX(o.creation_date)
+         FROM objects o
+         JOIN data_provenances dp ON dp.ROWID = o.provenance
+         WHERE dp.origin_product_type NOT IN ('UnknownDevice', 'iPhone0,0')
+           AND dp.origin_product_type IS NOT NULL
+           AND dp.origin_product_type <> ''
+           AND o.creation_date > 1
+         GROUP BY dp.origin_product_type, {build_col}"
+    );
+    let mut stmt = src.prepare(&sql)?;
+
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM health_device_use", [])?;
+    }
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        tx.execute(
+            "INSERT INTO health_device_use (model, os_build, samples, first_at, last_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?
+                    .filter(|b| !b.trim().is_empty()),
                 r.get::<_, i64>(2)?,
                 to_unix(r.get::<_, Option<f64>>(3)?),
                 to_unix(r.get::<_, Option<f64>>(4)?),
@@ -769,6 +849,84 @@ fn summarize_samples(src: &Connection, cache: &CacheDb) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// The device history must keep a device that contributed a single sample,
+    /// and must never present iOS's provenance placeholders as devices.
+    ///
+    /// The single-sample case is the one the two reads deliberately disagree
+    /// about: it is a device the person owned (so it belongs in the rollup) but
+    /// its window is zero-length (so it cannot date an upgrade). Dropping it at
+    /// PARSE time — which is what iLEAPP's query does — would make that choice
+    /// unrecoverable downstream.
+    #[test]
+    fn device_history_keeps_single_sample_devices_and_drops_placeholders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("healthdb_secure.sqlite");
+        let src = Connection::open(&db).unwrap();
+        src.execute_batch(
+            "CREATE TABLE samples (data_id INTEGER, start_date REAL);
+             CREATE TABLE data_provenances (ROWID INTEGER PRIMARY KEY,
+                 origin_product_type TEXT, origin_build TEXT);
+             CREATE TABLE objects (ROWID INTEGER PRIMARY KEY, provenance INTEGER,
+                 creation_date REAL);
+             INSERT INTO data_provenances VALUES (1, 'iPhone12,1', '21D50');
+             INSERT INTO data_provenances VALUES (2, 'iPhone12,1', '20B110');
+             INSERT INTO data_provenances VALUES (3, 'iPhone10,1', '18B92');
+             INSERT INTO data_provenances VALUES (4, 'UnknownDevice', '21D50');
+             INSERT INTO data_provenances VALUES (5, 'iPhone0,0', '21D50');
+             -- Cocoa seconds.
+             INSERT INTO objects VALUES (10, 1, 727961400.0);
+             INSERT INTO objects VALUES (11, 1, 744322559.0);
+             INSERT INTO objects VALUES (12, 2, 709936383.0);
+             INSERT INTO objects VALUES (13, 2, 727875001.0);
+             -- One sample only: zero-length window.
+             INSERT INTO objects VALUES (14, 3, 642622621.0);
+             INSERT INTO objects VALUES (15, 4, 727961400.0);
+             INSERT INTO objects VALUES (16, 5, 727961400.0);",
+        )
+        .unwrap();
+        drop(src);
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        parse_health(&db, &cache, &mut ImportReport::default(), false).unwrap();
+
+        let owned: Vec<String> = crate::query::list_devices_used(&cache)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.model)
+            .collect();
+        assert_eq!(
+            owned,
+            vec!["iPhone10,1", "iPhone12,1"],
+            "every real device, including the single-sample one; no placeholders"
+        );
+
+        let history = crate::query::list_device_os_history(&cache).unwrap();
+        let builds: Vec<String> = history
+            .iter()
+            .map(|d| d.os_build.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            builds,
+            vec!["20B110", "21D50"],
+            "one row per build, oldest first; the zero-length window dropped"
+        );
+        assert!(
+            history.iter().all(|d| d.model == "iPhone12,1"),
+            "the single-sample device dates no upgrade, so it is not here"
+        );
+
+        // Cocoa → unix, and the rollup spans both builds.
+        let iphone12 = crate::query::list_devices_used(&cache)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.model == "iPhone12,1")
+            .unwrap();
+        assert_eq!(iphone12.first_at, Some(709_936_383 + 978_307_200));
+        assert_eq!(iphone12.last_at, Some(744_322_559 + 978_307_200));
+        assert_eq!(iphone12.samples, 4, "samples summed across builds");
+        assert_eq!(iphone12.os_build, None, "the rollup spans builds");
+    }
+
     use super::*;
 
     #[test]

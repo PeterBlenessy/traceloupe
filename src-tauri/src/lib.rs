@@ -3103,6 +3103,32 @@ async fn get_safari_window(
 }
 
 #[tauri::command]
+async fn list_devices_used(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<query::DeviceUse>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_devices_used(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn list_device_os_history(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<query::DeviceUse>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::list_device_os_history(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn count_safari_searches(
     active: State<'_, ActiveBackup>,
     search: Option<String>,
@@ -4383,6 +4409,8 @@ pub fn run() {
             get_calls_window,
             count_safari,
             count_safari_ranges,
+            list_devices_used,
+            list_device_os_history,
             count_safari_searches,
             count_safari_search_ranges,
             get_safari_searches_window,

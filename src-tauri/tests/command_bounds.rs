@@ -59,6 +59,16 @@ const BOUNDED: &[(&str, &str)] = &[
     ),
     ("count_safari_ranges", "one count per histogram bucket"),
     (
+        "list_devices_used",
+        "one row per Apple device that ever wrote Health data — a person owns a \
+         handful, not a stream",
+    ),
+    (
+        "list_device_os_history",
+        "one row per (device, OS build); bounded by devices owned times OS \
+         upgrades, which is tens at most",
+    ),
+    (
         "count_safari_search_ranges",
         "one count per histogram bucket",
     ),

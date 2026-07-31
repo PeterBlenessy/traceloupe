@@ -34,7 +34,7 @@ import {
   ScanTile,
 } from "@/components/dashboard-tiles";
 import { CATEGORY_LABEL, formatSources } from "@/views/safety-scan";
-import { formatDateTime } from "@/lib/format";
+import { formatCount, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ArtifactTable } from "@/components/artifact-table";
 import { useHostedArtifacts } from "@/lib/use-hosted-artifacts";
@@ -696,6 +696,103 @@ function DeviceFacts() {
  * It knows no artifact by name — a new device-level module appears here with no
  * change to this file.
  */
+/** Every Apple device that ever wrote Health data to this phone, and the OS
+ *  builds each ran.
+ *
+ *  Health data survives migration between phones, so this reaches back past
+ *  devices the person no longer owns — which is why it lives here rather than in
+ *  the Health view: it describes the DEVICES, not anyone's fitness.
+ *
+ *  The two lists come from one table read two ways. A device that contributed a
+ *  single sample appears in the first and not the second: it is a device that
+ *  was owned, but a zero-length window dates no upgrade. */
+function DeviceHistory() {
+  const { data: devices } = useQuery({
+    queryKey: ["devicesUsed"],
+    queryFn: () => client.listDevicesUsed(),
+  });
+  const { data: osHistory } = useQuery({
+    queryKey: ["deviceOsHistory"],
+    queryFn: () => client.listDeviceOsHistory(),
+  });
+  if (!devices?.length) return null;
+
+  const span = (d: { firstAt: number | null; lastAt: number | null }) =>
+    d.firstAt == null
+      ? "—"
+      : `${formatDateTime(d.firstAt)} — ${formatDateTime(d.lastAt)}`;
+
+  return (
+    <>
+      <section className="mt-4">
+        <h2 className="text-sm font-semibold">Devices used</h2>
+        <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+          Apple devices that recorded Health data for this person. Health follows
+          someone between phones, so this can include devices replaced long
+          before this backup was taken.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground">
+              <tr className="border-b">
+                <th className="py-1 pr-4 text-left font-medium">Device</th>
+                <th className="py-1 pr-4 text-left font-medium">In use</th>
+                <th className="py-1 text-right font-medium">Samples</th>
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((d) => (
+                <tr key={d.model} className="border-b last:border-0">
+                  <td className="py-1 pr-4">
+                    {modelName(d.model)}
+                    {modelName(d.model) !== d.model && (
+                      <span className="ml-1.5 text-muted-foreground">{d.model}</span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-4 text-muted-foreground">{span(d)}</td>
+                  <td className="py-1 text-right tabular-nums text-muted-foreground">
+                    {formatCount(d.samples)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {osHistory && osHistory.length > 0 && (
+        <section className="mt-4">
+          <h2 className="text-sm font-semibold">OS history</h2>
+          <p className="mb-2 text-xs leading-relaxed text-muted-foreground">
+            Which OS build each device was running while it recorded Health data.
+            Builds, not versions — the store records `21D50`, and the mapping to
+            `17.3` is not in this backup.
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-muted-foreground">
+                <tr className="border-b">
+                  <th className="py-1 pr-4 text-left font-medium">Device</th>
+                  <th className="py-1 pr-4 text-left font-medium">Build</th>
+                  <th className="py-1 text-left font-medium">In use</th>
+                </tr>
+              </thead>
+              <tbody>
+                {osHistory.map((d) => (
+                  <tr key={`${d.model}:${d.osBuild}`} className="border-b last:border-0">
+                    <td className="py-1 pr-4">{modelName(d.model)}</td>
+                    <td className="py-1 pr-4 tabular-nums">{d.osBuild}</td>
+                    <td className="py-1 text-muted-foreground">{span(d)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
+
 function DeviceMoreInformation() {
   const { hosted } = useHostedArtifacts("device", true);
   const { data: extraction } = useQuery({
@@ -728,7 +825,17 @@ function DeviceMoreInformation() {
     (h) =>
       h.artifact.shape !== "facts" && h.rows.length === 0 && h.artifact.requiresEncryptedBackup,
   );
-  const nothingToShow = withRows.length === 0 && gatedAndEmpty.length === 0 && !needsExtraction;
+  // The device history is not an artifact module, so it is counted separately —
+  // otherwise a backup whose only device-level records are the Health device
+  // history would decide there is "nothing to show" and never offer the
+  // disclosure that contains it.
+  const { data: devicesUsed } = useQuery({
+    queryKey: ["devicesUsed"],
+    queryFn: () => client.listDevicesUsed(),
+  });
+  const hasHistory = (devicesUsed?.length ?? 0) > 0;
+  const nothingToShow =
+    withRows.length === 0 && gatedAndEmpty.length === 0 && !needsExtraction && !hasHistory;
   // Never offered when there is nothing to disclose and nothing to read. But once
   // it is open, it stays — a control that vanishes under the pointer is worse than
   // one that admits it found nothing, and unmounting would also discard `open`.
@@ -772,6 +879,7 @@ function DeviceMoreInformation() {
             This backup carried no device-level records TraceLoupe can read yet.
           </p>
         )}
+        <DeviceHistory />
         {withRows.map((h) => (
           <section key={h.artifact.id} className="mt-4">
             <h2 className="text-sm font-semibold">{h.artifact.name}</h2>

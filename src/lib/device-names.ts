@@ -28,6 +28,39 @@ const MODEL_NAMES: Record<string, string> = {
   "iPhone15,5": "iPhone 15 Plus",
   "iPhone16,1": "iPhone 15 Pro",
   "iPhone16,2": "iPhone 15 Pro Max",
+
+  // Apple Watch. Health data carries the WATCH's product type as readily as the
+  // phone's, so a device history is full of these and "Watch4,3" tells a reader
+  // nothing.
+  //
+  // Series only, no case size: `Watch4,3` is a 44mm Series 4, but the size is
+  // not what identifies the device to a reader, and pretending to a precision
+  // the mapping does not reliably have would be worse than omitting it.
+  //
+  // Deliberately stops at Series 5. Later identifiers interleave SE, Ultra and
+  // numbered series within one major version (the `Watch6,*` range spans three
+  // product lines), and a wrong entry here MISLABELS someone's device — a
+  // failure worth more than the convenience of a full table. `modelName` falls
+  // back to the raw identifier, which is honest, so the gap costs nothing but
+  // polish until the ranges are verified against Apple's own list.
+  "Watch1,1": "Apple Watch (1st gen)",
+  "Watch1,2": "Apple Watch (1st gen)",
+  "Watch2,6": "Apple Watch Series 1",
+  "Watch2,7": "Apple Watch Series 1",
+  "Watch2,3": "Apple Watch Series 2",
+  "Watch2,4": "Apple Watch Series 2",
+  "Watch3,1": "Apple Watch Series 3",
+  "Watch3,2": "Apple Watch Series 3",
+  "Watch3,3": "Apple Watch Series 3",
+  "Watch3,4": "Apple Watch Series 3",
+  "Watch4,1": "Apple Watch Series 4",
+  "Watch4,2": "Apple Watch Series 4",
+  "Watch4,3": "Apple Watch Series 4",
+  "Watch4,4": "Apple Watch Series 4",
+  "Watch5,1": "Apple Watch Series 5",
+  "Watch5,2": "Apple Watch Series 5",
+  "Watch5,3": "Apple Watch Series 5",
+  "Watch5,4": "Apple Watch Series 5",
 };
 
 export function modelName(productType: string | null): string | null {
