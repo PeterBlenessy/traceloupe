@@ -1891,6 +1891,105 @@ pub fn get_safari_bookmarks_window(
         .map_err(Into::into)
 }
 
+/// One Safari web search — a term recovered from a search-engine URL in history
+/// (`source = "visited"`) or typed into the search field (`source = "typed"`).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebSearch {
+    pub id: i64,
+    pub term: String,
+    pub searched_at: Option<i64>,
+    /// `"visited"` (recovered from a history URL) or `"typed"` (RecentWebSearches).
+    pub source: String,
+    /// Search-engine host, when the term came from a URL.
+    pub engine: Option<String>,
+    /// The result-page URL, when the term came from a URL.
+    pub url: Option<String>,
+    /// Safari profile the search belongs to, when it came from history.
+    pub profile: Option<String>,
+}
+
+fn row_to_search(r: &rusqlite::Row<'_>) -> rusqlite::Result<WebSearch> {
+    Ok(WebSearch {
+        id: r.get(0)?,
+        term: r.get(1)?,
+        searched_at: r.get(2)?,
+        source: r.get(3)?,
+        engine: r.get(4)?,
+        url: r.get(5)?,
+        profile: r.get(6)?,
+    })
+}
+
+/// The `WHERE` shared by every Safari-search query, so the count, the chips and
+/// the window can never disagree about what a filter means.
+const SEARCH_FILTER: &str = "(?1 IS NULL OR term LIKE '%' || ?1 || '%' ESCAPE '\\'
+                                        OR engine LIKE '%' || ?1 || '%' ESCAPE '\\')
+           AND (?2 IS NULL OR searched_at >= ?2)
+           AND (?3 IS NULL OR searched_at < ?3)";
+
+pub fn count_safari_searches(
+    cache: &CacheDb,
+    search: Option<&str>,
+    range: TimeRange,
+) -> Result<i64> {
+    let search = search.map(escape_like);
+    let n = cache.conn().query_row(
+        &format!("SELECT COUNT(*) FROM safari_searches WHERE {SEARCH_FILTER}"),
+        rusqlite::params![search, range.lo, range.hi],
+        |r| r.get(0),
+    )?;
+    Ok(n)
+}
+
+/// Per-range search counts (respecting `search`) — the time chips.
+pub fn count_safari_search_ranges(
+    cache: &CacheDb,
+    search: Option<&str>,
+    ranges: &[TimeRange],
+) -> Result<Vec<i64>> {
+    let search = search.map(escape_like);
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT COUNT(*) FROM safari_searches WHERE {SEARCH_FILTER}"
+    ))?;
+    let mut out = Vec::with_capacity(ranges.len());
+    for r in ranges {
+        out.push(stmt.query_row(rusqlite::params![search, r.lo, r.hi], |row| row.get(0))?);
+    }
+    Ok(out)
+}
+
+/// A window of Safari searches matching `search` within `range`, ordered by
+/// `sort` (an allowlisted column from the command layer).
+pub fn get_safari_searches_window(
+    cache: &CacheDb,
+    search: Option<&str>,
+    range: TimeRange,
+    offset: i64,
+    limit: i64,
+    sort: Sort,
+) -> Result<Vec<WebSearch>> {
+    let conn = cache.conn();
+    let search = search.map(escape_like);
+    let (dir, nulls) = sort.order_sql();
+    let sql = format!(
+        "SELECT id, term, searched_at, source, engine, url, profile
+         FROM safari_searches
+         WHERE {SEARCH_FILTER}
+         ORDER BY {} {dir} {nulls}, id {dir}
+         LIMIT ?4 OFFSET ?5",
+        sort.column(),
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(
+        rusqlite::params![search, range.lo, range.hi, limit, offset],
+        row_to_search,
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// Distinct media sources present, with a count each, for the gallery filter.
 /// Ordered by count descending (biggest sources first).
 pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {

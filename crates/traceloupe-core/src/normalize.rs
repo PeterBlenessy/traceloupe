@@ -28,6 +28,8 @@ pub struct ImportReport {
     pub safari_visits: usize,
     /// Safari bookmarks + reading-list items + open tabs.
     pub safari_bookmarks: usize,
+    /// Web searches recovered from history URLs and RecentWebSearches.
+    pub safari_searches: usize,
     pub contacts: usize,
     pub notes: usize,
     pub recordings: usize,

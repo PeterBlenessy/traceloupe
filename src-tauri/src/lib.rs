@@ -2892,6 +2892,14 @@ fn media_sort(field: &str, desc: bool) -> query::Sort {
     };
     query::Sort::new(col, desc)
 }
+fn safari_search_sort(field: &str, desc: bool) -> query::Sort {
+    let col = match field {
+        "term" => "term COLLATE NOCASE",
+        "engine" => "engine COLLATE NOCASE",
+        _ => "searched_at",
+    };
+    query::Sort::new(col, desc)
+}
 fn safari_bookmark_sort(field: &str, desc: bool) -> query::Sort {
     let col = match field {
         "title" => "title COLLATE NOCASE",
@@ -3087,6 +3095,68 @@ async fn get_safari_window(
             offset,
             limit,
             safari_sort(&sort_by, desc),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_safari_searches(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
+) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_safari_searches(&cache, search.as_deref(), query::TimeRange { lo, hi })
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn count_safari_search_ranges(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+    ranges: Vec<query::TimeRange>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::count_safari_search_ranges(&cache, search.as_deref(), &ranges)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn get_safari_searches_window(
+    active: State<'_, ActiveBackup>,
+    search: Option<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
+    offset: i64,
+    limit: i64,
+    sort_by: String,
+    desc: bool,
+) -> Result<Vec<query::WebSearch>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::get_safari_searches_window(
+            &cache,
+            search.as_deref(),
+            query::TimeRange { lo, hi },
+            offset,
+            limit,
+            safari_search_sort(&sort_by, desc),
         )
         .map_err(|e| e.to_string())
     })
@@ -4313,6 +4383,9 @@ pub fn run() {
             get_calls_window,
             count_safari,
             count_safari_ranges,
+            count_safari_searches,
+            count_safari_search_ranges,
+            get_safari_searches_window,
             count_safari_bookmarks,
             count_safari_bookmark_ranges,
             get_safari_bookmarks_window,

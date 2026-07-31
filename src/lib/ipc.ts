@@ -120,6 +120,22 @@ export interface HistoryVisit {
   redirectDestination: string | null;
 }
 
+/** One Safari web search: a term recovered from a search-engine URL in history
+ *  ("visited"), or typed into the search field ("typed"). */
+export interface WebSearch {
+  id: number;
+  term: string;
+  searchedAt: number | null;
+  /** "visited" (recovered from a history URL) or "typed" (RecentWebSearches). */
+  source: string;
+  /** Search-engine host, when the term came from a URL. */
+  engine: string | null;
+  /** The result-page URL, when the term came from a URL. */
+  url: string | null;
+  /** Safari profile the search belongs to, when it came from history. */
+  profile: string | null;
+}
+
 /** A Safari bookmark, reading-list item, or open tab (`kind` selects which). */
 export interface SafariBookmark {
   id: number;
@@ -1407,6 +1423,25 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<HistoryVisit[]>;
+  /** Count of Safari web searches matching search+range. */
+  countSafariSearches(
+    search: string | null,
+    lo?: number | null,
+    hi?: number | null,
+  ): Promise<number>;
+  countSafariSearchRanges(
+    search: string | null,
+    ranges: TimeRange[],
+  ): Promise<number[]>;
+  getSafariSearchesWindow(
+    search: string | null,
+    lo: number | null,
+    hi: number | null,
+    offset: number,
+    limit: number,
+    sortBy: string,
+    desc: boolean,
+  ): Promise<WebSearch[]>;
   /** Count of one Safari `kind` (bookmark/reading_list/tab) matching search+range. */
   countSafariBookmarks(
     kind: string,
@@ -1719,6 +1754,20 @@ const tauriClient: TraceLoupeClient = {
     invoke<number[]>("count_safari_ranges", { search, ranges }),
   getSafariWindow: (search, lo, hi, offset, limit, sortBy, desc) =>
     invoke<HistoryVisit[]>("get_safari_window", {
+      search,
+      lo,
+      hi,
+      offset,
+      limit,
+      sortBy,
+      desc,
+    }),
+  countSafariSearches: (search, lo = null, hi = null) =>
+    invoke<number>("count_safari_searches", { search, lo, hi }),
+  countSafariSearchRanges: (search, ranges) =>
+    invoke<number[]>("count_safari_search_ranges", { search, ranges }),
+  getSafariSearchesWindow: (search, lo, hi, offset, limit, sortBy, desc) =>
+    invoke<WebSearch[]>("get_safari_searches_window", {
       search,
       lo,
       hi,
@@ -2367,6 +2416,37 @@ const mockSafari: HistoryVisit[] = [
   },
 ];
 
+const mockSafariSearches: WebSearch[] = [
+  {
+    id: 1,
+    term: "mission peak trail conditions",
+    searchedAt: 1717801100,
+    source: "visited",
+    engine: "google.com",
+    url: "https://www.google.com/search?q=mission+peak+trail+conditions",
+    profile: "Default",
+  },
+  {
+    id: 2,
+    term: "tor browser",
+    searchedAt: 1717799000,
+    source: "visited",
+    engine: "duckduckgo.com",
+    url: "https://duckduckgo.com/?q=tor+browser",
+    profile: "Default",
+  },
+  // Typed but never opened: no URL, so the row is not clickable.
+  {
+    id: 3,
+    term: "digitalcorpora",
+    searchedAt: 1717790500,
+    source: "typed",
+    engine: null,
+    url: null,
+    profile: null,
+  },
+];
+
 const mockSafariBookmarks: SafariBookmark[] = [
   {
     id: 1,
@@ -3003,6 +3083,24 @@ function mockFilterCalls(search: string | null, range?: TimeRange): Call[] {
   }
   return out;
 }
+function mockFilterSafariSearches(
+  search: string | null,
+  range?: TimeRange,
+): WebSearch[] {
+  let out = mockSafariSearches;
+  if (search) {
+    const q = search.toLowerCase();
+    out = out.filter(
+      (w) =>
+        w.term.toLowerCase().includes(q) ||
+        (w.engine?.toLowerCase().includes(q) ?? false),
+    );
+  }
+  if (range && (range.lo != null || range.hi != null)) {
+    out = out.filter((w) => inRange(w.searchedAt ?? null, range));
+  }
+  return out;
+}
 function mockFilterSafari(
   search: string | null,
   range?: TimeRange,
@@ -3062,6 +3160,8 @@ const mediaKey = (by: string) => (m: MediaItem) =>
   by === "source" ? m.source : m.takenAt;
 const callKey = (by: string) => (c: Call) =>
   by === "name" ? c.address : by === "duration" ? c.durationS : c.occurredAt;
+const safariSearchKey = (by: string) => (w: WebSearch) =>
+  by === "term" ? w.term : by === "engine" ? w.engine : w.searchedAt;
 const safariKey = (by: string) => (h: HistoryVisit) =>
   by === "title" ? h.title : by === "visits" ? h.visitCount : h.visitedAt;
 
@@ -4741,6 +4841,18 @@ const mockClient: TraceLoupeClient = {
       ? mockSortBy(
           mockFilterSafari(search, { lo, hi }),
           safariKey(sortBy),
+          desc,
+        ).slice(offset, offset + limit)
+      : [],
+  countSafariSearches: async (search, lo = null, hi = null) =>
+    mockActive ? mockFilterSafariSearches(search, { lo, hi }).length : 0,
+  countSafariSearchRanges: async (search, ranges) =>
+    ranges.map((r) => (mockActive ? mockFilterSafariSearches(search, r).length : 0)),
+  getSafariSearchesWindow: async (search, lo, hi, offset, limit, sortBy, desc) =>
+    mockActive
+      ? mockSortBy(
+          mockFilterSafariSearches(search, { lo, hi }),
+          safariSearchKey(sortBy),
           desc,
         ).slice(offset, offset + limit)
       : [],

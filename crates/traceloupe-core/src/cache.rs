@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 51;
+const SCHEMA_VERSION: i64 = 52;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -117,6 +117,23 @@ CREATE TABLE IF NOT EXISTS safari_history (
     redirect_destination TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_safari_visited ON safari_history(visited_at DESC);
+
+-- Safari web searches, from the two places iOS records them: `visited` terms
+-- recovered from a search-engine URL in History.db, and `typed` ones from
+-- com.apple.mobilesafari.plist's RecentWebSearches. They are different sets — a
+-- typed search never opened leaves no history, a result page reached by link
+-- leaves no typed entry — so `source` keeps them apart rather than merging.
+CREATE TABLE IF NOT EXISTS safari_searches (
+    id          INTEGER PRIMARY KEY,
+    term        TEXT NOT NULL,
+    searched_at INTEGER,
+    source      TEXT NOT NULL,      -- 'visited' | 'typed'
+    engine      TEXT,               -- search engine host, when known
+    url         TEXT,               -- the result-page URL ('visited' only)
+    profile     TEXT                -- Safari profile ('visited' only)
+);
+CREATE INDEX IF NOT EXISTS idx_safari_searches_at
+    ON safari_searches(searched_at DESC);
 
 -- Safari bookmarks, reading-list items, and open tabs (History lives above).
 -- `kind` selects which one, so the view can filter by type.
@@ -768,6 +785,21 @@ impl CacheDb {
             )?;
             ensure_column(&conn, "safari_history", "redirect_source", "TEXT")?;
             ensure_column(&conn, "safari_history", "redirect_destination", "TEXT")?;
+            // v52: Safari web searches, recovered from history URLs and from
+            // RecentWebSearches in com.apple.mobilesafari.plist.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS safari_searches (
+                    id          INTEGER PRIMARY KEY,
+                    term        TEXT NOT NULL,
+                    searched_at INTEGER,
+                    source      TEXT NOT NULL,
+                    engine      TEXT,
+                    url         TEXT,
+                    profile     TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_safari_searches_at
+                    ON safari_searches(searched_at DESC);",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
