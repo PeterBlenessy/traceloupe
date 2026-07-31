@@ -2070,6 +2070,10 @@ const BUILTIN: &[(&str, &str)] = &[
     ("podcasts.toml", include_str!("../modules/podcasts.toml")),
     ("alltrails.toml", include_str!("../modules/alltrails.toml")),
     (
+        "health_current_device.toml",
+        include_str!("../modules/health_current_device.toml"),
+    ),
+    (
         "home_screen.toml",
         include_str!("../modules/home_screen.toml"),
     ),
@@ -3961,6 +3965,11 @@ from = "nope"
         // id, domain, relative path
         ("tcc", "HomeDomain", "Library/TCC/TCC.db"),
         (
+            "health_current_device",
+            "HealthDomain",
+            "Health/healthdb.sqlite",
+        ),
+        (
             "carplay_recent_apps",
             "HomeDomain",
             "Library/Preferences/com.apple.CarPlayApp.plist",
@@ -4077,6 +4086,17 @@ from = "nope"
         Bytes(fn() -> Vec<u8>),
     }
 
+    /// `healthdb.sqlite`'s single-row device context — a different file from the
+    /// provenance store above, which is the mistake this fixture pins.
+    fn seed_health_device_context(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE device_context (date_modified REAL, product_type_name TEXT,
+                 currentOS_name TEXT, currentOS_version TEXT);
+             INSERT INTO device_context VALUES (744322680.0, 'iPhone12,1', 'iOS', '17.3');",
+        )
+        .unwrap();
+    }
+
     /// CarPlay's preferences: recent apps keyed by bundle id, plus the
     /// session-end facts. One fixture for both modules, because they read one
     /// store — writing two would let them drift apart while both stayed green.
@@ -4164,6 +4184,7 @@ from = "nope"
             "alltrails" => seed_alltrails,
             // Not SQL at all: return early rather than pretend.
             "carplay_recent_apps" | "carplay_session" => return Seed::Bytes(seed_carplay),
+            "health_current_device" => seed_health_device_context,
             "life360_locations" => return Seed::Bytes(seed_life360_log),
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
