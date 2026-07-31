@@ -279,15 +279,23 @@ impl BackupDecryptor {
         // Zeroizing so the file key doesn't linger on the stack after decryption.
         let key = Zeroizing::new(unwrap_prefixed(&self.class_keys, enc_key_field)?);
         let mut pt = aes_cbc_decrypt(&key, ciphertext)?;
-        if let Some(size) = size {
-            // Trim the CBC block padding back to the real plaintext length. A wrong
-            // key can't reach here as an over-long size: it yields garbage of the
-            // exact ciphertext length, so `size <= pt.len()` always holds for a
-            // valid record. A `size` beyond the buffer therefore only means bad
-            // `Size` metadata — clamp (serve untrimmed, ≤15 bytes of harmless
-            // trailing padding for a DB/media file) rather than failing the read.
-            pt.truncate(size.min(pt.len()));
-        }
+        // Trim the CBC padding back to the real plaintext length.
+        //
+        // THE PADDING IS THE AUTHORITY, NOT THE MANIFEST'S `Size`. Both describe
+        // the plaintext length, and when they disagree the padding is the one
+        // that describes THIS ciphertext: it was written by whatever encrypted
+        // the blob, while `Size` is separate metadata recorded earlier and can
+        // go stale if the file changed in between.
+        //
+        // That is not a theory. `Library/SMS/sms.db` on the iOS 17.3 public
+        // image has `Size` = «redacted» against a «redacted»-byte ciphertext carrying
+        // «redacted» bytes of database plus one padding block. Trusting `Size`
+        // discarded a whole 4 KB page and produced a file whose header promised
+        // 122 pages with 121 present — SQLite rejected it outright, so Messages
+        // was unreadable from that backup (#268). Across the five stores checked
+        // by hand, the padding gave the right length every time; `Size` was
+        // right twice, absent or over-long twice, and short once.
+        pt.truncate(plaintext_len(&pt, size));
         Ok(pt)
     }
 }
@@ -406,6 +414,44 @@ fn unwrap_prefixed(class_keys: &HashMap<u32, [u8; 32]>, field: &[u8]) -> Result<
             .map_err(|_| err("key unwrap failed (wrong password or corrupt keybag)"))?,
     );
     <[u8; 32]>::try_from(unwrapped.as_slice()).map_err(|_| err("unexpected unwrapped-key length"))
+}
+
+/// How much of a decrypted buffer is real plaintext, given the Manifest's `Size`.
+///
+/// Split out from [`BackupDecryptor::decrypt_bytes`] so the rule can be tested
+/// against the exact byte lengths measured on a real backup, without a keybag.
+fn plaintext_len(pt: &[u8], size: Option<usize>) -> usize {
+    match pkcs7_len(pt) {
+        // `Size` covering the whole buffer means nothing was padded away, so
+        // there is no padding to read and trailing bytes that merely LOOK like
+        // it must be left alone.
+        Some(len) if size != Some(pt.len()) => len,
+        // No readable padding: fall back to `Size`, clamped. A `size` beyond the
+        // buffer only means bad metadata — serve untrimmed rather than failing.
+        _ => size.map_or(pt.len(), |s| s.min(pt.len())),
+    }
+}
+
+/// Length of the plaintext inside a PKCS#7-padded buffer, or None if the tail is
+/// not valid padding.
+///
+/// PKCS#7 appends `n` bytes of value `n`, with `n` in 1..=16 — and a FULL block
+/// when the plaintext is already block-aligned, which is why a «redacted»-byte
+/// database encrypts to «redacted» bytes rather than «redacted».
+///
+/// Returning None rather than guessing matters: a wrong key yields garbage whose
+/// final byte is arbitrary, and ~6% of the time that garbage will look like
+/// valid padding. The caller therefore treats None as "no padding information"
+/// and falls back, instead of this function inventing a length.
+fn pkcs7_len(pt: &[u8]) -> Option<usize> {
+    let n = *pt.last()? as usize;
+    if n == 0 || n > 16 || n > pt.len() {
+        return None;
+    }
+    pt[pt.len() - n..]
+        .iter()
+        .all(|b| usize::from(*b) == n)
+        .then(|| pt.len() - n)
 }
 
 /// AES-256-CBC decrypt with a zero IV. `ct` must be a positive multiple of 16.
@@ -567,6 +613,80 @@ mod tests {
     use super::*;
     use aes::Aes256;
     use cbc::cipher::BlockEncryptMut;
+
+    /// The padding wins over a stale `Size` — the defect that made sms.db
+    /// unopenable (#268).
+    ///
+    /// Lengths here are the ones measured on the iOS 17.3 public image, so this
+    /// fails if the rule ever reverts to trusting `Size`.
+    #[test]
+    fn plaintext_len_prefers_the_padding_over_a_stale_size() {
+        // sms.db: «redacted» bytes of database + one full padding block. `Size`
+        // says «redacted» — a whole 4 KB page short of what was encrypted.
+        let mut sms = vec![0xAAu8; 499_728];
+        sms[499_712..].fill(16);
+        assert_eq!(
+            plaintext_len(&sms, Some(495_616)),
+            499_712,
+            "a stale Size must not discard a page that is really there"
+        );
+
+        // healthdb_secure.sqlite: no usable `Size`, so the padding is the only
+        // source — previously served 16 bytes over-long.
+        let mut health = vec![0xAAu8; 40_652_816];
+        health[40_652_800..].fill(16);
+        assert_eq!(plaintext_len(&health, None), 40_652_800);
+
+        // History.db: `Size` and the padding agree. Either rule works; pinned so
+        // the common case cannot regress unnoticed.
+        let mut hist = vec![0xAAu8; 98_320];
+        hist[98_304..].fill(16);
+        assert_eq!(plaintext_len(&hist, Some(98_304)), 98_304);
+
+        // A `Size` that spans the whole buffer means nothing was padded away.
+        // The tail must survive even though it looks like padding.
+        let mut unpadded = vec![0xAAu8; 32];
+        unpadded[16..].fill(16);
+        assert_eq!(
+            plaintext_len(&unpadded, Some(32)),
+            32,
+            "an unpadded record must not have its own bytes read as padding"
+        );
+
+        // No padding to read and no `Size`: serve the buffer rather than guess.
+        assert_eq!(plaintext_len(&[0xAAu8; 16], None), 16);
+        // Bad metadata beyond the buffer is clamped, not fatal.
+        assert_eq!(plaintext_len(&[0xAAu8; 16], Some(999)), 16);
+    }
+
+    /// PKCS#7 says how long the plaintext is; these are the shapes that reach it
+    /// from a real backup.
+    #[test]
+    fn pkcs7_len_reads_the_padding_or_declines() {
+        // A full padding block — what a block-ALIGNED plaintext gets, and the
+        // case that made sms.db look 4 KB shorter than it is.
+        let mut aligned = vec![0xAAu8; 32];
+        aligned[16..].fill(16);
+        assert_eq!(pkcs7_len(&aligned), Some(16));
+
+        // A partial block: 12 bytes of value 12 (the CarPlay plist's shape).
+        let mut partial = vec![0xAAu8; 16];
+        partial[4..].fill(12);
+        assert_eq!(pkcs7_len(&partial), Some(4));
+
+        assert_eq!(pkcs7_len(&[]), None, "nothing to read");
+        assert_eq!(pkcs7_len(&[0u8; 16]), None, "n = 0 is not valid padding");
+        // n > 16 cannot be PKCS#7 over a 16-byte block cipher.
+        let mut big = vec![0xAAu8; 32];
+        big[31] = 17;
+        assert_eq!(pkcs7_len(&big), None);
+        // Last byte says 4, but the four bytes are not all 4 — garbage, not padding.
+        let mut inconsistent = vec![0xAAu8; 16];
+        inconsistent[15] = 4;
+        assert_eq!(pkcs7_len(&inconsistent), None);
+        // Claims more padding than there are bytes.
+        assert_eq!(pkcs7_len(&[3u8]), None);
+    }
 
     /// What the backup key ladder costs at representative keybag iteration
     /// counts (#40, #55).
