@@ -481,6 +481,10 @@ mod tests {
         ),
         ("workout_routes", "one row per GPS sample inside a workout"),
         ("activity_rings", "Health detail"),
+        (
+            "health_device_use",
+            "device provenance — shown in the Device view, not a data tile",
+        ),
         ("health_timezones", "Health detail"),
         ("cycle_tracking", "Health detail"),
         (

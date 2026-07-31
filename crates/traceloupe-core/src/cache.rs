@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 52;
+const SCHEMA_VERSION: i64 = 53;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -785,6 +785,22 @@ impl CacheDb {
             )?;
             ensure_column(&conn, "safari_history", "redirect_source", "TEXT")?;
             ensure_column(&conn, "safari_history", "redirect_destination", "TEXT")?;
+            // v53: which Apple device wrote the Health data, per (model, OS
+            // build). Health survives device migration, so this is a device
+            // history reaching back past devices the person no longer owns.
+            // Rolled up per model at read time rather than stored twice.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS health_device_use (
+                    id       INTEGER PRIMARY KEY,
+                    model    TEXT NOT NULL,   -- origin_product_type, e.g. iPhone12,1
+                    os_build TEXT,            -- origin_build, e.g. 21D50; NULL if unrecorded
+                    first_at INTEGER,
+                    last_at  INTEGER,
+                    samples  INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX IF NOT EXISTS idx_health_device_use
+                    ON health_device_use(first_at);",
+            )?;
             // v52: Safari web searches, recovered from history URLs and from
             // RecentWebSearches in com.apple.mobilesafari.plist.
             conn.execute_batch(

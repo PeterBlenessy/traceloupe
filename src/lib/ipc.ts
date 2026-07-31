@@ -136,6 +136,19 @@ export interface WebSearch {
   profile: string | null;
 }
 
+/** An Apple device that contributed Health data to this phone. Health survives
+ *  migration between phones, so this reaches back past devices no longer owned. */
+export interface DeviceUse {
+  /** `ProductType` as stored (`iPhone12,1`) — an identifier, not a marketing
+   *  name. Render through `modelName()` in device-names.ts. */
+  model: string;
+  /** OS build (`21D50`). Null on the per-device rollup, which spans builds. */
+  osBuild: string | null;
+  firstAt: number | null;
+  lastAt: number | null;
+  samples: number;
+}
+
 /** A Safari bookmark, reading-list item, or open tab (`kind` selects which). */
 export interface SafariBookmark {
   id: number;
@@ -1423,6 +1436,10 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<HistoryVisit[]>;
+  /** Every Apple device that ever wrote Health data here, oldest first. */
+  listDevicesUsed(): Promise<DeviceUse[]>;
+  /** One row per (device, OS build) — an upgrade timeline, oldest first. */
+  listDeviceOsHistory(): Promise<DeviceUse[]>;
   /** Count of Safari web searches matching search+range. */
   countSafariSearches(
     search: string | null,
@@ -1762,6 +1779,8 @@ const tauriClient: TraceLoupeClient = {
       sortBy,
       desc,
     }),
+  listDevicesUsed: () => invoke<DeviceUse[]>("list_devices_used"),
+  listDeviceOsHistory: () => invoke<DeviceUse[]>("list_device_os_history"),
   countSafariSearches: (search, lo = null, hi = null) =>
     invoke<number>("count_safari_searches", { search, lo, hi }),
   countSafariSearchRanges: (search, ranges) =>
@@ -2414,6 +2433,17 @@ const mockSafari: HistoryVisit[] = [
     redirectSource: null,
     redirectDestination: null,
   },
+];
+
+const mockDeviceUse: DeviceUse[] = [
+  // Per (device, build). The rollup and the OS history are both derived from
+  // this in the mock exactly as they are in SQL, so the two cannot disagree here
+  // in a way they would not in the real client.
+  { model: "iPhone10,4", osBuild: "17G80", firstAt: 1598373708, lastAt: 1610000000, samples: 7498 },
+  { model: "iPhone12,1", osBuild: "20B110", firstAt: 1688243583, lastAt: 1706000000, samples: 5100 },
+  { model: "iPhone12,1", osBuild: "21D50", firstAt: 1706104059, lastAt: 1722629759, samples: 7119 },
+  // Single sample: a device owned, but its window dates no upgrade.
+  { model: "Watch4,3", osBuild: "20U502", firstAt: 1620929821, lastAt: 1620929821, samples: 2 },
 ];
 
 const mockSafariSearches: WebSearch[] = [
@@ -4843,6 +4873,27 @@ const mockClient: TraceLoupeClient = {
           safariKey(sortBy),
           desc,
         ).slice(offset, offset + limit)
+      : [],
+  listDevicesUsed: async () => {
+    if (!mockActive) return [];
+    const byModel = new Map<string, DeviceUse>();
+    for (const d of mockDeviceUse) {
+      const prev = byModel.get(d.model);
+      byModel.set(d.model, {
+        model: d.model,
+        osBuild: null,
+        firstAt: Math.min(prev?.firstAt ?? d.firstAt!, d.firstAt!),
+        lastAt: Math.max(prev?.lastAt ?? d.lastAt!, d.lastAt!),
+        samples: (prev?.samples ?? 0) + d.samples,
+      });
+    }
+    return [...byModel.values()].sort((a, b) => (a.firstAt ?? 0) - (b.firstAt ?? 0));
+  },
+  listDeviceOsHistory: async () =>
+    mockActive
+      ? mockDeviceUse
+          .filter((d) => d.firstAt !== d.lastAt)
+          .sort((a, b) => (a.firstAt ?? 0) - (b.firstAt ?? 0))
       : [],
   countSafariSearches: async (search, lo = null, hi = null) =>
     mockActive ? mockFilterSafariSearches(search, { lo, hi }).length : 0,
