@@ -145,8 +145,11 @@ cmd_fetch() {
 
   # Check space FIRST. Finding out there is no room 20 GB into a download is a bad
   # way to find out, and the archive lands beside images we may no longer need.
+  # An unrecorded size falls back to 24 GB: larger than any image in the catalogue,
+  # so an unknown never under-reserves.
   local need free
   need=$(( ${bytes:-24000000000} / 1024 ))
+  [ "${bytes:-0}" -gt 0 ] 2>/dev/null || need=$(( 24000000000 / 1024 ))
   free=$(df -k "$DEST_DIR" | tail -1 | awk '{print $4}')
   if [ "$free" -lt "$need" ]; then
     echo "⚠ $(human $((free * 1024))) free, need about $(human $((need * 1024)))."
@@ -154,7 +157,15 @@ cmd_fetch() {
     return 1
   fi
 
-  echo "▶ downloading $name ($(human "${bytes:-0}")) — resumable, re-run if interrupted"
+  # "(0 B)" is what an uncatalogued size printed, which is a lie in the one place
+  # someone checks whether a 22 GB download is worth starting. Say unknown.
+  local size_note
+  if [ -n "$bytes" ] && [ "$bytes" -gt 0 ] 2>/dev/null; then
+    size_note="$(human "$bytes")"
+  else
+    size_note="size not recorded — expect ~20 GB"
+  fi
+  echo "▶ downloading $name ($size_note) — resumable, re-run if interrupted"
   curl -L -C - --progress-bar -o "$archive" "$url" || die "download interrupted; re-run to resume."
 
   echo "▶ extracting only the backup ($glob)"
@@ -179,6 +190,11 @@ cmd_fetch() {
   echo "▶ removing the archive — the backup is out and the archive is re-downloadable"
   rm -f "$archive"
   echo "✓ $id ready: $(dirname "$got")"
+  # Record what it actually weighed, so the next person sees a real number in
+  # --list instead of "? GB" and the space check stops guessing.
+  if [ -z "$bytes" ] || [ "${bytes:-0}" -le 0 ] 2>/dev/null; then
+    echo "  note: $name was not sized in $CATALOG — add archive_bytes for it"
+  fi
   local pw
   pw=$(field "$id" backup_password)
   [ -n "$pw" ] && echo "  backup password: $pw"
