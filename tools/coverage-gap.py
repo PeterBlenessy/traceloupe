@@ -201,11 +201,16 @@ def glob_to_re(g: str) -> re.Pattern:
 
 def split_by_backup(artifacts, untouched, paths_file: Path):
     """Untouched artifacts, split by what a real backup contains."""
+    # (domain, path). The DOMAIN is what makes a bad match obvious: iLEAPP globs
+    # are rooted at the filesystem, so `*/Application Support/DataStore*` matches
+    # any app's — it put Google Duo against Apple Books here. Nothing can tell
+    # those apart automatically, so the report shows the domain and lets a reader
+    # see it in one glance instead of trusting a count.
     rows = []
     for line in paths_file.read_text().splitlines():
         parts = line.strip().split(None, 1)
         if len(parts) == 2:
-            rows.append(parts[1])
+            rows.append((parts[0], parts[1]))
     ours = stores_we_read()
     same, unread, absent = collections.Counter(), collections.Counter(), collections.Counter()
     examples: dict[str, str] = {}
@@ -218,17 +223,20 @@ def split_by_backup(artifacts, untouched, paths_file: Path):
         hit = None
         for g in a.get("paths") or []:
             rx = glob_to_re(g)
-            hit = next((p for p in rows if rx.match(p)), None)
+            hit = next((r for r in rows if rx.match(r[1])), None)
             if hit:
                 break
         if hit is None:
             absent[cat] += 1
-        elif any(hit.endswith(o) or o.endswith(hit) for o in ours):
+            continue
+        domain, path = hit
+        shown = f"{domain[:34]}  {path}"
+        if any(path.endswith(o) or o.endswith(path) for o in ours):
             same[cat] += 1
-            examples.setdefault(cat, hit)
+            examples.setdefault(cat, shown)
         else:
             unread[cat] += 1
-            examples.setdefault(cat, hit)
+            examples.setdefault(cat, shown)
     return same, unread, absent, examples, len(rows)
 
 
@@ -308,11 +316,13 @@ def main() -> int:
         print(f"\n── SAME STORE: {sum(same.values())} artifacts read a file we ALREADY parse.")
         print("   No new parsing — analysis we do not do on data already in the cache.")
         for c, k in same.most_common():
-            print(f"  {k:3}  {c:24} {ex.get(c, '')[:56]}")
+            print(f"  {k:3}  {c:22} {ex.get(c, '')[:78]}")
         print(f"\n── UNREAD STORE: {sum(unread.values())} artifacts read a file in this backup")
-        print("   that nothing reads. Real work, provably worth doing on THIS device.")
+        print("   that nothing reads. Real work — but CHECK THE DOMAIN: an iLEAPP glob")
+        print("   with no domain root matches any app's file, so a product name against")
+        print("   an unrelated domain is a bad match, not a gap.")
         for c, k in unread.most_common():
-            print(f"  {k:3}  {c:24} {ex.get(c, '')[:56]}")
+            print(f"  {k:3}  {c:22} {ex.get(c, '')[:78]}")
         print(f"\n── NOT HERE: {sum(absent.values())} artifacts in {len(absent)} categories.")
         print("   Not unreachable — this device just lacks the app. Needs another device")
         print("   before it can be built OR ruled out.")
