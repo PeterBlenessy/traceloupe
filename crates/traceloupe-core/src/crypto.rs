@@ -614,6 +614,86 @@ mod tests {
     use aes::Aes256;
     use cbc::cipher::BlockEncryptMut;
 
+    /// END-TO-END: a backed-up file whose Manifest `Size` is stale must still
+    /// decrypt whole, through the real `decrypt_file` path.
+    ///
+    /// `plaintext_len` pins the RULE; this pins the CHAIN — the blob plist parse,
+    /// the key unwrap, the CBC decrypt and the trim, together. #268 lived in that
+    /// chain and every existing test passed while a store we ship a parser for
+    /// decrypted to something SQLite refused to open. The gated fixture
+    /// cross-check could not have caught it either: it asserts the SQLite magic,
+    /// which a truncated file still has.
+    ///
+    /// Built in-process rather than by `tools/make_fixture_backup.py`, because a
+    /// guard that only runs when an env var points at a generated backup is a
+    /// guard that does not run in CI.
+    #[test]
+    fn a_file_with_a_stale_manifest_size_still_decrypts_whole() {
+        use cbc::cipher::{BlockEncryptMut, KeyIvInit};
+
+        const CLASS: u32 = 3;
+        let class_key = [0x11u8; 32];
+        let file_key = [0x22u8; 32];
+
+        // A plaintext that is block-ALIGNED, so PKCS#7 appends a whole extra
+        // block — the shape that made sms.db look one page short.
+        let plaintext: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        assert_eq!(plaintext.len() % 16, 0, "the aligned case is the point");
+
+        let mut buf = plaintext.clone();
+        buf.resize(plaintext.len() + 16, 0);
+        let enc = cbc::Encryptor::<Aes256>::new(
+            GenericArray::from_slice(&file_key),
+            GenericArray::from_slice(&ZERO_IV),
+        );
+        let ct_len = enc
+            .encrypt_padded_mut::<cbc::cipher::block_padding::Pkcs7>(&mut buf, plaintext.len())
+            .expect("encrypt")
+            .len();
+        buf.truncate(ct_len);
+        assert_eq!(ct_len, plaintext.len() + 16, "a full padding block");
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_id = "3d0d7e5fb2ce288813306e4d4636395e047a3d28";
+        let sub = dir.path().join(&file_id[..2]);
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join(file_id), &buf).unwrap();
+
+        // The Manifest under-reports by one 4 KB page, exactly as the real
+        // `Library/SMS/sms.db` does on the iOS 17.3 public image.
+        let wrapped = KekAes256::from(class_key)
+            .wrap_vec(&file_key)
+            .expect("wrap the file key");
+        let mut enc_key_field = CLASS.to_le_bytes().to_vec();
+        enc_key_field.extend_from_slice(&wrapped);
+        let stale = plaintext.len() - 4096;
+
+        let mut key_dict = plist::Dictionary::new();
+        key_dict.insert("NS.data".into(), plist::Value::Data(enc_key_field));
+        let mut blob_dict = plist::Dictionary::new();
+        blob_dict.insert("EncryptionKey".into(), key_dict.into());
+        blob_dict.insert("Size".into(), plist::Value::Integer((stale as u64).into()));
+        let mut file_blob = Vec::new();
+        plist::Value::Dictionary(blob_dict)
+            .to_writer_binary(&mut file_blob)
+            .unwrap();
+
+        let dec = BackupDecryptor {
+            backup_dir: dir.path().to_path_buf(),
+            class_keys: HashMap::from([(CLASS, class_key)]),
+            manifest_key: [0u8; 32],
+        };
+        let got = dec.decrypt_file(&file_blob, file_id).expect("decrypt");
+
+        assert_eq!(
+            got.len(),
+            plaintext.len(),
+            "a stale Size discarded {} bytes that were really in the ciphertext",
+            plaintext.len().saturating_sub(got.len())
+        );
+        assert_eq!(got, plaintext, "and the bytes must be the original ones");
+    }
+
     /// The padding wins over a stale `Size` — the defect that made sms.db
     /// unopenable (#268).
     ///
