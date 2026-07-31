@@ -1,0 +1,98 @@
+# Podcasts — the shows subscribed to on this device, who publishes each, and when
+# one was last listened to.
+#
+# `MTLibrary.sqlite` is the Podcasts app's library. Backup-reachable in
+# `AppDomainGroup-243LU875E5.groups.com.apple.podcasts`, whose `Documents` is
+# backed up (see docs/reference/backup-coverage-audit.md).
+#
+# THE DOMAIN CARRIES APPLE'S TEAM ID (`243LU875E5`) and is written out exactly.
+# `domain` takes no pattern, unlike `path`. If a device ever presents a different
+# team id the module finds NOTHING rather than something wrong, which is the safe
+# direction — but it is worth knowing that is the failure mode rather than
+# discovering it as an empty artifact.
+#
+# WHY THE SHOWS AND NOT THE 1774 EPISODES
+#
+# `ZMTEPISODE` holds 1774 rows on the validation image and exactly TWO have ever
+# been played. That is not a reason to filter — `bluetooth_nearby` ships all 1056
+# of its sightings for precisely that reason — but it is a different KIND of row.
+# A nearby-Bluetooth row is an observation the device made: something really was in
+# range. A podcast episode row is metadata the app FETCHED from a feed, whether or
+# not anyone ever saw it. One is evidence, the other is a cache, and 1774 rows of
+# cache would bury the six facts a reader wants.
+#
+# The activity survives the choice: `ZLASTDATEPLAYED` on the SHOW is when that
+# subscription was last listened to, so "what do they follow, and did they
+# actually listen" is answered without the feed cache. If per-episode playback
+# earns its own artifact later, it is a second module over the same store reading
+# a different table — which the overlap guard explicitly allows.
+#
+# `ZAUTHOR` and `ZCATEGORY` are the feed's own self-description, not Apple's
+# classification, so they say what the publisher claims rather than what the store
+# decided. `ZFEEDURL` is kept because it identifies the show independently of a
+# title anyone can change.
+#
+# Dates are Core Data seconds, hence `epoch = "cocoa"`.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 6 subscriptions, one with a 2021 last-played date. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "podcasts"
+name        = "Podcasts"
+description = "Podcast shows subscribed to on this device, who publishes each, and when one was last listened to."
+surface     = "device"
+category    = "Media"
+domain      = "AppDomainGroup-243LU875E5.groups.com.apple.podcasts"
+path        = "Documents/MTLibrary.sqlite"
+
+sql = [
+  """
+  SELECT ZTITLE AS show,
+         ZAUTHOR AS author,
+         ZCATEGORY AS category,
+         CASE
+           WHEN ZSUBSCRIBED IS NULL THEN 'Not recorded'
+           WHEN ZSUBSCRIBED = 0 THEN 'No'
+           WHEN ZSUBSCRIBED = 1 THEN 'Yes'
+           ELSE 'Unrecognised (' || ZSUBSCRIBED || ')'
+         END AS subscribed,
+         ZADDEDDATE AS added_at,
+         ZLASTDATEPLAYED AS last_played,
+         ZFEEDURL AS feed
+  FROM ZMTPODCAST
+  ORDER BY ZLASTDATEPLAYED DESC, ZTITLE
+  """,
+]
+
+[[columns]]
+name = "Show"
+from = "show"
+
+[[columns]]
+name = "Published by"
+from = "author"
+
+[[columns]]
+name = "Category"
+from = "category"
+
+[[columns]]
+name = "Subscribed"
+from = "subscribed"
+
+[[columns]]
+name = "Added"
+from = "added_at"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Last played"
+from = "last_played"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Feed"
+from = "feed"

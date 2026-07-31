@@ -926,6 +926,33 @@ def build_mobile_backup_plist() -> bytes:
     )
 
 
+def seed_podcasts(path: Path) -> None:
+    """MTLibrary.sqlite's show table — podcast subscriptions.
+
+    One show has been listened to and one has not: `ZLASTDATEPLAYED` being null is
+    the difference between "followed" and "actually played", which is the most
+    useful thing this artifact says.
+    """
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE ZMTPODCAST (Z_PK INTEGER PRIMARY KEY, ZSUBSCRIBED INTEGER,"
+        " ZADDEDDATE TIMESTAMP, ZLASTDATEPLAYED TIMESTAMP, ZAUTHOR VARCHAR,"
+        " ZCATEGORY VARCHAR, ZFEEDURL VARCHAR, ZTITLE VARCHAR)"
+    )
+    con.executemany(
+        "INSERT INTO ZMTPODCAST (ZSUBSCRIBED, ZADDEDDATE, ZLASTDATEPLAYED, ZAUTHOR,"
+        " ZCATEGORY, ZFEEDURL, ZTITLE) VALUES (?,?,?,?,?,?,?)",
+        [
+            (1, 606_856_862, 632_849_727, "A tech journalist", "Tech News",
+             "https://example.com/feed", "Listened Show"),
+            (1, 606_856_678, None, "Example Radio", "Daily News",
+             "https://example.org/rss", "Never Played Show"),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -951,6 +978,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_cellular_usage(cell_path)
     nearby_path = workdir / "ledevices.other.db"
     seed_bluetooth_nearby(nearby_path)
+    podcasts_path = workdir / "MTLibrary.sqlite"
+    seed_podcasts(podcasts_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -1013,6 +1042,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.MobileBackup.plist",
             build_mobile_backup_plist(),
+        ),
+        (
+            "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
+            "Documents/MTLibrary.sqlite",
+            podcasts_path.read_bytes(),
         ),
 
         (

@@ -1723,6 +1723,7 @@ const BUILTIN: &[(&str, &str)] = &[
         "backup_sizing.toml",
         include_str!("../modules/backup_sizing.toml"),
     ),
+    ("podcasts.toml", include_str!("../modules/podcasts.toml")),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -3502,6 +3503,29 @@ from = "nope"
         out
     }
 
+    /// MTLibrary.sqlite's show table. One subscription has been listened to and
+    /// one has not, because `ZLASTDATEPLAYED` being null is the difference between
+    /// "followed" and "actually played" — the single most useful thing this
+    /// artifact says.
+    fn seed_podcasts(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE ZMTPODCAST (Z_PK INTEGER PRIMARY KEY, ZSUBSCRIBED INTEGER,
+                ZADDEDDATE TIMESTAMP, ZLASTDATEPLAYED TIMESTAMP, ZAUTHOR VARCHAR,
+                ZCATEGORY VARCHAR, ZFEEDURL VARCHAR, ZTITLE VARCHAR);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO ZMTPODCAST
+                (ZSUBSCRIBED, ZADDEDDATE, ZLASTDATEPLAYED, ZAUTHOR, ZCATEGORY, ZFEEDURL, ZTITLE)
+             VALUES
+                (1,606856862,632849727,'A tech journalist','Tech News',
+                 'https://example.com/feed','Listened Show'),
+                (1,606856678,NULL,'Example Radio','Daily News',
+                 'https://example.org/rss','Never Played Show');",
+        )
+        .unwrap();
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -3581,6 +3605,11 @@ from = "nope"
             "Library/Caches/locationd/clients.plist",
         ),
         (
+            "podcasts",
+            "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
+            "Documents/MTLibrary.sqlite",
+        ),
+        (
             "backup_sizing",
             "HomeDomain",
             "Library/Preferences/com.apple.MobileBackup.plist",
@@ -3609,6 +3638,7 @@ from = "nope"
             "data_usage" => seed_data_usage,
             "sim_cards" => seed_sim_cards,
             "bluetooth_nearby" => seed_bluetooth_nearby,
+            "podcasts" => seed_podcasts,
             // Not SQL at all: return early rather than pretend.
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
