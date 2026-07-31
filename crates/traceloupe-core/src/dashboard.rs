@@ -222,17 +222,6 @@ pub const METRIC_SOURCES: &[MetricSource] = &[
         facets: Some(FacetSource::PerTable),
     },
     MetricSource {
-        id: "interactions",
-        label: "Interactions",
-        route: "/interactions",
-        icon: "interactions",
-        tables: &[one("interactions", None)],
-        facets: Some(FacetSource::Query(
-            "SELECT bundle_id, incoming + outgoing FROM interaction_channels
-             WHERE bundle_id IS NOT NULL ORDER BY 2 DESC",
-        )),
-    },
-    MetricSource {
         id: "apps",
         label: "Apps",
         route: "/apps",
@@ -488,8 +477,15 @@ mod tests {
         ("health_timezones", "Health detail"),
         ("cycle_tracking", "Health detail"),
         (
+            "interactions",
+            "CoreDuet's per-person communication summary — no longer a view (#222); \
+             retained because Security Check scans its identifiers against the \
+             indicator feeds",
+        ),
+        (
             "interaction_channels",
-            "per-channel breakdown inside Interactions",
+            "per-app counts that fed the Interactions tile's facets; kept with the \
+             table above rather than dropped mid-migration",
         ),
         ("threads", "conversations — counted as part of Messages"),
         (

@@ -104,10 +104,6 @@ const BOUNDED: &[(&str, &str)] = &[
         "one row per installed app — hundreds at the extreme",
     ),
     (
-        "interaction_channels",
-        "one row per app the person interacted through",
-    ),
-    (
         "list_recordings",
         "one row per voice memo; hundreds at the extreme",
     ),
@@ -156,10 +152,6 @@ const BOUNDED: &[(&str, &str)] = &[
     (
         "list_calendar_events",
         "#65: one row per event; read once into a virtualized list",
-    ),
-    (
-        "list_interactions",
-        "#65: one row per CoreDuet interaction; read once into a virtualized list",
     ),
     ("list_workouts", "#65: one row per workout"),
     ("list_sleep", "#65: one row per sleep session"),

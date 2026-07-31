@@ -48,7 +48,7 @@ const BASE = process.env.BASE || "http://localhost:1420";
  */
 const VIEWS = [
   "Photos", "Messages", "Contacts", "Calls", "Safari", "Notes", "Recordings",
-  "Calendar", "Reminders", "Health", "Interactions", "Apps", "Security", "Safety",
+  "Calendar", "Reminders", "Health", "Apps", "Security", "Safety",
 ];
 const DEEP = new Set(["Messages", "Notes", "Safety", "Contacts", "Photos"]);
 
@@ -307,7 +307,7 @@ const probe = () =>
 
     const islands = [];
     // Only inside a toolbar or a card header. The same rounded-bordered-muted
-    // look is used for CONTENT chips too (the Interactions channel strip), and
+    // look is used for CONTENT chips too (filter pills, badges inside rows), and
     // those size to their content — judging them against the island height
     // reports the app as broken when it is the detector that is wrong.
     const islandScopes = [

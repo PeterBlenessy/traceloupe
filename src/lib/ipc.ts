@@ -259,24 +259,6 @@ export interface CalendarEvent {
   recurring: boolean;
 }
 
-export interface Interaction {
-  id: number;
-  displayName: string | null;
-  identifier: string | null;
-  incoming: number;
-  outgoing: number;
-  incomingRecipient: number;
-  firstAt: number | null;
-  lastAt: number | null;
-}
-
-/** A per-app communication channel (which app CoreDuet interactions flowed through). */
-export interface InteractionChannel {
-  bundleId: string;
-  incoming: number;
-  outgoing: number;
-}
-
 export interface Workout {
   id: number;
   activity: string | null;
@@ -1126,9 +1108,6 @@ export interface TraceLoupeClient {
   /** Cycle Tracking entries (flow + symptoms), most recent first. */
   listCycle(): Promise<CycleEntry[]>;
   healthSummary(): Promise<HealthSummary>;
-  listInteractions(): Promise<Interaction[]>;
-  /** Per-app interaction channels (which apps comms flowed through), busiest first. */
-  interactionChannels(): Promise<InteractionChannel[]>;
   /** Distinct content kinds present (with counts), for the content-filter pills.
    * `threadId` scopes to one conversation; otherwise all messages in `service`. */
   messageKinds(
@@ -1654,9 +1633,6 @@ const tauriClient: TraceLoupeClient = {
     invoke<HealthAchievement[]>("list_health_achievements"),
   listCycle: () => invoke<CycleEntry[]>("list_cycle"),
   healthSummary: () => invoke<HealthSummary>("health_summary"),
-  listInteractions: () => invoke<Interaction[]>("list_interactions"),
-  interactionChannels: () =>
-    invoke<InteractionChannel[]>("interaction_channels"),
   messageKinds: (threadId = null, service = null) =>
     invoke<[string, number][]>("message_kinds", {
       threadId: threadId ?? null,
@@ -3427,7 +3403,7 @@ const mockClient: TraceLoupeClient = {
           serialNumber: "F2LW00XYZ123",
           lastBackupDate: 1717800000,
           // `?mock=unencrypted` renders the app as it looks against a backup
-          // made without encryption, where Health, Interactions and iCloud
+          // made without encryption, where Health and iCloud
           // tabs cannot exist. Mock-only: this client is never used inside
           // Tauri, so it cannot affect the shipped app.
           isEncrypted: !mockUnencrypted,
@@ -3625,41 +3601,6 @@ const mockClient: TraceLoupeClient = {
           achievementCount: 0,
           cycleCount: 0,
         },
-  listInteractions: async () =>
-    mockActive && !mockUnencrypted
-      ? [
-          {
-            id: 1,
-            displayName: "Robin Chen",
-            identifier: "+15551234567",
-            incoming: 842,
-            outgoing: 1203,
-            incomingRecipient: 96,
-            firstAt: 1500000000,
-            lastAt: 1717900000,
-          },
-          {
-            id: 2,
-            displayName: null,
-            identifier: "team@work.example",
-            incoming: 210,
-            outgoing: 55,
-            incomingRecipient: 12,
-            firstAt: 1600000000,
-            lastAt: 1717800000,
-          },
-        ]
-      : [],
-  interactionChannels: async () =>
-    mockActive && !mockUnencrypted
-      ? [
-          { bundleId: "com.apple.MobileSMS", incoming: 5873, outgoing: 6482 },
-          { bundleId: "com.apple.InCallService", incoming: 140, outgoing: 157 },
-          { bundleId: "com.toyopagroup.picaboo", incoming: 0, outgoing: 166 },
-          { bundleId: "com.apple.facetime", incoming: 60, outgoing: 62 },
-          { bundleId: "com.google.Gmail", incoming: 8, outgoing: 4 },
-        ]
-      : [],
   artifactsExtractionState: async () => (mockArtifactsExtracted ? "up-to-date" : "never-run"),
   extractArtifacts: async () => {
     mockArtifactsExtracted = true;
@@ -4717,14 +4658,12 @@ const mockClient: TraceLoupeClient = {
     // Read the OTHER mocks through the client rather than copying their
     // fixtures: a third copy of "what calendar data exists" would drift from
     // the view's, which is the whole failure this dashboard already had once.
-    const [events, reminders, workouts, sleep, interactions, channels] =
+    const [events, reminders, workouts, sleep] =
       await Promise.all([
         mockClient.listCalendarEvents(),
         mockClient.listReminders(),
         mockClient.listWorkouts(),
         mockClient.listSleep(),
-        mockClient.listInteractions(),
-        mockClient.interactionChannels(),
       ]);
 
     const msgs = Object.values(mockMessages).flat();
@@ -4802,13 +4741,6 @@ const mockClient: TraceLoupeClient = {
           { label: "Workouts", count: workouts.length },
           { label: "Sleep", count: sleep.length },
         ].filter((f) => f.count > 0).sort((a, b) => b.count - a.count),
-      },
-      {
-        id: "interactions", label: "Interactions", route: "/interactions", icon: "interactions",
-        count: interactions.length, stamps: [],
-        facets: channels
-          .map((c) => ({ label: c.bundleId, count: c.incoming + c.outgoing }))
-          .sort((a, b) => b.count - a.count),
       },
       {
         id: "apps", label: "Apps", route: "/apps", icon: "apps",

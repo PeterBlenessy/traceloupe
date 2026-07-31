@@ -20,7 +20,6 @@ import {
   ShieldUser,
   Table2,
   Users,
-  Waypoints,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,7 +60,6 @@ export const nav: readonly NavItem[] = [
   { to: "/calendar", label: "Calendar", icon: CalendarDays },
   { to: "/reminders", label: "Reminders", icon: ListTodo },
   { to: "/health", label: "Health", icon: HeartPulse },
-  { to: "/interactions", label: "Interactions", icon: Waypoints },
   { to: "/apps", label: "Apps", icon: Boxes },
 
 ] as const;

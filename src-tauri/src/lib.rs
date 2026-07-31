@@ -2549,32 +2549,6 @@ async fn list_calendar_events(
 }
 
 #[tauri::command]
-async fn list_interactions(
-    active: State<'_, ActiveBackup>,
-) -> Result<Vec<query::Interaction>, String> {
-    let path = active.path()?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::list_interactions(&cache).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn interaction_channels(
-    active: State<'_, ActiveBackup>,
-) -> Result<Vec<query::InteractionChannel>, String> {
-    let path = active.path()?;
-    tauri::async_runtime::spawn_blocking(move || {
-        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::interaction_channels(&cache).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
 async fn list_workouts(active: State<'_, ActiveBackup>) -> Result<Vec<query::Workout>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -4391,8 +4365,6 @@ pub fn run() {
             list_health_achievements,
             list_cycle,
             health_summary,
-            list_interactions,
-            interaction_channels,
             message_kinds,
             count_thread_messages,
             get_thread_message_window,
