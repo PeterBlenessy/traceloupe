@@ -109,6 +109,15 @@ export interface HistoryVisit {
   visitCount: number | null;
   /** URL recorded as deleted from history (a tombstone), not a live visit. */
   deleted: boolean;
+  /** Safari profile the visit belongs to (iOS 17+): "Default" for the main
+   *  history, otherwise the profile's name. Null on imports predating profiles. */
+  profile: string | null;
+  /** The visit happened on another iCloud-synced device, not this one. */
+  synced: boolean;
+  /** URL that redirected *to* this visit, when Safari recorded a chain. */
+  redirectSource: string | null;
+  /** URL this visit redirected *to*. */
+  redirectDestination: string | null;
 }
 
 /** A Safari bookmark, reading-list item, or open tab (`kind` selects which). */
@@ -2313,6 +2322,10 @@ const mockSafari: HistoryVisit[] = [
     visitedAt: 1717801200,
     visitCount: 2,
     deleted: false,
+    profile: "Default",
+    synced: false,
+    redirectSource: null,
+    redirectDestination: null,
   },
   {
     id: 2,
@@ -2321,6 +2334,11 @@ const mockSafari: HistoryVisit[] = [
     visitedAt: 1717797600,
     visitCount: 34,
     deleted: false,
+    profile: "Default",
+    // Browsed on another device signed into the same iCloud account.
+    synced: true,
+    redirectSource: null,
+    redirectDestination: null,
   },
   {
     id: 3,
@@ -2329,6 +2347,11 @@ const mockSafari: HistoryVisit[] = [
     visitedAt: 1717794000,
     visitCount: 12,
     deleted: false,
+    // A second Safari profile, so the profile badge has something to render.
+    profile: "Work",
+    synced: false,
+    redirectSource: "https://t.co/9dK2p",
+    redirectDestination: null,
   },
   {
     id: 4,
@@ -2337,6 +2360,10 @@ const mockSafari: HistoryVisit[] = [
     visitedAt: 1717790000,
     visitCount: null,
     deleted: true,
+    profile: "Default",
+    synced: false,
+    redirectSource: null,
+    redirectDestination: null,
   },
 ];
 
