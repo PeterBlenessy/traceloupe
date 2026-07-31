@@ -1724,6 +1724,7 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/backup_sizing.toml"),
     ),
     ("podcasts.toml", include_str!("../modules/podcasts.toml")),
+    ("alltrails.toml", include_str!("../modules/alltrails.toml")),
 ];
 
 /// Parse the compiled-in modules. Errors carry the module's filename, exactly
@@ -3526,6 +3527,41 @@ from = "nope"
         .unwrap();
     }
 
+    /// AllTrails: the three tables an activity is spread across.
+    ///
+    /// One recording has TWO timed segments — a pause and resume — because the
+    /// aggregation is the whole reason the join is written the way it is: joined
+    /// row-for-row it would report one hike as two.
+    fn seed_alltrails(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE ZTRACK (Z_PK INTEGER PRIMARY KEY, ZELEVATIONGAIN INTEGER,
+                ZTIMEMOVING INTEGER, ZTIMETOTAL INTEGER, ZMAP INTEGER,
+                ZCALORIES FLOAT, ZDISTANCETOTAL FLOAT, ZNAME VARCHAR);
+             CREATE TABLE ZMAP (Z_PK INTEGER PRIMARY KEY, ZISPRIVATE INTEGER,
+                ZBOTTOMRIGHTLATITUDE FLOAT, ZBOTTOMRIGHTLONGITUDE FLOAT,
+                ZTOPLEFTLATITUDE FLOAT, ZTOPLEFTLONGITUDE FLOAT, ZNAME VARCHAR);
+             CREATE TABLE ZLINETIMEDSEGMENT (Z_PK INTEGER PRIMARY KEY, ZTRACK INTEGER,
+                ZDATETIMESTART TIMESTAMP, ZDATETIMESTOP TIMESTAMP);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO ZMAP (Z_PK, ZISPRIVATE, ZTOPLEFTLATITUDE, ZTOPLEFTLONGITUDE,
+                ZBOTTOMRIGHTLATITUDE, ZBOTTOMRIGHTLONGITUDE, ZNAME) VALUES
+                (1,0,35.60,-78.80,35.70,-78.90,'Bass Lake Trail'),
+                (2,1,38.70,-77.20,38.90,-77.40,'Morning hike');
+             INSERT INTO ZTRACK (Z_PK, ZELEVATIONGAIN, ZTIMEMOVING, ZTIMETOTAL, ZMAP,
+                ZCALORIES, ZDISTANCETOTAL) VALUES
+                (1,29,2846,3025,1,411.0,3049.33),
+                (2,84,4498,4498,2,650.0,6796.12);
+             INSERT INTO ZLINETIMEDSEGMENT (Z_PK, ZTRACK, ZDATETIMESTART, ZDATETIMESTOP) VALUES
+                -- One hike, paused and resumed: TWO segments, one activity.
+                (1,1,660000000,660001000),
+                (2,1,660002000,660003025),
+                (3,2,726000000,726004498);",
+        )
+        .unwrap();
+    }
+
     /// Where each shipped module's store lives, stated HERE rather than read
     /// from the module.
     ///
@@ -3605,6 +3641,11 @@ from = "nope"
             "Library/Caches/locationd/clients.plist",
         ),
         (
+            "alltrails",
+            "AppDomain-com.alltrails.AllTrails",
+            "Documents/AllTrails.sqlite",
+        ),
+        (
             "podcasts",
             "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
             "Documents/MTLibrary.sqlite",
@@ -3639,6 +3680,7 @@ from = "nope"
             "sim_cards" => seed_sim_cards,
             "bluetooth_nearby" => seed_bluetooth_nearby,
             "podcasts" => seed_podcasts,
+            "alltrails" => seed_alltrails,
             // Not SQL at all: return early rather than pretend.
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
@@ -3930,6 +3972,56 @@ from = "nope"
                 );
             }
         }
+    }
+
+    /// AllTrails: a paused-and-resumed recording is ONE activity, and the
+    /// coordinates are the midpoint of a box rather than a corner of it.
+    #[test]
+    fn alltrails_aggregates_segments_and_centres_the_box() {
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods.iter().find(|m| m.id == "alltrails").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, seed_alltrails);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+
+        // TWO activities, not three: the first has two timed segments, and joining
+        // row-for-row would report one hike as two.
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+
+        let lake = rows
+            .iter()
+            .find(|r| r["Activity"] == serde_json::json!("Bass Lake Trail"))
+            .unwrap();
+        assert_eq!(lake["Segments"], serde_json::json!(2));
+        // The span covers BOTH segments: first start to last stop.
+        assert_eq!(
+            lake["Started"],
+            serde_json::json!(660_000_000_i64 + 978_307_200)
+        );
+        assert_eq!(
+            lake["Ended"],
+            serde_json::json!(660_003_025_i64 + 978_307_200)
+        );
+
+        // The MIDPOINT of the box (35.60..35.70), not either corner. A corner can
+        // be a long way from anything actually walked.
+        let lat = lake["Roughly where (lat)"].as_f64().unwrap();
+        assert!((lat - 35.65).abs() < 1e-9, "got {lat}");
+        let lon = lake["Roughly where (lon)"].as_f64().unwrap();
+        assert!((lon + 78.85).abs() < 1e-9, "got {lon}");
+
+        assert_eq!(lake["Distance (m)"], serde_json::json!(3049));
+        assert_eq!(lake["Private"], serde_json::json!("No"));
+
+        let other = rows
+            .iter()
+            .find(|r| r["Activity"] == serde_json::json!("Morning hike"))
+            .unwrap();
+        assert_eq!(other["Segments"], serde_json::json!(1));
+        assert_eq!(other["Private"], serde_json::json!("Yes"));
     }
 
     /// The accounts module: a service is always NAMED, a sub-account says what it
