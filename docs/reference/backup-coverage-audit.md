@@ -241,6 +241,28 @@ python3 tools/coverage-gap.py            # summary + the biggest gaps
 python3 tools/coverage-gap.py --all      # every untouched category
 ```
 
+`--present` splits the remaining gap by what a REAL backup contains, which is the
+difference between a list and a worklist:
+
+```bash
+cargo run -p traceloupe-core --example explore_real_backup -- <dir> <pw> list '%' \
+    | tail -n +3 > /tmp/allpaths.txt
+python3 tools/coverage-gap.py --present /tmp/allpaths.txt
+```
+
+Three outcomes, and they are different kinds of work:
+
+| | meaning |
+|---|---|
+| **same store** | the artifact reads a file we already parse — no new parsing, just analysis we do not do on data already in the cache |
+| **unread store** | the file is in this backup and nothing reads it — real work, provably worth doing on this device |
+| **not here** | the file is not in this backup at all — this device simply lacks the app, so it can be neither built nor ruled out without another device |
+
+On the iOS 17 image that splits 187 untouched artifacts into **12 / 21 / 154**.
+The last number is the one that matters: most of what is left cannot be settled
+by working harder on the device we have. It is the corpus argument again, with a
+figure attached.
+
 It reads our coverage **from the source** — `APP_CHAT_MODULES`, the module TOMLs,
 the parser files, the app catalog — so a parser added tomorrow counts without
 anyone editing the tool.
