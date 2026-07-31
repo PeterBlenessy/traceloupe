@@ -154,8 +154,13 @@ pub fn parse_safari(
     let tx = conn.unchecked_transaction()?;
     if replace {
         tx.execute("DELETE FROM safari_history", [])?;
+        // The searches recovered from these URLs are derived from the rows being
+        // replaced, so they go with them. Typed searches come from a different
+        // file and survive.
+        tx.execute("DELETE FROM safari_searches WHERE source = 'visited'", [])?;
     }
     let mut inserted: usize = 0;
+    let mut searches: usize = 0;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let url: String = r.get(0)?;
@@ -193,6 +198,22 @@ pub fn parse_safari(
             ],
         )?;
         inserted += 1;
+
+        // A search-engine result page is an ordinary history row whose URL
+        // carries the query; nothing stores the term as text, so recover it here
+        // while the URL is in hand.
+        if let Some(s) = crate::parsers::safari_search::search_in_url(&url) {
+            crate::parsers::safari_search::insert_search(
+                &tx,
+                &s.term,
+                visited_at,
+                "visited",
+                Some(&s.engine),
+                Some(&url),
+                Some(profile),
+            )?;
+            searches += 1;
+        }
     }
 
     // Deleted-history tombstones: URLs Safari recorded as removed from history.
@@ -222,6 +243,7 @@ pub fn parse_safari(
     tx.commit()?;
     // Count only committed rows — a mid-loop error rolls back, adding nothing.
     report.safari_visits += inserted;
+    report.safari_searches += searches;
     Ok(())
 }
 

@@ -25,4 +25,5 @@ pub mod recordings;
 pub mod reminders;
 pub mod safari;
 pub mod safari_bookmarks;
+pub mod safari_search;
 pub mod tiktok_contacts;

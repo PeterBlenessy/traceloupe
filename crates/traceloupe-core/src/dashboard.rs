@@ -467,6 +467,10 @@ mod tests {
             "shown inside the Safari view, not a tile of its own",
         ),
         (
+            "safari_searches",
+            "shown inside the Safari view, same as safari_bookmarks",
+        ),
+        (
             "scan_runs",
             "Security Check runs — surfaced as a scan tile, not a data tile",
         ),

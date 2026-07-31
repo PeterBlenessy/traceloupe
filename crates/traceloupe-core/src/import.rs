@@ -1115,7 +1115,55 @@ fn import_safari_native(
             return false;
         }
     };
-    parse_safari_histories(&index, decryptor, cache, work_dir, report, false, ".") > 0
+    let n = parse_safari_histories(&index, decryptor, cache, work_dir, report, false, ".");
+    // Typed searches live in Safari's preferences plist, not in History.db, so
+    // they are imported whether or not the history parsed.
+    import_recent_searches(&index, decryptor, cache, work_dir, report, false);
+    n > 0
+}
+
+/// Import `RecentWebSearches` from `com.apple.mobilesafari.plist`.
+///
+/// Located by relative path across domains rather than by a fixed `(domain,
+/// path)`: it sits under `AppDomain-com.apple.mobilesafari` on the images we
+/// have, but the preferences domain has moved between iOS versions and the path
+/// is the stable half.
+fn import_recent_searches(
+    index: &crate::manifest::ManifestIndex,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+    replace: bool,
+) {
+    let hits = match index.find_relative_like("%Library/Preferences/com.apple.mobilesafari.plist") {
+        Ok(h) => h,
+        Err(e) => {
+            report
+                .warnings
+                .push(format!("Safari searches: Manifest read failed ({e})."));
+            return;
+        }
+    };
+    let Some(entry) = hits.into_iter().next() else {
+        return; // no Safari preferences in this backup
+    };
+    let out = work_dir.join(".com.apple.mobilesafari.plist");
+    if let Err(e) = index.extract_to(&entry, decryptor, &out) {
+        let _ = std::fs::remove_file(&out);
+        report
+            .warnings
+            .push(format!("Safari searches: couldn't read preferences ({e})."));
+        return;
+    }
+    if let Err(e) =
+        crate::parsers::safari_search::parse_recent_searches(&out, cache, report, replace)
+    {
+        report
+            .warnings
+            .push(format!("Safari searches: parse failed ({e})."));
+    }
+    let _ = std::fs::remove_file(&out);
 }
 
 /// Extract + parse Safari `Bookmarks.db` (bookmarks + reading list) and
@@ -1802,6 +1850,7 @@ pub fn reimport_module(
                     "History.db is not in this backup".into(),
                 ));
             }
+            import_recent_searches(&index, decryptor, &cache, work_dir, &mut report, true);
             // Refresh bookmarks / reading list / tabs alongside history.
             import_safari_bookmarks_native(
                 backup_dir,
