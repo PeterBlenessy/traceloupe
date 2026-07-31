@@ -3594,6 +3594,30 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "podcasts",
+            name: "Podcasts",
+            category: "Media",
+            description:
+              "Podcast shows subscribed to on this device, who publishes each, and when one was last listened to.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Show",
+              "Published by",
+              "Category",
+              "Subscribed",
+              "Added",
+              "Last played",
+              "Feed",
+            ],
+            timestampColumns: ["Added", "Last played"],
+            byteColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "backup_sizing",
             name: "Backup size by domain",
             category: "Device",
@@ -4012,6 +4036,28 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "podcasts"
+        ? [
+            {
+              Show: "Listened Show",
+              "Published by": "A tech journalist",
+              Category: "Tech News",
+              Subscribed: "Yes",
+              Added: 1585164062,
+              "Last played": 1611156927,
+              Feed: "https://example.com/feed",
+            },
+            {
+              Show: "Never Played Show",
+              "Published by": "Example Radio",
+              Category: "Daily News",
+              Subscribed: "Yes",
+              Added: 1585163878,
+              // Followed, never actually played — the distinction the artifact is for.
+              "Last played": null,
+              Feed: "https://example.org/rss",
+            },
+          ]
       : mockActive && artifactId === "backup_sizing"
         ? [
             { Domain: "CameraRollDomain", Size: 3221225472 },
