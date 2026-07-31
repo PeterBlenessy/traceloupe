@@ -1,7 +1,17 @@
 import { useCallback, useMemo, useState } from "react";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { useQuery } from "@tanstack/react-query";
-import { Bookmark, BookOpen, EyeOff, Globe, SquareStack, Trash2 } from "lucide-react";
+import {
+  Bookmark,
+  BookOpen,
+  CloudDownload,
+  CornerDownRight,
+  EyeOff,
+  Globe,
+  SquareStack,
+  Trash2,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import {
   Item, ItemContent, ItemDescription, ItemMedia, ItemTitle, } from "@/components/ui/item";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -217,6 +227,11 @@ function hostOf(url: string): string {
 }
 
 function VisitRow({ visit }: { visit: HistoryVisit }) {
+  // "Default" is the profile almost every visit has, so labelling it would put a
+  // badge on every row and tell the reader nothing. Only a named profile shows.
+  const namedProfile =
+    visit.profile && visit.profile !== "Default" ? visit.profile : null;
+  const redirect = visit.redirectSource ?? visit.redirectDestination;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -237,13 +252,33 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
               )}
             </ItemMedia>
             <ItemContent>
-              <ItemTitle className={cn("truncate", visit.deleted && "line-through")}>
-                {visit.title ?? hostOf(visit.url)}
+              <ItemTitle
+                className={cn(
+                  "flex items-center gap-1.5 truncate",
+                  visit.deleted && "line-through",
+                )}
+              >
+                <span className="truncate">
+                  {visit.title ?? hostOf(visit.url)}
+                </span>
+                {namedProfile && (
+                  <Badge variant="secondary" className="shrink-0 font-normal">
+                    {namedProfile}
+                  </Badge>
+                )}
               </ItemTitle>
-              <ItemDescription className="truncate">{visit.url}</ItemDescription>
+              <ItemDescription className="flex items-center gap-1.5 truncate">
+                {redirect && (
+                  <CornerDownRight className="size-3 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate">{visit.url}</span>
+              </ItemDescription>
             </ItemContent>
             <div className="flex shrink-0 flex-col items-end gap-0.5 whitespace-nowrap text-xs text-muted-foreground">
-              <span>{visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}</span>
+              <span className="flex items-center gap-1">
+                {visit.synced && <CloudDownload className="size-3.5" />}
+                {visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}
+              </span>
               {visit.visitCount != null && (
                 <span>{formatCount(visit.visitCount)} visits</span>
               )}
@@ -251,7 +286,26 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
           </button>
         </Item>
       </TooltipTrigger>
-      <TooltipContent>{`Open ${visit.url}`}</TooltipContent>
+      <TooltipContent className="max-w-sm">
+        <div className="space-y-1">
+          <div>{`Open ${visit.url}`}</div>
+          {visit.synced && (
+            <div className="text-muted-foreground">
+              Visited on another device signed into this iCloud account, not on
+              this one.
+            </div>
+          )}
+          {namedProfile && (
+            <div className="text-muted-foreground">{`Safari profile: ${namedProfile}`}</div>
+          )}
+          {visit.redirectSource && (
+            <div className="text-muted-foreground">{`Redirected from ${visit.redirectSource}`}</div>
+          )}
+          {visit.redirectDestination && (
+            <div className="text-muted-foreground">{`Redirected to ${visit.redirectDestination}`}</div>
+          )}
+        </div>
+      </TooltipContent>
     </Tooltip>
   );
 }

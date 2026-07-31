@@ -754,13 +754,23 @@ pub struct HistoryVisit {
     pub visit_count: Option<i64>,
     /// This URL was recorded as deleted from history (a tombstone), not a live visit.
     pub deleted: bool,
+    /// Safari profile the visit belongs to (iOS 17+): `Default` for the main
+    /// history, otherwise the profile's name. NULL on pre-v51 imports.
+    pub profile: Option<String>,
+    /// The visit happened on another iCloud-synced device, not this one.
+    pub synced: bool,
+    /// URL that redirected *to* this visit, when Safari recorded a chain.
+    pub redirect_source: Option<String>,
+    /// URL this visit redirected *to*.
+    pub redirect_destination: Option<String>,
 }
 
 /// Safari history, most recent first.
 pub fn list_safari_history(cache: &CacheDb) -> Result<Vec<HistoryVisit>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
-        "SELECT id, url, title, visited_at, visit_count, deleted
+        "SELECT id, url, title, visited_at, visit_count, deleted,
+                profile, synced, redirect_source, redirect_destination
          FROM safari_history ORDER BY visited_at DESC NULLS LAST, id DESC",
     )?;
     let rows = stmt.query_map([], row_to_visit)?;
@@ -776,6 +786,10 @@ fn row_to_visit(r: &rusqlite::Row<'_>) -> rusqlite::Result<HistoryVisit> {
         visited_at: r.get(3)?,
         visit_count: r.get(4)?,
         deleted: r.get::<_, i64>(5)? != 0,
+        profile: r.get(6)?,
+        synced: r.get::<_, i64>(7)? != 0,
+        redirect_source: r.get(8)?,
+        redirect_destination: r.get(9)?,
     })
 }
 
@@ -1741,7 +1755,8 @@ pub fn get_safari_window(
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
-        "SELECT id, url, title, visited_at, visit_count, deleted
+        "SELECT id, url, title, visited_at, visit_count, deleted,
+                profile, synced, redirect_source, redirect_destination
          FROM safari_history
          WHERE (?1 IS NULL OR url LIKE '%' || ?1 || '%' ESCAPE '\\'
                           OR title LIKE '%' || ?1 || '%' ESCAPE '\\')

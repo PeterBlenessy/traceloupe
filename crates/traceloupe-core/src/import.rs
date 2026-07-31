@@ -1010,6 +1010,93 @@ fn import_calls_native(
     ok
 }
 
+/// Every Safari history database in the backup, as `(profile name, entry)`.
+///
+/// Before iOS 17 that is just `Library/Safari/History.db`. Since iOS 17 Safari
+/// supports profiles, each keeping its own `History.db` under
+/// `Library/Safari/Profiles/<name>/` — reading only the main one silently drops
+/// everything browsed in a profile, which on a multi-profile device can be most
+/// of the history.
+fn safari_history_dbs(
+    index: &crate::manifest::ManifestIndex,
+) -> Result<Vec<(String, crate::manifest::FileEntry)>> {
+    let mut out = Vec::new();
+    if let Some(e) = index.find("HomeDomain", "Library/Safari/History.db")? {
+        out.push((crate::parsers::safari::DEFAULT_PROFILE.to_string(), e));
+    }
+    for e in index.find_relative_like("Library/Safari/Profiles/%/History.db")? {
+        // LIKE '%' also spans '/', so confirm the shape rather than trusting the
+        // pattern: .../Profiles/<name>/History.db, one segment for the name.
+        let parts: Vec<&str> = e.relative_path.split('/').collect();
+        let Some(name) = parts
+            .iter()
+            .position(|p| *p == "Profiles")
+            .filter(|i| parts.len() == i + 3)
+            .map(|i| parts[i + 1])
+        else {
+            continue;
+        };
+        if e.domain == "HomeDomain" && !name.is_empty() {
+            out.push((name.to_string(), e));
+        }
+    }
+    Ok(out)
+}
+
+/// Extract and parse every Safari history database (main + per-profile) into the
+/// cache. `replace` clears the table before the *first* one, so a re-import
+/// replaces all profiles together instead of each wiping the last.
+///
+/// Returns how many databases parsed successfully; a per-file failure is warned
+/// about and skipped, so one unreadable profile does not lose the others.
+fn parse_safari_histories(
+    index: &crate::manifest::ManifestIndex,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    work_dir: &Path,
+    report: &mut ImportReport,
+    replace: bool,
+    tmp_prefix: &str,
+) -> usize {
+    let dbs = match safari_history_dbs(index) {
+        Ok(d) => d,
+        Err(e) => {
+            report.warnings.push(format!(
+                "Native Safari: Manifest read failed ({e}); using iLEAPP."
+            ));
+            return 0;
+        }
+    };
+    let mut parsed = 0usize;
+    for (profile, entry) in dbs {
+        let out = work_dir.join(format!("{tmp_prefix}{profile}.History.db"));
+        // WAL-aware: History.db keeps most/all visits in its `-wal` sidecar.
+        if let Err(e) = index.extract_db(&entry, decryptor, &out) {
+            let _ = std::fs::remove_file(&out);
+            report.warnings.push(format!(
+                "Native Safari: couldn't read {} History.db ({e}).",
+                profile
+            ));
+            continue;
+        }
+        // Only the first parse clears; the rest append their profile's rows.
+        match crate::parsers::safari::parse_safari(
+            &out,
+            cache,
+            report,
+            replace && parsed == 0,
+            &profile,
+        ) {
+            Ok(()) => parsed += 1,
+            Err(e) => report
+                .warnings
+                .push(format!("Native Safari: {profile} parse failed ({e}).")),
+        }
+        let _ = std::fs::remove_file(&out);
+    }
+    parsed
+}
+
 /// Materialize Safari history natively from `History.db`. Returns true when the
 /// native path handled Safari (so the iLEAPP `safarihistory` stage is skipped).
 fn import_safari_native(
@@ -1028,36 +1115,7 @@ fn import_safari_native(
             return false;
         }
     };
-    let entry = match index.find("HomeDomain", "Library/Safari/History.db") {
-        Ok(Some(e)) => e,
-        Ok(None) => return false, // not in this backup → iLEAPP path
-        Err(e) => {
-            report.warnings.push(format!(
-                "Native Safari: Manifest read failed ({e}); using iLEAPP."
-            ));
-            return false;
-        }
-    };
-    let out = work_dir.join(".History.db");
-    // WAL-aware: History.db keeps most/all visits in its `-wal` sidecar.
-    if let Err(e) = index.extract_db(&entry, decryptor, &out) {
-        let _ = std::fs::remove_file(&out);
-        report.warnings.push(format!(
-            "Native Safari: couldn't read History.db ({e}); using iLEAPP."
-        ));
-        return false;
-    }
-    let ok = match crate::parsers::safari::parse_safari(&out, cache, report, false) {
-        Ok(()) => true,
-        Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Safari: parse failed ({e}); using iLEAPP."));
-            false
-        }
-    };
-    let _ = std::fs::remove_file(&out);
-    ok
+    parse_safari_histories(&index, decryptor, cache, work_dir, report, false, ".") > 0
 }
 
 /// Extract + parse Safari `Bookmarks.db` (bookmarks + reading list) and
@@ -1728,17 +1786,22 @@ pub fn reimport_module(
         }
         "safari" => {
             let index = crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir)?;
-            let entry = index
-                .find("HomeDomain", "Library/Safari/History.db")?
-                .ok_or_else(|| crate::Error::Parse("History.db is not in this backup".into()))?;
-            let out = work_dir.join(".reimport-History.db");
-            if let Err(e) = index.extract_db(&entry, decryptor, &out) {
-                let _ = std::fs::remove_file(&out);
-                return Err(e);
+            // Main history plus every iOS 17+ profile, replacing all of them in
+            // one pass so a re-import can't leave a stale profile behind.
+            let n = parse_safari_histories(
+                &index,
+                decryptor,
+                &cache,
+                work_dir,
+                &mut report,
+                true,
+                ".reimport-",
+            );
+            if n == 0 {
+                return Err(crate::Error::Parse(
+                    "History.db is not in this backup".into(),
+                ));
             }
-            let r = crate::parsers::safari::parse_safari(&out, &cache, &mut report, true);
-            let _ = std::fs::remove_file(&out);
-            r?;
             // Refresh bookmarks / reading list / tabs alongside history.
             import_safari_bookmarks_native(
                 backup_dir,
@@ -1973,6 +2036,114 @@ mod tests {
             .unwrap();
         assert_eq!(folder.as_deref(), Some("Notes"));
         assert_eq!(title.as_deref(), Some("Reminder"));
+    }
+
+    /// Write a minimal Safari `History.db` blob into a plaintext backup, and
+    /// return the Manifest row for it.
+    fn seed_history_blob(
+        backup: &Path,
+        file_id: &str,
+        domain: &str,
+        rel: &str,
+        url: &str,
+    ) -> String {
+        let sub = backup.join(&file_id[..2]);
+        std::fs::create_dir_all(&sub).unwrap();
+        let db = Connection::open(sub.join(file_id)).unwrap();
+        db.execute_batch(&format!(
+            "CREATE TABLE history_items (id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER);
+             CREATE TABLE history_visits (id INTEGER PRIMARY KEY, history_item INTEGER,
+                 title TEXT, visit_time REAL, origin INTEGER,
+                 redirect_source INTEGER, redirect_destination INTEGER);
+             INSERT INTO history_items VALUES (1, '{url}', 1);
+             INSERT INTO history_visits VALUES (10, 1, 'page', 721692800.0, 0, NULL, NULL);"
+        ))
+        .unwrap();
+        drop(db);
+        format!("INSERT INTO Files VALUES ('{file_id}','{domain}','{rel}',1,NULL);")
+    }
+
+    /// Since iOS 17 Safari keeps a separate `History.db` per profile. All of them
+    /// must be imported and stay attributable — reading only the main one drops
+    /// every visit made in a profile.
+    ///
+    /// The decoys matter as much as the real rows: a `LIKE` pattern with `%` also
+    /// spans `/`, so a deeper path and a non-HomeDomain hit both match the SQL and
+    /// have to be rejected by shape rather than by the query.
+    #[test]
+    fn imports_every_safari_profile_and_rejects_lookalikes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(&backup).unwrap();
+
+        let rows = [
+            seed_history_blob(
+                &backup,
+                "ef00000000000000000000000000000000000001",
+                "HomeDomain",
+                "Library/Safari/History.db",
+                "https://default.example",
+            ),
+            seed_history_blob(
+                &backup,
+                "ef00000000000000000000000000000000000002",
+                "HomeDomain",
+                "Library/Safari/Profiles/Work/History.db",
+                "https://work.example",
+            ),
+            // Decoy: one segment too deep, so "Work" is not the profile name.
+            seed_history_blob(
+                &backup,
+                "ef00000000000000000000000000000000000003",
+                "HomeDomain",
+                "Library/Safari/Profiles/Work/Nested/History.db",
+                "https://nested.example",
+            ),
+            // Decoy: right shape, wrong domain — another app's lookalike path.
+            seed_history_blob(
+                &backup,
+                "ef00000000000000000000000000000000000004",
+                "AppDomain-com.example.other",
+                "Library/Safari/Profiles/Other/History.db",
+                "https://otherdomain.example",
+            ),
+        ];
+        Connection::open(backup.join("Manifest.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+                 {}",
+                rows.join("\n")
+            ))
+            .unwrap();
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        let work = tmp.path().join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        let mut report = ImportReport::default();
+
+        let ok = import_safari_native(&backup, None, &cache, &work, &mut report);
+        assert!(ok, "native Safari should succeed; {:?}", report.warnings);
+
+        let mut stmt = cache
+            .conn()
+            .prepare("SELECT profile, url FROM safari_history ORDER BY url")
+            .unwrap();
+        let got: Vec<(String, String)> = stmt
+            .query_map([], |r| -> rusqlite::Result<(String, String)> {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+            .map(std::result::Result::unwrap)
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("Default".to_string(), "https://default.example".to_string()),
+                ("Work".to_string(), "https://work.example".to_string()),
+            ],
+            "main history + the one real profile, each attributed; decoys excluded"
+        );
     }
 
     /// Re-importing a native type replaces its rows rather than appending: two
