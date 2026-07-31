@@ -1,0 +1,142 @@
+# AllTrails recordings — outdoor activities recorded on this device: what was
+# walked or hiked, when, how far, and roughly where.
+#
+# `AllTrails.sqlite` is the app's Core Data store, in
+# `AppDomain-com.alltrails.AllTrails`, whose `Documents` is backed up (see
+# docs/reference/backup-coverage-audit.md).
+#
+# THREE TABLES, because no one of them is the activity:
+#
+#   * `ZTRACK`             — the measurements: distance, moving time, elevation,
+#                            calories. No name and NO DATE.
+#   * `ZMAP`               — the name the user gave it, whether it is private, and
+#                            the bounding box it covers. Joined by `ZTRACK.ZMAP`.
+#   * `ZLINETIMEDSEGMENT`  — when it happened. Joined by `ZTRACK` on the segment.
+#
+# The date living in a third table is the thing that makes this artifact hard to
+# find and easy to get wrong: a reader of `ZTRACK` alone would conclude the app
+# does not record when.
+#
+# SEGMENTS ARE AGGREGATED, not joined row-for-row. A track may have several timed
+# segments (a pause and resume makes two), and joining without grouping would
+# report one hike as several. `MIN(start)`/`MAX(stop)` give the real span, and the
+# segment count is shown so a multi-segment recording is visible as one rather
+# than looking like a single unbroken walk.
+#
+# THE COORDINATES ARE A MIDPOINT, AND THE COLUMN SAYS SO
+#
+# `ZMAP` stores a bounding BOX (`ZTOPLEFT*` / `ZBOTTOMRIGHT*`), not a position.
+# Showing a corner as "location" would put the activity at a point it never
+# reached — a box corner can be a long way from anything walked. The midpoint of
+# the box is honest as "roughly where this was", which is what the column is
+# called, and it is arithmetic on stored values rather than an invented fix.
+#
+# On the validation image it earns itself immediately: five recordings sit around
+# 35.6N 78.8W and the sixth is at 38.8N 77.3W — about 300 km away, which is a trip
+# rather than a walk.
+#
+# Times are Core Data seconds. Distance is metres and moving time is seconds, both
+# named so, because this format has no unit-aware kind and a bare "3049" invites
+# the reader to guess.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 6 recordings between November 2021 and July 2024. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "alltrails"
+name        = "AllTrails recordings"
+description = "Outdoor activities recorded in AllTrails — what was walked or hiked, when, how far, and roughly where."
+surface     = "device"
+category    = "Locations"
+domain      = "AppDomain-com.alltrails.AllTrails"
+path        = "Documents/AllTrails.sqlite"
+
+sql = [
+  """
+  SELECT m.ZNAME AS name,
+         MIN(s.ZDATETIMESTART) AS started_at,
+         MAX(s.ZDATETIMESTOP) AS ended_at,
+         CAST(t.ZDISTANCETOTAL AS INTEGER) AS distance_m,
+         t.ZTIMEMOVING AS moving_s,
+         t.ZTIMETOTAL AS total_s,
+         t.ZELEVATIONGAIN AS climb_m,
+         CAST(t.ZCALORIES AS INTEGER) AS calories,
+         -- The MIDPOINT of the map's bounding box, not a recorded position.
+         (m.ZTOPLEFTLATITUDE + m.ZBOTTOMRIGHTLATITUDE) / 2.0 AS lat,
+         (m.ZTOPLEFTLONGITUDE + m.ZBOTTOMRIGHTLONGITUDE) / 2.0 AS lon,
+         CASE
+           WHEN m.ZISPRIVATE IS NULL THEN 'Not recorded'
+           WHEN m.ZISPRIVATE = 0 THEN 'No'
+           WHEN m.ZISPRIVATE = 1 THEN 'Yes'
+           ELSE 'Unrecognised (' || m.ZISPRIVATE || ')'
+         END AS private,
+         COUNT(s.Z_PK) AS segments
+  FROM ZTRACK t
+  LEFT JOIN ZMAP m ON m.Z_PK = t.ZMAP
+  LEFT JOIN ZLINETIMEDSEGMENT s ON s.ZTRACK = t.Z_PK
+  GROUP BY t.Z_PK
+  ORDER BY started_at DESC
+  """,
+]
+
+[[columns]]
+name = "Activity"
+from = "name"
+
+[[columns]]
+name = "Started"
+from = "started_at"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Ended"
+from = "ended_at"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Distance (m)"
+from = "distance_m"
+kind = "integer"
+
+[[columns]]
+name = "Moving time (s)"
+from = "moving_s"
+kind = "integer"
+
+[[columns]]
+name = "Total time (s)"
+from = "total_s"
+kind = "integer"
+
+[[columns]]
+name = "Climb (m)"
+from = "climb_m"
+kind = "integer"
+
+[[columns]]
+name = "Calories"
+from = "calories"
+kind = "integer"
+
+# Named for what it is: the centre of the recorded area, not a position the device
+# was ever at.
+[[columns]]
+name = "Roughly where (lat)"
+from = "lat"
+kind = "real"
+
+[[columns]]
+name = "Roughly where (lon)"
+from = "lon"
+kind = "real"
+
+[[columns]]
+name = "Private"
+from = "private"
+
+[[columns]]
+name = "Segments"
+from = "segments"
+kind = "integer"

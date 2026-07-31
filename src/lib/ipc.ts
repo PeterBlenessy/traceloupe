@@ -3594,6 +3594,35 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "alltrails",
+            name: "AllTrails recordings",
+            category: "Locations",
+            description:
+              "Outdoor activities recorded in AllTrails — what was walked or hiked, when, how far, and roughly where.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Activity",
+              "Started",
+              "Ended",
+              "Distance (m)",
+              "Moving time (s)",
+              "Total time (s)",
+              "Climb (m)",
+              "Calories",
+              "Roughly where (lat)",
+              "Roughly where (lon)",
+              "Private",
+              "Segments",
+            ],
+            timestampColumns: ["Started", "Ended"],
+            byteColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "podcasts",
             name: "Podcasts",
             category: "Media",
@@ -4036,6 +4065,38 @@ const mockClient: TraceLoupeClient = {
             "Registered by": "appstored",
           },
         ]
+      : mockActive && artifactId === "alltrails"
+        ? [
+            {
+              Activity: "Morning hike",
+              Started: 1704307200,
+              Ended: 1704311698,
+              "Distance (m)": 6796,
+              "Moving time (s)": 4498,
+              "Total time (s)": 4498,
+              "Climb (m)": 84,
+              Calories: 650,
+              "Roughly where (lat)": 38.8,
+              "Roughly where (lon)": -77.3,
+              Private: "Yes",
+              Segments: 1,
+            },
+            {
+              Activity: "Bass Lake Trail",
+              Started: 1638307200,
+              Ended: 1638310225,
+              "Distance (m)": 3049,
+              "Moving time (s)": 2846,
+              "Total time (s)": 3025,
+              "Climb (m)": 29,
+              Calories: 411,
+              "Roughly where (lat)": 35.65,
+              "Roughly where (lon)": -78.85,
+              Private: "No",
+              // Paused and resumed — one activity, two segments.
+              Segments: 2,
+            },
+          ]
       : mockActive && artifactId === "podcasts"
         ? [
             {
