@@ -2053,6 +2053,64 @@ pub fn list_device_os_history(cache: &CacheDb) -> Result<Vec<DeviceUse>> {
         .map_err(Into::into)
 }
 
+/// What a backup can say about messages that are GONE — content no longer in
+/// `sms.db` at all, as opposed to the recently-deleted ones that keep their row
+/// and are flagged by `Message::deleted_at`.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionEvidence {
+    /// Deletions iOS recorded itself, in `sync_deleted_messages`.
+    pub recorded: i64,
+    /// ROWIDs that were allocated and have no row. `message` is AUTOINCREMENT,
+    /// so SQLite never reissues one and a gap means a row existed.
+    pub missing_rowids: i64,
+    /// How many separate runs those missing ROWIDs fall into — two gaps of one
+    /// is a different story from one gap of two.
+    pub gaps: i64,
+    /// Earliest and latest surviving message bracketing any gap, so the absence
+    /// can be placed in time at all.
+    pub first_gap_at: Option<i64>,
+    pub last_gap_at: Option<i64>,
+}
+
+/// Evidence about deleted messages.
+///
+/// `recorded` and `missing_rowids` are NOT added together and must not be
+/// presented as one total: on the validation device both describe the same two
+/// deletions, so summing them would double the count. They are separate because
+/// they fail differently — iOS prunes its sync record once every device has
+/// caught up, while a ROWID gap survives that but says nothing about what was
+/// deleted.
+pub fn message_deletion_evidence(cache: &CacheDb) -> Result<DeletionEvidence> {
+    let conn = cache.conn();
+    let (recorded, gaps, missing, first, last) = conn.query_row(
+        "SELECT
+             COALESCE(SUM(source = 'recorded'), 0),
+             COALESCE(SUM(source = 'gap'), 0),
+             COALESCE(SUM(CASE WHEN source = 'gap' THEN missing END), 0),
+             MIN(after_at),
+             MAX(before_at)
+         FROM message_deletions",
+        [],
+        |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, Option<i64>>(3)?,
+                r.get::<_, Option<i64>>(4)?,
+            ))
+        },
+    )?;
+    Ok(DeletionEvidence {
+        recorded,
+        missing_rowids: missing,
+        gaps,
+        first_gap_at: first,
+        last_gap_at: last,
+    })
+}
+
 /// Distinct media sources present, with a count each, for the gallery filter.
 /// Ordered by count descending (biggest sources first).
 pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {

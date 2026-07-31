@@ -221,6 +221,62 @@ function OrderToggle({ desc, onToggle }: { desc: boolean; onToggle: () => void }
   );
 }
 
+/** What this backup can say about messages that are GONE.
+ *
+ *  Deliberately does NOT add the two counts together. iOS's own
+ *  `sync_deleted_messages` record and the unused message IDs usually describe
+ *  the SAME deletions — on the validation device both report two — so a single
+ *  summed figure would double it. Each is also only a lower bound: iOS prunes
+ *  its record once every device has synced, and a message deleted from the very
+ *  end of the table leaves no gap to find. Hence "at least".
+ *
+ *  Distinct from the per-message "Deleted" badge, which marks recently-deleted
+ *  messages whose content is still here. These have no content left. */
+function DeletionNote() {
+  const { data } = useQuery({
+    queryKey: ["messageDeletionEvidence"],
+    queryFn: () => client.messageDeletionEvidence(),
+  });
+  if (!data) return null;
+  const { recorded, missingRowids, gaps } = data;
+  const known = Math.max(recorded, missingRowids);
+  if (known === 0) return null;
+  const parts = [
+    recorded > 0 ? `iOS recorded ${recorded}` : null,
+    missingRowids > 0
+      ? `${missingRowids} message ${missingRowids === 1 ? "ID is" : "IDs are"} unused across ${gaps === 1 ? "one gap" : `${gaps} gaps`}`
+      : null,
+  ].filter(Boolean);
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div className="mx-2 mb-1 flex items-start gap-1.5 rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+          <Trash2 className="mt-0.5 size-3 shrink-0" />
+          <span>
+            At least {known} {known === 1 ? "message was" : "messages were"}{" "}
+            deleted and {known === 1 ? "is" : "are"} not in this backup.
+          </span>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-sm">
+        <div className="space-y-1">
+          <div>{parts.join("; ")}.</div>
+          <div className="text-muted-foreground">
+            These usually describe the same messages, so they are not added
+            together. Both are lower bounds — iOS drops its record once every
+            device has synced, and a message deleted from the end of the table
+            leaves no gap to find.
+          </div>
+          <div className="text-muted-foreground">
+            Deletion is not necessarily deliberate: iOS also expires messages on
+            the Keep Messages setting.
+          </div>
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function MessagesView() {
   // One media cache key per mount of this view, shared by every image below —
   // so a view-switch remount busts WebKit's cached-failed scheme tasks while
@@ -612,6 +668,8 @@ function Conversations({
               }
             />
           ) : (
+            <>
+            <DeletionNote />
             <VirtualList
               items={visibleThreads!}
               getKey={(t) => t.id}
@@ -631,6 +689,7 @@ function Conversations({
                 </div>
               )}
             />
+            </>
           )}
         </>
       }

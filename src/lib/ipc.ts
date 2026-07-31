@@ -136,6 +136,22 @@ export interface WebSearch {
   profile: string | null;
 }
 
+/** What a backup can say about messages that are GONE — content no longer in
+ *  sms.db, as opposed to recently-deleted ones which keep their row and are
+ *  flagged by `Message.deletedAt`. */
+export interface DeletionEvidence {
+  /** Deletions iOS recorded itself, in `sync_deleted_messages`. */
+  recorded: number;
+  /** ROWIDs allocated with no row. `message` is AUTOINCREMENT, so a gap means
+   *  a row existed. NOT to be added to `recorded` — they usually describe the
+   *  same deletions, so summing double-counts. */
+  missingRowids: number;
+  /** How many separate runs those missing ROWIDs fall into. */
+  gaps: number;
+  firstGapAt: number | null;
+  lastGapAt: number | null;
+}
+
 /** An Apple device that contributed Health data to this phone. Health survives
  *  migration between phones, so this reaches back past devices no longer owned. */
 export interface DeviceUse {
@@ -1436,6 +1452,8 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<HistoryVisit[]>;
+  /** Evidence about messages that are gone from this backup. */
+  messageDeletionEvidence(): Promise<DeletionEvidence>;
   /** Every Apple device that ever wrote Health data here, oldest first. */
   listDevicesUsed(): Promise<DeviceUse[]>;
   /** One row per (device, OS build) — an upgrade timeline, oldest first. */
@@ -1779,6 +1797,8 @@ const tauriClient: TraceLoupeClient = {
       sortBy,
       desc,
     }),
+  messageDeletionEvidence: () =>
+    invoke<DeletionEvidence>("message_deletion_evidence"),
   listDevicesUsed: () => invoke<DeviceUse[]>("list_devices_used"),
   listDeviceOsHistory: () => invoke<DeviceUse[]>("list_device_os_history"),
   countSafariSearches: (search, lo = null, hi = null) =>
@@ -4874,6 +4894,19 @@ const mockClient: TraceLoupeClient = {
           desc,
         ).slice(offset, offset + limit)
       : [],
+  messageDeletionEvidence: async () =>
+    mockActive
+      ? {
+          // The mock mirrors the validation device: iOS recorded two deletions
+          // and two ROWIDs are missing — the SAME two. Shown separately so the
+          // UI is exercised against the double-counting trap, not around it.
+          recorded: 2,
+          missingRowids: 2,
+          gaps: 2,
+          firstGapAt: 1717790000,
+          lastGapAt: 1717801200,
+        }
+      : { recorded: 0, missingRowids: 0, gaps: 0, firstGapAt: null, lastGapAt: null },
   listDevicesUsed: async () => {
     if (!mockActive) return [];
     const byModel = new Map<string, DeviceUse>();
