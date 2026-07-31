@@ -1990,6 +1990,69 @@ pub fn get_safari_searches_window(
         .map_err(Into::into)
 }
 
+/// One Apple device that contributed Health data to this phone.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceUse {
+    /// `ProductType` as the store holds it (`iPhone12,1`) — an identifier, not a
+    /// marketing name. The UI maps it via `device-names.ts`.
+    pub model: String,
+    /// OS build (`21D50`). None on the per-device rollup, which spans builds.
+    pub os_build: Option<String>,
+    pub first_at: Option<i64>,
+    pub last_at: Option<i64>,
+    pub samples: i64,
+}
+
+fn row_to_device_use(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceUse> {
+    Ok(DeviceUse {
+        model: r.get(0)?,
+        os_build: r.get(1)?,
+        first_at: r.get(2)?,
+        last_at: r.get(3)?,
+        samples: r.get(4)?,
+    })
+}
+
+/// Every device that ever wrote Health data here, oldest first.
+///
+/// Rolled up across OS builds, so one row per device. Health survives migration
+/// between phones, so this reaches back past devices the person no longer owns.
+pub fn list_devices_used(cache: &CacheDb) -> Result<Vec<DeviceUse>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT model, NULL, MIN(first_at), MAX(last_at), SUM(samples)
+         FROM health_device_use
+         GROUP BY model
+         ORDER BY MIN(first_at)",
+    )?;
+    let rows = stmt.query_map([], row_to_device_use)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// One row per (device, OS build) — an upgrade timeline, oldest first.
+///
+/// Pairs whose window is zero-length are excluded: a single sample says the
+/// device existed, which `list_devices_used` already reports, but it cannot date
+/// an upgrade, and a row claiming a device ran a build "from T to T" invites
+/// exactly that reading. The pair is still in the table, so the rollup above
+/// keeps the device.
+pub fn list_device_os_history(cache: &CacheDb) -> Result<Vec<DeviceUse>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT model, os_build, first_at, last_at, samples
+         FROM health_device_use
+         WHERE os_build IS NOT NULL
+           AND first_at IS NOT NULL AND last_at IS NOT NULL
+           AND first_at <> last_at
+         ORDER BY first_at",
+    )?;
+    let rows = stmt.query_map([], row_to_device_use)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
 /// Distinct media sources present, with a count each, for the gallery filter.
 /// Ordered by count descending (biggest sources first).
 pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
