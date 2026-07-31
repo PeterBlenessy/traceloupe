@@ -3,15 +3,14 @@
  *
  * iOS decides what goes into a backup via `Domains.plist`, and its
  * `RelativePathsToOnlyBackupEncrypted` list covers several stores TraceLoupe
- * surfaces — `Library/CoreDuet/People/interactionC.db` (the whole Interactions
- * view), `Health` and `MedicalID` (the whole Health view), and
+ * surfaces — `Health` and `MedicalID` (the whole Health view), and
  * `Library/Safari/SafariTabs.db` (iCloud tabs). See
  * `docs/reference/backup-coverage-audit.md`.
  *
  * So on an unencrypted backup those views are legitimately empty — and saying
- * only "No interaction data in this backup" reads as *this person contacted
- * nobody*, which is a different and much stronger claim than *this kind of
- * backup cannot carry it*. Telling those two apart is the app's whole job; the
+ * only "No health data in this backup" reads as *this person recorded none*,
+ * which is a different and much stronger claim than *this kind of backup cannot
+ * carry it*. Telling those two apart is the app's whole job; the
  * same reasoning is why deleted messages and trashed photos are shown with a
  * badge rather than filtered away.
  */
@@ -31,8 +30,8 @@ export function useBackupEncrypted(): boolean | null {
 /**
  * Pick the empty message for a view whose data is encrypted-backup-only.
  *
- * `subject` names the missing data in the app's own words ("Interaction
- * history", "Health data"). Only an explicit `false` swaps the wording —
+ * `subject` names the missing data in the app's own words ("Health data",
+ * "Tabs synced from your other Apple devices"). Only an explicit `false` swaps the wording —
  * unknown encryption state keeps the plain message, because claiming the
  * backup is unencrypted when we do not know would be its own wrong answer.
  */
