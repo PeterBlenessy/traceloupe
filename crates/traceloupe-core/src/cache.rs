@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 50;
+const SCHEMA_VERSION: i64 = 51;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -106,7 +106,15 @@ CREATE TABLE IF NOT EXISTS safari_history (
     url         TEXT NOT NULL,
     title       TEXT,
     visited_at  INTEGER,
-    visit_count INTEGER
+    visit_count INTEGER,
+    -- Safari profile the visit belongs to (iOS 17+). 'Default' is the main
+    -- History.db; anything else is a directory name under Safari/Profiles/.
+    profile     TEXT,
+    -- The visit happened on another iCloud-synced device, not this one.
+    synced      INTEGER NOT NULL DEFAULT 0,
+    -- Redirect chain, resolved from visit ids to the URLs they landed on.
+    redirect_source      TEXT,
+    redirect_destination TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_safari_visited ON safari_history(visited_at DESC);
 
@@ -748,6 +756,18 @@ impl CacheDb {
                 CREATE INDEX IF NOT EXISTS idx_artifact_rows
                     ON artifact_rows(artifact_id, row_idx);",
             )?;
+            // v51: Safari history on modern iOS — the profile a visit belongs to
+            // (iOS 17+ multi-profile Safari), whether it came from an iCloud-synced
+            // device rather than this one, and the redirect chain around it.
+            ensure_column(&conn, "safari_history", "profile", "TEXT")?;
+            ensure_column(
+                &conn,
+                "safari_history",
+                "synced",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
+            ensure_column(&conn, "safari_history", "redirect_source", "TEXT")?;
+            ensure_column(&conn, "safari_history", "redirect_destination", "TEXT")?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
