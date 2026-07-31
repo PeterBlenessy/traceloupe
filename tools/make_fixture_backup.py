@@ -953,6 +953,51 @@ def seed_podcasts(path: Path) -> None:
     con.close()
 
 
+def seed_alltrails(path: Path) -> None:
+    """AllTrails.sqlite — an activity spread across three tables.
+
+    One recording has TWO timed segments (a pause and resume), because the module
+    aggregates them: joined row-for-row it would report one hike as two.
+    The map stores a bounding BOX, and the module reports its midpoint.
+    """
+    con = sqlite3.connect(path)
+    con.executescript(
+        """CREATE TABLE ZTRACK (Z_PK INTEGER PRIMARY KEY, ZELEVATIONGAIN INTEGER,
+             ZTIMEMOVING INTEGER, ZTIMETOTAL INTEGER, ZMAP INTEGER,
+             ZCALORIES FLOAT, ZDISTANCETOTAL FLOAT, ZNAME VARCHAR);
+           CREATE TABLE ZMAP (Z_PK INTEGER PRIMARY KEY, ZISPRIVATE INTEGER,
+             ZBOTTOMRIGHTLATITUDE FLOAT, ZBOTTOMRIGHTLONGITUDE FLOAT,
+             ZTOPLEFTLATITUDE FLOAT, ZTOPLEFTLONGITUDE FLOAT, ZNAME VARCHAR);
+           CREATE TABLE ZLINETIMEDSEGMENT (Z_PK INTEGER PRIMARY KEY, ZTRACK INTEGER,
+             ZDATETIMESTART TIMESTAMP, ZDATETIMESTOP TIMESTAMP);"""
+    )
+    con.executemany(
+        "INSERT INTO ZMAP (Z_PK, ZISPRIVATE, ZTOPLEFTLATITUDE, ZTOPLEFTLONGITUDE,"
+        " ZBOTTOMRIGHTLATITUDE, ZBOTTOMRIGHTLONGITUDE, ZNAME) VALUES (?,?,?,?,?,?,?)",
+        [
+            (1, 0, 35.60, -78.80, 35.70, -78.90, "Bass Lake Trail"),
+            (2, 1, 38.70, -77.20, 38.90, -77.40, "Morning hike"),
+        ],
+    )
+    con.executemany(
+        "INSERT INTO ZTRACK (Z_PK, ZELEVATIONGAIN, ZTIMEMOVING, ZTIMETOTAL, ZMAP,"
+        " ZCALORIES, ZDISTANCETOTAL) VALUES (?,?,?,?,?,?,?)",
+        [(1, 29, 2846, 3025, 1, 411.0, 3049.33), (2, 84, 4498, 4498, 2, 650.0, 6796.12)],
+    )
+    con.executemany(
+        "INSERT INTO ZLINETIMEDSEGMENT (Z_PK, ZTRACK, ZDATETIMESTART, ZDATETIMESTOP)"
+        " VALUES (?,?,?,?)",
+        [
+            # One hike, paused and resumed: two segments, one activity.
+            (1, 1, 660_000_000, 660_001_000),
+            (2, 1, 660_002_000, 660_003_025),
+            (3, 2, 726_000_000, 726_004_498),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -980,6 +1025,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_bluetooth_nearby(nearby_path)
     podcasts_path = workdir / "MTLibrary.sqlite"
     seed_podcasts(podcasts_path)
+    trails_path = workdir / "AllTrails.sqlite"
+    seed_alltrails(trails_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -1047,6 +1094,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
             "Documents/MTLibrary.sqlite",
             podcasts_path.read_bytes(),
+        ),
+        (
+            "AppDomain-com.alltrails.AllTrails",
+            "Documents/AllTrails.sqlite",
+            trails_path.read_bytes(),
         ),
 
         (
