@@ -1,0 +1,62 @@
+# CarPlay — which apps were opened on the car's screen, and when each was last
+# used there.
+#
+# `com.apple.CarPlayApp.plist` is the CarPlay app's own preferences. Backup-
+# reachable via `HomeDomain`'s `Library/Preferences`.
+#
+# WHY THIS IS NOT JUST "APPS AGAIN"
+#
+# The Apps view already knows what is installed. This says something different
+# and not otherwise recorded: the phone was CONNECTED TO A CAR, and these are the
+# apps used while it was. An app opened on a car's dashboard places the phone in
+# a vehicle at that time, which is a stronger claim than the app merely existing.
+#
+# `CARRecentAppHistory` is a dictionary of BUNDLE ID → last-used time, so the key
+# is the identifying field and nothing inside the entry repeats it — the same
+# shape `key_column` was added for. The value is a bare number, which is what
+# `value_column` is for: the row IS the value, so there is no key path to name.
+#
+# THE TIME IS UNIX SECONDS, NOT COCOA — which is the opposite of the safe guess.
+# Most bare reals in Apple plists are CFAbsoluteTime, and reading these as Cocoa
+# looks entirely plausible: it yields dates in 2055, which is wrong by 31 years
+# but still parses, still sorts, and still renders. Only checking a value against
+# the device's own backup date catches it. The neighbouring
+# `CARAnalyticsPreviousSessionEnd` in the same file is a real plist `Date`, so
+# this one store uses two different time representations.
+#
+# Because the key is a bundle id, this hosts in the Apps view and joins on it.
+# The times only mean anything next to the app they belong to.
+#
+# The rest of the plist — session end, thermal level, battery at interrupt — is a
+# different artifact (`carplay_sessions`): those are facts about the CAR
+# connection, not about any app, and merging them here would need a row shape
+# that fits neither.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 7 apps, including com.waze.iphone, com.spotify.client and
+# com.google.Maps, last used between 2024-01-16 and 2024-07-27. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "carplay_recent_apps"
+name        = "CarPlay apps"
+description = "Apps opened on a car's CarPlay screen, with when each was last used there — evidence the phone was in a vehicle at that time."
+surface     = "apps"
+join_column = "App"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.CarPlayApp.plist"
+
+[plist]
+rows         = ["CARRecentAppHistory"]
+key_column   = "App"
+value_column = "Last used in CarPlay"
+
+# No `from`: this column IS the entry's key — the app's bundle id.
+[[columns]]
+name = "App"
+
+# No `from`: this column IS the entry's value.
+[[columns]]
+name = "Last used in CarPlay"
+kind = "timestamp"
+epoch = "unix"

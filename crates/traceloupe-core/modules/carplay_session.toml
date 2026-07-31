@@ -1,0 +1,52 @@
+# CarPlay connection — when the phone was last connected to a car, and the state
+# it was in when that session ended.
+#
+# Same store as `carplay_recent_apps` (`com.apple.CarPlayApp.plist`), read as a
+# SINGLE RECORD: the root dictionary is the row. A separate module because these
+# are facts about the CAR CONNECTION rather than about any app, and the two
+# cannot share a row shape — one is keyed by bundle id, this one is not keyed at
+# all.
+#
+# `CARAnalyticsPreviousSessionEnd` is the useful one: a date the phone was
+# demonstrably in a car. It is a real plist date, so no epoch is involved.
+#
+# The battery and thermal readings under `CARAnalyticsSessionInterruptKey` are
+# the device's state when a session was INTERRUPTED — Apple's own telemetry for
+# why CarPlay dropped out. They are shipped because "the phone was at 84% and not
+# overheating when the car connection ended" is a corroborating detail, and
+# because leaving them would make this module one column wide.
+#
+# `CARStartPageIndex` and `CARWallpaperCacheVersionKey` are NOT read: a page index
+# and a cache version are internal counters with no documented meaning — the same
+# call `device_locale` and `bluetooth_devices` make about version keys.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): last session ended 2024-07-27T16:21:39Z at 84% battery, thermal level
+# "None". Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup -- <dir> <password>
+
+id          = "carplay_session"
+name        = "CarPlay connection"
+description = "When this iPhone was last connected to a car over CarPlay, and the battery and thermal state when that session ended."
+surface     = "device"
+category    = "Device"
+shape       = "facts"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.CarPlayApp.plist"
+
+# No `rows`: the root dictionary IS the record.
+[plist]
+
+[[columns]]
+name = "Last CarPlay session ended"
+from = "CARAnalyticsPreviousSessionEnd"
+kind = "timestamp"
+
+[[columns]]
+name = "Battery at session end"
+from = ["CARAnalyticsSessionInterruptKey", "batteryPercentage"]
+kind = "integer"
+
+[[columns]]
+name = "Thermal state at session end"
+from = ["CARAnalyticsSessionInterruptKey", "thermalLevel"]

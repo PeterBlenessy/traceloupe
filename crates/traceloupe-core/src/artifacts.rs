@@ -2010,6 +2010,14 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/bluetooth_paired.toml"),
     ),
     (
+        "carplay_recent_apps.toml",
+        include_str!("../modules/carplay_recent_apps.toml"),
+    ),
+    (
+        "carplay_session.toml",
+        include_str!("../modules/carplay_session.toml"),
+    ),
+    (
         "data_usage.toml",
         include_str!("../modules/data_usage.toml"),
     ),
@@ -3953,6 +3961,16 @@ from = "nope"
         // id, domain, relative path
         ("tcc", "HomeDomain", "Library/TCC/TCC.db"),
         (
+            "carplay_recent_apps",
+            "HomeDomain",
+            "Library/Preferences/com.apple.CarPlayApp.plist",
+        ),
+        (
+            "carplay_session",
+            "HomeDomain",
+            "Library/Preferences/com.apple.CarPlayApp.plist",
+        ),
+        (
             "life360_locations",
             "AppDomainGroup-group.com.life360.safetymap",
             "**/com.life360.safetymap*.log",
@@ -4059,6 +4077,48 @@ from = "nope"
         Bytes(fn() -> Vec<u8>),
     }
 
+    /// CarPlay's preferences: recent apps keyed by bundle id, plus the
+    /// session-end facts. One fixture for both modules, because they read one
+    /// store — writing two would let them drift apart while both stayed green.
+    fn seed_carplay() -> Vec<u8> {
+        let mut recents = plist::Dictionary::new();
+        // UNIX seconds, not Cocoa — this store's own encoding. 1706104059 is
+        // 2024-01-24. Seeding Cocoa here would agree with a module that declared
+        // the wrong epoch and prove nothing.
+        recents.insert(
+            "com.waze.iphone".into(),
+            plist::Value::Real(1_722_097_299.0),
+        );
+        recents.insert(
+            "com.spotify.client".into(),
+            plist::Value::Real(1_706_104_059.0),
+        );
+
+        let mut interrupt = plist::Dictionary::new();
+        interrupt.insert("batteryPercentage".into(), 84.into());
+        interrupt.insert("thermalLevel".into(), "None".into());
+
+        let mut root = plist::Dictionary::new();
+        root.insert("CARRecentAppHistory".into(), recents.into());
+        root.insert("CARAnalyticsSessionInterruptKey".into(), interrupt.into());
+        root.insert(
+            "CARAnalyticsPreviousSessionEnd".into(),
+            plist::Value::Date(
+                (std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_722_097_299)).into(),
+            ),
+        );
+        // Internal counters the modules deliberately ignore; present so the
+        // fixture is the real shape rather than only what we read.
+        root.insert("CARStartPageIndex".into(), 103.into());
+        root.insert("CARWallpaperCacheVersionKey".into(), 8.into());
+
+        let mut out = Vec::new();
+        plist::Value::Dictionary(root)
+            .to_writer_binary(&mut out)
+            .unwrap();
+        out
+    }
+
     /// A Life360 log: two `X-UserContext` records among ordinary chatter.
     ///
     /// The chatter is the point as much as the records. A log is mostly NOT
@@ -4103,6 +4163,7 @@ from = "nope"
             "podcasts" => seed_podcasts,
             "alltrails" => seed_alltrails,
             // Not SQL at all: return early rather than pretend.
+            "carplay_recent_apps" | "carplay_session" => return Seed::Bytes(seed_carplay),
             "life360_locations" => return Seed::Bytes(seed_life360_log),
             "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
@@ -4399,6 +4460,33 @@ from = "nope"
                     spec.id,
                     c.name
                 );
+                // A timestamp must land in the iPhone era. A wrong `epoch` does
+                // not fail, parse badly or look odd in a table — it produces a
+                // date decades out that still sorts and still renders. CarPlay's
+                // `CARRecentAppHistory` holds UNIX seconds where almost every
+                // other bare Apple real is Cocoa; read as Cocoa it gives 2055,
+                // and only a range check or a human noticing the year catches it.
+                //
+                // 2007 is the first iPhone; 2035 is far enough out to never
+                // bracket real data, close enough to catch a 31-year shift in
+                // either direction.
+                if c.kind == ColumnKind::Timestamp {
+                    const FIRST_IPHONE: i64 = 1_167_609_600; // 2007-01-01
+                    const FAR_FUTURE: i64 = 2_051_222_400; // 2035-01-01
+                    for r in &rows {
+                        let Some(t) = r[&c.name].as_i64() else {
+                            continue;
+                        };
+                        assert!(
+                            (FIRST_IPHONE..FAR_FUTURE).contains(&t),
+                            "module {}: column {:?} produced {t}, which is outside the \
+                             iPhone era — almost always a wrong `epoch` on a column whose \
+                             store does not use the encoding it looks like it uses",
+                            spec.id,
+                            c.name
+                        );
+                    }
+                }
             }
         }
     }
