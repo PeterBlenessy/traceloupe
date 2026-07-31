@@ -274,6 +274,82 @@ const NATIVE_THREADS: &str = "service IS NULL OR service NOT IN ('TikTok','Whats
 /// When `attachments` is `Some`, each message's attachments are resolved to their
 /// backup files and written to the `attachments` table (with a wrapped key for
 /// encrypted backups, so they decrypt on demand at view time).
+/// Evidence of messages that are GONE — content no longer anywhere in `sms.db`.
+///
+/// Distinct from the recently-deleted ones, which keep their row and are flagged
+/// by `messages.deleted_at`: those can still be read, these cannot. Conflating
+/// the two would claim we hold content we do not.
+///
+/// TWO INDEPENDENT SOURCES, deliberately kept apart rather than summed:
+///
+/// * `sync_deleted_messages` — iOS's OWN record of a deletion, kept so other
+///   devices can mirror it. It carries the message's GUID, which is citable, but
+///   it is sync bookkeeping and can be pruned once every device has caught up.
+///
+/// * A gap in `message.ROWID` — a ROWID that was allocated and now has no row.
+///   `message` is `INTEGER PRIMARY KEY AUTOINCREMENT`, so SQLite never reissues
+///   one; a gap therefore means a row existed and is gone. It survives whatever
+///   the sync table prunes, but says nothing about WHAT was deleted.
+///
+/// On the validation device both report the same two deletions. They must not be
+/// added together — that would double-count — which is why `source` is on the
+/// row and the reader is told what each means rather than shown one total.
+///
+/// A gap is NOT proof a person deleted something: iOS expires messages on the
+/// Keep Messages setting (30 days / 1 year), and a rolled-back insert also burns
+/// a ROWID. "A message was here and is not" is what the evidence supports.
+fn parse_message_deletions(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
+    let conn = cache.conn();
+    let tx = conn.unchecked_transaction()?;
+    if replace {
+        tx.execute("DELETE FROM message_deletions", [])?;
+    }
+
+    if table_exists(src, "sync_deleted_messages") {
+        let mut stmt =
+            src.prepare("SELECT guid FROM sync_deleted_messages WHERE guid IS NOT NULL")?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            tx.execute(
+                "INSERT INTO message_deletions (source, guid) VALUES ('recorded', ?1)",
+                [r.get::<_, String>(0)?],
+            )?;
+        }
+    }
+
+    // Gaps, with the surviving messages either side so the absence can be placed
+    // in time. A gap with no neighbour after it (deleted from the end) is not
+    // detectable this way and is not guessed at.
+    let mut stmt = src.prepare(
+        "SELECT prev_rowid, rowid_, prev_date, date_ FROM (
+             SELECT LAG(ROWID) OVER (ORDER BY ROWID) AS prev_rowid,
+                    ROWID                            AS rowid_,
+                    LAG(date)  OVER (ORDER BY ROWID) AS prev_date,
+                    date                             AS date_
+             FROM message)
+         WHERE prev_rowid IS NOT NULL AND rowid_ - prev_rowid > 1",
+    )?;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let after: i64 = r.get(0)?;
+        let before: i64 = r.get(1)?;
+        tx.execute(
+            "INSERT INTO message_deletions
+                 (source, after_rowid, before_rowid, missing, after_at, before_at)
+             VALUES ('gap', ?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                after,
+                before,
+                before - after - 1,
+                mac_to_unix(r.get::<_, Option<i64>>(2)?.unwrap_or(0)),
+                mac_to_unix(r.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn parse_messages(
     sms_db: &Path,
     cache: &CacheDb,
@@ -838,6 +914,10 @@ pub fn parse_messages(
          WHERE {NATIVE_THREADS}"
     ))?;
     tx.commit()?;
+
+    // After the messages themselves, so a failure here cannot cost the import —
+    // this is evidence ABOUT the conversation, not the conversation.
+    parse_message_deletions(&src, cache, replace)?;
     Ok(())
 }
 
@@ -932,6 +1012,73 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The two kinds of deletion evidence must stay separate, and must not be
+    /// confused with recently-deleted messages that still have their content.
+    ///
+    /// On the validation device iOS records two deletions and two ROWIDs are
+    /// missing — the SAME two messages. Summing them would report four, so the
+    /// counts stay apart and the UI says what each means.
+    #[test]
+    fn deletion_evidence_keeps_recorded_and_inferred_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("sms.db");
+        let src = Connection::open(&db).unwrap();
+        src.execute_batch(
+            "CREATE TABLE message (ROWID INTEGER PRIMARY KEY AUTOINCREMENT, guid TEXT,
+                 text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER,
+                 cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER,
+                 associated_message_guid TEXT, associated_message_type INTEGER,
+                 associated_message_emoji TEXT, thread_originator_guid TEXT,
+                 attributedBody BLOB, date_edited INTEGER, balloon_bundle_id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT,
+                 display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE sync_deleted_messages (ROWID INTEGER PRIMARY KEY, guid TEXT, recordID TEXT);
+             INSERT INTO chat VALUES (1, '+15551234567', NULL, 'iMessage');
+             INSERT INTO handle VALUES (1, '+15551234567');
+             -- ROWIDs 2 and 5 are absent: one gap of one, one gap of two (5,6 -> 7).
+             INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
+                 VALUES (1,'A','first',«redacted»700010000000000,1);
+             INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
+                 VALUES (3,'B','second',«redacted»700020000000000,1);
+             INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
+                 VALUES (4,'C','third',«redacted»700030000000000,1);
+             INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
+                 VALUES (7,'D','fourth',«redacted»700040000000000,1);
+             INSERT INTO chat_message_join VALUES (1,1),(1,3),(1,4),(1,7);
+             INSERT INTO chat_handle_join VALUES (1,1);
+             -- iOS's own record of the same deletions.
+             INSERT INTO sync_deleted_messages VALUES (1,'GONE-1',NULL);
+             INSERT INTO sync_deleted_messages VALUES (2,'GONE-2',NULL);",
+        )
+        .unwrap();
+        drop(src);
+
+        let cache = CacheDb::open_in_memory().unwrap();
+        parse_messages(&db, &cache, &mut ImportReport::default(), false, None).unwrap();
+
+        let ev = crate::query::message_deletion_evidence(&cache).unwrap();
+        assert_eq!(ev.recorded, 2, "iOS recorded two deletions");
+        assert_eq!(ev.gaps, 2, "two separate runs of missing ROWIDs");
+        assert_eq!(
+            ev.missing_rowids, 3,
+            "ROWID 2, plus 5 and 6 — the run length matters, not just the gap count"
+        );
+        assert!(
+            ev.first_gap_at.is_some() && ev.last_gap_at.is_some(),
+            "a gap must be placeable in time by its surviving neighbours"
+        );
+        // Surviving messages are untouched: evidence about absence must not
+        // remove anything that is present.
+        let live: i64 = cache
+            .conn()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(live, 4);
+    }
+
     use super::*;
 
     fn make_sms_db(dir: &Path) -> std::path::PathBuf {

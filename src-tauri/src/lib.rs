@@ -3103,6 +3103,19 @@ async fn get_safari_window(
 }
 
 #[tauri::command]
+async fn message_deletion_evidence(
+    active: State<'_, ActiveBackup>,
+) -> Result<query::DeletionEvidence, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::message_deletion_evidence(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn list_devices_used(
     active: State<'_, ActiveBackup>,
 ) -> Result<Vec<query::DeviceUse>, String> {
@@ -4409,6 +4422,7 @@ pub fn run() {
             get_calls_window,
             count_safari,
             count_safari_ranges,
+            message_deletion_evidence,
             list_devices_used,
             list_device_os_history,
             count_safari_searches,
