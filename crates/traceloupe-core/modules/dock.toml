@@ -1,0 +1,43 @@
+# Dock — the apps kept one tap away, in the order they appear.
+#
+# `buttonBar` in `IconState.plist` is an array of plain bundle ids, which is why
+# this is a separate module from `home_screen`: the store holds two different
+# shapes, and one module reads one collection. The overlap guard allows two
+# modules over one file precisely for this.
+#
+# It is a small artifact and a telling one. The dock holds four apps at most and
+# they are the ones someone reaches for without looking — a fair proxy for what
+# the device is actually FOR, which a list of 200 installed apps does not give.
+#
+# The rows are plain strings, so `value_column` takes each bundle id and there is
+# no key path to name. `index_column` records the position, because the dock is
+# ORDERED and "first in the dock" is a stronger signal than "in the dock".
+#
+# Bundle ids are shown as stored rather than mapped to app names: the mapping
+# lives in the Apps view, which reads it from the backup itself, and inventing a
+# name here would be this module guessing at something another view knows.
+#
+# VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
+# image): 4 apps, Phone first. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "dock"
+name        = "Dock"
+description = "The apps kept in the dock, one tap away, in the order they appear."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/SpringBoard/IconState.plist"
+
+[plist]
+rows         = ["buttonBar", "*"]
+index_column = "Position"
+value_column = "App"
+
+# No `from`: filled with which `*` element this row came from.
+[[columns]]
+name = "Position"
+
+# No `from`: this column IS the entry's value.
+[[columns]]
+name = "App"
