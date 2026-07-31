@@ -998,6 +998,31 @@ def seed_alltrails(path: Path) -> None:
     con.close()
 
 
+def build_icon_state_plist() -> bytes:
+    """IconState.plist — pages of icons, and the dock.
+
+    TWO pages, because one page cannot tell a working `rows` wildcard from a path
+    that happened to find the only container there was. One icon is a WIDGET,
+    whose identifier is a UUID rather than a bundle id.
+    """
+    def icon(ident: str, kind: str, size: str) -> dict:
+        return {"displayIdentifier": ident, "iconType": kind, "gridSize": size}
+
+    return plistlib.dumps(
+        {
+            "iconLists": [
+                [
+                    icon("com.example.chatapp", "app", "small"),
+                    icon("A5E1414E-FD2B-486D-BAC2-B0DEED262F03", "custom", "medium"),
+                ],
+                [icon("com.example.todo", "app", "small")],
+            ],
+            "buttonBar": ["com.apple.mobilephone", "com.example.chatapp"],
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 # domain, relativePath, seeder(fn writing plaintext bytes to a temp path)
 def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     """Return (domain, relativePath, plaintext_bytes) for each backed-up file."""
@@ -1089,6 +1114,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.MobileBackup.plist",
             build_mobile_backup_plist(),
+        ),
+        (
+            "HomeDomain",
+            "Library/SpringBoard/IconState.plist",
+            build_icon_state_plist(),
         ),
         (
             "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
