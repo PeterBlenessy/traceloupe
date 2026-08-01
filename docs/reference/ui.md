@@ -369,7 +369,7 @@ Current classification:
 
 | List | Bucket |
 |---|---|
-| Photos, Safari, Calls, Apps, Health, Notes, Messages, Recordings, Reminders, Contacts, Interactions, Calendar | virtualized (`VirtualListView` / `LazyListView`) |
+| Photos, Safari, Calls, Apps, Health, Notes, Messages, Recordings, Reminders, Contacts, Calendar | virtualized (`VirtualListView` / `LazyListView`) |
 | Safety Scan history rail · Safety Scan findings · Security run rail · Security findings | virtualized (`VirtualList`) |
 | Safety Scan report findings (500) · a note's image gallery (50) · a finding's shortened links (25) | bounded with disclosure |
 | Sidebar nav · sort fields · density & theme options · filter pills (`OverflowRow` caps them) · per-contact fields · per-message attachments · severity/category breakdowns | provably small |

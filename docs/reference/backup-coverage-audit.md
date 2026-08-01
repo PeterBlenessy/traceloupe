@@ -85,7 +85,7 @@ TraceLoupe surfaces today:
 | Path | What it is |
 |---|---|
 | `Library/Safari/SafariTabs.db` | Safari open tabs (iCloud tabs) |
-| `Library/CoreDuet/People/interactionC.db` | the whole Interactions view |
+| `Library/CoreDuet/People/interactionC.db` | Security Check's contact-identifier scan (the Interactions view was removed in #222) |
 | `Health`, `MedicalID` | the whole Health view |
 | `Library/com.apple.siri.remembers` | Siri Remembers |
 | `Library/locationd/user.plist` | location |

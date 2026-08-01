@@ -60,7 +60,7 @@ The application ingests an encrypted iOS backup (created by Finder or by an incl
 - Message threads (SMS/iMessage) from `sms.db`.
 - Contacts, call history, and Safari history.
 - Notes rendered with formatting and embedded media (protobuf-aware); locked Apple Notes decrypted on demand.
-- Additional first-party views: Recordings, Calendar, Reminders, Health, Interactions, Apps, and Device info.
+- Additional first-party views: Recordings, Calendar, Reminders, Health, Apps, and Device info.
 - Native third-party app-chat coverage via a pluggable framework (WhatsApp, Messenger, Instagram, TikTok, Telegram, Kik, imo, Threema, Viber, Teams, LinkedIn; see §8).
 - **Security Check** — scan for spyware/stalkerware indicators (MVT-style) against bundled and refreshable feeds, with severity-graded findings and CSV export.
 - **Safety Scan** (experimental) — local-AI content review of Messages and Notes for threats, harassment, grooming, self-harm, coercive control, and scams.
