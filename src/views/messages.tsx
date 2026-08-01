@@ -52,7 +52,6 @@ import { NoBackupState,
   ListDetail,
   ListSearch,
   ListSkeleton,
-  ViewHeader,
 } from "@/components/view";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { VirtualList } from "@/components/virtual-list";
@@ -612,6 +611,11 @@ function Conversations({
     { by: "time", desc: false },
   );
   const [q, setQ] = useState("");
+  // What the open conversation hands up so the toolbar can host its controls.
+  const [conv, setConv] = useState<{ total: number } | null>(null);
+  // Identity is stable per thread; clearing on change stops a stale name
+  // showing for a frame when you switch conversations.
+  useEffect(() => setConv(null), [selectedId]);
   // Kinds present in the OPEN conversation — the same query the detail pane ran,
   // moved up so the filter can be published with everything else.
   const { data: convKinds } = useQuery({
@@ -693,17 +697,38 @@ function Conversations({
         count: visibleThreads?.length,
         modes: modesNode,
         filter: serviceGroups,
-        sort: sortNode,
         // Only while a conversation is open: a search box or an order toggle
         // with nothing to act on is a control that does nothing, which is worse
         // than its absence.
         ...(selected
           ? {
+              // The open conversation OWNS the toolbar: it names it, and every
+              // control that acts on it is here. The conversation LIST's sort is
+              // deliberately not — it lives in the list column, which is what
+              // stops the toolbar carrying two sort-shaped controls acting on
+              // different things.
+              // The title stays "Messages": it names the VIEW, and the app has
+              // no other fixed place that does. The open conversation is named
+              // by its highlighted row in the list — the same way Contacts shows
+              // which contact is open — so nothing is lost by not repeating it.
+              count: conv?.total,
               search: convSearchNode,
               filter: [...serviceGroups, ...convKindGroup],
               sort: (
                 <>
-                  {sortNode}
+                  {/* Back appears only when the conversation was jumped into
+                      from Timeline; it returns you where you came from. */}
+                  {onBack && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1 px-2 text-muted-foreground"
+                      onClick={onBack}
+                    >
+                      <ArrowLeft className="size-4" />
+                      {backLabel ?? "Back"}
+                    </Button>
+                  )}
                   <OrderToggle
                     desc={order.desc}
                     onToggle={() => setOrder({ by: "time", desc: !order.desc })}
@@ -715,7 +740,8 @@ function Conversations({
       }),
       [
         visibleThreads?.length, modesNode, serviceGroups, sortNode, selected,
-        convSearchNode, convKindGroup, order.desc, setOrder,
+        convSearchNode, convKindGroup, order.desc, setOrder, conv,
+        onBack, backLabel,
       ],
     ),
   );
@@ -738,6 +764,22 @@ function Conversations({
               }
             />
           ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+            {/* The LIST's toolbar: it sorts the list, so it sits with the list.
+                Keeping it in the app toolbar put two sort-shaped controls side
+                by side, one acting on the list and one on the open
+                conversation, with nothing saying which was which.
+
+                On an ISLAND, matching the app toolbar's controls exactly — same
+                rounding, border, tint and p-0.5 — because a bare control beside
+                a bar full of islands reads as unfinished rather than as a
+                deliberate second surface. (--island-h in index.css is the token
+                the design lint measures these against.) */}
+            <div className="flex items-center justify-end px-2 py-1.5">
+              <div className="flex items-center rounded-lg border border-border/70 bg-muted/40 p-0.5">
+                {sortNode}
+              </div>
+            </div>
             <div
               {...threadListProps}
               aria-label="Conversations"
@@ -767,6 +809,7 @@ function Conversations({
               )}
             />
             </div>
+            </div>
           )}
         </>
       }
@@ -780,12 +823,11 @@ function Conversations({
             q={q}
             order={order}
             available={convAvailable}
-            onBack={onBack}
-            backLabel={backLabel}
             scrollToMessage={
               selected.id === selectedId ? scrollToMessage : null
             }
             onScrolledToMessage={onScrolledToMessage}
+            onContext={setConv}
           />
         ) : (
           !isPending && (
@@ -1377,10 +1419,9 @@ function Conversation({
   q,
   order,
   available,
-  onBack,
-  backLabel,
   scrollToMessage,
   onScrolledToMessage,
+  onContext,
 }: {
   thread: ThreadSummary;
   resolve: Resolver;
@@ -1392,12 +1433,13 @@ function Conversation({
   order: SortState;
   /** Kinds present in this conversation, queried by the parent. */
   available: string[];
-  onBack?: () => void;
-  backLabel?: string;
   scrollToMessage?: number | null;
   onScrolledToMessage?: () => void;
+  /** Everything the toolbar needs to host this conversation's controls. The
+   *  pane owns the scroller and the thread, so it hands them up rather than
+   *  keeping a header of its own. */
+  onContext: (c: { total: number }) => void;
 }) {
-  const name = threadLabel(thread, resolve, showContactNames);
   const group = isGroup(thread);
   // `order` and `q` are PROPS now, owned by Conversations so they can be
   // published into the single top toolbar rather than rendered as a second
@@ -1405,12 +1447,6 @@ function Conversation({
   // windowed count + fetch.
   const searchTerm = useDebounced(q.trim()) || null;
   const kind = kindValue !== "all" && available.includes(kindValue) ? kindValue : null;
-  // For a group, list the members under the header.
-  const members = group
-    ? thread.participants
-        .map((h) => handleLabel(h, resolve, showContactNames))
-        .join(", ")
-    : null;
 
   // A thread can hold tens of thousands of messages; the count sizes the virtual
   // scroller and LazyVirtualList fetches only the windows it renders.
@@ -1430,6 +1466,13 @@ function Conversation({
   const [jumpTo, setJumpTo] = useState<{ index: number; token: number } | undefined>();
   const jumpToken = useRef(0);
   const { scrollEnd, toTop, toBottom } = useScrollEnds();
+  // Hand the toolbar what it needs to drive this pane. Functions travelling
+  // upward is the price of the pane having no chrome of its own — and the right
+  // trade, because a fixed strip here would stop the content scrolling under
+  // the app's translucent bar.
+  useEffect(() => {
+    onContext({ total: total ?? 0 });
+  }, [onContext, total]);
   useEffect(() => {
     if (scrollToMessage == null || jumpIndex === undefined) return;
     if (jumpIndex != null && jumpIndex >= 0) {
@@ -1439,60 +1482,26 @@ function Conversation({
     onScrolledToMessage?.(); // consume the request (found or not) so it fires once
   }, [scrollToMessage, jumpIndex, onScrolledToMessage]);
 
-  const brandIcon = hasBrandIcon(serviceSlug(thread.service)) ? (
-    <BrandIcon
-      slug={serviceSlug(thread.service)}
-      name={thread.service ?? ""}
-      className="size-4 shrink-0"
-    />
-  ) : null;
-  // A back button appears only when this conversation was jumped into from the
-  // Timeline/Periods overview, returning the user to where they came from.
-  const headerIcon =
-    onBack || brandIcon ? (
-      <div className="flex items-center gap-2">
-        {onBack && (
-          <Button
-            variant="ghost"
-            size="sm"
-            className="-ml-2 gap-1 px-2 text-muted-foreground"
-            onClick={onBack}
-          >
-            <ArrowLeft className="size-4" />
-            {backLabel ?? "Back"}
-          </Button>
-        )}
-        {brandIcon}
-      </div>
-    ) : undefined;
+  // The back button and the service badge moved to the app toolbar with every
+  // other control that acts on this conversation; nothing chrome-like is left
+  // in here.
 
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={name} icon={headerIcon}>
-        {group ? (
-          <span
-            className="max-w-[60%] truncate text-xs text-muted-foreground"
-            title={members ?? ""}
-          >
-            {thread.participants.length} people · {members}
-          </span>
-        ) : (
-          // App threads (e.g. TikTok) store the peer's @handle as the sole
-          // participant — show it. The service name is intentionally omitted: it's
-          // already in the conversation list and implied by the active filter.
-          (() => {
-            const handle = thread.participants.find((p) => p.startsWith("@"));
-            return handle ? (
-              <span className="text-xs text-muted-foreground">{handle}</span>
-            ) : null;
-          })()
-        )}
-        {/* Identity and a scroll affordance only. Search, kind and order moved
-            to the app's single top toolbar (Conversations publishes them), so
-            Messages stops being the one view with a second control row. Jump
-            stays: it scrolls THIS pane, which is a property of the pane. */}
-        <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
-      </ViewHeader>
+      {/* Jump-to-top/bottom is list navigation, not a toolbar control — floated
+          over the bottom-right, which is what Timeline mode already does. It was
+          briefly in the toolbar and the design lint caught the two arrows
+          overlapping by 4px there: the component carries a `-ml-1` that is right
+          when it sits in its own floating pill and wrong in a dense bar. */}
+      {(total ?? 0) > 0 && (
+        <div className="absolute bottom-3 right-3 z-10 rounded-full border bg-background/90 shadow-sm backdrop-blur">
+          <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
+        </div>
+      )}
+      {/* NO HEADER. Every control that acts on this conversation lives in the
+          app's one top toolbar, and the pane is content only — which is what
+          lets it scroll up under the translucent bar. A fixed strip here would
+          be a second toolbar whatever it was called, and would block that. */}
       <LazyVirtualList<Message>
         count={total ?? 0}
         startAtBottom={!order.desc && !searchTerm}
