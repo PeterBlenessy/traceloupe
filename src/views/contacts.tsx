@@ -32,6 +32,7 @@ import { NoBackupState,
   ListSkeleton,
 } from "@/components/view";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
@@ -81,13 +82,18 @@ export function ContactsView() {
   // If the saved source isn't present (e.g. a backup with no Address Book
   // contacts), fall back to the first available so the list never filters to
   // nothing.
-  const activeSource = sources.includes(source) ? source : (sources[0] ?? source);
+  // "all" is the default, and the only value that is always valid. Falling back
+  // to `sources[0]` meant a backup with more than one source opened permanently
+  // filtered to whichever came first, with a toolbar count describing a subset
+  // while the title said "Contacts".
+  const activeSource = source === "all" || sources.includes(source) ? source : "all";
 
   const filtered = useMemo(() => {
     if (!contacts) return [];
     const needle = q.trim().toLowerCase();
     return contacts.filter((c) => {
-      if (sources.length > 1 && c.source !== activeSource) return false;
+      if (activeSource !== "all" && sources.length > 1 && c.source !== activeSource)
+        return false;
       if (!needle) return true;
       const hay = [
         contactName(c),
@@ -117,11 +123,14 @@ export function ContactsView() {
 
   const filterGroups = useMemo<FilterGroup[]>(() => {
     if (sources.length <= 1) return [];
-    const sourceOptions: BadgeFilterOption[] = sources.map((s) => ({
-      value: s,
-      label: s,
-      count: (contacts ?? []).filter((c) => c.source === s).length,
-    }));
+    const sourceOptions: BadgeFilterOption[] = [
+      { value: "all", label: "All", count: (contacts ?? []).length },
+      ...sources.map((s) => ({
+        value: s,
+        label: s,
+        count: (contacts ?? []).filter((c) => c.source === s).length,
+      })),
+    ];
     return [
       badgeGroup({ key: "source", label: "Source", description: "Address Book or a third-party app", options: sourceOptions, value: activeSource, onChange: setSource }),
     ];
@@ -146,7 +155,15 @@ export function ContactsView() {
   const toolbar = useMemo(
     () =>
       active === true
-        ? { title: "Contacts", count: filtered.length, filter: filterGroups, sort: sortNode, search: searchNode }
+        ? {
+            title: "Contacts",
+            // undefined, not 0, while the query is in flight: "Contacts 0" reads
+            // as an answer, and it is not one yet.
+            count: isPending ? undefined : filtered.length,
+            filter: filterGroups,
+            sort: sortNode,
+            search: searchNode,
+          }
         : null,
     [active, filtered.length, filterGroups, sortNode, searchNode],
   );
@@ -482,14 +499,38 @@ function Field({
     </>
   );
   const className = cn(
+    // data-slot="list-row" is what the Density setting keys off; the contact
+    // card was the one place rows ignored it.
     "flex items-center gap-3 border-b px-3 py-2.5 last:border-b-0",
     href && "transition-colors hover:bg-accent/50",
   );
-  return href ? (
-    <a href={href} className={className}>
-      {inner}
-    </a>
-  ) : (
-    <div className={className}>{inner}</div>
+  if (!href)
+    return (
+      <div data-slot="list-row" className={className}>
+        {inner}
+      </div>
+    );
+  // A bare tel:/mailto: anchor inside a Tauri webview goes nowhere. Everything
+  // else in the app routes through `openExternal`, which hands it to the OS.
+  const what = href.startsWith("tel:")
+    ? "Call with your default phone app"
+    : "Write with your default mail app";
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <a
+          href={href}
+          data-slot="list-row"
+          className={className}
+          onClick={(e) => {
+            e.preventDefault();
+            void client.openExternal(href);
+          }}
+        >
+          {inner}
+        </a>
+      </TooltipTrigger>
+      <TooltipContent>{what}</TooltipContent>
+    </Tooltip>
   );
 }
