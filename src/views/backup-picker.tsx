@@ -551,8 +551,8 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
       </div>
       {info?.isEncrypted === false && (
         <p className="mt-2 text-xs text-muted-foreground">
-          Unencrypted — Safari &amp; call history, Health, and passwords are
-          excluded by iOS. Encrypt the backup to include them.
+          Unencrypted — Health, saved passwords, and tabs synced from your other
+          Apple devices are excluded by iOS. Encrypt the backup to include them.
         </p>
       )}
 
