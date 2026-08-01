@@ -16,6 +16,7 @@
  * not another toolbar slot.
  */
 import { Link } from "@tanstack/react-router";
+import { nav } from "@/lib/nav";
 import { useRouterState } from "@tanstack/react-router";
 import { Loader2 } from "lucide-react";
 import {
@@ -144,12 +145,16 @@ function useActivities(): Activity[] {
   // Re-imports have no progress events — only which modules are in flight — so
   // they list without a bar rather than with a fabricated one.
   for (const module of reimporting) {
+    // The raw module id reached the pill as the detail line ("camera_roll"), and
+    // every entry pointed at "/" — so the pill's own rule of hiding itself when
+    // you are already looking at the view that owns the work could never fire.
+    const item = nav.find((n) => n.module === module);
     out.push({
       key: `reimport:${module}`,
-      title: "Re-importing",
-      detail: module,
+      title: `Re-importing ${item?.label ?? module}`,
+      detail: "Reading it again from the backup",
       percent: null,
-      to: "/",
+      to: item?.to ?? "/",
     });
   }
 

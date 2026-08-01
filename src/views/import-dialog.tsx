@@ -141,7 +141,10 @@ export function ImportDialog({
             )}
             {showPasswordField && (
               <div className="relative">
-                <Lock className="absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                {/* inset-y-0 + my-auto centres against whatever height the
+                    control has, instead of a fixed top that drifts further off
+                    at every text-size step. */}
+                <Lock className="absolute inset-y-0 left-2.5 my-auto size-4 text-muted-foreground" />
                 <Input
                   type="password"
                   autoFocus
