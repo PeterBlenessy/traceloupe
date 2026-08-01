@@ -986,7 +986,11 @@ function Timeline({
     enabled: active === true,
   });
   // Count for the active range — sizes the virtual scroller.
-  const { data: total } = useQuery({
+  const {
+    data: total,
+    isPending: totalPending,
+    error: totalError,
+  } = useQuery({
     queryKey: ["timelineRangeCount", range.lo, range.hi, service, search, kind],
     queryFn: async () =>
       (await client.countMessageRanges([range], service, search, kind))[0] ?? 0,
@@ -1052,6 +1056,26 @@ function Timeline({
       [total, modesNode, searchNode, filterGroups, sortNode],
     ),
   );
+
+  // A blank scroller is not a state. `count={total ?? 0}` rendered an empty
+  // container both while the count was in flight and when a filter matched
+  // nothing — with the search term still in the box and no copy at all. A failed
+  // count did the same, so "couldn't load" and "nothing here" looked identical.
+  if (totalError) return <ErrorState error={totalError} />;
+  if (totalPending) return <ListSkeleton rows={8} />;
+  if (total === 0)
+    return (
+      <EmptyView
+        icon={MessageSquare}
+        title={
+          search
+            ? "No messages match this search."
+            : kind !== null || range.lo != null || range.hi != null
+              ? "No messages match these filters."
+              : "No messages in this backup."
+        }
+      />
+    );
 
   return (
     <div className="relative flex h-full flex-col">
@@ -1450,7 +1474,11 @@ function Conversation({
 
   // A thread can hold tens of thousands of messages; the count sizes the virtual
   // scroller and LazyVirtualList fetches only the windows it renders.
-  const { data: total } = useQuery({
+  const {
+    data: total,
+    isPending: totalPending,
+    error: totalError,
+  } = useQuery({
     queryKey: ["messageCount", thread.id, kind, searchTerm],
     queryFn: () => client.countThreadMessages(thread.id, kind, searchTerm),
   });
@@ -1502,6 +1530,25 @@ function Conversation({
           app's one top toolbar, and the pane is content only — which is what
           lets it scroll up under the translucent bar. A fixed strip here would
           be a second toolbar whatever it was called, and would block that. */}
+      {/* Same reasoning as Timeline: a blank pane is not a state. A failed count
+          rendered identically to an empty conversation, which is the confusion
+          this app exists to prevent. */}
+      {totalError ? (
+        <ErrorState error={totalError} />
+      ) : totalPending ? (
+        <ListSkeleton rows={8} />
+      ) : total === 0 ? (
+        <EmptyView
+          icon={MessageSquare}
+          title={
+            searchTerm
+              ? "No messages match this search."
+              : kind !== null
+                ? "No messages of this type in this conversation."
+                : "No messages in this conversation."
+          }
+        />
+      ) : (
       <LazyVirtualList<Message>
         count={total ?? 0}
         startAtBottom={!order.desc && !searchTerm}
@@ -1549,6 +1596,7 @@ function Conversation({
           );
         }}
       />
+      )}
     </div>
   );
 }

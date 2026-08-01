@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { useListNavigation } from "@/lib/use-keyboard-nav";
 import { useQuery } from "@tanstack/react-query";
 import {
   SafetyFlagBadge,
@@ -8,7 +9,6 @@ import {
 } from "@/components/safety-flag-badge";
 import {
   ArrowLeft,
-  ChevronDown,
   ChevronRight,
   Folder,
   FolderTree,
@@ -344,6 +344,17 @@ export function NotesView() {
       : groupNotes(sortedNotes, sort, new Date());
   }, [sortedNotes, sort, viewMode, collapsed]);
 
+  // Arrows move between NOTES, not between rows: the master list also holds
+  // section headers and folder rows, and stepping onto a header would be a
+  // selection that selects nothing. `sortedNotes` is already the visible,
+  // filtered, sorted set, so it is the right sequence to walk.
+  const { listProps } = useListNavigation({
+    items: sortedNotes ?? [],
+    selectedId: selectedId ?? sortedNotes?.[0]?.id ?? null,
+    onSelect: setSelectedId,
+    getId: (n) => n.id,
+  });
+
   const hasNotes = (notes?.length ?? 0) > 0;
   // Faceted filters for the single Filter control. Only groups this backup
   // actually has are included — no locked notes → no Lock group at all.
@@ -539,6 +550,11 @@ export function NotesView() {
             ) : (sortedNotes?.length ?? 0) === 0 ? (
               <EmptyView icon={NotebookText} title="No notes match these filters." />
             ) : (
+              <div
+                {...listProps}
+                aria-label="Notes"
+                className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
               <VirtualList
                 key={clockFormat}
                 items={rows}
@@ -556,7 +572,10 @@ export function NotesView() {
                       onToggle={() => toggleFolder(r.folder)}
                     />
                   ) : (
-                    <div className={cn("py-0.5", r.indent ? "pl-6 pr-2" : "px-2")}>
+                    <div
+                      className={cn("py-0.5", r.indent ? "pl-6 pr-2" : "px-2")}
+                      aria-current={selected?.id === r.note.id || undefined}
+                    >
                       <NoteRow
                         note={r.note}
                         active={selected?.id === r.note.id}
@@ -568,6 +587,7 @@ export function NotesView() {
                   )
                 }
               />
+              </div>
             )
           }
           detail={
@@ -628,11 +648,14 @@ function FolderRow({
       data-slot="list-row"
       className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-sm font-medium hover:bg-accent/50"
     >
-      {collapsed ? (
-        <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-      ) : (
-        <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-      )}
+      {/* One chevron that ROTATES rather than two that swap: swapping has no
+          motion to give, and the rotation is the affordance. `transform` is used
+          rather than Tailwind's `rotate-90`, which compiles to the standalone
+          `rotate` property that WKWebView will not animate. */}
+      <ChevronRight
+        className="size-4 shrink-0 text-muted-foreground transition-transform duration-150"
+        style={{ transform: collapsed ? undefined : "rotate(90deg)" }}
+      />
       <Folder className="size-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1 truncate">{folder}</span>
       <Badge variant="secondary" className="shrink-0 tabular-nums">
@@ -694,13 +717,19 @@ function NoteRow({
                 </Tooltip>
               )}
               {note.attachmentCount > note.imageCount && (
-                <span
-                  className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground"
-                  title="Other attachments (tables, drawings, files)"
-                >
-                  <Paperclip className="size-3.5" />
-                  {note.attachmentCount - note.imageCount}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
+                      <Paperclip className="size-3.5" />
+                      {note.attachmentCount - note.imageCount}
+                    </span>
+                  </TooltipTrigger>
+                  {/* A native `title=` ten lines from a real Tooltip: different
+                      delay, different styling, invisible to the tooltip guard. */}
+                  <TooltipContent>
+                    Other attachments (tables, drawings, files)
+                  </TooltipContent>
+                </Tooltip>
               )}
             </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">

@@ -34,7 +34,7 @@ import {
   ScanTile,
 } from "@/components/dashboard-tiles";
 import { CATEGORY_LABEL, formatSources } from "@/views/safety-scan";
-import { formatCount, formatDateTime } from "@/lib/format";
+import { formatCount, formatDateTime, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { ArtifactTable } from "@/components/artifact-table";
 import { useHostedArtifacts } from "@/lib/use-hosted-artifacts";
@@ -322,13 +322,16 @@ function HomeDashboard() {
                       ? "nothing found"
                       : `${security.critical} critical · ${security.warning} warning · ${security.info} info`,
                     newSinceLastRun > 0
-                      ? `${newSinceLastRun} new since the run before`
+                      ? `${plural(newSinceLastRun, "new finding")} since the run before`
                       : "nothing new since the run before",
                     // A clean scan against stale feeds is a weaker claim than a
                     // clean scan against fresh ones, and nothing else says so.
+                    // "feeds were 3 days ago" is not a sentence. `formatRelative`
+                    // returns either a relative phrase or a date, so the wording
+                    // has to work for both — "updated" carries each.
                     security.feedsGeneratedAt != null
-                      ? `feeds were ${formatRelative(security.feedsGeneratedAt)} · ${security.modules.length} modules`
-                      : `${security.modules.length} modules covered`,
+                      ? `feeds updated ${formatRelative(security.feedsGeneratedAt)} · ${plural(security.modules.length, "module")}`
+                      : `${plural(security.modules.length, "module")} covered`,
                   ]
                 : undefined
             }
