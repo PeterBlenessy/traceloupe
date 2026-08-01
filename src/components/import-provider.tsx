@@ -3,6 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { client, type BackupInfo, type ImportProgress } from "@/lib/ipc";
 import { ImportDialog } from "@/views/import-dialog";
+import { toast } from "sonner";
 
 /**
  * Owns the import lifecycle above the routes, so an import survives closing its
@@ -110,15 +111,25 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
         password,
         modules,
       });
-      // Surface partial-failure warnings (a malformed artifact was skipped) so
-      // they aren't lost — the import still succeeded for everything else.
+      // Partial-failure warnings (a malformed store was skipped) must reach the
+      // PERSON, not the devtools console. The comment here used to say "so they
+      // aren't lost" above a `console.warn` — which loses them: an import that
+      // skipped data reported unqualified success, and this app's whole claim is
+      // telling "we read it" apart from "we could not".
+      //
+      // Shown for long enough to read and act on, listing what was skipped
+      // rather than only how many things were.
       if (result.warnings.length > 0) {
-        console.warn(
-          `%c[traceloupe]%c import completed with ${result.warnings.length} warning(s):`,
-          "color:#a78bfa;font-weight:600",
-          "color:inherit",
-          result.warnings,
+        const n = result.warnings.length;
+        toast.warning(
+          `Import finished — ${n === 1 ? "1 thing was" : `${n} things were`} skipped`,
+          {
+            description: result.warnings.slice(0, 3).join("\n") +
+              (n > 3 ? `\n…and ${n - 3} more` : ""),
+            duration: 30_000,
+          },
         );
+        console.warn("[traceloupe] import warnings:", result.warnings);
       }
       unlisten.current?.();
       unlisten.current = null;

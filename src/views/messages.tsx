@@ -75,6 +75,7 @@ import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-k
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
 import { useDebounced } from "@/lib/use-debounced";
+import { useListNavigation } from "@/lib/use-keyboard-nav";
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import {
@@ -620,6 +621,15 @@ function Conversations({
     visibleThreads?.[0] ??
     null;
 
+  // One tab stop for the conversation list, arrows moving the selection. The
+  // primitive's scroll-into-view keys off aria-current, which the rows now set.
+  const { listProps: threadListProps } = useListNavigation({
+    items: visibleThreads ?? [],
+    selectedId: selected?.id ?? null,
+    onSelect,
+    getId: (t) => t.id,
+  });
+
   // Publish the shared toolbar: title + mode toggle + app filter (from the
   // parent) + this mode's sort. Search/kind stay per-conversation in the detail
   // pane. So Chats matches every other view's single top toolbar.
@@ -668,7 +678,11 @@ function Conversations({
               }
             />
           ) : (
-            <>
+            <div
+              {...threadListProps}
+              aria-label="Conversations"
+              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
             <DeletionNote />
             <VirtualList
               items={visibleThreads!}
@@ -676,7 +690,10 @@ function Conversations({
               estimateSize={64}
               underlap={!fromSafety}
               renderItem={(t) => (
-                <div className="px-2 py-0.5">
+                <div
+                  className="px-2 py-0.5"
+                  aria-current={selected?.id === t.id || undefined}
+                >
                   <ThreadRow
                     thread={t}
                     resolve={resolve}
@@ -689,7 +706,7 @@ function Conversations({
                 </div>
               )}
             />
-            </>
+            </div>
           )}
         </>
       }
