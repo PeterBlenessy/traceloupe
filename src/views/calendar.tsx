@@ -40,7 +40,7 @@ function EventRow({ event }: { event: CalendarEvent }) {
               aria-label="Repeating event"
             />
           )}
-          <span className="truncate">{event.title ?? "(untitled event)"}</span>
+          <span className="truncate">{eventTitle(event)}</span>
         </span>
         {event.calendarName && (
           <Badge variant="secondary" className="shrink-0">
@@ -51,6 +51,15 @@ function EventRow({ event }: { event: CalendarEvent }) {
       <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
         <Clock className="size-3 shrink-0" />
         <span className="select-text">{whenLabel(event)}</span>
+        {/* Only when it is NOT "busy": busy is the default an event carries, so
+            marking every row with it is noise. Filtering by availability
+            previously changed the list with nothing on any row explaining what
+            the rows had in common. */}
+        {event.availability && event.availability !== "busy" && (
+          <span className="rounded bg-muted px-1 py-0.5 text-[10px] uppercase tracking-wide">
+            {event.availability}
+          </span>
+        )}
       </div>
       {event.location && (
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -65,6 +74,16 @@ function EventRow({ event }: { event: CalendarEvent }) {
       )}
     </div>
   );
+}
+
+/** What to call an event with no usable title.
+ *
+ *  `?? ` only catches null, so an event titled "" rendered as an empty row with
+ *  no indication anything was there. `?.trim() ||` catches both, and the phrase
+ *  is sentence case like every other placeholder in the app — the parenthesised
+ *  "(untitled event)" was a third wording for the same idea. */
+function eventTitle(event: { title: string | null }): string {
+  return event.title?.trim() || "Untitled event";
 }
 
 /** True when `at` falls in a half-open [lo, hi) window; undated only pass "All". */
@@ -220,7 +239,10 @@ export function CalendarView() {
       <NoBackupState
         icon={CalendarDays}
         title="See calendar events"
-        lead="Events and appointments across every calendar on the device — with dates, times, locations, invitees, and recurrence — as they were scheduled."
+        // No "invitees": nothing parses them, and an intro that names a
+        // capability the view lacks is the most expensive place to be wrong —
+        // it is read before anyone can check.
+        lead="Events and appointments across every calendar on the device — with dates, times, locations, and recurrence — as they were scheduled."
         features={[
           { label: "Search", detail: "Search titles, notes, and locations." },
           { label: "Filters", detail: "Filter by calendar, free/busy availability, or time range." },

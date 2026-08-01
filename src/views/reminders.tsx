@@ -40,7 +40,7 @@ function ReminderRow({ reminder }: { reminder: Reminder }) {
               reminder.completed && "text-muted-foreground line-through",
             )}
           >
-            {reminder.title ?? "(untitled)"}
+            {reminder.title?.trim() || "Untitled reminder"}
             {reminder.flagged && (
               <Flag className="ml-1.5 inline size-3 fill-status-warning text-status-warning" />
             )}

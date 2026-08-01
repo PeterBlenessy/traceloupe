@@ -323,6 +323,14 @@ export function SafetyScanView() {
       reason?: string;
     }) =>
       client.dismissContentFinding(f.fingerprint, f.category, f.dismissed, f.reason),
+    // Silent failure here is worse than elsewhere: the row disappears
+    // optimistically, so a failed dismiss looks exactly like a successful one
+    // until the next refetch brings it back.
+    onError: (e) => {
+      toast.error("Couldn't dismiss this finding", {
+        description: e instanceof Error ? e.message : String(e),
+      });
+    },
     onSuccess: () => {
       // Refresh both the findings list and the inline badges (marks).
       qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
@@ -754,7 +762,13 @@ function ScanProgress({
         <Loader2 className="size-4 animate-spin text-muted-foreground" />
         {label}
       </div>
-      <Progress value={pct ?? undefined} />
+      {/* Model load and report writing have no percentage. A determinate bar
+          pinned at 0% reads as "stuck"; an indeterminate one reads as "working",
+          which is the truth. */}
+      <Progress
+        value={pct ?? undefined}
+        className={pct == null ? "[&>*]:animate-pulse" : undefined}
+      />
       {scanEvent.phase === "classifying" && scanEvent.total > 0 && (
         <div className="text-xs text-muted-foreground">
           {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
@@ -1086,6 +1100,9 @@ function ScanRail({
           <div
             role="option"
             tabIndex={-1}
+            /* The Density setting keys off this; the scan-history rows were the
+               one list that ignored it. */
+            data-slot="list-row"
             aria-current={s.id === selectedId}
             onClick={() => onSelect(s.id)}
             onKeyDown={(e) => {
@@ -2347,7 +2364,16 @@ function FindingsList({
             )}
           />
         </div>
-        {total === 0 && !matching.isPending && (
+        {/* A failed query gives total === 0 exactly like a clean scan does, and
+            "nothing was flagged" is the one sentence a safety tool must not say
+            when it does not know. The error branch comes first. */}
+        {matching.isError && (
+          <p className="text-xs text-status-warn-text">
+            These findings couldn't be loaded, so this is not a result — try
+            again rather than reading the empty list as clean.
+          </p>
+        )}
+        {total === 0 && !matching.isPending && !matching.isError && (
           <p className="text-xs text-muted-foreground">
             {noFindings
               ? "Nothing was flagged in this scan's scope. A clean scan is a review aid, not a guarantee — spot-check important conversations yourself."
