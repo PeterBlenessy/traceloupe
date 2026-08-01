@@ -32,7 +32,7 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { BadgeFilter, type BadgeFilterOption } from "@/components/badge-filter";
+import { type BadgeFilterOption } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useViewToolbar } from "@/components/toolbar-context";
@@ -110,29 +110,6 @@ const KIND_ORDER = ["text", "media", "link", "shared", "sticker", "app", "system
 /** Clickable content-kind badges (same pill component as the Apps "Native"/"Coming
  *  soon" tags). Shows only the kinds present in `available`, and hides itself unless
  *  there are at least two to choose between. */
-function MessageKindFilter({
-  available,
-  value,
-  onChange,
-}: {
-  available: string[];
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  const kinds = KIND_ORDER.filter((k) => available.includes(k));
-  if (kinds.length < 2) return null; // one (or no) kind → nothing to filter
-  return (
-    <BadgeFilter
-      value={kinds.includes(value) ? value : "all"}
-      onChange={onChange}
-      options={[
-        { value: "all", label: "All" },
-        ...kinds.map((k) => ({ value: k, label: KIND_LABELS[k] })),
-      ]}
-    />
-  );
-}
-
 /** Imperative top/bottom scrolling for a LazyVirtualList: the `scrollEnd` value
  *  to pass to it, plus handlers that bump its token. */
 function useScrollEnds() {
@@ -621,6 +598,32 @@ function Conversations({
     visibleThreads?.[0] ??
     null;
 
+  // CONVERSATION-SCOPED CONTROLS LIVE HERE, NOT IN THE DETAIL PANE.
+  //
+  // They used to sit in the conversation's own ViewHeader, which gave Messages a
+  // second control row that no other view has: Contacts and Notes put everything
+  // in the one top toolbar and let the detail pane start with content. Owning the
+  // state here is what lets it publish into that single toolbar, since only one
+  // `useViewToolbar` is live at a time and this component is the one that calls it.
+  //
+  // Same persistence key as before, so an existing preference carries over.
+  const [order, setOrder] = usePersistedState<SortState>(
+    "messages:conversation-order",
+    { by: "time", desc: false },
+  );
+  const [q, setQ] = useState("");
+  // Kinds present in the OPEN conversation — the same query the detail pane ran,
+  // moved up so the filter can be published with everything else.
+  const { data: convKinds } = useQuery({
+    queryKey: ["messageKinds", selected?.id ?? null, null],
+    queryFn: () => client.messageKinds(selected?.id ?? null, null),
+    enabled: selected != null,
+  });
+  const convAvailable = useMemo(
+    () => (convKinds ?? []).map(([k]) => k),
+    [convKinds],
+  );
+
   // One tab stop for the conversation list, arrows moving the selection. The
   // primitive's scroll-into-view keys off aria-current, which the rows now set.
   const { listProps: threadListProps } = useListNavigation({
@@ -647,6 +650,42 @@ function Conversations({
     ),
     [sort, setSort],
   );
+  const convSearchNode = useMemo(
+    () => (
+      <ListSearch
+        value={q}
+        onChange={setQ}
+        placeholder="Search this conversation…"
+      />
+    ),
+    [q],
+  );
+  // Kind as a FilterGroup and order in the sort slot — the shape Timeline mode
+  // already publishes, so both Messages modes now feed the same toolbar the same
+  // way. (There is no free-form slot to put custom controls in, and inventing one
+  // would just be the second toolbar again, wearing the toolbar's clothes.)
+  const convKindGroup = useMemo<FilterGroup[]>(
+    () =>
+      convAvailable.length >= 2
+        ? [
+            badgeGroup({
+              key: "kind",
+              label: "Type",
+              description: "Message content type",
+              options: [
+                { value: "all", label: "All" },
+                ...KIND_ORDER.filter((k) => convAvailable.includes(k)).map((k) => ({
+                  value: k,
+                  label: KIND_LABELS[k],
+                })),
+              ],
+              value: convAvailable.includes(kindValue) ? kindValue : "all",
+              onChange: onKindChange,
+            }),
+          ]
+        : [],
+    [convAvailable, kindValue, onKindChange],
+  );
   useViewToolbar(
     useMemo(
       () => ({
@@ -655,8 +694,29 @@ function Conversations({
         modes: modesNode,
         filter: serviceGroups,
         sort: sortNode,
+        // Only while a conversation is open: a search box or an order toggle
+        // with nothing to act on is a control that does nothing, which is worse
+        // than its absence.
+        ...(selected
+          ? {
+              search: convSearchNode,
+              filter: [...serviceGroups, ...convKindGroup],
+              sort: (
+                <>
+                  {sortNode}
+                  <OrderToggle
+                    desc={order.desc}
+                    onToggle={() => setOrder({ by: "time", desc: !order.desc })}
+                  />
+                </>
+              ),
+            }
+          : {}),
       }),
-      [visibleThreads?.length, modesNode, serviceGroups, sortNode],
+      [
+        visibleThreads?.length, modesNode, serviceGroups, sortNode, selected,
+        convSearchNode, convKindGroup, order.desc, setOrder,
+      ],
     ),
   );
 
@@ -717,7 +777,9 @@ function Conversations({
             resolve={resolve}
             showContactNames={showContactNames}
             kindValue={kindValue}
-            onKindChange={onKindChange}
+            q={q}
+            order={order}
+            available={convAvailable}
             onBack={onBack}
             backLabel={backLabel}
             scrollToMessage={
@@ -1312,7 +1374,9 @@ function Conversation({
   resolve,
   showContactNames,
   kindValue,
-  onKindChange,
+  q,
+  order,
+  available,
   onBack,
   backLabel,
   scrollToMessage,
@@ -1322,7 +1386,12 @@ function Conversation({
   resolve: Resolver;
   showContactNames: boolean;
   kindValue: string;
-  onKindChange: (v: string) => void;
+  /** Search term, owned by the parent so it can live in the one top toolbar. */
+  q: string;
+  /** Message order, owned by the parent for the same reason. */
+  order: SortState;
+  /** Kinds present in this conversation, queried by the parent. */
+  available: string[];
   onBack?: () => void;
   backLabel?: string;
   scrollToMessage?: number | null;
@@ -1330,24 +1399,11 @@ function Conversation({
 }) {
   const name = threadLabel(thread, resolve, showContactNames);
   const group = isGroup(thread);
-  // Message order: oldest-first by default (chat-like, newest at the bottom).
-  // Toggling to newest-first flips the query and pins the list to the top.
-  // Persisted so it survives leaving Messages and returning.
-  const [order, setOrder] = usePersistedState<SortState>("messages:conversation-order", {
-    by: "time",
-    desc: false,
-  });
-  // In-conversation search over message body/sender. Debounced so each keystroke
-  // doesn't refire the windowed count + fetch. Not persisted — search is a
-  // transient lookup within the open thread, cleared when you leave it.
-  const [q, setQ] = useState("");
+  // `order` and `q` are PROPS now, owned by Conversations so they can be
+  // published into the single top toolbar rather than rendered as a second
+  // control row in here. Debounced locally so each keystroke doesn't refire the
+  // windowed count + fetch.
   const searchTerm = useDebounced(q.trim()) || null;
-  // Content kinds present in THIS conversation (drives the pills below).
-  const { data: kindsData } = useQuery({
-    queryKey: ["messageKinds", thread.id, null],
-    queryFn: () => client.messageKinds(thread.id, null),
-  });
-  const available = (kindsData ?? []).map(([k]) => k);
   const kind = kindValue !== "all" && available.includes(kindValue) ? kindValue : null;
   // For a group, list the members under the header.
   const members = group
@@ -1431,20 +1487,10 @@ function Conversation({
             ) : null;
           })()
         )}
-        <ListSearch
-          value={q}
-          onChange={setQ}
-          placeholder="Search this conversation…"
-        />
-        <MessageKindFilter
-          available={available}
-          value={kindValue}
-          onChange={onKindChange}
-        />
-        <OrderToggle
-          desc={order.desc}
-          onToggle={() => setOrder({ by: "time", desc: !order.desc })}
-        />
+        {/* Identity and a scroll affordance only. Search, kind and order moved
+            to the app's single top toolbar (Conversations publishes them), so
+            Messages stops being the one view with a second control row. Jump
+            stays: it scrolls THIS pane, which is a property of the pane. */}
         <JumpButtons onTop={toTop} onBottom={toBottom} disabled={!total} />
       </ViewHeader>
       <LazyVirtualList<Message>
