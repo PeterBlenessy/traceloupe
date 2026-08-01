@@ -29,6 +29,7 @@ import { cn } from "@/lib/utils";
 import { VirtualList } from "@/components/virtual-list";
 import { ConsentDialogs } from "@/views/security-consent";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
+import { toast } from "sonner";
 
 const SEVERITY_META: Record<
   Severity,
@@ -59,6 +60,14 @@ const SEVERITY_META: Record<
 const FINDING_COLS =
   "grid-cols-[auto_minmax(0,1fr)_minmax(0,16rem)_auto]";
 
+/** Scanner module id → what it is, in the reader's words.
+ *
+ *  Must cover every id `analyzer.rs` emits, because anything missing falls
+ *  through to the raw identifier and the user reads "process_names". The
+ *  scanner's own list is the source of truth: apps, attachments, contacts,
+ *  interactions, manifest, messages, process_names, profiles, safari, tcc,
+ *  webkit. (`notes` and `calendar` are kept for scans recorded before those
+ *  modules were folded into others.) */
 const MODULE_LABEL: Record<string, string> = {
   apps: "Installed apps",
   messages: "Messages",
@@ -67,8 +76,23 @@ const MODULE_LABEL: Record<string, string> = {
   notes: "Notes",
   calendar: "Calendar",
   contacts: "Contacts",
-  interactions: "Interactions",
+  // Not "Interactions": that named a database. This module matches the people
+  // and addresses the device communicated with against the feeds.
+  interactions: "People contacted",
   manifest: "Backup files",
+  process_names: "Running processes",
+  profiles: "Configuration profiles",
+  tcc: "App permissions",
+  webkit: "Web data",
+};
+
+/** How a finished run is described in the history. The raw enum reached the
+ *  screen as "cancelled" / "failed", which are words about the software. */
+const STATUS_LABEL: Record<string, string> = {
+  running: "Running",
+  done: "Finished",
+  cancelled: "Stopped",
+  failed: "Didn't finish",
 };
 
 function SeverityBadge({ severity }: { severity: Severity }) {
@@ -143,6 +167,16 @@ export function SecurityView() {
 
   const scan = useMutation({
     mutationFn: () => client.runSecurityScan("explicit"),
+    // A scan that fails must say so. It ended silently before: the spinner
+    // stopped, nothing appeared, and the run was indistinguishable from one that
+    // found nothing — the worst possible confusion for a security check.
+    onError: (e) => {
+      clearScanProgress();
+      toast.error("The security check couldn't finish", {
+        description: e instanceof Error ? e.message : String(e),
+        duration: 30_000,
+      });
+    },
     onSuccess: () => {
       clearScanProgress();
       qc.invalidateQueries({ queryKey: ["scanRuns"] });
@@ -178,6 +212,10 @@ export function SecurityView() {
     ),
   );
 
+  // `active` is undefined while the check is in flight; only an explicit false
+  // means there is no backup. Rendering the onboarding card on undefined made it
+  // flash on every visit with a backup already open.
+  if (active === undefined) return null;
   if (!enabled) {
     return (
       <NoBackupState
@@ -271,7 +309,9 @@ export function SecurityView() {
             <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
               <Loader2 className="size-4 animate-spin text-muted-foreground" />
               <span className="text-muted-foreground">
-                {progress ? `Scanning: ${progress}` : "Starting scan…"}
+                {progress
+                  ? `Checking ${(MODULE_LABEL[progress] ?? progress).toLowerCase()}…`
+                  : "Starting scan…"}
               </span>
               <Button
                 variant="ghost"
@@ -337,9 +377,18 @@ const KIND_LABEL: Record<string, string> = {
 function RunOutcomeBadge({ run }: { run: ScanRun }) {
   if (run.status !== "done")
     return (
-      <Badge variant="outline" className="shrink-0 text-muted-foreground">
-        {run.status}
-      </Badge>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Badge variant="outline" className="shrink-0 text-muted-foreground">
+            {STATUS_LABEL[run.status] ?? run.status}
+          </Badge>
+        </TooltipTrigger>
+        <TooltipContent>
+          {run.status === "running"
+            ? "This check is still going."
+            : "This check didn't cover the whole backup — run it again for a result you can rely on."}
+        </TooltipContent>
+      </Tooltip>
     );
   const total = run.critical + run.warning + run.info;
   if (total === 0)
@@ -566,6 +615,44 @@ function ResultSummary({
 }) {
   const total = run.critical + run.warning + run.info;
   const newCount = findings.filter((f) => f.isNew).length;
+  // What this run actually looked at. A passive check covers installed apps
+  // only; saying "no known indicators matched" without that reads as though the
+  // whole backup was examined.
+  const coverage =
+    run.modules.length > 0
+      ? run.modules.map((m) => MODULE_LABEL[m] ?? m).join(", ")
+      : null;
+
+  // A CANCELLED OR FAILED RUN FOUND NOTHING BECAUSE IT STOPPED, not because
+  // there was nothing. Presenting it with a green shield and "No known
+  // indicators matched" is the single most misleading thing this view could do.
+  if (run.status === "cancelled" || run.status === "failed") {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <ShieldQuestion className="size-5 text-muted-foreground" />
+              <CardTitle>
+                {run.status === "cancelled"
+                  ? "This check was stopped"
+                  : "This check didn't finish"}
+              </CardTitle>
+            </div>
+            {!latest && <BackToLatest onClick={onBackToLatest} />}
+          </div>
+          <CardDescription>
+            Started {formatListTime(run.startedAt)}
+            {coverage ? ` · got as far as: ${coverage}` : ""}. It found{" "}
+            {total === 0 ? "nothing" : formatCount(total)} before stopping, which
+            says nothing about the rest of the backup. Run it again for a result
+            you can rely on.
+          </CardDescription>
+          <FeedReceipt run={run} className="text-xs text-muted-foreground" />
+        </CardHeader>
+      </Card>
+    );
+  }
 
   if (total === 0) {
     return (
@@ -579,7 +666,8 @@ function ResultSummary({
             {!latest && <BackToLatest onClick={onBackToLatest} />}
           </div>
           <CardDescription>
-            Scanned {formatListTime(run.startedAt)} against{" "}
+            Scanned {formatListTime(run.startedAt)}
+            {coverage ? ` · ${coverage}` : ""} against{" "}
             {run.indicatorCount != null ? formatCount(run.indicatorCount) : "?"} indicators. A clean
             result means no traces of spyware <em>known to these feeds</em> were
             found — it does not guarantee the device is uncompromised.
@@ -637,7 +725,19 @@ function ResultSummary({
               variant="ghost"
               size="sm"
               className="ml-auto"
-              onClick={() => client.exportScanReport(run.id)}
+              onClick={async () => {
+                // Silent before: no confirmation, no destination, and a failure
+                // was indistinguishable from a cancelled save dialog.
+                try {
+                  const path = await client.exportScanReport(run.id);
+                  if (path)
+                    toast.success("Report saved", { description: path });
+                } catch (e) {
+                  toast.error("Couldn't save the report", {
+                    description: e instanceof Error ? e.message : String(e),
+                  });
+                }
+              }}
             >
               <Download className="size-4" />
               Export CSV
@@ -723,6 +823,38 @@ function ResultSummary({
   );
 }
 
+/** One support contact, copyable rather than clickable.
+ *
+ *  COPY, NOT OPEN — deliberately. This panel is read by someone who may be
+ *  monitored, and opening a link puts the visit in browser history on the
+ *  device they are worried about. Copying leaves the choice of where and when to
+ *  use it with them, which is the same reasoning as the warning above about
+ *  removing an app tipping off whoever installed it. */
+function HelpContact({ name, contact }: { name: string; contact: string }) {
+  return (
+    <li>
+      <span>{name} — </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+            onClick={() => {
+              void navigator.clipboard.writeText(contact);
+              toast.success("Copied", { description: contact });
+            }}
+          >
+            {contact}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>
+          Copy — opening it here would leave it in this device's browser history
+        </TooltipContent>
+      </Tooltip>
+    </li>
+  );
+}
+
 function WhatNow() {
   return (
     <Alert>
@@ -734,10 +866,22 @@ function WhatNow() {
           passwords can alert the person who installed it. Consider your
           situation before acting, and reach out for support:
         </p>
-        <ul className="mt-1 list-inside list-disc space-y-0.5">
-          <li>Access Now Digital Security Helpline — help@accessnow.org</li>
-          <li>Amnesty International Security Lab</li>
-          <li>Coalition Against Stalkerware — stopstalkerware.org</li>
+        <ul className="mt-1 space-y-1">
+          <HelpContact
+            name="Access Now Digital Security Helpline"
+            contact="help@accessnow.org"
+          />
+          <HelpContact
+            name="Coalition Against Stalkerware"
+            contact="stopstalkerware.org"
+          />
+          {/* Named without a contact route on purpose: the Security Lab is a
+              real resource worth knowing, and guessing an intake address for a
+              person who may be under surveillance is not a risk worth taking to
+              make a list look tidy. */}
+          <li className="text-muted-foreground">
+            Amnesty International Security Lab
+          </li>
         </ul>
       </AlertDescription>
     </Alert>
