@@ -273,14 +273,14 @@ iMessage/phone-only); **contacts/social graph** is imported only for TikTok
 
 TraceLoupe surfaces most of the backup's high-value data — Messages, Photos,
 Contacts, Calls, Safari, Notes, Recordings, third-party chats, installed apps,
-Health, CoreDuet Interactions, Calendar, Reminders, and device metadata (the ✅
+Health, Calendar, Reminders, and device metadata (the ✅
 rows below). The remaining rows exist in this backup but have no parser yet,
 ranked by value × feasibility.
 
 | Domain | Present here? | Rough scale | Value | Notes |
 |--------|:---:|-------|:---:|-------|
 | **Health** | ✅ **rings + mobility + timezones (0.17.0)** | 344,063 quantity samples, 13 workouts, 24k GPS points, 1,137 ring days, 10 timezones | ★★★ | **Health** view sections: workout log with inline GPS-route previews, daily-activity table (steps/distance/flights/energy + HR + activity rings vs goals + walking/audio metrics), sleep sessions, and a per-timezone travel timeline from `data_provenances.tz_name`. Remaining: per-sample browsing (raw quantity samples). Achievements (Awards) and symptoms (Cycle Tracking) now shipped; stand-hours (`appleStandHour`, cat 70) is absent from this backup |
-| **CoreDuet interactions** | ✅ **surfaced (0.10.0-dev; channels 0.18.0-dev)** | 15,055 interactions, 66 contacts, 12 apps | ★★★ | **Interactions** view: pre-aggregated `ZCONTACTS` per-person graph (name/handle · incoming/outgoing counts · first–last span), most-contacted first, plus a per-app **Channels** strip from the raw `ZINTERACTIONS` table (`ZBUNDLEID`/`ZDIRECTION`) — which apps the interactions flowed through, with in/out totals |
+| **CoreDuet interactions** | ⚠️ **parsed, not surfaced (view removed in #222)** | 66 contacts, 12 apps | ★☆☆ | `ZCONTACTS` is a pre-aggregated per-person communication summary. It had its own view until #222: the name was Apple's internal one, the rows led nowhere, and its counts contradicted Messages because CoreDuet aggregates across apps TraceLoupe cannot parse. Contacts already shows per-contact message counts linked to the conversation, which is what that view was reaching for. The store is still parsed because **Security Check scans its identifiers against the indicator feeds** — removing the table to remove the view would have weakened the scan |
 | **Device / backup metadata** | ✅ **surfaced (0.10.0-dev)** | name, model, iOS version, serial, last-backup, encryption | ★★★ | New **Device** view: `device_info` command re-reads Info.plist via the stored `source_dir`; model id mapped to a marketing name |
 | **Calendar** | ✅ **surfaced (0.10.0-dev)** | `Calendar.sqlitedb` 217 events, 15 calendars | ★★ | New **Calendar** view: title/when/location/notes + calendar name (`CalendarItem` entity_type 2, joined to `Calendar` + `Location`). Invitees/recurrence not yet parsed |
 | **Reminders** | ✅ **surfaced (0.10.0-dev)** | 124 reminders | ★★ | New **Reminders** view: title/notes/due/completion/flag + list name (`ZREMCDREMINDER` joined to `ZREMCDBASELIST`; trashed excluded) |

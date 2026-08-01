@@ -72,7 +72,7 @@ Three principles shape everything below:
 │                                                                             │
 │   React 19 + shadcn/ui + Tailwind v4 · TanStack Router/Query — Tauri webview │
 │   Views (one unified toolbar): Photos · Messages · Contacts · Calls · Safari │
-│     · Notes · Recordings · Calendar · Reminders · Health · Interactions      │
+│     · Notes · Recordings · Calendar · Reminders · Health · Apps             │
 │     · Apps · Device · Security · Safety                                      │
 └───────────────────────────────┬─────────────────────────────────────────────┘
                                 │ @tauri-apps/api  invoke(command)
@@ -142,7 +142,7 @@ The core crate has no knowledge of Tauri or the UI. It exposes use-cases (`open_
 
 - **Manifest Index** — decrypts only `Manifest.db` once; maps every `domain/relativePath` to its `fileID` and per-file key. The backbone of lazy access.
 - **Decryptor** — unwraps the keybag with the backup password and decrypts a *single* requested file to bytes on demand, caching the result. Never walks the whole backup. Locked Apple Notes are decrypted on demand the same way.
-- **Native Parsers** — original Rust parsers turn plaintext bytes into structured records: first-party artifacts (Messages, Notes, Contacts, Calls, Safari, Recordings, Photos/camera-roll, Calendar, Reminders, Health, Interactions, Apps) plus a pluggable app-chat framework for third-party chats (WhatsApp, Messenger, Instagram, TikTok, Telegram, Kik, imo, Threema, Viber, Teams, LinkedIn). SQLite via `rusqlite`, plist, Notes protobuf, media/thumbnails. (The retired MVP delegated parsing to an iLEAPP sidecar; see §6.)
+- **Native Parsers** — original Rust parsers turn plaintext bytes into structured records: first-party artifacts (Messages, Notes, Contacts, Calls, Safari, Recordings, Photos/camera-roll, Calendar, Reminders, Health, Apps) plus a pluggable app-chat framework for third-party chats (WhatsApp, Messenger, Instagram, TikTok, Telegram, Kik, imo, Threema, Viber, Teams, LinkedIn). SQLite via `rusqlite`, plist, Notes protobuf, media/thumbnails. (The retired MVP delegated parsing to an iLEAPP sidecar; see §6.)
 - **Cache / Index** — the per-backup `cache.db` (SQLite) holding the file index, parsed artifacts, thumbnails, and Security Check findings/scan-runs; populated by native lazy parsing and read on every access.
 - **Search** — full-text index built over cached artifacts.
 - **Security Check (`analyzer`)** — native Rust spyware/stalkerware indicator engine (v0.20.0–0.28.0). Runs Explicit Scans and a consent-gated Passive Check over messages/Safari/apps/contacts/notes/calendar/interactions, a Manifest file sweep, and Tier-B artifacts; matches bundled + refreshable STIX2/Échap indicator feeds; writes severity-graded findings and scan-runs to `cache.db`.
