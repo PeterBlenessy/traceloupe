@@ -113,7 +113,39 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/health", component: HealthView }),
 ];
 
-const router = createRouter({ routeTree: rootRoute.addChildren(routes) });
+/** What the app shows when a route throws.
+ *
+ *  The default is React Router's raw stack trace, which tells someone reading a
+ *  forensic tool that it broke, in a language written for the person who wrote
+ *  it. The message stays available — it is what makes a bug report useful — but
+ *  behind a disclosure rather than as the headline. */
+function CrashScreen({ error }: { error: Error }) {
+  return (
+    <div className="flex h-full items-center justify-center p-8">
+      <div className="max-w-md space-y-3 text-center">
+        <h1 className="text-base font-semibold">This screen stopped working</h1>
+        <p className="text-sm text-muted-foreground">
+          Your backup is untouched — TraceLoupe only ever reads it. Switching to
+          another view usually recovers; if it keeps happening, the detail below
+          is what a bug report needs.
+        </p>
+        <details className="text-left">
+          <summary className="cursor-pointer text-xs text-muted-foreground">
+            Technical detail
+          </summary>
+          <pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-2 text-left text-xs">
+            {error?.message ?? String(error)}
+          </pre>
+        </details>
+      </div>
+    </div>
+  );
+}
+
+const router = createRouter({
+  routeTree: rootRoute.addChildren(routes),
+  defaultErrorComponent: CrashScreen,
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

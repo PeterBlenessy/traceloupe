@@ -23,7 +23,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
-import { formatCount, formatDate, formatDateTime } from "@/lib/format";
+import { formatDate, formatDateTime, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
 import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
@@ -329,7 +329,7 @@ function VisitRow({ visit }: { visit: HistoryVisit }) {
                 {visit.deleted ? "Deleted" : formatDateTime(visit.visitedAt)}
               </span>
               {visit.visitCount != null && (
-                <span>{formatCount(visit.visitCount)} visits</span>
+                <span>{plural(visit.visitCount, "visit")}</span>
               )}
             </div>
           </button>
@@ -434,13 +434,20 @@ function BookmarkRow({ item }: { item: SafariBookmark }) {
             {item.title ?? (url ? hostOf(url) : "Untitled")}
           </span>
           {item.private && (
-            <span
-              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-note-soft px-1.5 py-0.5 text-3xs font-medium text-status-note-text"
-              title="Open in a private-browsing window"
-            >
-              <EyeOff className="size-2.5" />
-              Private
-            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-status-note-soft px-1.5 py-0.5 text-3xs font-medium text-status-note-text">
+                  <EyeOff className="size-2.5" />
+                  Private
+                </span>
+              </TooltipTrigger>
+              {/* The old native title= said "Open in a private-browsing window",
+                  which reads as an instruction to the user. This is a record of
+                  what the device did, not something to do. */}
+              <TooltipContent>
+                This tab was open in a private-browsing window.
+              </TooltipContent>
+            </Tooltip>
           )}
         </ItemTitle>
         {url && <ItemDescription className="truncate">{url}</ItemDescription>}

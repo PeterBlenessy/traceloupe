@@ -774,3 +774,50 @@ body {
     padding: 0;
   }
 }
+
+/* Sheet and Dialog entrance/exit.
+   ================================================================
+   `tailwindcss-animate` is NOT a dependency of this project, so every
+   `animate-in` / `slide-in-from-*` / `zoom-in-95` class those two components
+   carried was inert: the panels appeared and vanished with no transition at
+   all, while the class list claimed otherwise.
+
+   These are real transitions on the `transform` SHORTHAND plus opacity.
+   WKWebView will not animate the standalone `translate` / `scale` / `rotate`
+   properties that Tailwind v4 emits for `translate-x-*` and friends, so the
+   dialog's centring is expressed here too rather than as utilities — mixing the
+   two would leave the shorthand fighting the longhand. */
+[data-slot="sheet-content"] {
+  transition:
+    transform 260ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 200ms ease;
+}
+[data-slot="sheet-content"][data-state="open"] {
+  transform: translate(0, 0);
+  opacity: 1;
+}
+[data-slot="sheet-content"][data-state="closed"][data-side="right"] { transform: translateX(100%); opacity: 0; }
+[data-slot="sheet-content"][data-state="closed"][data-side="left"]  { transform: translateX(-100%); opacity: 0; }
+[data-slot="sheet-content"][data-state="closed"][data-side="top"]   { transform: translateY(-100%); opacity: 0; }
+[data-slot="sheet-content"][data-state="closed"][data-side="bottom"]{ transform: translateY(100%); opacity: 0; }
+
+[data-slot="dialog-content"] {
+  transition:
+    transform 180ms cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 150ms ease;
+}
+[data-slot="dialog-content"][data-state="open"] {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+}
+[data-slot="dialog-content"][data-state="closed"] {
+  transform: translate(-50%, -50%) scale(0.97);
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="sheet-content"],
+  [data-slot="dialog-content"] {
+    transition: none;
+  }
+}
