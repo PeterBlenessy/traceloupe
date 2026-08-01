@@ -266,3 +266,12 @@ export function formatBytes(n: number | null | undefined): string {
     maximumFractionDigits: digits,
   }).format(value)} ${units[unit]}`;
 }
+
+/** "1 finding" / "3 findings", without every caller re-deriving the ternary.
+ *
+ *  Written out because three views were doing it inline and the scan tiles were
+ *  not doing it at all — "1 modules covered" is the kind of detail that makes a
+ *  careful tool look careless. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${formatCount(n)} ${n === 1 ? one : many}`;
+}
