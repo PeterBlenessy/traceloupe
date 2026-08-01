@@ -17,42 +17,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ResizeHandle, useResizableWidth } from "@/components/resize";
 import { VirtualList } from "@/components/virtual-list";
 import { LazyVirtualList } from "@/components/lazy-virtual-list";
-import { formatCount } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useControlTabIndex } from "@/lib/use-keyboard-nav";
 
-/** The header strip at the top of a view: title, optional count, actions. */
-export function ViewHeader({
-  title,
-  count,
-  icon,
-  children,
-}: {
-  title: string;
-  count?: number;
-  icon?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  return (
-    <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
-      {icon}
-      <h1 className="text-base font-semibold">{title}</h1>
-      {count !== undefined && (
-        <span className="text-xs tabular-nums text-muted-foreground/60">
-          {formatCount(count)}
-        </span>
-      )}
-      {children && (
-        // flex-1 (not ml-auto content-width) so a child can actually claim the
-        // free header width — an OverflowRow filter needs it to measure how many
-        // chips fit; justify-end keeps plain metadata right-aligned as before.
-        <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
-          {children}
-        </div>
-      )}
-    </header>
-  );
-}
+/* ViewHeader was removed once every view stopped having one.
+ *
+ * A detail pane carries no chrome: the controls that act on it live in the app's
+ * single top toolbar, and the pane is content, so it can scroll up under the
+ * translucent bar. A component that renders a fixed 56px strip with a border is
+ * the thing that pattern exists to prevent, and leaving it exported would make
+ * re-introducing it the path of least resistance.
+ *
+ * If a view ever genuinely needs a header again, that is a design decision worth
+ * making explicitly rather than by importing something that happens to be there.
+ */
 
 /** The one list loading state — a stack of row-height skeletons. Shared by every
  *  list primitive so "loading" looks identical everywhere (no ad-hoc pulses). */

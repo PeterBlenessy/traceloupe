@@ -27,6 +27,7 @@ import { formatCount, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
 import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
+import { useNotImportedEmpty } from "@/lib/use-not-imported";
 import {
   client,
   type HistoryVisit,
@@ -174,7 +175,10 @@ export function SafariView() {
     "Tabs synced from your other Apple devices",
     EMPTY.tab,
   );
-  const emptyForType = type === "tab" ? emptyTabs : EMPTY[type];
+  // Safari's own module covers history/bookmarks/tabs; if it was unticked at
+  // import, every pill here is empty for that reason rather than the device's.
+  const notImported = useNotImportedEmpty("safari", "Safari data", "");
+  const emptyForType = notImported || (type === "tab" ? emptyTabs : EMPTY[type]);
 
   useViewToolbar(toolbar);
 
