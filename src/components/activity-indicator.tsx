@@ -159,6 +159,13 @@ function useActivities(): Activity[] {
 export function ActivityIndicator() {
   const activities = useActivities();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+  // EVERY hook must run before any early return below, or the hook COUNT changes
+  // between renders and React tears the tree down. This one sat after the two
+  // returns, so the first activity to appear — clicking any sidebar re-import —
+  // unmounted the app. Bounded by the fixed activity kinds plus one row per
+  // re-importing module (#67).
+  useBoundedList("activity-indicator entries", activities.length, 30);
+
   if (activities.length === 0) return null;
 
   // With exactly one activity, and the user already looking at the view that
@@ -169,10 +176,6 @@ export function ActivityIndicator() {
   const label = single
     ? `${single.title} · ${single.detail}`
     : `${activities.length} ongoing`;
-
-  // Bounded by the fixed activity kinds plus one row per re-importing
-  // module (#67).
-  useBoundedList("activity-indicator entries", activities.length, 30);
 
   return (
     <Popover>
