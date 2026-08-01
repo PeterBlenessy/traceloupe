@@ -524,7 +524,13 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
       <div className="mt-6 grid gap-x-6 sm:grid-cols-2">
         <div className="overflow-hidden rounded-lg border">
           <DeviceRow label="Device name" value={info?.deviceName} />
-          <DeviceRow label="Model" value={model} />
+          {/* `modelName` falls back to the raw identifier when a model is not in
+              the table, so on a recent phone both rows printed the SAME string
+              under two labels — which reads as a rendering bug rather than as a
+              gap in the table. Show the friendly name only when there is one. */}
+          {model && model !== info?.productType && (
+            <DeviceRow label="Model" value={model} />
+          )}
           <DeviceRow label="Model identifier" value={info?.productType} />
         </div>
         <div className="mt-2.5 overflow-hidden rounded-lg border sm:mt-0">
