@@ -13,6 +13,68 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.38.0] — 2026-08-01
+
+**A backup is read whole, and read right** — encrypted backups were silently
+losing data, iOS 26 dated every Safari visit thirty-one years into the future,
+and a store that a person's own logs held was invisible.
+
+### Fixed
+
+- **Encrypted backups no longer truncate files.** A store whose recorded size had
+  gone stale — which is what a live database does between the Manifest being
+  written and the file being read — decrypted short and would not open. On the
+  validation device `sms.db` lost a whole 4 KB page, so **Messages was empty from
+  an encrypted backup**. The padding is now what decides the length, because it
+  describes the ciphertext that was actually written. Worth re-importing a
+  backup taken before this.
+- **Safari dated every visit ~31 years into the future on iOS 26**, which stores
+  its timestamps differently from every earlier release.
+- **Safari read only the main profile.** Since iOS 17 each profile keeps its own
+  history, and everything browsed in one was silently missing.
+- **Clicking a sidebar re-import button crashed the app** — a hook that ran after
+  an early return, so the first background activity tore the tree down.
+- **A filtered list claimed the backup was empty.** Narrowing Calls or Safari to
+  a time range with nothing in it announced "No calls in this backup", which is a
+  statement about the device made from a question about a week.
+- **The Device panel named the wrong data as encrypted-only.** Call history and
+  Safari history are excluded from *iCloud* backups, not from unencrypted local
+  ones.
+- **Import warnings went to the console.** A backup that skipped a malformed
+  store reported unqualified success; the skipped work is now shown.
+
+### Added
+
+- **Life360 location history** — every position the app reported, recovered from
+  its own logs, which is the only place it exists in a backup.
+- **Deleted messages are evidenced**, from iOS's own record and from gaps in the
+  message table, kept apart because they can describe the same deletions.
+- **Every device this person used**, with the OS builds each ran — Health data
+  survives migration between phones, so it reaches back past devices long gone.
+- **Safari searches**, from result-page URLs and from what was typed into the
+  search field. These are different sets, and are labelled as such.
+- **CarPlay** — which apps were opened on a car's screen, and when the phone was
+  last connected to one.
+- **Log-backed artifacts** are now readable at all, along with paths that span
+  directory depths and columns that carry a constant.
+
+### Changed
+
+- **Messages has one toolbar, like every other view.** The conversation pane
+  carries no chrome; everything that acts on it is in the app toolbar, the list's
+  own sort sits with the list, and the content scrolls under the bar.
+- **Contacts and the conversation list are keyboard-navigable** — one tab stop,
+  arrows moving the selection, instead of one tab stop per row.
+- **Calls says what it searches.** It matches the number, never the name shown on
+  the row, so it no longer offers to sort or search by something it cannot.
+
+### Removed
+
+- **The Interactions view.** Contacts already shows per-person message counts
+  linked to the conversation, which is what it was reaching for, and its numbers
+  contradicted Messages because CoreDuet counts apps TraceLoupe cannot read. The
+  store is still parsed — Security Check scans it against the indicator feeds.
+
 ## [0.37.1] — 2026-07-29
 
 ### Fixed
