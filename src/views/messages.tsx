@@ -1579,12 +1579,22 @@ function Conversation({
           // when the sender changes, so runs of messages aren't repetitive.
           const newSender =
             !prev || prev.isFromMe || prev.sender !== message.sender;
+          const named = (handle: string) =>
+            showContactNames ? (resolve(handle)?.name ?? handle) : handle;
           const senderLabel =
-            group && !message.isFromMe && message.sender && newSender
-              ? showContactNames
-                ? (resolve(message.sender)?.name ?? message.sender)
-                : message.sender
-              : null;
+            // A system row ("<actor> renamed the group") names its actor
+            // whatever the conversation shape is. The group/newSender rules
+            // below exist to stop a run of bubbles repeating the same name —
+            // they have nothing to do with a system note, and applying them to
+            // one left it falling through to the raw phone number while every
+            // bubble beside it showed a name.
+            message.kind === "system"
+              ? !message.isFromMe && message.sender
+                ? named(message.sender)
+                : null
+              : group && !message.isFromMe && message.sender && newSender
+                ? named(message.sender)
+                : null;
           return (
             <div className="px-4 pb-1">
               <MessageBubble
