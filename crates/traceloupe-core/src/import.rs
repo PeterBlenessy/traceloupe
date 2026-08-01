@@ -99,10 +99,16 @@ pub fn import_backup(
     let effective = sidecar::effective_module_ids(module_ids);
 
     // Total number of indexing steps we'll emit, so the UI can fill the bar
-    // `index/total`. Seven always run (Preparing, Calendar, Reminders, Health,
-    // Interactions, App Chats, Installed Apps); Safari, TikTok and the camera roll
-    // each contribute two. KEEP IN SYNC with the `step!(…)` calls below.
-    let index_total: u32 = 7
+    // `index/total`. EIGHT always run — Preparing, Calendar, Reminders, Health,
+    // Interactions, artifacts, App Chats, Installed Apps — and Safari, TikTok and
+    // the camera roll each contribute two.
+    //
+    // It said seven and omitted the artifacts step, so `step_i` overran
+    // `index_total` on every import and the bar ran past its own end. A
+    // hand-maintained count beside twenty `step!` calls will drift again; the
+    // debug assert after the last one is what turns the next drift into a test
+    // failure instead of a progress bar sliding off the edge.
+    let index_total: u32 = 8
         + effective.contains(&"messages") as u32
         + effective.contains(&"notes") as u32
         + effective.contains(&"calls") as u32
@@ -487,6 +493,12 @@ pub fn import_backup(
     }
 
     step!("Indexing Installed Apps");
+    // The last step: if these disagree the bar is wrong, and a hand-maintained
+    // total is exactly the kind of thing that drifts silently.
+    debug_assert_eq!(
+        step_i, index_total,
+        "index_total ({index_total}) disagrees with the {step_i} step!() calls actually emitted"
+    );
     // Record which apps were on the device + their App Store metadata (name,
     // seller, version, genre, release date) from Info.plist's iTunesMetadata.
     let apps = crate::discovery::installed_apps_meta(backup_dir);

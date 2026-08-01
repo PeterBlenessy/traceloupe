@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { dateFormat } from "@/lib/format";
+import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Boxes } from "lucide-react";
@@ -102,15 +103,23 @@ export function AppsView() {
   });
   const queryClient = useQueryClient();
   const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
   const needsExtraction = extraction === "never-run" || extraction === "stale";
 
   async function runExtraction() {
     setExtracting(true);
+    setExtractError(null);
     try {
       await client.extractArtifacts();
       await queryClient.invalidateQueries({ queryKey: ["artifacts"] });
       await queryClient.invalidateQueries({ queryKey: ["artifactRows"] });
       await queryClient.invalidateQueries({ queryKey: ["artifactsExtractionState"] });
+    } catch (e) {
+      // It failed silently before: the spinner stopped and the permissions
+      // simply never appeared, which reads as "this backup has none".
+      const msg = e instanceof Error ? e.message : String(e);
+      setExtractError(msg);
+      toast.error("Couldn't read app permissions", { description: msg });
     } finally {
       setExtracting(false);
     }
@@ -224,15 +233,19 @@ export function AppsView() {
           a view. */}
       {needsExtraction && (
         <div className="flex items-center gap-2 border-b px-3 py-1.5 text-xs">
-          <span className="text-muted-foreground">
-            {extraction === "never-run"
-              ? "App permissions have not been read from this backup yet."
-              : "TraceLoupe can read more about these apps than was extracted."}
+          <span
+            className={extractError ? "text-status-warn-text" : "text-muted-foreground"}
+          >
+            {extractError
+              ? `Couldn't read app permissions: ${extractError}`
+              : extraction === "never-run"
+                ? "App permissions have not been read from this backup yet."
+                : "TraceLoupe can read more about these apps than was extracted."}
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button size="sm" variant="ghost" onClick={runExtraction} disabled={extracting}>
-                {extracting ? "Reading…" : "Read them now"}
+                {extracting ? "Reading…" : extractError ? "Try again" : "Read them now"}
               </Button>
             </TooltipTrigger>
             <TooltipContent>Reads from the backup on disk — no re-import needed</TooltipContent>
@@ -251,7 +264,13 @@ export function AppsView() {
       count={filtered.length}
       isPending={isPending}
       error={error}
-      emptyMessage="No installed-app list in this backup."
+      // A search that matched nothing is not a backup without an app list —
+      // the same distinction every sibling view now makes.
+      emptyMessage={
+        apps.length === 0
+          ? "No installed-app list in this backup."
+          : "No apps match this search."
+      }
       emptyIcon={Boxes}
       underlap={!needsExtraction}
       items={filtered}
