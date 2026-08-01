@@ -70,7 +70,10 @@ export function CallsView() {
       <SortControl
         fields={[
           { value: "date", label: "Date" },
-          { value: "name", label: "Name" },
+          // Sorts by `address COLLATE NOCASE` (src-tauri/src/lib.rs) — the phone
+          // number, not the resolved contact name. Labelled "Name" it promised
+          // an ordering the backend never produced.
+          { value: "name", label: "Number" },
           { value: "duration", label: "Duration" },
         ]}
         value={sort}
@@ -80,7 +83,10 @@ export function CallsView() {
     [sort, setSort],
   );
   const searchNode = useMemo(
-    () => <ListSearch value={q} onChange={setQ} placeholder="Search calls" />,
+    // "Search calls" over rows showing NAMES implied names were searchable; the
+    // query runs against `address` only, so typing a name on screen returned
+    // "no matching calls". Naming the field is the honest half of #279.
+    () => <ListSearch value={q} onChange={setQ} placeholder="Search by number" />,
     [q],
   );
   const toolbar = useMemo(
