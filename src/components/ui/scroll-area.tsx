@@ -8,8 +8,14 @@ import { cn } from "@/lib/utils"
 function ScrollArea({
   className,
   children,
+  underlap = false,
   ...props
-}: React.ComponentProps<typeof ScrollAreaPrimitive.Root>) {
+}: React.ComponentProps<typeof ScrollAreaPrimitive.Root> & {
+  /** Let content rise under the translucent title bar, as VirtualList does.
+   *  The CSS keys off `data-underlap`, and the VIEWPORT is the scroller here —
+   *  putting it on the Root would move the wrong element. */
+  underlap?: boolean;
+}) {
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
@@ -18,6 +24,7 @@ function ScrollArea({
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
+        data-underlap={underlap ? "" : undefined}
         className="size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1"
       >
         {children}

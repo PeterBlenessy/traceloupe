@@ -20,10 +20,10 @@ import { NoBackupState,
   ListDetail,
   ListSearch,
   ListSkeleton,
-  ViewHeader,
 } from "@/components/view";
 import { formatDateTime, formatDuration, formatListTime } from "@/lib/format";
 import { client, type Recording, type TimeRange } from "@/lib/ipc";
+import { useNotImportedEmpty } from "@/lib/use-not-imported";
 
 export function RecordingsView() {
   // Subscribe to the clock preference so times re-render on change.
@@ -42,6 +42,12 @@ export function RecordingsView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Same distinction as Notes: an unticked import is not an empty device.
+  const emptyTitle = useNotImportedEmpty(
+    "recordings",
+    "Voice recordings",
+    "No voice recordings in this backup.",
+  );
   const [q, setQ] = useState("");
   const [sort, setSort] = usePersistedState<SortState>("recordings:sort", { by: "recorded", desc: true });
   // Time filter — same preset chips + custom range as Photos/Notes, over the
@@ -158,7 +164,7 @@ export function RecordingsView() {
             ) : isPending ? (
               <ListSkeleton rows={6} />
             ) : (recordings?.length ?? 0) === 0 ? (
-              <EmptyView icon={Mic} title="No voice recordings in this backup." />
+              <EmptyView icon={Mic} title={emptyTitle} />
             ) : (sortedRecordings?.length ?? 0) === 0 ? (
               <EmptyView icon={Mic} title="No recordings match the current search or time range." />
             ) : (
@@ -246,13 +252,14 @@ function RecordingDetail({ recording }: { recording: Recording }) {
   const duration = formatDuration(Math.round(recording.durationS ?? 0));
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={recordingTitle(recording)}>
-        {duration && (
-          <span className="text-xs text-muted-foreground">{duration}</span>
-        )}
-      </ViewHeader>
+      {/* No header — the recording names itself in the card below, which is
+          where a person is already looking. */}
       <div className="flex flex-1 flex-col items-center justify-center gap-6 p-6">
         <div className="flex flex-col items-center gap-2 text-center">
+          <h1 className="text-[17px] font-semibold">{recordingTitle(recording)}</h1>
+          {duration && (
+            <p className="text-xs text-muted-foreground">{duration}</p>
+          )}
           <div className="flex h-16 w-16 items-center justify-center rounded-full bg-accent">
             <Mic className="h-7 w-7 text-muted-foreground" />
           </div>

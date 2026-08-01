@@ -47,12 +47,12 @@ import { NoBackupState,
   ListDetail,
   ListSearch,
   ListSkeleton,
-  ViewHeader,
 } from "@/components/view";
 import { dateFormat, formatDateTime, formatListTime } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { client, type Note, type TimeRange } from "@/lib/ipc";
+import { useNotImportedEmpty } from "@/lib/use-not-imported";
 
 /** Most images to put in the document for one note. A note built from a long
  *  photo roll would otherwise mount hundreds of <img> elements at once; the
@@ -194,6 +194,13 @@ export function NotesView() {
     enabled: active === true,
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // "No notes in this backup" is a claim about the DEVICE; if Notes was unticked
+  // at import it is a claim about the import, and a different sentence.
+  const emptyTitle = useNotImportedEmpty(
+    "notes",
+    "Notes",
+    "No notes in this backup.",
+  );
   // Deep link from a Safety Scan finding: ?id=<note id> selects that note, and
   // ?from=safety adds a return chip so the jump is a round trip (same pattern
   // as the Timeline → conversation jump in Messages).
@@ -528,7 +535,7 @@ export function NotesView() {
             ) : isPending ? (
               <ListSkeleton rows={6} />
             ) : (notes?.length ?? 0) === 0 ? (
-              <EmptyView icon={NotebookText} title="No notes in this backup." />
+              <EmptyView icon={NotebookText} title={emptyTitle} />
             ) : (sortedNotes?.length ?? 0) === 0 ? (
               <EmptyView icon={NotebookText} title="No notes match these filters." />
             ) : (
@@ -736,15 +743,17 @@ function NoteRow({
 function NoteDetail({ note }: { note: Note }) {
   return (
     <div className="flex h-full flex-col">
-      <ViewHeader title={noteTitle(note)}>
-        {note.folder && (
-          <span className="text-xs text-muted-foreground">{note.folder}</span>
-        )}
-      </ViewHeader>
+      {/* No header: the pane is content, so it can rise under the title bar.
+          The note names itself at the top of that content, and scrolls away
+          with it — the same shape Contacts uses for the open contact. */}
       {/* min-h-0 lets this flex child shrink to the pane height so the ScrollArea
           actually clips + scrolls, instead of growing with the note body. */}
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1" underlap>
         <div className="max-w-2xl p-6">
+          <h1 className="text-[17px] font-semibold">{noteTitle(note)}</h1>
+          {note.folder && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{note.folder}</p>
+          )}
           {note.modifiedAt && (
             <p className="mb-4 text-xs text-muted-foreground">
               {formatDateTime(note.modifiedAt)}
