@@ -26,6 +26,7 @@ import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatCount, formatDate, formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
+import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
 import {
   client,
   type HistoryVisit,
@@ -48,6 +49,14 @@ const TYPES: { value: SafariType; label: string }[] = [
   { value: "reading_list", label: "Reading List" },
   { value: "tab", label: "Tabs" },
 ];
+/** The plural thing each pill lists, for empty-state wording that names it. */
+const NOUN: Record<SafariType, string> = {
+  history: "visits",
+  search: "searches",
+  bookmark: "bookmarks",
+  reading_list: "reading-list items",
+  tab: "tabs",
+};
 const EMPTY: Record<SafariType, string> = {
   history: "No Safari history in this backup.",
   search: "No web searches in this backup.",
@@ -192,7 +201,11 @@ export function SafariView() {
       count={count}
       error={error}
       resetKey={`${type}:${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
-      emptyMessage={search ? "No matches." : emptyForType}
+      emptyMessage={emptyListMessage(
+        { search, timeFiltered: isTimeFiltered(range) },
+        emptyForType,
+        NOUN[type],
+      )}
       emptyIcon={Globe}
       underlap
       windowKey={(page) => [

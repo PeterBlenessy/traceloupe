@@ -23,6 +23,7 @@ import { timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
+import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
 import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
 import { ContactAvatar } from "@/components/contact-avatar";
 import { useSettings } from "@/components/settings-provider";
@@ -114,7 +115,11 @@ export function CallsView() {
       count={active === true ? count : undefined}
       error={error}
       resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
-      emptyMessage={search ? "No matching calls." : "No calls in this backup."}
+      emptyMessage={emptyListMessage(
+        { search, timeFiltered: isTimeFiltered(range) },
+        "No calls in this backup.",
+        "calls",
+      )}
       emptyIcon={PhoneCall}
       underlap
       windowKey={(page) => [
