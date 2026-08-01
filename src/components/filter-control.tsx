@@ -221,17 +221,27 @@ export function FilterControl({
             >
               {s.icon}
               {s.label}
-              <button
-                type="button"
-                aria-label={`Clear ${s.label}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  removeChip(s);
-                }}
-                className="ml-0.5 inline-flex size-4 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
-              >
-                <X className="size-3" />
-              </button>
+              {/* Icon-only, so it needs a tooltip like every other control; and
+                  it sits inside a toolbar island, so it is measured against the
+                  segment height. It was 16px and untooltipped — invisible to
+                  both rules until Contacts gained an "All" option and made a
+                  chip reachable there for the first time. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    aria-label={`Clear ${s.label}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      removeChip(s);
+                    }}
+                    className="ml-0.5 inline-flex size-(--control-h-sm) items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>{`Clear ${s.label}`}</TooltipContent>
+              </Tooltip>
             </span>
           </span>
         ))}
