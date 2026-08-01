@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 import { client, type Contact } from "@/lib/ipc";
 import { formatDate } from "@/lib/format";
 import { useBoundedList } from "@/lib/bounded-list";
+import { useListNavigation } from "@/lib/use-keyboard-nav";
 
 export function ContactsView() {
   const { data: active } = useQuery({
@@ -169,6 +170,15 @@ export function ContactsView() {
   }
 
   const selected = sorted.find((c) => c.id === selectedId) ?? sorted[0] ?? null;
+  // One tab stop for the list, arrows moving the selection — the macOS model,
+  // and the pattern docs/reference/ui.md documents. Ten Tab presses to reach the
+  // tenth contact was the alternative.
+  const { listProps } = useListNavigation({
+    items: sorted,
+    selectedId: selected?.id ?? null,
+    onSelect: setSelectedId,
+    getId: (c) => c.id,
+  });
 
   return (
     <div className="flex h-full flex-col">
@@ -189,13 +199,18 @@ export function ContactsView() {
                 }
               />
             ) : (
+              <div
+                {...listProps}
+                aria-label="Contacts"
+                className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
               <VirtualList
                 items={sorted}
                 getKey={(c) => c.id}
                 estimateSize={56}
                 underlap
                 renderItem={(c) => (
-                  <div className="px-2 py-0.5">
+                  <div className="px-2 py-0.5" aria-current={selected?.id === c.id || undefined}>
                     <ContactRow
                       contact={c}
                       showAvatars={showAvatars}
@@ -205,6 +220,7 @@ export function ContactsView() {
                   </div>
                 )}
               />
+              </div>
             )
           }
           detail={
