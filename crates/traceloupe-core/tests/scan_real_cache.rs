@@ -1,4 +1,12 @@
 //! Perf/AC check against a real cache DB (plan T4: full Tier A scan < 60 s).
+//!
+//! EVERY test in this file reads the owner's real device data, which AGENTS.md
+//! puts off-limits. `#[ignore]` alone does not protect it: `cargo test --
+//! --ignored` runs the whole ignored set, and that is a normal thing to type to
+//! see the crate's benchmarks. So each test here is additionally gated on its
+//! own environment variable and SKIPS when it is unset — running the ignored set
+//! wholesale must be both safe and clean.
+//!
 //! Ignored by default; run with a copy-safe env pointer:
 //!
 //!   TRACELOUPE_REAL_CACHE="$HOME/Library/Application Support/se.addable.traceloupe.dev/caches/<udid>/cache.db" \
@@ -37,14 +45,30 @@ fn glob_observations(root: &str) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// Verify Tier-B process extraction against the real decrypted dev mirror
-/// (~/.traceloupe-dev/backup-mirror). Ignored; run with:
-///   cargo test -p traceloupe-core --test scan_real_cache real_mirror -- --ignored --nocapture
+/// Verify Tier-B process extraction against the decrypted dev mirror.
+///
+/// GATED ON `TRACELOUPE_DEV_MIRROR`, and deliberately not on `#[ignore]` alone.
+///
+/// The mirror is the owner's real device data, which AGENTS.md puts off-limits:
+/// never read, never recorded. `#[ignore]` does not protect it — `cargo test --
+/// --ignored` runs every ignored test in the crate, which is a thing people type
+/// to see benchmarks, and this test then read the mirror and printed installed
+/// software and an organisation domain to stdout. That happened.
+///
+/// Its sibling `full_tier_a_scan_under_60s` already required an env var. The two
+/// now behave the same way, so no wholesale run can reach private data by
+/// accident. Skipping rather than panicking is deliberate: `--ignored` must be
+/// safe AND clean to run, or the measurements it exists for get avoided.
+///
+///   TRACELOUPE_DEV_MIRROR=~/.traceloupe-dev/backup-mirror \
+///     cargo test -p traceloupe-core --test scan_real_cache real_mirror -- --ignored --nocapture
 #[test]
-#[ignore = "needs the decrypted dev mirror at ~/.traceloupe-dev/backup-mirror"]
+#[ignore = "needs TRACELOUPE_DEV_MIRROR pointing at a decrypted dev mirror"]
 fn process_extraction_on_real_mirror() {
-    let home = std::env::var("HOME").unwrap();
-    let mirror = format!("{home}/.traceloupe-dev/backup-mirror");
+    let Ok(mirror) = std::env::var("TRACELOUPE_DEV_MIRROR") else {
+        eprintln!("skipping: set TRACELOUPE_DEV_MIRROR to opt in to reading the dev mirror");
+        return;
+    };
     let datausage = format!("{mirror}/WirelessDomain/Library/Databases/DataUsage.sqlite");
     let addaily =
         format!("{mirror}/HomeDomain/Library/Preferences/com.apple.osanalytics.addaily.plist");
@@ -165,7 +189,8 @@ fn process_extraction_on_real_mirror() {
 #[ignore = "needs TRACELOUPE_REAL_CACHE pointing at a real cache.db"]
 fn full_tier_a_scan_under_60s() {
     let Ok(src) = std::env::var("TRACELOUPE_REAL_CACHE") else {
-        panic!("set TRACELOUPE_REAL_CACHE");
+        eprintln!("skipping: set TRACELOUPE_REAL_CACHE to opt in to reading a real cache");
+        return;
     };
     let tmp = tempfile::tempdir().unwrap();
     let copy = tmp.path().join("cache.db");
