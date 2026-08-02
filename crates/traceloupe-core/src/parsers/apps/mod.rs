@@ -18,10 +18,11 @@ pub mod facebook_messenger;
 pub mod imo;
 pub mod instagram;
 pub mod kik;
+pub mod line;
 pub mod linkedin;
 pub mod teams;
 pub mod telegram;
-pub mod teleguard;
+mod teleguard;
 pub mod threema;
 pub mod tiktok;
 pub mod viber;
@@ -123,6 +124,7 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
     teams::MODULE,
     linkedin::MODULE,
     teleguard::MODULE,
+    line::MODULE,
 ];
 
 /// Read a column as a String whether it's stored TEXT or INTEGER — app schemas
