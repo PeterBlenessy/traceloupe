@@ -3133,6 +3133,14 @@ function mockFilterMedia(
   }
   return out;
 }
+/** `?mock=no-data` renders a backup that imported cleanly and simply holds
+ *  nothing — the one case where "No calls in this backup." is the TRUE thing to
+ *  say. It exists so check-filtered-empty can assert the honest message still
+ *  appears; without that half, "never say it" would pass the guard (#278). */
+const mockNoData =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("mock") === "no-data";
+
 /** `?mock=parse-failed` renders the app as it looks when a store WAS in the
  *  backup and could not be read (#288) — the one empty-state reason that had
  *  no way to be seen, and so no way to be guarded. */
@@ -3148,7 +3156,7 @@ function mockFilterCalls(
   // A store that failed to parse produced no rows -- that is the whole point of
   // the state. Returning calls here would make the mock incoherent and the
   // guard unable to reach the empty view it exists to measure.
-  if (mockParseFailed) return [];
+  if (mockParseFailed || mockNoData) return [];
   let out = mockCalls;
   if (search) {
     const q = search.toLowerCase();
@@ -3193,6 +3201,7 @@ function mockFilterSafari(
   search: string | null,
   range?: TimeRange,
 ): HistoryVisit[] {
+  if (mockNoData) return [];
   let out = mockSafari;
   if (search) {
     const q = search.toLowerCase();
@@ -4865,7 +4874,7 @@ const mockClient: TraceLoupeClient = {
   },
   listCalls: async () => (mockActive && !mockParseFailed ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
-  listNotes: async () => (mockActive ? mockNotes : []),
+  listNotes: async () => (mockActive && !mockNoData ? mockNotes : []),
   unlockNote: async (_noteId, password) =>
     password === "test"
       ? "Bank PIN: 1234\nWiFi: hunter2"
