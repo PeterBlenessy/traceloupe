@@ -2088,6 +2088,8 @@ const BUILTIN: &[(&str, &str)] = &[
     ),
     ("alarms.toml", include_str!("../modules/alarms.toml")),
     ("timers.toml", include_str!("../modules/timers.toml")),
+    ("stopwatch.toml", include_str!("../modules/stopwatch.toml")),
+    ("airdrop.toml", include_str!("../modules/airdrop.toml")),
     (
         "world_clock.toml",
         include_str!("../modules/world_clock.toml"),
@@ -3776,9 +3778,45 @@ from = "nope"
         let mut root = Dictionary::new();
         root.insert("MTAlarms".into(), Value::Dictionary(inner));
         root.insert("MTTimers".into(), Value::Dictionary(timers_inner));
+
+        // A stopwatch. `MTStopwatchLaps` is an array of bare numbers, which is
+        // exactly why `stopwatch.toml` cannot report laps -- it is in the
+        // fixture so that limitation is visible rather than theoretical.
+        let mut sw = Dictionary::new();
+        sw.insert("MTStopwatchState".into(), Value::Integer(2.into()));
+        sw.insert("MTStopwatchCurrentInterval".into(), Value::Real(93.5));
+        sw.insert(
+            "MTStopwatchLaps".into(),
+            Value::Array(vec![Value::Real(31.2), Value::Real(28.9)]),
+        );
+        let mut sw_wrapped = Dictionary::new();
+        sw_wrapped.insert("$MTStopwatch".into(), Value::Dictionary(sw));
+        let mut sw_inner = Dictionary::new();
+        sw_inner.insert(
+            "MTStopwatches".into(),
+            Value::Array(vec![Value::Dictionary(sw_wrapped)]),
+        );
+        root.insert("MTStopwatches".into(), Value::Dictionary(sw_inner));
         // Other keys in the real file, none of them read.
         root.insert("MTTimerDefaultDuration".into(), Value::Real(900.0));
 
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
+    /// `com.apple.sharingd.plist` — AirDrop's identifier and discoverability.
+    fn seed_airdrop() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert("AirDropID".into(), Value::String("6f8a2b1c9d4e".into()));
+        // Already words in this plist, so no enum mapping is needed.
+        root.insert(
+            "DiscoverableMode".into(),
+            Value::String("Contacts Only".into()),
+        );
+        // Other sharingd keys, none of them read.
+        root.insert("HandoffEnabled".into(), Value::Boolean(true));
         let mut out = Vec::new();
         plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
         out
@@ -4183,6 +4221,16 @@ from = "nope"
             "Library/Preferences/com.apple.mobiletimerd.plist",
         ),
         (
+            "stopwatch",
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimerd.plist",
+        ),
+        (
+            "airdrop",
+            "HomeDomain",
+            "Library/Preferences/com.apple.sharingd.plist",
+        ),
+        (
             "world_clock",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
@@ -4350,7 +4398,8 @@ from = "nope"
             "device_locale" => return Seed::Bytes(seed_device_locale),
             // One fixture, two modules: the store really does hold both.
             // One store, three modules: alarms, the sleep schedule and timers.
-            "alarms" | "sleep_schedule" | "timers" => return Seed::Bytes(seed_clock),
+            "alarms" | "sleep_schedule" | "timers" | "stopwatch" => return Seed::Bytes(seed_clock),
+            "airdrop" => return Seed::Bytes(seed_airdrop),
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),

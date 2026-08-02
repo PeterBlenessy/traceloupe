@@ -272,6 +272,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Module | Category | Implemented | Verified against |
 |---|---|:-:|---|
 | Accounts | Device | ✅ | iphone11_ios17 — 19 accounts across 12 services |
+| AirDrop | Device | ✅ | — not yet — |
 | Alarms | Device | ✅ | iphone11_ios17 — one alarm at 10:41, switched off, last changed 2024-07-28 |
 | AllTrails recordings | Locations | ✅ | iphone11_ios17 — 6 recordings between November 2021 and July 2024 |
 | Backup size by domain | Device | ✅ | iphone11_ios17 — 42 domains sized |
@@ -291,6 +292,7 @@ asks. Check free space before fetching, not 20 GB in.
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
 | Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
 | Sleep schedule | Device | ✅ | iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off |
+| Stopwatch | Device | ✅ | — not yet — |
 | Permissions | Security | ✅ | iphone11_ios17 — 289 rows, which is exactly the count iLEAPP records for the same image — two independent parsers agreeing. The distribution also justified passing unknowns through rather than guessing: alongside… |
 | Timers | Device | ✅ | — not yet — |
 | Apple Watch apps | Device | ✅ | iphone11_ios17 — 47 apps on one paired watch |
@@ -298,7 +300,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | — not yet — |
 
-**26 implemented · 24 verified · 2 awaiting a real backup.**
+**28 implemented · 24 verified · 4 awaiting a real backup.**
 
 ---
 

@@ -1,0 +1,51 @@
+# The Clock app's stopwatch — whether one is running, and how far it has got.
+#
+# Third artifact out of `com.apple.mobiletimerd.plist`, alongside `alarms`,
+# `sleep_schedule` and `timers`. `HomeDomain/Library/Preferences` is backed up.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO
+#
+# iLEAPP's `appleStopwatch.py` also emits one row per LAP, and a total that is
+# `sum(MTStopwatchLaps) + MTStopwatchCurrentInterval`. Neither is expressible
+# here, and the reason is worth writing down rather than quietly dropping:
+#
+#   * `MTStopwatchLaps` is an array of bare NUMBERS, not of dictionaries. A
+#     column addresses a key inside a record, so there is no key to name.
+#   * The total needs arithmetic across that array. The declarative format has
+#     no aggregate, by design — SQL modules aggregate in SQL, and a plist has
+#     nowhere to put one.
+#
+# So this reports what it can state exactly: the stopwatch's state and its
+# current interval. It does NOT report a lap count or a total, because a wrong
+# total is worse than an absent one, and half of a sum silently presented as the
+# whole is precisely that. Laps earn a native parser or an aggregate feature;
+# until then the honest scope is one row per stopwatch.
+#
+# `MTStopwatchState` is an undocumented integer and is passed through as one,
+# for the same reason `bluetooth_paired.toml` passes `NameOrigin` through: an
+# enum invented into words is worse than a number a reader can look up.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against the shared clock fixture. Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "stopwatch"
+name        = "Stopwatch"
+description = "The Clock app's stopwatch — its state and how far the current run has got."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.mobiletimerd.plist"
+
+[plist]
+rows = ["MTStopwatches", "MTStopwatches"]
+
+[[columns]]
+name = "State"
+from = ["$MTStopwatch", "MTStopwatchState"]
+kind = "integer"
+
+[[columns]]
+name = "Current run"
+from = ["$MTStopwatch", "MTStopwatchCurrentInterval"]
+kind = "duration"

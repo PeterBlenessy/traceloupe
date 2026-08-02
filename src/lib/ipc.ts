@@ -4029,6 +4029,40 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "stopwatch",
+            name: "Stopwatch",
+            category: "Device",
+            description:
+              "The Clock app's stopwatch — its state and how far the current run has got.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["State", "Current run"],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: ["Current run"],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "airdrop",
+            name: "AirDrop",
+            category: "Device",
+            description:
+              "This device's AirDrop identifier, and who it was set to be discoverable by.",
+            surface: "device" as const,
+            shape: "facts" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["AirDrop ID", "Discoverable by"],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "world_clock",
             name: "World Clock",
             category: "Device",
@@ -4247,7 +4281,11 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "timers"
+    mockActive && artifactId === "stopwatch"
+      ? [{ State: 2, "Current run": 93.5 }]
+      : mockActive && artifactId === "airdrop"
+        ? [{ "AirDrop ID": "6f8a2b1c9d4e", "Discoverable by": "Contacts Only" }]
+      : mockActive && artifactId === "timers"
       ? [
           {
             Title: "Pasta",

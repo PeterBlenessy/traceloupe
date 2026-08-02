@@ -1,0 +1,42 @@
+# AirDrop — this device's AirDrop identifier, and who it was discoverable to.
+#
+# `com.apple.sharingd.plist` in `HomeDomain`, whose `Library/Preferences` is
+# backed up. `sharingd` is the daemon behind AirDrop, Handoff and Universal
+# Clipboard.
+#
+# WHY THE IDENTIFIER MATTERS
+#
+# `AirDropID` is a stable per-device value that appears in the AirDrop exchanges
+# this device takes part in. It is the thing that ties a transfer seen from the
+# OTHER side — another device's logs, another examiner's extraction — back to
+# this one. That makes it a correlation key, which is why iLEAPP reports it as
+# device info rather than as a table.
+#
+# `DiscoverableMode` is Everyone / Contacts Only / Receiving Off as a STRING in
+# this plist, so it needs no enum mapping — it is already the words.
+#
+# Facts, not a table: one device, one identifier. The Device view folds it in
+# beside the serial and the locale.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against a fixture. Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "airdrop"
+name        = "AirDrop"
+description = "This device's AirDrop identifier, and who it was set to be discoverable by."
+surface     = "device"
+shape       = "facts"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.sharingd.plist"
+
+[plist]
+
+[[columns]]
+name = "AirDrop ID"
+from = "AirDropID"
+
+[[columns]]
+name = "Discoverable by"
+from = "DiscoverableMode"
