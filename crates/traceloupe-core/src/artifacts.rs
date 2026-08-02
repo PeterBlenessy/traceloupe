@@ -156,6 +156,38 @@ pub struct ColumnSpec {
     /// Required when `kind = "timestamp"`, meaningless otherwise.
     #[serde(default)]
     pub epoch: Option<Epoch>,
+    /// Enum code → what it means, for the columns where Apple stores a number
+    /// that stands for a word.
+    ///
+    /// `SSKeepMessages` is 0, 30 or 365, and it means Forever / 30 days /
+    /// 1 year. Shipping the bare integer is the defect #287 fixed elsewhere:
+    /// a table of codes is not an answer, it is homework.
+    ///
+    /// ```text
+    /// [[columns]]
+    /// name = "Keep messages for"
+    /// from = "SSKeepMessages"
+    /// [columns.map]
+    /// 0 = "Forever"
+    /// 30 = "30 days"
+    /// 365 = "1 year"
+    /// ```
+    ///
+    /// TWO RULES, both deliberate:
+    ///
+    /// 1. **An unmapped value passes through as itself**, never as "Unknown".
+    ///    A code we have not seen is data; replacing it with a word we made up
+    ///    loses it, and `tcc.toml` already establishes that unknowns travel
+    ///    rather than being guessed at.
+    /// 2. **A mapped column always produces a STRING**, mapped or not. A column
+    ///    that is sometimes text and sometimes a number sorts and aligns
+    ///    differently row to row, which looks like a rendering bug.
+    ///
+    /// Only for codes whose meaning is ESTABLISHED. An undocumented enum
+    /// invented into words is worse than the number — see the `MTTimerState`
+    /// note in `timers.toml`.
+    #[serde(default)]
+    pub map: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// What a host view may show about an artifact ON THE ROW, before anything is
@@ -703,6 +735,24 @@ impl ModuleSpec {
         }
         let mut seen_names: Vec<&str> = Vec::new();
         for c in &self.columns {
+            if let Some(m) = &c.map {
+                if m.is_empty() {
+                    return Err(format!(
+                        "column {:?} declares an empty `[columns.map]` — either map \
+                         something or drop it",
+                        c.name
+                    ));
+                }
+                // A date is not an enum. Mapping one would stringify it and the
+                // UI would stop formatting it as a date, silently.
+                if c.kind == ColumnKind::Timestamp {
+                    return Err(format!(
+                        "column {:?} is a timestamp with a `[columns.map]` — a date is \
+                         not an enum, and mapping it turns off date formatting",
+                        c.name
+                    ));
+                }
+            }
             let is_plist_key = self
                 .plist
                 .as_ref()
@@ -1479,7 +1529,33 @@ fn lookup_json<'a>(value: &'a serde_json::Value, path: &[String]) -> Option<&'a 
 /// as a number and `charge` as `"0"` in the same object — so a numeric column
 /// accepts a numeric string, and a bool column accepts `"1"`/`"true"`. Without
 /// that, half the fields of a real record read as null.
+/// Enum code → word, applied after conversion.
+///
+/// The single choke point: JSON, plist and SQL all funnel through here, so a
+/// mapped column behaves identically whichever kind of store it came from.
+fn apply_map(v: serde_json::Value, c: &ColumnSpec) -> serde_json::Value {
+    let Some(map) = &c.map else { return v };
+    // Null is "not recorded" and must stay that way; mapping it would invent a
+    // value for a key the device never wrote.
+    if v.is_null() {
+        return v;
+    }
+    let key = match &v {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    // Always a string, mapped or not: a column that is text on one row and a
+    // number on the next sorts and aligns differently row to row, which reads
+    // as a rendering bug. An unmapped code travels as itself -- never as
+    // "Unknown", which would lose the one thing worth keeping.
+    serde_json::Value::String(map.get(&key).cloned().unwrap_or(key))
+}
+
 fn convert_json(v: &serde_json::Value, c: &ColumnSpec) -> serde_json::Value {
+    apply_map(convert_json_inner(v, c), c)
+}
+
+fn convert_json_inner(v: &serde_json::Value, c: &ColumnSpec) -> serde_json::Value {
     use serde_json::Value as J;
     let as_f64 = |v: &J| -> Option<f64> {
         v.as_f64()
@@ -1814,6 +1890,10 @@ fn describe_at(rows: &[String]) -> String {
 /// timestamp column meeting a number when no `epoch` was declared. Everything
 /// else that cannot be represented is a null cell, which is an honest "not this".
 fn convert_plist(v: &plist::Value, c: &ColumnSpec) -> Result<serde_json::Value> {
+    convert_plist_inner(v, c).map(|out| apply_map(out, c))
+}
+
+fn convert_plist_inner(v: &plist::Value, c: &ColumnSpec) -> Result<serde_json::Value> {
     use serde_json::Value as J;
     // plist Integers are i128-backed and Apple writes plenty of ids as u64 above
     // i64::MAX (persistent ids, address-shaped values). `as_signed` alone turns
@@ -1921,6 +2001,10 @@ fn convert_plist(v: &plist::Value, c: &ColumnSpec) -> Result<serde_json::Value> 
 }
 
 fn convert(raw: &rusqlite::types::Value, c: &ColumnSpec) -> serde_json::Value {
+    apply_map(convert_inner(raw, c), c)
+}
+
+fn convert_inner(raw: &rusqlite::types::Value, c: &ColumnSpec) -> serde_json::Value {
     use rusqlite::types::Value as V;
     use serde_json::Value as J;
     match c.kind {
@@ -2090,6 +2174,18 @@ const BUILTIN: &[(&str, &str)] = &[
     ("timers.toml", include_str!("../modules/timers.toml")),
     ("stopwatch.toml", include_str!("../modules/stopwatch.toml")),
     ("airdrop.toml", include_str!("../modules/airdrop.toml")),
+    (
+        "message_retention.toml",
+        include_str!("../modules/message_retention.toml"),
+    ),
+    (
+        "backup_settings.toml",
+        include_str!("../modules/backup_settings.toml"),
+    ),
+    (
+        "location_services.toml",
+        include_str!("../modules/location_services.toml"),
+    ),
     (
         "world_clock.toml",
         include_str!("../modules/world_clock.toml"),
@@ -3054,6 +3150,7 @@ from = "who"
                 kind: ColumnKind::Text,
                 value: None,
                 epoch: None,
+                map: None,
             }],
         };
         let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
@@ -3805,6 +3902,60 @@ from = "nope"
         out
     }
 
+    /// `com.apple.MobileSMS.plist` — BOTH retention keys, the iOS <=16 spelling
+    /// and the iOS 17+ one, so a module reading only the modern one is caught.
+    /// 30 is mapped; a deliberately unmapped 90 proves an unknown code travels
+    /// as itself rather than becoming "Unknown".
+    fn seed_message_retention() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert("SSKeepMessages".into(), Value::Integer(30.into()));
+        root.insert("KeepMessageForDays".into(), Value::Integer(90.into()));
+        // Other keys in the real file, none of them read.
+        root.insert("ShowSubject".into(), Value::Boolean(false));
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
+    /// `com.apple.mobile.ldbackup.plist` — the device's own backup history.
+    fn seed_backup_settings() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        // Cocoa seconds, not Unix: 2024-07-28 in Core Data's epoch.
+        root.insert("LastiTunesBackupDate".into(), Value::Real(743_800_000.0));
+        root.insert(
+            "LastiTunesBackupTZ".into(),
+            Value::String("Europe/Stockholm".into()),
+        );
+        root.insert("LastCloudBackupDate".into(), Value::Real(743_900_000.0));
+        root.insert(
+            "LastCloudBackupTZ".into(),
+            Value::String("Europe/Stockholm".into()),
+        );
+        root.insert("CloudBackupEnabled".into(), Value::Boolean(true));
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
+    /// `com.apple.locationd.plist` — the master Location Services switch.
+    ///
+    /// The key name CONTAINS A DOT (`LocationServicesEnabledIn8.0`), which is
+    /// the case that makes column paths lists rather than dotted strings. A
+    /// fixture without it would let that regress unnoticed.
+    fn seed_location_services() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert("LocationServicesEnabledIn8.0".into(), Value::Boolean(true));
+        root.insert("LastSystemVersion".into(), Value::String("21D50".into()));
+        // Scheduler bookkeeping the module deliberately ignores.
+        root.insert("kP6MWDNextEstimateTime".into(), Value::Real(744_000_000.0));
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// `com.apple.sharingd.plist` — AirDrop's identifier and discoverability.
     fn seed_airdrop() -> Vec<u8> {
         use plist::{Dictionary, Value};
@@ -4231,6 +4382,21 @@ from = "nope"
             "Library/Preferences/com.apple.sharingd.plist",
         ),
         (
+            "message_retention",
+            "HomeDomain",
+            "Library/Preferences/com.apple.MobileSMS.plist",
+        ),
+        (
+            "backup_settings",
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobile.ldbackup.plist",
+        ),
+        (
+            "location_services",
+            "HomeDomain",
+            "Library/Preferences/com.apple.locationd.plist",
+        ),
+        (
             "world_clock",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
@@ -4400,6 +4566,9 @@ from = "nope"
             // One store, three modules: alarms, the sleep schedule and timers.
             "alarms" | "sleep_schedule" | "timers" | "stopwatch" => return Seed::Bytes(seed_clock),
             "airdrop" => return Seed::Bytes(seed_airdrop),
+            "message_retention" => return Seed::Bytes(seed_message_retention),
+            "backup_settings" => return Seed::Bytes(seed_backup_settings),
+            "location_services" => return Seed::Bytes(seed_location_services),
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
@@ -4602,6 +4771,78 @@ from = "nope"
     /// This is the guard that scales: it costs nothing per new artifact and
     /// fails the moment one rots — a renamed column, a typo in the SQL or the
     /// path, a column spec that stops matching.
+    fn mapped(pairs: &[(&str, &str)]) -> ColumnSpec {
+        ColumnSpec {
+            name: "Keep".into(),
+            from: vec!["k".into()],
+            value: None,
+            kind: ColumnKind::Text,
+            epoch: None,
+            map: Some(
+                pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+            ),
+        }
+    }
+
+    #[test]
+    fn a_value_map_turns_codes_into_words() {
+        let c = mapped(&[("0", "Forever"), ("30", "30 days")]);
+        assert_eq!(
+            apply_map(serde_json::json!(30), &c),
+            serde_json::json!("30 days")
+        );
+        assert_eq!(
+            apply_map(serde_json::json!("0"), &c),
+            serde_json::json!("Forever")
+        );
+    }
+
+    #[test]
+    fn an_unmapped_code_travels_as_itself() {
+        // The rule that matters. A code we have not seen is DATA -- replacing
+        // it with "Unknown" would lose the one thing worth keeping, and a
+        // fourth retention value is exactly what someone would want to see.
+        let c = mapped(&[("0", "Forever")]);
+        assert_eq!(
+            apply_map(serde_json::json!(90), &c),
+            serde_json::json!("90")
+        );
+    }
+
+    #[test]
+    fn a_mapped_column_is_always_a_string() {
+        // Mapped or not, one type. A column that is text on one row and a
+        // number on the next sorts and aligns differently row to row, which
+        // reads as a rendering bug rather than as data.
+        let c = mapped(&[("0", "Forever")]);
+        assert!(apply_map(serde_json::json!(0), &c).is_string());
+        assert!(apply_map(serde_json::json!(7), &c).is_string());
+    }
+
+    #[test]
+    fn a_map_never_invents_a_value_for_null() {
+        // Null is "the device never wrote this key". Mapping it would answer a
+        // question the store did not.
+        let c = mapped(&[("0", "Forever")]);
+        assert!(apply_map(serde_json::Value::Null, &c).is_null());
+    }
+
+    #[test]
+    fn a_timestamp_may_not_be_mapped() {
+        // Stringifying a date turns off date formatting, silently.
+        let mut spec = load_modules(&builtin_modules_dir())
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id == "backup_settings")
+            .unwrap();
+        spec.columns[0].map = Some([("1".into(), "x".into())].into_iter().collect());
+        let err = spec.validate().unwrap_err();
+        assert!(err.contains("not an enum"), "{err}");
+    }
+
     #[test]
     fn every_shipped_module_loads_and_runs() {
         let mods = load_modules(&builtin_modules_dir()).unwrap();
@@ -5292,6 +5533,7 @@ from = "a"
             kind: ColumnKind::Text,
             value: None,
             epoch: None,
+            map: None,
         };
         let utf8 = plist::Value::Data(b"HomeNet".to_vec());
         assert_eq!(
@@ -5328,6 +5570,7 @@ from = "a"
             kind: ColumnKind::Hex,
             value: None,
             epoch: None,
+            map: None,
         };
         let mac = plist::Value::Data(vec![0x8a, 0x1b, 0x2c, 0x3d, 0x4e, 0x5f]);
         assert_eq!(
@@ -5349,6 +5592,7 @@ from = "a"
             kind: ColumnKind::Timestamp,
             value: None,
             epoch: None,
+            map: None,
         };
         let err = convert_plist(&plist::Value::Integer(1_700_000_000.into()), &ts)
             .expect_err("a number timestamp with no epoch is unreadable");
@@ -5980,6 +6224,7 @@ from = "a"
                 kind: ColumnKind::Text,
                 value: None,
                 epoch: None,
+                map: None,
             }],
         });
         assert_ne!(
@@ -6016,6 +6261,7 @@ from = "a"
                 kind: ColumnKind::Text,
                 value: None,
                 epoch: None,
+                map: None,
             }],
         };
         assert_eq!(

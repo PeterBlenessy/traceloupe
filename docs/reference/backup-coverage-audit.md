@@ -275,6 +275,7 @@ asks. Check free space before fetching, not 20 GB in.
 | AirDrop | Device | ✅ | — not yet — |
 | Alarms | Device | ✅ | iphone11_ios17 — one alarm at 10:41, switched off, last changed 2024-07-28 |
 | AllTrails recordings | Locations | ✅ | iphone11_ios17 — 6 recordings between November 2021 and July 2024 |
+| Backup history | Device | ✅ | — not yet — |
 | Backup size by domain | Device | ✅ | iphone11_ios17 — 42 domains sized |
 | Bluetooth devices | Device | ✅ | iphone11_ios17 — 5 devices, including two sets of AirPods named after different people |
 | Nearby Bluetooth | Device | ✅ | iphone11_ios17 — 1056 sightings, 5 named |
@@ -288,6 +289,8 @@ asks. Check free space before fetching, not 20 GB in.
 | Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
 | Life360 location history | Location | ✅ | iphone11_ios17 — «redacted» rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives «redacted»… |
 | Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
+| Location Services | Device | ✅ | — not yet — |
+| Message retention | Device | ✅ | — not yet — |
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
 | Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
@@ -300,7 +303,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | — not yet — |
 
-**28 implemented · 24 verified · 4 awaiting a real backup.**
+**31 implemented · 24 verified · 7 awaiting a real backup.**
 
 ---
 

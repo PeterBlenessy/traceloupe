@@ -4029,6 +4029,66 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "message_retention",
+            name: "Message retention",
+            category: "Device",
+            description:
+              "How long this iPhone was set to keep messages before deleting them — context for any conversation that stops early.",
+            surface: "device" as const,
+            shape: "facts" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Keep messages (iOS 17+)",
+              "Keep messages (iOS 16 and earlier)",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "backup_settings",
+            name: "Backup history",
+            category: "Device",
+            description:
+              "When this device last backed up to a computer and to iCloud, and whether iCloud backup was switched on.",
+            surface: "device" as const,
+            shape: "facts" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Last computer backup",
+              "Computer backup time zone",
+              "Last iCloud backup",
+              "iCloud backup time zone",
+              "iCloud backup on",
+            ],
+            timestampColumns: ["Last computer backup", "Last iCloud backup"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "location_services",
+            name: "Location Services",
+            category: "Device",
+            description:
+              "Whether Location Services was switched on at all — the context that decides what the per-app location list means.",
+            surface: "device" as const,
+            shape: "facts" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Location Services on", "Last system version"],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "stopwatch",
             name: "Stopwatch",
             category: "Device",
@@ -4281,7 +4341,28 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "stopwatch"
+    mockActive && artifactId === "message_retention"
+      // Strings, because a mapped column always is — and "90" is the unmapped
+      // code travelling as itself.
+      ? [
+          {
+            "Keep messages (iOS 17+)": "30 days",
+            "Keep messages (iOS 16 and earlier)": "90",
+          },
+        ]
+      : mockActive && artifactId === "backup_settings"
+        ? [
+            {
+              "Last computer backup": 1722107200,
+              "Computer backup time zone": "Europe/Stockholm",
+              "Last iCloud backup": 1722207200,
+              "iCloud backup time zone": "Europe/Stockholm",
+              "iCloud backup on": true,
+            },
+          ]
+      : mockActive && artifactId === "location_services"
+        ? [{ "Location Services on": true, "Last system version": "21D50" }]
+      : mockActive && artifactId === "stopwatch"
       ? [{ State: 2, "Current run": 93.5 }]
       : mockActive && artifactId === "airdrop"
         ? [{ "AirDrop ID": "6f8a2b1c9d4e", "Discoverable by": "Contacts Only" }]

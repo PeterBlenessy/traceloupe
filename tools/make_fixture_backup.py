@@ -855,6 +855,58 @@ def build_clock_plist() -> bytes:
     )
 
 
+def build_message_retention_plist() -> bytes:
+    """com.apple.MobileSMS.plist — BOTH retention keys.
+
+    `SSKeepMessages` is the iOS 17+ spelling and `KeepMessageForDays` the
+    iOS <=16 one; carrying both catches a module that reads only the modern
+    key. 30 is mapped; the deliberately unmapped 90 proves an unknown code
+    travels as itself rather than becoming "Unknown".
+    """
+    return plistlib.dumps(
+        {
+            "SSKeepMessages": 30,
+            "KeepMessageForDays": 90,
+            "ShowSubject": False,  # unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
+def build_backup_settings_plist() -> bytes:
+    """com.apple.mobile.ldbackup.plist — the device's own backup history.
+
+    Dates are Cocoa / Core Data seconds, not Unix.
+    """
+    return plistlib.dumps(
+        {
+            "LastiTunesBackupDate": 743_800_000.0,
+            "LastiTunesBackupTZ": "Europe/Stockholm",
+            "LastCloudBackupDate": 743_900_000.0,
+            "LastCloudBackupTZ": "Europe/Stockholm",
+            "CloudBackupEnabled": True,
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
+def build_location_services_plist() -> bytes:
+    """com.apple.locationd.plist — the master Location Services switch.
+
+    The key name CONTAINS A DOT (`LocationServicesEnabledIn8.0`), which is the
+    case that makes column paths lists rather than dotted strings. A fixture
+    without it would let that regress unnoticed.
+    """
+    return plistlib.dumps(
+        {
+            "LocationServicesEnabledIn8.0": True,
+            "LastSystemVersion": "21D50",
+            "kP6MWDNextEstimateTime": 744_000_000.0,  # scheduler noise, unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
 def build_airdrop_plist() -> bytes:
     """com.apple.sharingd.plist — AirDrop's identifier and discoverability.
 
@@ -1195,6 +1247,24 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.sharingd.plist",
             build_airdrop_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.MobileSMS.plist",
+            build_message_retention_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobile.ldbackup.plist",
+            build_backup_settings_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.locationd.plist",
+            build_location_services_plist(),
         ),
 
         (
