@@ -356,6 +356,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Life360 location history | Location | ✅ | iphone11_ios17 — 1,635 rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives 1,635… |
 | Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
 | Location Services | Device | ✅ | iphone11_ios17 — Location Services on, last written by iPhone OS17.3/21D50 |
+| MEGA files | Files | ✅ | iphone11_ios17 — 966 files across 332 folders, resolving to real paths such as 'Cloud Drive/My chat files/IMG_4552.jpg'; the _status_ and _transfers_ sibling stores the path glob also matches are skipped, which is what the globbed-skip rule exists for |
 | Message retention | Device | ✅ | iphone11_ios17 — 'Forever' via the value map, from the iOS 17+ key; the iOS 16 key is absent as expected on this lineage |
 | OS build history | Device | ✅ | iphone11_ios17 — 2 boots, 20B110 (2023-07-01) then 21D50 (2024-01-25); iphone11_ios16 — the SAME phone shows only the first, because the upgrade had not happened yet, so the artifact corroborates the corpus |
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
@@ -374,7 +375,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**41 implemented · 41 verified · 0 awaiting a real backup.**
+**42 implemented · 42 verified · 0 awaiting a real backup.**
 
 ---
 
