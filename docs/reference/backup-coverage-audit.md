@@ -369,11 +369,12 @@ asks. Check free space before fetching, not 20 GB in.
 | Waze favourites | Locations | ✅ | iphone11_ios17 — 1 favourite, slot 2, named 'Work' at 605 Bridge St, Fuquay-Varina NC |
 | Waze places | Locations | ✅ | iphone11_ios17 — 7 places with street addresses and decimal coordinates (Burke VA, Fuquay-Varina NC), matching the 7 rows iLEAPP records for this image |
 | Waze destinations | Locations | ✅ | iphone11_ios17 — 6 recent destinations, matching iLEAPP's 6 for this image; last-used and first-added differ on some rows, so both are read |
+| Web domains loaded in apps | Network | ✅ | iphone11_ios17 — 352 domains across 42 app containers, from Edge/Chrome/DuckDuckGo/Brave to Signal, Discord, Reddit and Zoom; this WebKit has no firstSeen/isPrevalentResource so the second SQL alternative is the one that runs, and both report NULL rather than a value |
 | Wi-Fi networks | Network | ✅ | iphone11_ios17 — 17 known networks, with join dates from July 2023 to January 2024 |
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**40 implemented · 40 verified · 0 awaiting a real backup.**
+**41 implemented · 41 verified · 0 awaiting a real backup.**
 
 ---
 
