@@ -1,0 +1,59 @@
+# How long this iPhone was set to keep messages before deleting them.
+#
+# `com.apple.MobileSMS.plist` in `HomeDomain`, whose `Library/Preferences` is
+# backed up.
+#
+# WHY THIS IS THE FIRST THING TO CHECK WHEN MESSAGES LOOK THIN
+#
+# Settings › Messages › Keep Messages offers Forever, 1 Year or 30 Days. On
+# anything but Forever, iOS deletes messages older than the window — permanently,
+# from the device, and therefore from every backup taken afterwards. So a
+# conversation that stops dead a year back may be a retention setting rather than
+# a conversation that stopped, and those are very different conclusions.
+#
+# That makes this a small artifact with outsized interpretive weight: it is
+# context for the ABSENCE of data elsewhere in the app, which nothing else here
+# can supply.
+#
+# TWO KEYS, TWO ERAS. `KeepMessageForDays` is the iOS ≤ 16 spelling and
+# `SSKeepMessages` the iOS 17+ one, per iLEAPP's `messageRetention.py`. Both are
+# read: a backup can come from either, and reading only the modern one would
+# report "not set" on an older device that has it set perfectly well. Whichever
+# is absent simply renders as "—".
+#
+# THE CODES ARE ESTABLISHED, which is what earns the value map here. 0, 30 and
+# 365 are the three values the Settings UI can produce, and iLEAPP maps the same
+# three. An unrecognised code passes through as itself rather than being guessed
+# at — a fourth value would be worth seeing, not worth hiding behind a word.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against a fixture. iLEAPP records 1 row on every image it tracks
+# (2 on hickman_ios14, which has both keys), so the shape is stable. Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "message_retention"
+name        = "Message retention"
+description = "How long this iPhone was set to keep messages before deleting them — context for any conversation that stops early."
+surface     = "device"
+shape       = "facts"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.MobileSMS.plist"
+
+[plist]
+
+[[columns]]
+name = "Keep messages (iOS 17+)"
+from = "SSKeepMessages"
+[columns.map]
+0 = "Forever"
+30 = "30 days"
+365 = "1 year"
+
+[[columns]]
+name = "Keep messages (iOS 16 and earlier)"
+from = "KeepMessageForDays"
+[columns.map]
+0 = "Forever"
+30 = "30 days"
+365 = "1 year"

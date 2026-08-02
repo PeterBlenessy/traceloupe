@@ -1,0 +1,52 @@
+# Whether Location Services was switched on at all, and the iOS version that
+# last wrote this file.
+#
+# `com.apple.locationd.plist` in `HomeDomain`, whose `Library/Preferences` is
+# backed up. Per iLEAPP's `appleLocationd.py`.
+#
+# WHY THE MASTER SWITCH IS WORTH ITS OWN ROW
+#
+# `location_clients.toml` already lists the 189-odd apps that asked for
+# location. What it cannot say is whether the system was answering them. With
+# Location Services off, every one of those clients is a request that got
+# nothing — so the same client list means something completely different
+# depending on this one boolean, and reading the list without it invites the
+# wrong conclusion.
+#
+# THE KEY IS NAMED `LocationServicesEnabledIn8.0` and has been since iOS 8; the
+# version in the name is historical, not a hint that it stops applying. It
+# contains a DOT, which is exactly why column paths are lists rather than dotted
+# strings in this format — see the `from` documentation.
+#
+# `LastSystemVersion` is the OS build that last wrote the file. Cheap, and it
+# corroborates the version the Device panel reports from Info.plist.
+#
+# WHAT IS LEFT OUT: the rest of this plist is scheduler bookkeeping
+# (`steadinessClassificationNextClassificationTime`, `VO2MaxCloudKit*`,
+# `kP6MWDNextEstimateTime`) — future timestamps for background work, which say
+# nothing about the person and would pad the panel with noise. iLEAPP passes
+# them through because it prints every key; that is not a reason to.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against a fixture. Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "location_services"
+name        = "Location Services"
+description = "Whether Location Services was switched on at all — the context that decides what the per-app location list means."
+surface     = "device"
+shape       = "facts"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.locationd.plist"
+
+[plist]
+
+[[columns]]
+name = "Location Services on"
+from = ["LocationServicesEnabledIn8.0"]
+kind = "bool"
+
+[[columns]]
+name = "Last system version"
+from = "LastSystemVersion"
