@@ -22,6 +22,21 @@ export interface BackupInfo {
   isEncrypted: boolean | null;
 }
 
+/**
+ * What became of one module's source store during the import (#288).
+ *
+ * `failed` is the one that matters: the store was in the backup and we could
+ * not read it, so the view is empty because of US, not because the device held
+ * nothing. Everything else the app says about emptiness is wording; this is a
+ * fact the import knows and used to throw away.
+ */
+export interface ModuleStatus {
+  module: string;
+  status: "parsed" | "source-absent" | "failed";
+  /** The underlying error, when `status` is `"failed"`. */
+  detail: string | null;
+}
+
 export type DiscoveryResult =
   | { status: "ok"; backups: BackupInfo[] }
   | { status: "permissionDenied"; path: string }
@@ -1074,6 +1089,9 @@ export interface TraceLoupeClient {
   listThreads(): Promise<ThreadSummary[]>;
   /** Device + backup metadata for the active backup, or null if unknown. */
   deviceInfo(): Promise<BackupInfo | null>;
+  /** Why each module ended up empty or not, from the import that built the
+   *  open cache. See `use-parse-failed.ts` (#288). */
+  moduleStatus(): Promise<ModuleStatus[]>;
   /** The macOS accent color as an oklch CSS string, or null when the host has
    *  no readable accent (non-macOS) — the UI then keeps its baked-in default. */
   systemAccentColor(): Promise<string | null>;
@@ -1605,6 +1623,7 @@ const tauriClient: TraceLoupeClient = {
   importedBackupIds: () => invoke<string[]>("imported_backup_ids"),
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
+  moduleStatus: () => invoke<ModuleStatus[]>("module_status"),
   systemAccentColor: () => invoke<string | null>("get_system_accent_color"),
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
@@ -3093,7 +3112,18 @@ function mockFilterMedia(
   }
   return out;
 }
+/** `?mock=parse-failed` renders the app as it looks when a store WAS in the
+ *  backup and could not be read (#288) — the one empty-state reason that had
+ *  no way to be seen, and so no way to be guarded. */
+const mockParseFailed =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("mock") === "parse-failed";
+
 function mockFilterCalls(search: string | null, range?: TimeRange): Call[] {
+  // A store that failed to parse produced no rows -- that is the whole point of
+  // the state. Returning calls here would make the mock incoherent and the
+  // guard unable to reach the empty view it exists to measure.
+  if (mockParseFailed) return [];
   let out = mockCalls;
   if (search) {
     const q = search.toLowerCase();
@@ -3229,6 +3259,7 @@ let mockArtifactsExtracted = false;
 const mockUnencrypted =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("mock") === "unencrypted";
+
 
 const mockClient: TraceLoupeClient = {
   listBackups: async () => ({ status: "ok", backups: mockBackups }),
@@ -3409,6 +3440,26 @@ const mockClient: TraceLoupeClient = {
           isEncrypted: !mockUnencrypted,
         }
       : null,
+  moduleStatus: async () =>
+    !mockActive
+      ? []
+      : mockParseFailed
+        ? [
+            {
+              module: "calls",
+              status: "failed" as const,
+              detail:
+                "Native Calls: couldn't read CallHistory.storedata (file is not a database); using iLEAPP.",
+            },
+            { module: "messages", status: "parsed" as const, detail: null },
+          ]
+        : [
+            { module: "messages", status: "parsed" as const, detail: null },
+            { module: "calls", status: "parsed" as const, detail: null },
+            { module: "contacts", status: "parsed" as const, detail: null },
+            { module: "safari", status: "parsed" as const, detail: null },
+            { module: "notes", status: "parsed" as const, detail: null },
+          ],
   systemAccentColor: async () => null,
   listCalendarEvents: async () =>
     mockActive
@@ -4780,7 +4831,7 @@ const mockClient: TraceLoupeClient = {
     const ordered = desc ? [...filtered].reverse() : filtered;
     return ordered.slice(offset, offset + limit);
   },
-  listCalls: async () => (mockActive ? mockCalls : []),
+  listCalls: async () => (mockActive && !mockParseFailed ? mockCalls : []),
   listSafariHistory: async () => (mockActive ? mockSafari : []),
   listNotes: async () => (mockActive ? mockNotes : []),
   unlockNote: async (_noteId, password) =>
