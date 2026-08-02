@@ -46,6 +46,7 @@
 id          = "alltrails"
 name        = "AllTrails recordings"
 description = "Outdoor activities recorded in AllTrails — what was walked or hiked, when, how far, and roughly where."
+verified    = "iphone11_ios17 — 6 recordings between November 2021 and July 2024"
 surface     = "device"
 category    = "Locations"
 domain      = "AppDomain-com.alltrails.AllTrails"

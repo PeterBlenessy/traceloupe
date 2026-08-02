@@ -990,6 +990,8 @@ export type ArtifactSummary = {
   /** Which of `columns` are byte counts, declared by the module's `kind`. Rendered
    *  as human sizes — raw bytes are unreadable at the scale data usage reaches. */
   byteColumns: string[];
+  /** Columns holding a number of SECONDS, formatted as a duration. */
+  durationColumns: string[];
   rowCount: number;
   requiresEncryptedBackup: boolean;
 };
@@ -3721,6 +3723,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["App", "Permission", "Decision", "Decided"],
             timestampColumns: ["Decided"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 5,
             requiresEncryptedBackup: false,
           },
@@ -3744,6 +3747,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Stopped receiving", "Location stopped"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -3770,6 +3774,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["First", "Last"],
             byteColumns: ["Cellular down", "Cellular up", "Wi-Fi down", "Wi-Fi up"],
+            durationColumns: [],
             rowCount: 4,
             requiresEncryptedBackup: false,
           },
@@ -3800,6 +3805,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Added"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 4,
             requiresEncryptedBackup: false,
           },
@@ -3816,6 +3822,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["Page", "Identifier", "Kind", "Size"],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -3831,6 +3838,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["Position", "App"],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 2,
             requiresEncryptedBackup: false,
           },
@@ -3860,6 +3868,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Started", "Ended"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 2,
             requiresEncryptedBackup: false,
           },
@@ -3884,6 +3893,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Added", "Last played"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 2,
             requiresEncryptedBackup: false,
           },
@@ -3900,6 +3910,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["Domain", "Size"],
             timestampColumns: [],
             byteColumns: ["Size"],
+            durationColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -3924,6 +3935,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 2,
             requiresEncryptedBackup: false,
           },
@@ -3940,6 +3952,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["Device", "Address", "Seen counter", "Identifier"],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 4,
             requiresEncryptedBackup: false,
           },
@@ -3962,6 +3975,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 1,
             requiresEncryptedBackup: false,
           },
@@ -3986,7 +4000,57 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Last changed", "Last dismissed"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "timers",
+            name: "Timers",
+            category: "Device",
+            description:
+              "Timers set in the Clock app — what each was called, how long it ran for, and when it was last changed.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Title",
+              "Duration",
+              "State",
+              "Due",
+              "Last changed",
+              "Sound",
+            ],
+            timestampColumns: ["Due", "Last changed"],
+            byteColumns: [],
+            durationColumns: ["Duration"],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "world_clock",
+            name: "World Clock",
+            category: "Device",
+            description:
+              "Cities added to the Clock app's World Clock, with the time zone and coordinates of each.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "City",
+              "Country",
+              "Time zone",
+              "Latitude",
+              "Longitude",
+              "Locale",
+              "Identifier",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 2,
             requiresEncryptedBackup: false,
           },
           {
@@ -4011,6 +4075,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Off until", "Last changed"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 1,
             requiresEncryptedBackup: false,
           },
@@ -4033,6 +4098,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 1,
             requiresEncryptedBackup: false,
           },
@@ -4049,6 +4115,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["Address", "Named by owner", "Device name", "Kind"],
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -4074,6 +4141,7 @@ const mockClient: TraceLoupeClient = {
             ],
             timestampColumns: ["Last joined", "Address generated"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 2,
             requiresEncryptedBackup: false,
           },
@@ -4105,6 +4173,7 @@ const mockClient: TraceLoupeClient = {
               "Last seen",
             ],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -4121,6 +4190,7 @@ const mockClient: TraceLoupeClient = {
             columns: ["Slot", "Phone number", "SIM serial (ICCID)", "Last updated"],
             timestampColumns: ["Last updated"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 2,
             requiresEncryptedBackup: false,
           },
@@ -4148,6 +4218,7 @@ const mockClient: TraceLoupeClient = {
             // comment explains at length.
             timestampColumns: [],
             byteColumns: [],
+            durationColumns: [],
             rowCount: 3,
             requiresEncryptedBackup: false,
           },
@@ -4167,15 +4238,50 @@ const mockClient: TraceLoupeClient = {
             columns: ["Mode", "Enabled", "Changed"],
             timestampColumns: ["Changed"],
             byteColumns: [],
+            durationColumns: [],
             rowCount: mockUnencrypted ? 0 : 2,
             requiresEncryptedBackup: true,
           },
         ]
       : [],
   getArtifactRows: async (artifactId) =>
-    // Bundle ids MUST match mockInstalledApps, or Apps has nothing to attach
-    // these to and the hosted path silently renders nothing.
-    mockActive && artifactId === "location_clients"
+    // Timers is the mock's one `duration` column, so the browser checks
+    // actually render that kind rather than trusting it was wired up.
+    mockActive && artifactId === "timers"
+      ? [
+          {
+            Title: "Pasta",
+            Duration: 600,
+            State: 1,
+            Due: 1722180000,
+            "Last changed": 1722179400,
+            Sound: "system:sunrise",
+          },
+        ]
+      : mockActive && artifactId === "world_clock"
+        ? [
+            {
+              City: "Stockholm",
+              Country: "Sweden",
+              "Time zone": "Europe/Stockholm",
+              Latitude: 59.3293,
+              Longitude: 18.0686,
+              Locale: "sv_SE",
+              Identifier: "Stockholm",
+            },
+            {
+              City: "Cupertino",
+              Country: "United States",
+              "Time zone": "America/Los_Angeles",
+              Latitude: 37.323,
+              Longitude: -122.0322,
+              Locale: "en_US",
+              Identifier: "Cupertino",
+            },
+          ]
+      // Bundle ids MUST match mockInstalledApps, or Apps has nothing to attach
+      // these to and the hosted path silently renders nothing.
+      : mockActive && artifactId === "location_clients"
       ? [
           {
             App: "net.whatsapp.WhatsApp",

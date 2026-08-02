@@ -28,6 +28,7 @@
 id          = "carplay_session"
 name        = "CarPlay connection"
 description = "When this iPhone was last connected to a car over CarPlay, and the battery and thermal state when that session ended."
+verified    = "iphone11_ios17 — last session ended 2024-07-27T16:21:39Z at 84% battery, thermal level 'None'"
 surface     = "device"
 category    = "Device"
 shape       = "facts"

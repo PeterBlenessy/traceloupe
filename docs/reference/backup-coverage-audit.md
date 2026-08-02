@@ -230,6 +230,78 @@ time becomes a validator that is only ever run against the newest one.
 
 ---
 
+## Implemented is not verified
+
+Two different claims, and this document used to make only one of them.
+
+A module can be written from iLEAPP's definition, load, run, and pass its fixture
+while reading the wrong key — the fixture was written from the same reading of
+the store, so it **agrees with the module by construction**. Only a real device
+settles it.
+
+Both states ship. Waiting for a backup before writing a module means the module
+never gets written, and iLEAPP's own definitions plus its per-image sample counts
+are a good enough basis to build from. What must not happen is the two being
+confused, so they are tracked apart:
+
+| | means |
+|---|---|
+| **Implemented** | exists, loads, runs, produced rows from a fixture |
+| **Verified** | its output was checked against a **named real backup** |
+
+The verified note lives in each module's own `verified` field, so the table below
+is read from the modules and cannot drift from them. Regenerate it with:
+
+```bash
+python3 tools/module-status.py            # this table
+python3 tools/module-status.py --summary  # just the counts
+```
+
+### Backups used for verification
+
+| Corpus key | Device | What it is |
+|---|---|---|
+| `iphone11_ios17` | iPhone 11, iOS 17.3 | Josh Hickman's public research image — the encrypted backup, not the full-filesystem tree |
+
+`tools/data/dfir-images.json` catalogues what else exists and
+`scripts/fetch-test-image.sh` fetches it. Backups are **kept**; archives and
+full-filesystem trees are **pruned** — an FFS image shows where a file lives,
+never whether a backup carries it, which is the only question this document
+asks. Check free space before fetching, not 20 GB in.
+
+| Module | Category | Implemented | Verified against |
+|---|---|:-:|---|
+| Accounts | Device | ✅ | iphone11_ios17 — 19 accounts across 12 services |
+| Alarms | Device | ✅ | iphone11_ios17 — one alarm at 10:41, switched off, last changed 2024-07-28 |
+| AllTrails recordings | Locations | ✅ | iphone11_ios17 — 6 recordings between November 2021 and July 2024 |
+| Backup size by domain | Device | ✅ | iphone11_ios17 — 42 domains sized |
+| Bluetooth devices | Device | ✅ | iphone11_ios17 — 5 devices, including two sets of AirPods named after different people |
+| Nearby Bluetooth | Device | ✅ | iphone11_ios17 — 1056 sightings, 5 named |
+| Bluetooth pairings | Device | ✅ | iphone11_ios17 — 3 paired devices — a Garmin vívoactive 4, a Fitbit Versa 3 and an Apple Watch |
+| CarPlay apps | Device | ✅ | iphone11_ios17 — 7 apps, including com.waze.iphone, com.spotify.client and com.google.Maps, last used between 2024-01-16 and 2024-07-27 |
+| CarPlay connection | Device | ✅ | iphone11_ios17 — last session ended 2024-07-27T16:21:39Z at 84% battery, thermal level 'None' |
+| Data usage | Network | ✅ | iphone11_ios17 — 1959 usage rows collapse to 671 per-app totals, topped by the App Store at 2.77 GB and TikTok at 300 MB |
+| Language and region | Device | ✅ | iphone11_ios17 — en-US, en_US, 24-hour time on |
+| Dock | Device | ✅ | iphone11_ios17 — 4 apps, Phone first |
+| Health device | Device | ✅ | iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02 |
+| Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
+| Life360 location history | Location | ✅ | iphone11_ios17 — 1,635 rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives 1,635… |
+| Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
+| Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
+| SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
+| Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
+| Sleep schedule | Device | ✅ | iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off |
+| Permissions | Security | ✅ | iphone11_ios17 — 289 rows, which is exactly the count iLEAPP records for the same image — two independent parsers agreeing. The distribution also justified passing unknowns through rather than guessing: alongside… |
+| Timers | Device | ✅ | — not yet — |
+| Apple Watch apps | Device | ✅ | iphone11_ios17 — 47 apps on one paired watch |
+| Wi-Fi networks | Network | ✅ | iphone11_ios17 — 17 known networks, with join dates from July 2023 to January 2024 |
+| Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
+| World Clock | Device | ✅ | — not yet — |
+
+**26 implemented · 24 verified · 2 awaiting a real backup.**
+
+---
+
 ## What is left, as a number that goes down
 
 `classify-ileapp-artifacts.py` says which of iLEAPP's artifacts a backup can

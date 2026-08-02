@@ -58,6 +58,7 @@
 id          = "data_usage"
 name        = "Data usage"
 description = "How much data each app sent and received, over Wi-Fi and cellular, and which system process carried it."
+verified    = "iphone11_ios17 — 1959 usage rows collapse to 671 per-app totals, topped by the App Store at 2.77 GB and TikTok at 300 MB"
 surface     = "apps"
 join_column = "App"   # the bundle id, so Apps can attach these to the right app
 category    = "Network"

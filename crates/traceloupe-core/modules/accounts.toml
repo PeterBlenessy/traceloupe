@@ -76,6 +76,7 @@
 id          = "accounts"
 name        = "Accounts"
 description = "Which services are signed in on this device — mail, calendars, iCloud, Game Center and more — with when each was added."
+verified    = "iphone11_ios17 — 19 accounts across 12 services"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"
