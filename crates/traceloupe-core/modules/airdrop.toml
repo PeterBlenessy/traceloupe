@@ -25,6 +25,7 @@
 id          = "airdrop"
 name        = "AirDrop"
 description = "This device's AirDrop identifier, and who it was set to be discoverable by."
+verified    = "iphone11_ios17 — AirDrop ID 5de9c0ec2f83; DiscoverableMode is not written on this device, so it reads as unrecorded"
 surface     = "device"
 shape       = "facts"
 category    = "Device"

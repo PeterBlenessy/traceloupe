@@ -10,9 +10,23 @@
 #
 #   MTTimers → MTTimers → [ { $MTTimer: { … } } ]
 #
-# and inside each timer the fire time is nested twice more:
+# and inside each timer the fire time is nested twice more.
 #
-#   MTTimerFireTime → $MTTimerDate → MTTimerTimeDate
+# THE FIRE TIME IS POLYMORPHIC, which the real device settled and iLEAPP's code
+# quietly assumes away. `MTTimerFireTime` holds ONE of two shapes, and
+# `MTTimerFireTimerClass` says which:
+#
+#   $MTTimerDate         → MTTimerTimeDate      a running timer, due at a moment
+#   $MTTimerTimeInterval → …                    a stored timer, no moment yet
+#
+# On the iPhone 11 / iOS 17.3 image the single timer is the stored placeholder
+# ("CURRENT_TIMER", 15 minutes, never started) and carries the INTERVAL shape,
+# so "Due" is null there and correctly so. iLEAPP reads `.get('$MTTimerDate')`
+# unconditionally and gets an empty string in the same case.
+#
+# "Due" is kept because the date shape is the forensically interesting one — a
+# timer counting down to a specific moment — and `Fire time` names the class so
+# an empty Due reads as "not scheduled" rather than as a broken column.
 #
 # Apple's `$`-prefixed keys are class markers, exactly like `$MTAlarm` next
 # door. They are stepped over rather than stripped, so a module that drops a
@@ -31,15 +45,16 @@
 # declares `kind = "duration"` so the app formats it the same way it formats
 # every other duration, rather than a second opinion in one table.
 #
-# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
-# proven to run against the shared clock fixture. iLEAPP's own sample data
-# records 1 row on every image it tracks, from iOS 12.4 to 18.7, so the shape is
-# stable; what is unconfirmed is our reading of it. Verify with:
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image. That run is
+# why this module lost a column: it declared `MTTimerLastModifiedDate`, which
+# iLEAPP also reads, and the real timer dict has EIGHT keys and that is not one
+# of them. The column could only ever have been empty. Reproduce with:
 #   cargo run -p traceloupe-core --example validate_against_real_backup
 
 id          = "timers"
 name        = "Timers"
 description = "Timers set in the Clock app — what each was called, how long it ran for, and when it was last changed."
+verified    = "iphone11_ios17 — 1 timer, the stored 'CURRENT_TIMER' placeholder: 15 min, fire-time class MTTimerTimeInterval, so 'Due' is correctly empty"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"
@@ -68,10 +83,13 @@ from = ["$MTTimer", "MTTimerFireTime", "$MTTimerDate", "MTTimerTimeDate"]
 kind = "timestamp"
 
 [[columns]]
-name = "Last changed"
-from = ["$MTTimer", "MTTimerLastModifiedDate"]
-kind = "timestamp"
+name = "Fire time"
+from = ["$MTTimer", "MTTimerFireTimerClass"]
 
 [[columns]]
 name = "Sound"
 from = ["$MTTimer", "MTTimerSound", "$MTSound", "MTSoundToneID"]
+
+[[columns]]
+name = "Identifier"
+from = ["$MTTimer", "MTTimerID"]

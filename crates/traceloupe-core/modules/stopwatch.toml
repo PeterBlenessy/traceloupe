@@ -25,13 +25,16 @@
 # for the same reason `bluetooth_paired.toml` passes `NameOrigin` through: an
 # enum invented into words is worse than a number a reader can look up.
 #
-# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
-# proven to run against the shared clock fixture. Verify with:
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: the key is
+# absent there, which is what taught this module it must be `optional`. It read
+# as a hard parse failure before. An empty table here means the stopwatch was
+# never used, and now says so. Reproduce with:
 #   cargo run -p traceloupe-core --example validate_against_real_backup
 
 id          = "stopwatch"
 name        = "Stopwatch"
 description = "The Clock app's stopwatch — its state and how far the current run has got."
+verified    = "iphone11_ios17 — 0 rows: the MTStopwatches key is absent entirely, which is what taught this module it must be optional"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"
@@ -39,6 +42,11 @@ path        = "Library/Preferences/com.apple.mobiletimerd.plist"
 
 [plist]
 rows = ["MTStopwatches", "MTStopwatches"]
+# The real device settled this: on the iPhone 11 / iOS 17.3 image the file has
+# MTAlarms and MTTimers and NO MTStopwatches key at all -- the stopwatch had
+# never been run. Strict would take the artifact down over the ordinary state of
+# a device. iLEAPP guards the same way (`if 'MTStopwatches' in pl`).
+optional = true
 
 [[columns]]
 name = "State"

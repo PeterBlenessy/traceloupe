@@ -34,6 +34,7 @@
 id          = "world_clock"
 name        = "World Clock"
 description = "Cities added to the Clock app's World Clock, with the time zone and coordinates of each."
+verified    = "iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

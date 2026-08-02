@@ -815,6 +815,15 @@ def build_clock_plist() -> bytes:
                     }
                 ],
             },
+            # TWO timers: the fire time is POLYMORPHIC and a real device
+            # settled which shape is ordinary. `$MTTimerDate` is a running
+            # timer due at a moment; `$MTTimerTimeInterval` is a stored one
+            # with no moment yet. The iPhone 11 / iOS 17.3 image has only the
+            # interval shape, so a fixture with only the date shape agreed with
+            # the module about something the device does not do.
+            #
+            # `MTTimerLastModifiedDate` used to be here and is gone: the real
+            # timer dict has eight keys and that is not one of them.
             "MTTimers": {
                 "MTTimers": [
                     {
@@ -822,17 +831,35 @@ def build_clock_plist() -> bytes:
                             "MTTimerTitle": "Pasta",
                             "MTTimerDuration": 600,
                             "MTTimerState": 1,
-                            "MTTimerLastModifiedDate": at(1_722_179_400),
                             "MTTimerFireTime": {
                                 "$MTTimerDate": {
                                     "MTTimerTimeDate": at(1_722_180_000),
                                 }
                             },
+                            "MTTimerFireTimerClass": "MTTimerDate",
                             "MTTimerSound": {
-                                "$MTSound": {"MTSoundToneID": "system:sunrise"}
+                                "$MTSound": {"MTSoundToneID": "system:Radial"}
                             },
+                            "MTTimerID": "1D8B30D8-DF6F-4644-B7E3-534F4E26CB86",
                         }
-                    }
+                    },
+                    {
+                        "$MTTimer": {
+                            "MTTimerTitle": "CURRENT_TIMER",
+                            "MTTimerDuration": 900,
+                            "MTTimerState": 1,
+                            "MTTimerFireTime": {
+                                "$MTTimerTimeInterval": {
+                                    "MTTimerTimeInterval": 900.0,
+                                }
+                            },
+                            "MTTimerFireTimerClass": "MTTimerTimeInterval",
+                            "MTTimerSound": {
+                                "$MTSound": {"MTSoundToneID": "system:Radial"}
+                            },
+                            "MTTimerID": "2E9C41E9-EF70-5755-C8F4-645F5F37DC97",
+                        }
+                    },
                 ],
             },
             "MTStopwatches": {
