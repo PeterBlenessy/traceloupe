@@ -1465,9 +1465,35 @@ pub fn run_module(
     // matching several SHOULD declare `path_column` and `validate` insists on it.
     // Without that, two accounts' records would be indistinguishable in one table —
     // which is worse than not reading the second, because it looks complete.
+    // A GLOBBED path may match stores that were never this module's.
+    //
+    // MEGA is the case that forced this: `megaclient_statecache14_*.db` matches
+    // the node cache AND its `_status_`/`_transfers_` siblings, whose schemas
+    // have nothing in common with it beyond a name. No SQL alternative can tell
+    // them apart -- the siblings hold only `statecache`, which the real store
+    // also has -- so a fallback query would prepare against the real store too
+    // and silently return nothing the day its schema changed.
+    //
+    // So: with a glob, a store no alternative can run against is SKIPPED and
+    // its reason kept. If NONE of the matched stores worked, the first reason is
+    // raised as the error -- a genuine schema change still fails loudly, because
+    // it breaks every store rather than one.
+    let globbed = spec.path.contains('*') || spec.domain.contains('*');
+    let mut skipped: Option<Error> = None;
+    let mut any_ran = false;
     let mut all: Vec<ArtifactRow> = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
-        let mut rows = run_one(spec, index, decryptor, work_dir, entry, i)?;
+        let mut rows = match run_one(spec, index, decryptor, work_dir, entry, i) {
+            Ok(rows) => {
+                any_ran = true;
+                rows
+            }
+            Err(e) if globbed => {
+                skipped.get_or_insert(e);
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if let Some(col) = &spec.app_column {
             // The bundle id, not the raw domain: it is what the Apps view joins
             // on and what a reader recognises.
@@ -1499,6 +1525,11 @@ pub fn run_module(
             }
         }
         all.extend(rows);
+    }
+    if !any_ran {
+        if let Some(e) = skipped {
+            return Err(e);
+        }
     }
     enforce_shape(spec, all).map(Some)
 }
@@ -2343,6 +2374,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "webkit_domains.toml",
         include_str!("../modules/webkit_domains.toml"),
+    ),
+    (
+        "mega_files.toml",
+        include_str!("../modules/mega_files.toml"),
     ),
     (
         "waze_places.toml",
@@ -3766,6 +3801,35 @@ from = "nope"
         .unwrap();
     }
 
+    /// MEGA's decrypted state cache.
+    ///
+    /// A three-level tree under a ROOT NODE whose name is the literal
+    /// `CRYPTO_ERROR` — which is what the real store holds, because MEGA's
+    /// roots have no encrypted name attribute. The module names them from
+    /// `type` instead, and a fixture without that literal would let it get away
+    /// with passing the raw value through.
+    fn seed_mega(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE nodes (nodehandle INTEGER PRIMARY KEY, parenthandle INTEGER,
+                name TEXT, type INTEGER, size INTEGER, share INTEGER, fav INTEGER,
+                ctime INTEGER, mtime INTEGER);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO nodes VALUES
+                -- the Cloud Drive root: type 2, and no readable name.
+                (1, 0, 'CRYPTO_ERROR', 2, NULL, 0, 0, 1600000000, 1600000000),
+                (2, 1, 'My chat files', 1, NULL, 0, 0, 1650000000, 1650000000),
+                (3, 2, 'IMG_4552.jpg', 0, 170856, 0, 0, 1714243988, 1682368329),
+                -- shared and favourited, so both flags are exercised.
+                (4, 2, 'notes.pdf', 0, 2048, 1, 1, 1714243000, 1714243000),
+                -- the Rubbish Bin root and a file in it.
+                (5, 0, 'CRYPTO_ERROR', 4, NULL, 0, 0, 1600000000, 1600000000),
+                (6, 5, 'deleted.txt', 0, 12, 0, 0, 1700000000, 1700000000);",
+        )
+        .unwrap();
+    }
+
     /// WebKit's ITP store, `observations.db`.
     ///
     /// `mostRecentUserInteractionTime` is -1, not NULL, when a domain was never
@@ -4854,6 +4918,11 @@ from = "nope"
             "Library/Application Support/CloudDocs/session/db/server.db",
         ),
         (
+            "mega_files",
+            "AppDomainGroup-group.mega.ios",
+            "GroupSupport/megaclient_statecache14_*.db",
+        ),
+        (
             "webkit_domains",
             "AppDomain-*",
             "Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db",
@@ -5054,6 +5123,7 @@ from = "nope"
             // One store, three modules: places, recents and favourites.
             "waze_places" | "waze_recents" | "waze_favorites" => seed_waze,
             "webkit_domains" => seed_observations,
+            "mega_files" => seed_mega,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
@@ -5348,6 +5418,81 @@ from = "nope"
         );
         let err = load_modules(tmp3.path()).unwrap_err().to_string();
         assert!(err.contains("only one app"), "{err}");
+    }
+
+    #[test]
+    fn a_glob_skips_a_foreign_store_but_not_a_broken_one() {
+        // MEGA's `megaclient_statecache14_*.db` matches the node cache AND its
+        // `_status_`/`_transfers_` siblings, which share no schema with it. One
+        // unreadable match must not take the artifact down -- but EVERY match
+        // being unreadable is a schema change, and must.
+        let tmp = tempfile::tempdir().unwrap();
+        let two = |rel: &str, id: &str, ddl: &str| {
+            let blob_dir = tmp.path().join(&id[..2]);
+            std::fs::create_dir_all(&blob_dir).unwrap();
+            let c = Connection::open(blob_dir.join(id)).unwrap();
+            c.execute_batch(ddl).unwrap();
+            drop(c);
+            let m = Connection::open(tmp.path().join("Manifest.db")).unwrap();
+            m.execute_batch(
+                "CREATE TABLE IF NOT EXISTS Files (fileID TEXT PRIMARY KEY, domain TEXT, \
+                 relativePath TEXT, flags INTEGER, file BLOB);",
+            )
+            .unwrap();
+            m.execute(
+                "INSERT INTO Files VALUES (?1, 'HomeDomain', ?2, 1, NULL)",
+                rusqlite::params![id, rel],
+            )
+            .unwrap();
+        };
+        two(
+            "Group/store_real.db",
+            "cd00000000000000000000000000000000000001",
+            "CREATE TABLE nodes (name TEXT); INSERT INTO nodes VALUES ('a');",
+        );
+        two(
+            "Group/store_other.db",
+            "cd00000000000000000000000000000000000002",
+            "CREATE TABLE unrelated (x TEXT);",
+        );
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let work = tempfile::tempdir().unwrap();
+
+        let module = |sql: &str| -> ModuleSpec {
+            toml::from_str(&format!(
+                "id = \"g\"\nname = \"G\"\ndescription = \"Two stores, one shape.\"\n\
+                 surface = \"device\"\ncategory = \"C\"\ndomain = \"HomeDomain\"\n\
+                 path = \"Group/store_*.db\"\npath_column = \"Which\"\n\
+                 sql = \"{sql}\"\n\
+                 [[columns]]\nname = \"Which\"\n[[columns]]\nname = \"N\"\nfrom = \"n\"\n"
+            ))
+            .unwrap()
+        };
+
+        let rows = run_module(
+            &module("SELECT name AS n FROM nodes"),
+            &index,
+            None,
+            work.path(),
+        )
+        .unwrap()
+        .expect("the readable store still reports");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the foreign store contributed nothing, quietly"
+        );
+
+        // Break the one that worked: with nothing left that runs, the error must
+        // surface rather than an empty artifact.
+        let err = run_module(
+            &module("SELECT gone AS n FROM absent_table"),
+            &index,
+            None,
+            work.path(),
+        )
+        .expect_err("every store failing is a schema change, not a skip");
+        assert!(err.to_string().contains("sql"), "{err}");
     }
 
     fn mapped(pairs: &[(&str, &str)]) -> ColumnSpec {
