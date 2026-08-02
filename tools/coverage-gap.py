@@ -122,28 +122,36 @@ def ours() -> dict[str, str]:
     return covered
 
 
-# iLEAPP category → what of ours reads part of it, when the names differ. Each is
-# justified by the artifact that makes it true; without that a line here is just
-# an assertion that we cover something.
+# iLEAPP category → what of OURS reads part of it, for the cases where the names
+# differ and no automatic match is possible.
+#
+# THIS TABLE USED TO CARRY A SECOND HALF: a hand-written note saying which
+# artifacts in the category we did and did not read ("Alarms — NOT Stopwatch,
+# Timers or WorldClock"). It went stale the moment modules were added — three
+# Clock modules shipped and this file still reported 1 of 4, in a tool whose own
+# docstring promises coverage is read from the source and never from a list kept
+# beside it.
+#
+# So the note is computed now. What stays here is only the part a machine cannot
+# derive: WHICH OF OURS covers the category when the product names differ.
 ALIASES = {
-    # iLEAPP category: (our thing, the artifact that justifies the claim)
-    "facebookmessenger": ("app chat parser (facebook_messenger)", "Facebook Messenger - Chats"),
-    "clock": ("module (alarms, sleep_schedule)", "Alarms — NOT Stopwatch, Timers or WorldClock"),
-    "wificonnections": ("module (wifi_networks, wifi_private_mac)", "WiFi Known Networks Info / Times / Scanned (Private) — NOT BSS List"),
-    "location": ("module (location_clients)", "LSC - clients.plist — NOT locationd.plist, routined, Maps Sync, Weather"),
-    "identifiers": ("module (sim_cards) + the device header", "Subscriber Info, Serial Number — NOT AirDrop ID, IMEI, Find My, Timezone, Backup Settings"),
-    "bluetooth": ("module (bluetooth_paired, bluetooth_devices, bluetooth_nearby)", "Bluetooth Paired LE / Paired / Other LE"),
-    "appusage": ("module (data_usage)", "network usage per app — NOT foreground/screen time"),
+    "facebookmessenger": "app chat parser (facebook_messenger)",
+    "clock": "module (alarms, sleep_schedule, timers, stopwatch, world_clock)",
+    "wificonnections": "module (wifi_networks, wifi_private_mac)",
+    "location": "module (location_clients)",
+    "identifiers": "module (sim_cards) + the device header",
+    "bluetooth": "module (bluetooth_paired, bluetooth_devices, bluetooth_nearby)",
+    "appusage": "module (data_usage)",
     # Our parser's service label is "imo"; iLEAPP calls the product "IMO HD Chat".
-    "imohdchat": ("app chat parser (imo)", "IMO HD Chat - Messages — NOT Contacts"),
-    "networkusage": ("module (data_usage)", "Data Usage"),
-    "apppermissions": ("module (tcc)", "Application Permissions"),
+    "imohdchat": "app chat parser (imo)",
+    "networkusage": "module (data_usage)",
+    "apppermissions": "module (tcc)",
     # sim_cards reads CellularUsage.db's subscriber_info, which is where the SIM's
     # ICCID and number live. iLEAPP splits the same store across two categories.
-    "siminfo": ("module (sim_cards)", "SIM - UUID — NOT the Unique Label Store"),
-    "cellular": ("module (sim_cards, data_usage)", "Cellular Wireless — partially"),
-    "mobilebackupplist": ("module (backup_sizing)", "Mobile Backup Plist — PreflightSizing"),
-    "wifiknownnetworks": ("module (wifi_networks)", "known networks and their join times"),
+    "siminfo": "module (sim_cards)",
+    "cellular": "module (sim_cards, data_usage)",
+    "mobilebackupplist": "module (backup_sizing)",
+    "wifiknownnetworks": "module (wifi_networks)",
 }
 
 # iLEAPP categories that are not products we could "support" — they name a store
@@ -240,6 +248,37 @@ def split_by_backup(artifacts, untouched, paths_file: Path):
     return same, unread, absent, examples, len(rows)
 
 
+def reads(items, covered) -> str | None:
+    """Which artifacts in a category we read, and which we do not — computed.
+
+    Matched by artifact NAME against everything `ours()` found, the same way a
+    whole category is matched. That makes the sentence move on its own when a
+    module lands, which is the entire point: the hand-written version this
+    replaces reported Clock as 1 of 4 after three of the four had shipped.
+
+    Naming what is NOT read is the useful half — it is the worklist.
+
+    RETURNS None WHEN NAME MATCHING CANNOT SPEAK. Per-artifact names only line
+    up with ours where iLEAPP names the thing rather than the product: "Timers"
+    matches, "Kik Messages" never will, because our parser is called "Kik". In
+    those categories no artifact matches, and printing "NOT <every artifact>"
+    would report a covered chat app as a total gap. Saying nothing is the honest
+    answer; the `how` beside it already names what reads the category.
+    """
+    yes = sorted(a["name"] for a in items if norm(a.get("name", "")) in covered)
+    no = sorted(a["name"] for a in items if norm(a.get("name", "")) not in covered)
+    if not yes:
+        return None
+    if not no:
+        return f"all {len(yes)}"
+    return f"{', '.join(yes)} — NOT {', '.join(no)}"
+
+
+def with_detail(how: str, items, covered) -> str:
+    detail = reads(items, covered)
+    return f"{how} — {detail}" if detail else how
+
+
 def is_photos_facet(cat: str) -> bool:
     return cat.lower().startswith(("photos.sqlite", "photos-"))
 
@@ -272,10 +311,9 @@ def main() -> int:
         elif n in NOT_A_GAP:
             excused.append((cat, len(items), NOT_A_GAP[n]))
         elif n in ALIASES:
-            how, why = ALIASES[n]
-            done.append((cat, len(items), f"{how} — {why}"))
+            done.append((cat, len(items), with_detail(ALIASES[n], items, covered)))
         elif n in covered:
-            done.append((cat, len(items), covered[n]))
+            done.append((cat, len(items), with_detail(covered[n], items, covered)))
         else:
             gaps.append((cat, len(items)))
 
