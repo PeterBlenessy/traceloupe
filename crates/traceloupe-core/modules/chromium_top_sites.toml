@@ -1,0 +1,67 @@
+# The sites a Chromium browser puts on its new-tab page.
+#
+# `Default/Top Sites` under `Library/Application Support` — same `**` glob as
+# `chromium_logins.toml`, covering Chrome, Edge, Brave and any other Chromium
+# browser by the same layout.
+#
+# WHY THIS EXISTS WHEN THE HISTORY DOES NOT
+#
+# None of these browsers puts `History` in a backup — the file simply is not in
+# the Manifest on any device in the corpus. `Top Sites` is: it is the browser's
+# own ranked shortlist of where the person goes most, rebuilt from history that
+# is otherwise unreachable. So it is a small, high-signal residue of a store we
+# cannot read — the same shape of evidence as `webkit_domains`, but ranked and
+# titled rather than merely observed.
+#
+# `url_rank` is the position on the new-tab page, 0 first. It is a RANKING, not
+# a count: the store keeps no visit numbers, and presenting the rank as though
+# it were frequency would overclaim.
+#
+# The title is the page title as the browser last saw it, which is often more
+# informative than the URL and occasionally the only readable thing about it.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 1 row in
+# Chrome — nhl.com, rank 0 — which is the same site whose service worker
+# `service_workers.toml` found in Safari, from a different store, on a different
+# browser. Two independent artifacts agreeing about one visit is the kind of
+# corroboration a single row cannot give on its own. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "chromium_top_sites"
+name        = "Most-visited sites (Chromium browsers)"
+description = "The ranked shortlist a Chromium browser shows on its new-tab page — a residue of browsing history that a backup does not otherwise carry."
+verified    = "iphone11_ios17 — 1 row, nhl.com at rank 0 in Chrome, with the vendor profile captured as 'Google/Chrome' by the ** glob; the same site service_workers found in Safari from a different store"
+surface     = "apps"
+join_column = "App"
+app_column  = "App"
+path_column = "Profile"
+category    = "Network"
+domain      = "AppDomain-*"
+path        = "Library/Application Support/**/Default/Top Sites"
+
+sql = [
+  """
+  SELECT url, title, url_rank AS rank
+  FROM top_sites
+  ORDER BY url_rank
+  """,
+]
+
+[[columns]]
+name = "App"
+
+[[columns]]
+name = "Profile"
+
+[[columns]]
+name = "Site"
+from = "url"
+
+[[columns]]
+name = "Title"
+from = "title"
+
+[[columns]]
+name = "Rank"
+from = "rank"
+kind = "integer"

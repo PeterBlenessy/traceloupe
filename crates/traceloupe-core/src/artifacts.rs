@@ -2380,6 +2380,14 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/service_workers.toml"),
     ),
     (
+        "chromium_logins.toml",
+        include_str!("../modules/chromium_logins.toml"),
+    ),
+    (
+        "chromium_top_sites.toml",
+        include_str!("../modules/chromium_top_sites.toml"),
+    ),
+    (
         "mega_files.toml",
         include_str!("../modules/mega_files.toml"),
     ),
@@ -3805,6 +3813,45 @@ from = "nope"
         .unwrap();
     }
 
+    /// Chromium's `Login Data`. An EXTENSIONLESS SQLite file, which is why an
+    /// audit that enumerated `%.db`/`%.sqlite` could not see it.
+    ///
+    /// Includes a `blacklisted_by_user` row -- a site the person told the
+    /// browser never to save -- because that is a different fact from an
+    /// account and the module labels it rather than dropping it.
+    fn seed_chromium_logins(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE logins (origin_url VARCHAR NOT NULL, signon_realm VARCHAR NOT NULL,
+                username_value VARCHAR, password_value BLOB, date_created INTEGER NOT NULL,
+                date_last_used INTEGER NOT NULL DEFAULT 0, times_used INTEGER,
+                blacklisted_by_user INTEGER NOT NULL, keychain_identifier BLOB);",
+        )
+        .unwrap();
+        // WebKit/Chrome epoch: microseconds since 1601.
+        c.execute_batch(
+            "INSERT INTO logins VALUES
+                ('https://example.com/login', 'https://example.com/', 'someone@example.com',
+                 x'DEADBEEF', 13350000000000000, 13360000000000000, 4, 0, x'01'),
+                ('https://never.example/', 'https://never.example/', NULL,
+                 NULL, 13350000000000000, 0, 0, 1, NULL);",
+        )
+        .unwrap();
+    }
+
+    /// Chromium's `Top Sites`, also extensionless.
+    fn seed_chromium_top_sites(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE top_sites (url TEXT NOT NULL PRIMARY KEY,
+                url_rank INTEGER NOT NULL, title TEXT NOT NULL);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO top_sites VALUES
+                ('https://www.nhl.com/', 0, 'Official Site of the National Hockey League');",
+        )
+        .unwrap();
+    }
+
     /// WebKit's service-worker registry.
     fn seed_service_workers(c: &Connection) {
         c.execute_batch(
@@ -4945,6 +4992,16 @@ from = "nope"
             "GroupSupport/megaclient_statecache14_*.db",
         ),
         (
+            "chromium_logins",
+            "AppDomain-*",
+            "Library/Application Support/**/Default/Login Data",
+        ),
+        (
+            "chromium_top_sites",
+            "AppDomain-*",
+            "Library/Application Support/**/Default/Top Sites",
+        ),
+        (
             "service_workers",
             "AppDomain-*",
             "Library/WebKit/WebsiteData/Default/*/*/ServiceWorkers/ServiceWorkerRegistrations-*.sqlite3",
@@ -5151,6 +5208,8 @@ from = "nope"
             "waze_places" | "waze_recents" | "waze_favorites" => seed_waze,
             "webkit_domains" => seed_observations,
             "service_workers" => seed_service_workers,
+            "chromium_logins" => seed_chromium_logins,
+            "chromium_top_sites" => seed_chromium_top_sites,
             "mega_files" => seed_mega,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
