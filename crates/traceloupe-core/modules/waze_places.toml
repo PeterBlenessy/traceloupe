@@ -1,0 +1,113 @@
+# Places Waze knows about — everywhere searched for, routed to, or referenced.
+#
+# `Documents/user.db` in `AppDomain-com.waze.iphone`. An app container's
+# `Documents` is backed up, so this is in an ordinary iTunes/Finder backup.
+#
+# A CORRECTION TO AN EARLIER CLAIM. PR #307 recorded Waze as out of reach for a
+# declarative module, on the grounds that it stores its data as protobuf inside
+# `com.waze.iphone.plist`. That was wrong, and wrong in an instructive way:
+# iLEAPP's `waze.py` DECLARES the plist as its path but only uses it to find the
+# app's container id, then reads `Documents/user.db` — a plain SQLite database.
+# The declared `paths` of an iLEAPP artifact is not necessarily where its data
+# comes from, and reading the code rather than the manifest is the difference
+# between "impossible" and "seven rows of somebody's driving".
+#
+# WHY THIS IS THE MOST LOCATION-DENSE ARTIFACT SHIPPED SO FAR
+#
+# Every row is a place with a street address AND coordinates, created at a known
+# time. Unlike a location trace, which says where a device was, this says where
+# a person INTENDED to go — they typed it, or picked it from a result. On the
+# validation device that is a Starbucks in Fuquay-Varina, an address on Leesburg
+# Pike in Vienna, and five more.
+#
+# COORDINATES ARE MICRODEGREES. Waze stores `35589221` for 35.589221°N — an
+# integer, scaled by a million. Divided here, because a column of eight-digit
+# integers labelled "Latitude" is not a latitude, and every other coordinate in
+# this app is a real number.
+#
+# `created_time` IS 0, NOT NULL, on rows Waze never dated — the third row on the
+# validation device. Passed through `NULLIF` so an undated place reads as
+# undated rather than as 1 January 1970, which is the same trap
+# `check-artifact-*` guards elsewhere.
+#
+# Hosts on Apps via a constant `App` column, the pattern `life360_locations.toml`
+# established: the rows have no bundle id of their own, and Waze's own entry in
+# the Apps view is where a reader looks for what Waze knew.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 7 places,
+# matching the 7 rows iLEAPP records for this same image. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "waze_places"
+name        = "Waze places"
+description = "Every place Waze searched for, routed to or referenced — with its address, coordinates and when it was first seen."
+verified    = "iphone11_ios17 — 7 places with street addresses and decimal coordinates (Burke VA, Fuquay-Varina NC), matching the 7 rows iLEAPP records for this image"
+surface     = "apps"
+join_column = "App"
+category    = "Locations"
+domain      = "AppDomain-com.waze.iphone"
+path        = "Documents/user.db"
+
+sql = [
+  """
+  SELECT name,
+         TRIM(COALESCE(house, '') || ' ' || COALESCE(street, '')) AS street,
+         city, state, country,
+         latitude  / 1000000.0 AS lat,
+         longitude / 1000000.0 AS lon,
+         NULLIF(created_time, 0) AS created,
+         venue_id,
+         is_residential
+  FROM PLACES
+  ORDER BY created_time DESC, id DESC
+  """,
+]
+
+[[columns]]
+name = "App"
+value = "com.waze.iphone"
+
+[[columns]]
+name = "Place"
+from = "name"
+
+[[columns]]
+name = "Street"
+from = "street"
+
+[[columns]]
+name = "City"
+from = "city"
+
+[[columns]]
+name = "State"
+from = "state"
+
+[[columns]]
+name = "Country"
+from = "country"
+
+[[columns]]
+name = "Latitude"
+from = "lat"
+kind = "real"
+
+[[columns]]
+name = "Longitude"
+from = "lon"
+kind = "real"
+
+[[columns]]
+name = "First seen"
+from = "created"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Residential"
+from = "is_residential"
+kind = "bool"
+
+[[columns]]
+name = "Venue id"
+from = "venue_id"

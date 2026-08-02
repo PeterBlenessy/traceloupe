@@ -183,7 +183,7 @@ table in [`app-support.md`](app-support.md) order the work; they do not limit
 it.
 
 The backup-reachable third-party artifacts iLEAPP has that we do not are led by
-**Booking.com (11) · Home Depot (10) · Uber (10) · Waze (9) · Slack (8) · Oura
+**Booking.com (11) · Home Depot (10) · Uber (10) · ~~Waze (9)~~ · Slack (8) · Oura
 Ring (7) · Withings (7) · Dahua/DMSS (7) · ChatGPT (6) · BeReal (5) · Box (5)**.
 Note how few are chat apps — which matches the finding already recorded in
 `app-support.md`, and is the reason the declarative module matters here as much
@@ -227,6 +227,27 @@ prunes. Ask the script.
 With no arguments, `validate_against_real_backup` runs every module against
 **every** backup in the corpus. A validator that must be pointed at one device at a
 time becomes a validator that is only ever run against the newest one.
+
+---
+
+## A trap worth naming: iLEAPP's declared `paths` is not where its data is
+
+`waze.py` declares `com.waze.iphone.plist` as its path for eight artifacts. That
+plist is used only to find the app's **container id**; the search history,
+recent destinations and favourites are read from `Documents/user.db`, a plain
+SQLite database. Dumping the declared path and finding nothing but Firebase
+configuration led to Waze being recorded as "protobuf, out of reach for a
+declarative module" — which was wrong, and cost a round trip.
+
+**Read the artifact's code, not its manifest.** The `paths` entry is what iLEAPP
+globs for to decide the artifact applies; the data can come from anywhere the
+seeker can reach.
+
+A second trap in the same family: **iLEAPP's `sample_data` row counts are
+measured against full-filesystem images, not backups.** They are a good signal
+that data EXISTS on a device, and no signal at all that a backup carries it.
+Both were nearly used here to justify fetching a 22 GB image for data that was
+already on disk.
 
 ---
 
@@ -345,11 +366,14 @@ asks. Check free space before fetching, not 20 GB in.
 | Permissions | Security | ✅ | iphone11_ios17 — 289 rows, which is exactly the count iLEAPP records for the same image — two independent parsers agreeing. The distribution also justified passing unknowns through rather than guessing: alongside… |
 | Timers | Device | ✅ | iphone11_ios17 — 1 timer, the stored 'CURRENT_TIMER' placeholder: 15 min, fire-time class MTTimerTimeInterval, so 'Due' is correctly empty |
 | Apple Watch apps | Device | ✅ | iphone11_ios17 — 47 apps on one paired watch |
+| Waze favourites | Locations | ✅ | iphone11_ios17 — 1 favourite, slot 2, named 'Work' at 605 Bridge St, Fuquay-Varina NC |
+| Waze places | Locations | ✅ | iphone11_ios17 — 7 places with street addresses and decimal coordinates (Burke VA, Fuquay-Varina NC), matching the 7 rows iLEAPP records for this image |
+| Waze destinations | Locations | ✅ | iphone11_ios17 — 6 recent destinations, matching iLEAPP's 6 for this image; last-used and first-added differ on some rows, so both are read |
 | Wi-Fi networks | Network | ✅ | iphone11_ios17 — 17 known networks, with join dates from July 2023 to January 2024 |
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**37 implemented · 37 verified · 0 awaiting a real backup.**
+**40 implemented · 40 verified · 0 awaiting a real backup.**
 
 ---
 

@@ -4030,6 +4030,91 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "waze_places",
+            name: "Waze places",
+            category: "Locations",
+            description:
+              "Every place Waze searched for, routed to or referenced — with its address, coordinates and when it was first seen.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Place",
+              "Street",
+              "City",
+              "State",
+              "Country",
+              "Latitude",
+              "Longitude",
+              "First seen",
+              "Residential",
+              "Venue id",
+            ],
+            timestampColumns: ["First seen"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "waze_recents",
+            name: "Waze destinations",
+            category: "Locations",
+            description:
+              "Recent destinations chosen in Waze — where the person actually navigated to, and when they last did.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Destination",
+              "Street",
+              "City",
+              "State",
+              "Last used",
+              "First added",
+              "Latitude",
+              "Longitude",
+            ],
+            timestampColumns: ["Last used", "First added"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "waze_favorites",
+            name: "Waze favourites",
+            category: "Locations",
+            description:
+              "Places saved as favourites in Waze, including its Home and Work entries — the shortest and most identifying list the app keeps.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Favourite",
+              "Street",
+              "City",
+              "State",
+              "Slot",
+              "Saved",
+              "Changed",
+              "Last used",
+              "Latitude",
+              "Longitude",
+            ],
+            timestampColumns: ["Saved", "Changed", "Last used"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "icloud_devices",
             name: "iCloud devices",
             category: "Files",
@@ -4468,7 +4553,53 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "icloud_devices"
+    mockActive && artifactId === "waze_places"
+      ? [
+          {
+            App: "com.waze.iphone",
+            Place: "Starbucks",
+            Street: "110 N Main St",
+            City: "Fuquay-Varina",
+            State: "North Carolina",
+            Country: "US",
+            Latitude: 35.591915,
+            Longitude: -78.775217,
+            "First seen": 1705430233,
+            Residential: false,
+            "Venue id": "VENUE1",
+          },
+        ]
+      : mockActive && artifactId === "waze_recents"
+        ? [
+            {
+              App: "com.waze.iphone",
+              Destination: "Starbucks",
+              Street: "110 N Main St",
+              City: "Fuquay-Varina",
+              State: "North Carolina",
+              "Last used": 1721818400,
+              "First added": 1705430233,
+              Latitude: 35.591915,
+              Longitude: -78.775217,
+            },
+          ]
+      : mockActive && artifactId === "waze_favorites"
+        ? [
+            {
+              App: "com.waze.iphone",
+              Favourite: "Home",
+              Street: "Bridge St",
+              City: "Fuquay-Varina",
+              State: "NC",
+              Slot: 1,
+              Saved: 1705426741,
+              Changed: 1705426800,
+              "Last used": 1721818316,
+              Latitude: 35.592426,
+              Longitude: -78.808746,
+            },
+          ]
+      : mockActive && artifactId === "icloud_devices"
       ? [
           { Device: "iPhone", "Sync id": 1 },
           { Device: "A Mac", "Sync id": 2 },

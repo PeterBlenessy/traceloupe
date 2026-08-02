@@ -1,0 +1,93 @@
+# Where the person actually went in Waze, and when they last went there.
+#
+# `RECENTS` joined to `PLACES` in `Documents/user.db`
+# (`AppDomain-com.waze.iphone`). Same store as `waze_places.toml`, a different
+# question: that one is everywhere Waze has heard of, this is the short list the
+# app offers back as "recent" — destinations chosen, not merely seen.
+#
+# WHY `access_time` IS THE COLUMN THAT MATTERS
+#
+# `created_time` is when the destination first entered the list. `access_time`
+# is when it was last USED. A place created eighteen months ago and accessed
+# yesterday is a routine; one created and accessed the same minute is a one-off.
+# Both are kept because the pair is the evidence, and either alone reads as
+# something it is not.
+#
+# The join is `RECENTS.place_id = PLACES.id` — many recents to one place, on a
+# primary key, so it cannot multiply rows. LEFT, not INNER: a recent whose place
+# row has been pruned still shows its own name and time rather than vanishing,
+# which is the difference between "no longer detailed" and "never happened".
+#
+# Coordinates are microdegrees, divided here — see `waze_places.toml`.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 6 recent
+# destinations, matching the 6 rows iLEAPP records for this same image.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "waze_recents"
+name        = "Waze destinations"
+description = "Recent destinations chosen in Waze — where the person actually navigated to, and when they last did."
+verified    = "iphone11_ios17 — 6 recent destinations, matching iLEAPP's 6 for this image; last-used and first-added differ on some rows, so both are read"
+surface     = "apps"
+join_column = "App"
+category    = "Locations"
+domain      = "AppDomain-com.waze.iphone"
+path        = "Documents/user.db"
+
+sql = [
+  """
+  SELECT COALESCE(NULLIF(r.name, ''), p.name)          AS place,
+         TRIM(COALESCE(p.house, '') || ' ' || COALESCE(p.street, '')) AS street,
+         p.city, p.state,
+         p.latitude  / 1000000.0 AS lat,
+         p.longitude / 1000000.0 AS lon,
+         NULLIF(r.access_time, 0)  AS last_used,
+         NULLIF(r.created_time, 0) AS first_added
+  FROM RECENTS r
+  LEFT JOIN PLACES p ON p.id = r.place_id
+  ORDER BY r.access_time DESC, r.id DESC
+  """,
+]
+
+[[columns]]
+name = "App"
+value = "com.waze.iphone"
+
+[[columns]]
+name = "Destination"
+from = "place"
+
+[[columns]]
+name = "Street"
+from = "street"
+
+[[columns]]
+name = "City"
+from = "city"
+
+[[columns]]
+name = "State"
+from = "state"
+
+[[columns]]
+name = "Last used"
+from = "last_used"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "First added"
+from = "first_added"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Latitude"
+from = "lat"
+kind = "real"
+
+[[columns]]
+name = "Longitude"
+from = "lon"
+kind = "real"

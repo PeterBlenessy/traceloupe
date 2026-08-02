@@ -1,0 +1,102 @@
+# Places saved in Waze as favourites — Home and Work among them.
+#
+# `FAVORITES` joined to `PLACES` in `Documents/user.db`
+# (`AppDomain-com.waze.iphone`).
+#
+# WHY A FAVOURITE IS DIFFERENT FROM A DESTINATION
+#
+# A recent destination is somewhere a person went. A favourite is somewhere they
+# declared as theirs — and Waze's own Home and Work entries live here. That
+# makes this the shortest list in the app and the most identifying: two rows
+# that between them can place someone's residence and employer.
+#
+# `type` is Waze's slot for that: the app treats particular values as Home and
+# Work. The codes are not documented anywhere this module can cite, so it is
+# passed through as an integer rather than mapped — the same call `timers.toml`
+# makes about `MTTimerState`. The `name` column usually says it in words anyway.
+#
+# Coordinates are microdegrees, divided here — see `waze_places.toml`.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 1 saved
+# favourite. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "waze_favorites"
+name        = "Waze favourites"
+description = "Places saved as favourites in Waze, including its Home and Work entries — the shortest and most identifying list the app keeps."
+verified    = "iphone11_ios17 — 1 favourite, slot 2, named 'Work' at 605 Bridge St, Fuquay-Varina NC"
+surface     = "apps"
+join_column = "App"
+category    = "Locations"
+domain      = "AppDomain-com.waze.iphone"
+path        = "Documents/user.db"
+
+sql = [
+  """
+  SELECT COALESCE(NULLIF(f.name, ''), p.name)          AS place,
+         TRIM(COALESCE(p.house, '') || ' ' || COALESCE(p.street, '')) AS street,
+         p.city, p.state,
+         p.latitude  / 1000000.0 AS lat,
+         p.longitude / 1000000.0 AS lon,
+         f.type                     AS slot,
+         NULLIF(f.created_time, 0)  AS created,
+         NULLIF(f.modified_time, 0) AS modified,
+         NULLIF(f.access_time, 0)   AS last_used
+  FROM FAVORITES f
+  LEFT JOIN PLACES p ON p.id = f.place_id
+  ORDER BY f.rank, f.id
+  """,
+]
+
+[[columns]]
+name = "App"
+value = "com.waze.iphone"
+
+[[columns]]
+name = "Favourite"
+from = "place"
+
+[[columns]]
+name = "Street"
+from = "street"
+
+[[columns]]
+name = "City"
+from = "city"
+
+[[columns]]
+name = "State"
+from = "state"
+
+[[columns]]
+name = "Slot"
+from = "slot"
+kind = "integer"
+
+[[columns]]
+name = "Saved"
+from = "created"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Changed"
+from = "modified"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Last used"
+from = "last_used"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Latitude"
+from = "lat"
+kind = "real"
+
+[[columns]]
+name = "Longitude"
+from = "lon"
+kind = "real"

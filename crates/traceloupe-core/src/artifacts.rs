@@ -2221,6 +2221,18 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/icloud_devices.toml"),
     ),
     (
+        "waze_places.toml",
+        include_str!("../modules/waze_places.toml"),
+    ),
+    (
+        "waze_recents.toml",
+        include_str!("../modules/waze_recents.toml"),
+    ),
+    (
+        "waze_favorites.toml",
+        include_str!("../modules/waze_favorites.toml"),
+    ),
+    (
         "os_build_history.toml",
         include_str!("../modules/os_build_history.toml"),
     ),
@@ -3629,6 +3641,47 @@ from = "nope"
         .unwrap();
     }
 
+    /// Waze's `Documents/user.db`.
+    ///
+    /// COORDINATES ARE MICRODEGREES here, as the app writes them — `35589221`
+    /// for 35.589221. A fixture holding real degrees would let the module drop
+    /// the division and still look right.
+    ///
+    /// One place carries `created_time = 0`, which Waze writes for a place it
+    /// never dated. The module NULLIFs it; without a zero in the fixture that
+    /// could regress into 1 January 1970.
+    fn seed_waze(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE PLACES (id INTEGER PRIMARY KEY, name TEXT, street TEXT,
+                city TEXT, state TEXT, country TEXT, house TEXT,
+                longitude INTEGER, latitude INTEGER, venue_id TEXT,
+                created_time INTEGER, routing_context TEXT,
+                is_residential INTEGER DEFAULT NULL);
+             CREATE TABLE RECENTS (id INTEGER PRIMARY KEY, place_id INTEGER,
+                name TEXT, created_time INTEGER, access_time INTEGER,
+                type INTEGER DEFAULT 0, string_context TEXT, image_id TEXT,
+                waypoint_access_time INTEGER);
+             CREATE TABLE FAVORITES (id INTEGER PRIMARY KEY, place_id INTEGER,
+                name TEXT, created_time INTEGER, modified_time INTEGER,
+                rank INTEGER, type INTEGER DEFAULT 0, server_id INTEGER,
+                access_time INTEGER, waypoint_access_time INTEGER);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO PLACES VALUES
+                (1, 'Starbucks', 'N Main St', 'Fuquay-Varina', 'North Carolina',
+                 'US', '110', -78775217, 35591915, 'VENUE1', 1705430233, NULL, 0),
+                (2, NULL, 'Bridge St', 'Fuquay-Varina', 'NC', 'US', NULL,
+                 -78808746, 35592426, NULL, 0, NULL, 1);
+             INSERT INTO RECENTS VALUES
+                (1, 1, 'Starbucks', 1705430233, 1721818400, 0, NULL, NULL, 0),
+                (2, 2, NULL, 1705426741, 1705426741, 0, NULL, NULL, 0);
+             INSERT INTO FAVORITES VALUES
+                (1, 2, 'Home', 1705426741, 1705426800, 0, 1, -1, 1721818316, 0);",
+        )
+        .unwrap();
+    }
+
     fn seed_data_usage(c: &Connection) {
         c.execute_batch(
             "CREATE TABLE ZLIVEUSAGE (
@@ -4654,6 +4707,21 @@ from = "nope"
             "Library/Application Support/CloudDocs/session/db/server.db",
         ),
         (
+            "waze_places",
+            "AppDomain-com.waze.iphone",
+            "Documents/user.db",
+        ),
+        (
+            "waze_recents",
+            "AppDomain-com.waze.iphone",
+            "Documents/user.db",
+        ),
+        (
+            "waze_favorites",
+            "AppDomain-com.waze.iphone",
+            "Documents/user.db",
+        ),
+        (
             "world_clock",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
@@ -4831,6 +4899,8 @@ from = "nope"
             // One store, three modules: files, the boot log and the containers.
             "icloud_drive" | "os_build_history" | "icloud_app_libraries" => seed_icloud_drive,
             "icloud_devices" => seed_icloud_server,
+            // One store, three modules: places, recents and favourites.
+            "waze_places" | "waze_recents" | "waze_favorites" => seed_waze,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
