@@ -53,6 +53,7 @@
 id          = "bluetooth_paired"
 name        = "Bluetooth pairings"
 description = "Low-energy Bluetooth accessories this iPhone is paired with — watches, trackers, headphones and tags — with the address each advertises."
+verified    = "iphone11_ios17 — 3 paired devices — a Garmin vívoactive 4, a Fitbit Versa 3 and an Apple Watch"
 surface     = "device"
 category    = "Device"
 domain      = "SysSharedContainerDomain-systemgroup.com.apple.bluetooth"

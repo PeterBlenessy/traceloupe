@@ -54,6 +54,7 @@
 id          = "wifi_networks"
 name        = "Wi-Fi networks"
 description = "Every Wi-Fi network this iPhone has joined, when it was added, when it was last joined, and the access point it saw."
+verified    = "iphone11_ios17 — 17 known networks, with join dates from July 2023 to January 2024"
 surface     = "device"
 category    = "Network"
 domain      = "SystemPreferencesDomain"

@@ -46,6 +46,7 @@
 id          = "life360_locations"
 name        = "Life360 location history"
 description = "Every position Life360 reported to its servers — time, coordinates, speed, heading and the activity iOS inferred — recovered from the app's own logs."
+verified    = "iphone11_ios17 — «redacted» rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives «redacted»…"
 surface     = "apps"
 join_column = "App"
 category    = "Location"

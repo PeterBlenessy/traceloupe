@@ -33,6 +33,7 @@
 id          = "alarms"
 name        = "Alarms"
 description = "Clock alarms set on this iPhone — the time each is for, whether it is switched on, and when it was last changed."
+verified    = "iphone11_ios17 — one alarm at 10:41, switched off, last changed 2024-07-28"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

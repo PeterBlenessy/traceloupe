@@ -28,6 +28,7 @@
 id          = "sleep_schedule"
 name        = "Sleep schedule"
 description = "The bedtime and wake time set on this iPhone, and whether sleep tracking was switched on."
+verified    = "iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

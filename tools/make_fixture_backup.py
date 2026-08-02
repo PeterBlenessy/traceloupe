@@ -773,11 +773,12 @@ def build_global_preferences_plist() -> bytes:
 def build_clock_plist() -> bytes:
     """com.apple.mobiletimerd.plist — BOTH collections the real file holds.
 
-    `MTAlarms` (ordinary alarms) and `MTSleepAlarms` (the sleep schedule) are two
-    different artifacts sharing one file, read by two modules. Each element is
-    wrapped in Apple's `$MTAlarm` class marker, which the modules step over — a
-    fixture without the wrapper would let a module drop that path segment and
-    still pass.
+    `MTAlarms` (ordinary alarms), `MTSleepAlarms` (the sleep schedule) and
+    `MTTimers` are three different artifacts sharing one file, read by three
+    modules. Each element is wrapped in Apple's `$MTAlarm` / `$MTTimer` class
+    marker, which the modules step over — a fixture without the wrapper would
+    let a module drop that path segment and still pass. The timer nests twice
+    more for its fire time, for the same reason.
     """
     def at(secs: int) -> datetime:
         return datetime.fromtimestamp(secs, tz=timezone.utc).replace(tzinfo=None)
@@ -814,7 +815,62 @@ def build_clock_plist() -> bytes:
                     }
                 ],
             },
+            "MTTimers": {
+                "MTTimers": [
+                    {
+                        "$MTTimer": {
+                            "MTTimerTitle": "Pasta",
+                            "MTTimerDuration": 600,
+                            "MTTimerState": 1,
+                            "MTTimerLastModifiedDate": at(1_722_179_400),
+                            "MTTimerFireTime": {
+                                "$MTTimerDate": {
+                                    "MTTimerTimeDate": at(1_722_180_000),
+                                }
+                            },
+                            "MTTimerSound": {
+                                "$MTSound": {"MTSoundToneID": "system:sunrise"}
+                            },
+                        }
+                    }
+                ],
+            },
             "MTTimerDefaultDuration": 900.0,  # unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
+def build_world_clock_plist() -> bytes:
+    """com.apple.mobiletimer.plist — the World Clock city list.
+
+    A DIFFERENT file from `com.apple.mobiletimerd.plist` above, one letter
+    apart: `mobiletimer` here, `mobiletimerd` (the daemon) for alarms and
+    timers. Each city sits behind a nested key itself called `city`, which is
+    Apple's shape, not a transcription error.
+    """
+    def city(name, country, tz, lat, lon, locale, ident):
+        return {
+            "city": {
+                "unlocalizedName": name,
+                "unlocalizedCountryName": country,
+                "timeZone": tz,
+                "latitude": lat,
+                "longitude": lon,
+                "localeCode": locale,
+                "identifier": ident,
+                "yahooCode": "YAH0001",  # a fossil of an old weather backend, unread
+            }
+        }
+
+    return plistlib.dumps(
+        {
+            "cities": [
+                city("Stockholm", "Sweden", "Europe/Stockholm",
+                     59.3293, 18.0686, "sv_SE", "Stockholm"),
+                city("Cupertino", "United States", "America/Los_Angeles",
+                     37.3230, -122.0322, "en_US", "Cupertino"),
+            ]
         },
         fmt=plistlib.FMT_BINARY,
     )
@@ -1097,6 +1153,12 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimerd.plist",
             build_clock_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimer.plist",
+            build_world_clock_plist(),
         ),
 
         (

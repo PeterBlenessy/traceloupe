@@ -28,6 +28,7 @@
 id          = "device_locale"
 name        = "Language and region"
 description = "The language this iPhone is set to, its region format, and whether it shows a 24-hour clock."
+verified    = "iphone11_ios17 — en-US, en_US, 24-hour time on"
 surface     = "device"
 # ONE record, so its columns are FACTS folded into the Device view's identity
 # summary rather than a one-row table of their own.

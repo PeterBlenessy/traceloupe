@@ -46,6 +46,7 @@
 id          = "location_clients"
 name        = "Location access"
 description = "Apps and services that asked this iPhone for its location, and when each last stopped receiving it."
+verified    = "iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps"
 surface     = "apps"
 join_column = "App"
 category    = "Security"

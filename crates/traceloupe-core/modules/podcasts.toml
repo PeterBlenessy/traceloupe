@@ -41,6 +41,7 @@
 id          = "podcasts"
 name        = "Podcasts"
 description = "Podcast shows subscribed to on this device, who publishes each, and when one was last listened to."
+verified    = "iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date"
 surface     = "device"
 category    = "Media"
 domain      = "AppDomainGroup-243LU875E5.groups.com.apple.podcasts"

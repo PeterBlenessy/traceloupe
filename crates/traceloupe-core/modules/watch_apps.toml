@@ -41,6 +41,7 @@
 id          = "watch_apps"
 name        = "Apple Watch apps"
 description = "Apps installed on the Apple Watch paired with this iPhone, and which iPhone app each belongs to."
+verified    = "iphone11_ios17 — 47 apps on one paired watch"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

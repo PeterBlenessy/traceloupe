@@ -1,0 +1,73 @@
+# World Clock — the cities someone chose to keep an eye on, and where each is.
+#
+# `com.apple.mobiletimer.plist` in `HomeDomain`, whose `Library/Preferences` is
+# backed up. Note the name: this is `mobiletimer`, NOT the `mobiletimerd`
+# ("d" for daemon) that holds alarms and timers. Two files one letter apart in
+# the same directory, holding different artifacts — which is exactly the sort of
+# thing a module gets silently wrong, so it is worth stating.
+#
+# WHY A CITY LIST IS EVIDENCE
+#
+# It looks like decoration and is not. The cities someone adds are the places
+# they need the time in: where family is, where an employer is, where they are
+# going. Latitude and longitude come along in the record, so this is a small set
+# of self-selected, deliberate geographic associations — and unlike location
+# history, it is a statement of intent rather than a trace of movement.
+#
+# THE NESTING IS ONE DEEP AND ODD-LOOKING: each element of `cities` is a
+# dictionary whose only interesting member is itself called `city`. That is
+# Apple's shape, per iLEAPP's `appleWorldClock.py`, not a mistake here.
+#
+# `unlocalizedName` and `unlocalizedCountryName` are the English names; the
+# localised ones are not in the file. `identifier` is Apple's own city id.
+# `yahooCode` is a fossil of an old weather backend and is deliberately not
+# read — it identifies nothing a reader can use, and iLEAPP keeps it only for
+# completeness.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against a fixture. iLEAPP's sample data shows this varying
+# honestly across images (4 rows on iPhone 11 / iOS 17.3, 0 on several others),
+# which is the behaviour of a real user setting, so an empty table here means
+# "no cities added" rather than "not read". Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "world_clock"
+name        = "World Clock"
+description = "Cities added to the Clock app's World Clock, with the time zone and coordinates of each."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.mobiletimer.plist"
+
+[plist]
+rows = ["cities"]
+
+[[columns]]
+name = "City"
+from = ["city", "unlocalizedName"]
+
+[[columns]]
+name = "Country"
+from = ["city", "unlocalizedCountryName"]
+
+[[columns]]
+name = "Time zone"
+from = ["city", "timeZone"]
+
+[[columns]]
+name = "Latitude"
+from = ["city", "latitude"]
+kind = "real"
+
+[[columns]]
+name = "Longitude"
+from = ["city", "longitude"]
+kind = "real"
+
+[[columns]]
+name = "Locale"
+from = ["city", "localeCode"]
+
+[[columns]]
+name = "Identifier"
+from = ["city", "identifier"]

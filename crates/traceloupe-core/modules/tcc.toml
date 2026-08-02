@@ -48,6 +48,7 @@
 id          = "tcc"
 name        = "Permissions"
 description = "Which apps were allowed to use the camera, microphone, photos, contacts and location — and when that was decided."
+verified    = "iphone11_ios17 — 289 rows, which is exactly the count iLEAPP records for the same image — two independent parsers agreeing. The distribution also justified passing unknowns through rather than guessing: alongside…"
 surface     = "apps"
 join_column = "App"   # the bundle id, so Apps can attach these to the right app
 category    = "Security"

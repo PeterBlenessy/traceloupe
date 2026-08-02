@@ -43,6 +43,7 @@
 id          = "wifi_private_mac"
 name        = "Private Wi-Fi addresses"
 description = "The randomised hardware address this iPhone presented to each Wi-Fi network, and when it last changed."
+verified    = "iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps"
 surface     = "device"
 category    = "Network"
 domain      = "SystemPreferencesDomain"
