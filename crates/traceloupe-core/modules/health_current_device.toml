@@ -20,20 +20,49 @@
 id          = "health_current_device"
 name        = "Health device"
 description = "The model and OS version of the device Health was last recording on, as iOS records them."
-verified    = "iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02"
+verified    = "iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02; iphone11_ios16 — same device at 16.1.2 via the source_devices fallback, since device_context does not exist there"
 surface     = "device"
 category    = "Device"
 shape       = "facts"
 domain      = "HealthDomain"
 path        = "Health/healthdb.sqlite"
 
-sql = """
-SELECT
-    product_type_name                              AS "Model identifier",
-    currentOS_name || ' ' || currentOS_version     AS "OS version",
-    date_modified                                  AS "Last recorded"
-FROM device_context
-"""
+sql = [
+  # iOS 17 lineage: one purpose-built row.
+  """
+  SELECT
+      product_type_name                              AS "Model identifier",
+      currentOS_name || ' ' || currentOS_version     AS "OS version",
+      date_modified                                  AS "Last recorded"
+  FROM device_context
+  """,
+  # iOS 16 lineage: NO `device_context` TABLE AT ALL. Verified on the same
+  # physical iPhone 11 one OS earlier (16.1.2) — the query above fails with
+  # "no such table", which took the whole artifact down.
+  #
+  # `source_devices` carries the same facts, but it holds every device that ever
+  # contributed to Health — on the validation device that is AirPods, an Apple
+  # Watch, the iPhone and a `__NONE__` placeholder. Picking the phone by
+  # `model = 'iPhone'` would be wrong on an iPad, so the local device is
+  # identified the way the schema itself does: `sources.local_device = 1`, whose
+  # `product_type` is this device's hardware identifier.
+  #
+  # "Last recorded" IS NULL ON THIS PATH, deliberately. `source_devices` has
+  # `creation_date` — when the device record was first written — which is a
+  # different fact from `device_context.date_modified`. Putting one under the
+  # other's heading would be a quiet lie in a column someone might date evidence
+  # from. No equivalent exists on iOS 16, so it says so.
+  """
+  SELECT
+      sd.hardware              AS "Model identifier",
+      'iOS ' || sd.software    AS "OS version",
+      NULL                     AS "Last recorded"
+  FROM source_devices sd
+  WHERE sd.hardware = (SELECT product_type FROM sources WHERE local_device = 1 LIMIT 1)
+  ORDER BY sd.creation_date DESC
+  LIMIT 1
+  """,
+]
 
 [[columns]]
 name = "Model identifier"

@@ -262,6 +262,26 @@ python3 tools/module-status.py --summary  # just the counts
 | Corpus key | Device | What it is |
 |---|---|---|
 | `iphone11_ios17` | iPhone 11, iOS 17.3 | Josh Hickman's public research image — the encrypted backup, not the full-filesystem tree |
+| `iphone11_ios16` | iPhone 11, iOS 16.1.2 | **The same physical phone** (serial F4GZ987AN72N) one OS earlier, which is what makes it a drift check rather than a second sample |
+
+Both decrypt with the same password. The catalogue recorded `ios16` as "not yet
+fetched", with no password and the wrong device — so every module "failed"
+against it in corpus mode, unauthenticated. Corrected from the fetched backup's
+own `Info.plist`.
+
+**A second lineage paid for itself immediately.** `healthdb.sqlite` has **no
+`device_context` table at all** on iOS 16.1.2; the module's only query failed
+with "no such table" and took the artifact down. It now has an iOS 16
+alternative reading `source_devices`, with the local device identified the way
+the schema itself does (`sources.local_device = 1`) rather than by guessing at
+`model = 'iPhone'`, which would be wrong on an iPad.
+
+**Absence is a fact about a device, not a defect.** That older phone has no
+`ACXRemoteAppList.plist` and no `com.apple.MobileBackup.plist`; the same phone at
+17.3 has both. The corpus validator used to count those as failures, which made
+the report get *worse* every time an older device was added — and a validator
+that always fails is one nobody runs. It now fails only for a module absent from
+**every** backup, which is a wrong path, and notes the rest.
 
 ### What verifying actually caught
 
