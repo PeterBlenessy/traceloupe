@@ -315,6 +315,27 @@ the report get *worse* every time an older device was added — and a validator
 that always fails is one nobody runs. It now fails only for a module absent from
 **every** backup, which is a wrong path, and notes the rest.
 
+### Same-store artifacts split by who reads the store
+
+`coverage-gap.py --present` reports 16 artifacts that read a file we **already
+parse** — "no new parsing, analysis we do not do on data already in the cache".
+That framing is right about the data and wrong about the cost, because it
+depends on WHICH layer reads the store:
+
+- **A store read by a MODULE** (Podcasts' `MTLibrary.sqlite`, AllTrails) takes
+  another module. `check-artifact-overlap.mjs` compares domain + path + *what is
+  read within*, so two modules over one file are fine.
+- **A store read NATIVELY** (`NoteStore.sqlite`, `Photos.sqlite`,
+  `interactionC.db`, `IconState.plist`) cannot take a module at all — the
+  overlap guard rejects any module over a natively-parsed store, deliberately.
+  Those artifacts need the native parser, the cache schema and the view to
+  change together.
+
+So of the 16, the cheap ones are the module-read stores and the rest are
+parser work. `ZICNOTEPARTICIPANT` — **who a note was shared with**, 4 rows on
+the validation device — is the most valuable of the blocked ones and is the
+argument for doing that parser work.
+
 ### Extensionless stores were invisible for weeks
 
 `Login Data`, `Web Data` and `Top Sites` are SQLite databases with **no file
@@ -401,6 +422,7 @@ asks. Check free space before fetching, not 20 GB in.
 | MEGA files | Files | ✅ | iphone11_ios17 — 966 files across 332 folders, resolving to real paths such as 'Cloud Drive/My chat files/IMG_4552.jpg'; the _status_ and _transfers_ sibling stores the path glob also matches are skipped, which is what the globbed-skip rule exists for |
 | Message retention | Device | ✅ | iphone11_ios17 — 'Forever' via the value map, from the iOS 17+ key; the iOS 16 key is absent as expected on this lineage |
 | OS build history | Device | ✅ | iphone11_ios17 — 2 boots, 20B110 (2023-07-01) then 21D50 (2024-01-25); iphone11_ios16 — the SAME phone shows only the first, because the upgrade had not happened yet, so the artifact corroborates the corpus |
+| Podcast episodes | Media | ✅ | iphone11_ios17 — 35 of 1,774 cached episodes, i.e. the ~2% someone acted on; iphone11_ios16 — 35; iphone_se_ios13 — 18 and iphone_se_ios13_4 — 24, the SAME device three days apart, so the count tracks real listening rather than the feed |
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
 | Sites with a service worker | Network | ✅ | iphone11_ios17 — 2 registrations, nhl.com in Safari and one in DuckDuckGo, with the worker's own script URL; absent on both iPhone SE lineages, where service workers were barely in use in 2020 |
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
@@ -418,7 +440,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**45 implemented · 45 verified · 0 awaiting a real backup.**
+**46 implemented · 46 verified · 0 awaiting a real backup.**
 
 ---
 
