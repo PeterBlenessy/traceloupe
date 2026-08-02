@@ -2096,6 +2096,25 @@ async fn device_info(active: State<'_, ActiveBackup>) -> Result<Option<BackupInf
     .map_err(|e| e.to_string())?
 }
 
+/// Why each module ended up empty or not, from the import that built this
+/// cache (#288).
+///
+/// Read by the views' empty states, so "we could not read your call history"
+/// is distinguishable from "your backup contains none" long after the toast
+/// that reported it at import time has gone.
+#[tauri::command]
+async fn module_status(
+    active: State<'_, ActiveBackup>,
+) -> Result<Vec<traceloupe_core::normalize::ModuleStatus>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        cache.module_status().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// One home-dashboard tile. Carries its own label, route and icon, so the view
 /// renders whatever arrives without knowing which modules exist (#157).
 #[derive(Clone, serde::Serialize)]
@@ -4354,6 +4373,7 @@ pub fn run() {
             imported_backup_ids,
             list_threads,
             device_info,
+            module_status,
             module_metrics,
             list_calendar_events,
             list_reminders,

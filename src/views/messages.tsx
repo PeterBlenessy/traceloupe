@@ -70,6 +70,7 @@ import {
   formatMessageTime,
 } from "@/lib/format";
 import { usePersistedState } from "@/lib/use-persisted-state";
+import { useParseFailedEmpty } from "@/lib/use-parse-failed";
 import { MediaCacheKeyBoundary, useMediaCacheKey } from "@/lib/use-media-cache-key";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { initials } from "@/lib/contact";
@@ -549,6 +550,14 @@ function Conversations({
   scrollToMessage?: number | null;
   onScrolledToMessage?: () => void;
 }) {
+  // #268 was exactly this: sms.db decrypted truncated, would not open, and
+  // this view read as "No messages in this backup." for months. It is the
+  // reason module_status exists (#288).
+  const noMessages = useParseFailedEmpty(
+    "messages",
+    "messages",
+    "No messages in this backup.",
+  );
   const fromSafety = useFromSafety();
   // Gate on an open backup (React Query dedups this with the parent's copy), so
   // list_threads isn't fired while `hasActiveBackup` is still resolving.
@@ -759,7 +768,7 @@ function Conversations({
               icon={MessageSquare}
               title={
                 (threads?.length ?? 0) === 0
-                  ? "No messages in this backup."
+                  ? noMessages
                   : "No conversations for this app."
               }
             />
@@ -908,6 +917,15 @@ function Timeline({
   const fromSafety = useFromSafety();
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
+  // #268 was exactly this: sms.db decrypted truncated, would not open, and
+  // this view read as "No messages in this backup." for months. It is the
+  // reason module_status exists (#288).
+  const noMessages = useParseFailedEmpty(
+    "messages",
+    "messages",
+    "No messages in this backup.",
+  );
+
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -1072,7 +1090,7 @@ function Timeline({
             ? "No messages match this search."
             : kind !== null || range.lo != null || range.hi != null
               ? "No messages match these filters."
-              : "No messages in this backup."
+              : noMessages
         }
       />
     );

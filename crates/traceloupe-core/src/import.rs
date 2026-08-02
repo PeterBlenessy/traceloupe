@@ -367,6 +367,11 @@ pub fn import_backup(
     report.interactions += native.interactions;
     report.warnings.extend(pre_warnings);
     report.warnings.extend(native.warnings);
+    // Carry the native pass's verdicts across too -- note_module keeps a
+    // `Failed` from being overwritten by the fallback's later success.
+    for m in native.module_status {
+        report.note_module(&m.module, m.status, m.detail);
+    }
 
     // Camera roll: read the backup's Manifest natively and reference iOS's own
     // thumbnails, so the gallery is fast and full images transcode on demand.
@@ -490,6 +495,18 @@ pub fn import_backup(
                 format!("{label}: nothing found — the source data isn't in this backup.")
             });
         }
+        // Structured twin of the warning above, so a view opened later can
+        // still tell "absent" from "we could not read it" (#288). A `Failed`
+        // recorded by the native path is never overwritten here.
+        report.note_module(
+            id,
+            if source_present || count > 0 {
+                crate::normalize::ModuleOutcome::Parsed
+            } else {
+                crate::normalize::ModuleOutcome::SourceAbsent
+            },
+            None,
+        );
     }
 
     step!("Indexing Installed Apps");
@@ -499,6 +516,11 @@ pub fn import_backup(
         step_i, index_total,
         "index_total ({index_total}) disagrees with the {step_i} step!() calls actually emitted"
     );
+    // Persist why each module ended up the way it did, so a view opened days
+    // from now can still tell "your backup has none" from "we could not read
+    // it" (#288). Written last, once every path has had its say.
+    cache.write_module_status(&report.module_status)?;
+
     // Record which apps were on the device + their App Store metadata (name,
     // seller, version, genre, release date) from Info.plist's iTunesMetadata.
     let apps = crate::discovery::installed_apps_meta(backup_dir);
@@ -615,9 +637,10 @@ fn import_messages_native(
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
         Ok(i) => i,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Messages unavailable ({e}); using iLEAPP."));
+            report.native_failed(
+                "messages",
+                format!("Native Messages unavailable ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
@@ -626,18 +649,20 @@ fn import_messages_native(
         Ok(None) => return false, // sms.db not in this backup → iLEAPP path
         Err(e) => {
             // A real Manifest read error is worth surfacing, unlike a plain absence.
-            report.warnings.push(format!(
-                "Native Messages: Manifest read failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "messages",
+                format!("Native Messages: Manifest read failed ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
     let sms_db = work_dir.join(".sms.db");
     if let Err(e) = index.extract_db(&entry, decryptor, &sms_db) {
         let _ = std::fs::remove_file(&sms_db);
-        report.warnings.push(format!(
-            "Native Messages: couldn't read sms.db ({e}); using iLEAPP."
-        ));
+        report.native_failed(
+            "messages",
+            format!("Native Messages: couldn't read sms.db ({e}); using iLEAPP."),
+        );
         return false;
     }
     let att = crate::parsers::messages::AttachmentSource {
@@ -648,9 +673,10 @@ fn import_messages_native(
         match crate::parsers::messages::parse_messages(&sms_db, cache, report, false, Some(&att)) {
             Ok(()) => true,
             Err(e) => {
-                report.warnings.push(format!(
-                    "Native Messages: parse failed ({e}); using iLEAPP."
-                ));
+                report.native_failed(
+                    "messages",
+                    format!("Native Messages: parse failed ({e}); using iLEAPP."),
+                );
                 false
             }
         };
@@ -673,9 +699,10 @@ fn import_notes_native(
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
         Ok(i) => i,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Notes unavailable ({e}); using iLEAPP."));
+            report.native_failed(
+                "notes",
+                format!("Native Notes unavailable ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
@@ -683,18 +710,20 @@ fn import_notes_native(
         Ok(Some(e)) => e,
         Ok(None) => return false, // NoteStore.sqlite not in this backup → iLEAPP path
         Err(e) => {
-            report.warnings.push(format!(
-                "Native Notes: Manifest read failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "notes",
+                format!("Native Notes: Manifest read failed ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
     let note_store = work_dir.join(".NoteStore.sqlite");
     if let Err(e) = index.extract_db(&entry, decryptor, &note_store) {
         let _ = std::fs::remove_file(&note_store);
-        report.warnings.push(format!(
-            "Native Notes: couldn't read NoteStore.sqlite ({e}); using iLEAPP."
-        ));
+        report.native_failed(
+            "notes",
+            format!("Native Notes: couldn't read NoteStore.sqlite ({e}); using iLEAPP."),
+        );
         return false;
     }
     let img_src = crate::parsers::notes::NoteImageSource {
@@ -706,9 +735,10 @@ fn import_notes_native(
         {
             Ok(()) => true,
             Err(e) => {
-                report
-                    .warnings
-                    .push(format!("Native Notes: parse failed ({e}); using iLEAPP."));
+                report.native_failed(
+                    "notes",
+                    format!("Native Notes: parse failed ({e}); using iLEAPP."),
+                );
                 false
             }
         };
@@ -985,9 +1015,10 @@ fn import_calls_native(
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
         Ok(i) => i,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Calls unavailable ({e}); using iLEAPP."));
+            report.native_failed(
+                "calls",
+                format!("Native Calls unavailable ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
@@ -995,26 +1026,29 @@ fn import_calls_native(
         Ok(Some(e)) => e,
         Ok(None) => return false, // not in this backup → iLEAPP path
         Err(e) => {
-            report.warnings.push(format!(
-                "Native Calls: Manifest read failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "calls",
+                format!("Native Calls: Manifest read failed ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
     let out = work_dir.join(".CallHistory.storedata");
     if let Err(e) = index.extract_to(&entry, decryptor, &out) {
         let _ = std::fs::remove_file(&out);
-        report.warnings.push(format!(
-            "Native Calls: couldn't read CallHistory.storedata ({e}); using iLEAPP."
-        ));
+        report.native_failed(
+            "calls",
+            format!("Native Calls: couldn't read CallHistory.storedata ({e}); using iLEAPP."),
+        );
         return false;
     }
     let ok = match crate::parsers::calls::parse_calls(&out, cache, report, false) {
         Ok(()) => true,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Calls: parse failed ({e}); using iLEAPP."));
+            report.native_failed(
+                "calls",
+                format!("Native Calls: parse failed ({e}); using iLEAPP."),
+            );
             false
         }
     };
@@ -1073,9 +1107,10 @@ fn parse_safari_histories(
     let dbs = match safari_history_dbs(index) {
         Ok(d) => d,
         Err(e) => {
-            report.warnings.push(format!(
-                "Native Safari: Manifest read failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "safari",
+                format!("Native Safari: Manifest read failed ({e}); using iLEAPP."),
+            );
             return 0;
         }
     };
@@ -1085,10 +1120,10 @@ fn parse_safari_histories(
         // WAL-aware: History.db keeps most/all visits in its `-wal` sidecar.
         if let Err(e) = index.extract_db(&entry, decryptor, &out) {
             let _ = std::fs::remove_file(&out);
-            report.warnings.push(format!(
-                "Native Safari: couldn't read {} History.db ({e}).",
-                profile
-            ));
+            report.native_failed(
+                "safari",
+                format!("Native Safari: couldn't read {} History.db ({e}).", profile),
+            );
             continue;
         }
         // Only the first parse clears; the rest append their profile's rows.
@@ -1100,9 +1135,10 @@ fn parse_safari_histories(
             &profile,
         ) {
             Ok(()) => parsed += 1,
-            Err(e) => report
-                .warnings
-                .push(format!("Native Safari: {profile} parse failed ({e}).")),
+            Err(e) => report.native_failed(
+                "safari",
+                format!("Native Safari: {profile} parse failed ({e})."),
+            ),
         }
         let _ = std::fs::remove_file(&out);
     }
@@ -1121,9 +1157,10 @@ fn import_safari_native(
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
         Ok(i) => i,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Safari unavailable ({e}); using iLEAPP."));
+            report.native_failed(
+                "safari",
+                format!("Native Safari unavailable ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
@@ -1193,9 +1230,10 @@ fn import_safari_bookmarks_native(
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
         Ok(i) => i,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Safari bookmarks unavailable ({e})."));
+            report.native_failed(
+                "safari",
+                format!("Native Safari bookmarks unavailable ({e})."),
+            );
             return;
         }
     };
@@ -1216,18 +1254,20 @@ fn import_safari_bookmarks_native(
             Ok(Some(e)) => e,
             Ok(None) => continue, // not in this backup
             Err(e) => {
-                report.warnings.push(format!(
-                    "Native Safari {which}: Manifest read failed ({e})."
-                ));
+                report.native_failed(
+                    "safari",
+                    format!("Native Safari {which}: Manifest read failed ({e})."),
+                );
                 continue;
             }
         };
         let out = work_dir.join(tmp);
         if let Err(e) = index.extract_to(&entry, decryptor, &out) {
             let _ = std::fs::remove_file(&out);
-            report
-                .warnings
-                .push(format!("Native Safari {which}: extract failed ({e})."));
+            report.native_failed(
+                "safari",
+                format!("Native Safari {which}: extract failed ({e})."),
+            );
             continue;
         }
         let res = match which {
@@ -1240,9 +1280,10 @@ fn import_safari_bookmarks_native(
             _ => crate::parsers::safari_bookmarks::parse_safari_tabs(&out, cache, report, replace),
         };
         if let Err(e) = res {
-            report
-                .warnings
-                .push(format!("Native Safari {which}: parse failed ({e})."));
+            report.native_failed(
+                "safari",
+                format!("Native Safari {which}: parse failed ({e})."),
+            );
         }
         let _ = std::fs::remove_file(&out);
     }
@@ -1480,9 +1521,10 @@ fn import_contacts_native(
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
         Ok(i) => i,
         Err(e) => {
-            report
-                .warnings
-                .push(format!("Native Contacts unavailable ({e}); using iLEAPP."));
+            report.native_failed(
+                "contacts",
+                format!("Native Contacts unavailable ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
@@ -1490,18 +1532,20 @@ fn import_contacts_native(
         Ok(Some(e)) => e,
         Ok(None) => return false, // not in this backup → iLEAPP path
         Err(e) => {
-            report.warnings.push(format!(
-                "Native Contacts: Manifest read failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "contacts",
+                format!("Native Contacts: Manifest read failed ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
     let ab = work_dir.join(".AddressBook.sqlitedb");
     if let Err(e) = index.extract_to(&entry, decryptor, &ab) {
         let _ = std::fs::remove_file(&ab);
-        report.warnings.push(format!(
-            "Native Contacts: couldn't read AddressBook.sqlitedb ({e}); using iLEAPP."
-        ));
+        report.native_failed(
+            "contacts",
+            format!("Native Contacts: couldn't read AddressBook.sqlitedb ({e}); using iLEAPP."),
+        );
         return false;
     }
 
@@ -1527,9 +1571,10 @@ fn import_contacts_native(
         Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&ab);
-            report.warnings.push(format!(
-                "Native Contacts: parse failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "contacts",
+                format!("Native Contacts: parse failed ({e}); using iLEAPP."),
+            );
             return false;
         }
     };
@@ -1541,9 +1586,10 @@ fn import_contacts_native(
             true
         }
         Err(e) => {
-            report.warnings.push(format!(
-                "Native Contacts: insert failed ({e}); using iLEAPP."
-            ));
+            report.native_failed(
+                "contacts",
+                format!("Native Contacts: insert failed ({e}); using iLEAPP."),
+            );
             false
         }
     }
