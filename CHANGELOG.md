@@ -13,6 +13,73 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.39.0] — 2026-08-02
+
+**An empty screen has to say why** — a view that shows nothing is making a claim
+about someone's device, and this release stops the app making that claim when it
+does not know it to be true.
+
+There are five reasons a list can be empty: the backup does not contain it, this
+*kind* of backup cannot contain it, the person did not import it, a filter is
+hiding it, or **we could not read it**. The last one is the only one where the
+data is there and the shortfall is ours — and it was the one with nowhere to
+live, so it rendered as the first. That is not hypothetical: an encrypted
+backup's `sms.db` decrypted short, would not open, and Messages read as *"No
+messages in this backup."* for months.
+
+### Added
+
+- **Search calls by name.** Call rows show the saved contact's name, but the
+  search only ever matched the number — so typing a name that was on screen
+  returned "No matching calls", the app denying data it was rendering.
+- **An unreadable store now says so.** When a store is in the backup and cannot
+  be opened, the view says that, and suggests taking a fresh backup — rather
+  than reporting that the device holds nothing. The import already knew; it
+  showed a warning once and threw the fact away.
+
+### Changed
+
+- **Every view publishes into the one app toolbar.** Detail panes no longer
+  carry toolbars of their own, so the controls that act on a view are always in
+  the same place, and content scrolls cleanly under the title bar.
+- **Health, when a section has no data.** The Section filter now offers only
+  what the backup holds, which also makes single-section mode — and with it
+  per-section sorting and wording — reachable on a partly populated backup.
+
+### Fixed
+
+- **A failed query was reported as a clean result** in Safety Scan, Calendar and
+  Security Check, and an unfinished scan was reported as one that found nothing.
+- **A filtered-to-empty list blamed the backup.** Narrowing a list to nothing
+  said "in this backup", which is a statement about the device made from a
+  question about a search.
+- **Photos showed a blank tile and a black, empty lightbox** when a file could
+  not be decrypted — most often after a cancelled Touch ID prompt. It now names
+  the failure instead of looking like missing media.
+- **Health contradicted itself on activity days.** Days with rings but no step
+  data printed "No activity recorded" directly above "Move 412/500 kcal".
+- **Health claimed a workout had no route** when the backup recorded one.
+- **Numbers ignored your region.** Distances and walking metrics used a
+  hard-coded decimal point beside region-aware counts, in the same sentence.
+- **"1 samples", "1 floors", "1 workouts"** — and "Cycle Tracking" beside
+  sentence-case siblings.
+- **Contacts was missing its "All" filter**, and some links went nowhere.
+- **Notes lost keyboard navigation**, and a detail pane could render blank.
+- **Animations that did not exist.** Several transitions were written with CSS
+  properties this webview does not animate, so they snapped instead of moving;
+  a progress bar could also run past its own end.
+- **System rows now name who acted**, like every row beside them.
+
+### Internal
+
+- Per-module parse outcomes are recorded in the cache, so a view opened days
+  later can still explain itself.
+- Two new browser guards — one for the unreadable-store wording, one for
+  filtered-versus-absent — bringing the pre-flight gate to 17 checks. Both were
+  verified by breaking the code they protect and watching them fail.
+- A signal-handling test that looked flaky for weeks turned out to contradict a
+  documented branch of the code it tested; the code was never wrong.
+
 ## [0.38.0] — 2026-08-01
 
 **A backup is read whole, and read right** — encrypted backups were silently
