@@ -2979,12 +2979,33 @@ async fn count_calls(
     search: Option<String>,
     lo: Option<i64>,
     hi: Option<i64>,
+    // Addresses whose CONTACT NAME matched the search, resolved by the client
+    // (#279). See `query::call_addresses` for why the client does it.
+    addresses: Option<Vec<String>>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_calls(&cache, search.as_deref(), query::TimeRange { lo, hi })
-            .map_err(|e| e.to_string())
+        query::count_calls(
+            &cache,
+            search.as_deref(),
+            query::TimeRange { lo, hi },
+            addresses.as_deref(),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Every distinct peer address in the call log, so the client can resolve them
+/// to contact names and search by name (#279).
+#[tauri::command]
+async fn call_addresses(active: State<'_, ActiveBackup>) -> Result<Vec<String>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::call_addresses(&cache).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2995,11 +3016,13 @@ async fn count_call_ranges(
     active: State<'_, ActiveBackup>,
     ranges: Vec<query::TimeRange>,
     search: Option<String>,
+    addresses: Option<Vec<String>>,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_call_ranges(&cache, &ranges, search.as_deref()).map_err(|e| e.to_string())
+        query::count_call_ranges(&cache, &ranges, search.as_deref(), addresses.as_deref())
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3016,6 +3039,7 @@ async fn get_calls_window(
     limit: i64,
     sort_by: String,
     desc: bool,
+    addresses: Option<Vec<String>>,
 ) -> Result<Vec<Call>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -3027,6 +3051,7 @@ async fn get_calls_window(
             offset,
             limit,
             calls_sort(&sort_by, desc),
+            addresses.as_deref(),
         )
         .map_err(|e| e.to_string())
     })
@@ -4411,6 +4436,7 @@ pub fn run() {
             get_media_window,
             count_calls,
             count_call_ranges,
+            call_addresses,
             get_calls_window,
             count_safari,
             count_safari_ranges,

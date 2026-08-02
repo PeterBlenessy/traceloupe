@@ -135,6 +135,12 @@ const BOUNDED: &[(&str, &str)] = &[
         "#65: 399 B/row measured; 390 KB at 1000 conversations",
     ),
     (
+        "call_addresses",
+        "#279: one row per DISTINCT peer in the call log -- bounded by the \
+         number of people the device ever called, not by the call count; the \
+         client resolves them to names to search by name",
+    ),
+    (
         "list_contacts",
         "#65: one row per contact; read once into a virtualized list",
     ),
