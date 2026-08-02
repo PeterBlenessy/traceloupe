@@ -4057,6 +4057,50 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "chromium_top_sites",
+            name: "Most-visited sites (Chromium browsers)",
+            category: "Network",
+            description:
+              "The ranked shortlist a Chromium browser shows on its new-tab page — a residue of browsing history that a backup does not otherwise carry.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: ["App", "Profile", "Site", "Title", "Rank"],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "chromium_logins",
+            name: "Saved logins (Chromium browsers)",
+            category: "Security",
+            description:
+              "Sites a Chromium browser saved a login for — the account inventory, with usernames and dates, but never the password.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Profile",
+              "Site",
+              "Username",
+              "Realm",
+              "Saved",
+              "Last used",
+              "Times filled",
+              "Never save here",
+            ],
+            timestampColumns: ["Saved", "Last used"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "service_workers",
             name: "Sites with a service worker",
             category: "Network",
@@ -4656,6 +4700,30 @@ const mockClient: TraceLoupeClient = {
             Shared: false,
           },
         ]
+      : mockActive && artifactId === "chromium_top_sites"
+        ? [
+            {
+              App: "com.google.chrome.ios",
+              Profile: "Google/Chrome",
+              Site: "https://www.nhl.com/",
+              Title: "Official Site of the National Hockey League",
+              Rank: 0,
+            },
+          ]
+      : mockActive && artifactId === "chromium_logins"
+        ? [
+            {
+              App: "com.google.chrome.ios",
+              Profile: "Google/Chrome",
+              Site: "https://example.com/login",
+              Username: "someone@example.com",
+              Realm: "https://example.com/",
+              Saved: 1710000000,
+              "Last used": 1720000000,
+              "Times filled": 4,
+              "Never save here": false,
+            },
+          ]
       : mockActive && artifactId === "service_workers"
         ? [
             {

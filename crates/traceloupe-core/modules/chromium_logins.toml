@@ -1,0 +1,103 @@
+# Sites the person saved a login for, in any Chromium browser.
+#
+# `Default/Login Data` under `Library/Application Support`, in whichever app
+# containers have one. On the validation device that is Chrome
+# (`Google/Chrome/Default`), Edge (`Microsoft/Edge/Default`) and Brave
+# (`Chromium/Default`) — three vendors, three path DEPTHS, which is why the
+# path uses `**` rather than `*`.
+#
+# THE PASSWORD IS NOT HERE AND IS NOT WANTED. `password_value` is a blob
+# encrypted against the iOS keychain (`keychain_identifier` names the item), so
+# it cannot be read from a backup alone — and this module does not select it.
+# What it selects is the INVENTORY: which sites someone holds an account on,
+# under what username, when it was first saved and last used. That is the
+# forensically useful half and the half that does not turn a case file into a
+# credential dump.
+#
+# A `blacklisted_by_user` ROW IS NOT A LOGIN. Chrome writes one when someone
+# answers "Never" to the save-password prompt — so it records a site they
+# deliberately declined to store, with no username at all. That is a different
+# fact from an account, and it is labelled rather than filtered out: "never
+# saved" is a decision someone made about a site they were on.
+#
+# `times_used` and `date_last_used` are how often the credential was filled,
+# which distinguishes a live account from one saved once and forgotten.
+#
+# WHY EXTENSIONLESS FILES WERE MISSED FOR SO LONG: `Login Data`, `Web Data` and
+# `Top Sites` are SQLite databases with NO FILE EXTENSION. An audit that
+# enumerates `%.db` and `%.sqlite` — which is what this project did for weeks —
+# cannot see them at all. They surfaced only when the coverage tool was pointed
+# at a real backup's full path list.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: the store
+# is present in all THREE browsers and holds 0 rows in each — the browsers were
+# installed and never used to save a login. The module runs, the schema is real
+# and read off the device rather than guessed; what is unproven is its output
+# against a populated store. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "chromium_logins"
+name        = "Saved logins (Chromium browsers)"
+description = "Sites a Chromium browser saved a login for — the account inventory, with usernames and dates, but never the password."
+verified    = "iphone11_ios17 — the store is present in ALL THREE browsers (Chrome, Edge, Brave) and holds 0 rows in each: installed, never used to save a login. The schema is read off the device; the output against a populated store is unproven"
+surface     = "apps"
+join_column = "App"
+app_column  = "App"
+path_column = "Profile"
+category    = "Security"
+domain      = "AppDomain-*"
+path        = "Library/Application Support/**/Default/Login Data"
+
+sql = [
+  """
+  SELECT origin_url                AS site,
+         signon_realm              AS realm,
+         username_value            AS username,
+         date_created              AS saved,
+         date_last_used            AS last_used,
+         times_used                AS used,
+         blacklisted_by_user       AS never_saved
+  FROM logins
+  ORDER BY date_last_used DESC, origin_url
+  """,
+]
+
+[[columns]]
+name = "App"
+
+[[columns]]
+name = "Profile"
+
+[[columns]]
+name = "Site"
+from = "site"
+
+[[columns]]
+name = "Username"
+from = "username"
+
+[[columns]]
+name = "Realm"
+from = "realm"
+
+[[columns]]
+name = "Saved"
+from = "saved"
+kind = "timestamp"
+epoch = "webkit"
+
+[[columns]]
+name = "Last used"
+from = "last_used"
+kind = "timestamp"
+epoch = "webkit"
+
+[[columns]]
+name = "Times filled"
+from = "used"
+kind = "integer"
+
+[[columns]]
+name = "Never save here"
+from = "never_saved"
+kind = "bool"
