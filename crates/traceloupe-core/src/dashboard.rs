@@ -452,6 +452,11 @@ mod tests {
         ),
         ("note_media", "belongs to a note"),
         (
+            "module_status",
+            "why each module is empty, not a thing the device holds -- read by \
+             the views' empty states, never counted",
+        ),
+        (
             "safari_bookmarks",
             "shown inside the Safari view, not a tile of its own",
         ),

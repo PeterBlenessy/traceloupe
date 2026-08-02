@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { useDebounced } from "@/lib/use-debounced";
 import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
 import { useNotImportedEmpty } from "@/lib/use-not-imported";
+import { useParseFailedEmpty } from "@/lib/use-parse-failed";
 import {
   client,
   type HistoryVisit,
@@ -178,7 +179,10 @@ export function SafariView() {
   // Safari's own module covers history/bookmarks/tabs; if it was unticked at
   // import, every pill here is empty for that reason rather than the device's.
   const notImported = useNotImportedEmpty("safari", "Safari data", "");
-  const emptyForType = notImported || (type === "tab" ? emptyTabs : EMPTY[type]);
+  // A Safari store that was present and would not open (#288).
+  const parseFailed = useParseFailedEmpty("safari", "Safari data", "");
+  const emptyForType =
+    notImported || parseFailed || (type === "tab" ? emptyTabs : EMPTY[type]);
 
   useViewToolbar(toolbar);
 

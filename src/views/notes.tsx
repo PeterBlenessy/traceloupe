@@ -53,6 +53,7 @@ import { useDebounced } from "@/lib/use-debounced";
 import { cn } from "@/lib/utils";
 import { client, type Note, type TimeRange } from "@/lib/ipc";
 import { useNotImportedEmpty } from "@/lib/use-not-imported";
+import { useParseFailedEmpty } from "@/lib/use-parse-failed";
 
 /** Most images to put in the document for one note. A note built from a long
  *  photo roll would otherwise mount hundreds of <img> elements at once; the
@@ -199,7 +200,9 @@ export function NotesView() {
   const emptyTitle = useNotImportedEmpty(
     "notes",
     "Notes",
-    "No notes in this backup.",
+    // ...and if the store was there but unreadable, that is a claim about US.
+    // The helpers compose: each answers only the reason it knows about (#288).
+    useParseFailedEmpty("notes", "notes", "No notes in this backup."),
   );
   // Deep link from a Safety Scan finding: ?id=<note id> selects that note, and
   // ?from=safety adds a return chip so the jump is a round trip (same pattern

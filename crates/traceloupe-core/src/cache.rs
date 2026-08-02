@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 54;
+const SCHEMA_VERSION: i64 = 55;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -348,6 +348,23 @@ CREATE TABLE IF NOT EXISTS findings (
     event_time    INTEGER              -- unix seconds of the underlying event
 );
 CREATE INDEX IF NOT EXISTS idx_findings_run ON findings(run_id, severity);
+
+-- Why a view is empty (#288). One row per module, rewritten on every import.
+--
+-- Four of the five reasons a view can be empty are answered by wording alone
+-- (absent / encrypted-only / not-imported / filtered). The fifth is the one
+-- that matters most and had nowhere to live: THE STORE WAS THERE AND WE COULD
+-- NOT READ IT. That state is indistinguishable from "your device holds none"
+-- unless it is recorded, which is how #268 hid an unreadable sms.db behind an
+-- empty Messages view for months.
+--
+-- The import already computes this and threw it away with the warning strings.
+CREATE TABLE IF NOT EXISTS module_status (
+    module  TEXT PRIMARY KEY,          -- 'messages', 'calls', 'safari', ...
+    status  TEXT NOT NULL,             -- 'parsed' | 'source-absent' | 'failed'
+    detail  TEXT,                      -- the underlying error, when 'failed'
+    at      INTEGER NOT NULL           -- unix seconds
+);
 "#;
 
 /// Add `column` to `table` if it isn't already present (SQLite has no
@@ -833,9 +850,66 @@ impl CacheDb {
                 CREATE INDEX IF NOT EXISTS idx_safari_searches_at
                     ON safari_searches(searched_at DESC);",
             )?;
+            // v55: per-module parse outcome, so an empty view can say whether
+            // the store was absent or unreadable (#288).
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS module_status (
+                    module  TEXT PRIMARY KEY,
+                    status  TEXT NOT NULL,
+                    detail  TEXT,
+                    at      INTEGER NOT NULL
+                );",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(CacheDb { conn })
+    }
+
+    /// Replace the per-module parse outcomes with `rows` (#288).
+    ///
+    /// A full replace, not an upsert: the table describes the import that
+    /// produced the current cache, so a module that is no longer reported must
+    /// not keep a stale verdict from a previous run.
+    pub fn write_module_status(&self, rows: &[crate::normalize::ModuleStatus]) -> Result<()> {
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM module_status", [])?;
+        {
+            let mut st = tx.prepare(
+                "INSERT INTO module_status (module, status, detail, at) VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for r in rows {
+                st.execute(rusqlite::params![r.module, r.status.as_str(), r.detail, at])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Every recorded module outcome, newest import only.
+    pub fn module_status(&self) -> Result<Vec<crate::normalize::ModuleStatus>> {
+        use crate::normalize::ModuleOutcome;
+        let mut st = self
+            .conn
+            .prepare("SELECT module, status, detail FROM module_status ORDER BY module")?;
+        let rows = st
+            .query_map([], |r| {
+                let status: String = r.get(1)?;
+                Ok(crate::normalize::ModuleStatus {
+                    module: r.get(0)?,
+                    status: match status.as_str() {
+                        "failed" => ModuleOutcome::Failed,
+                        "source-absent" => ModuleOutcome::SourceAbsent,
+                        _ => ModuleOutcome::Parsed,
+                    },
+                    detail: r.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 
     pub fn schema_version(&self) -> Result<i64> {
@@ -1068,5 +1142,77 @@ mod tests {
                 [],
             )
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod module_status_tests {
+    use crate::cache::CacheDb;
+    use crate::normalize::{ImportReport, ModuleOutcome, ModuleStatus};
+
+    #[test]
+    fn round_trips_through_the_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = CacheDb::open(&dir.path().join("c.db")).unwrap();
+        db.write_module_status(&[
+            ModuleStatus {
+                module: "calls".into(),
+                status: ModuleOutcome::Failed,
+                detail: Some("file is not a database".into()),
+            },
+            ModuleStatus {
+                module: "messages".into(),
+                status: ModuleOutcome::Parsed,
+                detail: None,
+            },
+        ])
+        .unwrap();
+        let got = db.module_status().unwrap();
+        assert_eq!(got.len(), 2);
+        let calls = got.iter().find(|m| m.module == "calls").unwrap();
+        assert_eq!(calls.status, ModuleOutcome::Failed);
+        assert_eq!(calls.detail.as_deref(), Some("file is not a database"));
+    }
+
+    #[test]
+    fn a_rewrite_drops_stale_verdicts() {
+        // The table describes the import that built THIS cache. A module that
+        // is no longer reported must not keep yesterday's answer.
+        let dir = tempfile::tempdir().unwrap();
+        let db = CacheDb::open(&dir.path().join("c.db")).unwrap();
+        db.write_module_status(&[ModuleStatus {
+            module: "safari".into(),
+            status: ModuleOutcome::Failed,
+            detail: Some("boom".into()),
+        }])
+        .unwrap();
+        db.write_module_status(&[ModuleStatus {
+            module: "notes".into(),
+            status: ModuleOutcome::Parsed,
+            detail: None,
+        }])
+        .unwrap();
+        let got = db.module_status().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].module, "notes");
+    }
+
+    #[test]
+    fn a_failure_survives_the_fallbacks_success() {
+        // The native path failing and iLEAPP then succeeding is the common
+        // case. The view must still be able to say the native store was
+        // unreadable -- losing that is how #268 stayed invisible.
+        let mut r = ImportReport::default();
+        r.note_module("messages", ModuleOutcome::Failed, Some("truncated".into()));
+        r.note_module("messages", ModuleOutcome::Parsed, None);
+        assert_eq!(r.module_status.len(), 1);
+        assert_eq!(r.module_status[0].status, ModuleOutcome::Failed);
+        assert_eq!(r.module_status[0].detail.as_deref(), Some("truncated"));
+
+        // ...but a later failure still replaces an earlier success.
+        let mut r = ImportReport::default();
+        r.note_module("calls", ModuleOutcome::Parsed, None);
+        r.note_module("calls", ModuleOutcome::Failed, Some("bad".into()));
+        assert_eq!(r.module_status[0].status, ModuleOutcome::Failed);
     }
 }

@@ -33,6 +33,7 @@ import { NoBackupState,
 } from "@/components/view";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useParseFailedEmpty } from "@/lib/use-parse-failed";
 import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,12 @@ import { useBoundedList } from "@/lib/bounded-list";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
 
 export function ContactsView() {
+  // An AddressBook that was present and would not open is not "no contacts".
+  const noContacts = useParseFailedEmpty(
+    "contacts",
+    "contacts",
+    "No contacts in this backup.",
+  );
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
@@ -211,7 +218,7 @@ export function ContactsView() {
                 icon={Users}
                 title={
                   (contacts?.length ?? 0) === 0
-                    ? "No contacts in this backup."
+                    ? noContacts
                     : "No matching contacts."
                 }
               />

@@ -24,6 +24,7 @@ import { NoBackupState, LazyListView, ListSearch } from "@/components/view";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { useDebounced } from "@/lib/use-debounced";
 import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
+import { useParseFailedEmpty } from "@/lib/use-parse-failed";
 import { useContactResolver, type ResolvedContact } from "@/lib/use-contact-resolver";
 import { ContactAvatar } from "@/components/contact-avatar";
 import { useSettings } from "@/components/settings-provider";
@@ -115,6 +116,13 @@ export function CallsView() {
     );
   }
 
+  // A store that was there and would not open is not "no calls" (#288).
+  const absent = useParseFailedEmpty(
+    "calls",
+    "call history",
+    "No calls in this backup.",
+  );
+
   return (
     <LazyListView<Call>
       title="Calls"
@@ -123,7 +131,7 @@ export function CallsView() {
       resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={emptyListMessage(
         { search, timeFiltered: isTimeFiltered(range) },
-        "No calls in this backup.",
+        absent,
         "calls",
       )}
       emptyIcon={PhoneCall}

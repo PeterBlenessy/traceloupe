@@ -24,6 +24,11 @@ use std::collections::BTreeSet;
 const BOUNDED: &[(&str, &str)] = &[
     // --- bounded by a UI constant or a fixed set ---
     (
+        "module_status",
+        "one row per module the import reported on; the module set is \
+         compiled in, so this is bounded by the number of parsers that exist",
+    ),
+    (
         "count_call_ranges",
         "one count per histogram bucket; the bucket count is a UI constant",
     ),

@@ -39,6 +39,74 @@ pub struct ImportReport {
     pub interactions: usize,
     /// Non-fatal problems (a skipped artifact, a media ref with no bytes).
     pub warnings: Vec<String>,
+    /// Per-module outcome, persisted to `module_status` so a view opened days
+    /// later can still say WHY it is empty. The warnings above are free text
+    /// shown once at import time; this is the structured, durable half (#288).
+    pub module_status: Vec<ModuleStatus>,
+}
+
+/// What became of one module's source store during an import.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModuleOutcome {
+    /// The store was found and read. (It may still hold zero rows.)
+    Parsed,
+    /// This backup contains no such store — the ordinary, honest empty.
+    SourceAbsent,
+    /// The store WAS there and we could not read it. The only outcome that
+    /// means data is being lost, and the reason this table exists.
+    Failed,
+}
+
+impl ModuleOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModuleOutcome::Parsed => "parsed",
+            ModuleOutcome::SourceAbsent => "source-absent",
+            ModuleOutcome::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModuleStatus {
+    pub module: String,
+    pub status: ModuleOutcome,
+    /// The underlying error, when `status` is `Failed`.
+    pub detail: Option<String>,
+}
+
+impl ImportReport {
+    /// Record a module's outcome. A `Failed` always wins over a later
+    /// `Parsed`/`SourceAbsent` for the same module: the fallback path may well
+    /// succeed afterwards, but the fact that the native store was unreadable is
+    /// the thing worth surfacing, and losing it is exactly how #268 stayed
+    /// invisible.
+    /// A native store was there and could not be read: warn AND remember.
+    ///
+    /// The two go together deliberately. Every one of these sites used to push
+    /// a warning only, which is shown once at import time and then gone --
+    /// leaving the view to say "none in this backup" forever after.
+    pub fn native_failed(&mut self, module: &str, msg: String) {
+        self.warnings.push(msg.clone());
+        self.note_module(module, ModuleOutcome::Failed, Some(msg));
+    }
+
+    pub fn note_module(&mut self, module: &str, status: ModuleOutcome, detail: Option<String>) {
+        if let Some(slot) = self.module_status.iter_mut().find(|m| m.module == module) {
+            if slot.status == ModuleOutcome::Failed && status != ModuleOutcome::Failed {
+                return;
+            }
+            slot.status = status;
+            slot.detail = detail;
+            return;
+        }
+        self.module_status.push(ModuleStatus {
+            module: module.to_string(),
+            status,
+            detail,
+        });
+    }
 }
 
 /// Normalize the lava DB at `lava_path` into `cache`. `engine_out_dir` is the
