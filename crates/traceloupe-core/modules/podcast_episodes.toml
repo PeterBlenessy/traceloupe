@@ -1,0 +1,135 @@
+# Podcast episodes this device actually downloaded or played.
+#
+# `ZMTEPISODE` in `Documents/MTLibrary.sqlite` — the same store
+# `podcasts.toml` reads for subscriptions, a different table.
+#
+# WHY THIS DOES NOT LIST ALL 1,774 EPISODES
+#
+# Subscribing to a show caches its whole feed: on the validation device that is
+# 1,774 episode rows for 6 podcasts, and 1,745 of them were never touched. They
+# are the show's back catalogue as the server described it, not anything the
+# person did — listing them would bury 32 real events in a table that looks like
+# 1,774 of them.
+#
+# So the filter is ENGAGEMENT: downloaded, played at least once, part-listened
+# (a non-zero playhead), or bookmarked. That is 29 downloads and 3 plays here.
+# Each of those is a choice someone made; a feed entry is not.
+#
+# The count of what was filtered away is not hidden — `podcasts.toml` reports
+# the subscription beside it, and the show name is on every row, so "6 shows,
+# 32 episodes engaged with" is readable across the two.
+#
+# `ZHASBEENPLAYED` IS NULL ON EVERY ROW of the validation device, including the
+# three with a play count — so it is not used to decide anything. `ZPLAYCOUNT`
+# and `ZPLAYHEAD` carry the signal that column's name promises. This is the
+# reason the module reads three fields where one would look sufficient.
+#
+# A PLAYHEAD BESIDE A DURATION IS THE INTERESTING PAIR: it says how far into an
+# episode someone got, which distinguishes "listened" from "started". Both are
+# seconds, and both are shown.
+#
+# Timestamps are Cocoa / Core Data seconds.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 1,774
+# episodes in the store, 29 downloaded and 3 with a play count — the module
+# returns those, led by Up First and The CultCast, with real durations.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "podcast_episodes"
+name        = "Podcast episodes"
+description = "Episodes this device downloaded, played or saved — the ones someone chose, not the whole cached feed of every show they follow."
+verified    = "iphone11_ios17 — 35 of 1,774 cached episodes, i.e. the ~2% someone acted on; iphone11_ios16 — 35; iphone_se_ios13 — 18 and iphone_se_ios13_4 — 24, the SAME device three days apart, so the count tracks real listening rather than the feed"
+surface     = "device"
+category    = "Media"
+domain      = "AppDomainGroup-243LU875E5.groups.com.apple.podcasts"
+path        = "Documents/MTLibrary.sqlite"
+
+sql = [
+  """
+  SELECT e.ZTITLE            AS episode,
+         p.ZTITLE            AS show,
+         e.ZDURATION         AS duration,
+         e.ZPLAYHEAD         AS position,
+         e.ZPLAYCOUNT        AS plays,
+         e.ZDOWNLOADDATE     AS downloaded,
+         e.ZLASTDATEPLAYED   AS last_played,
+         e.ZPUBDATE          AS published,
+         e.ZISBOOKMARKED     AS saved
+  FROM ZMTEPISODE e
+  LEFT JOIN ZMTPODCAST p ON p.Z_PK = e.ZPODCAST
+  WHERE e.ZDOWNLOADDATE IS NOT NULL
+     OR COALESCE(e.ZPLAYCOUNT, 0) > 0
+     OR COALESCE(e.ZPLAYHEAD, 0) > 0
+     OR COALESCE(e.ZISBOOKMARKED, 0) = 1
+  ORDER BY COALESCE(e.ZLASTDATEPLAYED, e.ZDOWNLOADDATE) DESC
+  """,
+  # iOS 13 lineage: NO `ZISBOOKMARKED` COLUMN. Verified on an iPhone SE at
+  # 13.3.1 and 13.4.1, where the query above fails outright -- saving an episode
+  # arrived later. Reported as NULL ("not recorded"), never as false, which
+  # would claim the person saved nothing rather than that the device could not
+  # record it. The engagement filter drops that clause with it.
+  """
+  SELECT e.ZTITLE            AS episode,
+         p.ZTITLE            AS show,
+         e.ZDURATION         AS duration,
+         e.ZPLAYHEAD         AS position,
+         e.ZPLAYCOUNT        AS plays,
+         e.ZDOWNLOADDATE     AS downloaded,
+         e.ZLASTDATEPLAYED   AS last_played,
+         e.ZPUBDATE          AS published,
+         NULL                AS saved
+  FROM ZMTEPISODE e
+  LEFT JOIN ZMTPODCAST p ON p.Z_PK = e.ZPODCAST
+  WHERE e.ZDOWNLOADDATE IS NOT NULL
+     OR COALESCE(e.ZPLAYCOUNT, 0) > 0
+     OR COALESCE(e.ZPLAYHEAD, 0) > 0
+  ORDER BY COALESCE(e.ZLASTDATEPLAYED, e.ZDOWNLOADDATE) DESC
+  """,
+]
+
+[[columns]]
+name = "Episode"
+from = "episode"
+
+[[columns]]
+name = "Show"
+from = "show"
+
+[[columns]]
+name = "Length"
+from = "duration"
+kind = "duration"
+
+[[columns]]
+name = "Got to"
+from = "position"
+kind = "duration"
+
+[[columns]]
+name = "Plays"
+from = "plays"
+kind = "integer"
+
+[[columns]]
+name = "Downloaded"
+from = "downloaded"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Last played"
+from = "last_played"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Published"
+from = "published"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Saved"
+from = "saved"
+kind = "bool"

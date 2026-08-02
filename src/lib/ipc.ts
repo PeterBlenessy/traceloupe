@@ -4057,6 +4057,33 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "podcast_episodes",
+            name: "Podcast episodes",
+            category: "Media",
+            description:
+              "Episodes this device downloaded, played or saved — the ones someone chose, not the whole cached feed of every show they follow.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Episode",
+              "Show",
+              "Length",
+              "Got to",
+              "Plays",
+              "Downloaded",
+              "Last played",
+              "Published",
+              "Saved",
+            ],
+            timestampColumns: ["Downloaded", "Last played", "Published"],
+            byteColumns: [],
+            durationColumns: ["Length", "Got to"],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "chromium_top_sites",
             name: "Most-visited sites (Chromium browsers)",
             category: "Network",
@@ -4700,6 +4727,20 @@ const mockClient: TraceLoupeClient = {
             Shared: false,
           },
         ]
+      : mockActive && artifactId === "podcast_episodes"
+        ? [
+            {
+              Episode: "Half heard",
+              Show: "Listened Show",
+              Length: 3600,
+              "Got to": 900,
+              Plays: 1,
+              Downloaded: 1689935415,
+              "Last played": 1689937000,
+              Published: 1689933508,
+              Saved: false,
+            },
+          ]
       : mockActive && artifactId === "chromium_top_sites"
         ? [
             {
