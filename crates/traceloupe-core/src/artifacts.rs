@@ -2440,6 +2440,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/backup_sizing.toml"),
     ),
     ("podcasts.toml", include_str!("../modules/podcasts.toml")),
+    (
+        "podcast_episodes.toml",
+        include_str!("../modules/podcast_episodes.toml"),
+    ),
     ("alltrails.toml", include_str!("../modules/alltrails.toml")),
     (
         "health_current_device.toml",
@@ -4777,6 +4781,34 @@ from = "nope"
                  'https://example.org/rss','Never Played Show');",
         )
         .unwrap();
+        // Episodes. The subscription caches a whole FEED -- on the validation
+        // device «redacted» rows for 6 shows, of which «redacted» were never touched --
+        // so the fixture carries untouched rows too. A module that forgets the
+        // engagement filter returns them and looks like it found more.
+        c.execute_batch(
+            "CREATE TABLE ZMTEPISODE (Z_PK INTEGER PRIMARY KEY, ZPODCAST INTEGER,
+                ZTITLE VARCHAR, ZDURATION FLOAT, ZPLAYHEAD FLOAT, ZPLAYCOUNT INTEGER,
+                ZHASBEENPLAYED INTEGER, ZISBOOKMARKED INTEGER,
+                ZDOWNLOADDATE TIMESTAMP, ZLASTDATEPLAYED TIMESTAMP,
+                ZPUBDATE TIMESTAMP);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO ZMTEPISODE
+                (ZPODCAST, ZTITLE, ZDURATION, ZPLAYHEAD, ZPLAYCOUNT, ZHASBEENPLAYED,
+                 ZISBOOKMARKED, ZDOWNLOADDATE, ZLASTDATEPLAYED, ZPUBDATE)
+             VALUES
+                -- Downloaded and part-listened: the playhead beside the duration
+                -- is what says 'started, did not finish'.
+                (1,'Half heard',3600,900,1,NULL,«redacted»628215,711630000,711626308),
+                -- Downloaded, never opened.
+                (1,'Queued up',764,0,0,NULL,«redacted»543114,NULL,711540859),
+                -- Bookmarked without a download.
+                (2,'Saved for later',1200,0,0,NULL,1,NULL,NULL,711000000),
+                -- Feed cache: no download, no play, no bookmark. MUST NOT show.
+                (2,'Never touched',900,0,0,NULL,0,NULL,NULL,710000000);",
+        )
+        .unwrap();
     }
 
     /// AllTrails: the three tables an activity is spread across.
@@ -5063,6 +5095,11 @@ from = "nope"
             "Documents/AllTrails.sqlite",
         ),
         (
+            "podcast_episodes",
+            "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
+            "Documents/MTLibrary.sqlite",
+        ),
+        (
             "podcasts",
             "AppDomainGroup-243LU875E5.groups.com.apple.podcasts",
             "Documents/MTLibrary.sqlite",
@@ -5182,7 +5219,8 @@ from = "nope"
             "data_usage" => seed_data_usage,
             "sim_cards" => seed_sim_cards,
             "bluetooth_nearby" => seed_bluetooth_nearby,
-            "podcasts" => seed_podcasts,
+            // One store, two modules: the shows and the episodes.
+            "podcasts" | "podcast_episodes" => seed_podcasts,
             "alltrails" => seed_alltrails,
             // Not SQL at all: return early rather than pretend.
             "carplay_recent_apps" | "carplay_session" => return Seed::Bytes(seed_carplay),
@@ -5974,6 +6012,48 @@ name = "Which"
     /// "com.apple.account.Google". It holds a per-account GUID — measured on the
     /// validation image — so the fallback would have printed a UUID in a column
     /// headed "Service". The three rungs and this test exist because of that.
+    #[test]
+    fn podcast_episodes_lists_choices_not_the_cached_feed() {
+        // Subscribing caches a whole back catalogue: «redacted» rows for 6 shows on
+        // the validation device, «redacted» of them never touched. Listing those
+        // would bury the real events in a table that LOOKS like thousands of
+        // them, which is the failure this module's filter exists to prevent.
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "podcast_episodes")
+            .expect("podcast_episodes ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_in(tmp.path(), &spec.domain, &spec.path, seed_podcasts);
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+
+        let titles: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("Episode").and_then(|v| v.as_str()))
+            .collect();
+        assert!(
+            !titles.contains(&"Never touched"),
+            "a feed entry nobody opened is not something someone did: {titles:?}"
+        );
+        assert_eq!(
+            rows.len(),
+            3,
+            "downloaded, queued and bookmarked: {titles:?}"
+        );
+
+        // The playhead beside the duration is what separates "listened" from
+        // "started", so both have to survive to the row.
+        let half = rows
+            .iter()
+            .find(|r| r.get("Episode").and_then(|v| v.as_str()) == Some("Half heard"))
+            .expect("the part-listened episode is present");
+        assert_eq!(half.get("Got to").and_then(|v| v.as_i64()), Some(900));
+        assert_eq!(half.get("Length").and_then(|v| v.as_i64()), Some(3600));
+    }
+
     #[test]
     fn accounts_module_names_every_service_and_never_shows_a_guid() {
         let mods = load_modules(&builtin_modules_dir()).unwrap();
