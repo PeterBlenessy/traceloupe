@@ -1411,15 +1411,27 @@ export interface TraceLoupeClient {
     sortBy: string,
     desc: boolean,
   ): Promise<MediaItem[]>;
+  /**
+   * `addresses` are the call peers whose CONTACT NAME matched `search`,
+   * resolved client-side and matched by the backend with a plain `IN` (#279).
+   *
+   * The rows show names; the log stores addresses. Matching a typed name back
+   * to an address needs phone normalisation, and that lives in exactly one
+   * place — `use-contact-resolver.ts`, the same code that produced the name on
+   * screen. A second normalisation in SQL could disagree with the first, and a
+   * disagreement shows the WRONG person's calls.
+   */
   countCalls(
     search: string | null,
     lo?: number | null,
     hi?: number | null,
+    addresses?: string[] | null,
   ): Promise<number>;
   /** Call counts for each [lo, hi) window (respecting `search`). */
   countCallRanges(
     ranges: TimeRange[],
     search?: string | null,
+    addresses?: string[] | null,
   ): Promise<number[]>;
   getCallsWindow(
     search: string | null,
@@ -1429,7 +1441,10 @@ export interface TraceLoupeClient {
     limit: number,
     sortBy: string,
     desc: boolean,
+    addresses?: string[] | null,
   ): Promise<Call[]>;
+  /** Every distinct peer address in the call log, for name resolution (#279). */
+  callAddresses(): Promise<string[]>;
   countSafari(
     search: string | null,
     lo?: number | null,
@@ -1764,11 +1779,15 @@ const tauriClient: TraceLoupeClient = {
       sortBy,
       desc,
     }),
-  countCalls: (search, lo = null, hi = null) =>
-    invoke<number>("count_calls", { search, lo, hi }),
-  countCallRanges: (ranges, search = null) =>
-    invoke<number[]>("count_call_ranges", { ranges, search: search ?? null }),
-  getCallsWindow: (search, lo, hi, offset, limit, sortBy, desc) =>
+  countCalls: (search, lo = null, hi = null, addresses = null) =>
+    invoke<number>("count_calls", { search, lo, hi, addresses }),
+  countCallRanges: (ranges, search = null, addresses = null) =>
+    invoke<number[]>("count_call_ranges", {
+      ranges,
+      search: search ?? null,
+      addresses,
+    }),
+  getCallsWindow: (search, lo, hi, offset, limit, sortBy, desc, addresses = null) =>
     invoke<Call[]>("get_calls_window", {
       search,
       lo,
@@ -1777,7 +1796,9 @@ const tauriClient: TraceLoupeClient = {
       limit,
       sortBy,
       desc,
+      addresses,
     }),
+  callAddresses: () => invoke<string[]>("call_addresses"),
   countSafari: (search, lo = null, hi = null) =>
     invoke<number>("count_safari", { search, lo, hi }),
   countSafariRanges: (search, ranges) =>
@@ -3119,7 +3140,11 @@ const mockParseFailed =
   typeof window !== "undefined" &&
   new URLSearchParams(window.location.search).get("mock") === "parse-failed";
 
-function mockFilterCalls(search: string | null, range?: TimeRange): Call[] {
+function mockFilterCalls(
+  search: string | null,
+  range?: TimeRange,
+  addresses?: string[] | null,
+): Call[] {
   // A store that failed to parse produced no rows -- that is the whole point of
   // the state. Returning calls here would make the mock incoherent and the
   // guard unable to reach the empty view it exists to measure.
@@ -3127,7 +3152,14 @@ function mockFilterCalls(search: string | null, range?: TimeRange): Call[] {
   let out = mockCalls;
   if (search) {
     const q = search.toLowerCase();
-    out = out.filter((c) => c.address?.toLowerCase().includes(q));
+    const byName = new Set(addresses ?? []);
+    // Mirrors the SQL: substring on the address OR an exact address the client
+    // matched by contact name (#279).
+    out = out.filter(
+      (c) =>
+        c.address?.toLowerCase().includes(q) ||
+        (c.address != null && byName.has(c.address)),
+    );
   }
   if (range && (range.lo != null || range.hi != null)) {
     out = out.filter(
@@ -4853,17 +4885,32 @@ const mockClient: TraceLoupeClient = {
           desc,
         ).slice(offset, offset + limit)
       : [],
-  countCalls: async (search, lo = null, hi = null) =>
-    mockActive ? mockFilterCalls(search, { lo, hi }).length : 0,
-  countCallRanges: async (ranges, search = null) =>
-    ranges.map((r) => (mockActive ? mockFilterCalls(search, r).length : 0)),
-  getCallsWindow: async (search, lo, hi, offset, limit, sortBy, desc) =>
+  countCalls: async (search, lo = null, hi = null, addresses = null) =>
+    mockActive ? mockFilterCalls(search, { lo, hi }, addresses).length : 0,
+  countCallRanges: async (ranges, search = null, addresses = null) =>
+    ranges.map((r) =>
+      mockActive ? mockFilterCalls(search, r, addresses).length : 0,
+    ),
+  getCallsWindow: async (
+    search,
+    lo,
+    hi,
+    offset,
+    limit,
+    sortBy,
+    desc,
+    addresses = null,
+  ) =>
     mockActive
       ? mockSortBy(
-          mockFilterCalls(search, { lo, hi }),
+          mockFilterCalls(search, { lo, hi }, addresses),
           callKey(sortBy),
           desc,
         ).slice(offset, offset + limit)
+      : [],
+  callAddresses: async () =>
+    mockActive && !mockParseFailed
+      ? [...new Set(mockCalls.map((c) => c.address).filter((a): a is string => !!a))]
       : [],
   countSafari: async (search, lo = null, hi = null) =>
     mockActive ? mockFilterSafari(search, { lo, hi }).length : 0,

@@ -36,6 +36,7 @@ export function CallsView() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
+  const resolve = useContactResolver();
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
   const [sort, setSort] = usePersistedState<SortState>("calls:sort", { by: "date", desc: true });
@@ -45,22 +46,47 @@ export function CallsView() {
   // Subscribe to the clock preference so rows re-render (with the new time
   // format) when it changes; folded into resetKey below.
   const { clockFormat } = useSettings();
+  // Typing a NAME must find the calls whose rows show that name (#279). The
+  // log stores addresses, so the name has to be turned back into addresses --
+  // and the only trustworthy way to do that is with the resolver that put the
+  // name on screen in the first place. So: fetch the distinct addresses, run
+  // them through `resolve`, and hand the backend the ones that matched. The
+  // SQL then does a plain `IN` over values that came out of that same column,
+  // which cannot mis-normalise because it never normalises.
+  const { data: addressBook } = useQuery({
+    queryKey: ["callAddresses"],
+    queryFn: () => client.callAddresses(),
+    enabled: active === true,
+  });
+  const nameMatches = useMemo(() => {
+    if (!search || !addressBook?.length) return null;
+    const q = search.toLowerCase();
+    const hits = addressBook.filter((a) =>
+      resolve(a)?.name.toLowerCase().includes(q),
+    );
+    return hits.length > 0 ? hits : null;
+  }, [search, addressBook, resolve]);
+  // Part of every key below: a result set that depends on it must refetch when
+  // it changes (contacts arriving late would otherwise leave a stale "no
+  // matching calls" on screen).
+  const nameKey = nameMatches?.join(",") ?? "";
+
   const { data: count, error } = useQuery({
-    queryKey: ["callsCount", search, range.lo, range.hi],
-    queryFn: () => client.countCalls(search, range.lo, range.hi),
+    queryKey: ["callsCount", search, range.lo, range.hi, nameKey],
+    queryFn: () => client.countCalls(search, range.lo, range.hi, nameMatches),
     enabled: active === true,
   });
   const { data: presetCounts } = useQuery({
-    queryKey: ["callRanges", now, search],
+    queryKey: ["callRanges", now, search, nameKey],
     queryFn: () =>
       client.countCallRanges(
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         search,
+        nameMatches,
       ),
     enabled: active === true,
   });
   // Resolve each call's phone number to a saved contact, like Messages does.
-  const resolve = useContactResolver();
 
   const filterGroups = useMemo<FilterGroup[]>(
     () => [timeGroup({ description: "When the call happened", presets, counts: presetCounts, value: range, onChange: setRange })],
@@ -87,7 +113,7 @@ export function CallsView() {
     // "Search calls" over rows showing NAMES implied names were searchable; the
     // query runs against `address` only, so typing a name on screen returned
     // "no matching calls". Naming the field is the honest half of #279.
-    () => <ListSearch value={q} onChange={setQ} placeholder="Search by number" />,
+    () => <ListSearch value={q} onChange={setQ} placeholder="Search by name or number" />,
     [q],
   );
   const toolbar = useMemo(
@@ -128,7 +154,7 @@ export function CallsView() {
       title="Calls"
       count={active === true ? count : undefined}
       error={error}
-      resetKey={`${search ?? ""}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
+      resetKey={`${search ?? ""}:${nameKey}:${range.lo}:${range.hi}:${clockFormat}:${sort.by}:${sort.desc}`}
       emptyMessage={emptyListMessage(
         { search, timeFiltered: isTimeFiltered(range) },
         absent,
@@ -143,6 +169,7 @@ export function CallsView() {
         range.hi,
         sort.by,
         sort.desc,
+        nameKey,
         page,
       ]}
       fetchWindow={(offset, limit) =>
@@ -154,6 +181,7 @@ export function CallsView() {
           limit,
           sort.by,
           sort.desc,
+          nameMatches,
         )
       }
       renderItem={(c) => <CallRow call={c} contact={resolve(c.address)} />}
