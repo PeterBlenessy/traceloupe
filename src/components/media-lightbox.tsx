@@ -7,6 +7,7 @@
 import { useEffect } from "react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 export type LightboxStyle = "windowed" | "fullscreen";
@@ -62,13 +63,21 @@ export function MediaLightbox({
         )}
       >
         <DialogTitle className="sr-only">{title}</DialogTitle>
-        <button
-          onClick={onClose}
-          aria-label="Close"
-          className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
-        >
-          <X className="size-5" />
-        </button>
+        {/* Every icon-only button carries a Tooltip (docs/reference/ui.md).
+            These three had only an aria-label and went unflagged solely
+            because check-design.mjs never opens a photo. */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="absolute right-2 top-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+            >
+              <X className="size-5" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>Close (Esc)</TooltipContent>
+        </Tooltip>
         {/* The media is a DIRECT child so its `max-h-full` resolves against this
             flex area (an intermediate wrapper breaks the chain and lets a tall/
             portrait image overflow onto the metadata bar). Clicking the surround
@@ -81,23 +90,33 @@ export function MediaLightbox({
           }}
         >
           {hasPrev && (
-            <button
-              onClick={onPrev}
-              aria-label="Previous"
-              className="absolute left-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
-            >
-              <ChevronLeft className="size-6" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onPrev}
+                  aria-label="Previous"
+                  className="absolute left-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+                >
+                  <ChevronLeft className="size-6" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Previous (←)</TooltipContent>
+            </Tooltip>
           )}
           {media}
           {hasNext && (
-            <button
-              onClick={onNext}
-              aria-label="Next"
-              className="absolute right-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
-            >
-              <ChevronRight className="size-6" />
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onNext}
+                  aria-label="Next"
+                  className="absolute right-2 z-10 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+                >
+                  <ChevronRight className="size-6" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Next (→)</TooltipContent>
+            </Tooltip>
           )}
         </div>
         {meta && (
