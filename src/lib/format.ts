@@ -59,6 +59,7 @@ let dayTimeYear = buildDayTimeYear();
 let dateOnly = buildDateOnly();
 let dateYear = buildDateYear();
 let count = buildCount();
+let decimals = new Map<number, Intl.NumberFormat>();
 
 function rebuild() {
   time = buildTime();
@@ -69,6 +70,7 @@ function rebuild() {
   dateHeader = buildDateHeader();
   dateHeaderYear = buildDateHeaderYear();
   count = buildCount();
+  decimals = new Map();
 }
 
 function buildTime() {
@@ -232,6 +234,30 @@ export function formatDuration(seconds: number | null): string {
 export function formatCount(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return "";
   return count.format(Math.trunc(n));
+}
+
+/**
+ * A fractional number at a fixed number of decimals — "5.20 km", "1,3 m/s".
+ *
+ * `toFixed` hard-codes a period. Health printed `formatCount(steps)` (which is
+ * region-aware) and `distance.toFixed(2)` (which is not) in the SAME sentence,
+ * so a Swedish reader got "8 549 steg · 5.20 km" — one separator per half. That
+ * is the split-brain this file was written to end (#161).
+ */
+export function formatDecimal(
+  n: number | null | undefined,
+  digits: number,
+): string {
+  if (n == null || !Number.isFinite(n)) return "";
+  let f = decimals.get(digits);
+  if (!f) {
+    f = new Intl.NumberFormat(locale, {
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    });
+    decimals.set(digits, f);
+  }
+  return f.format(n);
 }
 
 /**
