@@ -4030,6 +4030,33 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "mega_files",
+            name: "MEGA files",
+            category: "Files",
+            description:
+              "Files kept in MEGA cloud storage — folder, size and dates — from the decrypted state cache the app keeps to browse offline.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Account",
+              "Folder",
+              "Filename",
+              "Size",
+              "Added",
+              "Modified",
+              "Favourite",
+              "Shared",
+            ],
+            timestampColumns: ["Added", "Modified"],
+            byteColumns: ["Size"],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "webkit_domains",
             name: "Web domains loaded in apps",
             category: "Network",
@@ -4578,7 +4605,32 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "webkit_domains"
+    mockActive && artifactId === "mega_files"
+      ? [
+          {
+            App: "mega.ios",
+            Account: "megaclient_statecache14_d0xKXy.db",
+            Folder: "Cloud Drive/My chat files/",
+            Filename: "IMG_4552.jpg",
+            Size: 170856,
+            Added: 1714243988,
+            Modified: 1682368329,
+            Favourite: false,
+            Shared: false,
+          },
+          {
+            App: "mega.ios",
+            Account: "megaclient_statecache14_d0xKXy.db",
+            Folder: "Rubbish Bin/",
+            Filename: "deleted.txt",
+            Size: 12,
+            Added: 1700000000,
+            Modified: 1700000000,
+            Favourite: false,
+            Shared: false,
+          },
+        ]
+      : mockActive && artifactId === "webkit_domains"
       ? [
           {
             App: "com.burbn.instagram",

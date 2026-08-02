@@ -1,0 +1,130 @@
+# Files kept in MEGA cloud storage — name, folder, size and dates.
+#
+# `megaclient_statecache14_<account>.db` in `AppDomainGroup-group.mega.ios`.
+# The `<account>` segment is a per-account hash, so the path needs a `*` and a
+# `path_column` to say which account a row came from.
+#
+# WHY A ZERO-KNOWLEDGE SERVICE LEAVES A READABLE FILE LISTING
+#
+# MEGA encrypts everything client-side and the server never sees a filename.
+# That is a claim about the SERVER. On the device, the app has the keys and
+# keeps a decrypted state cache so it can draw a file browser offline — so the
+# names, sizes and timestamps sit in plain SQLite in an ordinary backup.
+#
+# Like `icloud_drive.toml`, this is an INDEX of data the backup does not
+# contain: a row is evidence a file existed in the account, with its name and
+# size, for bytes stored somewhere this app cannot reach. Unlike iCloud Drive,
+# the account is a third-party one, so it is also evidence the account exists.
+#
+# `CRYPTO_ERROR` IS NOT A DECRYPTION FAILURE HERE, which is worth stating
+# because it looks exactly like one. On the validation device all 966 files and
+# all 332 folders decrypt cleanly; the only three rows holding that literal are
+# the three ROOT nodes, which have no encrypted name attribute at all — MEGA
+# labels them in its interface, not in the store. So the roots are named from
+# their type rather than passed through, and a genuine `CRYPTO_ERROR` on a
+# normal node would still show as itself.
+#
+# THE TYPE CODES ARE DOCUMENTED, in MEGA's own open-source SDK (`nodetype_t`):
+# 0 file, 1 folder, 2 Cloud Drive root, 3 Vault (formerly Inbox), 4 Rubbish Bin.
+# That citation is what earns the mapping — an undocumented enum would be passed
+# through as an integer, as `timers.toml` does with `MTTimerState`.
+#
+# THE FOLDER PATH IS A RECURSIVE CTE over `parenthandle`, the same technique
+# `icloud_drive.toml` uses and for the same reason: the store keeps only a
+# parent link. `depth < 32` is a cycle guard against a corrupt parent chain.
+#
+# ONLY FILES ARE LISTED. Folders are the path of their children, so a row for
+# each would be a size-less duplicate of a name already shown.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 966 files
+# across 332 folders, resolving to real paths such as
+# `Cloud Drive/My chat files/IMG_4552.jpg`. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "mega_files"
+name        = "MEGA files"
+description = "Files kept in MEGA cloud storage — folder, size and dates — from the decrypted state cache the app keeps to browse offline."
+verified    = "iphone11_ios17 — 966 files across 332 folders, resolving to real paths such as 'Cloud Drive/My chat files/IMG_4552.jpg'; the _status_ and _transfers_ sibling stores the path glob also matches are skipped, which is what the globbed-skip rule exists for"
+surface     = "apps"
+join_column = "App"
+path_column = "Account"
+category    = "Files"
+domain      = "AppDomainGroup-group.mega.ios"
+path        = "GroupSupport/megaclient_statecache14_*.db"
+
+sql = [
+  """
+  WITH RECURSIVE anc(start_id, cur_id, path, depth) AS (
+      SELECT nodehandle, parenthandle, '', 0 FROM nodes
+      UNION ALL
+      SELECT a.start_id,
+             p.parenthandle,
+             CASE p.type
+                 WHEN 2 THEN 'Cloud Drive'
+                 WHEN 3 THEN 'Vault'
+                 WHEN 4 THEN 'Rubbish Bin'
+                 ELSE p.name
+             END || '/' || a.path,
+             a.depth + 1
+      FROM anc a JOIN nodes p ON p.nodehandle = a.cur_id
+      WHERE a.depth < 32
+  ),
+  folder AS (
+      SELECT start_id, path FROM anc
+      WHERE cur_id NOT IN (SELECT nodehandle FROM nodes) OR depth >= 32
+  )
+  SELECT f.path      AS folder,
+         n.name      AS name,
+         n.size      AS size,
+         n.ctime     AS added,
+         n.mtime     AS modified,
+         n.fav       AS favourite,
+         CASE WHEN n.share <> 0 THEN 1 ELSE 0 END AS shared
+  FROM nodes n
+  LEFT JOIN folder f ON f.start_id = n.nodehandle
+  WHERE n.type = 0
+  ORDER BY n.ctime DESC
+  """,
+]
+
+[[columns]]
+name = "App"
+value = "mega.ios"
+
+[[columns]]
+name = "Account"
+
+[[columns]]
+name = "Folder"
+from = "folder"
+
+[[columns]]
+name = "Filename"
+from = "name"
+
+[[columns]]
+name = "Size"
+from = "size"
+kind = "bytes"
+
+[[columns]]
+name = "Added"
+from = "added"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Modified"
+from = "modified"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Favourite"
+from = "favourite"
+kind = "bool"
+
+[[columns]]
+name = "Shared"
+from = "shared"
+kind = "bool"
