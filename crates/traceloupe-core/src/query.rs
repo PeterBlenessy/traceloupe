@@ -1567,15 +1567,56 @@ fn escape_like(s: &str) -> String {
     out
 }
 
-/// Calls whose address matches `search` (substring), or all when NULL.
-pub fn count_calls(cache: &CacheDb, search: Option<&str>, range: TimeRange) -> Result<i64> {
+/// The distinct peer addresses in the call log.
+///
+/// Exists so the CLIENT can do the name matching (#279). Calls display resolved
+/// contact names, but the log stores only addresses -- and matching a typed name
+/// back to an address needs phone normalisation, which lives in exactly one
+/// place: `use-contact-resolver.ts`, the same code that produced the name on
+/// screen. Re-implementing it in SQL would be a second normalisation that can
+/// disagree with the first, and a disagreement here shows the WRONG PERSON's
+/// calls -- worse than not matching at all.
+///
+/// So: hand the client the addresses, let it resolve them with the resolver it
+/// already trusts, and take back the subset that matched. The query then does a
+/// plain `IN` over values that came out of this same column, which cannot
+/// mis-normalise because it never normalises.
+pub fn call_addresses(cache: &CacheDb) -> Result<Vec<String>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT address FROM calls WHERE address IS NOT NULL AND address <> ''",
+    )?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// JSON array for the `IN` clause, or NULL when the client sent no matches.
+fn address_json(addresses: Option<&[String]>) -> Option<String> {
+    match addresses {
+        Some(a) if !a.is_empty() => serde_json::to_string(a).ok(),
+        _ => None,
+    }
+}
+
+/// Calls whose address matches `search` (substring) or is one of `addresses`
+/// (the client's name matches, see [`call_addresses`]); all when both are NULL.
+pub fn count_calls(
+    cache: &CacheDb,
+    search: Option<&str>,
+    range: TimeRange,
+    addresses: Option<&[String]>,
+) -> Result<i64> {
     let search = search.map(escape_like);
+    let addr = address_json(addresses);
     let n = cache.conn().query_row(
         "SELECT COUNT(*) FROM calls
-         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
+         WHERE (?1 IS NULL
+                OR address LIKE '%' || ?1 || '%' ESCAPE '\\'
+                OR address IN (SELECT value FROM json_each(COALESCE(?4, '[]'))))
            AND (?2 IS NULL OR occurred_at >= ?2)
            AND (?3 IS NULL OR occurred_at < ?3)",
-        rusqlite::params![search, range.lo, range.hi],
+        rusqlite::params![search, range.lo, range.hi, addr],
         |r| r.get(0),
     )?;
     Ok(n)
@@ -1586,18 +1627,26 @@ pub fn count_call_ranges(
     cache: &CacheDb,
     ranges: &[TimeRange],
     search: Option<&str>,
+    addresses: Option<&[String]>,
 ) -> Result<Vec<i64>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
+    let addr = address_json(addresses);
     let mut stmt = conn.prepare(
         "SELECT COUNT(*) FROM calls
-         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
+         WHERE (?1 IS NULL
+                OR address LIKE '%' || ?1 || '%' ESCAPE '\\'
+                OR address IN (SELECT value FROM json_each(COALESCE(?4, '[]'))))
            AND (?2 IS NULL OR occurred_at >= ?2)
            AND (?3 IS NULL OR occurred_at < ?3)",
     )?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
-        out.push(stmt.query_row(rusqlite::params![search, r.lo, r.hi], |row| row.get(0))?);
+        out.push(
+            stmt.query_row(rusqlite::params![search, r.lo, r.hi, addr], |row| {
+                row.get(0)
+            })?,
+        );
     }
     Ok(out)
 }
@@ -1609,16 +1658,20 @@ pub fn get_calls_window(
     offset: i64,
     limit: i64,
     sort: Sort,
+    addresses: Option<&[String]>,
 ) -> Result<Vec<Call>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
+    let addr = address_json(addresses);
     // `sort.column()` is an allowlisted SQL fragment (never raw user input); see
     // the `Sort` type. `id` is the stable tiebreaker.
     let (dir, nulls) = sort.order_sql();
     let sql = format!(
         "SELECT id, address, direction, answered, duration_s, occurred_at, service, call_type, location, country_code
          FROM calls
-         WHERE (?1 IS NULL OR address LIKE '%' || ?1 || '%' ESCAPE '\\')
+         WHERE (?1 IS NULL
+                OR address LIKE '%' || ?1 || '%' ESCAPE '\\'
+                OR address IN (SELECT value FROM json_each(COALESCE(?6, '[]'))))
            AND (?4 IS NULL OR occurred_at >= ?4)
            AND (?5 IS NULL OR occurred_at < ?5)
          ORDER BY {} {dir} {nulls}, id {dir}
@@ -1627,7 +1680,7 @@ pub fn get_calls_window(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        rusqlite::params![search, limit, offset, range.lo, range.hi],
+        rusqlite::params![search, limit, offset, range.lo, range.hi, addr],
         row_to_call,
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -2542,6 +2595,80 @@ pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn seed_calls(cache: &CacheDb) {
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO calls (id, address, direction, answered, duration_s, occurred_at)
+                    VALUES (1, '+46 70 123 45 67', 'incoming', 1, 60, 1717840800);
+                 INSERT INTO calls (id, address, direction, answered, duration_s, occurred_at)
+                    VALUES (2, '+15551234567', 'outgoing', 1, 30, 1717840900);
+                 INSERT INTO calls (id, address, direction, answered, duration_s, occurred_at)
+                    VALUES (3, '+46 70 123 45 67', 'outgoing', 0, 0, 1717841000);",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn call_addresses_are_distinct_and_non_empty() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        seed_calls(&cache);
+        let mut got = call_addresses(&cache).unwrap();
+        got.sort();
+        assert_eq!(got, vec!["+15551234567", "+46 70 123 45 67"]);
+    }
+
+    #[test]
+    fn a_name_match_finds_calls_the_substring_cannot() {
+        // What #279 is about: the row shows "Anna", the column holds
+        // "+46 70 123 45 67", and no substring of "Anna" is in that number.
+        // The client resolves the name to the address; the query matches it
+        // exactly, without ever normalising a phone number itself.
+        let cache = CacheDb::open_in_memory().unwrap();
+        seed_calls(&cache);
+        let all = TimeRange { lo: None, hi: None };
+
+        // Search alone: the term is a name, so nothing matches.
+        assert_eq!(count_calls(&cache, Some("Anna"), all, None).unwrap(), 0);
+
+        // With the client's resolution, both of Anna's calls are found -- and
+        // the third, someone else's, is not.
+        let anna = vec!["+46 70 123 45 67".to_string()];
+        assert_eq!(
+            count_calls(&cache, Some("Anna"), all, Some(&anna)).unwrap(),
+            2
+        );
+        let rows = get_calls_window(
+            &cache,
+            Some("Anna"),
+            all,
+            0,
+            50,
+            Sort::new("occurred_at", true),
+            Some(&anna),
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|c| c.address.as_deref() == Some("+46 70 123 45 67")));
+    }
+
+    #[test]
+    fn an_empty_address_list_does_not_widen_the_search() {
+        // The dangerous failure: `IN ()` accidentally matching everything, or
+        // an empty list being read as "no filter". A search that matches
+        // nothing must still return nothing.
+        let cache = CacheDb::open_in_memory().unwrap();
+        seed_calls(&cache);
+        let all = TimeRange { lo: None, hi: None };
+        assert_eq!(count_calls(&cache, Some("zzz"), all, Some(&[])).unwrap(), 0);
+        assert_eq!(count_calls(&cache, Some("zzz"), all, None).unwrap(), 0);
+        // ...and no search at all still returns every call.
+        assert_eq!(count_calls(&cache, None, all, None).unwrap(), 3);
+        assert_eq!(count_calls(&cache, None, all, Some(&[])).unwrap(), 3);
+    }
 
     /// Seed a cache the way the normalizer would: one thread, three messages,
     /// the last carrying an attachment.
