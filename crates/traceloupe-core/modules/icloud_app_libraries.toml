@@ -1,0 +1,81 @@
+# Which apps keep data in iCloud, how much of it, and how many documents.
+#
+# `app_libraries` in `CloudDocs/session/db/client.db` — the same store
+# `icloud_drive.toml` reads, a different table. Each row is one app's iCloud
+# container.
+#
+# WHY THE COUNTS ARE THE POINT
+#
+# `icloud_drive.toml` lists the files this device has an index for. This lists
+# what each app's container is SUPPOSED to hold, as iCloud itself counts it. The
+# two disagreeing is the interesting case: a container reporting 20 documents
+# where the local index has 3 means seventeen files exist in the account that
+# this backup knows only the shape of. That gap is invisible from either table
+# alone.
+#
+# `auto_aggregate_size` is the container's total in bytes — 22 MB for
+# `com.apple.CloudDocs` on the validation device — which is a claim about the
+# account, not about anything stored locally.
+#
+# HOSTS ON APPS, for the same reason `icloud_drive.toml` does:
+# `app_library_name` is a bundle id. Here it is often an `iCloud.`-prefixed
+# container id (`iCloud.com.apple.MobileSMS`) rather than the app's own bundle
+# id, which is Apple's convention for a CloudKit container and is left as
+# recorded — rewriting it to guess the owning app would be a mapping this module
+# cannot justify.
+#
+# `app_library_plist` is a blob and is not read; nothing establishes what it
+# holds, and a column of byte counts is not an answer.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 43
+# containers, led by com.apple.CloudDocs with 25 items / 20 documents / 22 MB,
+# and including iCloud.com.apple.MobileSMS and iCloud.com.apple.mobilesafari.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "icloud_app_libraries"
+name        = "iCloud containers"
+description = "Which apps keep data in iCloud, how many documents each container holds, and how large it is according to iCloud itself."
+verified    = "iphone11_ios17 — 43 containers, com.apple.CloudDocs at 25 items / 20 documents / 22 MB; iphone11_ios16 — 43 again but 24 items / 12 documents / 5.1 MB, so the counts track real growth rather than being static"
+surface     = "apps"
+join_column = "App"
+category    = "Files"
+domain      = "HomeDomain"
+path        = "Library/Application Support/CloudDocs/session/db/client.db"
+
+sql = [
+  """
+  SELECT app_library_name                     AS app,
+         auto_client_item_count               AS items,
+         auto_document_count                  AS documents,
+         auto_document_with_local_changes_count AS unsynced,
+         auto_aggregate_size                  AS bytes
+  FROM app_libraries
+  WHERE app_library_name IS NOT NULL
+  ORDER BY auto_aggregate_size DESC, app_library_name
+  """,
+]
+
+[[columns]]
+name = "App"
+from = "app"
+
+[[columns]]
+name = "Items"
+from = "items"
+kind = "integer"
+
+[[columns]]
+name = "Documents"
+from = "documents"
+kind = "integer"
+
+[[columns]]
+name = "With local changes"
+from = "unsynced"
+kind = "integer"
+
+[[columns]]
+name = "Size in iCloud"
+from = "bytes"
+kind = "bytes"

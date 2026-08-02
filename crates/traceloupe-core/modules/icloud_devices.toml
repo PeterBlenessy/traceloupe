@@ -1,0 +1,55 @@
+# The other devices signed into this iCloud account.
+#
+# `CloudDocs/session/db/server.db` in `HomeDomain`. This is the SERVER half of
+# the iCloud Drive pair — `icloud_drive.toml` reads `client.db`, the local
+# index; this reads the account's own view, which includes machines that are not
+# this phone.
+#
+# WHY THIS IS A FINDING ABOUT THE INVESTIGATION, NOT THE PHONE
+#
+# On the validation device the list is `iPhone`, `This's Mac` and
+# `This Is's iPhone`. Two of those are not the device being examined. Each is a
+# machine that syncs the same iCloud Drive, and therefore a place where the same
+# documents exist — very likely in fuller form, since a Mac keeps them on disk
+# rather than as an index. `backup_settings.toml` makes a related point from the
+# other direction (an iCloud backup newer than the local one); together they
+# answer "is this backup the whole story", which is a question no single-device
+# artifact can.
+#
+# The names are user-chosen, so they also carry the owner's own naming of their
+# devices, which is often a person's name.
+#
+# WHAT IS NOT HERE: `server.db` also has a `users` table, whose `user_name` is a
+# 32-hex-character opaque token and whose `user_plist` is a blob. Neither
+# identifies a person without decoding, and a column of hashes is not an answer.
+# It earns a module when someone establishes what the plist holds.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image and the same
+# phone at 16.1.2: 3 devices on both, one of them a Mac. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "icloud_devices"
+name        = "iCloud devices"
+description = "The devices signed into this iCloud account and syncing the same iCloud Drive — including machines that are not this phone."
+verified    = "iphone11_ios17 + iphone11_ios16 — 3 devices on both, one of them a Mac; two of the three are not the phone being examined"
+surface     = "device"
+category    = "Files"
+domain      = "HomeDomain"
+path        = "Library/Application Support/CloudDocs/session/db/server.db"
+
+sql = [
+  """
+  SELECT key AS id, name AS device
+  FROM devices
+  ORDER BY key
+  """,
+]
+
+[[columns]]
+name = "Device"
+from = "device"
+
+[[columns]]
+name = "Sync id"
+from = "id"
+kind = "integer"

@@ -2217,6 +2217,18 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/icloud_drive.toml"),
     ),
     (
+        "icloud_devices.toml",
+        include_str!("../modules/icloud_devices.toml"),
+    ),
+    (
+        "os_build_history.toml",
+        include_str!("../modules/os_build_history.toml"),
+    ),
+    (
+        "icloud_app_libraries.toml",
+        include_str!("../modules/icloud_app_libraries.toml"),
+    ),
+    (
         "world_clock.toml",
         include_str!("../modules/world_clock.toml"),
     ),
@@ -3566,12 +3578,25 @@ from = "nope"
                 item_user_visible INTEGER, item_trash_put_back_path BLOB,
                 app_library_rowid INTEGER);
              CREATE TABLE app_libraries (
-                rowid INTEGER PRIMARY KEY, app_library_name TEXT);",
+                rowid INTEGER PRIMARY KEY, app_library_name TEXT,
+                auto_client_item_count INTEGER, auto_document_count INTEGER,
+                auto_document_with_local_changes_count INTEGER,
+                auto_aggregate_size INTEGER);
+             CREATE TABLE boot_history (
+                date INTEGER, os TEXT, br TEXT, bird_schema INTEGER,
+                db_schema INTEGER, device_id INTEGER);",
         )
         .unwrap();
         c.execute_batch(
-            "INSERT INTO app_libraries (rowid, app_library_name)
-                VALUES (1, 'com.apple.CloudDocs');
+            "INSERT INTO app_libraries VALUES
+                (1, 'com.apple.CloudDocs', 25, 20, 0, 22453826),
+                (2, 'iCloud.com.apple.MobileSMS', 1, 0, 0, 0);
+             -- Two boots under different builds, and a NULL device_id on the
+             -- first: the daemon only learns its id later, and the module shows
+             -- that rather than hiding it.
+             INSERT INTO boot_history VALUES
+                (1688242985, '20B110', '1177.42.1', 21004, 21004, NULL),
+                (1706205831, '21D50', '2461.80.8', 30016, 30016, 4829738);
              -- root: a parent id that is NOT 16 bytes, which ends the walk.
              INSERT INTO client_items VALUES
                 (X'1111111111111111', X'00', 'Documents', 1, 1684594000, NULL,
@@ -3588,6 +3613,18 @@ from = "nope"
              INSERT INTO client_items VALUES
                 (X'4444444444444444', X'00', 'loose.txt', 0,
                  1621718855, 1621718900, NULL, 1295, 0, 0, 1, NULL, 1);",
+        )
+        .unwrap();
+    }
+
+    /// `CloudDocs/session/db/server.db` — the account's view, not this device's.
+    fn seed_icloud_server(c: &Connection) {
+        c.execute_batch("CREATE TABLE devices (key INTEGER PRIMARY KEY, name TEXT);")
+            .unwrap();
+        // A Mac among them, because the point of the artifact is the machines
+        // that are NOT the phone being examined.
+        c.execute_batch(
+            "INSERT INTO devices VALUES (1, 'iPhone'), (2, 'A Mac'), (3, 'Another iPhone');",
         )
         .unwrap();
     }
@@ -4602,6 +4639,21 @@ from = "nope"
             "Library/Application Support/CloudDocs/session/db/client.db",
         ),
         (
+            "os_build_history",
+            "HomeDomain",
+            "Library/Application Support/CloudDocs/session/db/client.db",
+        ),
+        (
+            "icloud_app_libraries",
+            "HomeDomain",
+            "Library/Application Support/CloudDocs/session/db/client.db",
+        ),
+        (
+            "icloud_devices",
+            "HomeDomain",
+            "Library/Application Support/CloudDocs/session/db/server.db",
+        ),
+        (
             "world_clock",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
@@ -4776,7 +4828,9 @@ from = "nope"
             "location_services" => return Seed::Bytes(seed_location_services),
             "imei_imsi" => return Seed::Bytes(seed_commcenter),
             "find_my" => return Seed::Bytes(seed_find_my),
-            "icloud_drive" => seed_icloud_drive,
+            // One store, three modules: files, the boot log and the containers.
+            "icloud_drive" | "os_build_history" | "icloud_app_libraries" => seed_icloud_drive,
+            "icloud_devices" => seed_icloud_server,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),

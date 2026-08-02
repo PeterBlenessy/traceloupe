@@ -328,12 +328,15 @@ asks. Check free space before fetching, not 20 GB in.
 | Find My | Device | ✅ | iphone11_ios17 + iphone11_ios16 — DSID 17193901029 on both, enabled 2023-07-01; 'Send last location' was OFF at 16.1.2 and ON at 17.3, so the setting is read, not defaulted |
 | Health device | Device | ✅ | iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02; iphone11_ios16 — same device at 16.1.2 via the source_devices fallback, since device_context does not exist there |
 | Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
+| iCloud containers | Files | ✅ | iphone11_ios17 — 43 containers, com.apple.CloudDocs at 25 items / 20 documents / 22 MB; iphone11_ios16 — 43 again but 24 items / 12 documents / 5.1 MB, so the counts track real growth rather than being static |
+| iCloud devices | Files | ✅ | iphone11_ios17 + iphone11_ios16 — 3 devices on both, one of them a Mac; two of the three are not the phone being examined |
 | iCloud Drive files | Files | ✅ | iphone11_ios17 — 27 files resolving to real folders (Desktop/, Documents/, Downloads/, Dictionaries/…) with sizes and all three dates; iphone11_ios16 — 26 on the same phone one OS earlier, and the one file's Shared flag differs between them, so the flags are read not defaulted |
 | Cellular identity | Device | ✅ | iphone11_ios17 + iphone11_ios16 — 1 SIM, IMEI 353985100845978, IMSI 310260974867669, +1 919 579 4674 on PLMN 310260; identical across both OS versions, which is what a handset identifier should be |
 | Life360 location history | Location | ✅ | iphone11_ios17 — «redacted» rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives «redacted»… |
 | Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
 | Location Services | Device | ✅ | iphone11_ios17 — Location Services on, last written by iPhone OS17.3/21D50 |
 | Message retention | Device | ✅ | iphone11_ios17 — 'Forever' via the value map, from the iOS 17+ key; the iOS 16 key is absent as expected on this lineage |
+| OS build history | Device | ✅ | iphone11_ios17 — 2 boots, 20B110 (2023-07-01) then 21D50 (2024-01-25); iphone11_ios16 — the SAME phone shows only the first, because the upgrade had not happened yet, so the artifact corroborates the corpus |
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
 | Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
@@ -346,7 +349,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**34 implemented · 34 verified · 0 awaiting a real backup.**
+**37 implemented · 37 verified · 0 awaiting a real backup.**
 
 ---
 
