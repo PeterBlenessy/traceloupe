@@ -20,6 +20,7 @@
 id          = "health_current_device"
 name        = "Health device"
 description = "The model and OS version of the device Health was last recording on, as iOS records them."
+verified    = "iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02"
 surface     = "device"
 category    = "Device"
 shape       = "facts"

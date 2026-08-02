@@ -24,6 +24,7 @@
 id          = "dock"
 name        = "Dock"
 description = "The apps kept in the dock, one tap away, in the order they appear."
+verified    = "iphone11_ios17 — 4 apps, Phone first"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

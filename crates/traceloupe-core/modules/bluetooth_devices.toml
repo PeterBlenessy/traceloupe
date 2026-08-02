@@ -47,6 +47,7 @@
 id          = "bluetooth_devices"
 name        = "Bluetooth devices"
 description = "Classic Bluetooth accessories this iPhone has paired with — headphones, speakers, car kits — with the name the owner gave each one."
+verified    = "iphone11_ios17 — 5 devices, including two sets of AirPods named after different people"
 surface     = "device"
 category    = "Device"
 domain      = "SysSharedContainerDomain-systemgroup.com.apple.bluetooth"

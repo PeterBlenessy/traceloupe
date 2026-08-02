@@ -34,6 +34,7 @@
 id          = "backup_sizing"
 name        = "Backup size by domain"
 description = "How much of this backup each part of the device accounts for, as iOS measured it before writing the backup."
+verified    = "iphone11_ios17 — 42 domains sized"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

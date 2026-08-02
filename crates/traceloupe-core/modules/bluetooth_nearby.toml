@@ -48,6 +48,7 @@
 id          = "bluetooth_nearby"
 name        = "Nearby Bluetooth"
 description = "Low-energy Bluetooth devices this iPhone saw in range but never paired with — other people's devices, trackers and appliances."
+verified    = "iphone11_ios17 — 1056 sightings, 5 named"
 surface     = "device"
 category    = "Device"
 domain      = "SysSharedContainerDomain-systemgroup.com.apple.bluetooth"

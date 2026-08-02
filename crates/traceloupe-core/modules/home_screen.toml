@@ -34,6 +34,7 @@
 id          = "home_screen"
 name        = "Home screen"
 description = "Which apps, widgets and folders are on the home screen, and which page each is on."
+verified    = "iphone11_ios17 — 5 pages, 18 icons on the first"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"

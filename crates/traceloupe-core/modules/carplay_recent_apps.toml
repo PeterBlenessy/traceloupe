@@ -40,6 +40,7 @@
 id          = "carplay_recent_apps"
 name        = "CarPlay apps"
 description = "Apps opened on a car's CarPlay screen, with when each was last used there — evidence the phone was in a vehicle at that time."
+verified    = "iphone11_ios17 — 7 apps, including com.waze.iphone, com.spotify.client and com.google.Maps, last used between 2024-01-16 and 2024-07-27"
 surface     = "apps"
 join_column = "App"
 category    = "Device"

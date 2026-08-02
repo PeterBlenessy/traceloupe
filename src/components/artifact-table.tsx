@@ -13,7 +13,7 @@
  */
 import { useMemo } from "react";
 
-import { formatBytes, formatDateTime } from "@/lib/format";
+import { formatBytes, formatDateTime, formatDuration } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ArtifactRow, ArtifactSummary } from "@/lib/ipc";
 
@@ -27,10 +27,14 @@ export function cellText(
   value: ArtifactRow[string],
   isDate: boolean,
   isBytes = false,
+  isDuration = false,
 ): string {
   if (value === null || value === undefined) return "—";
   if (isDate && typeof value === "number") return formatDateTime(value);
   if (isBytes && typeof value === "number") return formatBytes(value);
+  // Seconds, formatted the way Calls and Health format theirs — a module that
+  // says "duration" gets the app's one answer, not a bare integer beside it.
+  if (isDuration && typeof value === "number") return formatDuration(value);
   if (typeof value === "boolean") return value ? "Yes" : "No";
   return String(value);
 }
@@ -66,6 +70,10 @@ export function ArtifactTable({
   );
   const dates = useMemo(() => dateColumns(artifact), [artifact]);
   const bytes = useMemo(() => new Set(artifact.byteColumns ?? []), [artifact]);
+  const durations = useMemo(
+    () => new Set(artifact.durationColumns ?? []),
+    [artifact],
+  );
 
   if (rows.length === 0) return null;
 
@@ -105,7 +113,7 @@ export function ArtifactTable({
                     row[c] === null && "text-muted-foreground",
                   )}
                 >
-                  {cellText(row[c], dates.has(c), bytes.has(c))}
+                  {cellText(row[c], dates.has(c), bytes.has(c), durations.has(c))}
                 </td>
               ))}
             </tr>

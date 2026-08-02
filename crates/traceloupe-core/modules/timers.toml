@@ -1,0 +1,75 @@
+# Timers set in the Clock app — what each was called, how long it ran for, and
+# when it was last touched.
+#
+# Same store as `alarms.toml`: `com.apple.mobiletimerd.plist` in `HomeDomain`,
+# whose `Library/Preferences` is backed up. One plist, three artifacts — alarms,
+# sleep schedule, and these — which is why the fixture is shared.
+#
+# THE SHAPE IS THREE DEEP, and that is not decoration. Per iLEAPP's
+# `appleTimers.py`:
+#
+#   MTTimers → MTTimers → [ { $MTTimer: { … } } ]
+#
+# and inside each timer the fire time is nested twice more:
+#
+#   MTTimerFireTime → $MTTimerDate → MTTimerTimeDate
+#
+# Apple's `$`-prefixed keys are class markers, exactly like `$MTAlarm` next
+# door. They are stepped over rather than stripped, so a module that drops a
+# segment reads nothing instead of quietly reading the wrong thing.
+#
+# WHAT MTTimerState IS
+#
+# An integer, and iLEAPP prints it raw. It is left as an integer here for the
+# same reason `bluetooth_paired.toml` leaves `NameOrigin` alone: an undocumented
+# enum invented into words is worse than a number a reader can look up. If
+# someone establishes the mapping it earns a `[columns.map]` then.
+#
+# DURATION IS SECONDS. iLEAPP renders it with `datetime.timedelta`; this
+# declares `kind = "duration"` so the app formats it the same way it formats
+# every other duration, rather than a second opinion in one table.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against the shared clock fixture. iLEAPP's own sample data
+# records 1 row on every image it tracks, from iOS 12.4 to 18.7, so the shape is
+# stable; what is unconfirmed is our reading of it. Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "timers"
+name        = "Timers"
+description = "Timers set in the Clock app — what each was called, how long it ran for, and when it was last changed."
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.mobiletimerd.plist"
+
+[plist]
+rows = ["MTTimers", "MTTimers"]
+
+[[columns]]
+name = "Title"
+from = ["$MTTimer", "MTTimerTitle"]
+
+[[columns]]
+name = "Duration"
+from = ["$MTTimer", "MTTimerDuration"]
+kind = "duration"
+
+[[columns]]
+name = "State"
+from = ["$MTTimer", "MTTimerState"]
+kind = "integer"
+
+[[columns]]
+name = "Due"
+from = ["$MTTimer", "MTTimerFireTime", "$MTTimerDate", "MTTimerTimeDate"]
+kind = "timestamp"
+
+[[columns]]
+name = "Last changed"
+from = ["$MTTimer", "MTTimerLastModifiedDate"]
+kind = "timestamp"
+
+[[columns]]
+name = "Sound"
+from = ["$MTTimer", "MTTimerSound", "$MTSound", "MTSoundToneID"]

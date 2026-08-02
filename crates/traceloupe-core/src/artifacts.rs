@@ -111,6 +111,15 @@ pub enum ColumnKind {
     /// module knows, and nothing else can tell a byte count from any other large
     /// integer.
     Bytes,
+    /// A length of time in SECONDS, rendered the way every other duration in the
+    /// app is.
+    ///
+    /// Declared, not inferred, for the same reason as `Bytes` and `Timestamp`:
+    /// nothing downstream can tell 900 seconds from any other 900. iLEAPP prints
+    /// these through `datetime.timedelta`; sending a bare integer to the table
+    /// would have been a second opinion about duration in one place, next to a
+    /// Calls view that already formats them properly.
+    Duration,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -350,6 +359,27 @@ pub struct ModuleSpec {
     /// How the host should present it. Defaults to a table.
     #[serde(default)]
     pub shape: Shape,
+    /// Which real backup this module's OUTPUT has been checked against, if any.
+    ///
+    /// A module can be correct-looking, load, run, and pass its fixture while
+    /// reading the wrong key — the fixture was written from the same reading of
+    /// the store, so it agrees with the module by construction. Only a real
+    /// device settles it.
+    ///
+    /// So implemented and verified are tracked apart. `None` means "written
+    /// from iLEAPP's definition and proven to run, not yet seen against a real
+    /// device" — a perfectly shippable state, and one that must not be
+    /// mistaken for the other. Use the corpus key from
+    /// `tools/data/dfir-images.json` plus what was actually observed:
+    ///
+    /// ```text
+    /// verified = "iphone11_ios17 — 1 SIM in slot 1, ICCID + number"
+    /// ```
+    ///
+    /// `tools/module-status.py` renders these into the audit doc, so the table
+    /// is read from the modules and cannot drift from them.
+    #[serde(default)]
+    pub verified: Option<String>,
     /// The column that records WHICH matched store a row came from.
     ///
     /// Required when `path` contains a `*`, because a pattern can match several
@@ -896,6 +926,8 @@ pub struct ArtifactSummary {
     pub columns: Vec<String>,
     /// Which of `columns` are byte counts, from the module's own `kind`.
     pub byte_columns: Vec<String>,
+    /// Which of `columns` are durations in seconds, from the module's own `kind`.
+    pub duration_columns: Vec<String>,
     /// Which of `columns` are timestamps, from the module's own `kind`.
     ///
     /// The UI used to infer this by testing whether every value in a column fell
@@ -992,6 +1024,12 @@ pub fn list_artifacts(conn: &Connection) -> Result<Vec<ArtifactSummary>> {
                 .columns
                 .iter()
                 .filter(|c| c.kind == ColumnKind::Bytes)
+                .map(|c| c.name.clone())
+                .collect(),
+            duration_columns: spec
+                .columns
+                .iter()
+                .filter(|c| c.kind == ColumnKind::Duration)
                 .map(|c| c.name.clone())
                 .collect(),
             row_count,
@@ -1455,7 +1493,11 @@ fn convert_json(v: &serde_json::Value, c: &ColumnSpec) -> serde_json::Value {
             let epoch = c.epoch.unwrap_or(Epoch::Unix);
             epoch.to_unix_seconds(raw).map_or(J::Null, J::from)
         }
-        ColumnKind::Integer => as_f64(v).map_or(J::Null, |f| J::from(f as i64)),
+        // Seconds on the wire, formatted at the edge -- the UI is told WHICH
+        // columns are durations rather than being asked to guess.
+        ColumnKind::Integer | ColumnKind::Duration => {
+            as_f64(v).map_or(J::Null, |f| J::from(f as i64))
+        }
         ColumnKind::Real => as_f64(v).map_or(J::Null, J::from),
         ColumnKind::Bool => match v {
             J::Bool(b) => J::Bool(*b),
@@ -1822,7 +1864,7 @@ fn convert_plist(v: &plist::Value, c: &ColumnSpec) -> Result<serde_json::Value> 
             plist::Value::Integer(i) => as_i64(i).map_or(J::Null, |n| J::Bool(n != 0)),
             _ => J::Null,
         },
-        ColumnKind::Integer | ColumnKind::Bytes => match v {
+        ColumnKind::Integer | ColumnKind::Bytes | ColumnKind::Duration => match v {
             plist::Value::Integer(i) => as_i64(i).map_or(J::Null, J::from),
             plist::Value::Real(f) => J::from(*f as i64),
             plist::Value::Boolean(b) => J::from(i64::from(*b)),
@@ -1902,7 +1944,9 @@ fn convert(raw: &rusqlite::types::Value, c: &ColumnSpec) -> serde_json::Value {
         // Bytes arrive as an integer count and are formatted by the UI. Core
         // Data stores these as FLOAT (DataUsage's ZWIFIIN and friends are
         // declared FLOAT), so the Real arm is the one that actually fires.
-        ColumnKind::Integer | ColumnKind::Bytes => match raw {
+        // Durations travel the same way: seconds on the wire, formatted at the
+        // edge.
+        ColumnKind::Integer | ColumnKind::Bytes | ColumnKind::Duration => match raw {
             V::Integer(i) => J::from(*i),
             V::Real(f) => J::from(*f as i64),
             _ => J::Null,
@@ -2043,6 +2087,11 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/device_locale.toml"),
     ),
     ("alarms.toml", include_str!("../modules/alarms.toml")),
+    ("timers.toml", include_str!("../modules/timers.toml")),
+    (
+        "world_clock.toml",
+        include_str!("../modules/world_clock.toml"),
+    ),
     (
         "sleep_schedule.toml",
         include_str!("../modules/sleep_schedule.toml"),
@@ -2991,6 +3040,7 @@ from = "who"
             domain: "HomeDomain".into(),
             path: "Library/Demo/demo.db".into(),
             shape: Shape::Table,
+            verified: None,
             path_column: None,
             plist: None,
             log: None,
@@ -3687,14 +3737,112 @@ from = "nope"
         sleep.insert("MTAlarmKeepOffUntilDate".into(), at(1_689_849_000));
         sleep.insert("MTAlarmLastModifiedDate".into(), at(1_722_076_501));
 
+        // A timer, nested the way Apple nests it: the fire time is two more
+        // dictionaries down, each behind a `$`-prefixed class marker. A fixture
+        // that flattened this would let `timers.toml` drop a segment and still
+        // pass, which is the whole thing the fixture is here to prevent.
+        let mut fire_date = Dictionary::new();
+        fire_date.insert("MTTimerTimeDate".into(), at(1_722_180_000));
+        let mut fire = Dictionary::new();
+        fire.insert("$MTTimerDate".into(), Value::Dictionary(fire_date));
+
+        let mut tone = Dictionary::new();
+        tone.insert(
+            "MTSoundToneID".into(),
+            Value::String("system:sunrise".into()),
+        );
+        let mut sound = Dictionary::new();
+        sound.insert("$MTSound".into(), Value::Dictionary(tone));
+
+        let mut timer = Dictionary::new();
+        timer.insert("MTTimerTitle".into(), Value::String("Pasta".into()));
+        timer.insert("MTTimerDuration".into(), Value::Integer(600.into()));
+        timer.insert("MTTimerState".into(), Value::Integer(1.into()));
+        timer.insert("MTTimerLastModifiedDate".into(), at(1_722_179_400));
+        timer.insert("MTTimerFireTime".into(), Value::Dictionary(fire));
+        timer.insert("MTTimerSound".into(), Value::Dictionary(sound));
+        let mut timer_wrapped = Dictionary::new();
+        timer_wrapped.insert("$MTTimer".into(), Value::Dictionary(timer));
+
+        let mut timers_inner = Dictionary::new();
+        timers_inner.insert(
+            "MTTimers".into(),
+            Value::Array(vec![Value::Dictionary(timer_wrapped)]),
+        );
+
         let mut inner = Dictionary::new();
         inner.insert("MTAlarms".into(), Value::Array(vec![wrap(alarm)]));
         inner.insert("MTSleepAlarms".into(), Value::Array(vec![wrap(sleep)]));
         let mut root = Dictionary::new();
         root.insert("MTAlarms".into(), Value::Dictionary(inner));
+        root.insert("MTTimers".into(), Value::Dictionary(timers_inner));
         // Other keys in the real file, none of them read.
         root.insert("MTTimerDefaultDuration".into(), Value::Real(900.0));
 
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
+    /// `com.apple.mobiletimer.plist` — the World Clock city list.
+    ///
+    /// A DIFFERENT file from the one above, one letter apart: `mobiletimer`
+    /// here, `mobiletimerd` (the daemon) for alarms and timers. Each city sits
+    /// behind a nested key that is itself called `city`, which is Apple's shape
+    /// and not a transcription error.
+    fn seed_world_clock() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        fn city(
+            name: &str,
+            country: &str,
+            tz: &str,
+            lat: f64,
+            lon: f64,
+            locale: &str,
+            id: &str,
+        ) -> Value {
+            let mut c = Dictionary::new();
+            c.insert("unlocalizedName".into(), Value::String(name.into()));
+            c.insert(
+                "unlocalizedCountryName".into(),
+                Value::String(country.into()),
+            );
+            c.insert("timeZone".into(), Value::String(tz.into()));
+            c.insert("latitude".into(), Value::Real(lat));
+            c.insert("longitude".into(), Value::Real(lon));
+            c.insert("localeCode".into(), Value::String(locale.into()));
+            c.insert("identifier".into(), Value::String(id.into()));
+            // Present in the real file, deliberately unread.
+            c.insert("yahooCode".into(), Value::String("YAH0001".into()));
+            let mut outer = Dictionary::new();
+            outer.insert("city".into(), Value::Dictionary(c));
+            Value::Dictionary(outer)
+        }
+
+        let mut root = Dictionary::new();
+        root.insert(
+            "cities".into(),
+            Value::Array(vec![
+                city(
+                    "Stockholm",
+                    "Sweden",
+                    "Europe/Stockholm",
+                    59.3293,
+                    18.0686,
+                    "sv_SE",
+                    "Stockholm",
+                ),
+                city(
+                    "Cupertino",
+                    "United States",
+                    "America/Los_Angeles",
+                    37.323,
+                    -122.0322,
+                    "en_US",
+                    "Cupertino",
+                ),
+            ]),
+        );
         let mut out = Vec::new();
         plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
         out
@@ -4030,6 +4178,16 @@ from = "nope"
             "Library/Preferences/.GlobalPreferences.plist",
         ),
         (
+            "timers",
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimerd.plist",
+        ),
+        (
+            "world_clock",
+            "HomeDomain",
+            "Library/Preferences/com.apple.mobiletimer.plist",
+        ),
+        (
             "alarms",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimerd.plist",
@@ -4191,7 +4349,9 @@ from = "nope"
             "wifi_private_mac" => return Seed::Bytes(seed_wifi_private_mac),
             "device_locale" => return Seed::Bytes(seed_device_locale),
             // One fixture, two modules: the store really does hold both.
-            "alarms" | "sleep_schedule" => return Seed::Bytes(seed_clock),
+            // One store, three modules: alarms, the sleep schedule and timers.
+            "alarms" | "sleep_schedule" | "timers" => return Seed::Bytes(seed_clock),
+            "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
             "watch_apps" => return Seed::Bytes(seed_watch_apps),
@@ -4233,6 +4393,7 @@ from = "nope"
             columns: vec![],
             timestamp_columns: vec![],
             byte_columns: vec![],
+            duration_columns: vec![],
             row_count: 0,
             requires_encrypted_backup: false,
         };
@@ -5758,6 +5919,7 @@ from = "a"
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
             shape: Shape::Table,
+            verified: None,
             path_column: None,
             plist: None,
             log: None,
@@ -5793,6 +5955,7 @@ from = "a"
             domain: "HomeDomain".into(),
             path: "a/b.db".into(),
             shape: Shape::Table,
+            verified: None,
             path_column: None,
             plist: None,
             log: None,

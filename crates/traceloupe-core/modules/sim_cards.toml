@@ -46,6 +46,7 @@
 id          = "sim_cards"
 name        = "SIM cards"
 description = "Which SIMs have been in this device, the phone number each carried, and the slot it used."
+verified    = "iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update"
 surface     = "device"
 category    = "Device"
 domain      = "WirelessDomain"

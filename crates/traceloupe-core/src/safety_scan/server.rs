@@ -637,10 +637,25 @@ mod tests {
     #[test]
     fn has_exited_reports_dead_child() {
         let tmp = tempfile::tempdir().unwrap();
-        // A child that exits immediately; give it a beat to actually die.
+        // A child that exits immediately.
         let bin = fake_binary(tmp.path(), "exit 0");
         let mut server = spawn_retrying(&cfg(bin, pick_port().unwrap()));
-        let _ = server.wait_healthy(Duration::from_secs(2)); // reaps the exit
+        let _ = server.wait_healthy(Duration::from_secs(2));
+
+        // POLL, don't assume the line above observed it. This used to assert
+        // `has_exited()` immediately after a 2s `wait_healthy`, which is a
+        // statement about SCHEDULING, not about the property under test: run
+        // under the full suite on a loaded machine, a freshly spawned child can
+        // still be waiting for CPU when that window closes, and the test failed
+        // for a reason that had nothing to do with `has_exited`.
+        //
+        // The property is "a dead child eventually reports exited, and keeps
+        // reporting it". A deadline expresses that; a fixed sleep would just be
+        // a slower guess.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !server.has_exited() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
         assert!(server.has_exited(), "a dead child must report exited");
         // Idempotent on a reaped child — this is what stops the poll loop
         // busy-spinning.

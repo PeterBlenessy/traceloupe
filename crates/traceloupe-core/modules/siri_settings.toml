@@ -43,6 +43,7 @@
 id          = "siri_settings"
 name        = "Siri"
 description = "How Siri is set up on this device — the voice it speaks with, the language it uses, and whether its data syncs to iCloud."
+verified    = "iphone11_ios17 — voice 'nora', en-US, cloud sync on"
 surface     = "device"
 # ONE record, so its columns are FACTS folded into the Device view's identity
 # summary rather than a one-row table of their own.
