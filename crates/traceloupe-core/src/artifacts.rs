@@ -2376,6 +2376,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/webkit_domains.toml"),
     ),
     (
+        "service_workers.toml",
+        include_str!("../modules/service_workers.toml"),
+    ),
+    (
         "mega_files.toml",
         include_str!("../modules/mega_files.toml"),
     ),
@@ -3801,6 +3805,24 @@ from = "nope"
         .unwrap();
     }
 
+    /// WebKit's service-worker registry.
+    fn seed_service_workers(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE Records (key TEXT NOT NULL UNIQUE, origin TEXT NOT NULL,
+                scopeURL TEXT NOT NULL, topOrigin TEXT NOT NULL,
+                lastUpdateCheckTime DOUBLE NOT NULL, updateViaCache TEXT NOT NULL,
+                scriptURL TEXT NOT NULL, workerType TEXT NOT NULL);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO Records VALUES
+                ('k1', 'https://www.nhl.com', '/', 'https://www.nhl.com',
+                 1720367276.884735, 'imports', 'https://www.nhl.com/serviceWorker.js',
+                 'classic');",
+        )
+        .unwrap();
+    }
+
     /// MEGA's decrypted state cache.
     ///
     /// A three-level tree under a ROOT NODE whose name is the literal
@@ -4923,6 +4945,11 @@ from = "nope"
             "GroupSupport/megaclient_statecache14_*.db",
         ),
         (
+            "service_workers",
+            "AppDomain-*",
+            "Library/WebKit/WebsiteData/Default/*/*/ServiceWorkers/ServiceWorkerRegistrations-*.sqlite3",
+        ),
+        (
             "webkit_domains",
             "AppDomain-*",
             "Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db",
@@ -5123,6 +5150,7 @@ from = "nope"
             // One store, three modules: places, recents and favourites.
             "waze_places" | "waze_recents" | "waze_favorites" => seed_waze,
             "webkit_domains" => seed_observations,
+            "service_workers" => seed_service_workers,
             "mega_files" => seed_mega,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),

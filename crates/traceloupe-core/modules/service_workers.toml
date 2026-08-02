@@ -1,0 +1,95 @@
+# Sites that installed a service worker inside an app's web view.
+#
+# `ServiceWorkers/ServiceWorkerRegistrations-*.sqlite3` under
+# `Library/WebKit/WebsiteData`, in whichever app containers have one. Same
+# `AppDomain-*` glob as `webkit_domains.toml`, a different store and a much
+# stronger claim.
+#
+# WHY A REGISTRATION IS EVIDENCE OF USE, NOT OF LOADING
+#
+# `webkit_domains.toml` lists every domain a web view touched — including
+# trackers pulled in by a page nobody chose. A SERVICE WORKER is different: a
+# site can only install one after being loaded as a top-level page over HTTPS,
+# and the registration then PERSISTS across visits. So a row here means someone
+# actually went to that site in that app, and the browser kept a piece of it.
+#
+# It also carries real URLs, which the ITP store does not: `scriptURL` is the
+# worker's own script and `scopeURL` the path it controls. On the validation
+# device that is `https://www.nhl.com/serviceWorker.js` in Safari — the page,
+# not just the registrable domain.
+#
+# `lastUpdateCheckTime` is when WebKit last asked the site whether the worker
+# had changed, which happens on visit. It is the closest thing this store has to
+# a last-seen time, and it is named for what it is rather than relabelled
+# "last visited", which would be a stronger claim than the column supports.
+#
+# THE `-8` IN THE FILENAME IS A SCHEMA VERSION and moves with WebKit, so the
+# path globs it. The two directory levels above are salted per-origin hashes,
+# which is why they are globbed too — and why the ORIGIN COLUMN matters: the
+# path cannot tell you which site a row belongs to, but the row can.
+#
+# SMALL ON THIS CORPUS, deliberately shipped anyway: 2 containers with 1 row
+# each. A registration is rare because it requires a site that ships one AND a
+# visit; that is exactly what makes the ones that exist worth seeing. The same
+# reasoning `sim_cards.toml` records for a single-row artifact.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 1 row in
+# Safari (nhl.com) and 1 in DuckDuckGo. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "service_workers"
+name        = "Sites with a service worker"
+description = "Web pages that installed a background worker inside an app's web view — which requires an actual visit, not merely a resource load."
+verified    = "iphone11_ios17 — 2 registrations, nhl.com in Safari and one in DuckDuckGo, with the worker's own script URL; absent on both iPhone SE lineages, where service workers were barely in use in 2020"
+surface     = "apps"
+join_column = "App"
+app_column  = "App"
+category    = "Network"
+domain      = "AppDomain-*"
+path        = "Library/WebKit/WebsiteData/Default/*/*/ServiceWorkers/ServiceWorkerRegistrations-*.sqlite3"
+path_column = "Storage key"
+
+sql = [
+  """
+  SELECT origin              AS site,
+         topOrigin           AS top_site,
+         scopeURL            AS scope,
+         scriptURL           AS script,
+         lastUpdateCheckTime AS checked,
+         workerType          AS worker_type
+  FROM Records
+  ORDER BY lastUpdateCheckTime DESC, origin
+  """,
+]
+
+[[columns]]
+name = "App"
+
+[[columns]]
+name = "Storage key"
+
+[[columns]]
+name = "Site"
+from = "site"
+
+[[columns]]
+name = "Under"
+from = "top_site"
+
+[[columns]]
+name = "Controls"
+from = "scope"
+
+[[columns]]
+name = "Worker script"
+from = "script"
+
+[[columns]]
+name = "Last update check"
+from = "checked"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Type"
+from = "worker_type"
