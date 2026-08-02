@@ -1,0 +1,156 @@
+# Every file in iCloud Drive — its folder, size, dates, and which app owns it.
+#
+# `CloudDocs/session/db/client.db` in `HomeDomain`, whose
+# `Library/Application Support` is backed up.
+#
+# WHY THIS IS THE FILES APP CLUSTER'S CENTRE OF GRAVITY
+#
+# iLEAPP splits the Files App into seven artifacts; six of them are queries over
+# this one store, and this is the one that answers "what documents did this
+# person keep". It is a file listing for data that is NOT otherwise in the
+# backup: iCloud Drive contents live in the cloud, and what a local backup
+# carries is this INDEX of them. So a row here is evidence that a file existed
+# and where, even though the bytes are somewhere this app cannot reach.
+#
+# THE FOLDER PATH IS BUILT WITH A RECURSIVE CTE, and that deserves explanation
+# because iLEAPP does it differently. `client_items` stores only
+# `item_parent_id`, so a path has to be walked up the chain — iLEAPP does that in
+# Python, building a dictionary of the whole table first. SQLite has
+# `WITH RECURSIVE`, so it is done in the query instead, which is what lets this
+# be a declarative module at all rather than a native parser.
+#
+# The chain terminates the way iLEAPP's does: a parent id of 16 bytes is another
+# item, anything else is a root. `depth < 32` is a cycle guard — a corrupt
+# parent chain that pointed at itself would otherwise recurse until SQLite ran
+# out of memory, and a store this app did not write is not a store it can trust.
+#
+# WHY IT HOSTS ON THE APPS VIEW
+#
+# `app_library_name` is a BUNDLE ID -- `com.apple.CloudDocs`,
+# `com.apple.TextInput` on the validation device -- because iCloud Drive is
+# organised by the app that owns each container. So these rows fold into Apps,
+# answering "what does this app keep in iCloud" beside its permissions and data
+# usage. The first draft declared `standalone` and the repo's own guard rejected
+# it, correctly: there is a view closer in meaning.
+#
+# The consequence worth stating: files under `com.apple.CloudDocs` are the
+# person's OWN documents -- the Desktop and Documents folders -- and they attach
+# to the Files app rather than to a destination of their own. That is the right
+# trade under the folding rule, but it is the reason a Documents view, if one is
+# ever earned, would take these rows first.
+#
+# WHAT IS LEFT OUT AND WHY
+#
+# iLEAPP also reports the DEVICE each version came from, by ATTACHING
+# `server.db` and joining `server.devices`. A declarative module reads one store,
+# deliberately — attaching a second database from a module would mean modules
+# could reach arbitrary files, which is the property that makes them safe to
+# ship. The device name is a real gap and belongs in its own module over
+# `server.db` if it is wanted.
+#
+# Rows with a NULL `version_size` are FOLDERS, not files; iLEAPP folds them into
+# the path of their children. They are excluded here so a size column means
+# something on every row.
+#
+# `item_sharing_options > 4` is iLEAPP's own test for "shared", carried over
+# rather than reinvented.
+#
+# Timestamps are UNIX seconds, unusually for an Apple store — verified against
+# the real device, where `created` reads 2024-01-14 rather than 2054.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 99 items,
+# of which the files resolve to real folders — Desktop/SANS_FOR585_Poster.pdf,
+# Documents/, Downloads/ — with sizes, all three dates, and the owning app
+# (com.apple.CloudDocs, com.apple.TextInput). Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "icloud_drive"
+name        = "iCloud Drive files"
+description = "Files kept in iCloud Drive — folder, size, when each was created, changed and last opened, and which app owns it."
+verified    = "iphone11_ios17 — 27 files resolving to real folders (Desktop/, Documents/, Downloads/, Dictionaries/…) with sizes and all three dates; iphone11_ios16 — 26 on the same phone one OS earlier, and the one file's Shared flag differs between them, so the flags are read not defaulted"
+surface     = "apps"
+join_column = "Owned by"   # app_library_name IS a bundle id
+category    = "Files"
+domain      = "HomeDomain"
+path        = "Library/Application Support/CloudDocs/session/db/client.db"
+
+sql = [
+  """
+  WITH RECURSIVE anc(start_id, cur_id, path, depth) AS (
+      SELECT item_id, item_parent_id, '', 0 FROM client_items
+      UNION ALL
+      SELECT a.start_id, p.item_parent_id,
+             p.item_filename || '/' || a.path, a.depth + 1
+      FROM anc a JOIN client_items p ON p.item_id = a.cur_id
+      WHERE length(a.cur_id) = 16 AND a.depth < 32
+  ),
+  folder AS (
+      SELECT start_id, path FROM anc WHERE length(cur_id) <> 16 OR depth >= 32
+  )
+  SELECT f.path                       AS folder,
+         i.item_filename              AS name,
+         i.version_size               AS size,
+         i.item_birthtime             AS created,
+         i.version_mtime              AS modified,
+         i.item_lastusedtime          AS opened,
+         a.app_library_name           AS app,
+         CASE WHEN i.item_sharing_options > 4 THEN 1 ELSE 0 END AS shared,
+         i.item_user_visible          AS visible,
+         CASE WHEN i.item_trash_put_back_path IS NOT NULL THEN 1 ELSE 0 END AS deleted
+  FROM client_items i
+  LEFT JOIN folder f ON f.start_id = i.item_id
+  LEFT JOIN app_libraries a ON a.rowid = i.app_library_rowid
+  WHERE i.version_size IS NOT NULL
+  ORDER BY i.item_birthtime DESC
+  """,
+]
+
+[[columns]]
+name = "Folder"
+from = "folder"
+
+[[columns]]
+name = "Filename"
+from = "name"
+
+[[columns]]
+name = "Size"
+from = "size"
+kind = "bytes"
+
+[[columns]]
+name = "Created"
+from = "created"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Modified"
+from = "modified"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Last opened"
+from = "opened"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Owned by"
+from = "app"
+
+[[columns]]
+name = "Shared"
+from = "shared"
+kind = "bool"
+
+[[columns]]
+name = "Visible in Files"
+from = "visible"
+kind = "bool"
+
+[[columns]]
+name = "Recently deleted"
+from = "deleted"
+kind = "bool"
