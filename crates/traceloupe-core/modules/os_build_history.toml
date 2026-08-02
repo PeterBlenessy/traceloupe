@@ -1,0 +1,79 @@
+# Every iOS build this device has booted, and when.
+#
+# `boot_history` in `CloudDocs/session/db/client.db` — the same store
+# `icloud_drive.toml` reads, a different table. iCloud's sync daemon records the
+# OS build each time it starts under a new one, which incidentally makes it one
+# of the few places a backup carries an UPGRADE TIMELINE.
+#
+# WHY THAT MATTERS
+#
+# A backup reports the version the device is on NOW. This reports the versions
+# it was on BEFORE, with dates. That bounds when the device was in a given
+# state: an artifact whose schema changed at iOS 17 can be dated against the
+# build that introduced it, and a device that spent a year on an old build is a
+# different evidential picture from one upgraded the week before seizure.
+#
+# On the validation phone it reads 20B110 on 2023-07-01 and 21D50 on
+# 2024-01-25 — which are iOS 16.1.2 and 17.3, the two lineages in the corpus.
+# The artifact corroborates the corpus rather than the other way round.
+#
+# BUILD NUMBERS, NOT VERSIONS. `os` is Apple's build identifier (`21D50`), not
+# `17.3`. Mapping one to the other needs a table that changes with every
+# release, and an out-of-date mapping would silently mislabel a build — so the
+# build is shown as recorded, which is also what a reader looking it up will
+# search for.
+#
+# `br` is the bird (the iCloud daemon) version, kept because it moves with the
+# OS and corroborates the build. `device_id` is NULL on the first row of the
+# validation device and populated on the second — an artefact of the daemon
+# only learning its id later, shown rather than hidden.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 2 boots,
+# 20B110 then 21D50 — and against the same phone at 16.1.2, which is where the
+# missing `device_id` column was found. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "os_build_history"
+name        = "OS build history"
+description = "Every iOS build this device has booted under, with the date — an upgrade timeline a backup does not otherwise carry."
+verified    = "iphone11_ios17 — 2 boots, 20B110 (2023-07-01) then 21D50 (2024-01-25); iphone11_ios16 — the SAME phone shows only the first, because the upgrade had not happened yet, so the artifact corroborates the corpus"
+surface     = "device"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Application Support/CloudDocs/session/db/client.db"
+
+sql = [
+  # iOS 17 lineage.
+  """
+  SELECT date AS booted, os AS build, br AS bird_version, device_id
+  FROM boot_history
+  ORDER BY date DESC
+  """,
+  # iOS 16 lineage: NO `device_id` COLUMN. Verified on the same physical phone
+  # at 16.1.2, where the query above fails outright. Reported as NULL -- "not
+  # recorded" -- never as a value, for the same reason `data_usage.toml` reports
+  # a missing Wi-Fi column as NULL rather than as zero traffic.
+  """
+  SELECT date AS booted, os AS build, br AS bird_version, NULL AS device_id
+  FROM boot_history
+  ORDER BY date DESC
+  """,
+]
+
+[[columns]]
+name = "First booted"
+from = "booted"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "iOS build"
+from = "build"
+
+[[columns]]
+name = "iCloud daemon"
+from = "bird_version"
+
+[[columns]]
+name = "Device id"
+from = "device_id"
