@@ -284,8 +284,18 @@ python3 tools/module-status.py --summary  # just the counts
 |---|---|---|
 | `iphone11_ios17` | iPhone 11, iOS 17.3 | Josh Hickman's public research image — the encrypted backup, not the full-filesystem tree |
 | `iphone11_ios16` | iPhone 11, iOS 16.1.2 | **The same physical phone** (serial F4GZ987AN72N) one OS earlier, which is what makes it a drift check rather than a second sample |
+| `iphone_se_ios13` | iPhone SE, iOS 13.3.1 | A **different** device (serial DX3T126VH2XV), four years older — the lineage that exercises every older-schema SQL alternative the modules carry |
 
-Both decrypt with the same password. The catalogue recorded `ios16` as "not yet
+The iPhone 11 pair decrypt with the same password; **the iPhone SE does not** — its
+password is lowercase `mypassword123`, documented only in the image-creation PDF.
+Its `image_info.txt` says "Password Protected: false" while the Manifest says
+`IsEncrypted: true`, so the obvious file is the misleading one.
+
+**Fetching it cost 396 MB, not 8.9 GB.** The archive is one zip; the iTunes backup
+inside it is a single member. `tools/fetch-zip-member.py` range-fetches just that
+member — read the End of Central Directory, find the entry, pull its bytes. Two of
+the four catalogue entries were also wrong and are corrected: `ios15` does not exist
+on Digital Corpora at all, and `ios13`'s URL 404'd. The catalogue recorded `ios16` as "not yet
 fetched", with no password and the wrong device — so every module "failed"
 against it in corpus mode, unauthenticated. Corrected from the fetched backup's
 own `Info.plist`.
@@ -303,6 +313,18 @@ the schema itself does (`sources.local_device = 1`) rather than by guessing at
 the report get *worse* every time an older device was added — and a validator
 that always fails is one nobody runs. It now fails only for a module absent from
 **every** backup, which is a wrong path, and notes the rest.
+
+### What the third lineage caught
+
+`sleep_schedule` failed outright on iOS 13.3.1: `MTSleepAlarms` does not exist
+there, because **Sleep Schedule arrived in iOS 14**. Strict path-walking took the
+whole artifact down over a device that simply predates the feature — the same
+shape as the `MTStopwatches` absence, and the same fix (`optional = true`).
+
+That is three sessions running where the OLDER device found something the newer
+ones could not. The pattern is worth stating plainly: **a corpus of one device is
+a corpus of one iOS version**, and every schema fallback a module carries is
+untested until something old enough to need it turns up.
 
 ### What verifying actually caught
 
@@ -362,7 +384,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
 | Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
-| Sleep schedule | Device | ✅ | iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off |
+| Sleep schedule | Device | ✅ | iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off; iphone_se_ios13 — 0 rows, because MTSleepAlarms does not exist before iOS 14 |
 | Stopwatch | Device | ✅ | iphone11_ios17 — 0 rows: the MTStopwatches key is absent entirely, which is what taught this module it must be optional |
 | Permissions | Security | ✅ | iphone11_ios17 — 289 rows, which is exactly the count iLEAPP records for the same image — two independent parsers agreeing. The distribution also justified passing unknowns through rather than guessing: alongside… |
 | Timers | Device | ✅ | iphone11_ios17 — 1 timer, the stored 'CURRENT_TIMER' placeholder: 15 min, fire-time class MTTimerTimeInterval, so 'Due' is correctly empty |
