@@ -1,0 +1,60 @@
+# When this device last backed up, where to, and whether iCloud backup was on.
+#
+# `com.apple.mobile.ldbackup.plist` in `HomeDomain`, whose `Library/Preferences`
+# is backed up. Per iLEAPP's `backupSettings.py`.
+#
+# WHY A BACKUP'S OWN BACKUP HISTORY IS EVIDENCE
+#
+# The backup being read has a date of its own. This plist says when the device
+# last backed up to a COMPUTER and when it last backed up to iCloud — two
+# different lineages, each with the time zone it was recorded in. A gap between
+# them, or an iCloud backup more recent than the local one being examined, says
+# there is a more complete copy of this device somewhere else. That is a fact
+# about the investigation, not about the phone.
+#
+# `CloudBackupEnabled` matters for the same reason in reverse: switched off, the
+# local copy is all there is.
+#
+# THE TIME ZONES ARE STORED AS SEPARATE STRINGS from the dates, which is why
+# they are separate columns rather than folded in. The dates themselves are
+# Cocoa / Core Data seconds, declared `epoch = "cocoa"`.
+#
+# NOT YET VERIFIED against a real device — written from iLEAPP's definition and
+# proven to run against a fixture. Verify with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "backup_settings"
+name        = "Backup history"
+description = "When this device last backed up to a computer and to iCloud, and whether iCloud backup was switched on."
+surface     = "device"
+shape       = "facts"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.mobile.ldbackup.plist"
+
+[plist]
+
+[[columns]]
+name = "Last computer backup"
+from = "LastiTunesBackupDate"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Computer backup time zone"
+from = "LastiTunesBackupTZ"
+
+[[columns]]
+name = "Last iCloud backup"
+from = "LastCloudBackupDate"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "iCloud backup time zone"
+from = "LastCloudBackupTZ"
+
+[[columns]]
+name = "iCloud backup on"
+from = "CloudBackupEnabled"
+kind = "bool"
