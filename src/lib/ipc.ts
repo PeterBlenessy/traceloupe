@@ -4030,6 +4030,53 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "imei_imsi",
+            name: "Cellular identity",
+            category: "Device",
+            description:
+              "The handset's IMEI, the subscriber's IMSI, and the phone number each SIM carried — the identifiers a carrier record is keyed on.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "SIM",
+              "IMEI",
+              "IMSI",
+              "Phone number",
+              "Number copied from SIM",
+              "Last registered network",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "find_my",
+            name: "Find My",
+            category: "Device",
+            description:
+              "The Apple account this device is registered to for Find My, when that was enabled, and whether it sends its last location before dying.",
+            surface: "device" as const,
+            shape: "facts" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Apple account (DSID)",
+              "Find My enabled",
+              "Send last location",
+              "OS version recorded",
+              "Enable context",
+            ],
+            timestampColumns: ["Find My enabled"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "message_retention",
             name: "Message retention",
             category: "Device",
@@ -4342,7 +4389,28 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "message_retention"
+    mockActive && artifactId === "imei_imsi"
+      ? [
+          {
+            SIM: "8901260971148676693",
+            IMEI: "353985100845978",
+            IMSI: "310260974867669",
+            "Phone number": "+19195794674",
+            "Number copied from SIM": "+19195794674",
+            "Last registered network": "310260",
+          },
+        ]
+      : mockActive && artifactId === "find_my"
+        ? [
+            {
+              "Apple account (DSID)": "17193901029",
+              "Find My enabled": 1688242982,
+              "Send last location": true,
+              "OS version recorded": "17.3",
+              "Enable context": 3,
+            },
+          ]
+      : mockActive && artifactId === "message_retention"
       // Strings, because a mapped column always is — and "90" is the unmapped
       // code travelling as itself.
       ? [
