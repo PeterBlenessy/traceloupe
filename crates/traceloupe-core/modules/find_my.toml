@@ -1,0 +1,74 @@
+# Find My — the Apple account this device is registered to, and when.
+#
+# `com.apple.icloud.findmydeviced.FMIPAccounts.plist` in `HomeDomain`, whose
+# `Library/Preferences` is backed up. Per iLEAPP's Identifiers cluster.
+#
+# WHY THE DSID MATTERS
+#
+# `dsid` is the Apple account's numeric Directory Services identifier — the
+# stable internal id behind an Apple ID, which does not change when the email
+# address does. It is what ties this handset to an iCloud account, and so to
+# every other device on it. The e-mail address is not in this file; the account
+# it belongs to is.
+#
+# `addTime` is when Find My was enabled for this account, in UNIX seconds — not
+# Cocoa, which is unusual for an Apple plist and worth stating: read as Cocoa
+# the 2023 value would land in 2054. Verified against the real device.
+#
+# `lowBatteryLocate` is the "Send Last Location" setting: with it on, the phone
+# transmits its position when the battery is critically low, which is often the
+# last position on record for a device that then died.
+#
+# WHAT CANNOT BE READ HERE
+#
+# `versionHistory` is an ARRAY OF STRINGS — on the validation device
+# `["u16.1.2"]`, the iOS this phone ran before its upgrade, which is a genuinely
+# interesting timeline. A column addresses a key inside a record and a bare
+# string has none, the same limitation `stopwatch.toml` documents for lap times.
+# Reading only element 0 would silently drop the rest on a device with a longer
+# history, so it is left out rather than half-read.
+#
+# `enableContext` is an undocumented integer (3 on the validation device) and is
+# passed through as one rather than guessed at.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: DSID
+# 17193901029, Find My enabled 2023-07-01, Send Last Location on, and a
+# versionHistory of "u16.1.2" that corroborates the iOS 16 image being the same
+# phone. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "find_my"
+name        = "Find My"
+description = "The Apple account this device is registered to for Find My, when that was enabled, and whether it sends its last location before dying."
+verified    = "iphone11_ios17 + iphone11_ios16 — DSID 17193901029 on both, enabled 2023-07-01; 'Send last location' was OFF at 16.1.2 and ON at 17.3, so the setting is read, not defaulted"
+surface     = "device"
+shape       = "facts"
+category    = "Device"
+domain      = "HomeDomain"
+path        = "Library/Preferences/com.apple.icloud.findmydeviced.FMIPAccounts.plist"
+
+[plist]
+
+[[columns]]
+name = "Apple account (DSID)"
+from = "dsid"
+
+[[columns]]
+name = "Find My enabled"
+from = "addTime"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Send last location"
+from = "lowBatteryLocate"
+kind = "bool"
+
+[[columns]]
+name = "OS version recorded"
+from = "osVersion"
+
+[[columns]]
+name = "Enable context"
+from = "enableContext"
+kind = "integer"

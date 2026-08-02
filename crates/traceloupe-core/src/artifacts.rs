@@ -2210,6 +2210,8 @@ const BUILTIN: &[(&str, &str)] = &[
         "location_services.toml",
         include_str!("../modules/location_services.toml"),
     ),
+    ("imei_imsi.toml", include_str!("../modules/imei_imsi.toml")),
+    ("find_my.toml", include_str!("../modules/find_my.toml")),
     (
         "world_clock.toml",
         include_str!("../modules/world_clock.toml"),
@@ -3960,6 +3962,88 @@ from = "nope"
         out
     }
 
+    /// `com.apple.commcenter.plist` — cellular identity, keyed by SIM.
+    ///
+    /// TWO SIMs, because the middle key is the SIM's own identifier and a
+    /// single-SIM fixture would let a module hard-code one and still pass.
+    fn seed_commcenter() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        fn sim(imei: &str, imsi: &str, number: &str, plmn: &str) -> Value {
+            let mut ent = Dictionary::new();
+            ent.insert("lastGoodImsi".into(), Value::String(imsi.into()));
+            ent.insert(
+                "kEntitlementsSelfRegistrationUpdateImei".into(),
+                Value::String(imei.into()),
+            );
+            let mut phonebook = Dictionary::new();
+            phonebook.insert("PNRPhoneNumber".into(), Value::String(number.into()));
+            phonebook.insert("CopiedSIMPhoneNumber".into(), Value::String(number.into()));
+            let mut deact = Dictionary::new();
+            deact.insert(
+                "LastRegisteredNetworkPlmn".into(),
+                Value::String(plmn.into()),
+            );
+            let mut caps = Dictionary::new();
+            caps.insert("NetworkSupportsVoPS".into(), Value::Boolean(true));
+
+            let mut d = Dictionary::new();
+            d.insert("CarrierEntitlements".into(), Value::Dictionary(ent));
+            d.insert("phonebook".into(), Value::Dictionary(phonebook));
+            d.insert("SimDeactivationInfo".into(), Value::Dictionary(deact));
+            // Radio state the module deliberately ignores.
+            d.insert("Capabilities".into(), Value::Dictionary(caps));
+            Value::Dictionary(d)
+        }
+        let mut wallet = Dictionary::new();
+        wallet.insert(
+            "8901260971148676693".into(),
+            sim(
+                "353985100845978",
+                "310260974867669",
+                "+19195794674",
+                "310260",
+            ),
+        );
+        wallet.insert(
+            "8901260971148676694".into(),
+            sim(
+                "353985100845979",
+                "310260974867670",
+                "+19195794675",
+                "310410",
+            ),
+        );
+        let mut root = Dictionary::new();
+        root.insert("PersonalWallet".into(), Value::Dictionary(wallet));
+        root.insert("LastKnownServingMnc".into(), Value::Integer(260.into()));
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
+    /// `…findmydeviced.FMIPAccounts.plist` — the account Find My is bound to.
+    ///
+    /// `addTime` is UNIX seconds, not Cocoa. Read as Cocoa this 2023 value
+    /// lands in 2054, which is exactly the sort of thing a fixture should pin.
+    fn seed_find_my() -> Vec<u8> {
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert("dsid".into(), Value::String("17193901029".into()));
+        root.insert("addTime".into(), Value::Real(1_688_242_982.504));
+        root.insert("osVersion".into(), Value::String("17.3".into()));
+        root.insert("lowBatteryLocate".into(), Value::Boolean(true));
+        root.insert("enableContext".into(), Value::Integer(3.into()));
+        // An array of bare strings, which no column can address -- present so
+        // the limitation the module documents is visible.
+        root.insert(
+            "versionHistory".into(),
+            Value::Array(vec![Value::String("u16.1.2".into())]),
+        );
+        let mut out = Vec::new();
+        plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
+        out
+    }
+
     /// `com.apple.MobileSMS.plist` — BOTH retention keys, the iOS <=16 spelling
     /// and the iOS 17+ one, so a module reading only the modern one is caught.
     /// 30 is mapped; a deliberately unmapped 90 proves an unknown code travels
@@ -4455,6 +4539,16 @@ from = "nope"
             "Library/Preferences/com.apple.locationd.plist",
         ),
         (
+            "imei_imsi",
+            "WirelessDomain",
+            "Library/Preferences/com.apple.commcenter.plist",
+        ),
+        (
+            "find_my",
+            "HomeDomain",
+            "Library/Preferences/com.apple.icloud.findmydeviced.FMIPAccounts.plist",
+        ),
+        (
             "world_clock",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
@@ -4627,6 +4721,8 @@ from = "nope"
             "message_retention" => return Seed::Bytes(seed_message_retention),
             "backup_settings" => return Seed::Bytes(seed_backup_settings),
             "location_services" => return Seed::Bytes(seed_location_services),
+            "imei_imsi" => return Seed::Bytes(seed_commcenter),
+            "find_my" => return Seed::Bytes(seed_find_my),
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),

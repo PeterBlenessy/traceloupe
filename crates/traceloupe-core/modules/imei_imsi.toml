@@ -1,0 +1,75 @@
+# The device's cellular identity — IMEI, IMSI, and the number each SIM carried.
+#
+# `com.apple.commcenter.plist` in `WirelessDomain`, whose `Library/Preferences`
+# is backed up. Per iLEAPP's `imeiImsi.py`.
+#
+# WHY THIS IS THE STRONGEST IDENTIFIER IN THE BACKUP
+#
+# The IMEI identifies the HANDSET, permanently and independently of any account,
+# SIM or iCloud login. The IMSI identifies the SUBSCRIBER on the carrier's
+# network. Together they are what a carrier record, a lawful-intercept request or
+# a stolen-device report is keyed on — so this is the row that ties a backup to
+# the physical phone and to a subscription, rather than to an Apple ID.
+#
+# `sim_cards.toml` reads the SIM's ICCID and number from `CellularUsage.db`;
+# this is a different store and different facts. Neither replaces the other,
+# and where both report a number they corroborate each other.
+#
+# THE SIM IS THE MIDDLE KEY, WHICH IS WHY THIS NEEDS A WILDCARD.
+# `PersonalWallet` is keyed by the SIM's own identifier —
+# `8901260971148676693` on the validation device — so there is no fixed path to
+# name and `rows = ["PersonalWallet", "*"]` fans out over whatever is there.
+# `index_column` then records WHICH SIM each row came from, which is required:
+# on a dual-SIM device two sets of identifiers merged into one anonymous table
+# would be worse than reading only one, because it would look complete.
+#
+# WHAT IS DELIBERATELY LEFT OUT
+#
+# The same subtree holds `Capabilities`, `SimPin`, `RegistrationController` and
+# `SMSControllerWalletDomain` — radio state and feature flags. They describe the
+# network session, not the person or the device, and none of them is documented
+# well enough to render as anything but a raw boolean.
+#
+# `kEntitlementsSelfRegistrationUpdateImsi` and `last-used-imsi` repeat
+# `lastGoodImsi` verbatim on the validation device. One IMSI column, not three.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: one SIM,
+# IMEI 353985100845978, IMSI 310260974867669, +1 919 579 4674 on PLMN 310260.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "imei_imsi"
+name        = "Cellular identity"
+description = "The handset's IMEI, the subscriber's IMSI, and the phone number each SIM carried — the identifiers a carrier record is keyed on."
+verified    = "iphone11_ios17 + iphone11_ios16 — 1 SIM, IMEI 353985100845978, IMSI 310260974867669, +1 919 579 4674 on PLMN 310260; identical across both OS versions, which is what a handset identifier should be"
+surface     = "device"
+category    = "Device"
+domain      = "WirelessDomain"
+path        = "Library/Preferences/com.apple.commcenter.plist"
+
+[plist]
+rows = ["PersonalWallet", "*"]
+index_column = "SIM"
+
+[[columns]]
+name = "SIM"
+
+[[columns]]
+name = "IMEI"
+from = ["CarrierEntitlements", "kEntitlementsSelfRegistrationUpdateImei"]
+
+[[columns]]
+name = "IMSI"
+from = ["CarrierEntitlements", "lastGoodImsi"]
+
+[[columns]]
+name = "Phone number"
+from = ["phonebook", "PNRPhoneNumber"]
+
+[[columns]]
+name = "Number copied from SIM"
+from = ["phonebook", "CopiedSIMPhoneNumber"]
+
+[[columns]]
+name = "Last registered network"
+from = ["SimDeactivationInfo", "LastRegisteredNetworkPlmn"]
