@@ -4057,6 +4057,32 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "service_workers",
+            name: "Sites with a service worker",
+            category: "Network",
+            description:
+              "Web pages that installed a background worker inside an app's web view — which requires an actual visit, not merely a resource load.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Storage key",
+              "Site",
+              "Under",
+              "Controls",
+              "Worker script",
+              "Last update check",
+              "Type",
+            ],
+            timestampColumns: ["Last update check"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "webkit_domains",
             name: "Web domains loaded in apps",
             category: "Network",
@@ -4630,6 +4656,19 @@ const mockClient: TraceLoupeClient = {
             Shared: false,
           },
         ]
+      : mockActive && artifactId === "service_workers"
+        ? [
+            {
+              App: "com.apple.mobilesafari",
+              "Storage key": "HUafgkFRnEK9.../ServiceWorkerRegistrations-8.sqlite3",
+              Site: "https://www.nhl.com",
+              Under: "https_www.nhl.com_0",
+              Controls: "/",
+              "Worker script": "https://www.nhl.com/serviceWorker.js",
+              "Last update check": 1720367276,
+              Type: "Classic",
+            },
+          ]
       : mockActive && artifactId === "webkit_domains"
       ? [
           {
