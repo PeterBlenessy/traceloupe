@@ -302,13 +302,40 @@ mod tests {
         // The other link: the handler has to actually be on SIGINT/SIGTERM/
         // SIGHUP, or nothing ever calls reap_all() on a signal. Drop a signal
         // from SIGNALS and this fails for that signal.
+        //
+        // THE CONTRACT IS CONDITIONAL, and this test used to ignore that.
+        // `install()` deliberately leaves a signal alone when it was INHERITED
+        // AS SIG_IGN — the POSIX convention that a process started with a signal
+        // ignored is meant to survive it. A backgrounded shell inherits SIGINT
+        // that way, which is exactly how `scripts/preflight.sh` runs the suite,
+        // so the old unconditional assertion failed there and passed when the
+        // same command was run in the foreground. It read as flakiness; it was
+        // the test asserting something the code is documented not to do.
+        //
+        // Snapshot first, because `install()` is `Once`-guarded: by the time
+        // this test runs another may already have installed, so "what was here
+        // before" is the only way to know which branch applies.
+        let before: Vec<(libc::c_int, usize)> = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP]
+            .iter()
+            .map(|&sig| (sig, installed_handler(sig)))
+            .collect();
+
         install_for_test();
-        for sig in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            assert_eq!(
-                installed_handler(sig),
-                our_handler(),
-                "signal {sig} must route to the reaper"
-            );
+
+        for (sig, prior) in before {
+            if prior == libc::SIG_IGN {
+                assert_eq!(
+                    installed_handler(sig),
+                    libc::SIG_IGN,
+                    "signal {sig} was inherited ignored, so it must be left ignored"
+                );
+            } else {
+                assert_eq!(
+                    installed_handler(sig),
+                    our_handler(),
+                    "signal {sig} must route to the reaper"
+                );
+            }
         }
     }
 }
