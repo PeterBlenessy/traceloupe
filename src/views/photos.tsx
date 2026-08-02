@@ -19,6 +19,7 @@ import {
   Heart,
   Import,
   Image as ImageIcon,
+  ImageOff,
   Images,
   MapPin,
   Play,
@@ -38,6 +39,7 @@ const SUBTYPE_LABELS: Record<string, string> = {
   live: "Live Photo",
   burst: "Burst",
 };
+import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -230,7 +232,10 @@ function PhotosViewInner() {
       {error ? (
         <ErrorState error={error} />
       ) : count === undefined ? (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1">
+        <div
+          data-underlap=""
+          className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-1 p-1"
+        >
           {Array.from({ length: 12 }).map((_, i) => (
             <Skeleton key={i} className="aspect-square" />
           ))}
@@ -238,11 +243,15 @@ function PhotosViewInner() {
       ) : count === 0 ? (
         <EmptyView
           icon={Images}
-          title={
-            source === "all"
-              ? "No photos or videos in this backup."
-              : "No media from this source."
-          }
+          title={emptyListMessage(
+            {
+              search,
+              timeFiltered: isTimeFiltered(range),
+              otherFiltered: source !== "all",
+            },
+            "No photos or videos in this backup.",
+            "photos or videos",
+          )}
         />
       ) : (
         // key by source+range+search+sort so the grid remounts (scroll +
@@ -434,6 +443,18 @@ function formatBytes(bytes: number): string {
 
 /** The photo's location as a clickable Apple Maps link — the moment place name
  *  when known, else the coordinates. */
+/** The house Tooltip triple. Three lightbox chips used a native `title=`,
+ *  which check-design.mjs forbids -- and never caught here only because the
+ *  lint never opens a photo. */
+function Hint({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent className="max-w-72">{label}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function LocationTag({ item }: { item: MediaItem }) {
   const hasCoords = item.latitude != null && item.longitude != null;
   const label =
@@ -470,17 +491,34 @@ function LocationTag({ item }: { item: MediaItem }) {
 function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
   const isVideo = item.kind === "video";
   const cacheKey = useMediaCacheKey();
+  const [failed, setFailed] = useState(false);
   return (
     <button
       onClick={onOpen}
       aria-label={item.filename ?? (isVideo ? "Open video" : "Open photo")}
       className="group relative aspect-square w-full overflow-hidden rounded-sm bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <img
-        src={client.mediaUrl(item.id, { thumb: true, cacheKey })}
-        alt={item.filename ?? ""}
-        className="size-full object-cover transition-transform group-hover:scale-105"
-      />
+      {failed ? (
+        // The media route 404s when the file cannot be produced -- most often
+        // an encrypted backup whose session decryptor is gone after a cancelled
+        // Touch ID. A bare broken <img> is a silent blank tile that reads as
+        // "this photo is missing from the backup", which is a different and
+        // false claim.
+        <span className="flex size-full flex-col items-center justify-center gap-1 text-muted-foreground">
+          <ImageOff className="size-5" />
+          <span className="px-1 text-3xs">Unavailable</span>
+        </span>
+      ) : (
+        <img
+          src={client.mediaUrl(item.id, { thumb: true, cacheKey })}
+          alt={item.filename ?? ""}
+          onError={() => setFailed(true)}
+          // Not `scale-105`: Tailwind v4 emits the standalone `scale` property
+          // and WKWebView will not animate it, so the zoom snapped. The
+          // `transform` shorthand does animate. See docs/reference/ui.md.
+          className="size-full object-cover transition-transform [transform:scale(1)] group-hover:[transform:scale(1.05)]"
+        />
+      )}
       {item.source && (
         <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-3xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
           {item.source}
@@ -566,6 +604,10 @@ function Lightbox({
   const open = index != null;
   const { lightboxStyle, showMediaMetadata } = useSettings();
   const cacheKey = useMediaCacheKey();
+  // Cleared on every navigation: the previous file failing says nothing about
+  // the next one.
+  const [fullFailed, setFullFailed] = useState(false);
+  useEffect(() => setFullFailed(false), [index, cacheKey]);
   // Subscribe to the current item's window (same key the grid fills) so the view
   // re-renders when a not-yet-loaded window resolves — a non-reactive cache read
   // would leave the spinner stuck until the next interaction.
@@ -632,22 +674,20 @@ function Lightbox({
             )}
             <span className="select-text truncate">{item.filename ?? "—"}</span>
             {item.persons && (
-              <span
-                className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400"
-                title={item.persons}
-              >
-                <Users className="size-3.5 shrink-0" />
-                <span className="select-text truncate">{item.persons}</span>
-              </span>
+              <Hint label={item.persons}>
+                <span className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400">
+                  <Users className="size-3.5 shrink-0" />
+                  <span className="select-text truncate">{item.persons}</span>
+                </span>
+              </Hint>
             )}
             {item.albums && (
-              <span
-                className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400"
-                title={`Albums: ${item.albums}`}
-              >
-                <Images className="size-3.5 shrink-0" />
-                <span className="select-text truncate">{item.albums}</span>
-              </span>
+              <Hint label={`Albums: ${item.albums}`}>
+                <span className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400">
+                  <Images className="size-3.5 shrink-0" />
+                  <span className="select-text truncate">{item.albums}</span>
+                </span>
+              </Hint>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-3">
@@ -662,13 +702,12 @@ function Lightbox({
             {item.addedAt != null &&
               (item.takenAt == null ||
                 Math.abs(item.addedAt - item.takenAt) > 86400) && (
-                <span
-                  className="inline-flex items-center gap-1 text-status-warning-text"
-                  title="Added to this device's library later than it was captured — likely received, saved, or imported"
-                >
-                  <Import className="size-3 shrink-0" />
-                  Added {formatDateTime(item.addedAt)}
-                </span>
+                <Hint label="Added to this device's library later than it was captured — likely received, saved, or imported">
+                  <span className="inline-flex items-center gap-1 text-status-warning-text">
+                    <Import className="size-3 shrink-0" />
+                    Added {formatDateTime(item.addedAt)}
+                  </span>
+                </Hint>
               )}
           </div>
         </div>
@@ -706,11 +745,24 @@ function Lightbox({
       onPrev={() => go(-1)}
       onNext={() => go(1)}
       media={
-        item ? (
+        item && fullFailed ? (
+          // Same rule as the tile: a black modal with nothing in it is not an
+          // answer. Decryption is the usual cause, so name it.
+          <div className="flex flex-col items-center gap-2 px-8 text-center text-white/70">
+            <ImageOff className="size-8" />
+            <p className="text-sm">
+              This file could not be read from the backup.
+            </p>
+            <p className="text-xs text-white/50">
+              If the backup is encrypted, unlock it and try again.
+            </p>
+          </div>
+        ) : item ? (
           isVideo ? (
             <video
               key={item.id}
               src={client.mediaUrl(item.id, { cacheKey })}
+              onError={() => setFullFailed(true)}
               // iOS's pre-rendered thumbnail as the poster, so a still shows
               // instantly (and if autoplay is blocked, it isn't a black frame).
               poster={client.mediaUrl(item.id, { thumb: true, cacheKey })}
@@ -723,6 +775,7 @@ function Lightbox({
               key={item.id}
               src={client.mediaUrl(item.id, { cacheKey })}
               alt={item.filename ?? ""}
+              onError={() => setFullFailed(true)}
               className="max-h-full max-w-full object-contain"
             />
           )

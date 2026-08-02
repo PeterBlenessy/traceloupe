@@ -17,7 +17,7 @@ import { usePersistedState } from "@/lib/use-persisted-state";
 import { useEncryptedOnlyEmpty } from "@/lib/use-encrypted-only";
 import { useSettings } from "@/components/settings-provider";
 import { NoBackupState, VirtualListView } from "@/components/view";
-import { dateFormat, formatCount, formatDate, formatDateTime, formatDuration } from "@/lib/format";
+import { dateFormat, formatCount, formatDate, formatDateTime, formatDecimal, formatDuration, plural } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { modelName } from "@/lib/device-names";
 import {
@@ -45,13 +45,15 @@ const SECTIONS: { value: HealthSection; label: string }[] = [
   { value: "sleep", label: "Sleep" },
   { value: "timezones", label: "Timezones" },
   { value: "awards", label: "Awards" },
-  { value: "cycle", label: "Cycle Tracking" },
+  { value: "cycle", label: "Cycle tracking" },
 ];
 
 /** Metres → a compact "5.2 km" / "820 m". */
 function formatDistance(m: number | null): string | null {
   if (m == null || m <= 0) return null;
-  return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${Math.round(m)} m`;
+  return m >= 1000
+    ? `${formatDecimal(m / 1000, 2)} km`
+    : `${formatCount(Math.round(m))} m`;
 }
 
 /** Days are aggregated per UTC day at import; format the label in UTC so the
@@ -70,16 +72,28 @@ function formatDayUTC(at: number): string {
  *  fitted and centered). Single series in the primary hue; start ring + end dot
  *  mark direction. Fetched lazily when the row expands. */
 function RoutePreview({ workoutId }: { workoutId: number }) {
-  const { data: route, isPending } = useQuery({
+  const { data: route, isPending, error } = useQuery({
     queryKey: ["workoutRoute", workoutId],
     queryFn: () => client.workoutRoute(workoutId),
   });
   if (isPending)
     return <div className="mx-2 mb-1 h-44 animate-pulse rounded-md bg-muted/40" />;
+  // This only mounts for a workout whose `has_route` was true -- an EXISTS over
+  // workout_routes (query.rs) -- so "no points were recorded" is a claim the
+  // backup has already contradicted. An empty result here means the read
+  // failed, and saying otherwise blames the user's device for our error.
+  if (error)
+    return (
+      <p className="px-4 pb-2 text-xs text-muted-foreground">
+        Could not read this route from the backup.
+      </p>
+    );
   if (!route || route.length < 2)
     return (
       <p className="px-4 pb-2 text-xs text-muted-foreground">
-        No route points recorded.
+        {route?.length === 1
+          ? "Only one point was recorded, so there is no line to draw."
+          : "Could not read this route from the backup."}
       </p>
     );
 
@@ -224,9 +238,9 @@ function ringBit(
 
 function DayRow({ day }: { day: HealthDay }) {
   const bits = [
-    day.steps != null ? `${formatCount(day.steps)} steps` : null,
+    day.steps != null ? plural(day.steps, "step") : null,
     formatDistance(day.distanceM),
-    day.flights ? `${formatCount(day.flights)} floors` : null,
+    day.flights ? plural(day.flights, "floor") : null,
     day.activeKcal != null && day.activeKcal >= 1
       ? `${formatCount(Math.round(day.activeKcal))} kcal active`
       : null,
@@ -240,8 +254,8 @@ function DayRow({ day }: { day: HealthDay }) {
     ringBit("Stand", day.standHours, day.standGoalHours, "hr"),
   ].filter(Boolean);
   const mobility = [
-    day.walkSpeedMs != null ? `walk ${day.walkSpeedMs.toFixed(1)} m/s` : null,
-    day.stepLengthM != null ? `step ${day.stepLengthM.toFixed(2)} m` : null,
+    day.walkSpeedMs != null ? `walk ${formatDecimal(day.walkSpeedMs, 1)} m/s` : null,
+    day.stepLengthM != null ? `step ${formatDecimal(day.stepLengthM, 2)} m` : null,
     day.doubleSupportPct != null
       ? `support ${Math.round(day.doubleSupportPct * 100)}%`
       : null,
@@ -257,11 +271,23 @@ function DayRow({ day }: { day: HealthDay }) {
       </ItemMedia>
       <ItemContent>
         <ItemTitle className="truncate">{formatDayUTC(day.dayAt)}</ItemTitle>
-        <div className="text-xs text-muted-foreground">
-          {bits.length > 0 ? bits.join(" · ") : "No activity recorded"}
-        </div>
+        {/* Rings come from a different parser path (activity_caches) than the
+            step/distance bits, so a day can have rings and no bits. This used
+            to print "No activity recorded" directly above "Move 412/500 kcal".
+            The absence is only real when every line is empty. */}
+        {bits.length > 0 ? (
+          <div className="text-xs text-muted-foreground">{bits.join(" · ")}</div>
+        ) : rings.length === 0 && mobility.length === 0 ? (
+          <div className="text-xs text-muted-foreground">No activity recorded</div>
+        ) : null}
         {(rings.length > 0 || mobility.length > 0) && (
-          <div className="text-xs text-muted-foreground/70">
+          <div
+            className={
+              bits.length > 0
+                ? "text-xs text-muted-foreground/70"
+                : "text-xs text-muted-foreground"
+            }
+          >
             {[...rings, ...mobility].join(" · ")}
           </div>
         )}
@@ -375,7 +401,7 @@ function TimezoneRow({ tz }: { tz: HealthTimezone }) {
       <ItemContent>
         <ItemTitle className="truncate">{tz.tzName.replace(/_/g, " ")}</ItemTitle>
         <div className="truncate text-xs text-muted-foreground">
-          {formatCount(tz.samples)} samples
+          {plural(tz.samples, "sample")}
           {devices && ` · ${devices}`}
         </div>
       </ItemContent>
@@ -610,9 +636,13 @@ export function HealthView() {
         setSort,
         timeDescription: "When the workout took place",
         emptyIcon: Activity,
-        emptyAll: hasAny
-          ? "No workouts in this backup — switch Section to see daily activity or sleep."
-          : "No health data in this backup.",
+        // No `hasAny` fallback here: when the backup has nothing at all the
+        // render below uses `noHealthMessage`, which is the only thing that
+        // knows whether Health is absent, unimported, or impossible in an
+        // unencrypted backup. This string used to assert "No health data in
+        // this backup." -- the exact sentence use-encrypted-only.ts forbids.
+        emptyAll:
+          "No workouts in this backup — switch Section to see daily activity or sleep.",
         emptyFiltered: "No workouts match these filters.",
         clockSensitive: true,
         render: (w) => <WorkoutRow workout={w} />,
@@ -756,16 +786,39 @@ export function HealthView() {
   // section's own descriptor — the sections stay section-agnostic, they just
   // stop being mutually exclusive.
   type Row = { section: HealthSection; item: unknown };
-  const only = selected.length === 1 ? defs[selected[0]] : undefined;
+  // A pill only exists for a section this backup HAS, so a section with no
+  // data can never be toggled off -- it sits in `selected` forever, holding
+  // `selected.length` above 1 and making `only` unreachable on any backup that
+  // is not fully populated. With `only` unreachable the Sort control never
+  // appears and every section falls back to the generic time and empty copy.
+  // Narrow to what is actually there before deriving anything from it.
+  const present = useMemo<HealthSection[]>(() => {
+    const has: Record<HealthSection, boolean> = {
+      workouts: hasWorkouts,
+      daily: hasDays,
+      sleep: hasSleep,
+      timezones: hasTz,
+      awards: hasAwards,
+      cycle: hasCycle,
+    };
+    return SECTIONS.map((x) => x.value).filter((v) => has[v]);
+  }, [hasWorkouts, hasDays, hasSleep, hasTz, hasAwards, hasCycle]);
+  const shown_ = useMemo(() => {
+    const narrowed = selected.filter((v) => present.includes(v));
+    // Untick every pill and "none" means "everything", same as untouched.
+    return narrowed.length > 0 ? narrowed : present;
+  }, [selected, present]);
+  const isShown = (v: HealthSection) => shown_.includes(v);
+  const only = shown_.length === 1 ? defs[shown_[0]] : undefined;
   const baseItems = useMemo<Row[]>(
     () =>
-      selected.flatMap((k) =>
+      shown_.flatMap((k) =>
         (defs[k].items ?? []).map((item) => ({ section: k, item })),
       ),
-    [selected, defs],
+    [shown_, defs],
   );
-  const pending = selected.some((k) => defs[k].pending);
-  const anyError = selected.map((k) => defs[k].error).find(Boolean);
+  const pending = shown_.some((k) => defs[k].pending);
+  const anyError = shown_.map((k) => defs[k].error).find(Boolean);
   const presetCounts = useMemo(
     () =>
       presets.map(
@@ -810,11 +863,11 @@ export function HealthView() {
           label: x.label,
           count: defs[x.value].count,
         })),
-        selected,
+        selected: shown_,
         onToggle: toggleSection,
       }),
     ];
-    if (isOn("workouts") && activities.length > 1) {
+    if (isShown("workouts") && activities.length > 1) {
       const activityOptions: BadgeFilterOption[] = [
         { value: "all", label: "All", count: workouts?.length },
         ...activities.map((a) => ({ value: a, label: a, count: (workouts ?? []).filter((w) => w.activity === a).length })),
@@ -831,7 +884,7 @@ export function HealthView() {
       }),
     );
     return out;
-  }, [hasAny, defs, only, selected, workouts, activities, effActivity, presets, presetCounts, range, setActivity, setRange, toggleSection, isOn]);
+  }, [hasAny, defs, only, shown_, workouts, activities, effActivity, presets, presetCounts, range, setActivity, setRange, toggleSection, isShown]);
   const sortNode = useMemo(
     () =>
       // Only one section's fields make sense at a time; across several, the
@@ -893,7 +946,7 @@ export function HealthView() {
         </>
       )}
       {summary.workoutCount > 0 &&
-        ` · ${formatCount(summary.workoutCount)} workouts`}
+        ` · ${plural(summary.workoutCount, "workout")}`}
     </div>
   );
 
@@ -903,7 +956,7 @@ export function HealthView() {
       <div
         // Remount on section change; clock-sensitive sections also remount
         // when the 12h/24h preference flips so times re-format.
-        key={`${selected.join(",")}:${selected.some((k) => defs[k].clockSensitive) ? clockFormat : ""}`}
+        key={`${shown_.join(",")}:${shown_.some((k) => defs[k].clockSensitive) ? clockFormat : ""}`}
         className="min-h-0 flex-1"
       >
         <VirtualListView
@@ -916,7 +969,9 @@ export function HealthView() {
           emptyMessage={
             baseItems.length > 0
               ? (only?.emptyFiltered ?? "Nothing in the selected sections matches these filters.")
-              : (only?.emptyAll ?? noHealthMessage)
+              : hasAny
+                ? (only?.emptyAll ?? noHealthMessage)
+                : noHealthMessage
           }
           renderItem={(r) => defs[r.section].render(r.item)}
         />
