@@ -49,22 +49,22 @@
       "ios": "15.x",
       "device": "iPhone",
       "archive": "iOS_15_Public_Image.tar.gz",
-      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS15/iOS_15_Public_Image.tar.gz",
+      "url": null,
       "archive_bytes": null,
       "backup_glob": "*/Backup/*",
       "backup_password": null,
-      "notes": "Not yet fetched. Old enough to exercise the fallback SQL alternatives (e.g. DataUsage without ZWIFIIN) that currently have no real device behind them."
+      "notes": "NOT AVAILABLE. The URL recorded here returned 404 and the bucket has no corpora/mobile/iOS15/ prefix -- Digital Corpora lists 2011-android, android_10/13/14, iOS16, iOS17, ios_13_3_1 and ios_13_4_1, and nothing for iOS 15. Kept as an entry so the next session does not re-research it."
     },
     {
       "id": "ios13",
       "ios": "13.3.1",
-      "device": "iPhone",
-      "archive": "iOS_13_Public_Image.tar.gz",
-      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS13/iOS_13_Public_Image.tar.gz",
-      "archive_bytes": null,
-      "backup_glob": "*/Backup/*",
-      "backup_password": null,
-      "notes": "Not yet fetched. The lineage tcc.toml's third SQL alternative was written for (allowed + no last_modified) and which nothing has ever run against."
+      "device": "iPhone SE (iPhone8,4)",
+      "archive": "ios_13_3_1.zip",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/ios_13_3_1/ios_13_3_1.zip",
+      "archive_bytes": 8927183592,
+      "backup_glob": "*/iTunes Backup/*.zip",
+      "backup_password": "mypassword123",
+      "notes": "The URL recorded here was wrong (iOS13/iOS_13_Public_Image.tar.gz, 404); the real path is ios_13_3_1/ios_13_3_1.zip. 8.93 GB, but THE BACKUP INSIDE IS 396 MB -- a single zip member. tools/fetch-zip-member.py range-fetches just that, so this costs 4% of the archive. Oldest lineage available, and the one that exercises every older-schema SQL alternative the modules carry. PASSWORD IS LOWERCASE -- `mypassword123`, not the `MyPassword123` that opens ios16 and ios17. It is in the image-creation PDF, not in image_info.txt, which reports 'Password Protected: false' while the Manifest says IsEncrypted: true. A DIFFERENT PHYSICAL DEVICE too (iPhone SE, serial DX3T126VH2XV) rather than the iPhone 11 of the other two."
     }
   ]
 }

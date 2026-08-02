@@ -28,7 +28,7 @@
 id          = "sleep_schedule"
 name        = "Sleep schedule"
 description = "The bedtime and wake time set on this iPhone, and whether sleep tracking was switched on."
-verified    = "iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off"
+verified    = "iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off; iphone_se_ios13 — 0 rows, because MTSleepAlarms does not exist before iOS 14"
 surface     = "device"
 category    = "Device"
 domain      = "HomeDomain"
@@ -36,6 +36,11 @@ path        = "Library/Preferences/com.apple.mobiletimerd.plist"
 
 [plist]
 rows = ["MTAlarms", "MTSleepAlarms"]
+# Sleep Schedule arrived in iOS 14. Verified on an iPhone SE at 13.3.1, where
+# `com.apple.mobiletimerd.plist` has MTAlarms and MTTimers and NO
+# MTSleepAlarms key at all -- the feature did not exist yet. Strict behaviour
+# took the whole artifact down over a device that simply predates it.
+optional = true
 
 [[columns]]
 name = "Wake hour"
