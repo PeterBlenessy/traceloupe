@@ -59,6 +59,7 @@ fn main() {
     println!("\n{} shipped module(s):", specs.len());
 
     let mut failures = 0;
+    let mut absent = 0;
     for spec in &specs {
         println!("\n── {} ({})", spec.name, spec.id);
         println!("   wants {}:{}", spec.domain, spec.path);
@@ -80,8 +81,14 @@ fn main() {
                 );
             }
             Ok(_) => {
+                // ABSENT, not BROKEN. Whether this is a defect depends on the
+                // other devices in the corpus, which one run cannot see -- so
+                // the marker is emitted for the corpus runner to judge, and the
+                // exit code below still fails a single run, because on its own
+                // "the audit says it should be here" is all we know.
                 println!("   ✗ NOT in this backup — the audit says it should be");
-                failures += 1;
+                println!("MARKER absent {}", spec.id);
+                absent += 1;
                 continue;
             }
             Err(e) => {
@@ -108,20 +115,27 @@ fn main() {
             }
             Ok(None) => {
                 println!("   ✗ run_module found nothing though the Manifest has it");
+                println!("MARKER broken {}", spec.id);
                 failures += 1;
             }
             Err(e) => {
                 println!("   ✗ FAILED: {e}");
+                println!("MARKER broken {}", spec.id);
                 failures += 1;
             }
         }
     }
 
     println!();
-    if failures == 0 {
+    if failures == 0 && absent == 0 {
         println!("✓ every shipped module ran against real data");
     } else {
-        println!("✗ {failures} module(s) failed against real data");
+        if absent > 0 {
+            println!("! {absent} module(s) read a store this device does not have");
+        }
+        if failures > 0 {
+            println!("✗ {failures} module(s) failed against real data");
+        }
         std::process::exit(1);
     }
 }
@@ -221,28 +235,82 @@ fn validate_corpus() {
         backups.len(),
         root.display()
     );
-    let mut failed = 0;
+    // ABSENCE IS A FACT ABOUT A DEVICE; only absence EVERYWHERE is a defect.
+    //
+    // The iPhone 11 at iOS 16.1.2 has no `ACXRemoteAppList.plist` and no
+    // `com.apple.MobileBackup.plist`; the same phone at 17.3 has both. Counting
+    // that as two module failures makes the corpus report get worse every time
+    // an older device is added, which is the opposite of what a corpus is for --
+    // and a validator that always fails is one nobody runs.
+    //
+    // So a module absent HERE but present on some other device is noted. A
+    // module absent from EVERY backup has a path that is wrong, and fails.
+    let mut broken: Vec<String> = Vec::new();
+    let mut absent_in: std::collections::BTreeMap<String, usize> = Default::default();
     for dir in &backups {
         let pw = password_for(&catalog, dir);
         println!("════ {}", dir.display());
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
             .arg(dir)
             .args(pw.iter())
-            .status()
+            .output()
             .expect("re-run self for one backup");
-        if !status.success() {
-            failed += 1;
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            // Markers are consumed here, never shown -- they are plumbing.
+            if let Some(id) = line.strip_prefix("MARKER absent ") {
+                *absent_in.entry(id.to_string()).or_default() += 1;
+            } else if let Some(id) = line.strip_prefix("MARKER broken ") {
+                broken.push(format!("{id} ({})", dir.display()));
+            } else {
+                println!("{line}");
+            }
         }
+        eprint!("{}", String::from_utf8_lossy(&out.stderr));
         println!();
     }
-    if failed > 0 {
-        eprintln!("✗ {failed} of {} backup(s) failed", backups.len());
-        std::process::exit(1);
+
+    let everywhere: Vec<&String> = absent_in
+        .iter()
+        .filter(|(_, n)| **n == backups.len())
+        .map(|(id, _)| id)
+        .collect();
+    let somewhere: Vec<&String> = absent_in
+        .iter()
+        .filter(|(_, n)| **n < backups.len())
+        .map(|(id, _)| id)
+        .collect();
+
+    if !somewhere.is_empty() {
+        println!(
+            "! not on every device, which is a fact about the devices: {}",
+            somewhere
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
-    println!(
-        "✓ every shipped module ran against all {} backup(s)",
-        backups.len()
-    );
+    if broken.is_empty() && everywhere.is_empty() {
+        println!(
+            "✓ every shipped module ran against all {} backup(s)",
+            backups.len()
+        );
+        return;
+    }
+    if !everywhere.is_empty() {
+        eprintln!(
+            "✗ absent from EVERY backup, so the path is wrong: {}",
+            everywhere
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    if !broken.is_empty() {
+        eprintln!("✗ present but unreadable: {}", broken.join(", "));
+    }
+    std::process::exit(1);
 }
 
 fn find_backups(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
