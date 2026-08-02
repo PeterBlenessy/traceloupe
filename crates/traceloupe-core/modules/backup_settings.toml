@@ -26,6 +26,7 @@
 id          = "backup_settings"
 name        = "Backup history"
 description = "When this device last backed up to a computer and to iCloud, and whether iCloud backup was switched on."
+verified    = "iphone11_ios17 — computer backup 2024-01-23 (EST), iCloud backup 2024-07-22 (GMT-4), iCloud on: the iCloud copy is the MORE RECENT of the two"
 surface     = "device"
 shape       = "facts"
 category    = "Device"

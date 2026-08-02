@@ -251,6 +251,24 @@ pub struct PlistSpec {
     /// which is the single-record case (a settings plist IS one row).
     #[serde(default, deserialize_with = "one_or_many_path")]
     pub rows: Vec<String>,
+    /// Whether the `rows` container legitimately may not exist.
+    ///
+    /// The default is strict, and stays strict: a missing key normally means
+    /// the schema moved under us, and reporting that as "this device has none"
+    /// is the class of lie this app exists to avoid.
+    ///
+    /// But some containers are genuinely written only once used. Verified on a
+    /// real iPhone 11 / iOS 17.3: `com.apple.mobiletimerd.plist` has `MTAlarms`
+    /// and `MTTimers` and **no `MTStopwatches` key at all** — the stopwatch had
+    /// never been run. iLEAPP guards the same way (`if 'MTStopwatches' in pl`).
+    /// Erroring there would take the whole artifact down over an absence that
+    /// is the ordinary state of the device.
+    ///
+    /// Opt-in per module, so the strict default keeps protecting every module
+    /// that has not thought about it, and declaring this is a statement that
+    /// the author checked.
+    #[serde(default)]
+    pub optional: bool,
     /// When the container is a DICTIONARY, the key of each entry becomes this
     /// column.
     ///
@@ -1668,6 +1686,11 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
         let mut found = Vec::new();
         resolve_rows(&root, &pl.rows, &mut Vec::new(), &mut found);
         if found.is_empty() {
+            // Declared optional: the container is written only once the feature
+            // is used, so its absence is "none recorded", not a broken path.
+            if pl.optional {
+                return Ok(Vec::new());
+            }
             return Err(Error::Parse(format!(
                 "artifact {}: `plist.rows` path {:?} matched nothing in {}:{}",
                 spec.id,
@@ -1693,6 +1716,7 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
     for (i, key) in pl.rows.iter().enumerate() {
         node = match step(node, key) {
             Some(v) => v,
+            None if pl.optional => return Ok(Vec::new()),
             None => {
                 return Err(Error::Parse(format!(
                     "artifact {}: `plist.rows` path {:?} stops at {:?} — {} in {}:{}",
@@ -3836,37 +3860,71 @@ from = "nope"
         sleep.insert("MTAlarmKeepOffUntilDate".into(), at(1_689_849_000));
         sleep.insert("MTAlarmLastModifiedDate".into(), at(1_722_076_501));
 
-        // A timer, nested the way Apple nests it: the fire time is two more
-        // dictionaries down, each behind a `$`-prefixed class marker. A fixture
-        // that flattened this would let `timers.toml` drop a segment and still
-        // pass, which is the whole thing the fixture is here to prevent.
+        // TWO timers, because the fire time is POLYMORPHIC and a real device
+        // settled which shape is ordinary. `MTTimerFireTime` holds either
+        // `$MTTimerDate` (running, due at a moment) or `$MTTimerTimeInterval`
+        // (stored, not scheduled), with `MTTimerFireTimerClass` naming which.
+        //
+        // The first version of this fixture had only the DATE shape, because
+        // that is what iLEAPP's code reaches for. The iPhone 11 / iOS 17.3
+        // image has only the INTERVAL shape — so the fixture agreed with the
+        // module about something the device does not do, which is exactly the
+        // failure mode `ModuleSpec::verified` exists to name.
+        fn tone(id: &str) -> Value {
+            let mut t = Dictionary::new();
+            t.insert("MTSoundToneID".into(), Value::String(id.into()));
+            let mut sound = Dictionary::new();
+            sound.insert("$MTSound".into(), Value::Dictionary(t));
+            Value::Dictionary(sound)
+        }
+        fn timer(title: &str, secs: i64, fire: Value, class: &str, id: &str) -> Value {
+            let mut t = Dictionary::new();
+            t.insert("MTTimerTitle".into(), Value::String(title.into()));
+            t.insert("MTTimerDuration".into(), Value::Integer(secs.into()));
+            t.insert("MTTimerState".into(), Value::Integer(1.into()));
+            t.insert("MTTimerFireTime".into(), fire);
+            t.insert("MTTimerFireTimerClass".into(), Value::String(class.into()));
+            t.insert("MTTimerSound".into(), tone("system:Radial"));
+            t.insert("MTTimerID".into(), Value::String(id.into()));
+            let mut w = Dictionary::new();
+            w.insert("$MTTimer".into(), Value::Dictionary(t));
+            Value::Dictionary(w)
+        }
+
+        // Running: due at an absolute moment.
         let mut fire_date = Dictionary::new();
         fire_date.insert("MTTimerTimeDate".into(), at(1_722_180_000));
-        let mut fire = Dictionary::new();
-        fire.insert("$MTTimerDate".into(), Value::Dictionary(fire_date));
+        let mut running = Dictionary::new();
+        running.insert("$MTTimerDate".into(), Value::Dictionary(fire_date));
 
-        let mut tone = Dictionary::new();
-        tone.insert(
-            "MTSoundToneID".into(),
-            Value::String("system:sunrise".into()),
+        // Stored: an interval, no moment. What the real image actually has.
+        let mut interval_inner = Dictionary::new();
+        interval_inner.insert("MTTimerTimeInterval".into(), Value::Real(900.0));
+        let mut stored = Dictionary::new();
+        stored.insert(
+            "$MTTimerTimeInterval".into(),
+            Value::Dictionary(interval_inner),
         );
-        let mut sound = Dictionary::new();
-        sound.insert("$MTSound".into(), Value::Dictionary(tone));
-
-        let mut timer = Dictionary::new();
-        timer.insert("MTTimerTitle".into(), Value::String("Pasta".into()));
-        timer.insert("MTTimerDuration".into(), Value::Integer(600.into()));
-        timer.insert("MTTimerState".into(), Value::Integer(1.into()));
-        timer.insert("MTTimerLastModifiedDate".into(), at(1_722_179_400));
-        timer.insert("MTTimerFireTime".into(), Value::Dictionary(fire));
-        timer.insert("MTTimerSound".into(), Value::Dictionary(sound));
-        let mut timer_wrapped = Dictionary::new();
-        timer_wrapped.insert("$MTTimer".into(), Value::Dictionary(timer));
 
         let mut timers_inner = Dictionary::new();
         timers_inner.insert(
             "MTTimers".into(),
-            Value::Array(vec![Value::Dictionary(timer_wrapped)]),
+            Value::Array(vec![
+                timer(
+                    "Pasta",
+                    600,
+                    Value::Dictionary(running),
+                    "MTTimerDate",
+                    "1D8B30D8-DF6F-4644-B7E3-534F4E26CB86",
+                ),
+                timer(
+                    "CURRENT_TIMER",
+                    900,
+                    Value::Dictionary(stored),
+                    "MTTimerTimeInterval",
+                    "2E9C41E9-EF70-5755-C8F4-645F5F37DC97",
+                ),
+            ]),
         );
 
         let mut inner = Dictionary::new();
@@ -4771,6 +4829,41 @@ from = "nope"
     /// This is the guard that scales: it costs nothing per new artifact and
     /// fails the moment one rots — a renamed column, a typo in the SQL or the
     /// path, a column spec that stops matching.
+    #[test]
+    fn an_optional_container_that_is_absent_is_empty_not_an_error() {
+        // Verified on the iPhone 11 / iOS 17.3 image: com.apple.mobiletimerd
+        // .plist has MTAlarms and MTTimers and NO MTStopwatches -- the
+        // stopwatch had never been run. Strict behaviour took the whole
+        // artifact down over the ordinary state of a device.
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert("MTAlarms".into(), Value::Dictionary(Dictionary::new()));
+        let mut bytes = Vec::new();
+        plist::to_writer_binary(&mut bytes, &Value::Dictionary(root)).unwrap();
+
+        let mut spec = load_modules(&builtin_modules_dir())
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id == "stopwatch")
+            .unwrap();
+        assert!(
+            spec.plist.as_ref().unwrap().optional,
+            "stopwatch must stay optional -- the real device has no such key"
+        );
+        let rows = run_plist_module(&spec, spec.plist.as_ref().unwrap(), &bytes).unwrap();
+        assert!(
+            rows.is_empty(),
+            "absent optional container must yield no rows"
+        );
+
+        // ...and the default is still strict, or every typo'd path becomes a
+        // silently empty artifact.
+        spec.plist.as_mut().unwrap().optional = false;
+        let err = run_plist_module(&spec, spec.plist.as_ref().unwrap(), &bytes)
+            .expect_err("a missing container is an error unless declared optional");
+        assert!(err.to_string().contains("MTStopwatches"), "{err}");
+    }
+
     fn mapped(pairs: &[(&str, &str)]) -> ColumnSpec {
         ColumnSpec {
             name: "Keep".into(),

@@ -263,6 +263,26 @@ python3 tools/module-status.py --summary  # just the counts
 |---|---|---|
 | `iphone11_ios17` | iPhone 11, iOS 17.3 | Josh Hickman's public research image — the encrypted backup, not the full-filesystem tree |
 
+### What verifying actually caught
+
+Three defects that every fixture-based test agreed with, because the fixtures
+were written from the same reading of the store as the modules:
+
+- `timers` declared `MTTimerLastModifiedDate`, which **iLEAPP also reads**. The
+  real timer dict has eight keys and that is not one of them, so the column
+  could only ever have been empty.
+- `MTTimerFireTime` is **polymorphic** — `$MTTimerDate` for a running timer,
+  `$MTTimerTimeInterval` for a stored one, with `MTTimerFireTimerClass` naming
+  which. The fixture had only the date shape; the device has only the interval
+  one.
+- `stopwatch` failed outright: `com.apple.mobiletimerd.plist` has **no
+  `MTStopwatches` key at all** when the stopwatch has never been run. Strict
+  path-walking took the whole artifact down over the ordinary state of a device,
+  which is what `[plist] optional` now exists for.
+
+None of these were reachable by reasoning. That is the argument for the
+implemented/verified split, and for keeping the corpus.
+
 `tools/data/dfir-images.json` catalogues what else exists and
 `scripts/fetch-test-image.sh` fetches it. Backups are **kept**; archives and
 full-filesystem trees are **pruned** — an FFS image shows where a file lives,
@@ -272,10 +292,10 @@ asks. Check free space before fetching, not 20 GB in.
 | Module | Category | Implemented | Verified against |
 |---|---|:-:|---|
 | Accounts | Device | ✅ | iphone11_ios17 — 19 accounts across 12 services |
-| AirDrop | Device | ✅ | — not yet — |
+| AirDrop | Device | ✅ | iphone11_ios17 — AirDrop ID 5de9c0ec2f83; DiscoverableMode is not written on this device, so it reads as unrecorded |
 | Alarms | Device | ✅ | iphone11_ios17 — one alarm at 10:41, switched off, last changed 2024-07-28 |
 | AllTrails recordings | Locations | ✅ | iphone11_ios17 — 6 recordings between November 2021 and July 2024 |
-| Backup history | Device | ✅ | — not yet — |
+| Backup history | Device | ✅ | iphone11_ios17 — computer backup 2024-01-23 (EST), iCloud backup 2024-07-22 (GMT-4), iCloud on: the iCloud copy is the MORE RECENT of the two |
 | Backup size by domain | Device | ✅ | iphone11_ios17 — 42 domains sized |
 | Bluetooth devices | Device | ✅ | iphone11_ios17 — 5 devices, including two sets of AirPods named after different people |
 | Nearby Bluetooth | Device | ✅ | iphone11_ios17 — 1056 sightings, 5 named |
@@ -289,21 +309,21 @@ asks. Check free space before fetching, not 20 GB in.
 | Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
 | Life360 location history | Location | ✅ | iphone11_ios17 — 1,635 rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives 1,635… |
 | Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
-| Location Services | Device | ✅ | — not yet — |
-| Message retention | Device | ✅ | — not yet — |
+| Location Services | Device | ✅ | iphone11_ios17 — Location Services on, last written by iPhone OS17.3/21D50 |
+| Message retention | Device | ✅ | iphone11_ios17 — 'Forever' via the value map, from the iOS 17+ key; the iOS 16 key is absent as expected on this lineage |
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
 | Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
 | Sleep schedule | Device | ✅ | iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off |
-| Stopwatch | Device | ✅ | — not yet — |
+| Stopwatch | Device | ✅ | iphone11_ios17 — 0 rows: the MTStopwatches key is absent entirely, which is what taught this module it must be optional |
 | Permissions | Security | ✅ | iphone11_ios17 — 289 rows, which is exactly the count iLEAPP records for the same image — two independent parsers agreeing. The distribution also justified passing unknowns through rather than guessing: alongside… |
-| Timers | Device | ✅ | — not yet — |
+| Timers | Device | ✅ | iphone11_ios17 — 1 timer, the stored 'CURRENT_TIMER' placeholder: 15 min, fire-time class MTTimerTimeInterval, so 'Due' is correctly empty |
 | Apple Watch apps | Device | ✅ | iphone11_ios17 — 47 apps on one paired watch |
 | Wi-Fi networks | Network | ✅ | iphone11_ios17 — 17 known networks, with join dates from July 2023 to January 2024 |
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
-| World Clock | Device | ✅ | — not yet — |
+| World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**31 implemented · 24 verified · 7 awaiting a real backup.**
+**31 implemented · 31 verified · 0 awaiting a real backup.**
 
 ---
 

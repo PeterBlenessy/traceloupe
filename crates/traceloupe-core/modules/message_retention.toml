@@ -34,6 +34,7 @@
 id          = "message_retention"
 name        = "Message retention"
 description = "How long this iPhone was set to keep messages before deleting them — context for any conversation that stops early."
+verified    = "iphone11_ios17 — 'Forever' via the value map, from the iOS 17+ key; the iOS 16 key is absent as expected on this lineage"
 surface     = "device"
 shape       = "facts"
 category    = "Device"

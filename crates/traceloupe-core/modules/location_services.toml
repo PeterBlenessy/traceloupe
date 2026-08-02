@@ -34,6 +34,7 @@
 id          = "location_services"
 name        = "Location Services"
 description = "Whether Location Services was switched on at all — the context that decides what the per-app location list means."
+verified    = "iphone11_ios17 — Location Services on, last written by iPhone OS17.3/21D50"
 surface     = "device"
 shape       = "facts"
 category    = "Device"
