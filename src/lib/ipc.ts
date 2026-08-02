@@ -4030,6 +4030,57 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "icloud_devices",
+            name: "iCloud devices",
+            category: "Files",
+            description:
+              "The devices signed into this iCloud account and syncing the same iCloud Drive — including machines that are not this phone.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["Device", "Sync id"],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "os_build_history",
+            name: "OS build history",
+            category: "Device",
+            description:
+              "Every iOS build this device has booted under, with the date — an upgrade timeline a backup does not otherwise carry.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["First booted", "iOS build", "iCloud daemon", "Device id"],
+            timestampColumns: ["First booted"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
+            id: "icloud_app_libraries",
+            name: "iCloud containers",
+            category: "Files",
+            description:
+              "Which apps keep data in iCloud, how many documents each container holds, and how large it is according to iCloud itself.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: ["App", "Items", "Documents", "With local changes", "Size in iCloud"],
+            timestampColumns: [],
+            byteColumns: ["Size in iCloud"],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "icloud_drive",
             name: "iCloud Drive files",
             category: "Files",
@@ -4417,7 +4468,45 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "icloud_drive"
+    mockActive && artifactId === "icloud_devices"
+      ? [
+          { Device: "iPhone", "Sync id": 1 },
+          { Device: "A Mac", "Sync id": 2 },
+          { Device: "Another iPhone", "Sync id": 3 },
+        ]
+      : mockActive && artifactId === "os_build_history"
+        ? [
+            {
+              "First booted": 1706205831,
+              "iOS build": "21D50",
+              "iCloud daemon": "2461.80.8",
+              "Device id": "4829738",
+            },
+            {
+              "First booted": 1688242985,
+              "iOS build": "20B110",
+              "iCloud daemon": "1177.42.1",
+              "Device id": null,
+            },
+          ]
+      : mockActive && artifactId === "icloud_app_libraries"
+        ? [
+            {
+              App: "com.apple.CloudDocs",
+              Items: 25,
+              Documents: 20,
+              "With local changes": 0,
+              "Size in iCloud": 22453826,
+            },
+            {
+              App: "iCloud.com.apple.MobileSMS",
+              Items: 1,
+              Documents: 0,
+              "With local changes": 0,
+              "Size in iCloud": 0,
+            },
+          ]
+      : mockActive && artifactId === "icloud_drive"
       // Bundle ids MUST match mockInstalledApps or Apps has nothing to attach.
       ? [
           {
