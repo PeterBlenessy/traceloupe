@@ -65,6 +65,17 @@
       "backup_glob": "*/iTunes Backup/*.zip",
       "backup_password": "mypassword123",
       "notes": "The URL recorded here was wrong (iOS13/iOS_13_Public_Image.tar.gz, 404); the real path is ios_13_3_1/ios_13_3_1.zip. 8.93 GB, but THE BACKUP INSIDE IS 396 MB -- a single zip member. tools/fetch-zip-member.py range-fetches just that, so this costs 4% of the archive. Oldest lineage available, and the one that exercises every older-schema SQL alternative the modules carry. PASSWORD IS LOWERCASE -- `mypassword123`, not the `MyPassword123` that opens ios16 and ios17. It is in the image-creation PDF, not in image_info.txt, which reports 'Password Protected: false' while the Manifest says IsEncrypted: true. A DIFFERENT PHYSICAL DEVICE too (iPhone SE, serial DX3T126VH2XV) rather than the iPhone 11 of the other two."
+    },
+    {
+      "id": "ios13_4",
+      "ios": "13.4.1",
+      "device": "iPhone SE (iPhone8,4)",
+      "archive": "ios_13_4_1.zip",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/ios_13_4_1/ios_13_4_1.zip",
+      "archive_bytes": 9629286492,
+      "backup_glob": "*/iTunes Backup/*.zip",
+      "backup_password": "mypassword123",
+      "notes": "The SAME iPhone SE as ios13 (serial DX3T126VH2XV), one point release later. A point-release pair is weaker than a major-version one for schema drift -- kept because the backup member is 420 MB via tools/fetch-zip-member.py, which is cheap enough that a fourth device-state costs less than deciding whether to want it."
     }
   ]
 }

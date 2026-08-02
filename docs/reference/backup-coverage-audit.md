@@ -285,6 +285,7 @@ python3 tools/module-status.py --summary  # just the counts
 | `iphone11_ios17` | iPhone 11, iOS 17.3 | Josh Hickman's public research image — the encrypted backup, not the full-filesystem tree |
 | `iphone11_ios16` | iPhone 11, iOS 16.1.2 | **The same physical phone** (serial F4GZ987AN72N) one OS earlier, which is what makes it a drift check rather than a second sample |
 | `iphone_se_ios13` | iPhone SE, iOS 13.3.1 | A **different** device (serial DX3T126VH2XV), four years older — the lineage that exercises every older-schema SQL alternative the modules carry |
+| `iphone_se_ios13_4` | iPhone SE, iOS 13.4.1 | The same SE one point release later. Weaker than a major-version pair for drift, kept because 420 MB is cheaper than deciding whether to want it |
 
 The iPhone 11 pair decrypt with the same password; **the iPhone SE does not** — its
 password is lowercase `mypassword123`, documented only in the image-creation PDF.
@@ -382,6 +383,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Message retention | Device | ✅ | iphone11_ios17 — 'Forever' via the value map, from the iOS 17+ key; the iOS 16 key is absent as expected on this lineage |
 | OS build history | Device | ✅ | iphone11_ios17 — 2 boots, 20B110 (2023-07-01) then 21D50 (2024-01-25); iphone11_ios16 — the SAME phone shows only the first, because the upgrade had not happened yet, so the artifact corroborates the corpus |
 | Podcasts | Media | ✅ | iphone11_ios17 — 6 subscriptions, one with a 2021 last-played date |
+| Sites with a service worker | Network | ✅ | iphone11_ios17 — 2 registrations, nhl.com in Safari and one in DuckDuckGo, with the worker's own script URL; absent on both iPhone SE lineages, where service workers were barely in use in 2020 |
 | SIM cards | Device | ✅ | iphone11_ios17 — 1 SIM in slot 1, with its ICCID, its number, and a July 2024 update |
 | Siri | Device | ✅ | iphone11_ios17 — voice 'nora', en-US, cloud sync on |
 | Sleep schedule | Device | ✅ | iphone11_ios17 — bedtime 22:45, wake 06:00, switched off, tracking off; iphone_se_ios13 — 0 rows, because MTSleepAlarms does not exist before iOS 14 |
@@ -397,7 +399,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**42 implemented · 42 verified · 0 awaiting a real backup.**
+**43 implemented · 43 verified · 0 awaiting a real backup.**
 
 ---
 
