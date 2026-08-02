@@ -328,6 +328,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Find My | Device | ✅ | iphone11_ios17 + iphone11_ios16 — DSID 17193901029 on both, enabled 2023-07-01; 'Send last location' was OFF at 16.1.2 and ON at 17.3, so the setting is read, not defaulted |
 | Health device | Device | ✅ | iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02; iphone11_ios16 — same device at 16.1.2 via the source_devices fallback, since device_context does not exist there |
 | Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
+| iCloud Drive files | Files | ✅ | iphone11_ios17 — 27 files resolving to real folders (Desktop/, Documents/, Downloads/, Dictionaries/…) with sizes and all three dates; iphone11_ios16 — 26 on the same phone one OS earlier, and the one file's Shared flag differs between them, so the flags are read not defaulted |
 | Cellular identity | Device | ✅ | iphone11_ios17 + iphone11_ios16 — 1 SIM, IMEI 353985100845978, IMSI 310260974867669, +1 919 579 4674 on PLMN 310260; identical across both OS versions, which is what a handset identifier should be |
 | Life360 location history | Location | ✅ | iphone11_ios17 — «redacted» rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives «redacted»… |
 | Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
@@ -345,7 +346,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**33 implemented · 33 verified · 0 awaiting a real backup.**
+**34 implemented · 34 verified · 0 awaiting a real backup.**
 
 ---
 

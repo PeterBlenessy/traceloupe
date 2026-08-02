@@ -2213,6 +2213,10 @@ const BUILTIN: &[(&str, &str)] = &[
     ("imei_imsi.toml", include_str!("../modules/imei_imsi.toml")),
     ("find_my.toml", include_str!("../modules/find_my.toml")),
     (
+        "icloud_drive.toml",
+        include_str!("../modules/icloud_drive.toml"),
+    ),
+    (
         "world_clock.toml",
         include_str!("../modules/world_clock.toml"),
     ),
@@ -3544,6 +3548,50 @@ from = "nope"
     /// ROLLUP row with a NULL bundle id whose total is the sum of everything else
     /// — the one the module must exclude, and which iLEAPP's `ZKIND != 257`
     /// constant would not catch here (this device's rollup is ZKIND 255).
+    /// `CloudDocs/session/db/client.db` — the iCloud Drive index.
+    ///
+    /// A THREE-LEVEL folder chain, because the module builds its path with a
+    /// recursive CTE and a one-level fixture would let a broken recursion pass.
+    /// Parent ids are 16-byte blobs and roots are not, which is the terminating
+    /// condition the query relies on — so the root here is deliberately short.
+    fn seed_icloud_drive(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE client_items (
+                item_id BLOB NOT NULL, item_parent_id BLOB NOT NULL,
+                item_filename TEXT, item_type INTEGER NOT NULL,
+                item_birthtime INTEGER NOT NULL, version_mtime INTEGER,
+                item_lastusedtime INTEGER, version_size INTEGER,
+                item_hidden_ext INTEGER NOT NULL DEFAULT 0,
+                item_sharing_options INTEGER NOT NULL DEFAULT 0,
+                item_user_visible INTEGER, item_trash_put_back_path BLOB,
+                app_library_rowid INTEGER);
+             CREATE TABLE app_libraries (
+                rowid INTEGER PRIMARY KEY, app_library_name TEXT);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO app_libraries (rowid, app_library_name)
+                VALUES (1, 'com.apple.CloudDocs');
+             -- root: a parent id that is NOT 16 bytes, which ends the walk.
+             INSERT INTO client_items VALUES
+                (X'1111111111111111', X'00', 'Documents', 1, 1684594000, NULL,
+                 NULL, NULL, 0, 0, 1, NULL, 1);
+             INSERT INTO client_items VALUES
+                (X'2222222222222222', X'1111111111111111', 'Reports', 1,
+                 1684594100, NULL, NULL, NULL, 0, 0, 1, NULL, 1);
+             -- the file, two folders deep; shared (>4) and once deleted.
+             INSERT INTO client_items VALUES
+                (X'3333333333333333', X'2222222222222222', 'q3.pdf', 0,
+                 1684594624, 1684594700, 1684594708, 1462115, 0, 5, 1,
+                 X'AA', 1);
+             -- a second file at the root, to prove an empty path is possible.
+             INSERT INTO client_items VALUES
+                (X'4444444444444444', X'00', 'loose.txt', 0,
+                 1621718855, 1621718900, NULL, 1295, 0, 0, 1, NULL, 1);",
+        )
+        .unwrap();
+    }
+
     fn seed_data_usage(c: &Connection) {
         c.execute_batch(
             "CREATE TABLE ZLIVEUSAGE (
@@ -4549,6 +4597,11 @@ from = "nope"
             "Library/Preferences/com.apple.icloud.findmydeviced.FMIPAccounts.plist",
         ),
         (
+            "icloud_drive",
+            "HomeDomain",
+            "Library/Application Support/CloudDocs/session/db/client.db",
+        ),
+        (
             "world_clock",
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
@@ -4723,6 +4776,7 @@ from = "nope"
             "location_services" => return Seed::Bytes(seed_location_services),
             "imei_imsi" => return Seed::Bytes(seed_commcenter),
             "find_my" => return Seed::Bytes(seed_find_my),
+            "icloud_drive" => seed_icloud_drive,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
