@@ -835,7 +835,37 @@ def build_clock_plist() -> bytes:
                     }
                 ],
             },
+            "MTStopwatches": {
+                "MTStopwatches": [
+                    {
+                        "$MTStopwatch": {
+                            "MTStopwatchState": 2,
+                            "MTStopwatchCurrentInterval": 93.5,
+                            # An array of bare NUMBERS -- which is exactly why
+                            # stopwatch.toml cannot report laps. Here so the
+                            # limitation is visible, not theoretical.
+                            "MTStopwatchLaps": [31.2, 28.9],
+                        }
+                    }
+                ],
+            },
             "MTTimerDefaultDuration": 900.0,  # unread
+        },
+        fmt=plistlib.FMT_BINARY,
+    )
+
+
+def build_airdrop_plist() -> bytes:
+    """com.apple.sharingd.plist — AirDrop's identifier and discoverability.
+
+    `DiscoverableMode` is already words in this plist, so no enum mapping is
+    needed anywhere downstream.
+    """
+    return plistlib.dumps(
+        {
+            "AirDropID": "6f8a2b1c9d4e",
+            "DiscoverableMode": "Contacts Only",
+            "HandoffEnabled": True,  # unread
         },
         fmt=plistlib.FMT_BINARY,
     )
@@ -1159,6 +1189,12 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "HomeDomain",
             "Library/Preferences/com.apple.mobiletimer.plist",
             build_world_clock_plist(),
+        ),
+
+        (
+            "HomeDomain",
+            "Library/Preferences/com.apple.sharingd.plist",
+            build_airdrop_plist(),
         ),
 
         (

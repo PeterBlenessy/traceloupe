@@ -23,7 +23,9 @@
 # An integer, and iLEAPP prints it raw. It is left as an integer here for the
 # same reason `bluetooth_paired.toml` leaves `NameOrigin` alone: an undocumented
 # enum invented into words is worse than a number a reader can look up. If
-# someone establishes the mapping it earns a `[columns.map]` then.
+# someone establishes the mapping, a value-map feature earns its keep then --
+# there is none today, and naming one that does not exist would send the next
+# reader looking for it.
 #
 # DURATION IS SECONDS. iLEAPP renders it with `datetime.timedelta`; this
 # declares `kind = "duration"` so the app formats it the same way it formats
