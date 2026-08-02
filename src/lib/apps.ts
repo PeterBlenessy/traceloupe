@@ -41,6 +41,7 @@ const CATALOG: Record<string, AppMeta> = {
   "ch.threema.iapp": { name: "Threema", support: "native", slug: "threema" },
   "ch.swisscows.messenger.teleguardapp": { name: "TeleGuard", support: "native" },
   "jp.naver.line": { name: "LINE", support: "native" },
+  "com.gettr.gettr": { name: "Gettr", support: "native" },
   "com.viber": { name: "Viber", support: "native", slug: "viber" },
   "com.microsoft.skype.teams": { name: "Microsoft Teams", support: "native" },
   "com.linkedin.LinkedIn": { name: "LinkedIn", support: "native", slug: "linkedin" },
