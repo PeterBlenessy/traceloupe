@@ -315,6 +315,23 @@ the report get *worse* every time an older device was added — and a validator
 that always fails is one nobody runs. It now fails only for a module absent from
 **every** backup, which is a wrong path, and notes the rest.
 
+### Extensionless stores were invisible for weeks
+
+`Login Data`, `Web Data` and `Top Sites` are SQLite databases with **no file
+extension**. Every audit this project ran enumerated `%.db`, `%.sqlite`,
+`%.storedata` and `%.sqlite3` — so all three were invisible, in all three
+Chromium browsers, on every device in the corpus.
+
+They surfaced only when `coverage-gap.py --present` was pointed at a real
+backup's full path list, which is the third time a *method* change found more
+than a search did (after "read the code, not the manifest" and "enumerate by
+store type, not by filename"). **Enumerate by what the manifest actually holds.**
+
+A related correction: this document previously recorded that no third-party
+browser ships anything readable. `History` is indeed absent on every device —
+but `Top Sites`, `Login Data` and `Web Data` are present in Chrome, Edge and
+Brave alike.
+
 ### What the third lineage caught
 
 `sleep_schedule` failed outright on iOS 13.3.1: `MTSleepAlarms` does not exist
@@ -366,6 +383,8 @@ asks. Check free space before fetching, not 20 GB in.
 | Bluetooth pairings | Device | ✅ | iphone11_ios17 — 3 paired devices — a Garmin vívoactive 4, a Fitbit Versa 3 and an Apple Watch |
 | CarPlay apps | Device | ✅ | iphone11_ios17 — 7 apps, including com.waze.iphone, com.spotify.client and com.google.Maps, last used between 2024-01-16 and 2024-07-27 |
 | CarPlay connection | Device | ✅ | iphone11_ios17 — last session ended 2024-07-27T16:21:39Z at 84% battery, thermal level 'None' |
+| Saved logins (Chromium browsers) | Security | ✅ | iphone11_ios17 — the store is present in ALL THREE browsers (Chrome, Edge, Brave) and holds 0 rows in each: installed, never used to save a login. The schema is read off the device; the output against a populated store is unproven |
+| Most-visited sites (Chromium browsers) | Network | ✅ | iphone11_ios17 — 1 row, nhl.com at rank 0 in Chrome, with the vendor profile captured as 'Google/Chrome' by the ** glob; the same site service_workers found in Safari from a different store |
 | Data usage | Network | ✅ | iphone11_ios17 — 1959 usage rows collapse to 671 per-app totals, topped by the App Store at 2.77 GB and TikTok at 300 MB |
 | Language and region | Device | ✅ | iphone11_ios17 — en-US, en_US, 24-hour time on |
 | Dock | Device | ✅ | iphone11_ios17 — 4 apps, Phone first |
@@ -399,7 +418,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**43 implemented · 43 verified · 0 awaiting a real backup.**
+**45 implemented · 45 verified · 0 awaiting a real backup.**
 
 ---
 
