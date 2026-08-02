@@ -4030,6 +4030,31 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "webkit_domains",
+            name: "Web domains loaded in apps",
+            category: "Network",
+            description:
+              "Which web domains each app's browser or web view loaded, when, and whether the person interacted with them — including apps whose history a backup does not carry.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Site",
+              "Interacted with",
+              "Last loaded",
+              "First loaded",
+              "User interacted",
+              "Tracker",
+            ],
+            timestampColumns: ["Interacted with", "Last loaded", "First loaded"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "waze_places",
             name: "Waze places",
             category: "Locations",
@@ -4553,7 +4578,29 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "waze_places"
+    mockActive && artifactId === "webkit_domains"
+      ? [
+          {
+            App: "com.burbn.instagram",
+            Site: "digitalcorpora.org",
+            "Interacted with": 1705006820,
+            "Last loaded": 1705006820,
+            "First loaded": 1704998000,
+            "User interacted": true,
+            Tracker: false,
+          },
+          {
+            // Never touched: -1 in the store, NULL here, not December 1969.
+            App: "com.burbn.instagram",
+            Site: "gstatic.com",
+            "Interacted with": null,
+            "Last loaded": 1704998430,
+            "First loaded": 1704998430,
+            "User interacted": false,
+            Tracker: true,
+          },
+        ]
+      : mockActive && artifactId === "waze_places"
       ? [
           {
             App: "com.waze.iphone",

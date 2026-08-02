@@ -460,7 +460,26 @@ pub struct ModuleSpec {
     #[serde(default)]
     pub highlight: Option<HighlightSpec>,
     /// Backup domain, e.g. `HomeDomain`.
+    ///
+    /// May contain `*`, which matches ANY RUN OF CHARACTERS — a domain has no
+    /// `/`, so there is no segment rule to respect. This exists for stores that
+    /// every app keeps its own copy of: `observations.db`, WebKit's
+    /// tracking-prevention database, is in 42 different `AppDomain-…` containers
+    /// on the validation device, and writing 42 identical modules would be a
+    /// worse answer than one that says what it means.
+    ///
+    /// A glob here REQUIRES `app_column`, because a row from Signal and a row
+    /// from Chrome are otherwise indistinguishable — the same rule, and the same
+    /// reason, as `path_column`.
     pub domain: String,
+    /// The column recording WHICH app's container a row came from.
+    ///
+    /// Required when `domain` contains `*`. Holds the bundle id — the domain
+    /// with its `AppDomain-` prefix removed — because that is what the Apps view
+    /// joins on and what a reader recognises. The raw domain is recoverable from
+    /// it and is not what anyone wants to read.
+    #[serde(default)]
+    pub app_column: Option<String>,
     /// Exact relative path within the domain.
     ///
     /// Deliberately not a glob. A prefix-match version of this shipped in the
@@ -585,6 +604,40 @@ impl ModuleSpec {
         }
         if self.domain.trim().is_empty() {
             return Err("`domain` is empty".into());
+        }
+        if self.domain.contains('*') {
+            // Only app containers, for now. A glob over system domains would
+            // match things with no common shape and no id to label them by, and
+            // the one use case is per-app copies of one store.
+            if !self.domain.starts_with("AppDomain-") {
+                return Err(format!(
+                    "`domain` = {:?} globs outside `AppDomain-`; only per-app containers \
+                     may be matched by pattern, because only they have a bundle id to \
+                     label the rows with",
+                    self.domain
+                ));
+            }
+            match &self.app_column {
+                None => {
+                    return Err(
+                        "`domain` contains `*` but no `app_column` — rows from different \
+                         apps would be indistinguishable, which looks complete and is not"
+                            .into(),
+                    )
+                }
+                Some(col) if !self.columns.iter().any(|c| &c.name == col) => {
+                    return Err(format!(
+                        "`app_column` = {col:?} is not one of the declared columns"
+                    ))
+                }
+                Some(_) => {}
+            }
+        } else if self.app_column.is_some() {
+            return Err(
+                "`app_column` is set but `domain` has no `*` — there is only one app, so \
+                 name it in a `value` column instead"
+                    .into(),
+            );
         }
         if self.path.trim().is_empty() {
             return Err("`path` is empty".into());
@@ -776,7 +829,10 @@ impl ModuleSpec {
                 .as_ref()
                 .and_then(|p| p.key_column.as_ref())
                 .is_some_and(|k| k == &c.name);
+            // Runner-filled columns: the value comes from WHICH store matched,
+            // not from inside it, so there is no `from` to declare.
             let is_path_column = self.path_column.as_ref().is_some_and(|k| k == &c.name)
+                || self.app_column.as_ref().is_some_and(|k| k == &c.name)
                 || self
                     .plist
                     .as_ref()
@@ -1182,7 +1238,59 @@ pub fn load_modules(dir: &Path) -> Result<Vec<ModuleSpec>> {
 /// own exact `index.find`, which reported the first pattern module as absent from
 /// a backup that contains it — a check that disagrees with the thing it checks is
 /// worse than no check.
+/// Does `domain` match `pattern`? `*` matches any run of characters; a backup
+/// domain has no `/`, so there is no segment rule here as there is for paths.
+fn domain_matches(pattern: &str, domain: &str) -> bool {
+    let mut rest = domain;
+    let parts: Vec<&str> = pattern.split('*').collect();
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        match (i, rest.find(part)) {
+            // A leading literal must be a prefix, not merely present.
+            (0, Some(0)) => rest = &rest[part.len()..],
+            (0, _) => return false,
+            (_, Some(at)) => rest = &rest[at + part.len()..],
+            (_, None) => return false,
+        }
+    }
+    // A pattern not ending in `*` must consume the whole domain.
+    pattern.ends_with('*') || rest.is_empty()
+}
+
 pub fn locate(index: &ManifestIndex, spec: &ModuleSpec) -> Result<Vec<crate::manifest::FileEntry>> {
+    if spec.domain.contains('*') {
+        // The path is still matched exactly or by its own rules; only the domain
+        // fans out. Every candidate is filtered in Rust, because the manifest
+        // query cannot express the segment rule paths need.
+        let like = spec.path.replace("**/", "%").replace('*', "%");
+        let mut out = Vec::new();
+        for entry in index.find_relative_like(&like)? {
+            if !domain_matches(&spec.domain, &entry.domain) {
+                continue;
+            }
+            if spec.path.contains('*') {
+                if !path_matches(&spec.path, &entry.relative_path) {
+                    continue;
+                }
+            } else if entry.relative_path != spec.path {
+                continue;
+            }
+            if entry.relative_path.ends_with("-wal") || entry.relative_path.ends_with("-shm") {
+                continue;
+            }
+            out.push(entry);
+        }
+        // By domain, then path: the manifest's order is not deterministic and an
+        // artifact whose rows reorder between runs looks like it changed.
+        out.sort_by(|a, b| {
+            a.domain
+                .cmp(&b.domain)
+                .then_with(|| a.relative_path.cmp(&b.relative_path))
+        });
+        return Ok(out);
+    }
     if !spec.path.contains('*') {
         return Ok(index.find(&spec.domain, &spec.path)?.into_iter().collect());
     }
@@ -1360,6 +1468,18 @@ pub fn run_module(
     let mut all: Vec<ArtifactRow> = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
         let mut rows = run_one(spec, index, decryptor, work_dir, entry, i)?;
+        if let Some(col) = &spec.app_column {
+            // The bundle id, not the raw domain: it is what the Apps view joins
+            // on and what a reader recognises.
+            let bundle = entry
+                .domain
+                .strip_prefix("AppDomain-")
+                .unwrap_or(&entry.domain)
+                .to_string();
+            for row in &mut rows {
+                row.insert(col.clone(), serde_json::Value::String(bundle.clone()));
+            }
+        }
         if let Some(col) = &spec.path_column {
             // What the wildcards matched, not the whole path: the varying part is
             // what identifies the store, and the rest is the same on every row.
@@ -2219,6 +2339,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "icloud_devices.toml",
         include_str!("../modules/icloud_devices.toml"),
+    ),
+    (
+        "webkit_domains.toml",
+        include_str!("../modules/webkit_domains.toml"),
     ),
     (
         "waze_places.toml",
@@ -3194,6 +3318,7 @@ from = "who"
             shape: Shape::Table,
             verified: None,
             path_column: None,
+            app_column: None,
             plist: None,
             log: None,
             sql: vec!["SELECT who FROM events".into()],
@@ -3637,6 +3762,28 @@ from = "nope"
         // that are NOT the phone being examined.
         c.execute_batch(
             "INSERT INTO devices VALUES (1, 'iPhone'), (2, 'A Mac'), (3, 'Another iPhone');",
+        )
+        .unwrap();
+    }
+
+    /// WebKit's ITP store, `observations.db`.
+    ///
+    /// `mostRecentUserInteractionTime` is -1, not NULL, when a domain was never
+    /// touched — the fixture carries one of each so a module that forgets to
+    /// NULLIF it reports December 1969 and is caught.
+    fn seed_observations(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE ObservedDomains (
+                domainID INTEGER PRIMARY KEY, registrableDomain TEXT NOT NULL,
+                lastSeen REAL NOT NULL, hadUserInteraction INTEGER NOT NULL,
+                mostRecentUserInteractionTime REAL NOT NULL,
+                firstSeen REAL, isPrevalentResource INTEGER);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO ObservedDomains VALUES
+                (1, 'digitalcorpora.org', 1705006820, 1, 1705006820, 1704998000, 0),
+                (2, 'gstatic.com', 1704998430, 0, -1, 1704998430, 1);",
         )
         .unwrap();
     }
@@ -4707,6 +4854,11 @@ from = "nope"
             "Library/Application Support/CloudDocs/session/db/server.db",
         ),
         (
+            "webkit_domains",
+            "AppDomain-*",
+            "Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db",
+        ),
+        (
             "waze_places",
             "AppDomain-com.waze.iphone",
             "Documents/user.db",
@@ -4901,6 +5053,7 @@ from = "nope"
             "icloud_devices" => seed_icloud_server,
             // One store, three modules: places, recents and favourites.
             "waze_places" | "waze_recents" | "waze_favorites" => seed_waze,
+            "webkit_domains" => seed_observations,
             "world_clock" => return Seed::Bytes(seed_world_clock),
             "siri_settings" => return Seed::Bytes(seed_siri),
             "location_clients" => return Seed::Bytes(seed_location_clients),
@@ -5136,6 +5289,65 @@ from = "nope"
         let err = run_plist_module(&spec, spec.plist.as_ref().unwrap(), &bytes)
             .expect_err("a missing container is an error unless declared optional");
         assert!(err.to_string().contains("MTStopwatches"), "{err}");
+    }
+
+    #[test]
+    fn a_domain_glob_matches_only_what_it_should() {
+        // `*` matches any run of characters -- a domain has no `/`, so there is
+        // no segment rule. The cases that matter are the ones a naive
+        // `contains` would get wrong.
+        assert!(domain_matches(
+            "AppDomain-*",
+            "AppDomain-com.brave.ios.browser"
+        ));
+        assert!(domain_matches("AppDomain-*", "AppDomain-x"));
+        // A leading literal must be a PREFIX, not merely present: an
+        // AppDomainGroup is a different container and must not be swept in by a
+        // pattern written for AppDomain.
+        assert!(!domain_matches("AppDomain-*", "AppDomainGroup-group.x"));
+        assert!(!domain_matches("AppDomain-*", "HomeDomain"));
+        assert!(!domain_matches("AppDomain-*", "XAppDomain-y"));
+        // Without a trailing `*` the whole domain must be consumed.
+        assert!(domain_matches("AppDomain-com.a", "AppDomain-com.a"));
+        assert!(!domain_matches("AppDomain-com.a", "AppDomain-com.ab"));
+    }
+
+    #[test]
+    fn a_globbed_domain_demands_a_way_to_tell_the_apps_apart() {
+        let base = |extra: &str| {
+            format!(
+                "id = \"x\"\nname = \"X\"\ndescription = \"A store every app keeps.\"\n\
+                 surface = \"apps\"\ncategory = \"C\"\npath = \"a.db\"\n\
+                 sql = \"SELECT 1 AS a\"\n{extra}\n[[columns]]\nname = \"A\"\nfrom = \"a\"\n"
+            )
+        };
+        // Rows from Signal and rows from Chrome would be indistinguishable.
+        let tmp = tempfile::tempdir().unwrap();
+        write_module(tmp.path(), "m.toml", &base("domain = \"AppDomain-*\""));
+        let err = load_modules(tmp.path()).unwrap_err().to_string();
+        assert!(err.contains("app_column"), "{err}");
+
+        // Only app containers may be globbed: nothing else has a bundle id to
+        // label the rows with.
+        let tmp2 = tempfile::tempdir().unwrap();
+        write_module(
+            tmp2.path(),
+            "m.toml",
+            &base("domain = \"Home*\"\napp_column = \"A\""),
+        );
+        let err = load_modules(tmp2.path()).unwrap_err().to_string();
+        assert!(err.contains("AppDomain-"), "{err}");
+
+        // And an app_column with no glob is a mistake the author should hear
+        // about, not a silent no-op.
+        let tmp3 = tempfile::tempdir().unwrap();
+        write_module(
+            tmp3.path(),
+            "m.toml",
+            &base("domain = \"AppDomain-com.one\"\napp_column = \"A\""),
+        );
+        let err = load_modules(tmp3.path()).unwrap_err().to_string();
+        assert!(err.contains("only one app"), "{err}");
     }
 
     fn mapped(pairs: &[(&str, &str)]) -> ColumnSpec {
@@ -6581,6 +6793,7 @@ from = "a"
             shape: Shape::Table,
             verified: None,
             path_column: None,
+            app_column: None,
             plist: None,
             log: None,
             sql: vec!["SELECT a FROM t".into()],
@@ -6618,6 +6831,7 @@ from = "a"
             shape: Shape::Table,
             verified: None,
             path_column: None,
+            app_column: None,
             plist: None,
             log: None,
             sql: vec!["SELECT a FROM t".into()],

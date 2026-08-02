@@ -1,0 +1,113 @@
+# Which web domains each app loaded, when, and whether the person interacted.
+#
+# `observations.db` — WebKit's Intelligent Tracking Prevention store — inside
+# EVERY app container that embeds a web view. On the validation device that is
+# 42 apps: Brave, Chrome, Edge, DuckDuckGo and Firefox, but also Signal,
+# Discord, Reddit, Slack, Snapchat, Zoom, Teams, Gmail, ProtonMail, Instagram
+# and Messenger.
+#
+# WHY THIS IS BROWSING EVIDENCE WHERE THERE IS OTHERWISE NONE
+#
+# None of those browsers puts its HISTORY in a backup. Chrome, Edge, Brave,
+# DuckDuckGo and Firefox on iOS all keep it somewhere a backup excludes — so on
+# the validation device there is not one third-party browser history to read.
+# ITP's store is different: it lives in `Library/WebKit`, which IS backed up,
+# because WebKit writes it as ordinary app data rather than as a cache.
+#
+# It is not a history. It records the registrable domain — `bbc.co.uk`, not the
+# page — and no titles or URLs. What it does carry is a first-seen and last-seen
+# time per domain, and `mostRecentUserInteractionTime`, which separates a site
+# the person actually touched from a tracker that merely loaded. That
+# distinction is the artifact: a domain with an interaction time was visited,
+# one without was pulled in by a page.
+#
+# THE IN-APP HALF IS THE PART THAT DOES NOT EXIST ELSEWHERE. Signal and Discord
+# have no browser history by definition, yet each has an ITP store recording the
+# domains their in-app browsers opened. Nothing else in a backup says what
+# someone followed a link to from inside a chat app.
+#
+# THIS IS THE FIRST MODULE WITH A GLOBBED DOMAIN. One store shape in 42
+# containers; writing it 42 times would be a worse answer than saying what it
+# means. `app_column` carries the bundle id so a Signal row and a Chrome row are
+# never confused, which is the same rule `path_column` enforces for stores.
+#
+# TIMES ARE UNIX SECONDS. `mostRecentUserInteractionTime` is -1, not NULL, when
+# there was no interaction — NULLIF'd, so "never touched" reads as never rather
+# than as December 1969.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 42 apps
+# with a store, led by Edge (26 domains, 5 interacted), Chrome (22/3),
+# DuckDuckGo (20/4) and Brave (11/4), and including digitalcorpora.org — the
+# site the image itself is published on. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "webkit_domains"
+name        = "Web domains loaded in apps"
+description = "Which web domains each app's browser or web view loaded, when, and whether the person interacted with them — including apps whose history a backup does not carry."
+verified    = "iphone11_ios17 — 352 domains across 42 app containers, from Edge/Chrome/DuckDuckGo/Brave to Signal, Discord, Reddit and Zoom; this WebKit has no firstSeen/isPrevalentResource so the second SQL alternative is the one that runs, and both report NULL rather than a value"
+surface     = "apps"
+join_column = "App"
+app_column  = "App"
+category    = "Network"
+domain      = "AppDomain-*"
+path        = "Library/WebKit/WebsiteData/ResourceLoadStatistics/observations.db"
+
+sql = [
+  """
+  SELECT registrableDomain                          AS site,
+         NULLIF(mostRecentUserInteractionTime, -1)  AS interacted,
+         lastSeen                                   AS last_seen,
+         firstSeen                                  AS first_seen,
+         hadUserInteraction                         AS touched,
+         isPrevalentResource                        AS prevalent
+  FROM ObservedDomains
+  ORDER BY lastSeen DESC, registrableDomain
+  """,
+  # Older WebKit: no `firstSeen`/`isPrevalentResource`. Reported as NULL --
+  # "not recorded" -- never as a value.
+  """
+  SELECT registrableDomain                          AS site,
+         NULLIF(mostRecentUserInteractionTime, -1)  AS interacted,
+         lastSeen                                   AS last_seen,
+         NULL                                       AS first_seen,
+         hadUserInteraction                         AS touched,
+         NULL                                       AS prevalent
+  FROM ObservedDomains
+  ORDER BY lastSeen DESC, registrableDomain
+  """,
+]
+
+[[columns]]
+name = "App"
+
+[[columns]]
+name = "Site"
+from = "site"
+
+[[columns]]
+name = "Interacted with"
+from = "interacted"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "Last loaded"
+from = "last_seen"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "First loaded"
+from = "first_seen"
+kind = "timestamp"
+epoch = "unix"
+
+[[columns]]
+name = "User interacted"
+from = "touched"
+kind = "bool"
+
+[[columns]]
+name = "Tracker"
+from = "prevalent"
+kind = "bool"
