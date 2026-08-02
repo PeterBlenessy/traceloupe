@@ -4030,6 +4030,34 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "icloud_drive",
+            name: "iCloud Drive files",
+            category: "Files",
+            description:
+              "Files kept in iCloud Drive — folder, size, when each was created, changed and last opened, and which app owns it.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "Owned by",
+            highlight: null,
+            columns: [
+              "Folder",
+              "Filename",
+              "Size",
+              "Created",
+              "Modified",
+              "Last opened",
+              "Owned by",
+              "Shared",
+              "Visible in Files",
+              "Recently deleted",
+            ],
+            timestampColumns: ["Created", "Modified", "Last opened"],
+            byteColumns: ["Size"],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "imei_imsi",
             name: "Cellular identity",
             category: "Device",
@@ -4389,7 +4417,35 @@ const mockClient: TraceLoupeClient = {
   getArtifactRows: async (artifactId) =>
     // Timers is the mock's one `duration` column, so the browser checks
     // actually render that kind rather than trusting it was wired up.
-    mockActive && artifactId === "imei_imsi"
+    mockActive && artifactId === "icloud_drive"
+      // Bundle ids MUST match mockInstalledApps or Apps has nothing to attach.
+      ? [
+          {
+            Folder: "Documents/",
+            Filename: "quarterly.pdf",
+            Size: 1462115,
+            Created: 1684594624,
+            Modified: 1684594700,
+            "Last opened": 1684594708,
+            "Owned by": "com.apple.CloudDocs",
+            Shared: true,
+            "Visible in Files": true,
+            "Recently deleted": false,
+          },
+          {
+            Folder: "",
+            Filename: "notes.txt",
+            Size: 1295,
+            Created: 1621718855,
+            Modified: 1621718900,
+            "Last opened": null,
+            "Owned by": "com.apple.CloudDocs",
+            Shared: false,
+            "Visible in Files": true,
+            "Recently deleted": false,
+          },
+        ]
+      : mockActive && artifactId === "imei_imsi"
       ? [
           {
             SIM: "8901260971148676693",
