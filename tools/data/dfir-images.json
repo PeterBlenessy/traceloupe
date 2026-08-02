@@ -15,7 +15,7 @@
     "  index: https://thebinaryhick.blog/public_images/",
     "",
     "`backup_password` is the password Hickman sets on the backup and publishes in",
-    "the accompanying documentation. It is not a secret and it protects nothing —",
+    "the accompanying documentation. It is not a secret and it protects nothing \u2014",
     "these are synthetic research devices.",
     "",
     "`have` is not recorded here: what is on disk is what is on disk, and a flag in",
@@ -35,14 +35,14 @@
     },
     {
       "id": "ios16",
-      "ios": "16.5",
-      "device": "iPhone 12",
+      "ios": "16.1.2",
+      "device": "iPhone 11",
       "archive": "iOS_16_Public_Image.tar.gz",
       "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/iOS16/iOS_16_Public_Image.tar.gz",
       "archive_bytes": null,
       "backup_glob": "*/Backup/*",
-      "backup_password": null,
-      "notes": "Not yet fetched. Second-newest schema lineage; the one most likely to disagree with iOS 17 on Core Data shapes."
+      "backup_password": "MyPassword123",
+      "notes": "Fetched. `ios`/`device` are read from the fetched backup's Info.plist, not from the upstream description, which says iPhone 12 / 16.5 \u2014 what is on disk is an iPhone 11 (serial F4GZ987AN72N) at 16.1.2, the SAME physical device as ios17 one OS earlier. That makes it the ideal drift check: same data, different iOS. The password was recorded as null and is not; it decrypts with the same one as ios17, which is why every module 'failed' against it in corpus mode."
     },
     {
       "id": "ios15",
