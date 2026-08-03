@@ -509,6 +509,13 @@ export interface MediaItem {
   addedAt: number | null;
   /** Media subtype ("screenshot" | "panorama" | "live" | "burst"), or null. */
   subtype: string | null;
+  /**
+   * A caption someone wrote on this photo in a shared album, and how many
+   * people liked it there — activity by others on a photo this device put in
+   * front of them. Null when it was never shared.
+   */
+  sharedCaption: string | null;
+  sharedLikes: number | null;
 }
 
 /** A media source and how many items came from it, for the gallery filter. */
@@ -2831,6 +2838,8 @@ const mockMedia: MediaItem[] = [
     trashed: false,
     trashedAt: null,
     addedAt: null,
+    sharedCaption: "My first batch of pictures",
+    sharedLikes: 3,
     subtype: "live",
   },
   {
@@ -2857,6 +2866,8 @@ const mockMedia: MediaItem[] = [
     trashed: false,
     trashedAt: null,
     addedAt: null,
+    sharedCaption: null,
+    sharedLikes: null,
     subtype: "panorama",
   },
   {
@@ -2883,6 +2894,8 @@ const mockMedia: MediaItem[] = [
     trashed: false,
     trashedAt: null,
     addedAt: 1720000000,
+    sharedCaption: null,
+    sharedLikes: null,
     subtype: "burst",
   },
   {
@@ -2909,6 +2922,8 @@ const mockMedia: MediaItem[] = [
     trashed: true,
     trashedAt: 1718000000,
     addedAt: null,
+    sharedCaption: null,
+    sharedLikes: null,
     subtype: "screenshot",
   },
 ];

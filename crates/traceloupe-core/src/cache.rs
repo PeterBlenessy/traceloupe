@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 56;
+const SCHEMA_VERSION: i64 = 57;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -233,6 +233,11 @@ CREATE TABLE IF NOT EXISTS media_items (
     albums          TEXT,
     -- Paths under the app cache dir; NULL until materialized.
     thumb_path      TEXT,
+    -- Activity by OTHER PEOPLE on a photo shared with them: a caption someone
+    -- wrote, and how many liked it. From ZCLOUDSHAREDCOMMENT, which holds likes,
+    -- captions and comments in one table and flags which is which.
+    shared_caption  TEXT,
+    shared_likes    INTEGER,
     local_path      TEXT,
     -- Encrypted backups only: the class-prefixed wrapped key that decrypts
     -- local_path on demand (useless without the backup keys). NULL otherwise.
@@ -855,6 +860,9 @@ impl CacheDb {
                 CREATE INDEX IF NOT EXISTS idx_safari_searches_at
                     ON safari_searches(searched_at DESC);",
             )?;
+            // v57: shared-album activity carried on the photo it happened to.
+            ensure_column(&conn, "media_items", "shared_caption", "TEXT")?;
+            ensure_column(&conn, "media_items", "shared_likes", "INTEGER")?;
             // v56: who a note is shared with, from its CloudKit share.
             ensure_column(&conn, "notes", "shared_with_json", "TEXT")?;
             // v55: per-module parse outcome, so an empty view can say whether
