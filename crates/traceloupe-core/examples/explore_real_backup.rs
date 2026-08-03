@@ -26,6 +26,12 @@
 //!     <backup-dir> <password> sql HomeDomain Library/Voicemail/voicemail.db \
 //!     'SELECT sender, duration FROM voicemail LIMIT 5'
 //!
+//! # `blob` — a property list stored in a COLUMN, not a file
+//! cargo run -p traceloupe-core --example explore_real_backup -- \
+//!     <backup-dir> <password> blob AppDomainGroup-group.com.apple.notes \
+//!     NoteStore.sqlite \
+//!     'SELECT ZTITLE1, ZSERVERSHAREDATA FROM ZICCLOUDSYNCINGOBJECT WHERE Z_PK = 33'
+//!
 //! # `plist` — the shape of a property list: key paths, types, sample values
 //! cargo run -p traceloupe-core --example explore_real_backup -- \
 //!     <backup-dir> <password> plist SystemPreferencesDomain \
@@ -50,6 +56,8 @@ fn usage() -> ! {
          \x20 schema <domain> <relative-path>        CREATE statements + row counts\n\
          \x20 sql    <domain> <relative-path> <sql>  run a query, print the rows\n\
          \x20 plist  <domain> <relative-path>        key paths, types, sample values\n\
+         \x20 blob   <domain> <relative-path> <sql>  a property list stored IN A COLUMN;\n\
+         \x20                                        select a label, then the blob\n\
          \x20 raw    <domain> <relative-path>        what kind of file it is, and its head\n\
          \n\
          \n  dump <domain> <path> <out-file>\n\
@@ -184,7 +192,7 @@ fn main() {
             // teach nothing that the first does not.
             dump_plist(&root, &mut Vec::new(), 0);
         }
-        "schema" | "sql" => {
+        "blob" | "schema" | "sql" => {
             let (domain, path) = match (args.get(3), args.get(4)) {
                 (Some(d), Some(p)) => (d.as_str(), p.as_str()),
                 _ => usage(),
@@ -218,7 +226,10 @@ fn main() {
             )
             .expect("open the extracted store read-only");
 
-            if command == "schema" {
+            if command == "blob" {
+                let query = args.get(5).map(String::as_str).unwrap_or_else(|| usage());
+                dump_blob_column(&conn, query);
+            } else if command == "schema" {
                 dump_schema(&conn, domain, path);
             } else {
                 let sql = args.get(5).map(String::as_str).unwrap_or_else(|| usage());
@@ -232,6 +243,48 @@ fn main() {
 /// How deep to descend. Deep enough for real artifacts, shallow enough that a
 /// pathological plist cannot fill the terminal.
 const MAX_DEPTH: usize = 6;
+
+/// A property list stored INSIDE a database column, not as a file.
+///
+/// Apple does this constantly and it was invisible to every other command here:
+/// `NoteStore.sqlite`'s `ZSERVERSHAREDATA` is a 12 KB NSKeyedArchiver blob
+/// holding the CloudKit share — including the e-mail address of everyone a note
+/// was shared with. `plist` cannot reach it because it reads FILES, and `sql`
+/// renders it as `<12502 bytes>`.
+///
+/// The query must select a label first and the blob second: which row a value
+/// came from is the question the moment more than one row is shared.
+fn dump_blob_column(conn: &Connection, query: &str) {
+    let mut stmt = conn.prepare(query).expect("prepare the blob query");
+    let mut rows = stmt.query([]).expect("run the blob query");
+    let mut n = 0;
+    while let Some(r) = rows.next().expect("read a row") {
+        let label = match r.get_ref(0) {
+            Ok(rusqlite::types::ValueRef::Text(t)) => String::from_utf8_lossy(t).into_owned(),
+            Ok(rusqlite::types::ValueRef::Integer(i)) => i.to_string(),
+            _ => String::from("?"),
+        };
+        let Ok(bytes) = r.get::<_, Vec<u8>>(1) else {
+            println!("── {label}: column 1 is not a blob\n");
+            continue;
+        };
+        if bytes.is_empty() {
+            println!("── {label}: empty\n");
+            continue;
+        }
+        println!("── {label}  ({} bytes)\n", bytes.len());
+        match traceloupe_core::nska::resolve(&bytes) {
+            Ok(root) => dump_plist(&root, &mut Vec::new(), 0),
+            Err(e) => println!("   not a readable property list: {e}"),
+        }
+        println!();
+        n += 1;
+        if n >= 3 {
+            println!("(stopping after 3 rows)");
+            break;
+        }
+    }
+}
 
 fn dump_plist(v: &plist::Value, at: &mut Vec<String>, depth: usize) {
     let here = if at.is_empty() {
