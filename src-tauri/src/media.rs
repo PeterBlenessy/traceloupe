@@ -248,6 +248,31 @@ pub fn render_preview(
     })
 }
 
+/// Transcode any image to a FULL-resolution JPEG, for "Save as JPEG" — so a HEIC
+/// (which most software off the Mac can't open) becomes a portable file at its
+/// original size. Returns the JPEG bytes, or `None` if `sips` can't convert it.
+pub fn render_full_jpeg(src: &Path, cache_dir: &Path, id: i64) -> Option<Vec<u8>> {
+    let _ = std::fs::create_dir_all(cache_dir);
+    let out: PathBuf = cache_dir.join(format!("{id}.savejpeg.jpg"));
+    if !out.exists() {
+        let seq = SIPS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = cache_dir.join(format!("{id}.savejpeg.{seq}.partial.jpg"));
+        if !run_sips(src, &tmp, None) {
+            let _ = std::fs::remove_file(&tmp);
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        if std::fs::rename(&tmp, &out).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    std::fs::read(&out).ok()
+}
+
 /// Invoke macOS `sips` to write a JPEG copy of `src` at `out`, downscaling its
 /// longest edge to `max_edge` px when given (`None` = full size). Returns whether
 /// a file was produced.
