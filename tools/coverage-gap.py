@@ -21,11 +21,26 @@ we read something in it — and never as finished. Anything stronger would be a
 claim this tool cannot support, and "we support Clock" is exactly the sort of
 thing that stops someone looking.
 
-Matching is by name, case- and punctuation-insensitively, plus an explicit alias
-table for the cases where iLEAPP's product name and ours differ ("Facebook
-Messenger" vs our "Messenger"). Aliases are listed with the artifact that
-justifies them, because an alias is a claim of coverage and an unjustified one
-overstates what we do.
+MATCHING IS BY NAME AND BY STORE, UNIONED. The name is case- and
+punctuation-insensitive. The store is the stronger of the two: an iLEAPP glob
+and a module `path` that name the same file are the same artifact whatever
+either project calls the product. Names drift — ours are chosen for a UI,
+iLEAPP's for a report — so the store is what keeps a shipped module from
+reading as a gap. It found four: the entire Files App cluster was reported
+untouched while `icloud_drive` and three siblings were reading its store.
+
+Placing a glob against a backup means stripping the DOMAIN ROOT off it: iLEAPP
+searches a filesystem (`*/mobile/Library/…`), a backup is addressed by
+(domain, relativePath) (`Library/…`). Every root that matches is tried, not the
+longest, because six domains share `/var/mobile` and HealthDomain sits inside it.
+
+A hand-written alias table joins the union for what neither can reach — chiefly
+Waze, where iLEAPP's declared `paths` name a plist its code opens only to find
+the container, and the data is in a `user.db` the manifest never mentions. An
+alias can add a name but never hide one, and `--self-test` refuses any that
+names a module or parser no longer in the tree.
+
+  python3 tools/coverage-gap.py --self-test     # the matcher, no iLEAPP needed
 
   python3 tools/coverage-gap.py                 # summary + the biggest gaps
   python3 tools/coverage-gap.py --json out.json # the full table
@@ -76,9 +91,23 @@ def norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s.lower())
 
 
-def ours() -> dict[str, str]:
-    """Everything we cover, as normalised name → how we cover it."""
-    covered: dict[str, str] = {}
+def ours() -> dict[str, dict[str, list[str]]]:
+    """Everything we cover, as normalised name → how we cover it.
+
+    EVERY match, not the first. This used to `setdefault`, so a name three
+    modules answer to reported one of them — whichever sorted first. That is how
+    iLEAPP's "Location" category came back as `module (life360_locations)` with
+    `location_clients` invisible beside it: not wrong, but an undercount that
+    reads as the whole answer, and the kind a reader has no way to notice.
+    """
+    parts: dict[str, dict[str, list[str]]] = collections.defaultdict(
+        lambda: collections.defaultdict(list)
+    )
+
+    def add(name: str, kind: str, detail: str) -> None:
+        bucket = parts[norm(name)][kind]
+        if detail not in bucket:
+            bucket.append(detail)
 
     # App chat modules: the `service` label is the product name.
     mod = (ROOT / "crates/traceloupe-core/src/parsers/apps/mod.rs").read_text()
@@ -89,10 +118,10 @@ def ours() -> dict[str, str]:
         if src.exists():
             m = re.search(r'service:\s*"([^"]+)"', src.read_text())
             if m:
-                covered[norm(m.group(1))] = f"app chat parser ({i})"
+                add(m.group(1), "app chat parser", i)
     # TikTok is driven separately (two DBs), so it is not in the list above.
     if (ROOT / "crates/traceloupe-core/src/parsers/apps/tiktok.rs").exists():
-        covered.setdefault(norm("TikTok"), "app chat parser (tiktok, driven directly)")
+        add("TikTok", "app chat parser", "tiktok, driven directly")
 
     # Declarative artifact modules. Only the header — everything after the first
     # `[[columns]]` is column names, and matching on those claimed we covered
@@ -103,13 +132,13 @@ def ours() -> dict[str, str]:
         cat = re.search(r'^category\s*=\s*"([^"]+)"', header, re.M)
         for value in (name, cat):
             if value:
-                covered.setdefault(norm(value.group(1)), f"module ({toml.stem})")
+                add(value.group(1), "module", toml.stem)
 
     # Native parsers, by file name — these are the big first-party stores.
     for src in sorted((ROOT / "crates/traceloupe-core/src/parsers").glob("*.rs")):
         if src.stem in {"mod"}:
             continue
-        covered.setdefault(norm(src.stem), f"native parser ({src.stem})")
+        add(src.stem, "native parser", src.stem)
 
     # The app catalog's own view of what we support natively.
     cat_src = (ROOT / "src/lib/apps.ts").read_text()
@@ -117,9 +146,14 @@ def ours() -> dict[str, str]:
         name = re.search(r'name:\s*"([^"]+)"', body)
         support = re.search(r'support:\s*"(\w+)"', body)
         if name and support and support.group(1) == "native":
-            covered.setdefault(norm(name.group(1)), "app catalog (native)")
+            add(name.group(1), "app catalog", "native")
 
-    return covered
+    return {k: {kind: list(d) for kind, d in v.items()} for k, v in parts.items()}
+
+
+def fmt(parts: dict[str, list[str]]) -> str:
+    """`{"module": ["a", "b"]}` → `module (a, b)`."""
+    return ", ".join(f"{kind} ({', '.join(sorted(set(d)))})" for kind, d in parts.items() if d)
 
 
 # iLEAPP category → what of OURS reads part of it, for the cases where the names
@@ -136,22 +170,24 @@ def ours() -> dict[str, str]:
 # derive: WHICH OF OURS covers the category when the product names differ.
 ALIASES = {
     "facebookmessenger": "app chat parser (facebook_messenger)",
-    "clock": "module (alarms, sleep_schedule, timers, stopwatch, world_clock)",
     "wificonnections": "module (wifi_networks, wifi_private_mac)",
-    "location": "module (location_clients)",
-    "identifiers": "module (sim_cards) + the device header",
     "bluetooth": "module (bluetooth_paired, bluetooth_devices, bluetooth_nearby)",
     "appusage": "module (data_usage)",
     # Our parser's service label is "imo"; iLEAPP calls the product "IMO HD Chat".
     "imohdchat": "app chat parser (imo)",
-    "networkusage": "module (data_usage)",
-    "apppermissions": "module (tcc)",
     # sim_cards reads CellularUsage.db's subscriber_info, which is where the SIM's
-    # ICCID and number live. iLEAPP splits the same store across two categories.
+    # ICCID and number live. iLEAPP names this category after the hardware, and
+    # its own paths point at a store we reach by a different one.
     "siminfo": "module (sim_cards)",
-    "cellular": "module (sim_cards, data_usage)",
     "mobilebackupplist": "module (backup_sizing)",
     "wifiknownnetworks": "module (wifi_networks)",
+    # Waze cannot be matched by store, and that is not a flaw in the matcher.
+    # iLEAPP's `paths` for every Waze artifact name `Preferences/
+    # com.waze.iphone.plist`; its CODE opens `Documents/user.db` in the same
+    # container and reads the plist only to find which container that is. Our
+    # modules read the store, so they read the same data by a path the manifest
+    # never mentions. Read the code, not the manifest.
+    "waze": "module (waze_places, waze_favorites, waze_recents)",
 }
 
 # iLEAPP categories that are not products we could "support" — they name a store
@@ -192,6 +228,117 @@ def stores_we_read() -> list[str]:
         if m:
             out.append(m.group(1))
     return sorted(set(out))
+
+
+def our_stores() -> list[tuple[str, str, str]]:
+    """(domain, path, how) for every store a declarative module opens.
+
+    Modules only — a native parser's stores live in `import.rs` as bare
+    filenames with no domain beside them, and a domainless filename is exactly
+    the kind of match that over-claims. `stores_we_read` still gathers those,
+    for the weaker "same store" split, which is allowed to be over-inclusive
+    because it only reclassifies work rather than declaring it done.
+    """
+    out = []
+    for toml in sorted((ROOT / "crates/traceloupe-core/modules").glob("*.toml")):
+        header = toml.read_text().split("[[columns]]")[0]
+        dom = re.search(r'^domain\s*=\s*"([^"]+)"', header, re.M)
+        path = re.search(r'^path\s*=\s*"([^"]+)"', header, re.M)
+        if dom and path:
+            out.append((dom.group(1), path.group(1), toml.stem))
+    return out
+
+
+# `.../Containers/Data/Application/<uuid>/` — everything after it is what an
+# AppDomain backup entry is relative to.
+APP_CONTAINER = re.compile(r"containers/data/application/[^/]+/(.*)", re.I)
+
+
+def domain_roots() -> list[str]:
+    """Every domain's root, as a prefix to strip off an iLEAPP glob.
+
+    iLEAPP searches a FILESYSTEM, so its globs are rooted there
+    (`*/mobile/Library/…`). A backup is addressed by (domain, relativePath) and
+    the path is relative to the domain's root (`Library/…`). Comparing the two
+    without stripping the root is why this tool reported the whole Files App
+    cluster as untouched while four modules were reading its store.
+    """
+    data = json.load(open(ROOT / "tools/data/ios-backup-domains.json"))
+    roots = set()
+    for d in data.values():
+        root = (d.get("root") or "").lower().strip("/")
+        root = re.sub(r"^(private/)?var/", "", root).strip("/")
+        # BackupDomain's root is the literal string "# empty" in the source
+        # plist; it names no directory and would never prefix a real path.
+        if root and not root.startswith("#"):
+            roots.add(root)
+    return sorted(roots)
+
+
+def as_backup_path(glob: str, roots: list[str]) -> list[tuple[str, bool]]:
+    """An iLEAPP glob → the (domain-relative glob, in-an-app-container) it could be.
+
+    EVERY matching root, not the longest. Six domains share `/var/mobile` and
+    HealthDomain sits at `/var/mobile/Library`, so `mobile/Library/…` is both
+    `Library/…` in HomeDomain and `…` in HealthDomain. Taking the longest root
+    picked HealthDomain for the whole Files App cluster and matched nothing.
+
+    A glob under no known root is tried AS IF already domain-relative, which is
+    what `classify-ileapp-artifacts.py` does with the same fragments. iLEAPP
+    writes a lot of them (`*/Library/Caches/locationd/clients.plist`) and they
+    are the ones a root-strip cannot help — the second flag says the placement
+    was a guess, so the caller can demand more before believing it.
+    """
+    g = glob.replace("\\", "/").lstrip("*").lstrip("/")
+    m = APP_CONTAINER.search(g)
+    if m:
+        return [(m.group(1), False)]
+    low = g.lower()
+    rooted = [(g[len(r) + 1 :], True) for r in roots if low.startswith(r + "/")]
+    return rooted or [(g, False)]
+
+
+def same_store(glob_rel: str, our_path: str) -> bool:
+    """Does an iLEAPP glob name the store a module reads?
+
+    Anchored at BOTH ends, and `*` does not cross `/`. A loose match here is not
+    a harmless one: it would print "we already read this" over work nobody has
+    done, which is the failure this whole file exists to prevent.
+    """
+    parts = [re.escape(p) for p in glob_rel.split("*")]
+    return re.fullmatch("[^/]*".join(parts), our_path, re.I) is not None
+
+
+def by_store(items, stores, category: str) -> set[str]:
+    """Which modules cover a category, decided by the STORE rather than the name.
+
+    Product names drift — ours are chosen for a UI, iLEAPP's for a report — so
+    name matching goes quiet exactly when a module lands under a different
+    heading. The store cannot drift: two artifacts reading the same file are the
+    same artifact whatever either project calls it.
+
+    AN APP'S OWN PATH IS NOT ENOUGH ON ITS OWN. `Documents/user.db` is a path a
+    hundred apps have, so when the module reads an app container and the glob
+    was not anchored at a domain root, the match only counts if the module's
+    domain names the app the category is about. Without that guard this would
+    report AllTrails as covered because Waze keeps a store with the same name.
+
+    A glob anchored at a real domain root needs no such guard: there is one
+    `Library/Application Support/CloudDocs/session/db/client.db` on the device.
+    """
+    roots = domain_roots()
+    hits: set[str] = set()
+    for a in items:
+        for glob in a.get("paths", []):
+            for rel, rooted in as_backup_path(glob, roots):
+                for domain, path, stem in stores:
+                    if not same_store(rel, path):
+                        continue
+                    app_scoped = domain.startswith("AppDomain")
+                    if not rooted and app_scoped and norm(category) not in norm(domain):
+                        continue
+                    hits.add(stem)
+    return hits
 
 
 def glob_to_re(g: str) -> re.Pattern:
@@ -279,8 +426,136 @@ def with_detail(how: str, items, covered) -> str:
     return f"{how} — {detail}" if detail else how
 
 
+PART_RE = re.compile(r"([a-z ]+?) \(([^)]*)\)")
+
+
+def parse_parts(prose: str) -> dict[str, list[str]]:
+    """`module (a, b), app chat parser (c)` → `{"module": ["a","b"], …}`.
+
+    The inverse of `fmt`, so the hand-written aliases and the computed matches
+    are the same shape and can simply be merged.
+    """
+    out: dict[str, list[str]] = {}
+    for kind, detail in PART_RE.findall(prose):
+        out.setdefault(kind.strip(), []).extend(d.strip() for d in detail.split(","))
+    return out
+
+
+# Where each kind of coverage lives, so an alias naming something deleted is an
+# error rather than a quiet overstatement.
+WHERE = {
+    "module": "crates/traceloupe-core/modules/{}.toml",
+    "app chat parser": "crates/traceloupe-core/src/parsers/apps/{}.rs",
+    "native parser": "crates/traceloupe-core/src/parsers/{}.rs",
+}
+
+
+def check_aliases() -> list[str]:
+    """Aliases naming code that is gone. An alias is a claim of coverage."""
+    bad = []
+    for cat, prose in ALIASES.items():
+        for kind, names in parse_parts(prose).items():
+            for name in names:
+                # Free-text notes ("the device header", "driven directly") are
+                # not paths and are not checked; only the ones that name code.
+                tmpl = WHERE.get(kind)
+                if tmpl and " " not in name and not (ROOT / tmpl.format(name)).exists():
+                    bad.append(f"ALIASES[{cat!r}] names {kind} {name!r}, which does not exist")
+    return bad
+
+
+def how_covered(cat: str, items, covered, stores) -> str | None:
+    """One sentence naming everything of ours that reads part of this category.
+
+    The NAME match and the STORE match are UNIONED rather than raced. They see
+    different things — a name knows a chat parser the store rules cannot place,
+    a store knows a module filed under a heading of our own choosing — and
+    taking whichever answered first is how `location_clients` went missing from
+    "Location" the moment a second module was filed under the same word.
+
+    The hand-written aliases join the union rather than sitting under it as a
+    fallback. That is safe in one direction only — an alias can now add a name
+    but never hide one — and `check_aliases` closes the other, refusing to run
+    with an alias that names a module or parser no longer in the tree.
+    """
+    n = norm(cat)
+    parts: dict[str, list[str]] = {k: list(v) for k, v in covered.get(n, {}).items()}
+    for kind, detail in parse_parts(ALIASES.get(n, "")).items():
+        parts.setdefault(kind, []).extend(detail)
+    extra = sorted(by_store(items, stores, cat) - set(parts.get("module", [])))
+    if extra:
+        parts.setdefault("module", []).extend(extra)
+    if not parts:
+        return None
+    return fmt(parts) + (", some by store" if extra else "")
+
+
 def is_photos_facet(cat: str) -> bool:
     return cat.lower().startswith(("photos.sqlite", "photos-"))
+
+
+# (iLEAPP glob, our module path, should they be the same store?) — the cases
+# that were wrong, kept as the record of what wrong looked like.
+STORE_CASES = [
+    # Rooted at /var/mobile: the whole Files App cluster read as untouched
+    # because the root was never stripped off the glob.
+    ("*/mobile/Library/Application Support/CloudDocs/session/db/client.db*",
+     "Library/Application Support/CloudDocs/session/db/client.db", True),
+    # …and taking the LONGEST root put that same glob in HealthDomain, where
+    # `/var/mobile/Library` swallowed two more segments than it should have.
+    ("*/mobile/Library/Application Support/CloudDocs/session/db/server.db*",
+     "Library/Application Support/CloudDocs/session/db/server.db", True),
+    # A rootless fragment, tried as already domain-relative.
+    ("*/Library/Caches/locationd/clients.plist",
+     "Library/Caches/locationd/clients.plist", True),
+    # `*` does not cross `/`: a store in a subdirectory is a different store.
+    ("*/mobile/Library/Preferences/com.apple.wifi.plist",
+     "Library/Preferences/nested/com.apple.wifi.plist", False),
+    # Same tail, different tree.
+    ("*/mobile/Library/Application Support/CloudDocs/session/db/client.db*",
+     "Library/Other/client.db", False),
+]
+
+
+def self_test() -> int:
+    """Everything that can be checked without an iLEAPP checkout."""
+    failures = []
+
+    for glob, path, want in STORE_CASES:
+        got = any(same_store(rel, path) for rel, _ in as_backup_path(glob, domain_roots()))
+        mark = "ok  " if got == want else "FAIL"
+        print(f"  {mark}  {'same store' if want else 'different'}: {glob} ~ {path}")
+        if got != want:
+            failures.append(f"{glob} ~ {path}: expected {want}, got {got}")
+
+    # An app container path is ambiguous by construction, so it must need the
+    # category to name the app. Both directions, because only checking the
+    # positive would pass on a matcher that had stopped checking at all.
+    stores = [("AppDomain-com.waze.iphone", "Documents/user.db", "waze_recents")]
+    item = {"name": "x", "paths": ["*/mobile/Containers/Data/Application/*/Documents/user.db"]}
+    for cat, want in (("Waze", {"waze_recents"}), ("AllTrails", set())):
+        got = by_store([item], stores, cat)
+        mark = "ok  " if got == want else "FAIL"
+        print(f"  {mark}  container path under {cat!r} → {sorted(got) or 'nothing'}")
+        if got != want:
+            failures.append(f"container match for {cat}: expected {want}, got {got}")
+
+    for problem in check_aliases():
+        print(f"  FAIL  {problem}")
+        failures.append(problem)
+    if not check_aliases():
+        print(f"  ok    every alias names code that exists ({len(ALIASES)} aliases)")
+
+    # A name several modules answer to must name all of them.
+    covered = ours()
+    multi = [k for k, v in covered.items() if len(v.get("module", [])) > 1]
+    print(f"  ok    {len(multi)} names matched by more than one module")
+
+    if failures:
+        print(f"\n✗ {len(failures)} failure(s)")
+        return 1
+    print("\n✓ coverage-gap self-test clean")
+    return 0
 
 
 def main() -> int:
@@ -289,7 +564,11 @@ def main() -> int:
     ap.add_argument("--json", metavar="FILE", help="write the full table")
     ap.add_argument("--all", action="store_true", help="every gap, not just the biggest")
     ap.add_argument("--present", metavar="PATHS", help="split the gap by a real backup's manifest")
+    ap.add_argument("--self-test", action="store_true", help="check the matcher; needs no iLEAPP checkout")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     path = Path(args.input)
     if not path.exists():
@@ -298,7 +577,12 @@ def main() -> int:
     artifacts = json.load(open(path))
     reachable = [a for a in artifacts if a.get("reach") in ("backup", "encrypted-only")]
 
+    if bad := check_aliases():
+        print("\n".join(bad), file=sys.stderr)
+        return 2
+
     covered = ours()
+    stores = our_stores()
     by_cat: dict[str, list] = collections.defaultdict(list)
     for a in reachable:
         by_cat[a.get("category") or "?"].append(a)
@@ -306,14 +590,18 @@ def main() -> int:
     gaps, done, excused = [], [], []
     for cat, items in by_cat.items():
         n = norm(cat)
+        # ORDER: name, then STORE, then the hand-written aliases LAST. The
+        # alias table is the only part of this file a human maintains, so it is
+        # the only part that can go stale — and it did, twice, naming two Wi-Fi
+        # modules after a third shipped and two Clock modules after five. Asking
+        # the store first means an alias is consulted only where nothing can be
+        # computed, which is the smallest surface a stale list can wrong.
         if is_photos_facet(cat):
             excused.append((cat, len(items), NOT_A_GAP["photos"]))
         elif n in NOT_A_GAP:
             excused.append((cat, len(items), NOT_A_GAP[n]))
-        elif n in ALIASES:
-            done.append((cat, len(items), with_detail(ALIASES[n], items, covered)))
-        elif n in covered:
-            done.append((cat, len(items), with_detail(covered[n], items, covered)))
+        elif how := how_covered(cat, items, covered, stores):
+            done.append((cat, len(items), with_detail(how, items, covered)))
         else:
             gaps.append((cat, len(items)))
 

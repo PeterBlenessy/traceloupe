@@ -551,7 +551,7 @@ Three outcomes, and they are different kinds of work:
 | **unread store** | the file is in this backup and nothing reads it — real work, provably worth doing on this device |
 | **not here** | the file is not in this backup at all — this device simply lacks the app, so it can be neither built nor ruled out without another device |
 
-On the iOS 17 image that splits 187 untouched artifacts into **12 / 21 / 154**.
+On the iOS 17 image that splits 159 untouched artifacts into **13 / 16 / 130**.
 The last number is the one that matters: most of what is left cannot be settled
 by working harder on the device we have. It is the corpus argument again, with a
 figure attached.
@@ -565,6 +565,45 @@ by product, and a category is rarely all-or-nothing: "Clock" is Alarms, Stopwatc
 Timers and WorldClock and we read one of four. Saying "we support Clock" is
 exactly the kind of claim that stops someone looking, so the tool refuses to make
 it — the alias table records what each claim rests on, including what it excludes.
+
+### The gap was overstated by 19 artifacts, and the tool was why
+
+Until this was fixed the tool matched categories by NAME only. Names drift: ours
+are chosen for a UI, iLEAPP's for a report. So a shipped module filed under a
+heading of our own choosing read as a gap, and the number this whole section
+promises to make honest was wrong in the direction that costs most — it sends
+the next session to build something that already exists.
+
+The worst case was the **entire Files App cluster**: seven artifacts reported
+untouched while `icloud_drive`, `icloud_devices`, `icloud_app_libraries` and
+`os_build_history` had been reading its store for weeks, filed under "Files". A
+session acting on that report would have rebuilt four modules.
+
+Matching now unions name with **store**: an iLEAPP glob and a module `path` that
+name the same file are the same artifact, whatever either project calls it. That
+needs the DOMAIN ROOT stripped off the glob — iLEAPP searches a filesystem
+(`*/mobile/Library/…`), a backup is addressed by (domain, relativePath)
+(`Library/…`) — and it must try every root that matches rather than the longest,
+because six domains share `/var/mobile` and HealthDomain sits inside it. Taking
+the longest filed the Files App under HealthDomain and matched nothing.
+
+Three second-order findings came out of the same pass:
+
+- **An app container path proves nothing on its own.** `Documents/user.db` is a
+  path a hundred apps have. A glob that is not anchored at a domain root only
+  counts when the module's own domain names the app the category is about —
+  without which Waze's store would have reported AllTrails as covered.
+- **`ours()` reported one module per name, whichever sorted first.** Three
+  modules answer to "Location"; two were invisible. Not wrong, but an undercount
+  that reads as the whole answer.
+- **The alias table had gone stale again** — the failure its own comment already
+  records. It named two Wi-Fi modules after a third had shipped. Aliases now
+  join the union instead of racing it (an alias can add a name, never hide one),
+  and `--self-test` refuses to run with one that names code no longer in the
+  tree. That check is in preflight and CI.
+
+`python3 tools/coverage-gap.py --self-test` needs no iLEAPP checkout, which is
+what lets it run on every push.
 
 ---
 
