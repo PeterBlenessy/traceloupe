@@ -2526,6 +2526,114 @@ async fn open_attachment(
     .map_err(|e| e.to_string())?
 }
 
+/// The plaintext bytes of one gallery item, plus its real filename. Decrypts an
+/// encrypted backup's blob on demand (same path the media protocol uses); errors
+/// with a readable message when the keys aren't loaded.
+fn media_plain_bytes(
+    app: &AppHandle,
+    active_path: &Path,
+    id: i64,
+) -> Result<(Vec<u8>, String, Option<String>, PathBuf), String> {
+    let cache = CacheDb::open(active_path).map_err(|e| e.to_string())?;
+    let (local_path, mime, _thumb, decrypt_key, plain_size) = query::media_blob(&cache, id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "this item's file is not available in the backup".to_string())?;
+    let plain = if let Some(key) = decrypt_key {
+        let dec = ensure_session_decryptor(app, active_path)
+            .ok_or_else(|| "backup keys are not loaded (unlock the backup first)".to_string())?;
+        let ciphertext = std::fs::read(&local_path).map_err(|e| e.to_string())?;
+        let size = plain_size.and_then(|s| usize::try_from(s).ok());
+        dec.decrypt_bytes(&key, &ciphertext, size)
+            .map_err(|e| e.to_string())?
+    } else {
+        std::fs::read(&local_path).map_err(|e| e.to_string())?
+    };
+    let filename = local_path
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("item")
+        .to_string();
+    Ok((plain, filename, mime, PathBuf::from(&local_path)))
+}
+
+/// Save a photo/video to a user-chosen path. `as_jpeg` transcodes an image to a
+/// full-resolution JPEG (for HEIC → something every viewer opens); otherwise the
+/// ORIGINAL bytes are written, byte-for-byte, which is what a forensic export
+/// wants.
+#[tauri::command]
+async fn save_media(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    id: i64,
+    path: String,
+    as_jpeg: bool,
+) -> Result<(), String> {
+    let active_path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (plain, _filename, mime, orig_path) = media_plain_bytes(&app, &active_path, id)?;
+        let bytes = if as_jpeg {
+            // Decrypted temp so sips can read it; the RAII guard removes it.
+            let thumbs = active_path
+                .parent()
+                .map(|p| p.join("thumbs"))
+                .unwrap_or_else(|| PathBuf::from("thumbs"));
+            std::fs::create_dir_all(&thumbs).map_err(|e| e.to_string())?;
+            let seq = TEMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Keep the original extension so sips recognises the input format.
+            let ext = orig_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("bin");
+            let tmp = thumbs.join(format!("save-{id}.{seq}.{ext}"));
+            write_private(&tmp, &plain).map_err(|e| e.to_string())?;
+            let _guard = TempPath(tmp.clone());
+            media::render_full_jpeg(&tmp, &thumbs, id).ok_or_else(|| {
+                format!(
+                    "couldn't convert this {} to JPEG",
+                    mime.as_deref().unwrap_or("image")
+                )
+            })?
+        } else {
+            plain
+        };
+        std::fs::write(&path, &bytes).map_err(|e| format!("writing {path}: {e}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Write a photo/video's ORIGINAL bytes to a temp under the cache dir and reveal
+/// it in Finder (`open -R`), so the user can drag/copy it into any folder. The
+/// bytes carry the item's real filename (hence extension), and the temp is
+/// cleared on backup close/switch like the other decrypted exports.
+#[tauri::command]
+async fn reveal_media(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    id: i64,
+) -> Result<(), String> {
+    let active_path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (plain, filename, _mime, _orig) = media_plain_bytes(&app, &active_path, id)?;
+        let dir = active_path
+            .parent()
+            .map(|p| p.join("att-open"))
+            .ok_or_else(|| "unexpected cache layout".to_string())?;
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let base = filename.rsplit(['/', '\\']).next().unwrap_or("item");
+        let dest = dir.join(format!("{id}-{base}"));
+        write_private(&dest, &plain).map_err(|e| e.to_string())?;
+        std::process::Command::new("/usr/bin/open")
+            .arg("-R")
+            .arg(&dest)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn list_calls(active: State<'_, ActiveBackup>) -> Result<Vec<Call>, String> {
     let path = active.path()?;
@@ -4617,6 +4725,8 @@ pub fn run() {
             count_media_ranges,
             get_media_window,
             set_media_favorite,
+            save_media,
+            reveal_media,
             count_calls,
             count_call_ranges,
             call_addresses,
