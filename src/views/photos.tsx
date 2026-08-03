@@ -46,7 +46,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
-import { useTimePresets } from "@/components/time-filter";
+import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { NoBackupState, EmptyView, ErrorState, ListSearch } from "@/components/view";
@@ -89,8 +89,25 @@ function PhotosViewInner() {
       ? sourcePref
       : "all";
   const sourceArg = source === "all" ? null : source;
-  // Time filter — same presets + custom range as the Timeline.
-  const { now, presets } = useTimePresets();
+  // Time filter — recency windows, then ONE CHIP PER YEAR the library actually
+  // spans (from the capture-date bounds), not just the current calendar year.
+  // `makeTimePresets` alone only ever offers "this year", which is why the
+  // filter looked stuck on 2026 no matter how old the photos were.
+  const { now, presets: basePresets } = useTimePresets();
+  const { data: dateBounds } = useQuery({
+    queryKey: ["mediaDateBounds"],
+    queryFn: () => client.mediaDateBounds(),
+    enabled: active === true,
+  });
+  const presets = useMemo(() => {
+    if (!dateBounds) return basePresets;
+    const minYear = new Date(dateBounds[0] * 1000).getFullYear();
+    const maxYear = new Date(dateBounds[1] * 1000).getFullYear();
+    return [
+      ...basePresets.filter((p) => p.key !== "year"),
+      ...makeYearPresets(minYear, maxYear),
+    ];
+  }, [basePresets, dateBounds]);
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
   // Free-text search over the filename (debounced).
   const [q, setQ] = useState("");
@@ -102,7 +119,9 @@ function PhotosViewInner() {
   });
   // Per-preset counts for the time chips, within the current source + search.
   const { data: presetCounts } = useQuery({
-    queryKey: ["mediaRanges", now, source, search],
+    // `presets.length` keys the year chips: when the date bounds resolve and the
+    // per-year presets appear, the counts must refetch to cover them.
+    queryKey: ["mediaRanges", now, source, search, presets.length],
     queryFn: () =>
       client.countMediaRanges(
         sourceArg,

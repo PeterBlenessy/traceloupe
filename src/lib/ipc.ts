@@ -1222,6 +1222,8 @@ export interface TraceLoupeClient {
   getSystemLocale(): Promise<string>;
   moduleMetrics(): Promise<ModuleMetric[]>;
   messageDateBounds(): Promise<[number, number] | null>;
+  /** [earliest, latest] photo/video CAPTURE date, for the year chips. */
+  mediaDateBounds(): Promise<[number, number] | null>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
   getRangeWindow(
     lo: number | null,
@@ -1763,6 +1765,8 @@ const tauriClient: TraceLoupeClient = {
   moduleMetrics: () => invoke<ModuleMetric[]>("module_metrics"),
   messageDateBounds: () =>
     invoke<[number, number] | null>("message_date_bounds"),
+  mediaDateBounds: () =>
+    invoke<[number, number] | null>("media_date_bounds"),
   getRangeWindow: (
     lo,
     hi,
@@ -5968,6 +5972,13 @@ const mockClient: TraceLoupeClient = {
     const ts = Object.values(mockMessages)
       .flat()
       .map((m) => m.sentAt)
+      .filter((t): t is number => t != null);
+    return ts.length ? [Math.min(...ts), Math.max(...ts)] : null;
+  },
+  mediaDateBounds: async () => {
+    if (!mockActive) return null;
+    const ts = mockMedia
+      .map((m) => m.takenAt)
       .filter((t): t is number => t != null);
     return ts.length ? [Math.min(...ts), Math.max(...ts)] : null;
   },

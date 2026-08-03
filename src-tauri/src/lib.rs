@@ -2359,6 +2359,17 @@ async fn message_date_bounds(
 }
 
 #[tauri::command]
+async fn media_date_bounds(active: State<'_, ActiveBackup>) -> Result<Option<(i64, i64)>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::media_date_bounds(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 async fn count_message_ranges(
     active: State<'_, ActiveBackup>,
     ranges: Vec<query::TimeRange>,
@@ -4503,6 +4514,7 @@ pub fn run() {
             count_message_ranges,
             count_note_ranges,
             message_date_bounds,
+            media_date_bounds,
             get_range_window,
             open_attachment,
             list_calls,
