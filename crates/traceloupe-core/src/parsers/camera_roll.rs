@@ -156,7 +156,20 @@ fn enumerate(
             continue; // skip directories, .AAE sidecars, etc.
         };
         let key = rel.strip_prefix(DCIM_PREFIX).unwrap_or(&rel).to_string();
-        let asset_meta = meta.get(&key);
+        // A Live Photo is TWO files on disk — `IMG_0001.HEIC` and its paired
+        // `IMG_0001.MOV` — but only ONE asset row (the still). So the `.MOV`
+        // component finds no metadata and would show no capture date. Borrow the
+        // still's date: same basename, a photo extension. Only for the paired
+        // component; a standalone video keeps its own asset row and date.
+        let asset_meta = meta.get(&key).or_else(|| {
+            let (stem, ext) = key.rsplit_once('.')?;
+            if !ext.eq_ignore_ascii_case("mov") {
+                return None;
+            }
+            ["HEIC", "heic", "JPG", "jpg", "HEIF", "heif", "PNG", "png"]
+                .iter()
+                .find_map(|e| meta.get(&format!("{stem}.{e}")))
+        });
         // Recently-deleted (trashed) assets are ingested too and badged later by
         // photos_meta (ZTRASHEDSTATE) — surfaced, not excluded, for forensics.
 
@@ -273,14 +286,31 @@ fn load_photos_metadata(
     read_photos_metadata(&conn)
 }
 
-/// Query ZASSET on an open Photos.sqlite for capture dates.
+fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        [name],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Query the asset table on an open Photos.sqlite for capture dates.
 fn read_photos_metadata(conn: &Connection) -> Result<HashMap<String, AssetMeta>> {
     // ZDATECREATED is a Core Data timestamp (seconds since 2001-01-01).
     const COCOA_EPOCH_OFFSET: f64 = 978_307_200.0;
-    let mut stmt = conn.prepare(
+    // The asset table is `ZGENERICASSET` on iOS 13/14 and `ZASSET` from iOS 15.
+    // Querying the wrong one just errors (→ empty map → no dates), which is
+    // exactly what made every photo on an older backup show no capture date.
+    let asset_table = if table_exists(conn, "ZASSET")? {
+        "ZASSET"
+    } else {
+        "ZGENERICASSET"
+    };
+    let mut stmt = conn.prepare(&format!(
         "SELECT ZDIRECTORY, ZFILENAME, ZDATECREATED
-         FROM ZASSET WHERE ZDIRECTORY LIKE 'DCIM/%'",
-    )?;
+         FROM {asset_table} WHERE ZDIRECTORY LIKE 'DCIM/%'",
+    ))?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -385,6 +415,56 @@ mod tests {
 
         let video = assets.iter().find(|a| a.kind == "video").unwrap();
         assert!(video.thumb_path.is_none()); // no thumb entry for the video
-        assert_eq!(video.taken_at, None); // not in ZASSET
+        assert_eq!(video.taken_at, None); // not in ZASSET, and no sibling still
+    }
+
+    #[test]
+    fn older_ios_uses_zgenericasset_and_live_photo_movs_borrow_the_stills_date() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path();
+        let conn = Connection::open(backup.join("Manifest.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             INSERT INTO Files VALUES ('aa11', 'CameraRollDomain', 'Media/DCIM/100APPLE/IMG_0001.HEIC', 1, NULL);
+             INSERT INTO Files VALUES ('bb22', 'CameraRollDomain', 'Media/DCIM/100APPLE/IMG_0001.MOV', 1, NULL);
+             INSERT INTO Files VALUES ('cc33', 'CameraRollDomain', 'Media/DCIM/100APPLE/IMG_0002.MOV', 1, NULL);
+             INSERT INTO Files VALUES ('ff55aa', 'CameraRollDomain', 'Media/PhotoData/Photos.sqlite', 1, NULL);",
+        )
+        .unwrap();
+
+        // iOS 13/14 keep assets in ZGENERICASSET, not ZASSET.
+        let photos = backup.join("ff").join("ff55aa");
+        std::fs::create_dir_all(photos.parent().unwrap()).unwrap();
+        let ph = Connection::open(&photos).unwrap();
+        ph.execute_batch(
+            "CREATE TABLE ZGENERICASSET (ZDIRECTORY TEXT, ZFILENAME TEXT, ZDATECREATED REAL, ZTRASHEDSTATE INTEGER);
+             INSERT INTO ZGENERICASSET VALUES ('DCIM/100APPLE', 'IMG_0001.HEIC', 700000000.0, 0);",
+        )
+        .unwrap();
+
+        let assets = parse_camera_roll(backup, None, &backup.join("_cache")).unwrap();
+
+        // The still is dated from ZGENERICASSET (the older-schema fix).
+        let still = assets
+            .iter()
+            .find(|a| a.relative_path.ends_with("IMG_0001.HEIC"))
+            .unwrap();
+        assert_eq!(still.taken_at, Some(1_678_307_200));
+
+        // Its paired Live Photo .MOV — no asset row of its own — borrows the
+        // still's date rather than showing nothing.
+        let live_mov = assets
+            .iter()
+            .find(|a| a.relative_path.ends_with("IMG_0001.MOV"))
+            .unwrap();
+        assert_eq!(live_mov.taken_at, Some(1_678_307_200));
+
+        // A standalone video with no sibling still keeps no date — we don't
+        // invent one.
+        let lone_mov = assets
+            .iter()
+            .find(|a| a.relative_path.ends_with("IMG_0002.MOV"))
+            .unwrap();
+        assert_eq!(lone_mov.taken_at, None);
     }
 }
