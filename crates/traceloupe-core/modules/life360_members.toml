@@ -1,0 +1,119 @@
+# Life360 — who this person shares their live location with, by name.
+#
+# `Library/Application Support/Messaging.sqlite` in the Life360 app's own
+# domain. The name is misleading: the store is Core Data behind the chat
+# feature, but the roster it keeps is the CIRCLE — and a circle is the whole
+# point of Life360. Every member of one sees every other member's position
+# continuously.
+#
+# WHY THIS IS THE MOST IMPORTANT ROW IN THE APP
+#
+# `life360_locations` already recovers WHERE the phone has been, from the app's
+# logs. This says WHO WAS WATCHING. A location history is a claim about one
+# person; a circle is a named list of the people that history was streamed to,
+# with an email address and a phone number for each. In a stalking or coercive
+# control matter that list is frequently the case, and it is one join away from
+# Contacts and from the message threads the rest of the app produces.
+#
+# ONE ROW PER MEMBERSHIP, NOT PER PERSON. Somebody in two circles is two rows,
+# because the fact recorded is a membership: this person, in this circle. The
+# validation device's owner is in both of their circles and appears twice, and
+# collapsing that would lose which circles they are actually in. `Member id` is
+# the person, and it is stable across the rows — sort by it to see one person's
+# memberships together.
+#
+# ADMIN IS AN AUTHORITY, NOT A LABEL. A circle admin can add and remove members
+# and see everyone. `Created by this account` marks the row belonging to the
+# phone's own user, so a reader can tell "they run this circle" from "they were
+# added to it" — which is the difference between organiser and subject.
+#
+# A PENDING INVITE IS NOT A MEMBER, and a removed one no longer sees anything.
+# Both are kept, with a column saying which, because an invitation that was
+# never accepted and a member who was thrown out are both facts about the
+# circle's history that the current roster alone does not carry.
+#
+# `ZCREATEDAT` is Core Data, so seconds since 2001 — not Unix. The device gives
+# 726264721, which is July 2024 and not 1993.
+
+id          = "life360_members"
+name        = "Life360 circles"
+description = "The people this phone shares its live location with — every Life360 circle it belongs to, and who else is in each one."
+verified    = "iphone11_ios17 — 4 memberships across 2 circles (\"Family\" and \"Our DFiR Fam\"), each with a name, email address and mobile number; the phone's own user is the admin of both"
+surface     = "apps"
+join_column = "App"
+category    = "Location"
+domain      = "AppDomain-com.life360.safetymap"
+path        = "Library/Application Support/Messaging.sqlite"
+
+sql = [
+  """
+  SELECT c.ZNAME AS circle,
+         c.ZCREATEDAT AS circle_created,
+         TRIM(COALESCE(m.ZFIRSTNAME, '') || ' ' || COALESCE(m.ZLASTNAME, '')) AS member,
+         m.ZEMAIL AS email,
+         m.ZPHONE AS phone,
+         m.ZISADMIN AS is_admin,
+         m.ZISLOGGEDINUSER AS is_self,
+         -- One column rather than three booleans: a membership is in exactly
+         -- one of these states, and three flags invite a reader to imagine
+         -- combinations the app cannot produce.
+         CASE
+           WHEN m.ZISDELETEDFROMCIRCLE = 1 THEN 'Removed from circle'
+           WHEN m.ZPENDINGINVITE = 1 THEN 'Invited, not yet joined'
+           ELSE 'Active'
+         END AS state,
+         m.ZMEMBERID AS member_id
+  FROM ZCHATMEMBER m
+  LEFT JOIN ZCHATCIRCLE c ON m.ZCIRCLE = c.Z_PK
+  ORDER BY c.ZNAME, m.ZISADMIN DESC, member
+  """,
+]
+
+# The bundle id the Apps view joins on. Constant: this store belongs to exactly
+# one app and nothing inside it names the app.
+[[columns]]
+name = "App"
+value = "com.life360.safetymap"
+
+[[columns]]
+name = "Circle"
+from = "circle"
+
+[[columns]]
+name = "Member"
+from = "member"
+
+[[columns]]
+name = "Email"
+from = "email"
+
+[[columns]]
+name = "Phone"
+from = "phone"
+
+[[columns]]
+name = "Role"
+from = "is_admin"
+kind = "integer"
+[columns.map]
+0 = "Member"
+1 = "Admin"
+
+[[columns]]
+name = "This phone's account"
+from = "is_self"
+kind = "bool"
+
+[[columns]]
+name = "Status"
+from = "state"
+
+[[columns]]
+name = "Circle created"
+from = "circle_created"
+kind = "timestamp"
+epoch = "cocoa"
+
+[[columns]]
+name = "Member id"
+from = "member_id"

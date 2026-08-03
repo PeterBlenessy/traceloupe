@@ -324,6 +324,14 @@ numbers because the category already counted as covered:
   `displayIdentifier` is a UUID; the names are one level down in `elements`.
   "iOS Screens" had looked covered since `home_screen` and `dock` shipped — it
   was covered for apps and blind to widgets.
+- **Life360's `Messaging.sqlite` holds the CIRCLE, not just the chat.**
+  `life360_locations` already recovers where the phone went, from the app's own
+  logs; nothing read who was watching it go. Every circle the phone belongs to,
+  with each member's name, email address and mobile number — a named list of the
+  people a live location feed is streamed to. Four memberships across two
+  circles on the validation device. The store had been dismissed as "chat", and
+  its message table is empty there, which is how the roster beside it stayed
+  unread.
 - **`wifi_networks` was reading network names and ignoring a location history.**
   Each network's `BSSList` is one entry per physical access point, carrying
   `LocationLatitude`/`LocationLongitude`/`LocationAccuracy` — where iOS believes
@@ -495,6 +503,7 @@ asks. Check free space before fetching, not 20 GB in.
 | iCloud Drive files | Files | ✅ | iphone11_ios17 — 27 files resolving to real folders (Desktop/, Documents/, Downloads/, Dictionaries/…) with sizes and all three dates; iphone11_ios16 — 26 on the same phone one OS earlier, and the one file's Shared flag differs between them, so the flags are read not defaulted |
 | Cellular identity | Device | ✅ | iphone11_ios17 + iphone11_ios16 — 1 SIM, IMEI 353985100845978, IMSI 310260974867669, +1 919 579 4674 on PLMN 310260; identical across both OS versions, which is what a handset identifier should be |
 | Life360 location history | Location | ✅ | iphone11_ios17 — 1,635 rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives 1,635… |
+| Life360 circles | Location | ✅ | iphone11_ios17 — 4 memberships across 2 circles (\"Family\" and \"Our DFiR Fam\"), each with a name, email address and mobile number; the phone's own user is the admin of both |
 | Location access | Security | ✅ | iphone11_ios17 — 189 clients including TikTok, Gmail and Apple Maps |
 | Location Services | Device | ✅ | iphone11_ios17 — Location Services on, last written by iPhone OS17.3/21D50 |
 | MEGA files | Files | ✅ | iphone11_ios17 — 966 files across 332 folders, resolving to real paths such as 'Cloud Drive/My chat files/IMG_4552.jpg'; the _status_ and _transfers_ sibling stores the path glob also matches are skipped, which is what the globbed-skip rule exists for |
@@ -519,7 +528,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**49 implemented · 49 verified · 0 awaiting a real backup.**
+**50 implemented · 50 verified · 0 awaiting a real backup.**
 
 ---
 
