@@ -21,6 +21,7 @@ import {
   Image as ImageIcon,
   ImageOff,
   Images,
+  MessageSquare,
   MapPin,
   Play,
   Smartphone,
@@ -678,6 +679,27 @@ function Lightbox({
                 <span className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400">
                   <Users className="size-3.5 shrink-0" />
                   <span className="select-text truncate">{item.persons}</span>
+                </span>
+              </Hint>
+            )}
+            {(item.sharedCaption || item.sharedLikes) && (
+              // Activity by OTHER PEOPLE on a photo this device shared with
+              // them — a different kind of fact from anything else on this bar,
+              // which is all about the photo itself.
+              <Hint
+                label={
+                  item.sharedCaption
+                    ? `Shared album caption: “${item.sharedCaption}”${
+                        item.sharedLikes ? ` · liked ${item.sharedLikes}×` : ""
+                      }`
+                    : `Liked ${item.sharedLikes}× in a shared album`
+                }
+              >
+                <span className="inline-flex min-w-0 shrink items-center gap-1 text-neutral-400">
+                  <MessageSquare className="size-3.5 shrink-0" />
+                  <span className="select-text truncate">
+                    {item.sharedCaption ?? `${item.sharedLikes} likes`}
+                  </span>
                 </span>
               </Hint>
             )}
