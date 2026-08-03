@@ -1,0 +1,73 @@
+# The widgets on the home screen, and which stack each sits in.
+#
+# `Library/SpringBoard/IconState.plist` in `HomeDomain` — the same store
+# `home_screen.toml` and `dock.toml` read, a different level of it.
+#
+# WHY THIS EXISTS: THE HOME SCREEN SHOWS UUIDs
+#
+# `home_screen.toml` lists one row per icon, and a widget stack appears there as
+# `Kind = "custom"` with a `displayIdentifier` of
+# `A5E1414E-FD2B-486D-BAC2-B0DEED262F03`. That is what the store holds and it is
+# not wrong — but it tells a reader nothing at all, and on the validation device
+# it is the FIRST TWO ROWS of the first page. The names are one level down, in
+# each icon's `elements` array.
+#
+# This module reads that level: every widget, with the app it belongs to. Read
+# together, "slot 0 on page 0 is a stack" and "that stack holds Weather and
+# Photos" are the whole fact.
+#
+# `index_column` records the path the wildcards took — page, slot, element — so
+# a row here can be tied back to the icon it came from rather than floating free
+# in a list of widgets with no positions.
+#
+# WIDGETS ARE A DIFFERENT KIND OF EVIDENCE from apps. An installed app says
+# someone downloaded it once; a widget on the home screen says they wanted it in
+# front of them every time they unlocked the phone, and the stack it is in says
+# what they grouped it with.
+#
+# `containerBundleIdentifier` is the app that PROVIDES the widget, which is
+# usually but not always the same as the widget id's prefix — a third-party app
+# can ship several. Both are kept.
+#
+# WHAT IS NOT HERE: the Today View (`today` at the plist root) is a separate
+# array with the same element shape. It is a separate module rather than a
+# `**` glob across both, because "on the home screen" and "in the Today View"
+# are different placements and merging them would lose which is which.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: the two
+# opaque `custom` icons on page 0 resolve to Weather and Photos widgets.
+# Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id           = "home_screen_widgets"
+name         = "Home screen widgets"
+description  = "Every widget on the home screen and the stack it sits in — the names behind the anonymous icons the layout shows as UUIDs."
+verified    = "iphone11_ios17 + iphone11_ios16 — 6 widgets (Weather, Maps and others) with their page/slot positions, resolving the two anonymous 'custom' UUIDs the layout shows on page 0; iphone_se_ios13 + iphone_se_ios13_4 — 0 rows, because home screen widgets did not exist before iOS 14"
+surface      = "device"
+category     = "Device"
+domain       = "HomeDomain"
+path         = "Library/SpringBoard/IconState.plist"
+
+[plist]
+rows         = ["iconLists", "*", "*", "elements", "*"]
+# HOME SCREEN WIDGETS ARRIVED IN iOS 14. Verified on an iPhone SE at 13.3.1 and
+# 13.4.1, where no icon has an `elements` array at all because the feature did
+# not exist -- the third artifact in this repo whose container is simply absent
+# on a device that predates it, after MTStopwatches and MTSleepAlarms.
+optional     = true
+index_column = "At"
+
+[[columns]]
+name = "At"
+
+[[columns]]
+name = "Widget"
+from = "widgetIdentifier"
+
+[[columns]]
+name = "Provided by"
+from = "containerBundleIdentifier"
+
+[[columns]]
+name = "Kind"
+from = "elementType"

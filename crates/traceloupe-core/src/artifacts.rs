@@ -2453,6 +2453,10 @@ const BUILTIN: &[(&str, &str)] = &[
         "home_screen.toml",
         include_str!("../modules/home_screen.toml"),
     ),
+    (
+        "home_screen_widgets.toml",
+        include_str!("../modules/home_screen_widgets.toml"),
+    ),
     ("dock.toml", include_str!("../modules/dock.toml")),
 ];
 
@@ -4859,10 +4863,48 @@ from = "nope"
             d.insert("gridSize".into(), Value::String(size.into()));
             Value::Dictionary(d)
         }
+        /// A widget STACK: the icon itself is an anonymous UUID and the names
+        /// are one level down, which is the whole reason
+        /// `home_screen_widgets.toml` exists.
+        fn stack(id: &str, widgets: &[(&str, &str)]) -> Value {
+            let mut d = Dictionary::new();
+            d.insert("displayIdentifier".into(), Value::String(id.into()));
+            d.insert("iconType".into(), Value::String("custom".into()));
+            d.insert("gridSize".into(), Value::String("medium".into()));
+            d.insert(
+                "elements".into(),
+                Value::Array(
+                    widgets
+                        .iter()
+                        .map(|(w, container)| {
+                            let mut e = Dictionary::new();
+                            e.insert("elementType".into(), Value::String("widget".into()));
+                            e.insert("widgetIdentifier".into(), Value::String((*w).into()));
+                            e.insert(
+                                "containerBundleIdentifier".into(),
+                                Value::String((*container).into()),
+                            );
+                            Value::Dictionary(e)
+                        })
+                        .collect(),
+                ),
+            );
+            Value::Dictionary(d)
+        }
         let page0 = Value::Array(vec![
             icon("com.example.chatapp", "app", "small"),
-            // A widget: the identifier is a UUID, not a bundle id.
-            icon("A5E1414E-FD2B-486D-BAC2-B0DEED262F03", "custom", "medium"),
+            // A widget stack: the identifier is a UUID, not a bundle id, and
+            // the two widgets inside it are the only readable thing about it.
+            stack(
+                "A5E1414E-FD2B-486D-BAC2-B0DEED262F03",
+                &[
+                    ("com.apple.weather", "com.apple.weather"),
+                    (
+                        "com.apple.mobileslideshow.PhotosReliveWidget",
+                        "com.apple.mobileslideshow",
+                    ),
+                ],
+            ),
         ]);
         let page1 = Value::Array(vec![icon("com.example.todo", "app", "small")]);
 
@@ -5084,6 +5126,11 @@ from = "nope"
             "Library/Caches/locationd/clients.plist",
         ),
         (
+            "home_screen_widgets",
+            "HomeDomain",
+            "Library/SpringBoard/IconState.plist",
+        ),
+        (
             "home_screen",
             "HomeDomain",
             "Library/SpringBoard/IconState.plist",
@@ -5255,7 +5302,9 @@ from = "nope"
             "watch_apps" => return Seed::Bytes(seed_watch_apps),
             "backup_sizing" => return Seed::Bytes(seed_backup_sizing),
             // One store, two modules: IconState holds pages AND the dock.
-            "home_screen" | "dock" => return Seed::Bytes(seed_icon_state),
+            // One store, three modules: the pages, the dock, and the widgets
+            // hiding inside the pages' anonymous "custom" icons.
+            "home_screen" | "dock" | "home_screen_widgets" => return Seed::Bytes(seed_icon_state),
             other => panic!(
                 "module {other:?} has no fixture — add one to FIXTURES and to \
                  tools/make_fixture_backup.py, so shipping a module always means \
