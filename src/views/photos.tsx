@@ -17,6 +17,7 @@ import {
   EyeOff,
   Frame,
   Heart,
+  Star,
   Import,
   Image as ImageIcon,
   ImageOff,
@@ -109,24 +110,34 @@ function PhotosViewInner() {
     ];
   }, [basePresets, dateBounds]);
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // Show only the user's starred photos/videos.
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   // Free-text search over the filename (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
   const { data: count, error } = useQuery({
-    queryKey: ["mediaCount", source, range.lo, range.hi, search],
-    queryFn: () => client.countMedia(sourceArg, range.lo, range.hi, search),
+    queryKey: ["mediaCount", source, range.lo, range.hi, search, favoritesOnly],
+    queryFn: () =>
+      client.countMedia(sourceArg, range.lo, range.hi, search, favoritesOnly),
+    enabled: active === true,
+  });
+  // How many are starred, for the Favorites pill's count (and whether to show it).
+  const { data: favCount } = useQuery({
+    queryKey: ["mediaFavCount"],
+    queryFn: () => client.countMedia(null, null, null, null, true),
     enabled: active === true,
   });
   // Per-preset counts for the time chips, within the current source + search.
   const { data: presetCounts } = useQuery({
     // `presets.length` keys the year chips: when the date bounds resolve and the
     // per-year presets appear, the counts must refetch to cover them.
-    queryKey: ["mediaRanges", now, source, search, presets.length],
+    queryKey: ["mediaRanges", now, source, search, presets.length, favoritesOnly],
     queryFn: () =>
       client.countMediaRanges(
         sourceArg,
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         search,
+        favoritesOnly,
       ),
     enabled: active === true,
   });
@@ -145,6 +156,7 @@ function PhotosViewInner() {
           search,
           sort.by,
           sort.desc,
+          favoritesOnly,
           page,
         ],
         queryFn: () =>
@@ -157,10 +169,24 @@ function PhotosViewInner() {
             PAGE,
             sort.by,
             sort.desc,
+            favoritesOnly,
           ),
       });
     },
-    [qc, sourceArg, range, search, sort],
+    [qc, sourceArg, range, search, sort, favoritesOnly],
+  );
+
+  // Toggle a star, persist it, and refresh the media queries so the grid, the
+  // counts, and the Favorites pill all reflect it.
+  const toggleFavorite = useCallback(
+    async (item: MediaItem) => {
+      await client.setMediaFavorite(item.id, !item.userFavorite);
+      void qc.invalidateQueries({ queryKey: ["mediaWindow"] });
+      void qc.invalidateQueries({ queryKey: ["mediaCount"] });
+      void qc.invalidateQueries({ queryKey: ["mediaRanges"] });
+      void qc.invalidateQueries({ queryKey: ["mediaFavCount"] });
+    },
+    [qc],
   );
 
   const hasFilter = (sources?.length ?? 0) > 1;
@@ -195,9 +221,37 @@ function PhotosViewInner() {
           onChange: setSource,
         }),
       );
+    // A single toggle pill: "★ Favorites". Shown once anything is starred (or
+    // while the filter is on), so it never appears as an empty "Favorites (0)".
+    if (favoritesOnly || (favCount ?? 0) > 0)
+      list.push({
+        key: "favorites",
+        label: "Favorites",
+        description: "Only photos and videos you've starred",
+        pills: [
+          {
+            key: "favorites",
+            label: "Favorites",
+            icon: <Star className="size-3.5" />,
+            count: favCount,
+            selected: favoritesOnly,
+            onSelect: () => setFavoritesOnly((v) => !v),
+          },
+        ],
+        summary: favoritesOnly
+          ? [
+              {
+                key: "favorites",
+                label: "Favorites",
+                icon: <Star className="size-3.5" />,
+                onClear: () => setFavoritesOnly(false),
+              },
+            ]
+          : [],
+      });
     list.push(timeGroup({ description: "When the media was created", presets, counts: presetCounts, value: range, onChange: setRange }));
     return list;
-  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range]);
+  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range, favoritesOnly, favCount]);
   const sortNode = useMemo(
     () => (
       <SortControl
@@ -277,13 +331,15 @@ function PhotosViewInner() {
         // key by source+range+search+sort so the grid remounts (scroll +
         // measurement reset) on any filter change.
         <MediaGrid
-          key={`${source}:${range.lo}:${range.hi}:${search}:${sort.by}:${sort.desc}`}
+          key={`${source}:${range.lo}:${range.hi}:${search}:${sort.by}:${sort.desc}:${favoritesOnly}`}
           count={count}
           source={sourceArg}
           range={range}
           search={search}
           sort={sort}
+          favoritesOnly={favoritesOnly}
           onOpen={setOpenIndex}
+          onToggleFavorite={toggleFavorite}
         />
       )}
 
@@ -294,6 +350,8 @@ function PhotosViewInner() {
         range={range}
         search={search}
         sort={sort}
+        favoritesOnly={favoritesOnly}
+        onToggleFavorite={toggleFavorite}
         ensurePage={ensurePage}
         onNavigate={setOpenIndex}
         onClose={() => setOpenIndex(null)}
@@ -319,14 +377,18 @@ function MediaGrid({
   range,
   search,
   sort,
+  favoritesOnly,
   onOpen,
+  onToggleFavorite,
 }: {
   count: number;
   source: string | null;
   range: TimeRange;
   search: string | null;
   sort: SortState;
+  favoritesOnly: boolean;
   onOpen: (index: number) => void;
+  onToggleFavorite: (item: MediaItem) => void;
 }) {
   const GAP = 4; // matches gap-1 / p-1 (0.25rem)
   const MIN = 144; // 9rem minimum tile
@@ -382,6 +444,7 @@ function MediaGrid({
         search,
         sort.by,
         sort.desc,
+        favoritesOnly,
         p,
       ],
       queryFn: () =>
@@ -394,6 +457,7 @@ function MediaGrid({
           PAGE,
           sort.by,
           sort.desc,
+          favoritesOnly,
         ),
     })),
   });
@@ -433,7 +497,11 @@ function MediaGrid({
                 return (
                   <div key={index} style={{ width: cell }}>
                     {item ? (
-                      <Thumb item={item} onOpen={() => onOpen(index)} />
+                      <Thumb
+                        item={item}
+                        onOpen={() => onOpen(index)}
+                        onToggleFavorite={onToggleFavorite}
+                      />
                     ) : (
                       <div className="aspect-square w-full animate-pulse rounded-sm bg-muted" />
                     )}
@@ -508,7 +576,15 @@ function LocationTag({ item }: { item: MediaItem }) {
   );
 }
 
-function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
+function Thumb({
+  item,
+  onOpen,
+  onToggleFavorite,
+}: {
+  item: MediaItem;
+  onOpen: () => void;
+  onToggleFavorite: (item: MediaItem) => void;
+}) {
   const isVideo = item.kind === "video";
   const cacheKey = useMediaCacheKey();
   const [failed, setFailed] = useState(false);
@@ -552,6 +628,37 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
         </span>
       )}
       <div className="absolute right-1 top-1 flex gap-1">
+        {/* The user's own star: interactive (nested `role="button"`, not a
+            <button>, since the tile itself is a button). Always shown when
+            starred; revealed on hover otherwise so any tile can be starred. */}
+        <span
+          role="button"
+          tabIndex={0}
+          aria-label={item.userFavorite ? "Remove star" : "Add star"}
+          title={item.userFavorite ? "Starred — click to remove" : "Star this"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFavorite(item);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleFavorite(item);
+            }
+          }}
+          className={`cursor-pointer rounded-full bg-black/55 p-1 transition-opacity ${
+            item.userFavorite ? "" : "opacity-0 group-hover:opacity-100"
+          }`}
+        >
+          <Star
+            className={`size-3 ${
+              item.userFavorite
+                ? "fill-amber-400 text-amber-400"
+                : "text-white"
+            }`}
+          />
+        </span>
         {item.trashed && (
           <span
             className="rounded-full bg-status-danger/80 p-1 text-white"
@@ -614,6 +721,8 @@ function Lightbox({
   range,
   search,
   sort,
+  favoritesOnly,
+  onToggleFavorite,
   ensurePage,
   onNavigate,
   onClose,
@@ -624,6 +733,8 @@ function Lightbox({
   range: TimeRange;
   search: string | null;
   sort: SortState;
+  favoritesOnly: boolean;
+  onToggleFavorite: (item: MediaItem) => void;
   ensurePage: (page: number) => void;
   onNavigate: (index: number) => void;
   onClose: () => void;
@@ -661,6 +772,7 @@ function Lightbox({
       search,
       sort.by,
       sort.desc,
+      favoritesOnly,
       page,
     ],
     queryFn: () =>
@@ -673,6 +785,7 @@ function Lightbox({
         PAGE,
         sort.by,
         sort.desc,
+        favoritesOnly,
       ),
     enabled: index != null,
   });
@@ -700,6 +813,26 @@ function Lightbox({
       <div className="space-y-1">
         <div className="flex items-center justify-between gap-2">
           <div className="flex min-w-0 items-center gap-3">
+            <Hint
+              label={
+                item.userFavorite ? "Starred — click to remove" : "Star this"
+              }
+            >
+              <button
+                type="button"
+                aria-label={item.userFavorite ? "Remove star" : "Add star"}
+                onClick={() => onToggleFavorite(item)}
+                className="shrink-0 rounded-full p-0.5 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <Star
+                  className={`size-4 ${
+                    item.userFavorite
+                      ? "fill-amber-400 text-amber-400"
+                      : "text-neutral-400"
+                  }`}
+                />
+              </button>
+            </Hint>
             {item.trashed && (
               <Trash2
                 className="size-3.5 shrink-0 text-status-danger-text"
