@@ -4398,6 +4398,32 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "wifi_access_points",
+            name: "Wi-Fi access points",
+            category: "Network",
+            description:
+              "Every access point this device joined, with where iOS believes that access point is and when the device was last on it.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Network",
+              "Access point",
+              "Latitude",
+              "Longitude",
+              "Accuracy (m)",
+              "Located",
+              "Last joined",
+              "Channel",
+            ],
+            timestampColumns: ["Located", "Last joined"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "cellular_network",
             name: "Cellular network",
             category: "Network",
@@ -5006,6 +5032,31 @@ const mockClient: TraceLoupeClient = {
             "Recently deleted": false,
           },
         ]
+      : mockActive && artifactId === "wifi_access_points"
+        ? [
+            {
+              Network: "HomeNet/0",
+              "Access point": "82:45:58:f7:b3:31",
+              Latitude: 35.65961074005026,
+              Longitude: -78.8727836529558,
+              "Accuracy (m)": 14.25,
+              Located: 1689377839,
+              "Last joined": 1689377839,
+              Channel: 153,
+            },
+            {
+              // A radio iOS never placed: still a row, because joining it is a
+              // fact about where the device has been.
+              Network: "HomeNet/1",
+              "Access point": "82:45:58:f7:b3:32",
+              Latitude: null,
+              Longitude: null,
+              "Accuracy (m)": null,
+              Located: null,
+              "Last joined": 1657000000,
+              Channel: 6,
+            },
+          ]
       : mockActive && artifactId === "cellular_network"
         ? [
             {

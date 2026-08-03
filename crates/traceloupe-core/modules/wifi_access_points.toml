@@ -1,0 +1,98 @@
+# Every Wi-Fi access point this device joined, and WHERE THAT ACCESS POINT IS.
+#
+# `com.apple.wifi.known-networks.plist` in `SystemPreferencesDomain` — the same
+# store `wifi_networks.toml` reads, one level deeper. That module reports the
+# NETWORK: its name, security, when it was joined. Each network also carries a
+# `BSSList`, one entry per physical access point the device has associated with
+# on that network, and nothing was reading it.
+#
+# WHY THIS IS A LOCATION HISTORY
+#
+# Each BSS entry holds `LocationLatitude`, `LocationLongitude` and
+# `LocationAccuracy` — iOS caches where it believes that access point is, to
+# metres — beside `LastAssociatedAt`, when the device was last connected to
+# THAT radio rather than to the network in general.
+#
+# A network name says someone was somewhere called "Matt_Foley". A BSS row says
+# they were at 35.65961, -78.87278, to within 14 metres, at 23:37 on
+# 2023-07-14. On the validation device 16 networks carry one, several with
+# multiple access points — a home or office with more than one radio produces a
+# row per radio, which is the shape of a building rather than a point.
+#
+# THIS IS INFERRED POSITION, NOT A FIX. `LocationLatitude` is where iOS thinks
+# the ACCESS POINT is, from its own crowd-sourced database — not where the
+# handset was standing. For a fixed AP the two are within its range, which is
+# what makes the row useful; for a mobile hotspot they are wherever that hotspot
+# was when Apple last placed it. `LocationAccuracy` is carried on every row so
+# the uncertainty travels with the coordinate instead of being dropped, and
+# `Located` is the timestamp OF THE POSITION, which can be much older than the
+# association.
+#
+# `LastAssociatedAt` IS PER ACCESS POINT and differs from the network's
+# `JoinedBySystemAt` that `wifi_networks.toml` reports: a network joined last
+# week can contain a radio last touched a year ago, which is how a device
+# reveals it has been back to a place more than once.
+#
+# `ChannelFlags` is an undocumented bitfield and travels as the integer it is;
+# `Channel` is the radio channel, which distinguishes 2.4 GHz from 5 GHz APs at
+# the same address.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: access
+# points across 16 networks, with coordinates in Fuquay-Varina, North Carolina —
+# the same town the Waze modules place the device in, from an entirely separate
+# store. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id           = "wifi_access_points"
+name         = "Wi-Fi access points"
+description  = "Every access point this device joined, with where iOS believes that access point is and when the device was last on it."
+verified    = "iphone11_ios17 — 100 access points across 16 networks with coordinates, accuracy and per-radio association times, placing the device in Fuquay-Varina NC — the same town the Waze modules place it in, from an entirely separate store; iphone11_ios16 — 42"
+surface      = "device"
+category     = "Network"
+domain       = "SystemPreferencesDomain"
+path         = "com.apple.wifi.known-networks.plist"
+
+[plist]
+rows         = ["*", "BSSList", "*"]
+index_column = "Network"
+# The index reads `wifi.network.ssid.Matt_Foley/0`; the namespace is on every
+# row and tells a reader nothing. The trailing `/N` stays -- it says WHICH radio
+# on that network, which is the point of a row per access point.
+index_strip_prefix = "wifi.network.ssid."
+
+[[columns]]
+name = "Network"
+
+[[columns]]
+name = "Access point"
+from = "BSSID"
+
+[[columns]]
+name = "Latitude"
+from = "LocationLatitude"
+kind = "real"
+
+[[columns]]
+name = "Longitude"
+from = "LocationLongitude"
+kind = "real"
+
+[[columns]]
+name = "Accuracy (m)"
+from = "LocationAccuracy"
+kind = "real"
+
+[[columns]]
+name = "Located"
+from = "LocationTimestamp"
+kind = "timestamp"
+
+[[columns]]
+name = "Last joined"
+from = "LastAssociatedAt"
+kind = "timestamp"
+
+[[columns]]
+name = "Channel"
+from = "Channel"
+kind = "integer"
