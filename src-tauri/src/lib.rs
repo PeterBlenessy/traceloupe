@@ -3305,6 +3305,7 @@ fn media_protocol_response(
     app: &AppHandle,
     path: &str,
     query_str: Option<&str>,
+    range: Option<&str>,
 ) -> tauri::http::Response<Vec<u8>> {
     use tauri::http::{Response, StatusCode};
 
@@ -3337,7 +3338,8 @@ fn media_protocol_response(
     // Camera-roll items carry iOS's pre-rendered JPEG thumbnail — serve it
     // directly for grid requests (no HEIC decode at all). On encrypted backups
     // this thumbnail was decrypted into the cache at import, so the grid works
-    // even without the keys.
+    // even without the keys. Videos use this for the grid tile AND the lightbox
+    // poster.
     if want_thumb {
         if let Some(tp) = thumb_path {
             if let Ok(bytes) = std::fs::read(&tp) {
@@ -3356,6 +3358,75 @@ fn media_protocol_response(
         .parent()
         .map(|p| p.join("thumbs"))
         .unwrap_or_else(|| PathBuf::from("thumbs"));
+
+    // VIDEO: stream it (Range-seekable), never buffer the whole file. `<video>`
+    // in WKWebView needs `206`/`Accept-Ranges` to start playing at all — without
+    // it a 100 MB+ clip must fully download (and, for encrypted backups, fully
+    // decrypt into memory) before the first frame, which is why large videos
+    // "never start." The message-attachment and audio handlers already do this;
+    // this brings the gallery's own scheme up to the same behaviour.
+    //
+    // Detection uses the ORIGINAL path (`local_path`), whose extension survives
+    // even when an encrypted backup's on-disk source is an extension-less temp.
+    if !want_thumb && media::is_video(std::path::Path::new(&local_path), mime.as_deref()) {
+        // Resolve a stable plaintext source. For encrypted backups decrypt ONCE
+        // to a reused temp (`decrypt_to_cache`), because the webview fires many
+        // Range requests while scrubbing and re-decrypting per request would
+        // thrash disk/OOM. `clear_decrypted_temps` removes it on close/switch.
+        let source_path: PathBuf = if let Some(key) = decrypt_key {
+            let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
+                return not_found();
+            };
+            let out = thumbs_dir.join(format!("media-{id}.decrypted"));
+            let Some(p) = decrypt_to_cache(&dec, &key, Path::new(&local_path), plain_size, &out)
+            else {
+                return not_found();
+            };
+            p
+        } else {
+            PathBuf::from(&local_path)
+        };
+
+        let content_type =
+            media::video_content_type(std::path::Path::new(&local_path), mime.as_deref());
+        let Ok(meta) = std::fs::metadata(&source_path) else {
+            return not_found();
+        };
+        let total = meta.len();
+
+        if let Some((start, end)) = range.and_then(|r| parse_byte_range(r, total)) {
+            use std::io::{Read, Seek, SeekFrom};
+            let Ok(mut file) = std::fs::File::open(&source_path) else {
+                return not_found();
+            };
+            if file.seek(SeekFrom::Start(start)).is_err() {
+                return not_found();
+            }
+            let mut buf = vec![0u8; (end - start + 1) as usize];
+            if file.read_exact(&mut buf).is_err() {
+                return not_found();
+            }
+            return Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header("Content-Type", content_type)
+                .header("Accept-Ranges", "bytes")
+                .header("Content-Range", format!("bytes {start}-{end}/{total}"))
+                .header("Cache-Control", "no-cache")
+                .body(buf)
+                .unwrap();
+        }
+
+        let Ok(bytes) = std::fs::read(&source_path) else {
+            return not_found();
+        };
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", content_type)
+            .header("Accept-Ranges", "bytes")
+            .header("Cache-Control", "no-cache")
+            .body(bytes)
+            .unwrap();
+    }
 
     // Encrypted original: decrypt it (using the session keys) to a temp file that
     // `media::render` / sips can read, then discard the plaintext. The rendered
@@ -4311,8 +4382,20 @@ pub fn run() {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_string();
             let query = request.uri().query().map(str::to_string);
+            // Videos are Range-served (see media_protocol_response); the webview
+            // sends `Range` while scrubbing and expects `206`.
+            let range = request
+                .headers()
+                .get("range")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
             tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(media_protocol_response(&app, &path, query.as_deref()));
+                responder.respond(media_protocol_response(
+                    &app,
+                    &path,
+                    query.as_deref(),
+                    range.as_deref(),
+                ));
             });
         })
         .register_asynchronous_uri_scheme_protocol(
