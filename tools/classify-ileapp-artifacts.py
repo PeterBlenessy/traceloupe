@@ -122,6 +122,67 @@ KNOWN_REACHABLE = {
 }
 
 
+# Files an APP keeps out of its own backup, which Apple's domain rules cannot
+# see and this classifier would otherwise call reachable.
+#
+# `Domains.plist` decides what backupd is ALLOWED to take from each domain. An
+# app can still opt a file out at runtime with `NSURLIsExcludedFromBackupKey`,
+# and Chromium does — deliberately, for the browsing record. The rules say
+# `AppDomain-com.google.chrome.ios/Library/…` is fair game and the file is
+# simply never there.
+#
+# EVIDENCE, because "it was not in the backup I looked at" is not the same
+# claim. Across BOTH iPhone 11 images in the corpus (iOS 17.3 and iOS 16.1.2)
+# and three Chromium browsers each (Chrome, Brave, Edge):
+#
+#   present : Web Data (3), Login Data (3), Top Sites (2), Bookmarks (2),
+#             Preferences (3)
+#   absent  : History (0), Cookies (0), Favicons (0), Visited Links (0),
+#             Network Action Predictor (0)
+#
+# Six sibling files in the same directory of the same app on the same device,
+# and the split falls exactly along "is this the browsing record". That is a
+# per-file exclusion, not an empty profile — `Top Sites` is populated on these
+# devices and `chromium_top_sites` reads it.
+#
+# WHAT IT COSTS: iLEAPP's Web History, Web Visits, Web Searches, Downloads and
+# Keyword Search Terms all read `History`, so all five are unreachable from ANY
+# iTunes backup. They are not work anyone can do on a backup, and listing them
+# as work is worse than not listing them — it is a permanent item on a worklist
+# that is supposed to empty.
+#
+# Full-filesystem extractions still have these files. This is a statement about
+# BACKUPS, which is what this app reads.
+APP_EXCLUDED = {
+    "chromium-history": (
+        ("*/Default/History*", "*/Default/Cookies*", "*/Default/Favicons*",
+         "*/Default/Visited Links*", "*/Default/Network Action Predictor*"),
+        "Chromium excludes the browsing record from backup "
+        "(NSURLIsExcludedFromBackupKey); absent on both corpus devices in all "
+        "three browsers, while five sibling files in the same directory are present",
+    ),
+}
+
+
+def app_excluded(path: str) -> str | None:
+    """The reason an APP keeps this file out of a backup, if it does.
+
+    Glob against glob: both sides are iLEAPP path patterns, normalised the same
+    way, so `*/Chrome/Default/History*` is matched by `*/Default/History*`
+    without either having to be a real path.
+    """
+    rel = normalise(path)
+    # `normalise` strips the leading `*` off BOTH sides, so it has to go back on
+    # the pattern: `*/Chrome/Default/History*` normalises to
+    # `chrome/default/history*`, which an unanchored `default/history*` would
+    # miss — and missing it is how the first draft of this flagged twelve
+    # unrelated artifacts and none of the five it was written for.
+    for globs, why in APP_EXCLUDED.values():
+        if any(fnmatch.fnmatch(rel, "*" + normalise(g)) for g in globs):
+            return why
+    return None
+
+
 def parse_artifacts() -> list[dict]:
     """Pull name/category/paths out of each module's __artifacts_v2__ literal."""
     out: list[dict] = []
@@ -316,13 +377,41 @@ def classify_path(p: str, domains: dict) -> tuple[str, str]:
 
 
 def classify(paths: list[str], domains: dict) -> tuple[str, list[str]]:
-    verdicts = [classify_path(p, domains) for p in paths]
+    # An APP-EXCLUDED path is dropped before the domain rules see it, not
+    # overruled after. The rules would say "backup" and be right about what
+    # backupd is allowed to take; the file is simply never offered. Dropping it
+    # leaves an artifact whose ONLY path is excluded with nothing to classify,
+    # which is the honest outcome, and one that also lists several paths still
+    # judged on the rest — which is how `Web Data` stays reachable while
+    # `History` beside it does not.
+    kept, why_excluded = [], []
+    for p in paths:
+        if reason := app_excluded(p):
+            why_excluded.append(reason)
+        else:
+            kept.append(p)
+    verdicts = [classify_path(p, domains) for p in kept]
     kinds = {v for v, _ in verdicts}
     # Any reachable path makes the artifact reachable — modules routinely list a
     # store plus its -wal/-shm siblings, or several OS-version variants.
     for want in ("backup", "encrypted-only", "unknown"):
         if want in kinds:
+            # …unless the only paths left are ones no backup resolves anyway.
+            # iLEAPP's Chromium module is shared with Android, so beside
+            # `*/Chrome/Default/History*` it lists `*/app_opera/History*` — a
+            # path an iOS backup has never contained and this cannot place. An
+            # artifact whose iOS path is app-excluded and whose remainder is a
+            # rootless Android fragment is not reachable, and reporting it as
+            # `unknown` leaves it on the worklist forever.
+            if want == "unknown" and why_excluded:
+                break
             return want, sorted({w for v, w in verdicts if v == want})
+    # `paths` is empty for a handful of iLEAPP modules that build their own file
+    # list in code. Those have nothing to exclude, and calling them app-excluded
+    # is how this first reported twelve Unified Logs artifacts it had never
+    # heard of.
+    if paths and why_excluded:
+        return "app-excluded", sorted(set(why_excluded))
     return "excluded", sorted({w for _, w in verdicts})
 
 
@@ -338,6 +427,20 @@ def classify(paths: list[str], domains: dict) -> tuple[str, list[str]]:
 KNOWN_UNREACHABLE = {
     "Biome": "Biome — Apple excludes it from backups entirely",
     "KnowledgeC": "knowledgeC — never in a backup",
+}
+
+
+# The `APP_EXCLUDED` rule pinned in both directions. Chromium keeps the
+# browsing record out of the backup and everything else in it, so a rule that
+# excluded too much would silently delete `chromium_logins` and
+# `chromium_top_sites` from the coverage map while looking like progress.
+KNOWN_CHROMIUM = {
+    "Web History": "app-excluded",
+    "Keyword Search Terms": "app-excluded",
+    "Login Data": "backup",
+    "Top Sites": "backup",
+    "Bookmarks": "backup",
+    "Autofill Entries": "backup",
 }
 
 
@@ -358,6 +461,21 @@ def self_test(ok: list[dict]) -> int:
             failures.append(f"{label}: expected {expected}, got {got} — {why}")
     for m in missing:
         print(f"  WARN  {m}: no such iLEAPP module — renamed upstream?")
+
+    # The app-exclusion rule, both directions. Only checking that `History` is
+    # excluded would pass on a rule that excluded the whole Chromium profile,
+    # which would delete three modules' worth of real, shipped coverage.
+    for name, expected in KNOWN_CHROMIUM.items():
+        rows = [a for a in ok if a["category"] == "Chromium" and a["name"] == name]
+        if not rows:
+            print(f"  WARN  Chromium/{name}: no such artifact — renamed upstream?")
+            continue
+        got = rows[0]["reach"]
+        if got == expected:
+            print(f"  ok    Chromium/{name:22} {got}")
+        else:
+            print(f"  FAIL  Chromium/{name:22} {got}  (expected {expected})")
+            failures.append(f"Chromium/{name}: expected {expected}, got {got}")
 
     for category, why in sorted(KNOWN_UNREACHABLE.items()):
         rows = [a for a in ok if a["category"] == category]
@@ -440,7 +558,7 @@ def main() -> int:
         print(f"  ({len(by_base):,} device basenames loaded; {resolved} rootless globs resolved)")
     else:
         print("  (no device path-lists found — rootless globs left unresolved)")
-    for reach in ("backup", "encrypted-only", "excluded", "unknown"):
+    for reach in ("backup", "encrypted-only", "app-excluded", "excluded", "unknown"):
         print(f"  {counts[reach]:4}  {reach}")
     for b in broken:
         print(f"  !! {b['file']}: {b['status']}")
