@@ -315,6 +315,24 @@ the report get *worse* every time an older device was added — and a validator
 that always fails is one nobody runs. It now fails only for a module absent from
 **every** backup, which is a wrong path, and notes the rest.
 
+### Auditing what we already ship, against what iLEAPP actually reads
+
+Two rounds of this found real gaps, and both were invisible from the coverage
+numbers because the category already counted as covered:
+
+- **`home_screen` was shipping UUIDs.** A widget stack is an icon whose
+  `displayIdentifier` is a UUID; the names are one level down in `elements`.
+  "iOS Screens" had looked covered since `home_screen` and `dock` shipped — it
+  was covered for apps and blind to widgets.
+- **`imei_imsi` read only the nested `PersonalWallet` subtree.** The same
+  plist's TOP-LEVEL keys are the device's last NETWORK state — MCC, MNC, carrier
+  bundle, `LastKnownICCID` — and nothing was reading them.
+
+The method: for each shipped module, find the iLEAPP script reading the same
+store and diff what it extracts against our columns. A category counting as
+"touched" says nothing about whether the module reads all of the store, and the
+coverage tool is explicit that it never claims otherwise — this is how to check.
+
 ### Property lists hidden in database columns
 
 Apple stores structured data in BLOB columns constantly, and until now nothing
@@ -455,6 +473,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Bluetooth pairings | Device | ✅ | iphone11_ios17 — 3 paired devices — a Garmin vívoactive 4, a Fitbit Versa 3 and an Apple Watch |
 | CarPlay apps | Device | ✅ | iphone11_ios17 — 7 apps, including com.waze.iphone, com.spotify.client and com.google.Maps, last used between 2024-01-16 and 2024-07-27 |
 | CarPlay connection | Device | ✅ | iphone11_ios17 — last session ended 2024-07-27T16:21:39Z at 84% battery, thermal level 'None' |
+| Cellular network | Network | ✅ | iphone11_ios17 — MCC 310 / MNC 260 (United States), carrier bundle 310260_GID1-4276, ICCID 8901260971148676693 which MATCHES the one sim_cards reads from a different store, number 19195794674, last OS 17.3 |
 | Saved logins (Chromium browsers) | Security | ✅ | iphone11_ios17 — the store is present in ALL THREE browsers (Chrome, Edge, Brave) and holds 0 rows in each: installed, never used to save a login. The schema is read off the device; the output against a populated store is unproven |
 | Most-visited sites (Chromium browsers) | Network | ✅ | iphone11_ios17 — 1 row, nhl.com at rank 0 in Chrome, with the vendor profile captured as 'Google/Chrome' by the ** glob; the same site service_workers found in Safari from a different store |
 | Data usage | Network | ✅ | iphone11_ios17 — 1959 usage rows collapse to 671 per-app totals, topped by the App Store at 2.77 GB and TikTok at 300 MB |
@@ -492,7 +511,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**47 implemented · 47 verified · 0 awaiting a real backup.**
+**48 implemented · 48 verified · 0 awaiting a real backup.**
 
 ---
 

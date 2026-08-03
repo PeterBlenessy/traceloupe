@@ -2362,6 +2362,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/location_services.toml"),
     ),
     ("imei_imsi.toml", include_str!("../modules/imei_imsi.toml")),
+    (
+        "cellular_network.toml",
+        include_str!("../modules/cellular_network.toml"),
+    ),
     ("find_my.toml", include_str!("../modules/find_my.toml")),
     (
         "icloud_drive.toml",
@@ -4442,6 +4446,19 @@ from = "nope"
         let mut root = Dictionary::new();
         root.insert("PersonalWallet".into(), Value::Dictionary(wallet));
         root.insert("LastKnownServingMnc".into(), Value::Integer(260.into()));
+        root.insert("LastKnownServingMcc".into(), Value::Integer(310.into()));
+        root.insert(
+            "CarrierBundleName".into(),
+            Value::String("310260_GID1-4276".into()),
+        );
+        root.insert(
+            "LastKnownICCID".into(),
+            Value::String("8901260971148676693".into()),
+        );
+        // No `+`, unlike the copy in the PersonalWallet subtree -- the two
+        // stores write it differently and neither is normalised.
+        root.insert("PhoneNumber".into(), Value::String("19195794674".into()));
+        root.insert("lastKnownOSVersion".into(), Value::String("17.3".into()));
         let mut out = Vec::new();
         plist::to_writer_binary(&mut out, &Value::Dictionary(root)).unwrap();
         out
@@ -5031,6 +5048,11 @@ from = "nope"
             "Library/Preferences/com.apple.locationd.plist",
         ),
         (
+            "cellular_network",
+            "WirelessDomain",
+            "Library/Preferences/com.apple.commcenter.plist",
+        ),
+        (
             "imei_imsi",
             "WirelessDomain",
             "Library/Preferences/com.apple.commcenter.plist",
@@ -5284,7 +5306,8 @@ from = "nope"
             "message_retention" => return Seed::Bytes(seed_message_retention),
             "backup_settings" => return Seed::Bytes(seed_backup_settings),
             "location_services" => return Seed::Bytes(seed_location_services),
-            "imei_imsi" => return Seed::Bytes(seed_commcenter),
+            // One store, two modules: per-SIM identity, and network state.
+            "imei_imsi" | "cellular_network" => return Seed::Bytes(seed_commcenter),
             "find_my" => return Seed::Bytes(seed_find_my),
             // One store, three modules: files, the boot log and the containers.
             "icloud_drive" | "os_build_history" | "icloud_app_libraries" => seed_icloud_drive,
