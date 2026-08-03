@@ -89,7 +89,9 @@ cmd_list() {
 import json
 for i in json.load(open('$CATALOG'))['images']:
     s = i.get('archive_bytes')
-    s = f\"{s/1e9:.0f} GB\" if s else '? GB'
+    # A sub-GB download (the iOS 15 backup zip is 0.5 GB) rounded to '0 GB',
+    # which reads as 'nothing to download' next to real 22 GB tarballs.
+    s = ('? GB' if not s else f\"{s/1e9:.0f} GB\" if s >= 5e8 else f\"{s/1e6:.0f} MB\")
     print(f\"  {i['id']:8} iOS {i['ios']:6} {i['device']:12} {s:7} {i['notes'][:62]}\")
 "
   echo
@@ -168,15 +170,26 @@ cmd_fetch() {
   echo "▶ downloading $name ($size_note) — resumable, re-run if interrupted"
   curl -L -C - --progress-bar -o "$archive" "$url" || die "download interrupted; re-run to resume."
 
-  echo "▶ extracting only the backup ($glob)"
-  tar -xzf "$archive" -C "$out" --include "$glob" 2>/dev/null || true
-
-  local inner
-  inner=$(find "$out" -name '*.zip' -path '*Backup*' 2>/dev/null | head -1)
-  if [ -n "$inner" ]; then
-    echo "▶ unpacking $(basename "$inner")"
+  # Two shapes of download. Most catalogue entries are full-filesystem tarballs
+  # with the backup buried inside; iOS 15 is the backup zip ITSELF, published
+  # standalone (474 MB, no 16 GB FFS half). `backup_zip: true` says which — and
+  # it matters because `tar -xzf` on a zip silently produces nothing, which then
+  # looks exactly like a download that failed.
+  if [ "$(field "$id" backup_zip)" = "true" ]; then
+    echo "▶ unpacking the backup zip directly (no FFS tarball to strip)"
     mkdir -p "$out/unpacked"
-    unzip -q -o "$inner" -d "$out/unpacked" && rm -f "$inner"
+    unzip -q -o "$archive" -d "$out/unpacked" || die "the backup zip did not unpack."
+  else
+    echo "▶ extracting only the backup ($glob)"
+    tar -xzf "$archive" -C "$out" --include "$glob" 2>/dev/null || true
+
+    local inner
+    inner=$(find "$out" -name '*.zip' -path '*Backup*' 2>/dev/null | head -1)
+    if [ -n "$inner" ]; then
+      echo "▶ unpacking $(basename "$inner")"
+      mkdir -p "$out/unpacked"
+      unzip -q -o "$inner" -d "$out/unpacked" && rm -f "$inner"
+    fi
   fi
 
   local got
