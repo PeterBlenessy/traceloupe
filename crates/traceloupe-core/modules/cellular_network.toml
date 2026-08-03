@@ -1,0 +1,76 @@
+# The last cellular network this device was on, and the carrier it belonged to.
+#
+# `com.apple.commcenter.plist` in `WirelessDomain` — the same store
+# `imei_imsi.toml` reads, a different level. That one reads the nested
+# `PersonalWallet` subtree, which is per-SIM IDENTITY. These are the plist's
+# TOP-LEVEL keys, which are the device's last NETWORK state, and nothing was
+# reading them.
+#
+# WHY MCC AND MNC ARE WORTH A ROW
+#
+# `LastKnownServingMcc` is the ITU Mobile Country Code and `LastKnownServingMnc`
+# the Mobile Network Code of the last network the phone registered with. On the
+# validation device that is 310 / 260 — the United States, on the network whose
+# carrier bundle is `310260_GID1-4276`. Together they place the handset in a
+# COUNTRY and on a CARRIER at the moment it last had signal, which is a
+# different fact from anything a SIM's identity gives you: a SIM says whose
+# subscription it is, this says where it actually was.
+#
+# THE CODES ARE NOT TRANSLATED. MCC 310 has meant the United States for
+# decades, but MNC assignments are reassigned, split and retired, so a
+# built-in lookup would be right for a while and then quietly wrong — and
+# "quietly wrong about which carrier" is worse than a number the reader can
+# look up. `CarrierBundleName` sits beside them and usually names it anyway.
+#
+# `LastKnownICCID` DUPLICATES `sim_cards.toml`'s ICCID on this device and is
+# kept regardless: they come from different stores, and two stores agreeing is
+# corroboration a single reading cannot give. Where they disagree, that is
+# itself the finding.
+#
+# `PhoneNumber` here is the device's own number as CommCenter last knew it,
+# without the `+` that `imei_imsi.toml`'s copy carries. Both are shown as
+# recorded rather than normalised, because normalising would hide the fact that
+# the two stores write it differently.
+#
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: MCC 310 /
+# MNC 260, carrier bundle 310260_GID1-4276, ICCID 8901260971148676693, number
+# 19195794674, last OS 17.3. Reproduce with:
+#   cargo run -p traceloupe-core --example validate_against_real_backup
+
+id          = "cellular_network"
+name        = "Cellular network"
+description = "The last mobile network this device registered with — country and network codes, the carrier bundle, and the SIM serial CommCenter last saw."
+verified    = "iphone11_ios17 — MCC 310 / MNC 260 (United States), carrier bundle 310260_GID1-4276, ICCID 8901260971148676693 which MATCHES the one sim_cards reads from a different store, number 19195794674, last OS 17.3"
+surface     = "device"
+shape       = "facts"
+category    = "Network"
+domain      = "WirelessDomain"
+path        = "Library/Preferences/com.apple.commcenter.plist"
+
+[plist]
+
+[[columns]]
+name = "Country code (MCC)"
+from = "LastKnownServingMcc"
+kind = "integer"
+
+[[columns]]
+name = "Network code (MNC)"
+from = "LastKnownServingMnc"
+kind = "integer"
+
+[[columns]]
+name = "Carrier bundle"
+from = "CarrierBundleName"
+
+[[columns]]
+name = "Phone number"
+from = "PhoneNumber"
+
+[[columns]]
+name = "SIM serial (ICCID)"
+from = "LastKnownICCID"
+
+[[columns]]
+name = "Last OS seen"
+from = "lastKnownOSVersion"

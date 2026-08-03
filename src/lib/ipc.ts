@@ -4398,6 +4398,30 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "cellular_network",
+            name: "Cellular network",
+            category: "Network",
+            description:
+              "The last mobile network this device registered with — country and network codes, the carrier bundle, and the SIM serial CommCenter last saw.",
+            surface: "device" as const,
+            shape: "facts" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: [
+              "Country code (MCC)",
+              "Network code (MNC)",
+              "Carrier bundle",
+              "Phone number",
+              "SIM serial (ICCID)",
+              "Last OS seen",
+            ],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 1,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "imei_imsi",
             name: "Cellular identity",
             category: "Device",
@@ -4982,6 +5006,17 @@ const mockClient: TraceLoupeClient = {
             "Recently deleted": false,
           },
         ]
+      : mockActive && artifactId === "cellular_network"
+        ? [
+            {
+              "Country code (MCC)": 310,
+              "Network code (MNC)": 260,
+              "Carrier bundle": "310260_GID1-4276",
+              "Phone number": "19195794674",
+              "SIM serial (ICCID)": "8901260971148676693",
+              "Last OS seen": "17.3",
+            },
+          ]
       : mockActive && artifactId === "imei_imsi"
       ? [
           {
