@@ -533,6 +533,13 @@ function Thumb({ item, onOpen }: { item: MediaItem; onOpen: () => void }) {
           src={client.mediaUrl(item.id, { thumb: true, cacheKey })}
           alt={item.filename ?? ""}
           onError={() => setFailed(true)}
+          // Decode OFF the main thread so a fast scroll doesn't stall on each
+          // tile's decode competing with virtualizer measurement, and only
+          // fetch/decode tiles near the viewport (`lazy`) rather than every
+          // overscan row at once — the two levers behind "scrolling gets
+          // sluggish the longer you browse."
+          decoding="async"
+          loading="lazy"
           // Not `scale-105`: Tailwind v4 emits the standalone `scale` property
           // and WKWebView will not animate it, so the zoom snapped. The
           // `transform` shorthand does animate. See docs/reference/ui.md.
@@ -817,6 +824,9 @@ function Lightbox({
               src={client.mediaUrl(item.id, { cacheKey })}
               alt={item.filename ?? ""}
               onError={() => setFullFailed(true)}
+              // Decode the full-res image off the main thread so paging
+              // next/prev doesn't block the UI thread on each decode.
+              decoding="async"
               className="max-h-full max-w-full object-contain"
             />
           )
