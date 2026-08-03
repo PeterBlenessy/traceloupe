@@ -490,6 +490,18 @@ pub fn message_date_bounds(cache: &CacheDb) -> Result<Option<(i64, i64)>> {
     Ok(lo.zip(hi))
 }
 
+/// The earliest and latest CAPTURE date across the gallery, so the Photos time
+/// filter can offer one chip per year the library actually spans instead of just
+/// the current calendar year. `None` when nothing has a date.
+pub fn media_date_bounds(cache: &CacheDb) -> Result<Option<(i64, i64)>> {
+    let (lo, hi): (Option<i64>, Option<i64>) = cache.conn().query_row(
+        "SELECT MIN(taken_at), MAX(taken_at) FROM media_items WHERE taken_at IS NOT NULL",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(lo.zip(hi))
+}
+
 pub fn count_message_ranges(
     cache: &CacheDb,
     ranges: &[TimeRange],
