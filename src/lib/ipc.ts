@@ -4263,6 +4263,34 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "life360_members",
+            name: "Life360 circles",
+            category: "Location",
+            description:
+              "The people this phone shares its live location with — every Life360 circle it belongs to, and who else is in each one.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Circle",
+              "Member",
+              "Email",
+              "Phone",
+              "Role",
+              "This phone's account",
+              "Status",
+              "Circle created",
+              "Member id",
+            ],
+            timestampColumns: ["Circle created"],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "waze_recents",
             name: "Waze destinations",
             category: "Locations",
@@ -4936,6 +4964,47 @@ const mockClient: TraceLoupeClient = {
             "Venue id": "VENUE1",
           },
         ]
+      : mockActive && artifactId === "life360_members"
+        ? [
+            {
+              App: "com.life360.safetymap",
+              Circle: "Family",
+              Member: "Sam Reeve",
+              Email: "owner@example.com",
+              Phone: "+15550100",
+              Role: "Admin",
+              "This phone's account": true,
+              Status: "Active",
+              "Circle created": 1704571921,
+              "Member id": "owner-id",
+            },
+            {
+              App: "com.life360.safetymap",
+              Circle: "Family",
+              Member: "Kit Reeve",
+              Email: "kit@example.com",
+              Phone: "+15550101",
+              Role: "Member",
+              "This phone's account": false,
+              Status: "Active",
+              "Circle created": 1704571921,
+              "Member id": "kit-id",
+            },
+            {
+              // Thrown out of the circle, and still a row: who USED to watch is
+              // a fact the current roster does not carry.
+              App: "com.life360.safetymap",
+              Circle: "Family",
+              Member: "Robin Vale",
+              Email: "ex@example.com",
+              Phone: "+15550103",
+              Role: "Member",
+              "This phone's account": false,
+              Status: "Removed from circle",
+              "Circle created": 1704571921,
+              "Member id": "robin-id",
+            },
+          ]
       : mockActive && artifactId === "waze_recents"
         ? [
             {

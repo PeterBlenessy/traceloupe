@@ -1118,6 +1118,45 @@ def seed_podcasts(path: Path) -> None:
     con.close()
 
 
+def seed_life360_members(path: Path) -> None:
+    """Messaging.sqlite — Life360's CIRCLE roster, not its chat.
+
+    Two circles with the same person in both, because a row is a MEMBERSHIP: a
+    fixture with one circle could not tell that apart from a row per person.
+    One pending invite and one removed member, so the state column has all three
+    values to report.
+    """
+    con = sqlite3.connect(path)
+    con.executescript(
+        """CREATE TABLE ZCHATCIRCLE (Z_PK INTEGER PRIMARY KEY, ZCREATEDAT TIMESTAMP,
+             ZCIRCLEID VARCHAR, ZNAME VARCHAR);
+           CREATE TABLE ZCHATMEMBER (Z_PK INTEGER PRIMARY KEY, ZISADMIN INTEGER,
+             ZISDELETEDFROMCIRCLE INTEGER, ZISLOGGEDINUSER INTEGER,
+             ZPENDINGINVITE INTEGER, ZCIRCLE INTEGER, ZEMAIL VARCHAR,
+             ZFIRSTNAME VARCHAR, ZLASTNAME VARCHAR, ZMEMBERID VARCHAR,
+             ZPHONE VARCHAR);"""
+    )
+    con.executemany(
+        "INSERT INTO ZCHATCIRCLE (Z_PK, ZCREATEDAT, ZNAME) VALUES (?,?,?)",
+        [(1, 726_264_721, "Family"), (2, 726_265_097, "Book club")],
+    )
+    con.executemany(
+        "INSERT INTO ZCHATMEMBER (Z_PK, ZISADMIN, ZISDELETEDFROMCIRCLE,"
+        " ZISLOGGEDINUSER, ZPENDINGINVITE, ZCIRCLE, ZEMAIL, ZFIRSTNAME, ZLASTNAME,"
+        " ZMEMBERID, ZPHONE) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [
+            # The phone's own user, running both circles.
+            (1, 1, 0, 1, 0, 1, "owner@example.com", "Sam", "Reeve", "owner-id", "+15550100"),
+            (2, 1, 0, 1, 0, 2, "owner@example.com", "Sam", "Reeve", "owner-id", "+15550100"),
+            (3, 0, 0, 0, 0, 1, "kit@example.com", "Kit", "Reeve", "kit-id", "+15550101"),
+            (4, 0, 0, 0, 1, 2, "ash@example.com", "Ash", "Nadel", "ash-id", "+15550102"),
+            (5, 0, 1, 0, 0, 1, "ex@example.com", "Robin", "Vale", "robin-id", "+15550103"),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
 def seed_alltrails(path: Path) -> None:
     """AllTrails.sqlite — an activity spread across three tables.
 
@@ -1217,6 +1256,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_podcasts(podcasts_path)
     trails_path = workdir / "AllTrails.sqlite"
     seed_alltrails(trails_path)
+    life360_path = workdir / "Messaging.sqlite"
+    seed_life360_members(life360_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -1324,6 +1365,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "AppDomain-com.alltrails.AllTrails",
             "Documents/AllTrails.sqlite",
             trails_path.read_bytes(),
+        ),
+        (
+            "AppDomain-com.life360.safetymap",
+            "Library/Application Support/Messaging.sqlite",
+            life360_path.read_bytes(),
         ),
 
         (

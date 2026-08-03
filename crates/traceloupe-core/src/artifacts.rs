@@ -2459,6 +2459,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/life360_locations.toml"),
     ),
     (
+        "life360_members.toml",
+        include_str!("../modules/life360_members.toml"),
+    ),
+    (
         "location_clients.toml",
         include_str!("../modules/location_clients.toml"),
     ),
@@ -4929,6 +4933,44 @@ from = "nope"
         .unwrap();
     }
 
+    /// Life360's chat store, which is where the CIRCLE roster lives.
+    ///
+    /// Two circles, because one could not tell a working join from a query that
+    /// happened to find the only circle there was — and the same person is in
+    /// both, which is the case that proves a row is a membership rather than a
+    /// person.
+    ///
+    /// The fourth member is a pending invite in a circle they are not yet in,
+    /// and the fifth was removed from one: both keep their row, and the module
+    /// has to say which is which.
+    fn seed_life360_members(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE ZCHATCIRCLE (Z_PK INTEGER PRIMARY KEY, ZCREATEDAT TIMESTAMP,
+                ZCIRCLEID VARCHAR, ZNAME VARCHAR);
+             CREATE TABLE ZCHATMEMBER (Z_PK INTEGER PRIMARY KEY, ZISADMIN INTEGER,
+                ZISDELETEDFROMCIRCLE INTEGER, ZISLOGGEDINUSER INTEGER,
+                ZPENDINGINVITE INTEGER, ZCIRCLE INTEGER, ZEMAIL VARCHAR,
+                ZFIRSTNAME VARCHAR, ZLASTNAME VARCHAR, ZMEMBERID VARCHAR,
+                ZPHONE VARCHAR);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO ZCHATCIRCLE (Z_PK, ZCREATEDAT, ZNAME) VALUES
+                (1, 726264721, 'Family'),
+                (2, 726265097, 'Book club');
+             INSERT INTO ZCHATMEMBER (Z_PK, ZISADMIN, ZISDELETEDFROMCIRCLE,
+                ZISLOGGEDINUSER, ZPENDINGINVITE, ZCIRCLE, ZEMAIL, ZFIRSTNAME,
+                ZLASTNAME, ZMEMBERID, ZPHONE) VALUES
+                -- The phone's own user, running both circles.
+                (1,1,0,1,0,1,'owner@example.com','Sam','Reeve','owner-id','+15550100'),
+                (2,1,0,1,0,2,'owner@example.com','Sam','Reeve','owner-id','+15550100'),
+                (3,0,0,0,0,1,'kit@example.com','Kit','Reeve','kit-id','+15550101'),
+                (4,0,0,0,1,2,'ash@example.com','Ash','Nadel','ash-id','+15550102'),
+                (5,0,1,0,0,1,'ex@example.com','Robin','Vale','robin-id','+15550103');",
+        )
+        .unwrap();
+    }
+
     /// IconState.plist: pages of icons, and the dock.
     ///
     /// TWO pages, because one page could not tell a working wildcard from a path
@@ -5033,6 +5075,11 @@ from = "nope"
             "life360_locations",
             "AppDomainGroup-group.com.life360.safetymap",
             "**/com.life360.safetymap*.log",
+        ),
+        (
+            "life360_members",
+            "AppDomain-com.life360.safetymap",
+            "Library/Application Support/Messaging.sqlite",
         ),
         (
             "accounts",
@@ -5362,6 +5409,7 @@ from = "nope"
             "carplay_recent_apps" | "carplay_session" => return Seed::Bytes(seed_carplay),
             "health_current_device" => seed_health_device_context,
             "life360_locations" => return Seed::Bytes(seed_life360_log),
+            "life360_members" => seed_life360_members,
             // One store, two modules: the network, and the radios in it.
             "wifi_networks" | "wifi_access_points" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
@@ -5790,6 +5838,74 @@ from = "nope"
         assert!(
             rows[1].get("Last joined").is_some_and(|v| !v.is_null()),
             "an unplaced radio still records when it was joined"
+        );
+    }
+
+    #[test]
+    fn life360_membership_is_per_circle_and_keeps_the_ones_who_left() {
+        // The circle is the social half of Life360: `life360_locations` says
+        // where the phone went, this says who was watching it go.
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "life360_members")
+            .expect("life360_members ships");
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("seed.sqlite");
+        let conn = Connection::open(&store).unwrap();
+        seed_life360_members(&conn);
+        drop(conn);
+        make_backup_bytes_in(
+            tmp.path(),
+            &spec.domain,
+            &spec.path,
+            &std::fs::read(&store).unwrap(),
+        );
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+
+        let get = |r: &ArtifactRow, k: &str| {
+            r.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert_eq!(rows.len(), 5, "one row per MEMBERSHIP, not per person");
+
+        // The same person in two circles is two rows, sharing one member id.
+        let owner: Vec<_> = rows
+            .iter()
+            .filter(|r| get(r, "Member id") == "owner-id")
+            .collect();
+        assert_eq!(owner.len(), 2, "somebody in two circles is in two rows");
+        let mut circles: Vec<_> = owner.iter().map(|r| get(r, "Circle")).collect();
+        circles.sort();
+        assert_eq!(circles, vec!["Book club", "Family"]);
+        assert!(owner.iter().all(|r| get(r, "Role") == "Admin"));
+
+        // An invite never accepted and a member thrown out are both facts about
+        // the circle, so both keep a row — with a column saying which.
+        let state = |id: &str| {
+            rows.iter()
+                .find(|r| get(r, "Member id") == id)
+                .map(|r| get(r, "Status"))
+                .unwrap_or_default()
+        };
+        assert_eq!(state("ash-id"), "Invited, not yet joined");
+        assert_eq!(state("robin-id"), "Removed from circle");
+        assert_eq!(state("kit-id"), "Active");
+
+        // A circle's creation time is Core Data seconds, not Unix: 726264721 is
+        // 2024, and reading it as Unix would print 1993.
+        let created = rows[0]
+            .get("Circle created")
+            .and_then(|v| v.as_i64())
+            .unwrap();
+        assert!(
+            (1_700_000_000..1_800_000_000).contains(&created),
+            "cocoa epoch, got {created}"
         );
     }
 
