@@ -336,6 +336,13 @@ numbers because the category already counted as covered:
   `displayIdentifier` is a UUID; the names are one level down in `elements`.
   "iOS Screens" had looked covered since `home_screen` and `dock` shipped — it
   was covered for apps and blind to widgets.
+- **Google Duo keeps its own call log, which the system Calls view never sees.**
+  `DataStore` in `com.google.Tachyon` (Duo's internal name; the app is now Meet)
+  is a plain SQLite store behind an extensionless name. Its `call_history` is
+  data-call activity — audio and video, to Duo contacts — that exists nowhere
+  else in the backup, because `CallHistory.storedata` only records cellular and
+  FaceTime. 10 calls on the validation device. The store was in the "unread"
+  column of the coverage map, present and parsed by nothing.
 - **Life360's `Messaging.sqlite` holds the CIRCLE, not just the chat.**
   `life360_locations` already recovers where the phone went, from the app's own
   logs; nothing read who was watching it go. Every circle the phone belongs to,
@@ -507,6 +514,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Language and region | Device | ✅ | iphone11_ios17 — en-US, en_US, 24-hour time on |
 | Dock | Device | ✅ | iphone11_ios17 — 4 apps, Phone first |
 | Find My | Device | ✅ | iphone11_ios17 + iphone11_ios16 — DSID 17193901029 on both, enabled 2023-07-01; 'Send last location' was OFF at 16.1.2 and ON at 17.3, so the setting is read, not defaulted |
+| Google Duo / Meet calls | Google Duo | ✅ | iphone11_ios17 — 10 calls to two contacts (audio and video, incoming and outgoing), the longest 1m43s; none of them appear in the system Calls view because Duo records its own |
 | Health device | Device | ✅ | iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02; iphone11_ios16 — same device at 16.1.2 via the source_devices fallback, since device_context does not exist there |
 | Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
 | Home screen widgets | Device | ✅ | iphone11_ios17 + iphone11_ios16 — 6 widgets (Weather, Maps and others) with their page/slot positions, resolving the two anonymous 'custom' UUIDs the layout shows on page 0; iphone_se_ios13 + iphone_se_ios13_4 — 0 rows, because home screen widgets did not exist before iOS 14 |
@@ -540,7 +548,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**50 implemented · 50 verified · 0 awaiting a real backup.**
+**51 implemented · 51 verified · 0 awaiting a real backup.**
 
 ---
 

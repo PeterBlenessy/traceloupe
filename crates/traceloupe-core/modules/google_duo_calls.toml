@@ -1,0 +1,101 @@
+# Google Duo / Google Meet — the app's own call log.
+#
+# `Library/Application Support/DataStore` in `AppDomain-com.google.Tachyon`
+# (Tachyon is Duo's internal name; the app is now Google Meet). A plain SQLite
+# store despite the extensionless name — `call_history` joined to `contact`.
+#
+# WHY A SEPARATE CALL LOG MATTERS
+#
+# The native Calls view reads `CallHistory.storedata`, which is the SYSTEM log —
+# cellular and FaceTime. A Duo/Meet call never appears there: it is a data call
+# the app records only for itself. So this is call activity that exists nowhere
+# else in the backup, to a set of contacts the person chose to reach over Duo
+# rather than the phone network. One row is a video or audio call with a named
+# contact, a timestamp, and how long it lasted.
+#
+# DURATION IS THE ANSWERED/MISSED SIGNAL, and it is the honest one. The store
+# also has `call_history_user_action`, an integer iLEAPP itself does not decode —
+# the codes seen here (2, 11, 12, 14, 16) have no published meaning, and guessing
+# "missed" for one would be inventing a fact. What is certain is the DURATION: a
+# call with time on the clock connected; one at zero did not. `Duration` carries
+# that without a claim the store cannot support, which is also all iLEAPP reports.
+#
+# DIRECTION AND MEDIUM are the two things the store does state plainly:
+# `is_outgoing_call` and `is_video_call`. Both are mapped to words rather than
+# shipped as 0/1.
+#
+# CONTACT NAME IS BEST-EFFORT. The join is on `other_user_id` — a phone number or
+# a Google email — against Duo's own `contact` table, which the app populates from
+# the address book. A call to someone not in it keeps its row with the raw id in
+# `Party`, because who was called is the point even when the name is unknown.
+
+id          = "google_duo_calls"
+name        = "Google Duo / Meet calls"
+description = "Audio and video calls made through Google Duo (now Meet) — direction, duration and who, from the app's own log rather than the system call history."
+verified    = "iphone11_ios17 — 10 calls to two contacts (audio and video, incoming and outgoing), the longest 1m43s; none of them appear in the system Calls view because Duo records its own"
+surface     = "apps"
+join_column = "App"
+category    = "Google Duo"
+domain      = "AppDomain-com.google.Tachyon"
+path        = "Library/Application Support/DataStore"
+
+sql = [
+  """
+  SELECT ch.call_history_timestamp AS ts,
+         COALESCE(c.contact_name, ch.call_history_other_user_id) AS party,
+         ch.call_history_other_user_id AS party_id,
+         ch.call_history_is_outgoing_call AS outgoing,
+         ch.call_history_is_video_call AS video,
+         ch.call_history_duration AS duration,
+         ch.call_history_local_user_id AS local_user
+  FROM call_history ch
+  LEFT JOIN contact c ON c.contact_id = ch.call_history_other_user_id
+  ORDER BY ts DESC
+  """,
+]
+
+# The bundle id the Apps view joins on. Constant: this store belongs to one app,
+# and the call rows never name it.
+[[columns]]
+name = "App"
+value = "com.google.Tachyon"
+
+[[columns]]
+name = "Time"
+from = "ts"
+kind = "timestamp"
+# Unix seconds, stored as a REAL with a fractional part.
+epoch = "unix"
+
+[[columns]]
+name = "Party"
+from = "party"
+
+[[columns]]
+name = "Party ID"
+from = "party_id"
+
+[[columns]]
+name = "Direction"
+from = "outgoing"
+kind = "integer"
+[columns.map]
+0 = "Incoming"
+1 = "Outgoing"
+
+[[columns]]
+name = "Kind"
+from = "video"
+kind = "integer"
+[columns.map]
+0 = "Audio"
+1 = "Video"
+
+[[columns]]
+name = "Duration"
+from = "duration"
+kind = "duration"
+
+[[columns]]
+name = "This account"
+from = "local_user"

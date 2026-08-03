@@ -2463,6 +2463,10 @@ const BUILTIN: &[(&str, &str)] = &[
         include_str!("../modules/life360_members.toml"),
     ),
     (
+        "google_duo_calls.toml",
+        include_str!("../modules/google_duo_calls.toml"),
+    ),
+    (
         "location_clients.toml",
         include_str!("../modules/location_clients.toml"),
     ),
@@ -4933,6 +4937,42 @@ from = "nope"
         .unwrap();
     }
 
+    /// Google Duo's DataStore: the app's own call log joined to its contacts.
+    ///
+    /// One call to a contact NOT in the table, kept because who was called is the
+    /// point even without a name; one zero-duration call that never connected;
+    /// audio and video, incoming and outgoing, so every mapped column varies.
+    fn seed_google_duo(c: &Connection) {
+        c.execute_batch(
+            "CREATE TABLE call_history (record_id INTEGER PRIMARY KEY,
+                call_history_other_user_id VARCHAR(20) NOT NULL,
+                call_history_timestamp REAL NOT NULL,
+                call_history_is_outgoing_call BOOLEAN NOT NULL,
+                call_history_user_action INTEGER DEFAULT 0,
+                call_history_duration REAL DEFAULT 0,
+                call_history_is_video_call BOOLEAN NOT NULL,
+                call_history_local_user_id TEXT);
+             CREATE TABLE contact (record_id INTEGER PRIMARY KEY, contact_id TEXT,
+                contact_name TEXT);",
+        )
+        .unwrap();
+        c.execute_batch(
+            "INSERT INTO contact (record_id, contact_id, contact_name) VALUES
+                (1, '+15550101', 'Kit Reeve');
+             INSERT INTO call_history (record_id, call_history_other_user_id,
+                call_history_timestamp, call_history_is_outgoing_call,
+                call_history_duration, call_history_is_video_call,
+                call_history_local_user_id) VALUES
+                (1, '+15550101', 1704740970.56, 0, 90.44, 1, '+15550100'),
+                (2, '+15550101', 1704740767.12, 1, 95.11, 0, '+15550100'),
+                -- Never connected: zero on the clock.
+                (3, '+15550101', 1704740542.96, 0, 0,     0, '+15550100'),
+                -- A party with no contact row: keeps the raw id in Party.
+                (4, '+15559999', 1704740000.0,  1, 12.0,  1, '+15550100');",
+        )
+        .unwrap();
+    }
+
     /// Life360's chat store, which is where the CIRCLE roster lives.
     ///
     /// Two circles, because one could not tell a working join from a query that
@@ -5080,6 +5120,11 @@ from = "nope"
             "life360_members",
             "AppDomain-com.life360.safetymap",
             "Library/Application Support/Messaging.sqlite",
+        ),
+        (
+            "google_duo_calls",
+            "AppDomain-com.google.Tachyon",
+            "Library/Application Support/DataStore",
         ),
         (
             "accounts",
@@ -5410,6 +5455,7 @@ from = "nope"
             "health_current_device" => seed_health_device_context,
             "life360_locations" => return Seed::Bytes(seed_life360_log),
             "life360_members" => seed_life360_members,
+            "google_duo_calls" => seed_google_duo,
             // One store, two modules: the network, and the radios in it.
             "wifi_networks" | "wifi_access_points" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
@@ -5906,6 +5952,60 @@ from = "nope"
         assert!(
             (1_700_000_000..1_800_000_000).contains(&created),
             "cocoa epoch, got {created}"
+        );
+    }
+
+    #[test]
+    fn google_duo_call_log_maps_direction_and_keeps_the_unnamed_party() {
+        // A data-call log the system Calls view never sees, and the store's own
+        // separate record of who this person reached over Duo.
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "google_duo_calls")
+            .expect("google_duo_calls ships");
+        let tmp = tempfile::tempdir().unwrap();
+        let store = tmp.path().join("seed.sqlite");
+        let conn = Connection::open(&store).unwrap();
+        seed_google_duo(&conn);
+        drop(conn);
+        make_backup_bytes_in(
+            tmp.path(),
+            &spec.domain,
+            &spec.path,
+            &std::fs::read(&store).unwrap(),
+        );
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 4);
+
+        let get = |r: &ArtifactRow, k: &str| {
+            r.get(k)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string()
+        };
+        // Newest first: an incoming video call to a named contact.
+        assert_eq!(get(&rows[0], "Party"), "Kit Reeve");
+        assert_eq!(get(&rows[0], "Direction"), "Incoming");
+        assert_eq!(get(&rows[0], "Kind"), "Video");
+        // Duration is REAL seconds, truncated to whole seconds.
+        assert_eq!(rows[0].get("Duration").and_then(|v| v.as_i64()), Some(90));
+
+        // A party with no contact row keeps the raw id as its Party.
+        let unnamed = rows
+            .iter()
+            .find(|r| get(r, "Party ID") == "+15559999")
+            .unwrap();
+        assert_eq!(get(unnamed, "Party"), "+15559999");
+
+        // The call that never connected still has a row; its clock is zero.
+        assert!(
+            rows.iter()
+                .any(|r| r.get("Duration").and_then(|v| v.as_i64()) == Some(0)),
+            "an unconnected call is kept, at zero duration"
         );
     }
 

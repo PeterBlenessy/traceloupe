@@ -1118,6 +1118,45 @@ def seed_podcasts(path: Path) -> None:
     con.close()
 
 
+def seed_google_duo(path: Path) -> None:
+    """DataStore — Google Duo's own call log, joined to its contact table.
+
+    Audio and video, incoming and outgoing, one unconnected call and one to a
+    party with no contact row, so every mapped column varies.
+    """
+    con = sqlite3.connect(path)
+    con.executescript(
+        """CREATE TABLE call_history (record_id INTEGER PRIMARY KEY,
+             call_history_other_user_id VARCHAR(20) NOT NULL,
+             call_history_timestamp REAL NOT NULL,
+             call_history_is_outgoing_call BOOLEAN NOT NULL,
+             call_history_user_action INTEGER DEFAULT 0,
+             call_history_duration REAL DEFAULT 0,
+             call_history_is_video_call BOOLEAN NOT NULL,
+             call_history_local_user_id TEXT);
+           CREATE TABLE contact (record_id INTEGER PRIMARY KEY, contact_id TEXT,
+             contact_name TEXT);"""
+    )
+    con.execute(
+        "INSERT INTO contact (record_id, contact_id, contact_name) VALUES (1, ?, ?)",
+        ("+15550101", "Kit Reeve"),
+    )
+    con.executemany(
+        "INSERT INTO call_history (record_id, call_history_other_user_id,"
+        " call_history_timestamp, call_history_is_outgoing_call,"
+        " call_history_duration, call_history_is_video_call,"
+        " call_history_local_user_id) VALUES (?,?,?,?,?,?,?)",
+        [
+            (1, "+15550101", 1704740970.56, 0, 90.44, 1, "+15550100"),
+            (2, "+15550101", 1704740767.12, 1, 95.11, 0, "+15550100"),
+            (3, "+15550101", 1704740542.96, 0, 0, 0, "+15550100"),
+            (4, "+15559999", 1704740000.0, 1, 12.0, 1, "+15550100"),
+        ],
+    )
+    con.commit()
+    con.close()
+
+
 def seed_life360_members(path: Path) -> None:
     """Messaging.sqlite — Life360's CIRCLE roster, not its chat.
 
@@ -1258,6 +1297,8 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
     seed_alltrails(trails_path)
     life360_path = workdir / "Messaging.sqlite"
     seed_life360_members(life360_path)
+    duo_path = workdir / "DataStore"
+    seed_google_duo(duo_path)
     files = [
         ("HomeDomain", "Library/SMS/sms.db", sms_path.read_bytes()),
         ("HomeDomain", "Library/Safari/History.db", safari_path.read_bytes()),
@@ -1370,6 +1411,11 @@ def seed_files(workdir: Path) -> list[tuple[str, str, bytes]]:
             "AppDomain-com.life360.safetymap",
             "Library/Application Support/Messaging.sqlite",
             life360_path.read_bytes(),
+        ),
+        (
+            "AppDomain-com.google.Tachyon",
+            "Library/Application Support/DataStore",
+            duo_path.read_bytes(),
         ),
 
         (
