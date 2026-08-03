@@ -747,6 +747,11 @@ async fn import_backup(
 
     // Newly imported backup becomes the active one for browsing.
     active.set(outcome.cache_path.clone());
+    // The cache was just rebuilt, so re-stamp the user's stars from the durable
+    // per-backup file onto it (they'd otherwise all reset to 0).
+    if let Ok(cache) = CacheDb::open(&outcome.cache_path) {
+        apply_favorites(&cache, &outcome.cache_path);
+    }
     repair_stranded_safety_scans(&app_for_passive, &outcome.cache_path);
     relink_findings_to_cache(&app_for_passive, &outcome.cache_path);
 
@@ -957,6 +962,10 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     // demand if something asks before the warm-up finishes.
     app.state::<SessionKeys>().set(None);
     app.state::<ActiveBackup>().set(cache_path.clone());
+    // Stamp the user's persisted stars onto the cache this session will query.
+    if let Ok(cache) = CacheDb::open(&cache_path) {
+        apply_favorites(&cache, &cache_path);
+    }
     repair_stranded_safety_scans(&app, &cache_path);
     phase!("repair stranded safety scans");
     // The macro re-arms `t_phase` for a next phase that doesn't exist here; this
@@ -2920,6 +2929,7 @@ async fn count_media(
     lo: Option<i64>,
     hi: Option<i64>,
     search: Option<String>,
+    favorites_only: bool,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2929,6 +2939,7 @@ async fn count_media(
             source.as_deref(),
             query::TimeRange { lo, hi },
             search.as_deref(),
+            favorites_only,
         )
         .map_err(|e| e.to_string())
     })
@@ -2942,19 +2953,26 @@ async fn count_media_ranges(
     source: Option<String>,
     ranges: Vec<query::TimeRange>,
     search: Option<String>,
+    favorites_only: bool,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media_ranges(&cache, source.as_deref(), &ranges, search.as_deref())
-            .map_err(|e| e.to_string())
+        query::count_media_ranges(
+            &cache,
+            source.as_deref(),
+            &ranges,
+            search.as_deref(),
+            favorites_only,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)] // Tauri command: source + time range + search + paging + sort.
+#[allow(clippy::too_many_arguments)] // Tauri command: source + time range + search + paging + sort + favorites.
 async fn get_media_window(
     active: State<'_, ActiveBackup>,
     source: Option<String>,
@@ -2965,6 +2983,7 @@ async fn get_media_window(
     limit: i64,
     sort_by: String,
     desc: bool,
+    favorites_only: bool,
 ) -> Result<Vec<MediaItem>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2977,8 +2996,61 @@ async fn get_media_window(
             offset,
             limit,
             media_sort(&sort_by, desc),
+            favorites_only,
         )
         .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Path to a backup's durable star file — a sibling of the cache DB, so a
+/// re-import (which rebuilds the cache) leaves it untouched.
+fn favorites_file(cache_path: &Path) -> PathBuf {
+    cache_path.with_file_name("favorites.json")
+}
+
+fn read_favorites(cache_path: &Path) -> Vec<String> {
+    std::fs::read(favorites_file(cache_path))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Re-apply the persisted stars onto a freshly opened/imported cache. Best
+/// effort: a missing or unreadable file just means "no stars yet."
+fn apply_favorites(cache: &CacheDb, cache_path: &Path) {
+    let paths = read_favorites(cache_path);
+    let _ = query::apply_user_favorites(cache, &paths);
+}
+
+#[tauri::command]
+async fn set_media_favorite(
+    active: State<'_, ActiveBackup>,
+    id: i64,
+    favorite: bool,
+) -> Result<(), String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        // Flip the cache column and learn the row's stable relative_path.
+        let Some(rel) =
+            query::set_user_favorite(&cache, id, favorite).map_err(|e| e.to_string())?
+        else {
+            return Ok(()); // no such media row
+        };
+        // Persist to the durable per-backup file so the star survives re-import.
+        let mut paths = read_favorites(&path);
+        if favorite {
+            if !paths.contains(&rel) {
+                paths.push(rel);
+            }
+        } else {
+            paths.retain(|p| p != &rel);
+        }
+        let json = serde_json::to_vec_pretty(&paths).map_err(|e| e.to_string())?;
+        write_private(&favorites_file(&path), &json).map_err(|e| e.to_string())?;
+        Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -4544,6 +4616,7 @@ pub fn run() {
             count_media,
             count_media_ranges,
             get_media_window,
+            set_media_favorite,
             count_calls,
             count_call_ranges,
             call_addresses,

@@ -516,6 +516,9 @@ export interface MediaItem {
    */
   sharedCaption: string | null;
   sharedLikes: number | null;
+  /** The USER's own star, toggled in this app (distinct from `favorite`, the
+   *  device's own flag). Persists across re-import. */
+  userFavorite: boolean;
 }
 
 /** A media source and how many items came from it, for the gallery filter. */
@@ -1421,12 +1424,14 @@ export interface TraceLoupeClient {
     lo?: number | null,
     hi?: number | null,
     search?: string | null,
+    favoritesOnly?: boolean,
   ): Promise<number>;
   /** Media counts for each [lo, hi) window in `source` — Photos time-filter chips. */
   countMediaRanges(
     source: string | null,
     ranges: TimeRange[],
     search?: string | null,
+    favoritesOnly?: boolean,
   ): Promise<number[]>;
   getMediaWindow(
     source: string | null,
@@ -1437,7 +1442,10 @@ export interface TraceLoupeClient {
     limit: number,
     sortBy: string,
     desc: boolean,
+    favoritesOnly?: boolean,
   ): Promise<MediaItem[]>;
+  /** Toggle the user's star on a photo/video; persists across re-import. */
+  setMediaFavorite(id: number, favorite: boolean): Promise<void>;
   /**
    * `addresses` are the call peers whose CONTACT NAME matched `search`,
    * resolved client-side and matched by the backend with a plain `IN` (#279).
@@ -1805,11 +1813,21 @@ const tauriClient: TraceLoupeClient = {
   unlockNote: (noteId, password) =>
     invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
-  countMedia: (source, lo = null, hi = null, search = null) =>
-    invoke<number>("count_media", { source, lo, hi, search }),
-  countMediaRanges: (source, ranges, search = null) =>
-    invoke<number[]>("count_media_ranges", { source, ranges, search }),
-  getMediaWindow: (source, lo, hi, search, offset, limit, sortBy, desc) =>
+  countMedia: (source, lo = null, hi = null, search = null, favoritesOnly = false) =>
+    invoke<number>("count_media", { source, lo, hi, search, favoritesOnly }),
+  countMediaRanges: (source, ranges, search = null, favoritesOnly = false) =>
+    invoke<number[]>("count_media_ranges", { source, ranges, search, favoritesOnly }),
+  getMediaWindow: (
+    source,
+    lo,
+    hi,
+    search,
+    offset,
+    limit,
+    sortBy,
+    desc,
+    favoritesOnly = false,
+  ) =>
     invoke<MediaItem[]>("get_media_window", {
       source,
       lo,
@@ -1819,7 +1837,10 @@ const tauriClient: TraceLoupeClient = {
       limit,
       sortBy,
       desc,
+      favoritesOnly,
     }),
+  setMediaFavorite: (id, favorite) =>
+    invoke<void>("set_media_favorite", { id, favorite }),
   countCalls: (search, lo = null, hi = null, addresses = null) =>
     invoke<number>("count_calls", { search, lo, hi, addresses }),
   countCallRanges: (ranges, search = null, addresses = null) =>
@@ -2856,6 +2877,7 @@ const mockMedia: MediaItem[] = [
     addedAt: null,
     sharedCaption: "My first batch of pictures",
     sharedLikes: 3,
+    userFavorite: true,
     subtype: "live",
   },
   {
@@ -2884,6 +2906,7 @@ const mockMedia: MediaItem[] = [
     addedAt: null,
     sharedCaption: null,
     sharedLikes: null,
+    userFavorite: false,
     subtype: "panorama",
   },
   {
@@ -2912,6 +2935,7 @@ const mockMedia: MediaItem[] = [
     addedAt: 1720000000,
     sharedCaption: null,
     sharedLikes: null,
+    userFavorite: false,
     subtype: "burst",
   },
   {
@@ -2940,6 +2964,7 @@ const mockMedia: MediaItem[] = [
     addedAt: null,
     sharedCaption: null,
     sharedLikes: null,
+    userFavorite: false,
     subtype: "screenshot",
   },
 ];
@@ -3172,10 +3197,12 @@ function mockFilterMedia(
   source: string | null,
   range?: TimeRange,
   search?: string | null,
+  favoritesOnly?: boolean,
 ): MediaItem[] {
   let out = source
     ? mockMedia.filter((m) => (m.source ?? "Other") === source)
     : mockMedia;
+  if (favoritesOnly) out = out.filter((m) => m.userFavorite);
   if (range && (range.lo != null || range.hi != null)) {
     out = out.filter((m) => inRange(m.takenAt ?? null, range));
   }
@@ -6017,20 +6044,42 @@ const mockClient: TraceLoupeClient = {
       ? "Bank PIN: 1234\nWiFi: hunter2"
       : Promise.reject(new Error("Wrong password.")),
   listRecordings: async () => (mockActive ? mockRecordings : []),
-  countMedia: async (source, lo = null, hi = null, search = null) =>
-    mockActive ? mockFilterMedia(source, { lo, hi }, search).length : 0,
-  countMediaRanges: async (source, ranges, search = null) =>
+  countMedia: async (
+    source,
+    lo = null,
+    hi = null,
+    search = null,
+    favoritesOnly = false,
+  ) =>
+    mockActive
+      ? mockFilterMedia(source, { lo, hi }, search, favoritesOnly).length
+      : 0,
+  countMediaRanges: async (source, ranges, search = null, favoritesOnly = false) =>
     ranges.map((r) =>
-      mockActive ? mockFilterMedia(source, r, search).length : 0,
+      mockActive ? mockFilterMedia(source, r, search, favoritesOnly).length : 0,
     ),
-  getMediaWindow: async (source, lo, hi, search, offset, limit, sortBy, desc) =>
+  getMediaWindow: async (
+    source,
+    lo,
+    hi,
+    search,
+    offset,
+    limit,
+    sortBy,
+    desc,
+    favoritesOnly = false,
+  ) =>
     mockActive
       ? mockSortBy(
-          mockFilterMedia(source, { lo, hi }, search),
+          mockFilterMedia(source, { lo, hi }, search, favoritesOnly),
           mediaKey(sortBy),
           desc,
         ).slice(offset, offset + limit)
       : [],
+  setMediaFavorite: async (id, favorite) => {
+    const m = mockMedia.find((x) => x.id === id);
+    if (m) m.userFavorite = favorite;
+  },
   countCalls: async (search, lo = null, hi = null, addresses = null) =>
     mockActive ? mockFilterCalls(search, { lo, hi }, addresses).length : 0,
   countCallRanges: async (ranges, search = null, addresses = null) =>

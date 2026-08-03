@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 57;
+const SCHEMA_VERSION: i64 = 58;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -228,6 +228,10 @@ CREATE TABLE IF NOT EXISTS media_items (
     latitude        REAL,
     longitude       REAL,
     is_favorite     INTEGER NOT NULL DEFAULT 0,
+    -- The USER's own star, set inside this app (distinct from is_favorite, which
+    -- is the device's own flag from Photos.sqlite). Re-applied from a per-backup
+    -- file after every import, since the cache is rebuilt but the star is not.
+    user_favorite   INTEGER NOT NULL DEFAULT 0,
     -- Moment place/event name + user-album names (Photos.sqlite); searchable.
     location        TEXT,
     albums          TEXT,
@@ -863,6 +867,15 @@ impl CacheDb {
             // v57: shared-album activity carried on the photo it happened to.
             ensure_column(&conn, "media_items", "shared_caption", "TEXT")?;
             ensure_column(&conn, "media_items", "shared_likes", "INTEGER")?;
+            // v58: the user's own star on a photo/video, re-applied from a
+            // per-backup file after each import (the cache is rebuilt; the star
+            // is user state that must outlive it).
+            ensure_column(
+                &conn,
+                "media_items",
+                "user_favorite",
+                "INTEGER NOT NULL DEFAULT 0",
+            )?;
             // v56: who a note is shared with, from its CloudKit share.
             ensure_column(&conn, "notes", "shared_with_json", "TEXT")?;
             // v55: per-module parse outcome, so an empty view can say whether
