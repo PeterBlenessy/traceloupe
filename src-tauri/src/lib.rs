@@ -3332,6 +3332,10 @@ fn media_protocol_response(
         return not_found();
     };
     let want_thumb = query_str.is_some_and(|q| q.contains("thumb"));
+    // A downscaled full-screen preview (see media::render_preview): far faster to
+    // load than the original, which is what stops a fast next/prev from leaving
+    // black frames.
+    let want_preview = query_str.is_some_and(|q| q.contains("preview"));
 
     let active = app.state::<ActiveBackup>();
     let Ok(cache_path) = active.path() else {
@@ -3465,7 +3469,18 @@ fn media_protocol_response(
         // RAII: the plaintext temp is removed when this guard drops, no matter how
         // we leave the block.
         let _tmp = TempPath(tmp.clone());
-        media::render(&tmp, &thumbs_dir, id, want_thumb, mime.as_deref())
+        if want_preview {
+            media::render_preview(&tmp, &thumbs_dir, id, mime.as_deref())
+        } else {
+            media::render(&tmp, &thumbs_dir, id, want_thumb, mime.as_deref())
+        }
+    } else if want_preview {
+        media::render_preview(
+            std::path::Path::new(&local_path),
+            &thumbs_dir,
+            id,
+            mime.as_deref(),
+        )
     } else {
         media::render(
             std::path::Path::new(&local_path),

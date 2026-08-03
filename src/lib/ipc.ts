@@ -1541,7 +1541,10 @@ export interface TraceLoupeClient {
   /** URL the webview can load for a media item. `thumb` requests a thumbnail;
    *  `cacheKey` (see `useMediaCacheKey`) makes each mount request a fresh URL to
    *  dodge WebKit's cached-failed-task quirk on remount. */
-  mediaUrl(id: number, opts?: { thumb?: boolean; cacheKey?: number }): string;
+  mediaUrl(
+    id: number,
+    opts?: { thumb?: boolean; preview?: boolean; cacheKey?: number; retry?: number },
+  ): string;
   /** URL the webview can load for a contact's photo. */
   contactAvatarUrl(id: number): string;
   /** URL for a message attachment's bytes (`thumb` for an image thumbnail;
@@ -1562,10 +1565,19 @@ export interface TraceLoupeClient {
 }
 
 /** Build the `?thumb=1&k=…` query suffix shared by media/attachment URLs. */
-function mediaQuery(opts?: { thumb?: boolean; cacheKey?: number }): string {
+function mediaQuery(opts?: {
+  thumb?: boolean;
+  preview?: boolean;
+  cacheKey?: number;
+  retry?: number;
+}): string {
   const parts: string[] = [];
   if (opts?.thumb) parts.push("thumb=1");
+  if (opts?.preview) parts.push("preview=1");
   if (opts?.cacheKey != null) parts.push(`k=${opts.cacheKey}`);
+  // A cache-buster: on a black-frame retry the URL must DIFFER, or WebKit serves
+  // the same cached (failed) scheme task instead of re-invoking the handler.
+  if (opts?.retry) parts.push(`r=${opts.retry}`);
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
