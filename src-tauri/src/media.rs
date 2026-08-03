@@ -14,6 +14,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Longest edge (px) for a grid thumbnail.
 const THUMB_MAX_EDGE: u32 = 512;
 
+/// Longest edge (px) for a LIGHTBOX preview. Big enough to look sharp full-screen
+/// on a retina display, small enough that it loads and decodes in a fraction of
+/// the time a 12-megapixel original takes — which is what shrinks the window in
+/// which a fast next/prev can cancel an in-flight load and leave a black frame.
+pub const PREVIEW_MAX_EDGE: u32 = 2048;
+
 /// Monotonic counter for unique per-render temp filenames (so concurrent `sips`
 /// renders of the same id write to distinct temps and rename atomically).
 static SIPS_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -172,7 +178,7 @@ pub fn render(
         // double-invoke) can't read a half-written JPEG from `out`.
         let seq = SIPS_SEQ.fetch_add(1, Ordering::Relaxed);
         let tmp = cache_dir.join(format!("{id}.{suffix}.{seq}.partial.jpg"));
-        if !run_sips(src, &tmp, want_thumb) {
+        if !run_sips(src, &tmp, want_thumb.then_some(THUMB_MAX_EDGE)) {
             let _ = std::fs::remove_file(&tmp);
             // Conversion failed (corrupt file, unknown format): fall back to the
             // original bytes so at least something is served.
@@ -204,13 +210,52 @@ pub fn render(
     })
 }
 
-/// Invoke macOS `sips` to write a JPEG copy of `src` at `out`, downscaling to
-/// `THUMB_MAX_EDGE` for thumbnails. Returns whether a file was produced.
-fn run_sips(src: &Path, out: &Path, thumb: bool) -> bool {
+/// Render a downscaled JPEG PREVIEW (`PREVIEW_MAX_EDGE`) for the lightbox, for
+/// ANY raster format — not just HEIC. A full-screen viewer never needs the full
+/// 12-megapixel original, and serving it is what made paging slow enough to
+/// leave black frames; a preview loads in a fraction of the time. Cached as
+/// `{id}.preview.jpg`. `None` if the source can't be read/converted.
+pub fn render_preview(
+    src: &Path,
+    cache_dir: &Path,
+    id: i64,
+    src_mime: Option<&str>,
+) -> Option<Rendered> {
+    let _ = std::fs::create_dir_all(cache_dir);
+    let out: PathBuf = cache_dir.join(format!("{id}.preview.jpg"));
+    if !out.exists() {
+        let seq = SIPS_SEQ.fetch_add(1, Ordering::Relaxed);
+        let tmp = cache_dir.join(format!("{id}.preview.{seq}.partial.jpg"));
+        if !run_sips(src, &tmp, Some(PREVIEW_MAX_EDGE)) {
+            let _ = std::fs::remove_file(&tmp);
+            // Couldn't downscale (unknown format): fall back to the full render
+            // so the lightbox still shows something.
+            return render(src, cache_dir, id, false, src_mime);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        }
+        if std::fs::rename(&tmp, &out).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    let bytes = std::fs::read(&out).ok()?;
+    Some(Rendered {
+        bytes,
+        content_type: "image/jpeg".to_string(),
+    })
+}
+
+/// Invoke macOS `sips` to write a JPEG copy of `src` at `out`, downscaling its
+/// longest edge to `max_edge` px when given (`None` = full size). Returns whether
+/// a file was produced.
+fn run_sips(src: &Path, out: &Path, max_edge: Option<u32>) -> bool {
     let mut cmd = Command::new("/usr/bin/sips");
     cmd.arg("-s").arg("format").arg("jpeg");
-    if thumb {
-        cmd.arg("-Z").arg(THUMB_MAX_EDGE.to_string());
+    if let Some(edge) = max_edge {
+        cmd.arg("-Z").arg(edge.to_string());
     }
     cmd.arg(src).arg("--out").arg(out);
     matches!(cmd.output(), Ok(o) if o.status.success()) && out.exists()
@@ -321,6 +366,20 @@ mod tests {
         assert_eq!(thumb.content_type, "image/jpeg");
         assert!(jpeg_magic(&thumb.bytes));
         assert!(cache.join("1.thumb.jpg").exists());
+    }
+
+    #[test]
+    fn preview_transcodes_any_format_to_a_cached_jpeg() {
+        let tmp = tempfile::tempdir().unwrap();
+        let png = tmp.path().join("a.png");
+        std::fs::write(&png, TINY_PNG).unwrap();
+        let cache = tmp.path().join("thumbs");
+        // A PNG (not HEIC) is still transcoded for the preview — the lightbox
+        // wants a downscaled JPEG regardless of source format.
+        let r = render_preview(&png, &cache, 9, Some("image/png")).unwrap();
+        assert_eq!(r.content_type, "image/jpeg");
+        assert!(jpeg_magic(&r.bytes), "preview is not JPEG");
+        assert!(cache.join("9.preview.jpg").exists());
     }
 
     #[test]
