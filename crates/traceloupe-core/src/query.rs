@@ -2146,6 +2146,16 @@ pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
         .optional()?)
 }
 
+/// One person a note is shared with, from its CloudKit share archive.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareParticipant {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    /// CloudKit's acceptance code, passed through rather than translated.
+    pub status: Option<i64>,
+}
+
 /// One note from the device's Notes app.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -2163,6 +2173,14 @@ pub struct Note {
     pub modified_at: Option<i64>,
     /// Pinned to the top of the Notes app.
     pub pinned: bool,
+    /// Who the note is shared with, decoded from its CloudKit share archive.
+    ///
+    /// Empty when the note is not shared. The OWNER is in this list too — a
+    /// share always names them alongside the people invited — so a one-entry
+    /// list means "shared, and only the owner has been fetched", not "shared
+    /// with one stranger".
+    #[serde(default)]
+    pub shared_with: Vec<ShareParticipant>,
     /// Password-protected: the body is withheld until unlocked with the password.
     pub locked: bool,
     /// The user's password hint, if the note stored one.
@@ -2190,7 +2208,8 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
     let mut stmt = conn.prepare(
         "SELECT id, folder, title, snippet, body_html, created_at, modified_at, locked, password_hint, pinned,
                 has_checklist, image_count, attachment_count, tags, image_local_path IS NOT NULL, body_rich,
-                (SELECT COUNT(*) FROM note_media WHERE note_media.note_id = notes.id)
+                (SELECT COUNT(*) FROM note_media WHERE note_media.note_id = notes.id),
+                shared_with_json
          FROM notes
          ORDER BY modified_at DESC NULLS LAST, id DESC",
     )?;
@@ -2216,6 +2235,10 @@ pub fn list_notes(cache: &CacheDb) -> Result<Vec<Note>> {
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or_default(),
             has_image: r.get::<_, i64>(14)? != 0,
+            shared_with: r
+                .get::<_, Option<String>>(17)?
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default(),
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
