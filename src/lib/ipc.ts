@@ -4095,6 +4095,23 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "home_screen_widgets",
+            name: "Home screen widgets",
+            category: "Device",
+            description:
+              "Every widget on the home screen and the stack it sits in — the names behind the anonymous icons the layout shows as UUIDs.",
+            surface: "device" as const,
+            shape: "table" as const,
+            joinColumn: null,
+            highlight: null,
+            columns: ["At", "Widget", "Provided by", "Kind"],
+            timestampColumns: [],
+            byteColumns: [],
+            durationColumns: [],
+            rowCount: 2,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "podcast_episodes",
             name: "Podcast episodes",
             category: "Media",
@@ -4765,6 +4782,21 @@ const mockClient: TraceLoupeClient = {
             Shared: false,
           },
         ]
+      : mockActive && artifactId === "home_screen_widgets"
+        ? [
+            {
+              At: "0/1/0",
+              Widget: "com.apple.weather",
+              "Provided by": "com.apple.weather",
+              Kind: "widget",
+            },
+            {
+              At: "0/1/1",
+              Widget: "com.apple.mobileslideshow.PhotosReliveWidget",
+              "Provided by": "com.apple.mobileslideshow",
+              Kind: "widget",
+            },
+          ]
       : mockActive && artifactId === "podcast_episodes"
         ? [
             {
