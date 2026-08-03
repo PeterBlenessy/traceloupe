@@ -146,7 +146,21 @@ fn table_exists(conn: &Connection, name: &str) -> Result<bool> {
 /// Missing tables (an unexpected schema) is an error; no matches is simply zero.
 pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    for t in ["ZASSET", "ZDETECTEDFACE", "ZPERSON"] {
+    // The asset table was renamed across iOS versions: `ZGENERICASSET` on iOS
+    // 13/14, `ZASSET` from iOS 15. Same columns either way — picking the wrong
+    // name is why every capture date came out NULL on an iPhone restored from an
+    // older backup, and the UI then fell back to showing the (restore-time)
+    // "added" date, which reads as "everything is the import date."
+    let asset_table = if table_exists(&src, "ZASSET")? {
+        "ZASSET"
+    } else if table_exists(&src, "ZGENERICASSET")? {
+        "ZGENERICASSET"
+    } else {
+        return Err(crate::Error::Parse(
+            "Photos.sqlite is not a recognized schema (no ZASSET/ZGENERICASSET)".into(),
+        ));
+    };
+    for t in ["ZDETECTEDFACE", "ZPERSON"] {
         if !table_exists(&src, t)? {
             return Err(crate::Error::Parse(format!(
                 "Photos.sqlite is not a recognized schema (missing {t})"
@@ -154,9 +168,12 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         }
     }
 
-    // ZASSET's columns vary across iOS versions; guard the newer ones we read.
+    // The asset table's columns vary across iOS versions; guard the newer ones we
+    // read.
     let asset_cols: HashSet<String> = src
-        .prepare("SELECT name FROM pragma_table_info('ZASSET')")?
+        .prepare(&format!(
+            "SELECT name FROM pragma_table_info('{asset_table}')"
+        ))?
         .query_map([], |r| r.get::<_, String>(0))?
         .filter_map(|c| c.ok())
         .collect();
@@ -201,7 +218,7 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                     a.ZWIDTH, a.ZHEIGHT, a.ZDURATION, a.ZHIDDEN,
                     a.ZKINDSUBTYPE, a.ZISDETECTEDSCREENSHOT, {play_expr}, {aval_expr},
                     {trash_expr}, {trashdate_expr}, {added_expr}
-             FROM ZASSET a
+             FROM {asset_table} a
              LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
              WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
         ))?;
@@ -321,14 +338,14 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
     // Named people per asset (a photo can have several).
     {
         let mut names: HashMap<String, BTreeSet<String>> = HashMap::new();
-        let mut stmt = src.prepare(
+        let mut stmt = src.prepare(&format!(
             "SELECT a.ZDIRECTORY, a.ZFILENAME,
                     COALESCE(NULLIF(p.ZFULLNAME, ''), NULLIF(p.ZDISPLAYNAME, '')) AS name
              FROM ZDETECTEDFACE f
-             JOIN ZASSET  a ON a.Z_PK = f.ZASSETFORFACE
+             JOIN {asset_table}  a ON a.Z_PK = f.ZASSETFORFACE
              JOIN ZPERSON p ON p.Z_PK = f.ZPERSONFORFACE
              WHERE name IS NOT NULL AND a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL",
-        )?;
+        ))?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let dir: String = r.get(0)?;
@@ -366,17 +383,17 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
     // evidence they shared it, and dropping it would leave an album that
     // nobody appears to have touched.
     if table_exists(&src, "ZCLOUDSHAREDCOMMENT")? {
-        let mut stmt = src.prepare(
+        let mut stmt = src.prepare(&format!(
             "SELECT a.ZDIRECTORY, a.ZFILENAME,
                     SUM(CASE WHEN c.ZISLIKE = 1 THEN 1 ELSE 0 END) AS likes,
                     MAX(CASE WHEN c.ZISLIKE = 0 AND c.ZCOMMENTTEXT IS NOT NULL
                              THEN c.ZCOMMENTTEXT END) AS caption
              FROM ZCLOUDSHAREDCOMMENT c
-             JOIN ZASSET a
+             JOIN {asset_table} a
                ON a.Z_PK = COALESCE(c.ZCOMMENTEDASSET, c.ZLIKEDASSET)
              WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL
              GROUP BY a.ZDIRECTORY, a.ZFILENAME",
-        )?;
+        ))?;
         let mut rows = stmt.query([])?;
         while let Some(r) = rows.next()? {
             let dir: String = r.get(0)?;
