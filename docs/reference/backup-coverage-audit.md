@@ -315,6 +315,32 @@ the report get *worse* every time an older device was added — and a validator
 that always fails is one nobody runs. It now fails only for a module absent from
 **every** backup, which is a wrong path, and notes the rest.
 
+### Property lists hidden in database columns
+
+Apple stores structured data in BLOB columns constantly, and until now nothing
+here could see inside one: `plist` reads files, and `sql` renders a blob as
+`<12502 bytes>`. `explore_real_backup blob` decodes it with the same
+NSKeyedArchiver resolver the module runner uses.
+
+The case that forced it, and the key paths it settled, so nobody re-derives
+them — `NoteStore.sqlite`, `ZICCLOUDSYNCINGOBJECT.ZSERVERSHAREDATA`, a 12 KB
+archive holding the CloudKit share for a note:
+
+| What | Path inside the archive |
+|---|---|
+| E-mail of each participant | `LastFetchedParticipants / N / UserIdentity / LookupInfo / EmailAddress` |
+| Their name | `… / UserIdentity / NameComponents / NS.nameComponentsPrivate / NS.givenName` + `NS.familyName` |
+| Whether they accepted | `LastFetchedParticipants / N / AcceptanceStatus` |
+| What they may do | `LastFetchedParticipants / N / Permission` |
+
+On the validation device that resolves to **This Is DFIR
+&lt;thisisdfir@gmail.com&gt;** on "iOS 16 Note". `ZICNOTEPARTICIPANT` gives the
+count and a `__defaultOwner__` marker for the note's own owner; the blob gives
+the identities.
+
+This is parser work rather than a module, because `NoteStore.sqlite` is parsed
+natively — see below.
+
 ### Same-store artifacts split by who reads the store
 
 `coverage-gap.py --present` reports 16 artifacts that read a file we **already
