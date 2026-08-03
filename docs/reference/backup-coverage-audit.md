@@ -338,8 +338,15 @@ On the validation device that resolves to **This Is DFIR
 count and a `__defaultOwner__` marker for the note's own owner; the blob gives
 the identities.
 
-This is parser work rather than a module, because `NoteStore.sqlite` is parsed
-natively — see below.
+**Shipped.** `parse_notes` decodes the archive and writes
+`notes.shared_with_json` (schema v56); Notes marks a shared note in the list and
+names every participant in the detail pane. The owner is among them — a CloudKit
+share always names them — so the wording is "shared with" and lists everyone,
+rather than counting strangers and getting it off by one.
+
+A note whose share blob will NOT decode is left unshared-looking rather than
+written as `[]`: "we could not read it" and "it is not shared" are different, and
+the parser skips instead of asserting the second.
 
 ### Same-store artifacts split by who reads the store
 

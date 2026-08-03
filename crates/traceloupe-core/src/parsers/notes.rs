@@ -17,7 +17,7 @@
 //! provenance: reference (own implementation) from the reverse-engineered Notes
 //! Core Data schema and the `NoteStoreProto` wire format.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -94,6 +94,124 @@ fn coalesce_or_null(cols: &HashSet<String>, candidates: &[&str]) -> String {
 /// With `replace = true` it clears the `notes` table first, **in the same
 /// transaction as the re-insert**, so a partial re-import is atomic (a parse
 /// failure rolls the delete back too).
+/// Who each note is shared with, from the CloudKit share archive.
+///
+/// `ZICCLOUDSYNCINGOBJECT.ZSERVERSHAREDATA` is a ~12 KB NSKeyedArchiver blob —
+/// invisible to SQL, which renders it as `<12502 bytes>`. Inside it, every
+/// participant carries a real identity:
+///
+/// ```text
+/// LastFetchedParticipants / N / UserIdentity / LookupInfo / EmailAddress
+/// LastFetchedParticipants / N / UserIdentity / NameComponents
+///                             / NS.nameComponentsPrivate / NS.givenName
+/// ```
+///
+/// THE OWNER IS INCLUDED AND MUST BE. A share always lists the note's own owner
+/// alongside the people invited, so "shared with 1 person" and "shared with 2"
+/// are the same share seen from different ends. Both are kept and the row says
+/// which is which — dropping the owner would make a shared note look like it
+/// belongs to nobody, and dropping the others would hide the point.
+///
+/// Returns JSON per note id, or nothing for a note with no share. A note that
+/// HAS a share but whose blob will not decode is skipped rather than reported
+/// as unshared: "we could not read it" and "it is not shared" are different.
+fn share_participants(src: &Connection, cols: &HashSet<String>) -> HashMap<i64, String> {
+    let mut out = HashMap::new();
+    if !cols.contains("ZSERVERSHAREDATA") {
+        return out;
+    }
+    let Ok(mut stmt) = src.prepare(
+        "SELECT Z_PK, ZSERVERSHAREDATA FROM ZICCLOUDSYNCINGOBJECT
+         WHERE ZSERVERSHAREDATA IS NOT NULL",
+    ) else {
+        return out;
+    };
+    let Ok(mut rows) = stmt.query([]) else {
+        return out;
+    };
+    while let Ok(Some(r)) = rows.next() {
+        let (Ok(pk), Ok(bytes)) = (r.get::<_, i64>(0), r.get::<_, Vec<u8>>(1)) else {
+            continue;
+        };
+        let Ok(root) = crate::nska::resolve(&bytes) else {
+            continue;
+        };
+        let people = participants_from_share(&root);
+        if people.is_empty() {
+            continue;
+        }
+        if let Ok(json) = serde_json::to_string(&people) {
+            out.insert(pk, json);
+        }
+    }
+    out
+}
+
+#[derive(serde::Serialize)]
+struct ShareParticipant {
+    name: Option<String>,
+    email: Option<String>,
+    /// CloudKit's own acceptance code. Passed through rather than translated:
+    /// the meanings are not documented anywhere this can cite, and an invented
+    /// word for "2" would be a claim about whether someone accepted.
+    status: Option<i64>,
+}
+
+fn participants_from_share(root: &plist::Value) -> Vec<ShareParticipant> {
+    fn s(v: Option<&plist::Value>) -> Option<String> {
+        v.and_then(|x| x.as_string())
+            .map(str::to_string)
+            .filter(|x| !x.trim().is_empty())
+    }
+    let Some(list) = root
+        .as_dictionary()
+        .and_then(|d| {
+            d.get("LastFetchedParticipants")
+                .or_else(|| d.get("Participants"))
+        })
+        .and_then(|v| v.as_array())
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for p in list {
+        let Some(pd) = p.as_dictionary() else {
+            continue;
+        };
+        let identity = pd.get("UserIdentity").and_then(|v| v.as_dictionary());
+        let email = identity
+            .and_then(|i| i.get("LookupInfo"))
+            .and_then(|v| v.as_dictionary())
+            .and_then(|l| s(l.get("EmailAddress")));
+        // The name lives two dictionaries down, behind NSPersonNameComponents'
+        // own private key.
+        let parts = identity
+            .and_then(|i| i.get("NameComponents"))
+            .and_then(|v| v.as_dictionary())
+            .and_then(|n| n.get("NS.nameComponentsPrivate"))
+            .and_then(|v| v.as_dictionary());
+        let name = parts.and_then(|n| {
+            let given = s(n.get("NS.givenName"));
+            let family = s(n.get("NS.familyName"));
+            match (given, family) {
+                (Some(g), Some(f)) => Some(format!("{g} {f}")),
+                (g, f) => g.or(f),
+            }
+        });
+        if name.is_none() && email.is_none() {
+            continue;
+        }
+        out.push(ShareParticipant {
+            name,
+            email,
+            status: pd
+                .get("AcceptanceStatus")
+                .and_then(|v| v.as_signed_integer()),
+        });
+    }
+    out
+}
+
 pub fn parse_notes(
     note_store: &Path,
     cache: &CacheDb,
@@ -224,6 +342,8 @@ pub fn parse_notes(
         tx.execute("DELETE FROM note_media", [])?;
     }
     let mut stmt = src.prepare(&sql)?;
+    let shares = share_participants(&src, &cols);
+
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
         let title: Option<String> = r.get(0)?;
@@ -268,8 +388,8 @@ pub fn parse_notes(
                 "INSERT INTO notes
                     (folder, title, snippet, body_html, created_at, modified_at,
                      locked, password_hint, crypto_salt, crypto_iter, crypto_iv, crypto_tag, encrypted_data, pinned,
-                     has_checklist, image_count, attachment_count, crypto_wrapped_key, tags)
-                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                     has_checklist, image_count, attachment_count, crypto_wrapped_key, tags, shared_with_json)
+                 VALUES (?1, ?2, NULL, NULL, ?3, ?4, 1, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
                 rusqlite::params![
                     folder,
                     title,
@@ -289,6 +409,10 @@ pub fn parse_notes(
                     // Withhold tags too: a locked note's hashtag alt-text is stored
                     // in cleartext, so surfacing it would leak protected content.
                     None::<String>,
+                    // WHO it is shared with is not protected content: the body is
+                    // encrypted, the share is not, and a locked note that left
+                    // the device is exactly the case worth seeing.
+                    shares.get(&note_pk),
                 ],
             )?;
             report.notes += 1;
@@ -326,8 +450,9 @@ pub fn parse_notes(
         tx.execute(
             "INSERT INTO notes (folder, title, snippet, body_html, body_rich, created_at, modified_at, locked, pinned,
                                 has_checklist, image_count, attachment_count, tags,
-                                image_local_path, image_decrypt_key, image_plain_size, image_mime)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                                image_local_path, image_decrypt_key, image_plain_size, image_mime,
+                                shared_with_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             rusqlite::params![
                 folder,
                 title,
@@ -345,6 +470,7 @@ pub fn parse_notes(
                 first.and_then(|i| i.decrypt_key.as_deref()),
                 first.and_then(|i| i.plain_size),
                 first.and_then(|i| i.mime.as_deref()),
+                shares.get(&note_pk),
             ],
         )?;
         let note_id = tx.last_insert_rowid();
@@ -1036,6 +1162,68 @@ fn clean_note_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// The share archive's shape, built the way the real one nests it.
+    ///
+    /// Verified against Josh Hickman's iPhone 11 / iOS 17.3 image with
+    /// `explore_real_backup blob`: the name is TWO dictionaries below
+    /// `UserIdentity`, behind NSPersonNameComponents' own private key, and the
+    /// e-mail is behind `LookupInfo`. A flatter fixture would let the walk drop
+    /// a level and still pass.
+    fn share_blob(entries: &[(&str, &str, i64)]) -> plist::Value {
+        use plist::{Dictionary, Value};
+        let mut people = Vec::new();
+        for (given, email, status) in entries {
+            let mut names = Dictionary::new();
+            names.insert("NS.givenName".into(), Value::String((*given).into()));
+            names.insert("NS.familyName".into(), Value::String("DFIR".into()));
+            let mut priv_wrap = Dictionary::new();
+            priv_wrap.insert("NS.nameComponentsPrivate".into(), Value::Dictionary(names));
+            let mut lookup = Dictionary::new();
+            lookup.insert("EmailAddress".into(), Value::String((*email).into()));
+            let mut identity = Dictionary::new();
+            identity.insert("NameComponents".into(), Value::Dictionary(priv_wrap));
+            identity.insert("LookupInfo".into(), Value::Dictionary(lookup));
+            let mut p = Dictionary::new();
+            p.insert("UserIdentity".into(), Value::Dictionary(identity));
+            p.insert("AcceptanceStatus".into(), Value::Integer((*status).into()));
+            people.push(Value::Dictionary(p));
+        }
+        let mut root = Dictionary::new();
+        root.insert("LastFetchedParticipants".into(), Value::Array(people));
+        Value::Dictionary(root)
+    }
+
+    #[test]
+    fn a_share_yields_the_people_it_names() {
+        let v = share_blob(&[("This Is", "thisisdfir@gmail.com", 2)]);
+        let people = participants_from_share(&v);
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].name.as_deref(), Some("This Is DFIR"));
+        assert_eq!(people[0].email.as_deref(), Some("thisisdfir@gmail.com"));
+        assert_eq!(people[0].status, Some(2));
+    }
+
+    #[test]
+    fn a_participant_with_no_identity_at_all_is_dropped() {
+        // A share can carry a placeholder with neither name nor address. A row
+        // for it would say someone was there and refuse to say who, which reads
+        // as data loss rather than as an empty record.
+        use plist::{Dictionary, Value};
+        let mut root = Dictionary::new();
+        root.insert(
+            "LastFetchedParticipants".into(),
+            Value::Array(vec![Value::Dictionary(Dictionary::new())]),
+        );
+        assert!(participants_from_share(&Value::Dictionary(root)).is_empty());
+    }
+
+    #[test]
+    fn an_unshared_note_yields_nothing_rather_than_an_empty_share() {
+        use plist::{Dictionary, Value};
+        assert!(participants_from_share(&Value::Dictionary(Dictionary::new())).is_empty());
+    }
+
     use super::*;
     use flate2::write::GzEncoder;
     use flate2::Compression;
