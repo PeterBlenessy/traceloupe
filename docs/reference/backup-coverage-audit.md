@@ -560,7 +560,7 @@ Three outcomes, and they are different kinds of work:
 | **unread store** | the file is in this backup and nothing reads it — real work, provably worth doing on this device |
 | **not here** | the file is not in this backup at all — this device simply lacks the app, so it can be neither built nor ruled out without another device |
 
-On the iOS 17 image that splits 141 untouched artifacts into **0 / 12 / 129**.
+On the iOS 17 image that splits 131 untouched artifacts into **0 / 7 / 124**.
 The last number is the one that matters: most of what is left cannot be settled
 by working harder on the device we have. It is the corpus argument again, with a
 figure attached.
@@ -642,6 +642,54 @@ to check the domain against. A human can, and the table says on what grounds.
 **The "same store" column is now empty.** Every artifact reading a file we
 already parse is accounted for; what is left either needs a new store or needs a
 different device.
+
+---
+
+## An app can keep its own files out of a backup, and Chromium does
+
+`Domains.plist` decides what `backupd` is **allowed** to take from each domain.
+An app can still opt a file out at runtime with `NSURLIsExcludedFromBackupKey`,
+and nothing in Apple's rules records that it did — so the classifier called
+those files reachable and the worklist carried work nobody could ever do.
+
+Chromium excludes the browsing record. Across **both** iPhone 11 images in the
+corpus (iOS 17.3 and iOS 16.1.2), for **three** Chromium browsers each — Chrome,
+Brave and Edge:
+
+| in the backup | never in the backup |
+|---|---|
+| `Web Data` (3) · `Login Data` (3) · `Top Sites` (2) · `Bookmarks` (2) · `Preferences` (3) | `History` (0) · `Cookies` (0) · `Favicons` (0) · `Visited Links` (0) · `Network Action Predictor` (0) |
+
+Six sibling files, same directory, same app, same device — and the split falls
+exactly along *is this the browsing record*. That is a per-file exclusion, not an
+empty profile: `Top Sites` is populated on these devices and `chromium_top_sites`
+reads it.
+
+**What it costs.** iLEAPP's Web History, Web Visits, Web Searches, Downloads and
+Keyword Search Terms all read `History`, so all five are unreachable from any
+iTunes backup — as are Cookies and Network Action Predictor. Seven artifacts
+that were on the worklist are not work at all. A full-filesystem extraction still
+has these files; this is a statement about **backups**, which is what this app
+reads.
+
+`classify-ileapp-artifacts.py` now has a fourth verdict, **`app-excluded`**, with
+the evidence recorded beside the rule. It is pinned in the self-test in both
+directions — a rule that excluded the whole Chromium profile would silently
+delete two shipped modules from the coverage map while looking like progress, so
+`Login Data`, `Top Sites`, `Bookmarks` and `Autofill Entries` are asserted to
+stay reachable.
+
+### What is still open in Chromium
+
+The category counts as touched — `chromium_logins` and `chromium_top_sites` read
+two of its five reachable artifacts. The other three are real, present work, and
+are recorded here because name matching cannot list them:
+
+- **Autofill Entries** and **Autofill Profiles** — `Web Data`. Present on every
+  corpus device and **empty on all of them**, so a module could be written but
+  not verified.
+- **Bookmarks** — a JSON file, which the module framework has no source for. The
+  bookmark trees are empty on all three browsers in the corpus.
 
 ---
 

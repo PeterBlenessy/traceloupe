@@ -199,6 +199,14 @@ ALIASES = {
     # "Health & Fitness" is two artifacts over AllTrails.sqlite, the store the
     # `alltrails` module reads.
     "healthfitness": "module (alltrails)",
+    # Neither side of this is a literal the other can match. iLEAPP's globs
+    # start INSIDE the app container (`*/Chrome/Default/Login Data*`); our
+    # modules' paths are domain-relative and themselves globbed, because one
+    # module has to serve Chrome, Brave and Edge at once
+    # (`Library/Application Support/**/Default/Login Data`). Two globs can only
+    # be compared by intersection, which `same_store` deliberately does not
+    # attempt — a wrong intersection would claim coverage nobody wrote.
+    "chromium": "module (chromium_logins, chromium_top_sites)",
 }
 
 # iLEAPP categories that are not products we could "support" — they name a store
