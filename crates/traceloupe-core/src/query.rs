@@ -1385,6 +1385,9 @@ pub struct MediaItem {
     pub shared_likes: Option<i64>,
     /// Media subtype ("screenshot" | "panorama"), or None.
     pub subtype: Option<String>,
+    /// The USER's own star, set in this app (distinct from `favorite`, the
+    /// device's Photos.sqlite flag).
+    pub user_favorite: bool,
 }
 
 /// Media items that have materialized bytes, newest first. Only items with a
@@ -1395,7 +1398,7 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
-                trashed, trashed_at, added_at, shared_caption, shared_likes
+                trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -1435,6 +1438,7 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         added_at: r.get(23)?,
         shared_caption: r.get(24)?,
         shared_likes: r.get(25)?,
+        user_favorite: r.get::<_, i64>(26)? != 0,
     })
 }
 
@@ -1453,6 +1457,7 @@ pub fn count_media(
     source: Option<&str>,
     range: TimeRange,
     search: Option<&str>,
+    favorites_only: bool,
 ) -> Result<i64> {
     // `COALESCE(source,'Other')` so the synthesized "Other" bucket (NULL source)
     // is actually selectable — `source = 'Other'` never matches a NULL. Matches
@@ -1464,11 +1469,12 @@ pub fn count_media(
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
+           AND (?5 = 0 OR user_favorite = 1)
            AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')",
-        rusqlite::params![source, range.lo, range.hi, search],
+        rusqlite::params![source, range.lo, range.hi, search, favorites_only as i64],
         |r| r.get(0),
     )?;
     Ok(n)
@@ -1481,6 +1487,7 @@ pub fn count_media_ranges(
     source: Option<&str>,
     ranges: &[TimeRange],
     search: Option<&str>,
+    favorites_only: bool,
 ) -> Result<Vec<i64>> {
     let search = search.map(escape_like);
     let conn = cache.conn();
@@ -1490,6 +1497,7 @@ pub fn count_media_ranges(
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
+           AND (?5 = 0 OR user_favorite = 1)
            AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
@@ -1497,15 +1505,15 @@ pub fn count_media_ranges(
     )?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
-        out.push(
-            stmt.query_row(rusqlite::params![source, r.lo, r.hi, search], |row| {
-                row.get(0)
-            })?,
-        );
+        out.push(stmt.query_row(
+            rusqlite::params![source, r.lo, r.hi, search, favorites_only as i64],
+            |row| row.get(0),
+        )?);
     }
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn get_media_window(
     cache: &CacheDb,
     source: Option<&str>,
@@ -1514,6 +1522,7 @@ pub fn get_media_window(
     offset: i64,
     limit: i64,
     sort: Sort,
+    favorites_only: bool,
 ) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
@@ -1522,12 +1531,13 @@ pub fn get_media_window(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
-                trashed, trashed_at, added_at, shared_caption, shared_likes
+                trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
            AND (?4 IS NULL OR taken_at >= ?4)
            AND (?5 IS NULL OR taken_at < ?5)
+           AND (?7 = 0 OR user_favorite = 1)
            AND (?6 IS NULL OR relative_path LIKE '%' || ?6 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?6 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?6 || '%' ESCAPE '\\'
@@ -1538,11 +1548,55 @@ pub fn get_media_window(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        rusqlite::params![source, limit, offset, range.lo, range.hi, search],
+        rusqlite::params![
+            source,
+            limit,
+            offset,
+            range.lo,
+            range.hi,
+            search,
+            favorites_only as i64
+        ],
         row_to_media,
     )?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
+}
+
+/// Toggle the user's star on one media item. Returns its `relative_path` (the
+/// stable per-backup identity a re-import preserves), so the caller can persist
+/// the star to the per-backup favorites file. `None` if the id isn't a media row.
+pub fn set_user_favorite(cache: &CacheDb, id: i64, on: bool) -> Result<Option<String>> {
+    let conn = cache.conn();
+    let rel: Option<String> = conn
+        .query_row(
+            "SELECT relative_path FROM media_items WHERE id = ?1",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if rel.is_some() {
+        conn.execute(
+            "UPDATE media_items SET user_favorite = ?2 WHERE id = ?1",
+            rusqlite::params![id, on as i64],
+        )?;
+    }
+    Ok(rel)
+}
+
+/// Re-apply a set of user-starred `relative_path`s onto the (freshly rebuilt)
+/// cache. Called after import and on open, because the favorites file — not the
+/// cache — is the durable home of the star.
+pub fn apply_user_favorites(cache: &CacheDb, paths: &[String]) -> Result<()> {
+    let conn = cache.conn();
+    conn.execute("UPDATE media_items SET user_favorite = 0", [])?;
+    let json = serde_json::to_string(paths).unwrap_or_else(|_| "[]".into());
+    conn.execute(
+        "UPDATE media_items SET user_favorite = 1
+         WHERE relative_path IN (SELECT value FROM json_each(?1))",
+        [json],
+    )?;
+    Ok(())
 }
 
 /// A list sort: an allowlisted column expression plus a direction. The column
@@ -2837,6 +2891,60 @@ mod tests {
         );
         assert_eq!(media_blob(&cache, 3).unwrap(), None);
         assert_eq!(media_blob(&cache, 999).unwrap(), None);
+    }
+
+    #[test]
+    fn user_favorites_toggle_persist_key_and_filter() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO media_items (id, kind, relative_path, taken_at, local_path)
+                    VALUES (1, 'photo', 'Media/DCIM/IMG_0001.png', 100, '/c/a.png');
+                 INSERT INTO media_items (id, kind, relative_path, taken_at, local_path)
+                    VALUES (2, 'photo', 'Media/DCIM/IMG_0002.png', 200, '/c/b.png');",
+            )
+            .unwrap();
+        let all = TimeRange { lo: None, hi: None };
+
+        // Starring returns the row's stable relative_path (what gets persisted).
+        assert_eq!(
+            set_user_favorite(&cache, 1, true).unwrap().as_deref(),
+            Some("Media/DCIM/IMG_0001.png")
+        );
+        assert_eq!(set_user_favorite(&cache, 999, true).unwrap(), None); // no such row
+
+        // favorites_only now returns just the starred one.
+        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 1);
+        assert_eq!(count_media(&cache, None, all, None, false).unwrap(), 2);
+        let starred = get_media_window(
+            &cache,
+            None,
+            all,
+            None,
+            0,
+            50,
+            Sort::new("taken_at", true),
+            true,
+        )
+        .unwrap();
+        assert_eq!(starred.len(), 1);
+        assert_eq!(starred[0].id, 1);
+        assert!(starred[0].user_favorite);
+
+        // Re-applying from the persisted paths (as after a re-import) restores the
+        // star by relative_path, even though the cache column was cleared.
+        cache
+            .conn()
+            .execute("UPDATE media_items SET user_favorite = 0", [])
+            .unwrap();
+        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 0);
+        apply_user_favorites(&cache, &["Media/DCIM/IMG_0001.png".to_string()]).unwrap();
+        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 1);
+
+        // Unstarring clears it.
+        set_user_favorite(&cache, 1, false).unwrap();
+        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 0);
     }
 
     #[test]
