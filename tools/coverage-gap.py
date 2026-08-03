@@ -207,6 +207,10 @@ ALIASES = {
     # be compared by intersection, which `same_store` deliberately does not
     # attempt — a wrong intersection would claim coverage nobody wrote.
     "chromium": "module (chromium_logins, chromium_top_sites)",
+    # Google Duo's DataStore glob is a bare `*/Application Support/DataStore*`
+    # with no domain root, so the container guard blocks the store match (it
+    # cannot confirm the domain names Duo). google_duo_calls reads it.
+    "googleduo": "module (google_duo_calls)",
 }
 
 # iLEAPP categories that are not products we could "support" — they name a store

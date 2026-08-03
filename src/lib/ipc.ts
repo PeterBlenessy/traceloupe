@@ -4263,6 +4263,32 @@ const mockClient: TraceLoupeClient = {
             requiresEncryptedBackup: false,
           },
           {
+            id: "google_duo_calls",
+            name: "Google Duo / Meet calls",
+            category: "Google Duo",
+            description:
+              "Audio and video calls made through Google Duo (now Meet) — direction, duration and who, from the app's own log rather than the system call history.",
+            surface: "apps" as const,
+            shape: "table" as const,
+            joinColumn: "App",
+            highlight: null,
+            columns: [
+              "App",
+              "Time",
+              "Party",
+              "Party ID",
+              "Direction",
+              "Kind",
+              "Duration",
+              "This account",
+            ],
+            timestampColumns: ["Time"],
+            byteColumns: [],
+            durationColumns: ["Duration"],
+            rowCount: 3,
+            requiresEncryptedBackup: false,
+          },
+          {
             id: "life360_members",
             name: "Life360 circles",
             category: "Location",
@@ -4964,6 +4990,40 @@ const mockClient: TraceLoupeClient = {
             "Venue id": "VENUE1",
           },
         ]
+      : mockActive && artifactId === "google_duo_calls"
+        ? [
+            {
+              App: "com.google.Tachyon",
+              Time: 1704740970,
+              Party: "Kit Reeve",
+              "Party ID": "+15550101",
+              Direction: "Incoming",
+              Kind: "Video",
+              Duration: 90,
+              "This account": "+15550100",
+            },
+            {
+              App: "com.google.Tachyon",
+              Time: 1704740767,
+              Party: "Kit Reeve",
+              "Party ID": "+15550101",
+              Direction: "Outgoing",
+              Kind: "Audio",
+              Duration: 95,
+              "This account": "+15550100",
+            },
+            {
+              // A call that never connected: still a row, zero on the clock.
+              App: "com.google.Tachyon",
+              Time: 1704740542,
+              Party: "Kit Reeve",
+              "Party ID": "+15550101",
+              Direction: "Incoming",
+              Kind: "Audio",
+              Duration: 0,
+              "This account": "+15550100",
+            },
+          ]
       : mockActive && artifactId === "life360_members"
         ? [
             {
