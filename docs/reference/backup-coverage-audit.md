@@ -560,7 +560,7 @@ Three outcomes, and they are different kinds of work:
 | **unread store** | the file is in this backup and nothing reads it — real work, provably worth doing on this device |
 | **not here** | the file is not in this backup at all — this device simply lacks the app, so it can be neither built nor ruled out without another device |
 
-On the iOS 17 image that splits 159 untouched artifacts into **13 / 16 / 130**.
+On the iOS 17 image that splits 141 untouched artifacts into **0 / 12 / 129**.
 The last number is the one that matters: most of what is left cannot be settled
 by working harder on the device we have. It is the corpus argument again, with a
 figure attached.
@@ -613,6 +613,35 @@ Three second-order findings came out of the same pass:
 
 `python3 tools/coverage-gap.py --self-test` needs no iLEAPP checkout, which is
 what lets it run on every push.
+
+### And then by another 18, for two more reasons
+
+Running the fixed matcher against the corpus found two more of its own blind
+spots, which is the argument for a tool that can be pointed at itself:
+
+- **A leading wildcard means "at any depth", and the matcher was anchoring it.**
+  `**/SpringBoard/IconState.plist` is the store `home_screen`, `dock` and
+  `home_screen_widgets` all read, at `Library/SpringBoard/…`, and matching it
+  against the front of the path reported all three as untouched. The front
+  anchor is now relaxed for such globs — but only when the tail is specific
+  enough to be a filename, because `**/*.db` at any depth would otherwise claim
+  every store in the app.
+- **Only the declarative modules were in the store list.** The native importer
+  reads nine stores with an explicit `index.find(domain, path)` beside each, and
+  none of them counted. `interactionC.db` and `NoteStore.sqlite` are parsed in
+  `import.rs`; their iLEAPP categories ("InteractionC", "Cloudkit") are named
+  after neither the store nor anything we call it, so name matching could not
+  see them either. Those `find` calls are now read from the source, exactly as
+  the module paths are.
+
+What remains is two hand-written aliases, both blocked by the container guard
+for the same honest reason — the glob is a bare filename with no domain root and
+the category is named after a topic rather than the app, so the guard has nothing
+to check the domain against. A human can, and the table says on what grounds.
+
+**The "same store" column is now empty.** Every artifact reading a file we
+already parse is accounted for; what is left either needs a new store or needs a
+different device.
 
 ---
 
