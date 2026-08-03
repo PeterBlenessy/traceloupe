@@ -1564,6 +1564,16 @@ export interface TraceLoupeClient {
   noteImageUrl(id: number, index?: number): string;
   /** Open an attachment's file with the OS default app (documents, etc.). */
   openAttachment(id: number): Promise<void>;
+  /** Save a photo/video to a folder the user picks. `asJpeg` transcodes an image
+   *  (HEIC → JPEG); otherwise the original bytes are written. Returns the chosen
+   *  path, or null if cancelled. */
+  saveMedia(
+    id: number,
+    defaultName: string,
+    asJpeg: boolean,
+  ): Promise<string | null>;
+  /** Write a photo/video's original bytes to a temp and reveal it in Finder. */
+  revealMedia(id: number): Promise<void>;
   /**
    * Re-import one natively-parsed data type into the open backup, replacing just
    * that type's rows (no iLEAPP). `moduleId` is one of "recordings",
@@ -2061,6 +2071,13 @@ const tauriClient: TraceLoupeClient = {
   audioUrl: (id) => `traceloupe-audio://localhost/${id}`,
   noteImageUrl: (id, index) => `traceloupe-note-image://localhost/${id}${index != null ? `/${index}` : ""}`,
   openAttachment: (id) => invoke<void>("open_attachment", { attachmentId: id }),
+  saveMedia: async (id, defaultName, asJpeg) => {
+    const path = await save({ title: "Save to folder", defaultPath: defaultName });
+    if (typeof path !== "string") return null;
+    await invoke("save_media", { id, path, asJpeg });
+    return path;
+  },
+  revealMedia: (id) => invoke<void>("reveal_media", { id }),
   reimportModule: (moduleId) =>
     invoke<ReimportResult>("reimport_module", { moduleId }),
 };
@@ -6671,6 +6688,8 @@ const mockClient: TraceLoupeClient = {
   audioUrl: () => SILENT_WAV_DATA_URL,
   noteImageUrl: (_id?: number, _index?: number) => "",
   openAttachment: async () => {},
+  saveMedia: async () => null,
+  revealMedia: async () => {},
   reimportModule: async (moduleId) => ({
     module: moduleId,
     recordings: mockActive ? mockRecordings.length : 0,

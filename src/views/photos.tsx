@@ -1,4 +1,5 @@
 import {
+  forwardRef,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -14,7 +15,10 @@ import {
   Camera,
   CircleDot,
   Copy,
+  Download,
+  Eye,
   EyeOff,
+  FolderOpen,
   Frame,
   Heart,
   Star,
@@ -29,6 +33,16 @@ import {
   Trash2,
   Users,
 } from "lucide-react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 /** Media items fetched per lazy window (shared by the grid and the lightbox's
  *  neighbour lookup so their cache keys line up). */
@@ -497,11 +511,13 @@ function MediaGrid({
                 return (
                   <div key={index} style={{ width: cell }}>
                     {item ? (
-                      <Thumb
-                        item={item}
-                        onOpen={() => onOpen(index)}
-                        onToggleFavorite={onToggleFavorite}
-                      />
+                      <MediaMenu item={item} onOpen={() => onOpen(index)}>
+                        <Thumb
+                          item={item}
+                          onOpen={() => onOpen(index)}
+                          onToggleFavorite={onToggleFavorite}
+                        />
+                      </MediaMenu>
                     ) : (
                       <div className="aspect-square w-full animate-pulse rounded-sm bg-muted" />
                     )}
@@ -576,23 +592,78 @@ function LocationTag({ item }: { item: MediaItem }) {
   );
 }
 
-function Thumb({
+/** Right-click actions for a photo/video, shared by the grid tile and the
+ *  lightbox. The native WebKit menu can't fetch our custom `traceloupe-media://`
+ *  scheme, so its "Save Image"/"Copy" silently fail — this replaces it with
+ *  actions wired to real Tauri commands. */
+function MediaMenu({
   item,
   onOpen,
-  onToggleFavorite,
+  children,
 }: {
   item: MediaItem;
-  onOpen: () => void;
-  onToggleFavorite: (item: MediaItem) => void;
+  onOpen?: () => void;
+  children: React.ReactNode;
 }) {
+  const isVideo = item.kind === "video";
+  const base = item.filename ?? `item-${item.id}`;
+  const jpegName = `${base.replace(/\.[^.]+$/, "")}.jpg`;
+  const ext = base.includes(".") ? base.split(".").pop()!.toUpperCase() : "original";
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {onOpen && (
+          <ContextMenuItem onSelect={onOpen}>
+            <Eye /> Open preview
+          </ContextMenuItem>
+        )}
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Download /> Download…
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <ContextMenuItem
+              onSelect={() => void client.saveMedia(item.id, base, false)}
+            >
+              Save original ({ext})
+            </ContextMenuItem>
+            {!isVideo && (
+              <ContextMenuItem
+                onSelect={() => void client.saveMedia(item.id, jpegName, true)}
+              >
+                Save as JPEG
+              </ContextMenuItem>
+            )}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => void client.revealMedia(item.id)}>
+          <FolderOpen /> Reveal in Finder
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+const Thumb = forwardRef<
+  HTMLButtonElement,
+  {
+    item: MediaItem;
+    onOpen: () => void;
+    onToggleFavorite: (item: MediaItem) => void;
+  } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function Thumb({ item, onOpen, onToggleFavorite, ...rest }, ref) {
   const isVideo = item.kind === "video";
   const cacheKey = useMediaCacheKey();
   const [failed, setFailed] = useState(false);
   return (
     <button
+      ref={ref}
       onClick={onOpen}
       aria-label={item.filename ?? (isVideo ? "Open video" : "Open photo")}
       className="group relative aspect-square w-full overflow-hidden rounded-sm bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      {...rest}
     >
       {failed ? (
         // The media route 404s when the file cannot be produced -- most often
@@ -712,7 +783,7 @@ function Thumb({
       )}
     </button>
   );
-}
+});
 
 function Lightbox({
   index,
@@ -953,33 +1024,37 @@ function Lightbox({
           </div>
         ) : item ? (
           isVideo ? (
-            <video
-              key={item.id}
-              src={client.mediaUrl(item.id, { cacheKey })}
-              onError={() => setFullFailed(true)}
-              // iOS's pre-rendered thumbnail as the poster, so a still shows
-              // instantly (and if autoplay is blocked, it isn't a black frame).
-              poster={client.mediaUrl(item.id, { thumb: true, cacheKey })}
-              controls
-              autoPlay
-              className="max-h-full max-w-full object-contain"
-            />
+            <MediaMenu item={item}>
+              <video
+                key={item.id}
+                src={client.mediaUrl(item.id, { cacheKey })}
+                onError={() => setFullFailed(true)}
+                // iOS's pre-rendered thumbnail as the poster, so a still shows
+                // instantly (and if autoplay is blocked, it isn't a black frame).
+                poster={client.mediaUrl(item.id, { thumb: true, cacheKey })}
+                controls
+                autoPlay
+                className="max-h-full max-w-full object-contain"
+              />
+            </MediaMenu>
           ) : (
-            <img
-              // `retry` is in the key so a retry actually remounts the element
-              // with the cache-busting URL rather than reusing the failed one.
-              key={`${item.id}:${retry}`}
-              // A downscaled preview, not the 12-megapixel original: it loads in
-              // a fraction of the time, which is the real fix for black frames
-              // (fewer cancelled loads) as well as being much lighter on memory.
-              src={client.mediaUrl(item.id, { preview: true, cacheKey, retry })}
-              alt={item.filename ?? ""}
-              onError={onImageError}
-              // Decode off the main thread so paging next/prev doesn't block the
-              // UI thread on each decode.
-              decoding="async"
-              className="max-h-full max-w-full object-contain"
-            />
+            <MediaMenu item={item}>
+              <img
+                // `retry` is in the key so a retry actually remounts the element
+                // with the cache-busting URL rather than reusing the failed one.
+                key={`${item.id}:${retry}`}
+                // A downscaled preview, not the 12-megapixel original: it loads in
+                // a fraction of the time, which is the real fix for black frames
+                // (fewer cancelled loads) as well as being much lighter on memory.
+                src={client.mediaUrl(item.id, { preview: true, cacheKey, retry })}
+                alt={item.filename ?? ""}
+                onError={onImageError}
+                // Decode off the main thread so paging next/prev doesn't block the
+                // UI thread on each decode.
+                decoding="async"
+                className="max-h-full max-w-full object-contain"
+              />
+            </MediaMenu>
           )
         ) : (
           <div className="size-16 animate-pulse rounded-full bg-white/20" />
