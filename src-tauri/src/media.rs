@@ -76,6 +76,53 @@ pub fn inline_media_content_type(mime: Option<&str>) -> String {
     }
 }
 
+/// Whether this item is a video that should be STREAMED (Range-served) rather
+/// than transcoded. Recognised by MIME, else by the source extension — the same
+/// belt-and-braces as `is_heic`, because camera-roll videos on some backups
+/// carry a NULL mime and an encrypted backup's on-disk source is an
+/// extension-less `.decrypted` temp (so we pass the ORIGINAL path/name here).
+pub fn is_video(src: &Path, mime: Option<&str>) -> bool {
+    if mime
+        .map(|m| {
+            m.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .is_some_and(|m| m.starts_with("video/"))
+    {
+        return true;
+    }
+    const VIDEO_EXTS: &[&str] = &["mov", "mp4", "m4v", "avi", "3gp", "hevc"];
+    src.extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|e| VIDEO_EXTS.contains(&e.as_str()))
+}
+
+/// Content-Type for streaming a video inline. Prefers the stored (video/*) MIME;
+/// falls back to the extension when it's NULL, so a webview `<video>` still gets
+/// a type it will play instead of `application/octet-stream` (which it won't).
+pub fn video_content_type(src: &Path, mime: Option<&str>) -> String {
+    let inline = inline_media_content_type(mime);
+    if inline.starts_with("video/") {
+        return inline;
+    }
+    match src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("mov") => "video/quicktime",
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("3gp") => "video/3gpp",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 fn is_heic(src: &Path, mime: Option<&str>) -> bool {
     if let Some(m) = mime {
         let m = m.to_ascii_lowercase();
@@ -195,6 +242,43 @@ mod tests {
         assert!(!has_image_extension(Some("clip.mov")));
         assert!(!has_image_extension(Some("doc.pdf")));
         assert!(!has_image_extension(None));
+    }
+
+    #[test]
+    fn video_is_recognised_by_mime_or_extension() {
+        use std::path::Path;
+        // By MIME, even when the on-disk source is an extension-less temp.
+        assert!(is_video(
+            Path::new("media-7.decrypted"),
+            Some("video/quicktime")
+        ));
+        // By extension, when the MIME is NULL (common on camera-roll videos).
+        assert!(is_video(Path::new("IMG_0001.MOV"), None));
+        assert!(is_video(Path::new("clip.mp4"), None));
+        // Not videos.
+        assert!(!is_video(Path::new("IMG_0001.HEIC"), Some("image/heic")));
+        assert!(!is_video(Path::new("photo.jpg"), None));
+    }
+
+    #[test]
+    fn video_content_type_falls_back_to_extension() {
+        use std::path::Path;
+        // Stored video MIME is honoured.
+        assert_eq!(
+            video_content_type(Path::new("x.decrypted"), Some("video/mp4")),
+            "video/mp4"
+        );
+        // NULL/non-video MIME → derive a playable type from the extension, never
+        // octet-stream (which <video> refuses to play).
+        assert_eq!(
+            video_content_type(Path::new("a.MOV"), None),
+            "video/quicktime"
+        );
+        assert_eq!(video_content_type(Path::new("b.mp4"), None), "video/mp4");
+        assert_eq!(
+            video_content_type(Path::new("c.m4v"), Some("application/octet-stream")),
+            "video/mp4"
+        );
     }
 
     #[test]
