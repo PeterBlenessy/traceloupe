@@ -58,6 +58,11 @@ struct AssetMeta {
     lens: Option<String>,
     /// Formatted exposure summary, e.g. "ISO 100 · ƒ/1.8 · 1/120s · 26 mm".
     exif: Option<String>,
+    /// A caption written on this photo in a SHARED ALBUM, and how many people
+    /// liked it there. Both come from `ZCLOUDSHAREDCOMMENT`, which is activity
+    /// by OTHER PEOPLE on a photo this device put in front of them.
+    shared_caption: Option<String>,
+    shared_likes: Option<i64>,
 }
 
 /// Combine a camera make + model into one label, avoiding "Apple Apple …".
@@ -342,6 +347,53 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         }
     }
 
+    // Shared-album activity: captions and likes left on a photo shared with
+    // other people.
+    //
+    // ONE TABLE, THREE THINGS. `ZCLOUDSHAREDCOMMENT` holds likes, captions and
+    // free-form comments together, and the row count says nothing about which:
+    // on the validation device its 18 rows are 15 likes and 3 captions, with no
+    // comments at all. Reporting "18 comments" would be wrong three ways over.
+    // The store flags them itself — `ZISLIKE`, `ZISCAPTION` — so nothing here is
+    // inferred from whether the text happens to be NULL.
+    //
+    // A like is counted, not listed: fifteen rows saying "someone liked this"
+    // are a number, and the number is the fact. A caption is text a person
+    // wrote, so it is kept verbatim.
+    //
+    // `ZISMYCOMMENT` marks the device owner's own activity. It is deliberately
+    // NOT filtered out: a caption the owner wrote on a shared album is still
+    // evidence they shared it, and dropping it would leave an album that
+    // nobody appears to have touched.
+    if table_exists(&src, "ZCLOUDSHAREDCOMMENT")? {
+        let mut stmt = src.prepare(
+            "SELECT a.ZDIRECTORY, a.ZFILENAME,
+                    SUM(CASE WHEN c.ZISLIKE = 1 THEN 1 ELSE 0 END) AS likes,
+                    MAX(CASE WHEN c.ZISLIKE = 0 AND c.ZCOMMENTTEXT IS NOT NULL
+                             THEN c.ZCOMMENTTEXT END) AS caption
+             FROM ZCLOUDSHAREDCOMMENT c
+             JOIN ZASSET a
+               ON a.Z_PK = COALESCE(c.ZCOMMENTEDASSET, c.ZLIKEDASSET)
+             WHERE a.ZDIRECTORY IS NOT NULL AND a.ZFILENAME IS NOT NULL
+             GROUP BY a.ZDIRECTORY, a.ZFILENAME",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(r) = rows.next()? {
+            let dir: String = r.get(0)?;
+            let file: String = r.get(1)?;
+            let likes: i64 = r.get(2).unwrap_or(0);
+            let caption: Option<String> = r.get(3).ok().flatten();
+            let e = by_suffix.entry(format!("{dir}/{file}")).or_default();
+            // Zero is not "no likes recorded" here -- every row in this table is
+            // activity -- but a column of zeroes on unshared photos would be
+            // noise, so only a real count is stored.
+            if likes > 0 {
+                e.shared_likes = Some(likes);
+            }
+            e.shared_caption = caption.filter(|c| !c.trim().is_empty());
+        }
+    }
+
     if by_suffix.is_empty() {
         return Ok(0);
     }
@@ -434,7 +486,9 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                  subtype = ?16,
                  trashed = ?18,
                  trashed_at = ?19,
-                 added_at = ?20
+                 added_at = ?20,
+                 shared_caption = ?21,
+                 shared_likes = ?22
              WHERE id = ?17",
             rusqlite::params![
                 meta.persons,
@@ -457,6 +511,8 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
                 meta.trashed as i64,
                 meta.trashed_at,
                 meta.added_at,
+                meta.shared_caption.as_deref(),
+                meta.shared_likes,
             ],
         )?;
     }

@@ -1366,6 +1366,11 @@ pub struct MediaItem {
     /// When the asset was added to the library (Unix), which differs from capture
     /// for received/saved/imported media, or None.
     pub added_at: Option<i64>,
+    /// A caption someone wrote on this photo in a SHARED ALBUM, and how many
+    /// people liked it there — activity by others on a photo this device put in
+    /// front of them. `None` when the photo was never shared.
+    pub shared_caption: Option<String>,
+    pub shared_likes: Option<i64>,
     /// Media subtype ("screenshot" | "panorama"), or None.
     pub subtype: Option<String>,
 }
@@ -1378,7 +1383,7 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
-                trashed, trashed_at, added_at
+                trashed, trashed_at, added_at, shared_caption, shared_likes
          FROM media_items
          WHERE local_path IS NOT NULL
          ORDER BY taken_at DESC NULLS LAST, id DESC",
@@ -1416,6 +1421,8 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         trashed: r.get::<_, i64>(21)? != 0,
         trashed_at: r.get(22)?,
         added_at: r.get(23)?,
+        shared_caption: r.get(24)?,
+        shared_likes: r.get(25)?,
     })
 }
 
@@ -1503,7 +1510,7 @@ pub fn get_media_window(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
-                trashed, trashed_at, added_at
+                trashed, trashed_at, added_at, shared_caption, shared_likes
          FROM media_items
          WHERE local_path IS NOT NULL
            AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)

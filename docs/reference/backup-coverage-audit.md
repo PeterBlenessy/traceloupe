@@ -348,6 +348,24 @@ A note whose share blob will NOT decode is left unshared-looking rather than
 written as `[]`: "we could not read it" and "it is not shared" are different, and
 the parser skips instead of asserting the second.
 
+### One table, three different things
+
+`ZCLOUDSHAREDCOMMENT` in `Photos.sqlite` holds **likes, captions and free-form
+comments together**, and its row count says nothing about which. On the
+validation device its 18 rows are **15 likes and 3 captions, with no comments at
+all** — so "18 comments" would have been wrong three ways over.
+
+The store flags them itself (`ZISLIKE`, `ZISCAPTION`, `ZISMYCOMMENT`), so
+nothing is inferred from whether the text happens to be NULL. Shipped as
+`media_items.shared_caption` / `shared_likes` (schema v57), shown in the Photos
+lightbox: a like is counted because fifteen rows saying "someone liked this"
+*are* a number, and a caption is kept verbatim because it is text a person
+wrote.
+
+`ZISMYCOMMENT` is deliberately **not** filtered out — a caption the owner wrote
+on a shared album is still evidence they shared it, and dropping it would leave
+an album nobody appears to have touched.
+
 ### Same-store artifacts split by who reads the store
 
 `coverage-gap.py --present` reports 16 artifacts that read a file we **already
