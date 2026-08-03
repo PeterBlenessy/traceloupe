@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 55;
+const SCHEMA_VERSION: i64 = 56;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -163,6 +163,11 @@ CREATE TABLE IF NOT EXISTS notes (
     modified_at INTEGER,
     -- Pinned to the top of the Notes app (ZISPINNED).
     pinned      INTEGER NOT NULL DEFAULT 0,
+    -- Who this note is shared with, as JSON `[{name, email, status}]`, decoded
+    -- from the CloudKit share archive in ZSERVERSHAREDATA. NULL when the note
+    -- is not shared -- or when its share blob would not decode, which is not
+    -- the same thing and is why the parser skips rather than writes `[]`.
+    shared_with_json TEXT,
     -- Password-protected (Apple Notes locked note): body is withheld until the
     -- user supplies the note password. The crypto_* columns + encrypted_data are
     -- everything needed to decrypt on demand (never the plaintext at rest).
@@ -850,6 +855,8 @@ impl CacheDb {
                 CREATE INDEX IF NOT EXISTS idx_safari_searches_at
                     ON safari_searches(searched_at DESC);",
             )?;
+            // v56: who a note is shared with, from its CloudKit share.
+            ensure_column(&conn, "notes", "shared_with_json", "TEXT")?;
             // v55: per-module parse outcome, so an empty view can say whether
             // the store was absent or unreadable (#288).
             conn.execute_batch(

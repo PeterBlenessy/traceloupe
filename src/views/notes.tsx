@@ -21,6 +21,7 @@ import {
   NotebookText,
   Paperclip,
   Pin,
+  Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -613,6 +614,17 @@ export function NotesView() {
 }
 
 /** A note's display title: its title, else the first line of the snippet. */
+/** The people a note is shared with, as a sentence.
+ *
+ *  A participant can have a name, an address, or only one of them — CloudKit
+ *  fills what it has fetched. Falling back to the address rather than to
+ *  "Unknown" keeps the row identifying, which is the whole point of it. */
+function sharedNames(n: Note): string {
+  return n.sharedWith
+    .map((p) => p.name ?? p.email ?? "someone unnamed")
+    .join(", ");
+}
+
 function noteTitle(n: Note): string {
   return (
     n.title?.trim() ||
@@ -697,6 +709,19 @@ function NoteRow({
               )}
               {note.locked && (
                 <Lock className="size-3.5 shrink-0 text-muted-foreground" />
+              )}
+              {note.sharedWith.length > 0 && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Users
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                      aria-label={`Shared with ${sharedNames(note)}`}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-72">
+                    Shared with {sharedNames(note)}
+                  </TooltipContent>
+                </Tooltip>
               )}
               <span className="truncate">{noteTitle(note)}</span>
               {flagSeverity && <SafetyFlagBadge severity={flagSeverity} />}
@@ -790,6 +815,27 @@ function NoteDetail({ note }: { note: Note }) {
             <p className="mb-4 text-xs text-muted-foreground">
               {formatDateTime(note.modifiedAt)}
             </p>
+          )}
+          {note.sharedWith.length > 0 && (
+            // A shared note LEFT THIS DEVICE, which is a different fact from
+            // anything else on this pane — so it is named in words rather than
+            // reduced to an icon, and every participant is listed. The owner is
+            // among them, because a CloudKit share always names them.
+            <div className="mb-4 flex items-start gap-1.5 text-xs text-muted-foreground">
+              <Users className="mt-0.5 size-3.5 shrink-0" />
+              <p className="select-text">
+                Shared with{" "}
+                {note.sharedWith.map((p, i) => (
+                  <span key={`${p.email ?? p.name ?? i}`}>
+                    {i > 0 && ", "}
+                    <span className="text-foreground">
+                      {p.name ?? p.email ?? "someone unnamed"}
+                    </span>
+                    {p.name && p.email && ` (${p.email})`}
+                  </span>
+                ))}
+              </p>
+            </div>
           )}
           {note.tags.length > 0 && (
             <div className="mb-4 flex flex-wrap gap-1.5">

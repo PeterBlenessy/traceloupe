@@ -222,6 +222,22 @@ export interface Note {
   tags: string[];
   /** Whether the note has a first image (served as a list thumbnail). */
   hasImage: boolean;
+  /**
+   * Who the note is shared with, decoded from its CloudKit share.
+   *
+   * Empty when it is not shared. The OWNER is in this list too — a share always
+   * names them alongside the people invited — so the view says "shared with"
+   * and lists everyone rather than counting strangers.
+   */
+  sharedWith: ShareParticipant[];
+}
+
+/** One person on a note's CloudKit share. */
+export interface ShareParticipant {
+  name: string | null;
+  email: string | null;
+  /** CloudKit's acceptance code, passed through untranslated. */
+  status: number | null;
 }
 
 /** An installed app with the App Store metadata the backup carries. */
@@ -2594,6 +2610,10 @@ const mockNotes: Note[] = [
     availableImageCount: 0,
     attachmentCount: 2,
     tags: [],
+    sharedWith: [
+      { name: "This Is DFIR", email: "thisisdfir@gmail.com", status: 2 },
+      { name: null, email: "someone.else@example.com", status: 1 },
+    ],
     hasImage: true,
     bodyRich: null,
   },
@@ -2613,6 +2633,7 @@ const mockNotes: Note[] = [
     availableImageCount: 0,
     attachmentCount: 0,
     tags: [],
+    sharedWith: [],
     hasImage: false,
     bodyRich: null,
   },
@@ -2632,6 +2653,7 @@ const mockNotes: Note[] = [
     availableImageCount: 0,
     attachmentCount: 0,
     tags: [],
+    sharedWith: [],
     hasImage: false,
     bodyRich: null,
   },
@@ -2651,6 +2673,7 @@ const mockNotes: Note[] = [
     availableImageCount: 0,
     attachmentCount: 0,
     tags: [],
+    sharedWith: [],
     hasImage: false,
     bodyRich: null,
   },
