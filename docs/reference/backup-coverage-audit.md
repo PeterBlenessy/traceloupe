@@ -463,6 +463,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Find My | Device | ✅ | iphone11_ios17 + iphone11_ios16 — DSID 17193901029 on both, enabled 2023-07-01; 'Send last location' was OFF at 16.1.2 and ON at 17.3, so the setting is read, not defaulted |
 | Health device | Device | ✅ | iphone11_ios17 — iPhone12,1 running iOS 17.3, recorded 2024-08-02; iphone11_ios16 — same device at 16.1.2 via the source_devices fallback, since device_context does not exist there |
 | Home screen | Device | ✅ | iphone11_ios17 — 5 pages, 18 icons on the first |
+| Home screen widgets | Device | ✅ | iphone11_ios17 + iphone11_ios16 — 6 widgets (Weather, Maps and others) with their page/slot positions, resolving the two anonymous 'custom' UUIDs the layout shows on page 0; iphone_se_ios13 + iphone_se_ios13_4 — 0 rows, because home screen widgets did not exist before iOS 14 |
 | iCloud containers | Files | ✅ | iphone11_ios17 — 43 containers, com.apple.CloudDocs at 25 items / 20 documents / 22 MB; iphone11_ios16 — 43 again but 24 items / 12 documents / 5.1 MB, so the counts track real growth rather than being static |
 | iCloud devices | Files | ✅ | iphone11_ios17 + iphone11_ios16 — 3 devices on both, one of them a Mac; two of the three are not the phone being examined |
 | iCloud Drive files | Files | ✅ | iphone11_ios17 — 27 files resolving to real folders (Desktop/, Documents/, Downloads/, Dictionaries/…) with sizes and all three dates; iphone11_ios16 — 26 on the same phone one OS earlier, and the one file's Shared flag differs between them, so the flags are read not defaulted |
@@ -491,7 +492,7 @@ asks. Check free space before fetching, not 20 GB in.
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**46 implemented · 46 verified · 0 awaiting a real backup.**
+**47 implemented · 47 verified · 0 awaiting a real backup.**
 
 ---
 
