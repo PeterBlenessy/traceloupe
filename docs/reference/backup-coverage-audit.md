@@ -324,6 +324,13 @@ numbers because the category already counted as covered:
   `displayIdentifier` is a UUID; the names are one level down in `elements`.
   "iOS Screens" had looked covered since `home_screen` and `dock` shipped — it
   was covered for apps and blind to widgets.
+- **`wifi_networks` was reading network names and ignoring a location history.**
+  Each network's `BSSList` is one entry per physical access point, carrying
+  `LocationLatitude`/`LocationLongitude`/`LocationAccuracy` — where iOS believes
+  that radio is, to metres — and `LastAssociatedAt`, when the device was last on
+  *that* radio. 100 of them on the validation device, across 16 networks. The
+  biggest single find of this audit, and the category had counted as covered
+  since the first Wi-Fi module shipped.
 - **`imei_imsi` read only the nested `PersonalWallet` subtree.** The same
   plist's TOP-LEVEL keys are the device's last NETWORK state — MCC, MNC, carrier
   bundle, `LastKnownICCID` — and nothing was reading them.
@@ -507,11 +514,12 @@ asks. Check free space before fetching, not 20 GB in.
 | Waze places | Locations | ✅ | iphone11_ios17 — 7 places with street addresses and decimal coordinates (Burke VA, Fuquay-Varina NC), matching the 7 rows iLEAPP records for this image |
 | Waze destinations | Locations | ✅ | iphone11_ios17 — 6 recent destinations, matching iLEAPP's 6 for this image; last-used and first-added differ on some rows, so both are read |
 | Web domains loaded in apps | Network | ✅ | iphone11_ios17 — 352 domains across 42 app containers, from Edge/Chrome/DuckDuckGo/Brave to Signal, Discord, Reddit and Zoom; this WebKit has no firstSeen/isPrevalentResource so the second SQL alternative is the one that runs, and both report NULL rather than a value |
+| Wi-Fi access points | Network | ✅ | iphone11_ios17 — 100 access points across 16 networks with coordinates, accuracy and per-radio association times, placing the device in Fuquay-Varina NC — the same town the Waze modules place it in, from an entirely separate store; iphone11_ios16 — 42 |
 | Wi-Fi networks | Network | ✅ | iphone11_ios17 — 17 known networks, with join dates from July 2023 to January 2024 |
 | Private Wi-Fi addresses | Network | ✅ | iphone11_ios17 — 17 networks with their private addresses, join times and rotation timestamps |
 | World Clock | Device | ✅ | iphone11_ios17 — 4 cities (Cupertino, New York, UTC, …) with coordinates; matches the 4 rows iLEAPP records for this same image |
 
-**48 implemented · 48 verified · 0 awaiting a real backup.**
+**49 implemented · 49 verified · 0 awaiting a real backup.**
 
 ---
 

@@ -304,6 +304,15 @@ pub struct PlistSpec {
     /// shape has changed.
     #[serde(default)]
     pub key_strip_prefix: Option<String>,
+    /// The same trim, for `index_column`.
+    ///
+    /// A `*` at the top of a `rows` path matches Apple's own namespaced keys,
+    /// so the index reads `wifi.network.ssid.Matt_Foley/0` — the network name
+    /// with a prefix that is on every single row and tells a reader nothing.
+    /// `key_strip_prefix` cannot help: that trims the KEY column, and a wildcard
+    /// path has an index instead.
+    #[serde(default)]
+    pub index_strip_prefix: Option<String>,
 }
 
 /// How a host should PRESENT an artifact — as rows, or as facts.
@@ -780,6 +789,13 @@ impl ModuleSpec {
                         "`plist.value_column` = {k:?} is not one of the declared columns"
                     ));
                 }
+            }
+            if pl.index_strip_prefix.is_some() && pl.index_column.is_none() {
+                return Err(
+                    "`plist.index_strip_prefix` is set but `index_column` is not — there is \
+                     no index being recorded for it to trim"
+                        .into(),
+                );
             }
             if pl.key_strip_prefix.is_some() && pl.key_column.is_none() {
                 return Err(
@@ -1855,7 +1871,14 @@ fn run_plist_module(spec: &ModuleSpec, pl: &PlistSpec, bytes: &[u8]) -> Result<V
             let mut rows = rows_from(spec, pl, container)?;
             if let Some(col) = &pl.index_column {
                 for row in &mut rows {
-                    row.insert(col.clone(), serde_json::Value::String(index.clone()));
+                    let shown = match &pl.index_strip_prefix {
+                        Some(prefix) => index
+                            .strip_prefix(prefix.as_str())
+                            .unwrap_or(&index)
+                            .to_string(),
+                        None => index.clone(),
+                    };
+                    row.insert(col.clone(), serde_json::Value::String(shown));
                 }
             }
             all.extend(rows);
@@ -2328,6 +2351,10 @@ const BUILTIN: &[(&str, &str)] = &[
     (
         "wifi_networks.toml",
         include_str!("../modules/wifi_networks.toml"),
+    ),
+    (
+        "wifi_access_points.toml",
+        include_str!("../modules/wifi_access_points.toml"),
     ),
     (
         "bluetooth_devices.toml",
@@ -4076,6 +4103,41 @@ from = "nope"
         os.insert("BSSID".into(), Value::String("6a:22:32:98:f4:df".into()));
         os.insert("CHANNEL".into(), Value::Integer(153.into()));
         home.insert("__OSSpecific__".into(), Value::Dictionary(os));
+        // TWO radios on one network, which is what a building with more than one
+        // access point looks like -- and the reason `wifi_access_points.toml`
+        // reports a row per BSS rather than per network. The second has NO
+        // position at all: iOS has not placed it, and that must come back null
+        // rather than dropping the row, because "we joined this radio and do not
+        // know where it is" is still a fact about where the device has been.
+        fn bss(mac: &str, lat: Option<f64>, lon: Option<f64>, chan: i64, seen: Value) -> Value {
+            let mut b = Dictionary::new();
+            b.insert("BSSID".into(), Value::String(mac.into()));
+            if let (Some(la), Some(lo)) = (lat, lon) {
+                b.insert("LocationLatitude".into(), Value::Real(la));
+                b.insert("LocationLongitude".into(), Value::Real(lo));
+                b.insert(
+                    "LocationAccuracy".into(),
+                    Value::Real(14.246_217_050_166_795),
+                );
+                b.insert("LocationTimestamp".into(), seen.clone());
+            }
+            b.insert("Channel".into(), Value::Integer(chan.into()));
+            b.insert("LastAssociatedAt".into(), seen);
+            Value::Dictionary(b)
+        }
+        home.insert(
+            "BSSList".into(),
+            Value::Array(vec![
+                bss(
+                    "82:45:58:f7:b3:31",
+                    Some(35.659_610_740_050_26),
+                    Some(-78.872_783_652_955_8),
+                    153,
+                    at(1_689_377_839),
+                ),
+                bss("82:45:58:f7:b3:32", None, None, 6, at(1_657_000_000)),
+            ]),
+        );
         root.insert("wifi.network.ssid.HomeNet".into(), Value::Dictionary(home));
 
         // No `__OSSpecific__` at all: the access point and channel must come back
@@ -4993,6 +5055,11 @@ from = "nope"
             "Library/Databases/CellularUsage.db",
         ),
         (
+            "wifi_access_points",
+            "SystemPreferencesDomain",
+            "com.apple.wifi.known-networks.plist",
+        ),
+        (
             "wifi_networks",
             "SystemPreferencesDomain",
             "com.apple.wifi.known-networks.plist",
@@ -5295,7 +5362,8 @@ from = "nope"
             "carplay_recent_apps" | "carplay_session" => return Seed::Bytes(seed_carplay),
             "health_current_device" => seed_health_device_context,
             "life360_locations" => return Seed::Bytes(seed_life360_log),
-            "wifi_networks" => return Seed::Bytes(seed_wifi_networks),
+            // One store, two modules: the network, and the radios in it.
+            "wifi_networks" | "wifi_access_points" => return Seed::Bytes(seed_wifi_networks),
             "bluetooth_devices" => return Seed::Bytes(seed_bluetooth_devices),
             "wifi_private_mac" => return Seed::Bytes(seed_wifi_private_mac),
             "device_locale" => return Seed::Bytes(seed_device_locale),
@@ -5690,6 +5758,39 @@ from = "nope"
         )
         .expect_err("every store failing is a schema change, not a skip");
         assert!(err.to_string().contains("sql"), "{err}");
+    }
+
+    #[test]
+    fn wifi_access_points_carry_position_and_survive_without_it() {
+        // The flagship of the module-vs-iLEAPP audit: each BSS entry is a
+        // physical radio with a cached position, which makes the store a
+        // location history rather than a list of network names.
+        let mods = load_modules(&builtin_modules_dir()).unwrap();
+        let spec = mods
+            .iter()
+            .find(|m| m.id == "wifi_access_points")
+            .expect("wifi_access_points ships");
+        let tmp = tempfile::tempdir().unwrap();
+        make_backup_bytes_in(tmp.path(), &spec.domain, &spec.path, &seed_wifi_networks());
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let rows = run_module(spec, &index, None, &tmp.path().join("work"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rows.len(), 2, "one row per RADIO, not per network");
+
+        let net = |i: usize| rows[i].get("Network").and_then(|v| v.as_str()).unwrap();
+        // The namespace is trimmed; the `/N` stays, because it says which radio.
+        assert_eq!(net(0), "HomeNet/0");
+        assert_eq!(net(1), "HomeNet/1");
+
+        assert!(rows[0].get("Latitude").and_then(|v| v.as_f64()).is_some());
+        // A radio iOS has never placed keeps its row: "we joined this and do not
+        // know where it is" is still a fact about where the device has been.
+        assert!(rows[1].get("Latitude").is_none_or(|v| v.is_null()));
+        assert!(
+            rows[1].get("Last joined").is_some_and(|v| !v.is_null()),
+            "an unplaced radio still records when it was joined"
+        );
     }
 
     fn mapped(pairs: &[(&str, &str)]) -> ColumnSpec {
