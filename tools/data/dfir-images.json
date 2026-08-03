@@ -46,14 +46,15 @@
     },
     {
       "id": "ios15",
-      "ios": "15.x",
-      "device": "iPhone",
-      "archive": "iOS_15_Public_Image.tar.gz",
-      "url": null,
-      "archive_bytes": null,
+      "ios": "15.3.1",
+      "device": "iPhone 8 (A1905)",
+      "archive": "c50d35ac85f428883e3b6fa3893599da85f708ea.zip",
+      "url": "https://digitalcorpora.s3.amazonaws.com/corpora/mobile/android_13/ios_15_3_1/c50d35ac85f428883e3b6fa3893599da85f708ea.zip",
+      "archive_bytes": 497254760,
       "backup_glob": "*/Backup/*",
-      "backup_password": null,
-      "notes": "NOT AVAILABLE. The URL recorded here returned 404 and the bucket has no corpora/mobile/iOS15/ prefix -- Digital Corpora lists 2011-android, android_10/13/14, iOS16, iOS17, ios_13_3_1 and ios_13_4_1, and nothing for iOS 15. Kept as an entry so the next session does not re-research it."
+      "backup_password": "MyBackup123",
+      "notes": "DIRECT ENCRYPTED-BACKUP DOWNLOAD, not a full-filesystem image: a 474 MB zip of the iTunes backup itself, so no tar/FFS step and nothing to prune. iPhone 8 at 15.3.1 (serial FFMW4BH5JC67), a DIFFERENT physical device from the iPhone 11 (ios16/ios17) and the iPhone SE (ios13/ios13_4) \u2014 the corpus's only iOS 15 and its only iPhone 8. Lives under the Digital Corpora `android_13/ios_15_3_1/` prefix, which is why the old iOS15/ guess 404'd. Password `MyBackup123` (note: NOT `MyPassword123` like ios16/ios17) is documented on the last page of iOS15-ImageCreation.pdf. `backup_zip: true` tells fetch-test-image.sh the url is the backup zip directly.",
+      "backup_zip": true
     },
     {
       "id": "ios13",

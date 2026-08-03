@@ -284,8 +284,20 @@ python3 tools/module-status.py --summary  # just the counts
 |---|---|---|
 | `iphone11_ios17` | iPhone 11, iOS 17.3 | Josh Hickman's public research image — the encrypted backup, not the full-filesystem tree |
 | `iphone11_ios16` | iPhone 11, iOS 16.1.2 | **The same physical phone** (serial F4GZ987AN72N) one OS earlier, which is what makes it a drift check rather than a second sample |
+| `ios15` | iPhone 8, iOS 15.3.1 | A **third** device (serial FFMW4BH5JC67) — the corpus's only iOS 15 and only iPhone 8, filling the gap between the 13 and 16/17 lineages. Fetched as a **474 MB standalone backup zip**, no full-filesystem half at all |
 | `iphone_se_ios13` | iPhone SE, iOS 13.3.1 | A **different** device (serial DX3T126VH2XV), four years older — the lineage that exercises every older-schema SQL alternative the modules carry |
 | `iphone_se_ios13_4` | iPhone SE, iOS 13.4.1 | The same SE one point release later. Weaker than a major-version pair for drift, kept because 420 MB is cheaper than deciding whether to want it |
+
+**iOS 15 is the cheapest device in the corpus and the odd one out on two counts.**
+Digital Corpora publishes the iTunes backup for it *on its own* — a 474 MB zip
+under the `android_13/ios_15_3_1/` prefix (which is why an `iOS15/` guess 404s) —
+so there is no 16 GB tarball to strip and nothing to prune afterwards.
+`fetch-test-image.sh` learns this from `backup_zip: true` in the catalogue, because
+`tar -xzf` on a zip produces nothing and looks exactly like a failed download. Its
+password is `MyBackup123` — **not** the `MyPassword123` the iPhone 11 pair use, and
+documented only on the last page of the image-creation PDF. All 50 modules run
+against it; it is where the Chromium modules are seen returning rows (12 saved
+logins, 2 top sites) on a device separate from the one they were written against.
 
 The iPhone 11 pair decrypt with the same password; **the iPhone SE does not** — its
 password is lowercase `mypassword123`, documented only in the image-creation PDF.
