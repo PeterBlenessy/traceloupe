@@ -634,7 +634,20 @@ function Lightbox({
   // Cleared on every navigation: the previous file failing says nothing about
   // the next one.
   const [fullFailed, setFullFailed] = useState(false);
-  useEffect(() => setFullFailed(false), [index, cacheKey]);
+  // Retry counter for the current image. Paging faster than a full-res load
+  // finishes makes WebKit cancel the scheme task and cache the URL as *failed*,
+  // so landing back on it shows black. We retry a couple of times with a
+  // cache-busting `r=` so the handler re-runs, and only then give up.
+  const [retry, setRetry] = useState(0);
+  const MAX_RETRIES = 2;
+  useEffect(() => {
+    setFullFailed(false);
+    setRetry(0);
+  }, [index, cacheKey]);
+  const onImageError = () => {
+    if (retry < MAX_RETRIES) setRetry((r) => r + 1);
+    else setFullFailed(true);
+  };
   // Subscribe to the current item's window (same key the grid fills) so the view
   // re-renders when a not-yet-loaded window resolves — a non-reactive cache read
   // would leave the spinner stuck until the next interaction.
@@ -820,12 +833,17 @@ function Lightbox({
             />
           ) : (
             <img
-              key={item.id}
-              src={client.mediaUrl(item.id, { cacheKey })}
+              // `retry` is in the key so a retry actually remounts the element
+              // with the cache-busting URL rather than reusing the failed one.
+              key={`${item.id}:${retry}`}
+              // A downscaled preview, not the 12-megapixel original: it loads in
+              // a fraction of the time, which is the real fix for black frames
+              // (fewer cancelled loads) as well as being much lighter on memory.
+              src={client.mediaUrl(item.id, { preview: true, cacheKey, retry })}
               alt={item.filename ?? ""}
-              onError={() => setFullFailed(true)}
-              // Decode the full-res image off the main thread so paging
-              // next/prev doesn't block the UI thread on each decode.
+              onError={onImageError}
+              // Decode off the main thread so paging next/prev doesn't block the
+              // UI thread on each decode.
               decoding="async"
               className="max-h-full max-w-full object-contain"
             />
