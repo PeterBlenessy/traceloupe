@@ -188,6 +188,17 @@ ALIASES = {
     # modules read the store, so they read the same data by a path the manifest
     # never mentions. Read the code, not the manifest.
     "waze": "module (waze_places, waze_favorites, waze_recents)",
+    # Both of these are blocked by the container guard, and correctly so: the
+    # glob is a bare filename with no domain root, and the category is named
+    # after a topic rather than the app, so the guard has nothing to check the
+    # domain against. A human can, which is what this table is for.
+    #
+    # "Cloudkit" is NoteStore.sqlite's share tables — who a note is shared with.
+    # `notes.rs` reads them into `notes.shared_with_json`.
+    "cloudkit": "native parser (notes)",
+    # "Health & Fitness" is two artifacts over AllTrails.sqlite, the store the
+    # `alltrails` module reads.
+    "healthfitness": "module (alltrails)",
 }
 
 # iLEAPP categories that are not products we could "support" — they name a store
@@ -230,14 +241,22 @@ def stores_we_read() -> list[str]:
     return sorted(set(out))
 
 
-def our_stores() -> list[tuple[str, str, str]]:
-    """(domain, path, how) for every store a declarative module opens.
+# `index.find("HomeDomain", "Library/CoreDuet/People/interactionC.db")` — the
+# native importer's stores, which name a DOMAIN as well as a path. The bare
+# filenames elsewhere in `import.rs` are deliberately not read here: a
+# domainless filename is exactly the kind of match that over-claims.
+NATIVE_STORE = re.compile(r'\bfind\(\s*"([A-Za-z][\w.\-]*)"\s*,\s*"([^"]+)"')
 
-    Modules only — a native parser's stores live in `import.rs` as bare
-    filenames with no domain beside them, and a domainless filename is exactly
-    the kind of match that over-claims. `stores_we_read` still gathers those,
-    for the weaker "same store" split, which is allowed to be over-inclusive
-    because it only reclassifies work rather than declaring it done.
+
+def our_stores() -> list[tuple[str, str, tuple[str, str]]]:
+    """(domain, path, (kind, name)) for every store we open with a domain beside it.
+
+    Both halves of the app: the declarative modules, and the native importer's
+    `index.find(domain, path)` calls. Leaving the native ones out reported
+    InteractionC and the CloudKit share artifacts as untouched — `interactionC.db`
+    and `NoteStore.sqlite` are parsed in `import.rs`, and their iLEAPP categories
+    are named after neither the store nor anything we call it, so name matching
+    could not see them either.
     """
     out = []
     for toml in sorted((ROOT / "crates/traceloupe-core/modules").glob("*.toml")):
@@ -245,9 +264,22 @@ def our_stores() -> list[tuple[str, str, str]]:
         dom = re.search(r'^domain\s*=\s*"([^"]+)"', header, re.M)
         path = re.search(r'^path\s*=\s*"([^"]+)"', header, re.M)
         if dom and path:
-            out.append((dom.group(1), path.group(1), toml.stem))
-    return out
+            out.append((dom.group(1), path.group(1), ("module", toml.stem)))
+    src = (ROOT / "crates/traceloupe-core/src/import.rs").read_text()
+    src = re.sub(r"/\*[\s\S]*?\*/", "", src)
+    src = re.sub(r"^\s*//.*$", "", src, flags=re.M)
+    for domain, path in NATIVE_STORE.findall(src):
+        # `AppDomainGroup-group.com.apple.notes` is a domain too, so the test
+        # is "names a domain", not "ends in one".
+        if "Domain" in domain and path.count(".") >= 1:
+            out.append((domain, path, ("native parser", path.rsplit("/", 1)[-1])))
+    return sorted(set(out))
 
+
+# Marks a glob whose leading wildcard means "at any depth". A sentinel rather
+# than a third tuple field because it travels through `by_store` untouched and
+# only `same_store` is entitled to act on it.
+ANY_DEPTH = "\0any-depth\0"
 
 # `.../Containers/Data/Application/<uuid>/` — everything after it is what an
 # AppDomain backup entry is relative to.
@@ -289,13 +321,22 @@ def as_backup_path(glob: str, roots: list[str]) -> list[tuple[str, bool]]:
     are the ones a root-strip cannot help — the second flag says the placement
     was a guess, so the caller can demand more before believing it.
     """
-    g = glob.replace("\\", "/").lstrip("*").lstrip("/")
+    raw = glob.replace("\\", "/")
+    g = raw.lstrip("*").lstrip("/")
     m = APP_CONTAINER.search(g)
     if m:
         return [(m.group(1), False)]
     low = g.lower()
     rooted = [(g[len(r) + 1 :], True) for r in roots if low.startswith(r + "/")]
-    return rooted or [(g, False)]
+    if rooted:
+        return rooted
+    # A glob that BEGAN with a wildcard says "at any depth", so the remainder is
+    # a suffix and not a whole path. `**/SpringBoard/IconState.plist` is the
+    # store three home-screen modules read, at `Library/SpringBoard/…`, and
+    # anchoring it at the front reported all three as untouched. `ANY_DEPTH`
+    # marks it so `same_store` can allow a prefix — but only for the tail, which
+    # still has to match completely.
+    return [((ANY_DEPTH + g) if raw.startswith("*") else g, False)]
 
 
 def same_store(glob_rel: str, our_path: str) -> bool:
@@ -304,13 +345,26 @@ def same_store(glob_rel: str, our_path: str) -> bool:
     Anchored at BOTH ends, and `*` does not cross `/`. A loose match here is not
     a harmless one: it would print "we already read this" over work nobody has
     done, which is the failure this whole file exists to prevent.
+
+    An `ANY_DEPTH` prefix relaxes the FRONT anchor only, and only when the tail
+    is specific enough to be a filename rather than a wildcard. `*.db` would
+    otherwise match every store in the app, and one over-claim costs more here
+    than every missed match put together.
     """
+    if glob_rel.startswith(ANY_DEPTH):
+        glob_rel = glob_rel[len(ANY_DEPTH) :]
+        literal = re.sub(r"\*", "", glob_rel.rsplit("/", 1)[-1])
+        if len(literal) < 6:
+            return False
+        head = "(?:.*/)?"
+    else:
+        head = ""
     parts = [re.escape(p) for p in glob_rel.split("*")]
-    return re.fullmatch("[^/]*".join(parts), our_path, re.I) is not None
+    return re.fullmatch(head + "[^/]*".join(parts), our_path, re.I) is not None
 
 
-def by_store(items, stores, category: str) -> set[str]:
-    """Which modules cover a category, decided by the STORE rather than the name.
+def by_store(items, stores, category: str) -> set[tuple[str, str]]:
+    """What covers a category, decided by the STORE rather than the name.
 
     Product names drift — ours are chosen for a UI, iLEAPP's for a report — so
     name matching goes quiet exactly when a module lands under a different
@@ -327,17 +381,17 @@ def by_store(items, stores, category: str) -> set[str]:
     `Library/Application Support/CloudDocs/session/db/client.db` on the device.
     """
     roots = domain_roots()
-    hits: set[str] = set()
+    hits: set[tuple[str, str]] = set()
     for a in items:
         for glob in a.get("paths", []):
             for rel, rooted in as_backup_path(glob, roots):
-                for domain, path, stem in stores:
+                for domain, path, what in stores:
                     if not same_store(rel, path):
                         continue
                     app_scoped = domain.startswith("AppDomain")
                     if not rooted and app_scoped and norm(category) not in norm(domain):
                         continue
-                    hits.add(stem)
+                    hits.add(what)
     return hits
 
 
@@ -482,9 +536,10 @@ def how_covered(cat: str, items, covered, stores) -> str | None:
     parts: dict[str, list[str]] = {k: list(v) for k, v in covered.get(n, {}).items()}
     for kind, detail in parse_parts(ALIASES.get(n, "")).items():
         parts.setdefault(kind, []).extend(detail)
-    extra = sorted(by_store(items, stores, cat) - set(parts.get("module", [])))
-    if extra:
-        parts.setdefault("module", []).extend(extra)
+    known = {(kind, name) for kind, names in parts.items() for name in names}
+    extra = sorted(by_store(items, stores, cat) - known)
+    for kind, name in extra:
+        parts.setdefault(kind, []).append(name)
     if not parts:
         return None
     return fmt(parts) + (", some by store" if extra else "")
@@ -514,6 +569,16 @@ STORE_CASES = [
     # Same tail, different tree.
     ("*/mobile/Library/Application Support/CloudDocs/session/db/client.db*",
      "Library/Other/client.db", False),
+    # A leading wildcard means AT ANY DEPTH: three home-screen modules read this
+    # store at `Library/SpringBoard/`, and anchoring the front reported all
+    # three as untouched.
+    ("**/SpringBoard/IconState.plist", "Library/SpringBoard/IconState.plist", True),
+    ("*NoteStore.sqlite*", "NoteStore.sqlite", True),
+    # …but the tail still has to match completely.
+    ("**/SpringBoard/IconState.plist", "Library/SpringBoard/Other.plist", False),
+    # A tail too short to be a filename matches nothing at all. `*.db` at any
+    # depth would otherwise claim every store in the app.
+    ("**/*.db", "Library/CoreDuet/People/interactionC.db", False),
 ]
 
 
@@ -531,14 +596,24 @@ def self_test() -> int:
     # An app container path is ambiguous by construction, so it must need the
     # category to name the app. Both directions, because only checking the
     # positive would pass on a matcher that had stopped checking at all.
-    stores = [("AppDomain-com.waze.iphone", "Documents/user.db", "waze_recents")]
+    stores = [("AppDomain-com.waze.iphone", "Documents/user.db", ("module", "waze_recents"))]
     item = {"name": "x", "paths": ["*/mobile/Containers/Data/Application/*/Documents/user.db"]}
-    for cat, want in (("Waze", {"waze_recents"}), ("AllTrails", set())):
+    for cat, want in (("Waze", {("module", "waze_recents")}), ("AllTrails", set())):
         got = by_store([item], stores, cat)
         mark = "ok  " if got == want else "FAIL"
         print(f"  {mark}  container path under {cat!r} → {sorted(got) or 'nothing'}")
         if got != want:
             failures.append(f"container match for {cat}: expected {want}, got {got}")
+
+    # The native importer's stores must be in the store list: their iLEAPP
+    # categories ("InteractionC", "Cloudkit") are named after neither the store
+    # nor anything we call it, so name matching cannot see them either.
+    native = {p for _, p, (kind, _) in our_stores() if kind == "native parser"}
+    for want in ("Library/CoreDuet/People/interactionC.db", "NoteStore.sqlite"):
+        ok = want in native
+        print(f"  {'ok  ' if ok else 'FAIL'}  native store listed: {want}")
+        if not ok:
+            failures.append(f"{want} is parsed in import.rs but not in our_stores()")
 
     for problem in check_aliases():
         print(f"  FAIL  {problem}")
