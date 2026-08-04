@@ -55,7 +55,7 @@ const SUBTYPE_LABELS: Record<string, string> = {
   live: "Live Photo",
   burst: "Burst",
 };
-import { emptyListMessage, isTimeFiltered } from "@/lib/empty-message";
+import { emptyListMessage } from "@/lib/empty-message";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaLightbox } from "@/components/media-lightbox";
@@ -63,7 +63,7 @@ import { useSettings } from "@/components/settings-provider";
 import { SortControl, type SortState } from "@/components/sort-control";
 import { makeYearPresets, useTimePresets } from "@/components/time-filter";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
+import { multiBadgeGroup, multiTimeGroup, type FilterGroup } from "@/components/filter-groups";
 import { NoBackupState, EmptyView, ErrorState, ListSearch } from "@/components/view";
 import { useDebounced } from "@/lib/use-debounced";
 import { formatCount, formatDateTimeYear } from "@/lib/format";
@@ -87,23 +87,29 @@ function PhotosViewInner() {
     queryKey: ["hasActiveBackup"],
     queryFn: () => client.hasActiveBackup(),
   });
-  const [sourcePref, setSource] = usePersistedState<string>(
-    "photos:source",
-    "all",
+  const [sourcesPref, setSourcesPref] = usePersistedState<string[]>(
+    "photos:sources",
+    [],
   );
   const { data: sources } = useQuery({
     queryKey: ["mediaSources"],
     queryFn: () => client.mediaSources(),
     enabled: active === true,
   });
-  // Clamp a stale persisted source to what THIS backup actually has, so a filter
-  // carried over from another backup can't leave the grid stuck empty (its chip
-  // may be hidden, leaving no way to reset).
-  const source =
-    sourcePref !== "all" && (sources ?? []).some(([s]) => s === sourcePref)
-      ? sourcePref
-      : "all";
-  const sourceArg = source === "all" ? null : source;
+  // Clamp stale persisted sources to what THIS backup actually has, so a filter
+  // carried over from another backup can't leave the grid stuck empty. MULTI-
+  // select: an empty array means "all".
+  const sourcesSel = useMemo(
+    () => sourcesPref.filter((s) => (sources ?? []).some(([n]) => n === s)),
+    [sourcesPref, sources],
+  );
+  const toggleSource = useCallback(
+    (v: string) =>
+      setSourcesPref((prev) =>
+        prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v],
+      ),
+    [setSourcesPref],
+  );
   // Time filter — recency windows, then ONE CHIP PER YEAR the library actually
   // spans (from the capture-date bounds), not just the current calendar year.
   // `makeTimePresets` alone only ever offers "this year", which is why the
@@ -123,32 +129,46 @@ function PhotosViewInner() {
       ...makeYearPresets(minYear, maxYear),
     ];
   }, [basePresets, dateBounds]);
-  const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
+  // MULTI-select time: several ranges (e.g. two years) unioned; [] = all time.
+  const [ranges, setRanges] = useState<TimeRange[]>([]);
+  const toggleRange = useCallback(
+    (r: TimeRange) =>
+      setRanges((prev) =>
+        prev.some((x) => x.lo === r.lo && x.hi === r.hi)
+          ? prev.filter((x) => !(x.lo === r.lo && x.hi === r.hi))
+          : [...prev, r],
+      ),
+    [],
+  );
   // Show only the photos/videos the user has marked as unsafe.
   const [unsafeOnly, setUnsafeOnly] = useState(false);
   // Free-text search over the filename (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
+  // Stable primitive keys for the multi-select arrays, so React Query refetches
+  // when the SELECTION changes but not on every render's new array identity.
+  const sourcesKey = sourcesSel.join(" ");
+  const rangesKey = ranges.map((r) => `${r.lo}-${r.hi}`).join(" ");
   const { data: count, error } = useQuery({
-    queryKey: ["mediaCount", source, range.lo, range.hi, search, unsafeOnly],
+    queryKey: ["mediaCount", sourcesKey, rangesKey, search, unsafeOnly],
     queryFn: () =>
-      client.countMedia(sourceArg, range.lo, range.hi, search, unsafeOnly),
+      client.countMedia(sourcesSel, ranges, search, unsafeOnly),
     enabled: active === true,
   });
   // How many are marked unsafe, for the Unsafe pill's count (and whether to show it).
   const { data: favCount } = useQuery({
     queryKey: ["mediaFavCount"],
-    queryFn: () => client.countMedia(null, null, null, null, true),
+    queryFn: () => client.countMedia([], [], null, true),
     enabled: active === true,
   });
-  // Per-preset counts for the time chips, within the current source + search.
+  // Per-preset counts for the time chips, within the current sources + search.
   const { data: presetCounts } = useQuery({
     // `presets.length` keys the year chips: when the date bounds resolve and the
     // per-year presets appear, the counts must refetch to cover them.
-    queryKey: ["mediaRanges", now, source, search, presets.length, unsafeOnly],
+    queryKey: ["mediaRanges", now, sourcesKey, search, presets.length, unsafeOnly],
     queryFn: () =>
       client.countMediaRanges(
-        sourceArg,
+        sourcesSel,
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         search,
         unsafeOnly,
@@ -164,9 +184,8 @@ function PhotosViewInner() {
       void qc.prefetchQuery({
         queryKey: [
           "mediaWindow",
-          sourceArg,
-          range.lo,
-          range.hi,
+          sourcesKey,
+          rangesKey,
           search,
           sort.by,
           sort.desc,
@@ -175,9 +194,8 @@ function PhotosViewInner() {
         ],
         queryFn: () =>
           client.getMediaWindow(
-            sourceArg,
-            range.lo,
-            range.hi,
+            sourcesSel,
+            ranges,
             search,
             page * PAGE,
             PAGE,
@@ -187,7 +205,7 @@ function PhotosViewInner() {
           ),
       });
     },
-    [qc, sourceArg, range, search, sort, unsafeOnly],
+    [qc, sourcesSel, ranges, sourcesKey, rangesKey, search, sort, unsafeOnly],
   );
 
   // Toggle the unsafe mark, persist it, and refresh the media queries so the
@@ -204,11 +222,10 @@ function PhotosViewInner() {
   );
 
   const hasFilter = (sources?.length ?? 0) > 1;
-  const total = sources?.reduce((sum, [, c]) => sum + c, 0) ?? 0;
+  // No "All" option: multi-select treats an empty selection as "all".
   const sourceOptions = useMemo(
-    () => [
-      { value: "all", label: "All", count: total },
-      ...(sources ?? []).map(([name, c]) => {
+    () =>
+      (sources ?? []).map(([name, c]) => {
         const slug = serviceSlug(name);
         return {
           value: name,
@@ -219,20 +236,19 @@ function PhotosViewInner() {
           ) : undefined,
         };
       }),
-    ],
-    [sources, total],
+    [sources],
   );
   const filterGroups = useMemo<FilterGroup[]>(() => {
     const list: FilterGroup[] = [];
     if (hasFilter)
       list.push(
-        badgeGroup({
+        multiBadgeGroup({
           key: "source",
           label: "Source",
-          description: "Which app or album the media came from",
+          description: "Which apps or albums the media came from",
           options: sourceOptions,
-          value: source,
-          onChange: setSource,
+          selected: sourcesSel,
+          onToggle: toggleSource,
         }),
       );
     // A single toggle pill: "Unsafe". Shown once anything is marked (or while
@@ -263,9 +279,18 @@ function PhotosViewInner() {
             ]
           : [],
       });
-    list.push(timeGroup({ description: "When the media was created", presets, counts: presetCounts, value: range, onChange: setRange }));
+    list.push(
+      multiTimeGroup({
+        description: "When the media was created",
+        presets,
+        counts: presetCounts,
+        values: ranges,
+        onToggle: toggleRange,
+        onClear: () => setRanges([]),
+      }),
+    );
     return list;
-  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range, unsafeOnly, favCount]);
+  }, [hasFilter, sourceOptions, sourcesSel, toggleSource, presets, presetCounts, ranges, toggleRange, unsafeOnly, favCount]);
   const sortNode = useMemo(
     () => (
       <SortControl
@@ -334,21 +359,21 @@ function PhotosViewInner() {
           title={emptyListMessage(
             {
               search,
-              timeFiltered: isTimeFiltered(range),
-              otherFiltered: source !== "all",
+              timeFiltered: ranges.length > 0,
+              otherFiltered: sourcesSel.length > 0,
             },
             "No photos or videos in this backup.",
             "photos or videos",
           )}
         />
       ) : (
-        // key by source+range+search+sort so the grid remounts (scroll +
+        // key by sources+ranges+search+sort so the grid remounts (scroll +
         // measurement reset) on any filter change.
         <MediaGrid
-          key={`${source}:${range.lo}:${range.hi}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}`}
+          key={`${sourcesKey}:${rangesKey}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}`}
           count={count}
-          source={sourceArg}
-          range={range}
+          sources={sourcesSel}
+          ranges={ranges}
           search={search}
           sort={sort}
           unsafeOnly={unsafeOnly}
@@ -360,8 +385,8 @@ function PhotosViewInner() {
       <Lightbox
         index={openIndex}
         count={count ?? 0}
-        source={sourceArg}
-        range={range}
+        sources={sourcesSel}
+        ranges={ranges}
         search={search}
         sort={sort}
         unsafeOnly={unsafeOnly}
@@ -387,8 +412,8 @@ function sourceLabel(name: string): string {
  */
 function MediaGrid({
   count,
-  source,
-  range,
+  sources,
+  ranges,
   search,
   sort,
   unsafeOnly,
@@ -396,14 +421,17 @@ function MediaGrid({
   onMarkUnsafe,
 }: {
   count: number;
-  source: string | null;
-  range: TimeRange;
+  sources: string[];
+  ranges: TimeRange[];
   search: string | null;
   sort: SortState;
   unsafeOnly: boolean;
   onOpen: (index: number) => void;
   onMarkUnsafe: (item: MediaItem) => void;
 }) {
+  // Same primitive keys the parent uses, so windows prefetched there hit here.
+  const sourcesKey = sources.join(" ");
+  const rangesKey = ranges.map((r) => `${r.lo}-${r.hi}`).join(" ");
   const GAP = 4; // matches gap-1 / p-1 (0.25rem)
   const MIN = 144; // 9rem minimum tile
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -452,9 +480,8 @@ function MediaGrid({
     queries: pages.map((p) => ({
       queryKey: [
         "mediaWindow",
-        source,
-        range.lo,
-        range.hi,
+        sourcesKey,
+        rangesKey,
         search,
         sort.by,
         sort.desc,
@@ -463,9 +490,8 @@ function MediaGrid({
       ],
       queryFn: () =>
         client.getMediaWindow(
-          source,
-          range.lo,
-          range.hi,
+          sources,
+          ranges,
           search,
           p * PAGE,
           PAGE,
@@ -794,8 +820,8 @@ const Thumb = forwardRef<
 function Lightbox({
   index,
   count,
-  source,
-  range,
+  sources,
+  ranges,
   search,
   sort,
   unsafeOnly,
@@ -806,8 +832,8 @@ function Lightbox({
 }: {
   index: number | null;
   count: number;
-  source: string | null;
-  range: TimeRange;
+  sources: string[];
+  ranges: TimeRange[];
   search: string | null;
   sort: SortState;
   unsafeOnly: boolean;
@@ -817,6 +843,8 @@ function Lightbox({
   onClose: () => void;
 }) {
   const open = index != null;
+  const sourcesKey = sources.join(" ");
+  const rangesKey = ranges.map((r) => `${r.lo}-${r.hi}`).join(" ");
   const { lightboxStyle, showMediaMetadata } = useSettings();
   const cacheKey = useMediaCacheKey();
   // Cleared on every navigation: the previous file failing says nothing about
@@ -843,9 +871,8 @@ function Lightbox({
   const { data: win } = useQuery({
     queryKey: [
       "mediaWindow",
-      source,
-      range.lo,
-      range.hi,
+      sourcesKey,
+      rangesKey,
       search,
       sort.by,
       sort.desc,
@@ -854,9 +881,8 @@ function Lightbox({
     ],
     queryFn: () =>
       client.getMediaWindow(
-        source,
-        range.lo,
-        range.hi,
+        sources,
+        ranges,
         search,
         page * PAGE,
         PAGE,

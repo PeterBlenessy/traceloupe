@@ -186,6 +186,73 @@ export function timeGroup(opts: {
   };
 }
 
+function rangeEq(a: TimeRange, b: TimeRange): boolean {
+  return a.lo === b.lo && a.hi === b.hi;
+}
+
+/** MULTI-select time filter: several presets/ranges can be active at once (e.g.
+ *  two years), unioned. An empty selection means "all time" — the same
+ *  "empty = everything" rule as {@link multiBadgeGroup}. `presets[0]` is the
+ *  "All" pill and clears the selection. Each active range becomes a removable
+ *  chip; the custom picker appends a range. */
+export function multiTimeGroup(opts: {
+  description: string;
+  presets: TimePreset[];
+  counts?: (number | undefined)[];
+  values: TimeRange[];
+  /** Add the range if absent, remove it if already selected. */
+  onToggle: (r: TimeRange) => void;
+  /** Reset to "all time" (empty selection). */
+  onClear: () => void;
+}): FilterGroup {
+  const { description, presets, counts, values, onToggle, onClear } = opts;
+  const all = presets[0];
+  const selected = (p: TimePreset) =>
+    values.some((v) => rangeEq(v, { lo: p.lo, hi: p.hi }));
+
+  const pills: FilterPill[] = presets.map((p, i) => {
+    const isAll = p.key === all?.key;
+    const c = counts?.[i];
+    return {
+      key: p.key,
+      label: p.label,
+      count: c,
+      // "All" lights up only when nothing else is picked; it clears the set.
+      selected: isAll ? values.length === 0 : selected(p),
+      disabled: !isAll && c != null && c <= 0,
+      onSelect: () => (isAll ? onClear() : onToggle({ lo: p.lo, hi: p.hi })),
+    };
+  });
+
+  // One removable chip per active range, labelled by its matching preset (or
+  // "Custom range" for a hand-picked window).
+  const summary: FilterSummary[] = values.map((v, i) => {
+    const p = presets.find((x) => rangeEq({ lo: x.lo, hi: x.hi }, v));
+    return {
+      key: `time:${i}`,
+      label: p ? p.label : "Custom range",
+      onClear: () => onToggle(v),
+    };
+  });
+
+  return {
+    key: "time",
+    label: "Time",
+    description,
+    pills,
+    // The custom picker APPENDS a range rather than replacing, so it composes
+    // with the year chips; it resets to empty after adding.
+    extra: (
+      <DateRangeFilter
+        value={{ lo: null, hi: null }}
+        active={false}
+        onChange={(r) => onToggle(r)}
+      />
+    ),
+    summary,
+  };
+}
+
 /** A pill button inside the panel (shared look with the rest of the app). */
 export function FilterPillButton({ pill }: { pill: FilterPill }) {
   return (
