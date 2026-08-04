@@ -66,7 +66,7 @@ import { useViewToolbar } from "@/components/toolbar-context";
 import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
 import { NoBackupState, EmptyView, ErrorState, ListSearch } from "@/components/view";
 import { useDebounced } from "@/lib/use-debounced";
-import { formatCount, formatDateTime } from "@/lib/format";
+import { formatCount, formatDateTimeYear } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { client, type MediaItem, type TimeRange } from "@/lib/ipc";
@@ -240,12 +240,12 @@ function PhotosViewInner() {
     if (favoritesOnly || (favCount ?? 0) > 0)
       list.push({
         key: "favorites",
-        label: "Favorites",
+        label: "Starred",
         description: "Only photos and videos you've starred",
         pills: [
           {
             key: "favorites",
-            label: "Favorites",
+            label: "Starred",
             icon: <Star className="size-3.5" />,
             count: favCount,
             selected: favoritesOnly,
@@ -256,7 +256,7 @@ function PhotosViewInner() {
           ? [
               {
                 key: "favorites",
-                label: "Favorites",
+                label: "Starred",
                 icon: <Star className="size-3.5" />,
                 onClear: () => setFavoritesOnly(false),
               },
@@ -681,16 +681,15 @@ const Thumb = forwardRef<
           alt={item.filename ?? ""}
           onError={() => setFailed(true)}
           // Decode OFF the main thread so a fast scroll doesn't stall on each
-          // tile's decode competing with virtualizer measurement, and only
-          // fetch/decode tiles near the viewport (`lazy`) rather than every
-          // overscan row at once — the two levers behind "scrolling gets
-          // sluggish the longer you browse."
+          // tile's decode competing with virtualizer measurement.
           decoding="async"
-          loading="lazy"
-          // Not `scale-105`: Tailwind v4 emits the standalone `scale` property
-          // and WKWebView will not animate it, so the zoom snapped. The
-          // `transform` shorthand does animate. See docs/reference/ui.md.
-          className="size-full object-cover transition-transform [transform:scale(1)] group-hover:[transform:scale(1.05)]"
+          // NO hover zoom and NO `loading="lazy"` here, on purpose. A
+          // `transform: scale` on hover makes WKWebView re-rasterize the scroll
+          // layer, and `lazy` then re-fetches the neighbouring no-cache
+          // custom-scheme URLs during that repaint — so hovering one tile made
+          // every tile below it blink. `lazy` also buys little next to the
+          // virtualizer, which already only mounts near-viewport rows.
+          className="size-full object-cover"
         />
       )}
       {item.source && (
@@ -963,14 +962,14 @@ function Lightbox({
               </span>
             )}
             {item.source && <span>{item.source}</span>}
-            {item.takenAt && <span>{formatDateTime(item.takenAt)}</span>}
+            {item.takenAt && <span>{formatDateTimeYear(item.takenAt)}</span>}
             {item.addedAt != null &&
               (item.takenAt == null ||
                 Math.abs(item.addedAt - item.takenAt) > 86400) && (
                 <Hint label="Added to this device's library later than it was captured — likely received, saved, or imported">
                   <span className="inline-flex items-center gap-1 text-status-warning-text">
                     <Import className="size-3 shrink-0" />
-                    Added {formatDateTime(item.addedAt)}
+                    Added {formatDateTimeYear(item.addedAt)}
                   </span>
                 </Hint>
               )}
