@@ -21,7 +21,7 @@ import {
   FolderOpen,
   Frame,
   Heart,
-  Star,
+  ShieldAlert,
   Import,
   Image as ImageIcon,
   ImageOff,
@@ -124,18 +124,18 @@ function PhotosViewInner() {
     ];
   }, [basePresets, dateBounds]);
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
-  // Show only the user's starred photos/videos.
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  // Show only the photos/videos the user has marked as unsafe.
+  const [unsafeOnly, setUnsafeOnly] = useState(false);
   // Free-text search over the filename (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
   const { data: count, error } = useQuery({
-    queryKey: ["mediaCount", source, range.lo, range.hi, search, favoritesOnly],
+    queryKey: ["mediaCount", source, range.lo, range.hi, search, unsafeOnly],
     queryFn: () =>
-      client.countMedia(sourceArg, range.lo, range.hi, search, favoritesOnly),
+      client.countMedia(sourceArg, range.lo, range.hi, search, unsafeOnly),
     enabled: active === true,
   });
-  // How many are starred, for the Favorites pill's count (and whether to show it).
+  // How many are marked unsafe, for the Unsafe pill's count (and whether to show it).
   const { data: favCount } = useQuery({
     queryKey: ["mediaFavCount"],
     queryFn: () => client.countMedia(null, null, null, null, true),
@@ -145,13 +145,13 @@ function PhotosViewInner() {
   const { data: presetCounts } = useQuery({
     // `presets.length` keys the year chips: when the date bounds resolve and the
     // per-year presets appear, the counts must refetch to cover them.
-    queryKey: ["mediaRanges", now, source, search, presets.length, favoritesOnly],
+    queryKey: ["mediaRanges", now, source, search, presets.length, unsafeOnly],
     queryFn: () =>
       client.countMediaRanges(
         sourceArg,
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         search,
-        favoritesOnly,
+        unsafeOnly,
       ),
     enabled: active === true,
   });
@@ -170,7 +170,7 @@ function PhotosViewInner() {
           search,
           sort.by,
           sort.desc,
-          favoritesOnly,
+          unsafeOnly,
           page,
         ],
         queryFn: () =>
@@ -183,16 +183,16 @@ function PhotosViewInner() {
             PAGE,
             sort.by,
             sort.desc,
-            favoritesOnly,
+            unsafeOnly,
           ),
       });
     },
-    [qc, sourceArg, range, search, sort, favoritesOnly],
+    [qc, sourceArg, range, search, sort, unsafeOnly],
   );
 
-  // Toggle a star, persist it, and refresh the media queries so the grid, the
-  // counts, and the Favorites pill all reflect it.
-  const toggleFavorite = useCallback(
+  // Toggle the unsafe mark, persist it, and refresh the media queries so the
+  // grid, the counts, and the Unsafe pill all reflect it.
+  const markUnsafe = useCallback(
     async (item: MediaItem) => {
       await client.setMediaFavorite(item.id, !item.userFavorite);
       void qc.invalidateQueries({ queryKey: ["mediaWindow"] });
@@ -235,37 +235,37 @@ function PhotosViewInner() {
           onChange: setSource,
         }),
       );
-    // A single toggle pill: "★ Favorites". Shown once anything is starred (or
-    // while the filter is on), so it never appears as an empty "Favorites (0)".
-    if (favoritesOnly || (favCount ?? 0) > 0)
+    // A single toggle pill: "Unsafe". Shown once anything is marked (or while
+    // the filter is on), so it never appears as an empty "Unsafe (0)".
+    if (unsafeOnly || (favCount ?? 0) > 0)
       list.push({
-        key: "favorites",
-        label: "Starred",
-        description: "Only photos and videos you've starred",
+        key: "unsafe",
+        label: "Unsafe",
+        description: "Photos and videos you've marked as unsafe",
         pills: [
           {
-            key: "favorites",
-            label: "Starred",
-            icon: <Star className="size-3.5" />,
+            key: "unsafe",
+            label: "Unsafe",
+            icon: <ShieldAlert className="size-3.5" />,
             count: favCount,
-            selected: favoritesOnly,
-            onSelect: () => setFavoritesOnly((v) => !v),
+            selected: unsafeOnly,
+            onSelect: () => setUnsafeOnly((v) => !v),
           },
         ],
-        summary: favoritesOnly
+        summary: unsafeOnly
           ? [
               {
-                key: "favorites",
-                label: "Starred",
-                icon: <Star className="size-3.5" />,
-                onClear: () => setFavoritesOnly(false),
+                key: "unsafe",
+                label: "Unsafe",
+                icon: <ShieldAlert className="size-3.5" />,
+                onClear: () => setUnsafeOnly(false),
               },
             ]
           : [],
       });
     list.push(timeGroup({ description: "When the media was created", presets, counts: presetCounts, value: range, onChange: setRange }));
     return list;
-  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range, favoritesOnly, favCount]);
+  }, [hasFilter, sourceOptions, source, setSource, presets, presetCounts, range, unsafeOnly, favCount]);
   const sortNode = useMemo(
     () => (
       <SortControl
@@ -345,15 +345,15 @@ function PhotosViewInner() {
         // key by source+range+search+sort so the grid remounts (scroll +
         // measurement reset) on any filter change.
         <MediaGrid
-          key={`${source}:${range.lo}:${range.hi}:${search}:${sort.by}:${sort.desc}:${favoritesOnly}`}
+          key={`${source}:${range.lo}:${range.hi}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}`}
           count={count}
           source={sourceArg}
           range={range}
           search={search}
           sort={sort}
-          favoritesOnly={favoritesOnly}
+          unsafeOnly={unsafeOnly}
           onOpen={setOpenIndex}
-          onToggleFavorite={toggleFavorite}
+          onMarkUnsafe={markUnsafe}
         />
       )}
 
@@ -364,8 +364,8 @@ function PhotosViewInner() {
         range={range}
         search={search}
         sort={sort}
-        favoritesOnly={favoritesOnly}
-        onToggleFavorite={toggleFavorite}
+        unsafeOnly={unsafeOnly}
+        onMarkUnsafe={markUnsafe}
         ensurePage={ensurePage}
         onNavigate={setOpenIndex}
         onClose={() => setOpenIndex(null)}
@@ -391,18 +391,18 @@ function MediaGrid({
   range,
   search,
   sort,
-  favoritesOnly,
+  unsafeOnly,
   onOpen,
-  onToggleFavorite,
+  onMarkUnsafe,
 }: {
   count: number;
   source: string | null;
   range: TimeRange;
   search: string | null;
   sort: SortState;
-  favoritesOnly: boolean;
+  unsafeOnly: boolean;
   onOpen: (index: number) => void;
-  onToggleFavorite: (item: MediaItem) => void;
+  onMarkUnsafe: (item: MediaItem) => void;
 }) {
   const GAP = 4; // matches gap-1 / p-1 (0.25rem)
   const MIN = 144; // 9rem minimum tile
@@ -458,7 +458,7 @@ function MediaGrid({
         search,
         sort.by,
         sort.desc,
-        favoritesOnly,
+        unsafeOnly,
         p,
       ],
       queryFn: () =>
@@ -471,7 +471,7 @@ function MediaGrid({
           PAGE,
           sort.by,
           sort.desc,
-          favoritesOnly,
+          unsafeOnly,
         ),
     })),
   });
@@ -511,11 +511,11 @@ function MediaGrid({
                 return (
                   <div key={index} style={{ width: cell }}>
                     {item ? (
-                      <MediaMenu item={item} onOpen={() => onOpen(index)}>
+                      <MediaMenu item={item} onOpen={() => onOpen(index)} onMarkUnsafe={onMarkUnsafe}>
                         <Thumb
                           item={item}
                           onOpen={() => onOpen(index)}
-                          onToggleFavorite={onToggleFavorite}
+                          onMarkUnsafe={onMarkUnsafe}
                         />
                       </MediaMenu>
                     ) : (
@@ -599,10 +599,12 @@ function LocationTag({ item }: { item: MediaItem }) {
 function MediaMenu({
   item,
   onOpen,
+  onMarkUnsafe,
   children,
 }: {
   item: MediaItem;
   onOpen?: () => void;
+  onMarkUnsafe: (item: MediaItem) => void;
   children: React.ReactNode;
 }) {
   const isVideo = item.kind === "video";
@@ -618,6 +620,11 @@ function MediaMenu({
             <Eye /> Open preview
           </ContextMenuItem>
         )}
+        <ContextMenuItem onSelect={() => onMarkUnsafe(item)}>
+          <ShieldAlert className={item.userFavorite ? "text-amber-400" : undefined} />
+          {item.userFavorite ? "Clear unsafe" : "Mark unsafe"}
+        </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <Download /> Download…
@@ -651,9 +658,9 @@ const Thumb = forwardRef<
   {
     item: MediaItem;
     onOpen: () => void;
-    onToggleFavorite: (item: MediaItem) => void;
+    onMarkUnsafe: (item: MediaItem) => void;
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
->(function Thumb({ item, onOpen, onToggleFavorite, ...rest }, ref) {
+>(function Thumb({ item, onOpen, onMarkUnsafe, ...rest }, ref) {
   const isVideo = item.kind === "video";
   const cacheKey = useMediaCacheKey();
   const [failed, setFailed] = useState(false);
@@ -698,33 +705,33 @@ const Thumb = forwardRef<
         </span>
       )}
       <div className="absolute right-1 top-1 flex gap-1">
-        {/* The user's own star: interactive (nested `role="button"`, not a
+        {/* The user's "unsafe" mark: interactive (nested `role="button"`, not a
             <button>, since the tile itself is a button). Always shown when
-            starred; revealed on hover otherwise so any tile can be starred. */}
+            marked; revealed on hover otherwise so any tile can be marked. */}
         <span
           role="button"
           tabIndex={0}
-          aria-label={item.userFavorite ? "Remove star" : "Add star"}
-          title={item.userFavorite ? "Starred — click to remove" : "Star this"}
+          aria-label={item.userFavorite ? "Clear unsafe mark" : "Mark unsafe"}
+          title={item.userFavorite ? "Marked unsafe — click to clear" : "Mark as unsafe"}
           onClick={(e) => {
             e.stopPropagation();
-            onToggleFavorite(item);
+            onMarkUnsafe(item);
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
               e.stopPropagation();
-              onToggleFavorite(item);
+              onMarkUnsafe(item);
             }
           }}
           className={`cursor-pointer rounded-full bg-black/55 p-1 transition-opacity ${
             item.userFavorite ? "" : "opacity-0 group-hover:opacity-100"
           }`}
         >
-          <Star
+          <ShieldAlert
             className={`size-3 ${
               item.userFavorite
-                ? "fill-amber-400 text-amber-400"
+                ? "text-amber-400"
                 : "text-white"
             }`}
           />
@@ -791,8 +798,8 @@ function Lightbox({
   range,
   search,
   sort,
-  favoritesOnly,
-  onToggleFavorite,
+  unsafeOnly,
+  onMarkUnsafe,
   ensurePage,
   onNavigate,
   onClose,
@@ -803,8 +810,8 @@ function Lightbox({
   range: TimeRange;
   search: string | null;
   sort: SortState;
-  favoritesOnly: boolean;
-  onToggleFavorite: (item: MediaItem) => void;
+  unsafeOnly: boolean;
+  onMarkUnsafe: (item: MediaItem) => void;
   ensurePage: (page: number) => void;
   onNavigate: (index: number) => void;
   onClose: () => void;
@@ -842,7 +849,7 @@ function Lightbox({
       search,
       sort.by,
       sort.desc,
-      favoritesOnly,
+      unsafeOnly,
       page,
     ],
     queryFn: () =>
@@ -855,7 +862,7 @@ function Lightbox({
         PAGE,
         sort.by,
         sort.desc,
-        favoritesOnly,
+        unsafeOnly,
       ),
     enabled: index != null,
   });
@@ -885,19 +892,19 @@ function Lightbox({
           <div className="flex min-w-0 items-center gap-3">
             <Hint
               label={
-                item.userFavorite ? "Starred — click to remove" : "Star this"
+                item.userFavorite ? "Marked unsafe — click to clear" : "Mark as unsafe"
               }
             >
               <button
                 type="button"
-                aria-label={item.userFavorite ? "Remove star" : "Add star"}
-                onClick={() => onToggleFavorite(item)}
+                aria-label={item.userFavorite ? "Clear unsafe mark" : "Mark unsafe"}
+                onClick={() => onMarkUnsafe(item)}
                 className="shrink-0 rounded-full p-0.5 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <Star
+                <ShieldAlert
                   className={`size-4 ${
                     item.userFavorite
-                      ? "fill-amber-400 text-amber-400"
+                      ? "text-amber-400"
                       : "text-neutral-400"
                   }`}
                 />
@@ -1023,7 +1030,7 @@ function Lightbox({
           </div>
         ) : item ? (
           isVideo ? (
-            <MediaMenu item={item}>
+            <MediaMenu item={item} onMarkUnsafe={onMarkUnsafe}>
               <video
                 key={item.id}
                 src={client.mediaUrl(item.id, { cacheKey })}
@@ -1037,7 +1044,7 @@ function Lightbox({
               />
             </MediaMenu>
           ) : (
-            <MediaMenu item={item}>
+            <MediaMenu item={item} onMarkUnsafe={onMarkUnsafe}>
               <img
                 // `retry` is in the key so a retry actually remounts the element
                 // with the cache-busting URL rather than reusing the failed one.
