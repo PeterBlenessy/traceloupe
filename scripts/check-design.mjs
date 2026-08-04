@@ -330,6 +330,11 @@ const probe = () =>
       islands.push({ h: el.getBoundingClientRect().height, name: label(el), fixed: fixed(el) });
       for (const seg of el.querySelectorAll("button")) {
         if (!visible(seg)) continue;
+        // A filter chip's "clear" button is NOT an island segment: it sits
+        // inside a chip, so segment height would make the chip as tall as the
+        // island itself (which is exactly how the chips came to look
+        // oversized). It is measured against its chip, not the bar.
+        if (seg.closest('[data-slot="filter-chip"]')) continue;
         // A ToggleGroup's items ARE the island — the group has no padding, so
         // the item fills it. A FilterControl's button is a true segment, inset
         // by 3px inside a taller island. Same appearance, different geometry,

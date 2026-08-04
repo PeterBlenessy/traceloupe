@@ -3478,6 +3478,28 @@ async fn get_safari_bookmarks_window(
 ///
 /// HEIC (the format most iOS photos use) is transcoded to JPEG so the webview
 /// can render it; thumbnails are downscaled JPEGs. Both are cached (see media).
+/// `Cache-Control` for a media response, and WHY IT IS NOT ALWAYS `no-cache`.
+///
+/// On a custom URI scheme there is no revalidation mechanism, so `no-cache` means
+/// WebKit re-invokes the scheme HANDLER every time it needs the bytes again —
+/// including on an ordinary repaint. Hovering a gallery tile (the badge/mark
+/// opacity reveals) repaints the scroll layer, so every visible thumbnail was
+/// re-fetched and re-decoded at once: the "hovering one photo makes the ones
+/// below blink" report.
+///
+/// A versioned URL is what makes a long-lived cache safe. `k=<n>` is minted per
+/// view mount by `useMediaCacheKey`, so anything that should invalidate —
+/// switching backups, re-importing, leaving and returning to the view — remounts
+/// the view and changes the key, and the old URLs are simply never requested
+/// again. An UNVERSIONED url keeps `no-cache`, because nothing could bust it.
+fn media_cache_control(query_str: Option<&str>) -> &'static str {
+    if query_str.is_some_and(|q| q.contains("k=")) {
+        "private, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
+}
+
 fn media_protocol_response(
     app: &AppHandle,
     path: &str,
@@ -3503,6 +3525,8 @@ fn media_protocol_response(
     // black frames.
     let want_preview = query_str.is_some_and(|q| q.contains("preview"));
 
+    let cache_ctl = media_cache_control(query_str);
+
     let active = app.state::<ActiveBackup>();
     let Ok(cache_path) = active.path() else {
         return not_found();
@@ -3527,7 +3551,7 @@ fn media_protocol_response(
                 return Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "image/jpeg")
-                    .header("Cache-Control", "no-cache")
+                    .header("Cache-Control", cache_ctl)
                     .body(bytes)
                     .unwrap();
             }
@@ -3592,7 +3616,7 @@ fn media_protocol_response(
                 .header("Content-Type", content_type)
                 .header("Accept-Ranges", "bytes")
                 .header("Content-Range", format!("bytes {start}-{end}/{total}"))
-                .header("Cache-Control", "no-cache")
+                .header("Cache-Control", cache_ctl)
                 .body(buf)
                 .unwrap();
         }
@@ -3604,7 +3628,7 @@ fn media_protocol_response(
             .status(StatusCode::OK)
             .header("Content-Type", content_type)
             .header("Accept-Ranges", "bytes")
-            .header("Cache-Control", "no-cache")
+            .header("Cache-Control", cache_ctl)
             .body(bytes)
             .unwrap();
     }
@@ -3664,7 +3688,7 @@ fn media_protocol_response(
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", rendered.content_type)
-        .header("Cache-Control", "no-cache")
+        .header("Cache-Control", cache_ctl)
         .body(rendered.bytes)
         .unwrap()
 }
@@ -4809,6 +4833,20 @@ mod tests {
         assert!(g("8.8.8.8"));
         assert!(g("1.1.1.1"));
         assert!(g("2606:4700:4700::1111"));
+    }
+
+    #[test]
+    fn versioned_media_urls_are_cacheable_unversioned_are_not() {
+        // A VERSIONED url may be cached hard: `k=` changes whenever the view
+        // remounts, which is the only thing that should invalidate it. Without
+        // this, `no-cache` forces the scheme handler to re-run on every repaint
+        // — which is what made hovering one tile blank the ones below it.
+        assert!(media_cache_control(Some("thumb=1&k=7")).contains("immutable"));
+        assert!(media_cache_control(Some("preview=1&k=12")).contains("max-age"));
+        // UNVERSIONED: nothing could bust a stale entry, so it must not be
+        // cached — a re-import would otherwise keep serving the old bytes.
+        assert_eq!(media_cache_control(Some("thumb=1")), "no-cache");
+        assert_eq!(media_cache_control(None), "no-cache");
     }
 
     #[test]
