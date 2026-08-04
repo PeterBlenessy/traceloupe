@@ -216,16 +216,19 @@ export function FilterControl({
             )}
           >
             <span
+              data-slot="filter-chip"
               className={filterPillClass(true, "ml-1 cursor-pointer py-0.5 pr-1")}
               onClick={() => open()}
             >
               {s.icon}
               {s.label}
-              {/* Icon-only, so it needs a tooltip like every other control; and
-                  it sits inside a toolbar island, so it is measured against the
-                  segment height. It was 16px and untooltipped — invisible to
-                  both rules until Contacts gained an "All" option and made a
-                  chip reachable there for the first time. */}
+              {/* Icon-only, so it needs a tooltip like every other control.
+                  Sized to the CHIP, not to the island segment: at
+                  `--control-h-sm` (the full control height) this one child
+                  stretched the whole chip to the island's height, which is what
+                  made the selected filter chips look oversized. 20px keeps a
+                  comfortable target on the 2px grid without setting the chip's
+                  height — the chip's own `py-1` does that. */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -235,7 +238,7 @@ export function FilterControl({
                       e.stopPropagation();
                       removeChip(s);
                     }}
-                    className="ml-0.5 inline-flex size-(--control-h-sm) items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+                    className="ml-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
                   >
                     <X className="size-3" />
                   </button>
