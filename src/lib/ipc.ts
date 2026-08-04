@@ -1419,24 +1419,25 @@ export interface TraceLoupeClient {
   mediaSources(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
   // huge lists a slice at a time.
+  // `sources`/`ranges` are MULTI-select: empty array = no restriction (all).
+  // An item matches if its source is in `sources` AND its date is in ANY range.
   countMedia(
-    source: string | null,
-    lo?: number | null,
-    hi?: number | null,
+    sources: string[],
+    ranges: TimeRange[],
     search?: string | null,
     favoritesOnly?: boolean,
   ): Promise<number>;
-  /** Media counts for each [lo, hi) window in `source` — Photos time-filter chips. */
+  /** Count for each preset window (one range each) within `sources` — the
+   *  Photos time-filter chip counts. */
   countMediaRanges(
-    source: string | null,
+    sources: string[],
     ranges: TimeRange[],
     search?: string | null,
     favoritesOnly?: boolean,
   ): Promise<number[]>;
   getMediaWindow(
-    source: string | null,
-    lo: number | null,
-    hi: number | null,
+    sources: string[],
+    ranges: TimeRange[],
     search: string | null,
     offset: number,
     limit: number,
@@ -1823,14 +1824,13 @@ const tauriClient: TraceLoupeClient = {
   unlockNote: (noteId, password) =>
     invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
-  countMedia: (source, lo = null, hi = null, search = null, favoritesOnly = false) =>
-    invoke<number>("count_media", { source, lo, hi, search, favoritesOnly }),
-  countMediaRanges: (source, ranges, search = null, favoritesOnly = false) =>
-    invoke<number[]>("count_media_ranges", { source, ranges, search, favoritesOnly }),
+  countMedia: (sources, ranges, search = null, favoritesOnly = false) =>
+    invoke<number>("count_media", { sources, ranges, search, favoritesOnly }),
+  countMediaRanges: (sources, ranges, search = null, favoritesOnly = false) =>
+    invoke<number[]>("count_media_ranges", { sources, ranges, search, favoritesOnly }),
   getMediaWindow: (
-    source,
-    lo,
-    hi,
+    sources,
+    ranges,
     search,
     offset,
     limit,
@@ -1839,9 +1839,8 @@ const tauriClient: TraceLoupeClient = {
     favoritesOnly = false,
   ) =>
     invoke<MediaItem[]>("get_media_window", {
-      source,
-      lo,
-      hi,
+      sources,
+      ranges,
       search,
       offset,
       limit,
@@ -3211,17 +3210,20 @@ const mockDeletedScanIds = new Set<number>();
 // Mock-side filters mirroring the backend's windowed SQL, so the browser mock
 // behaves like the real windowed/filterable queries.
 function mockFilterMedia(
-  source: string | null,
-  range?: TimeRange,
+  sources: string[],
+  ranges: TimeRange[],
   search?: string | null,
   favoritesOnly?: boolean,
 ): MediaItem[] {
-  let out = source
-    ? mockMedia.filter((m) => (m.source ?? "Other") === source)
-    : mockMedia;
+  // Empty arrays = no restriction (all); otherwise a union — source in
+  // `sources` AND date in ANY of `ranges`, mirroring the backend.
+  let out =
+    sources.length > 0
+      ? mockMedia.filter((m) => sources.includes(m.source ?? "Other"))
+      : mockMedia;
   if (favoritesOnly) out = out.filter((m) => m.userFavorite);
-  if (range && (range.lo != null || range.hi != null)) {
-    out = out.filter((m) => inRange(m.takenAt ?? null, range));
+  if (ranges.length > 0) {
+    out = out.filter((m) => ranges.some((r) => inRange(m.takenAt ?? null, r)));
   }
   if (search) {
     const q = search.toLowerCase();
@@ -6061,24 +6063,17 @@ const mockClient: TraceLoupeClient = {
       ? "Bank PIN: 1234\nWiFi: hunter2"
       : Promise.reject(new Error("Wrong password.")),
   listRecordings: async () => (mockActive ? mockRecordings : []),
-  countMedia: async (
-    source,
-    lo = null,
-    hi = null,
-    search = null,
-    favoritesOnly = false,
-  ) =>
+  countMedia: async (sources, ranges, search = null, favoritesOnly = false) =>
     mockActive
-      ? mockFilterMedia(source, { lo, hi }, search, favoritesOnly).length
+      ? mockFilterMedia(sources, ranges, search, favoritesOnly).length
       : 0,
-  countMediaRanges: async (source, ranges, search = null, favoritesOnly = false) =>
+  countMediaRanges: async (sources, ranges, search = null, favoritesOnly = false) =>
     ranges.map((r) =>
-      mockActive ? mockFilterMedia(source, r, search, favoritesOnly).length : 0,
+      mockActive ? mockFilterMedia(sources, [r], search, favoritesOnly).length : 0,
     ),
   getMediaWindow: async (
-    source,
-    lo,
-    hi,
+    sources,
+    ranges,
     search,
     offset,
     limit,
@@ -6088,7 +6083,7 @@ const mockClient: TraceLoupeClient = {
   ) =>
     mockActive
       ? mockSortBy(
-          mockFilterMedia(source, { lo, hi }, search, favoritesOnly),
+          mockFilterMedia(sources, ranges, search, favoritesOnly),
           mediaKey(sortBy),
           desc,
         ).slice(offset, offset + limit)

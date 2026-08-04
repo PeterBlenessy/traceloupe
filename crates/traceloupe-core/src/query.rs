@@ -73,7 +73,7 @@ pub struct TimelineMessage {
 
 /// A half-open time window `[lo, hi)` in epoch seconds; either bound may be open
 /// (`None`). Used to bucket messages by recency for the periods view.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimeRange {
     pub lo: Option<i64>,
@@ -1449,64 +1449,93 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
 // happens in SQL so the count and the windows stay consistent. A NULL filter
 // matches everything.
 
+/// SQL matching a JSON array of source labels bound at `?1`; `'[]'` = no source
+/// restriction. `COALESCE(source,'Other')` so the synthesized "Other" bucket
+/// (NULL source) is selectable, matching `media_sources`' label.
+const SOURCE_IN: &str =
+    "(?1 = '[]' OR COALESCE(source, 'Other') IN (SELECT value FROM json_each(?1)))";
+
+/// SQL matching a JSON array of {lo,hi} time ranges bound at `?2`; `'[]'` = no
+/// time restriction. An item matches if it falls in ANY selected range (union);
+/// a null bound is open on that end. Undated media (`taken_at` NULL) match no
+/// range, so they only appear under "all time" — the same rule the old single
+/// range had.
+const RANGES_IN: &str = "(?2 = '[]' OR EXISTS (SELECT 1 FROM json_each(?2) tr
+        WHERE (json_extract(tr.value, '$.lo') IS NULL OR taken_at >= json_extract(tr.value, '$.lo'))
+          AND (json_extract(tr.value, '$.hi') IS NULL OR taken_at <  json_extract(tr.value, '$.hi'))))";
+
+/// JSON-encode a filter list for the `json_each` clauses above. `[]` on failure.
+fn filter_json<T: serde::Serialize + ?Sized>(v: &T) -> String {
+    serde_json::to_string(v).unwrap_or_else(|_| "[]".into())
+}
+
 /// Photos/videos in `source` ("Photos", "Messages", …), or all when NULL, whose
 /// `taken_at` falls in `range` (open bounds = no limit; undated media only count
 /// when both bounds are open).
 pub fn count_media(
     cache: &CacheDb,
-    source: Option<&str>,
-    range: TimeRange,
+    sources: &[String],
+    ranges: &[TimeRange],
     search: Option<&str>,
     favorites_only: bool,
 ) -> Result<i64> {
-    // `COALESCE(source,'Other')` so the synthesized "Other" bucket (NULL source)
-    // is actually selectable — `source = 'Other'` never matches a NULL. Matches
-    // the label built by `media_sources`. `search` matches the filename.
     let search = search.map(escape_like);
-    let n = cache.conn().query_row(
+    let sql = format!(
         "SELECT COUNT(*) FROM media_items
          WHERE local_path IS NOT NULL
-           AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
-           AND (?2 IS NULL OR taken_at >= ?2)
-           AND (?3 IS NULL OR taken_at < ?3)
-           AND (?5 = 0 OR user_favorite = 1)
-           AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
-                          OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
-                          OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
-                          OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')",
-        rusqlite::params![source, range.lo, range.hi, search, favorites_only as i64],
+           AND {SOURCE_IN}
+           AND {RANGES_IN}
+           AND (?4 = 0 OR user_favorite = 1)
+           AND (?3 IS NULL OR relative_path LIKE '%' || ?3 || '%' ESCAPE '\\'
+                          OR persons LIKE '%' || ?3 || '%' ESCAPE '\\'
+                          OR location LIKE '%' || ?3 || '%' ESCAPE '\\'
+                          OR albums LIKE '%' || ?3 || '%' ESCAPE '\\')"
+    );
+    let n = cache.conn().query_row(
+        &sql,
+        rusqlite::params![
+            filter_json(sources),
+            filter_json(ranges),
+            search,
+            favorites_only as i64
+        ],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
-/// Media counts for each `range` in `source` (respecting `search`) — powers the
-/// Photos time-filter chips. One row per range, order preserved.
+/// Media counts for each preset `range` in `sources` (respecting `search`) —
+/// powers the Photos time-filter chips. One row per range, order preserved. Each
+/// chip is counted against its own single range (not the current selection).
 pub fn count_media_ranges(
     cache: &CacheDb,
-    source: Option<&str>,
+    sources: &[String],
     ranges: &[TimeRange],
     search: Option<&str>,
     favorites_only: bool,
 ) -> Result<Vec<i64>> {
     let search = search.map(escape_like);
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    // `?1` is the sources JSON (see SOURCE_IN); the per-chip range is a single
+    // `?2`/`?3` pair, so RANGES_IN is not used here.
+    let sql = format!(
         "SELECT COUNT(*) FROM media_items
          WHERE local_path IS NOT NULL
-           AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
+           AND {SOURCE_IN}
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
            AND (?5 = 0 OR user_favorite = 1)
            AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
-                          OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')",
-    )?;
+                          OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')"
+    );
+    let sources_json = filter_json(sources);
+    let mut stmt = conn.prepare(&sql)?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
         out.push(stmt.query_row(
-            rusqlite::params![source, r.lo, r.hi, search, favorites_only as i64],
+            rusqlite::params![sources_json, r.lo, r.hi, search, favorites_only as i64],
             |row| row.get(0),
         )?);
     }
@@ -1516,8 +1545,8 @@ pub fn count_media_ranges(
 #[allow(clippy::too_many_arguments)]
 pub fn get_media_window(
     cache: &CacheDb,
-    source: Option<&str>,
-    range: TimeRange,
+    sources: &[String],
+    ranges: &[TimeRange],
     search: Option<&str>,
     offset: i64,
     limit: i64,
@@ -1527,6 +1556,8 @@ pub fn get_media_window(
     let conn = cache.conn();
     let search = search.map(escape_like);
     let (dir, nulls) = sort.order_sql();
+    // ?1 sources JSON, ?2 ranges JSON (see SOURCE_IN / RANGES_IN), then paging,
+    // search and the favourite flag.
     let sql = format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
@@ -1534,26 +1565,24 @@ pub fn get_media_window(
                 trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
          FROM media_items
          WHERE local_path IS NOT NULL
-           AND (?1 IS NULL OR COALESCE(source, 'Other') = ?1)
-           AND (?4 IS NULL OR taken_at >= ?4)
-           AND (?5 IS NULL OR taken_at < ?5)
-           AND (?7 = 0 OR user_favorite = 1)
-           AND (?6 IS NULL OR relative_path LIKE '%' || ?6 || '%' ESCAPE '\\'
-                          OR persons LIKE '%' || ?6 || '%' ESCAPE '\\'
-                          OR location LIKE '%' || ?6 || '%' ESCAPE '\\'
-                          OR albums LIKE '%' || ?6 || '%' ESCAPE '\\')
+           AND {SOURCE_IN}
+           AND {RANGES_IN}
+           AND (?6 = 0 OR user_favorite = 1)
+           AND (?5 IS NULL OR relative_path LIKE '%' || ?5 || '%' ESCAPE '\\'
+                          OR persons LIKE '%' || ?5 || '%' ESCAPE '\\'
+                          OR location LIKE '%' || ?5 || '%' ESCAPE '\\'
+                          OR albums LIKE '%' || ?5 || '%' ESCAPE '\\')
          ORDER BY {} {dir} {nulls}, id {dir}
-         LIMIT ?2 OFFSET ?3",
+         LIMIT ?3 OFFSET ?4",
         sort.column(),
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
         rusqlite::params![
-            source,
+            filter_json(sources),
+            filter_json(ranges),
             limit,
             offset,
-            range.lo,
-            range.hi,
             search,
             favorites_only as i64
         ],
@@ -2905,7 +2934,6 @@ mod tests {
                     VALUES (2, 'photo', 'Media/DCIM/IMG_0002.png', 200, '/c/b.png');",
             )
             .unwrap();
-        let all = TimeRange { lo: None, hi: None };
 
         // Starring returns the row's stable relative_path (what gets persisted).
         assert_eq!(
@@ -2915,12 +2943,12 @@ mod tests {
         assert_eq!(set_user_favorite(&cache, 999, true).unwrap(), None); // no such row
 
         // favorites_only now returns just the starred one.
-        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 1);
-        assert_eq!(count_media(&cache, None, all, None, false).unwrap(), 2);
+        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 1);
+        assert_eq!(count_media(&cache, &[], &[], None, false).unwrap(), 2);
         let starred = get_media_window(
             &cache,
-            None,
-            all,
+            &[],
+            &[],
             None,
             0,
             50,
@@ -2938,13 +2966,66 @@ mod tests {
             .conn()
             .execute("UPDATE media_items SET user_favorite = 0", [])
             .unwrap();
-        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 0);
+        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 0);
         apply_user_favorites(&cache, &["Media/DCIM/IMG_0001.png".to_string()]).unwrap();
-        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 1);
+        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 1);
 
         // Unstarring clears it.
         set_user_favorite(&cache, 1, false).unwrap();
-        assert_eq!(count_media(&cache, None, all, None, true).unwrap(), 0);
+        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 0);
+    }
+
+    #[test]
+    fn media_filters_union_multiple_sources_and_ranges() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                // 2021 Photos, 2023 Photos, 2023 Messages, 2024 Photos, undated.
+                "INSERT INTO media_items (id, kind, source, relative_path, taken_at, local_path) VALUES
+                    (1,'photo','Photos','a', 1609500000, '/a'),
+                    (2,'photo','Photos','b', 1672550000, '/b'),
+                    (3,'photo','Messages','c', 1672560000, '/c'),
+                    (4,'photo','Photos','d', 1704090000, '/d'),
+                    (5,'photo','Photos','e', NULL, '/e');",
+            )
+            .unwrap();
+        let y2023 = TimeRange {
+            lo: Some(1672531200),
+            hi: Some(1704067200),
+        };
+        let y2024 = TimeRange {
+            lo: Some(1704067200),
+            hi: Some(1735689600),
+        };
+        let s = Sort::new("taken_at", true);
+        let count =
+            |src: &[String], r: &[TimeRange]| count_media(&cache, src, r, None, false).unwrap();
+
+        // Empty = everything (including the undated item).
+        assert_eq!(count(&[], &[]), 5);
+        // One source narrows.
+        assert_eq!(count(&["Messages".into()], &[]), 1);
+        // TWO sources = union.
+        assert_eq!(count(&["Photos".into(), "Messages".into()], &[]), 5);
+        // One year range (undated excluded once a range is active).
+        assert_eq!(count(&[], &[y2023]), 2);
+        // TWO year ranges = union.
+        assert_eq!(count(&[], &[y2023, y2024]), 3);
+        // Sources AND ranges compose: Photos in {2023,2024} = ids 2,4.
+        let rows = get_media_window(
+            &cache,
+            &["Photos".into()],
+            &[y2023, y2024],
+            None,
+            0,
+            50,
+            s,
+            false,
+        )
+        .unwrap();
+        let ids: Vec<i64> = rows.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec![4, 2]); // newest first
     }
 
     #[test]

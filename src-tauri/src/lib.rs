@@ -3033,23 +3033,16 @@ fn safari_bookmark_sort(field: &str, desc: bool) -> query::Sort {
 #[tauri::command]
 async fn count_media(
     active: State<'_, ActiveBackup>,
-    source: Option<String>,
-    lo: Option<i64>,
-    hi: Option<i64>,
+    sources: Vec<String>,
+    ranges: Vec<query::TimeRange>,
     search: Option<String>,
     favorites_only: bool,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media(
-            &cache,
-            source.as_deref(),
-            query::TimeRange { lo, hi },
-            search.as_deref(),
-            favorites_only,
-        )
-        .map_err(|e| e.to_string())
+        query::count_media(&cache, &sources, &ranges, search.as_deref(), favorites_only)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3058,7 +3051,7 @@ async fn count_media(
 #[tauri::command]
 async fn count_media_ranges(
     active: State<'_, ActiveBackup>,
-    source: Option<String>,
+    sources: Vec<String>,
     ranges: Vec<query::TimeRange>,
     search: Option<String>,
     favorites_only: bool,
@@ -3066,14 +3059,8 @@ async fn count_media_ranges(
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media_ranges(
-            &cache,
-            source.as_deref(),
-            &ranges,
-            search.as_deref(),
-            favorites_only,
-        )
-        .map_err(|e| e.to_string())
+        query::count_media_ranges(&cache, &sources, &ranges, search.as_deref(), favorites_only)
+            .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3083,9 +3070,8 @@ async fn count_media_ranges(
 #[allow(clippy::too_many_arguments)] // Tauri command: source + time range + search + paging + sort + favorites.
 async fn get_media_window(
     active: State<'_, ActiveBackup>,
-    source: Option<String>,
-    lo: Option<i64>,
-    hi: Option<i64>,
+    sources: Vec<String>,
+    ranges: Vec<query::TimeRange>,
     search: Option<String>,
     offset: i64,
     limit: i64,
@@ -3098,8 +3084,8 @@ async fn get_media_window(
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
         query::get_media_window(
             &cache,
-            source.as_deref(),
-            query::TimeRange { lo, hi },
+            &sources,
+            &ranges,
             search.as_deref(),
             offset,
             limit,
