@@ -145,6 +145,34 @@ fn is_heic(src: &Path, mime: Option<&str>) -> bool {
     )
 }
 
+/// The cache filename suffix for each rendered form, so the protocol handler and
+/// `render`/`render_preview` cannot disagree about where a rendering lives.
+pub fn render_suffix(want_thumb: bool, want_preview: bool) -> &'static str {
+    if want_preview {
+        "preview"
+    } else if want_thumb {
+        "thumb"
+    } else {
+        "full"
+    }
+}
+
+/// An ALREADY-RENDERED JPEG for `id`, if an earlier request produced one.
+///
+/// This exists so a repeat request never touches the original. `render` caches
+/// its output, but on an encrypted backup the caller had to decrypt the whole
+/// original into memory (and write a temp) BEFORE it could call `render` and
+/// discover the work was already done — so every repaint re-decrypted every
+/// visible HEIC. That is why the flicker was HEIC-only: formats served as
+/// original bytes never went down this path.
+pub fn cached(cache_dir: &Path, id: i64, suffix: &str) -> Option<Rendered> {
+    let bytes = std::fs::read(cache_dir.join(format!("{id}.{suffix}.jpg"))).ok()?;
+    Some(Rendered {
+        bytes,
+        content_type: "image/jpeg".to_string(),
+    })
+}
+
 /// Render a media item for serving. `want_thumb` selects a downscaled JPEG
 /// thumbnail; otherwise the full image (HEIC transcoded to JPEG, other formats
 /// served as-is). `cache_dir` holds the converted files. Returns `None` if the
@@ -391,6 +419,33 @@ mod tests {
         assert_eq!(thumb.content_type, "image/jpeg");
         assert!(jpeg_magic(&thumb.bytes));
         assert!(cache.join("1.thumb.jpg").exists());
+    }
+
+    #[test]
+    fn a_rendered_jpeg_is_servable_without_the_original() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path().join("thumbs");
+        // Nothing rendered yet.
+        assert!(cached(&cache, 5, "thumb").is_none());
+
+        let png = tmp.path().join("a.png");
+        std::fs::write(&png, TINY_PNG).unwrap();
+        render(&png, &cache, 5, true, Some("image/png")).unwrap();
+
+        // Now it is servable from the cache ALONE — the point being that the
+        // caller need not read (or, on an encrypted backup, decrypt) the
+        // original at all. Proven by deleting the source first.
+        std::fs::remove_file(&png).unwrap();
+        let hit = cached(&cache, 5, "thumb").expect("cached render is servable");
+        assert_eq!(hit.content_type, "image/jpeg");
+        assert!(jpeg_magic(&hit.bytes));
+
+        // Each rendered form has its own slot, so a thumb is never served as a
+        // preview (or vice versa).
+        assert_eq!(render_suffix(true, false), "thumb");
+        assert_eq!(render_suffix(false, true), "preview");
+        assert_eq!(render_suffix(false, false), "full");
+        assert!(cached(&cache, 5, "preview").is_none());
     }
 
     #[test]
