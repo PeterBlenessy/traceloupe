@@ -3636,6 +3636,26 @@ fn media_protocol_response(
     // Encrypted original: decrypt it (using the session keys) to a temp file that
     // `media::render` / sips can read, then discard the plaintext. The rendered
     // JPEG is still cached by id, so repeat views don't re-decrypt via sips.
+    // ALREADY RENDERED? Serve it and touch nothing else.
+    //
+    // `render` caches its output, but on an encrypted backup we used to decrypt
+    // the whole original into memory and write a temp BEFORE calling it — only
+    // for `render` to return the cached JPEG immediately. So every repaint
+    // re-decrypted every visible HEIC, which is why the flicker was HEIC-only
+    // (other formats are served as original bytes and never take this path).
+    if let Some(r) = media::cached(
+        &thumbs_dir,
+        id,
+        media::render_suffix(want_thumb, want_preview),
+    ) {
+        return Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", r.content_type)
+            .header("Cache-Control", cache_ctl)
+            .body(r.bytes)
+            .unwrap();
+    }
+
     let rendered = if let Some(key) = decrypt_key {
         let Some(dec) = ensure_session_decryptor(app, &cache_path) else {
             return not_found(); // encrypted item, and keys couldn't be loaded (no stored password)

@@ -713,10 +713,23 @@ const Thumb = forwardRef<
           src={client.mediaUrl(item.id, { thumb: true, cacheKey })}
           alt={item.filename ?? ""}
           onError={() => setFailed(true)}
-          // Decode OFF the main thread so a fast scroll doesn't stall on each
-          // tile's decode competing with virtualizer measurement.
-          decoding="async"
-          // NO hover zoom and NO `loading="lazy"` here, on purpose. A
+          // NO `decoding="async"` — it is what made the tiles BLINK.
+          //
+          // Async decoding lets WebKit paint an element whose decode is not
+          // ready, i.e. paint the tile with NO IMAGE and fill it in later. When
+          // hovering re-rasterizes the scroll layer, every tile whose decoded
+          // bitmap has to be regenerated shows that empty frame first — the
+          // expensive decodes worst, which is why it read as "HEIC only". No
+          // re-fetch and no React remount is involved (both were measured: the
+          // <img> nodes are identical across a hover and fire no `load`), which
+          // is why the earlier caching/remount explanations did not fit.
+          //
+          // Synchronous decoding (the default) paints the image or waits — it
+          // never paints a hole. The decode cost that motivated `async` is much
+          // lower now anyway: the handler serves a cached JPEG without touching
+          // (or decrypting) the original.
+          //
+          // NO hover zoom and NO `loading="lazy"` here either, on purpose. A
           // `transform: scale` on hover makes WKWebView re-rasterize the scroll
           // layer, and `lazy` then re-fetches the neighbouring no-cache
           // custom-scheme URLs during that repaint — so hovering one tile made
