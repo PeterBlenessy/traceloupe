@@ -226,9 +226,9 @@ export function FilterControl({
                   Sized to the CHIP, not to the island segment: at
                   `--control-h-sm` (the full control height) this one child
                   stretched the whole chip to the island's height, which is what
-                  made the selected filter chips look oversized. 20px keeps a
-                  comfortable target on the 2px grid without setting the chip's
-                  height — the chip's own `py-1` does that. */}
+                  made the selected filter chips look oversized. At 16px the chip's own
+                  text line (16px) sets the height instead, so the chip lands
+                  ~22px INSIDE the 30px island rather than filling it. */}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -238,7 +238,7 @@ export function FilterControl({
                       e.stopPropagation();
                       removeChip(s);
                     }}
-                    className="ml-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+                    className="ml-0.5 inline-flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
                   >
                     <X className="size-3" />
                   </button>
