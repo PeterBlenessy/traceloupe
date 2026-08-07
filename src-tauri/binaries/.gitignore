@@ -1,4 +1,8 @@
 # Downloaded llama-server sidecar + its dylibs (fetched via
 # scripts/download-llama-server.sh; too large / platform-specific to commit).
 llama-server-*
-lib/
+# `lib`, NOT `lib/`: a trailing slash matches only a DIRECTORY. When the
+# real lib/ was replaced by a symlink, this pattern stopped matching and
+# `git add -A` committed the symlink — which pointed at itself, so dyld
+# failed with ELOOP and the sidecar died on every start (see #350).
+lib
