@@ -45,7 +45,22 @@ fn bundled_binary_name() -> String {
 /// static binary with no dylibs, always usable.
 fn next_to_exe_usable(exe_dir: &Path) -> bool {
     let is_dev_target = exe_dir.to_string_lossy().contains("/target/");
-    !is_dev_target || exe_dir.join("lib").is_dir()
+    !is_dev_target || lib_dir_usable(&exe_dir.join("lib"))
+}
+
+/// Whether a `lib/` beside a dynamically-linked sidecar can actually satisfy it.
+///
+/// `is_dir()` alone is not enough, and the difference cost a day: `lib` was once
+/// committed as a symlink pointing at ITSELF, so every `dyld` lookup failed with
+/// ELOOP and the sidecar aborted after exec — long after we had decided the
+/// binary was fine. `is_dir()` follows symlinks and returns false on a loop, so
+/// resolution silently fell through to another equally broken copy and the user
+/// got `SIGABRT` with no cause.
+///
+/// Checking for the dylib the binary actually links against turns that into an
+/// answer at resolve time.
+fn lib_dir_usable(lib: &Path) -> bool {
+    lib.is_dir() && lib.join("libllama-server-impl.dylib").exists()
 }
 
 /// Locate the llama-server binary.
@@ -484,6 +499,35 @@ impl Drop for LlamaServer {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_self_referential_lib_symlink_is_not_a_usable_lib_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+
+        // Absent.
+        assert!(!lib_dir_usable(&lib));
+
+        // A real directory, but WITHOUT the dylib the binary links against —
+        // e.g. `tauri dev` dropping a bare sidecar next to the exe.
+        std::fs::create_dir(&lib).unwrap();
+        assert!(!lib_dir_usable(&lib));
+
+        // Populated: usable.
+        std::fs::write(lib.join("libllama-server-impl.dylib"), b"x").unwrap();
+        assert!(lib_dir_usable(&lib));
+
+        // THE REGRESSION: `lib` replaced by a symlink pointing at itself. This
+        // is what was committed to git; dyld resolved it to ELOOP and the
+        // sidecar aborted after exec. It must read as unusable HERE, so the
+        // failure is an error at resolve time and not a SIGABRT later.
+        let loop_dir = tmp.path().join("loop");
+        std::fs::create_dir(&loop_dir).unwrap();
+        let loop_lib = loop_dir.join("lib");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&loop_lib, &loop_lib).unwrap();
+        assert!(!lib_dir_usable(&loop_lib));
+    }
+
     /// A fake "server" binary: a shell script we control.
     fn fake_binary(dir: &Path, script_body: &str) -> PathBuf {
         let path = dir.join("fake-llama-server");
@@ -540,8 +584,19 @@ mod tests {
             !next_to_exe_usable(&dev),
             "dev-target without lib/ must be rejected"
         );
+        // An EMPTY lib/ is still not usable: the directory existing says
+        // nothing about the dylib the binary links against actually being
+        // there. (Before, `is_dir()` alone passed here.)
         std::fs::create_dir_all(dev.join("lib")).unwrap();
-        assert!(next_to_exe_usable(&dev), "dev-target WITH lib/ is usable");
+        assert!(
+            !next_to_exe_usable(&dev),
+            "an empty lib/ cannot satisfy the sidecar"
+        );
+        std::fs::write(dev.join("lib/libllama-server-impl.dylib"), b"x").unwrap();
+        assert!(
+            next_to_exe_usable(&dev),
+            "dev-target WITH a populated lib/ is usable"
+        );
         // A release bundle (not under /target/) is a static binary — usable.
         let rel = tmp.path().join("TraceLoupe.app/Contents/MacOS");
         std::fs::create_dir_all(&rel).unwrap();
