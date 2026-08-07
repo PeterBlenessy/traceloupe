@@ -25,6 +25,7 @@ jobs:
       # Fails the PR if any relative Markdown link points at a missing file
       # (catches links left dangling by a doc move or rename).
       - run: bash scripts/check-doc-links.sh
+      - run: node scripts/check-list-scroll.mjs
       - run: python3 tools/coverage-gap.py --self-test
       # Fails the PR if the browser mock and the backend describe different
       # worlds. The mock is what the design lint and every screenshot measure —

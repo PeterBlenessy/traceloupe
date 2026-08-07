@@ -226,7 +226,7 @@ export function ContactsView() {
               <div
                 {...listProps}
                 aria-label="Contacts"
-                className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex min-h-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
               <VirtualList
                 items={sorted}

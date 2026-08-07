@@ -56,6 +56,7 @@ run "releases"        bash scripts/check-releases.sh
 run "doc links"       bash scripts/check-doc-links.sh
 run "coverage map"    python3 tools/coverage-gap.py --self-test
 run "mock parity"     node scripts/check-mock-parity.mjs
+run "list scroll"     node scripts/check-list-scroll.mjs
 run "surfaces"        node scripts/check-artifact-surfaces.mjs
 run "overlap"         node scripts/check-artifact-overlap.mjs
 
