@@ -303,14 +303,16 @@ pub fn parse_notes(
     let (image_count_expr, attach_count_expr) =
         if cols.contains("ZTYPEUTI") && cols.contains("ZNOTE") {
             (
+                format!(
+                    "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a \
+                      WHERE a.ZNOTE = n.Z_PK AND a.ZTYPEUTI IN ({NOTE_IMAGE_UTIS}))"
+                ),
                 "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
-              AND a.ZTYPEUTI IN ('public.png','public.jpeg','public.heic','public.avif',\
-              'org.webmproject.webp','public.mpeg-4','com.apple.quicktime-movie'))",
-                "(SELECT COUNT(*) FROM ZICCLOUDSYNCINGOBJECT a WHERE a.ZNOTE = n.Z_PK \
-              AND a.ZTYPEUTI IS NOT NULL)",
+              AND a.ZTYPEUTI IS NOT NULL)"
+                    .to_string(),
             )
         } else {
-            ("0", "0")
+            ("0".to_string(), "0".to_string())
         };
     // Hashtag tags (iOS 15+): each tag is an inline-attachment token whose text is
     // in ZALTTEXT and whose note is ZNOTE1 (distinct from the media columns
@@ -559,9 +561,21 @@ fn load_note_tags(
     Ok(map)
 }
 
-/// Image UTIs we resolve for a note thumbnail (matches the `image_count` set).
-const NOTE_IMAGE_UTIS: &str =
-    "'public.jpeg','public.png','public.heic','public.avif','org.webmproject.webp'";
+/// Image UTIs we resolve — and the SAME set `image_count` counts.
+///
+/// These must not drift: the count drives "N images aren't included in this
+/// backup", so anything counted here that the resolver cannot try becomes a
+/// false accusation against the backup. Videos are deliberately absent — they
+/// were counted as images, so a note of clips reported "N images not included"
+/// when nothing was missing at all.
+///
+/// Drawings, scanned pages and gallery containers are included because their
+/// bytes render from FallbackImages (see `resolve_note_image`).
+const NOTE_IMAGE_UTIS: &str = "'public.jpeg','public.png','public.heic',\
+'public.heif','public.avif','public.tiff','public.jpeg-2000',\
+'com.compuserve.gif','org.webmproject.webp','com.apple.drawing',\
+'com.apple.drawing.2','com.apple.paper','com.apple.paper.doc.scan',\
+'com.apple.notes.gallery'";
 
 /// Resolve each note's FIRST embedded image (lowest attachment Z_PK) to a servable
 /// backup blob for a list thumbnail. Empty when there's no Manifest or the schema
@@ -575,24 +589,79 @@ fn load_note_images(
     let Some(src) = images else {
         return map;
     };
-    if !(cols.contains("ZMEDIA")
-        && cols.contains("ZACCOUNT1")
-        && cols.contains("ZTYPEUTI")
-        && cols.contains("ZNOTE"))
-    {
+    if !(cols.contains("ZTYPEUTI") && cols.contains("ZNOTE")) {
         return map;
     }
-    // First image attachment per note, joined to its media file record, its
-    // account (for the on-disk Accounts/<uuid>/… path), and an optional
-    // pre-rendered preview (Z_ENT 6, linked by ZATTACHMENT).
+
+    // The PREVIEW entity, resolved BY NAME. This was hard-coded `Z_ENT = 6`,
+    // which on iOS 17 is `ICDeviceMigrationState` — `ICAttachmentPreviewImage`
+    // is 5. So the preview join silently matched nothing on every modern
+    // backup, and the file's own header warns against exactly this ("Core Data
+    // column names carry version-dependent suffixes … we introspect").
+    let preview_ent: Option<i64> = conn
+        .query_row(
+            "SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME = 'ICAttachmentPreviewImage'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+
+    // Every column below varies by iOS version, so build the SQL from what this
+    // schema actually has. A missing one degrades that ONE candidate rather
+    // than dropping the attachment.
+    let col = |c: &str| cols.contains(c);
+    let media_join = if col("ZMEDIA") {
+        "LEFT JOIN ZICCLOUDSYNCINGOBJECT m ON m.Z_PK = a.ZMEDIA"
+    } else {
+        "LEFT JOIN ZICCLOUDSYNCINGOBJECT m ON 0"
+    };
+    // The account FK is ZACCOUNT…ZACCOUNT8 depending on version; take the first
+    // that exists rather than assuming ZACCOUNT1.
+    let account_fk = ["ZACCOUNT1", "ZACCOUNT", "ZACCOUNT2", "ZACCOUNT3"]
+        .into_iter()
+        .find(|c| col(c));
+    let account_join = match account_fk {
+        Some(fk) => format!("LEFT JOIN ZICCLOUDSYNCINGOBJECT acc ON acc.Z_PK = a.{fk}"),
+        None => "LEFT JOIN ZICCLOUDSYNCINGOBJECT acc ON 0".to_string(),
+    };
+    // A GALLERY or a scanned document hangs its pages off a parent attachment:
+    // only the parent carries ZNOTE, so `WHERE a.ZNOTE IS NOT NULL` hid every
+    // page of every multi-image insert — the common case in real notes.
+    let parent_fk = ["ZPARENTATTACHMENT", "ZPARENTATTACHMENT1"]
+        .into_iter()
+        .find(|c| col(c));
+    let (parent_join, note_expr) = match parent_fk {
+        Some(fk) => (
+            format!("LEFT JOIN ZICCLOUDSYNCINGOBJECT par ON par.Z_PK = a.{fk}"),
+            "COALESCE(a.ZNOTE, par.ZNOTE)",
+        ),
+        None => (
+            "LEFT JOIN ZICCLOUDSYNCINGOBJECT par ON 0".to_string(),
+            "a.ZNOTE",
+        ),
+    };
+    let preview_join = match preview_ent {
+        Some(ent) => {
+            let back = if col("ZATTACHMENT1") {
+                "(p.ZATTACHMENT = a.Z_PK OR p.ZATTACHMENT1 = a.Z_PK)"
+            } else {
+                "p.ZATTACHMENT = a.Z_PK"
+            };
+            format!("LEFT JOIN ZICCLOUDSYNCINGOBJECT p ON {back} AND p.Z_ENT = {ent}")
+        }
+        None => "LEFT JOIN ZICCLOUDSYNCINGOBJECT p ON 0".to_string(),
+    };
+
     let sql = format!(
-        "SELECT a.ZNOTE, m.ZIDENTIFIER, m.ZFILENAME, acc.ZIDENTIFIER, p.ZIDENTIFIER
+        "SELECT {note_expr} AS note_pk, m.ZIDENTIFIER, m.ZFILENAME, acc.ZIDENTIFIER,
+                p.ZIDENTIFIER, a.ZIDENTIFIER
          FROM ZICCLOUDSYNCINGOBJECT a
-         JOIN ZICCLOUDSYNCINGOBJECT m ON m.Z_PK = a.ZMEDIA
-         JOIN ZICCLOUDSYNCINGOBJECT acc ON acc.Z_PK = a.ZACCOUNT1
-         LEFT JOIN ZICCLOUDSYNCINGOBJECT p ON p.ZATTACHMENT = a.Z_PK AND p.Z_ENT = 6
-         WHERE a.ZNOTE IS NOT NULL AND a.ZTYPEUTI IN ({NOTE_IMAGE_UTIS})
-         ORDER BY a.ZNOTE, a.Z_PK"
+         {media_join}
+         {account_join}
+         {parent_join}
+         {preview_join}
+         WHERE {note_expr} IS NOT NULL AND a.ZTYPEUTI IN ({NOTE_IMAGE_UTIS})
+         ORDER BY note_pk, a.Z_PK"
     );
     let Ok(mut stmt) = conn.prepare(&sql) else {
         return map;
@@ -606,16 +675,18 @@ fn load_note_images(
         };
         let media_uuid = r.get::<_, Option<String>>(1).ok().flatten();
         let filename = r.get::<_, Option<String>>(2).ok().flatten();
-        let Some(account) = r.get::<_, Option<String>>(3).ok().flatten() else {
-            continue;
-        };
+        // The account is now OPTIONAL: without it we can still try the
+        // account-less legacy layout instead of dropping the image entirely.
+        let account = r.get::<_, Option<String>>(3).ok().flatten();
         let preview_stem = r.get::<_, Option<String>>(4).ok().flatten();
+        let attachment_id = r.get::<_, Option<String>>(5).ok().flatten();
         if let Some(img) = resolve_note_image(
             src,
-            &account,
+            account.as_deref(),
             media_uuid.as_deref(),
             filename.as_deref(),
             preview_stem.as_deref(),
+            attachment_id.as_deref(),
         ) {
             map.entry(note_pk).or_default().push(img);
         }
@@ -623,49 +694,98 @@ fn load_note_images(
     map
 }
 
-/// Resolve a note image's candidate on-disk paths (pre-rendered preview first,
-/// then the full-res original) against the Manifest; the first that exists wins.
+/// Resolve a note image to a servable blob, trying each on-disk layout Apple
+/// Notes actually uses. The first that exists in the Manifest wins.
+///
+/// WHY PREFIX MATCHING, NOT EXACT PATHS. Modern Notes writes
+/// `Accounts/<acct>/Media/<media-uuid>/<GENERATION-uuid>/<filename>` — the
+/// generation directory appears whenever the attachment has been edited, and
+/// which of ZGENERATION/ZGENERATION1/ZFALLBACK*GENERATION applies is
+/// version-dependent. Building one exact path meant every attachment with a
+/// generation silently vanished, which is why *some* images in a note showed
+/// and most did not. Matching the directory PREFIX finds the file whatever the
+/// layout, without this parser having to track Apple's column churn.
 fn resolve_note_image(
     src: &NoteImageSource,
-    account: &str,
+    account: Option<&str>,
     media_uuid: Option<&str>,
     filename: Option<&str>,
     preview_stem: Option<&str>,
+    attachment_id: Option<&str>,
 ) -> Option<NoteImage> {
+    // (exact path, mime) candidates, tried before the prefix searches.
     let mut candidates: Vec<(String, Option<String>)> = Vec::new();
-    if let Some(stem) = preview_stem {
+    // Directory prefixes to search when no exact path hits.
+    let mut prefixes: Vec<String> = Vec::new();
+
+    if let (Some(acct), Some(stem)) = (account, preview_stem) {
         candidates.push((
-            format!("Accounts/{account}/Previews/{stem}.png"),
+            format!("Accounts/{acct}/Previews/{stem}.png"),
             Some("image/png".to_string()),
         ));
         candidates.push((
-            format!("Accounts/{account}/Previews/{stem}.jpg"),
+            format!("Accounts/{acct}/Previews/{stem}.jpg"),
             Some("image/jpeg".to_string()),
         ));
     }
-    if let (Some(media), Some(file)) = (media_uuid, filename) {
+    if let Some(media) = media_uuid {
+        if let (Some(acct), Some(file)) = (account, filename) {
+            // The flat (un-generationed) form first — an exact hit is cheapest.
+            candidates.push((
+                format!("Accounts/{acct}/Media/{media}/{file}"),
+                mime_from_name(file),
+            ));
+        }
+        if let Some(acct) = account {
+            prefixes.push(format!("Accounts/{acct}/Media/{media}/"));
+        }
+        // Pre-iOS-16 / "On My iPhone": media sits at the container root with no
+        // account folder at all.
+        prefixes.push(format!("Media/{media}/"));
+    }
+    // Drawings, handwriting and scanned pages have no ICMedia row; their bytes
+    // render into FallbackImages, keyed by the ATTACHMENT's identifier.
+    if let (Some(acct), Some(att)) = (account, attachment_id) {
+        prefixes.push(format!("Accounts/{acct}/FallbackImages/{att}/"));
         candidates.push((
-            format!("Accounts/{account}/Media/{media}/{file}"),
-            mime_from_name(file),
+            format!("Accounts/{acct}/FallbackImages/{att}.png"),
+            Some("image/png".to_string()),
         ));
     }
-    for (rel, mime) in candidates {
-        if let Ok(Some(entry)) = src.index.find(NOTES_DOMAIN, &rel) {
-            let path: PathBuf = src.index.blob_path(&entry.file_id);
-            let (decrypt_key, plain_size) = if src.decryptor.is_some() {
-                match crypto::file_key_field(&entry.file_blob) {
-                    Ok((k, s)) => (Some(k), s.and_then(|v| i64::try_from(v).ok())),
-                    Err(_) => (None, None),
-                }
-            } else {
-                (None, None)
-            };
-            return Some(NoteImage {
-                local_path: path.to_string_lossy().into_owned(),
-                decrypt_key,
-                plain_size,
-                mime,
-            });
+
+    let servable = |entry: &crate::manifest::FileEntry, mime: Option<String>| -> NoteImage {
+        let path: PathBuf = src.index.blob_path(&entry.file_id);
+        let (decrypt_key, plain_size) = if src.decryptor.is_some() {
+            match crypto::file_key_field(&entry.file_blob) {
+                Ok((k, sz)) => (Some(k), sz.and_then(|v| i64::try_from(v).ok())),
+                Err(_) => (None, None),
+            }
+        } else {
+            (None, None)
+        };
+        NoteImage {
+            local_path: path.to_string_lossy().into_owned(),
+            decrypt_key,
+            plain_size,
+            mime,
+        }
+    };
+
+    for (rel, mime) in &candidates {
+        if let Ok(Some(entry)) = src.index.find(NOTES_DOMAIN, rel) {
+            return Some(servable(&entry, mime.clone()));
+        }
+    }
+    for prefix in &prefixes {
+        if let Ok(entries) = src.index.find_prefix(NOTES_DOMAIN, prefix) {
+            // A directory entry has no bytes; take the first real file.
+            if let Some(entry) = entries
+                .iter()
+                .find(|e| e.relative_path.len() > prefix.len() && !e.relative_path.ends_with('/'))
+            {
+                let mime = mime_from_name(&entry.relative_path);
+                return Some(servable(entry, mime));
+            }
         }
     }
     None
@@ -1386,6 +1506,102 @@ mod tests {
         )
         .unwrap();
         db
+    }
+
+    /// A Manifest holding just the paths a test cares about.
+    fn make_manifest(dir: &Path, paths: &[&str]) -> ManifestIndex {
+        let m = Connection::open(dir.join("Manifest.db")).unwrap();
+        m.execute_batch(
+            "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);",
+        )
+        .unwrap();
+        for (i, rel) in paths.iter().enumerate() {
+            m.execute(
+                "INSERT INTO Files VALUES (?1, ?2, ?3, 1, NULL)",
+                rusqlite::params![format!("f{i:04}"), NOTES_DOMAIN, rel],
+            )
+            .unwrap();
+        }
+        drop(m);
+        ManifestIndex::open(dir, None, dir).unwrap()
+    }
+
+    /// A NoteStore whose attachments exercise the layouts that were being missed.
+    fn make_note_store_with_images(dir: &Path) -> std::path::PathBuf {
+        let db = dir.join("NoteStoreImages.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Z_PRIMARYKEY (Z_ENT INTEGER, Z_NAME TEXT);
+             -- iOS 17 numbering: the PREVIEW entity is 5. The parser used to
+             -- hard-code 6, which here (as on a real device) is something else.
+             INSERT INTO Z_PRIMARYKEY VALUES (4,'ICAttachment'),
+                                             (5,'ICAttachmentPreviewImage'),
+                                             (6,'ICDeviceMigrationState');
+             CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+                Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER, ZTYPEUTI TEXT,
+                ZNOTE INTEGER, ZMEDIA INTEGER, ZACCOUNT1 INTEGER,
+                ZPARENTATTACHMENT INTEGER, ZATTACHMENT INTEGER,
+                ZIDENTIFIER TEXT, ZFILENAME TEXT);
+             -- the account object
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZIDENTIFIER) VALUES (1,'ACCT');
+             -- media rows
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZIDENTIFIER, ZFILENAME)
+                VALUES (2,'MEDIA-GEN','shot.jpg'), (3,'MEDIA-FLAT','flat.jpg');
+             -- (a) an attachment whose file sits under a GENERATION directory
+             INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZTYPEUTI, ZNOTE, ZMEDIA, ZACCOUNT1, ZIDENTIFIER)
+                VALUES (10, 4, 'public.jpeg', 100, 2, 1, 'ATT-GEN');
+             -- (b) a GALLERY parent (carries ZNOTE) and its child page (does NOT)
+             INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZTYPEUTI, ZNOTE, ZACCOUNT1, ZIDENTIFIER)
+                VALUES (11, 4, 'com.apple.notes.gallery', 100, 1, 'ATT-GALLERY');
+             INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZTYPEUTI, ZMEDIA, ZACCOUNT1, ZPARENTATTACHMENT, ZIDENTIFIER)
+                VALUES (12, 4, 'public.jpeg', 3, 1, 11, 'ATT-CHILD');",
+        )
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn note_images_resolve_through_generation_dirs_and_gallery_children() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = make_note_store_with_images(tmp.path());
+        let conn = Connection::open(&db).unwrap();
+        let cols: HashSet<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('ZICCLOUDSYNCINGOBJECT')")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(|c| c.ok())
+            .collect();
+
+        let index = make_manifest(
+            tmp.path(),
+            &[
+                // (a) real Notes layout: an extra GENERATION uuid before the file.
+                //     The old exact-path build could never match this.
+                "Accounts/ACCT/Media/MEDIA-GEN/GEN-UUID/shot.jpg",
+                // (b) the gallery CHILD's file, flat.
+                "Accounts/ACCT/Media/MEDIA-FLAT/flat.jpg",
+            ],
+        );
+        let src = NoteImageSource {
+            index: &index,
+            decryptor: None,
+        };
+        let map = load_note_images(&conn, &cols, Some(&src));
+
+        let imgs = map.get(&100).expect("note 100 has images");
+        let paths: Vec<&str> = imgs.iter().map(|i| i.local_path.as_str()).collect();
+        assert_eq!(
+            imgs.len(),
+            2,
+            "the generationed image AND the gallery child both resolve, got {paths:?}"
+        );
+        // Both are servable blobs, i.e. a real Manifest fileID was found.
+        assert!(imgs.iter().all(|i| !i.local_path.is_empty()));
+        assert!(imgs.iter().all(|i| i.mime.as_deref() == Some("image/jpeg")));
     }
 
     #[test]
