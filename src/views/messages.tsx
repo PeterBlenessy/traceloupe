@@ -228,7 +228,7 @@ function DeletionNote() {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div className="mx-2 mb-1 flex items-start gap-1.5 rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
+        <div className="mx-2 mb-1 flex shrink-0 items-start gap-1.5 rounded-md bg-muted/50 px-2 py-1.5 text-xs text-muted-foreground">
           <Trash2 className="mt-0.5 size-3 shrink-0" />
           <span>
             At least {known} {known === 1 ? "message was" : "messages were"}{" "}
@@ -792,7 +792,7 @@ function Conversations({
             <div
               {...threadListProps}
               aria-label="Conversations"
-              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="flex min-h-0 flex-1 flex-col outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
             <DeletionNote />
             <VirtualList
