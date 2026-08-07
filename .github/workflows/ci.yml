@@ -26,6 +26,7 @@ jobs:
       # (catches links left dangling by a doc move or rename).
       - run: bash scripts/check-doc-links.sh
       - run: python3 tools/coverage-gap.py --self-test
+      - run: node scripts/check-dates.mjs
       # Fails the PR if the browser mock and the backend describe different
       # worlds. The mock is what the design lint and every screenshot measure —
       # when it drifts, those checks quietly stop testing anything while still

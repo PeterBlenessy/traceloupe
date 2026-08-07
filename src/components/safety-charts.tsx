@@ -266,24 +266,12 @@ const UNIT_NOUN: Record<Unit, string> = {
   year: "year",
 };
 
-/** Does this chart cross a calendar year? A day/week/month label that omits the
- *  year is unreadable the moment it does: a 30-month axis reads
- *  "Jan Feb … Dec Jan Feb …" with nothing to say which January, and the hover
- *  title on the bar repeats the ambiguity. */
-function spansYears(unit: Unit, buckets: ChartBucket[]): boolean {
-  if (buckets.length < 2) return false;
-  const y = (b: ChartBucket) => keyToDate(unit, b.key).getUTCFullYear();
-  return y(buckets[0]) !== y(buckets[buckets.length - 1]);
-}
-
-function formatBucket(
-  unit: Unit,
-  key: string,
-  withYear = false,
-  locale?: string,
-): string {
+function formatBucket(unit: Unit, key: string, locale?: string): string {
   const d = keyToDate(unit, key);
-  const year: Intl.DateTimeFormatOptions = withYear ? { year: "2-digit" } : {};
+  // ALWAYS the year. An axis of "Jan Feb … Dec" says nothing about WHICH
+  // January, and a backup spans years by definition. 2-digit keeps the tick
+  // compact ("Jun 24"); `quarter` and `year` already carried it.
+  const year: Intl.DateTimeFormatOptions = { year: "2-digit" };
   const fmt = (o: Intl.DateTimeFormatOptions) =>
     new Intl.DateTimeFormat(locale, { ...o, ...year, timeZone: "UTC" }).format(
       d,
@@ -334,12 +322,10 @@ const TOP_PAD = 13;
 function TimeChart({
   unit,
   buckets,
-  withYear,
   hatchIds,
 }: {
   unit: Unit;
   buckets: ChartBucket[];
-  withYear: boolean;
   hatchIds: string[];
 }) {
   const max = Math.max(1, ...buckets.map(bucketTotal));
@@ -410,7 +396,7 @@ function TimeChart({
                 textAnchor="middle"
                 className="fill-muted-foreground text-3xs"
               >
-                {formatBucket(unit, b.key, withYear)}
+                {formatBucket(unit, b.key)}
               </text>
             )}
             {/* The hover target is the whole COLUMN, not the drawn bar: a quiet
@@ -428,7 +414,7 @@ function TimeChart({
               </TooltipTrigger>
               <TooltipContent>
                 <BucketSummary
-                  label={formatBucket(unit, b.key, withYear)}
+                  label={formatBucket(unit, b.key)}
                   bucket={b}
                 />
               </TooltipContent>
@@ -647,7 +633,6 @@ export function FindingCharts({
     dismissed,
   } = analytics;
   const overTime = fillTimeGaps(unit, analytics.overTime);
-  const multiYear = spansYears(unit, overTime);
   // Every bar is in the DOM (this prints), so the count has to be provably
   // small rather than assumed small — the #61 lesson.
   useBoundedList(
@@ -699,13 +684,12 @@ export function FindingCharts({
           <TimeChart
             unit={unit}
             buckets={overTime}
-            withYear={multiYear}
             hatchIds={hatchIds}
           />
           <ChartTable
             caption={`Findings by ${UNIT_NOUN[unit]}`}
             rows={overTime.map((b) => ({
-              label: formatBucket(unit, b.key, multiYear),
+              label: formatBucket(unit, b.key),
               bucket: b,
             }))}
           />
