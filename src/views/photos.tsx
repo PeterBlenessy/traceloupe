@@ -738,8 +738,11 @@ const Thumb = forwardRef<
           className="size-full object-cover"
         />
       )}
+      {/* NO `transition-opacity` on the hover-revealed overlays — see the note
+          on the mark below. An ANIMATED opacity is what promotes a tile to its
+          own compositing layer and blanks everything painted after it. */}
       {item.source && (
-        <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-3xs font-medium text-white opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="absolute bottom-1 left-1 rounded bg-black/55 px-1.5 py-0.5 text-3xs font-medium text-white opacity-0 group-hover:opacity-100">
           {item.source}
         </span>
       )}
@@ -763,7 +766,20 @@ const Thumb = forwardRef<
               onMarkUnsafe(item);
             }
           }}
-          className={`cursor-pointer rounded-full bg-black/55 p-1 transition-opacity ${
+          // NO `transition-opacity`. THIS IS THE HOVER FLICKER.
+          //
+          // A TRANSITIONING opacity is an accelerated animation, so WebKit
+          // promotes the element to its own compositing layer for the duration.
+          // By overlap testing, everything painted AFTER a composited layer that
+          // intersects it must be re-rasterized too — which blanks those tiles
+          // for a frame. That is exactly the reported shape: the flicker hits
+          // the same row and the rows BELOW, never above (paint order), and
+          // which tiles are hit depends on where you hover from and to.
+          //
+          // Toggling opacity WITHOUT a transition is a plain repaint of this one
+          // element: no promotion, no cascade. The reveal is instant, which for
+          // a hover affordance is no loss.
+          className={`cursor-pointer rounded-full bg-black/55 p-1 ${
             item.userFavorite ? "" : "opacity-0 group-hover:opacity-100"
           }`}
         >
