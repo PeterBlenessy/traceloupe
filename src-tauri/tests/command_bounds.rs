@@ -23,6 +23,11 @@ use std::collections::BTreeSet;
 /// concrete (what caps it), not reassuring ("should be small").
 const BOUNDED: &[(&str, &str)] = &[
     (
+        "threads_in_ranges",
+        "one id per CONVERSATION active in the period — bounded by how many \
+         conversations a device has, not by how many messages they hold",
+    ),
+    (
         "marked_ids",
         "one id per item the PERSON marked unsafe by hand — bounded by how many \
          someone can click, not by how much the backup holds",

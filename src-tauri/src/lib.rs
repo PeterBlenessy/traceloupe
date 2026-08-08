@@ -2467,6 +2467,7 @@ async fn count_thread_messages(
     kind: Option<String>,
     search: Option<String>,
     unsafe_only: Option<bool>,
+    ranges: Vec<query::TimeRange>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2477,6 +2478,7 @@ async fn count_thread_messages(
             kind.as_deref(),
             search.as_deref(),
             unsafe_only.unwrap_or(false),
+            &ranges,
         )
         .map_err(|e| e.to_string())
     })
@@ -2495,6 +2497,7 @@ async fn get_thread_message_window(
     desc: bool,
     search: Option<String>,
     unsafe_only: Option<bool>,
+    ranges: Vec<query::TimeRange>,
 ) -> Result<Vec<Message>, String> {
     // Async + spawn_blocking: a synchronous command runs on the main thread and
     // would freeze the whole native UI. Only the requested window is read, so
@@ -2511,6 +2514,7 @@ async fn get_thread_message_window(
             desc,
             search.as_deref(),
             unsafe_only.unwrap_or(false),
+            &ranges,
         )
         .map_err(|e| e.to_string())
     })
@@ -2569,6 +2573,7 @@ async fn count_timeline_messages(
     search: Option<String>,
     kind: Option<String>,
     unsafe_only: Option<bool>,
+    ranges: Vec<query::TimeRange>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2579,6 +2584,7 @@ async fn count_timeline_messages(
             search.as_deref(),
             kind.as_deref(),
             unsafe_only.unwrap_or(false),
+            &ranges,
         )
         .map_err(|e| e.to_string())
     })
@@ -2687,8 +2693,7 @@ async fn count_note_ranges(
 #[allow(clippy::too_many_arguments)] // Tauri command: time range + service + search + paging + dir.
 async fn get_range_window(
     active: State<'_, ActiveBackup>,
-    lo: Option<i64>,
-    hi: Option<i64>,
+    ranges: Vec<query::TimeRange>,
     offset: i64,
     limit: i64,
     service: Option<String>,
@@ -2702,7 +2707,7 @@ async fn get_range_window(
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
         query::get_range_window(
             &cache,
-            query::TimeRange { lo, hi },
+            &ranges,
             offset,
             limit,
             service.as_deref(),
@@ -3466,6 +3471,21 @@ async fn marked_ids(active: State<'_, ActiveBackup>, kind: String) -> Result<Vec
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
         traceloupe_core::marks::marked_ids(&cache, kind).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The conversations with at least one message in the period.
+#[tauri::command]
+async fn threads_in_ranges(
+    active: State<'_, ActiveBackup>,
+    ranges: Vec<query::TimeRange>,
+) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::threads_in_ranges(&cache, &ranges).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5116,6 +5136,7 @@ pub fn run() {
             module_status,
             set_item_mark,
             marked_ids,
+            threads_in_ranges,
             mark_counts,
             count_timeline_events,
             get_timeline_events,

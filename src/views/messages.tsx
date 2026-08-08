@@ -38,7 +38,7 @@ import { type BadgeFilterOption } from "@/components/badge-filter";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "@/components/ui/item";
 import { MediaLightbox } from "@/components/media-lightbox";
 import { useViewToolbar } from "@/components/toolbar-context";
-import { badgeGroup, timeGroup, type FilterGroup } from "@/components/filter-groups";
+import { badgeGroup, multiTimeGroup, type FilterGroup } from "@/components/filter-groups";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -588,6 +588,62 @@ function Conversations({
     enabled: active === true,
   });
   const { marked: markedConv } = useUnsafeMarks("message");
+  // One period for Chats mode, applied to BOTH sub-states: which conversations
+  // were active then, and which messages inside the open one happened then.
+  // Two ranges would be two answers to "the period I am looking at".
+  // MULTI-select, like every other time filter in the app: "2023 or 2025" has
+  // to mean both. Empty = all time.
+  const [ranges, setRanges] = useState<TimeRange[]>([]);
+  // Year chips from the backup's OWN span, not just the current year — the base
+  // presets stop at "this year", which on a 2024 backup offers a chip that can
+  // only ever match nothing. Timeline already does this; Chats has to agree or
+  // the same filter answers differently in the two modes.
+  const { now: convNow, presets: convBasePresets } = useTimePresets();
+  const { data: convDateBounds } = useQuery({
+    queryKey: ["messageDateBounds"],
+    queryFn: () => client.messageDateBounds(),
+  });
+  const presets = useMemo(() => {
+    if (!convDateBounds) return convBasePresets;
+    const minYear = new Date(convDateBounds[0] * 1000).getFullYear();
+    const maxYear = new Date(convNow * 1000).getFullYear();
+    return [
+      ...convBasePresets.filter((p) => p.key !== "year"),
+      ...makeYearPresets(minYear, maxYear),
+    ];
+  }, [convBasePresets, convDateBounds, convNow]);
+  const { data: presetCounts } = useQuery({
+    queryKey: ["convPresetCounts", presets.map((p) => [p.lo, p.hi]), service],
+    queryFn: () =>
+      client.countMessageRanges(
+        presets.map((p) => ({ lo: p.lo, hi: p.hi })),
+        service,
+      ),
+  });
+  // Conversations active in the period; undefined while loading or unfiltered.
+  const { data: activeThreadIds } = useQuery({
+    queryKey: ["threadsInRanges", ranges],
+    queryFn: () => client.threadsInRanges(ranges),
+    enabled: ranges.length > 0,
+  });
+  const timeGroupNode = useMemo<FilterGroup[]>(
+    () => [
+      multiTimeGroup({
+        description: "When the conversation was active",
+        presets,
+        counts: presetCounts,
+        values: ranges,
+        onToggle: (r) =>
+          setRanges((prev) =>
+            prev.some((v) => v.lo === r.lo && v.hi === r.hi)
+              ? prev.filter((v) => !(v.lo === r.lo && v.hi === r.hi))
+              : [...prev, r],
+          ),
+        onClear: () => setRanges([]),
+      }),
+    ],
+    [presets, presetCounts, ranges],
+  );
   // The same facet the Timeline offers, built from the same hook — one mark, one
   // filter, whichever mode you are in.
   const unsafeGroup = useMemo<FilterGroup[]>(
@@ -634,9 +690,13 @@ function Conversations({
 
   // The app filter lives in the shared header; here we just apply it, then sort.
   const visibleThreads = useMemo(() => {
-    const list = service
-      ? threads?.filter((t) => t.service === service)
-      : threads;
+    let list = service ? threads?.filter((t) => t.service === service) : threads;
+    // Active in the period, not "last spoke" in it — a long conversation still
+    // running today was active in 2023 if it has messages there.
+    if (list && ranges.length > 0 && activeThreadIds) {
+      const keep = new Set(activeThreadIds);
+      list = list.filter((t) => keep.has(t.id));
+    }
     if (!list) return list;
     return sortItems(
       list,
@@ -648,7 +708,7 @@ function Conversations({
             : t.lastMessageAt,
       sort.desc,
     );
-  }, [threads, service, sort]);
+  }, [threads, service, sort, ranges, activeThreadIds]);
 
   const selected =
     visibleThreads?.find((t) => t.id === selectedId) ??
@@ -754,7 +814,7 @@ function Conversations({
         title: "Messages",
         count: visibleThreads?.length,
         modes: modesNode,
-        filter: [...serviceGroups, ...unsafeGroup],
+        filter: [...serviceGroups, ...timeGroupNode, ...unsafeGroup],
         // Only while a conversation is open: a search box or an order toggle
         // with nothing to act on is a control that does nothing, which is worse
         // than its absence.
@@ -771,7 +831,7 @@ function Conversations({
               // which contact is open — so nothing is lost by not repeating it.
               count: conv?.total,
               search: convSearchNode,
-              filter: [...serviceGroups, ...convKindGroup, ...unsafeGroup],
+              filter: [...serviceGroups, ...convKindGroup, ...timeGroupNode, ...unsafeGroup],
               sort: (
                 <>
                   {/* Back appears only when the conversation was jumped into
@@ -799,7 +859,7 @@ function Conversations({
       [
         visibleThreads?.length, modesNode, serviceGroups, sortNode, selected,
         convSearchNode, convKindGroup, order.desc, setOrder, conv,
-        onBack, backLabel, unsafeGroup,
+        onBack, backLabel, unsafeGroup, timeGroupNode,
       ],
     ),
   );
@@ -876,6 +936,7 @@ function Conversations({
           <Conversation
             thread={selected}
             unsafeOnly={unsafeOnly}
+            ranges={ranges}
             resolve={resolve}
             showContactNames={showContactNames}
             kindValue={kindValue}
@@ -1043,9 +1104,11 @@ function Timeline({
   });
   // The active time filter as a half-open [lo, hi) range; {null,null} = all time.
   // Persisted so leaving Messages and returning keeps the same period in view.
-  const [range, setRange] = usePersistedState<TimeRange>(
-    "messages:timeline-range",
-    { lo: null, hi: null },
+  // MULTI-select, matching Photos and Chats: "2023 or 2025" means both. Empty
+  // = all time. Persisted so leaving Messages and returning keeps the periods.
+  const [ranges, setRanges] = usePersistedState<TimeRange[]>(
+    "messages:timeline-ranges",
+    [],
   );
   // Free-text search over message body / sender / conversation (debounced).
   const [q, setQ] = useState("");
@@ -1077,9 +1140,8 @@ function Timeline({
     isPending: totalPending,
     error: totalError,
   } = useQuery({
-    queryKey: ["timelineRangeCount", range.lo, range.hi, service, search, kind, unsafeOnly],
-    queryFn: async () =>
-      (await client.countMessageRanges([range], service, search, kind, unsafeOnly))[0] ?? 0,
+    queryKey: ["timelineCount", ranges, service, search, kind, unsafeOnly],
+    queryFn: () => client.countTimelineMessages(service, search, kind, unsafeOnly, ranges),
     enabled: active === true,
   });
   const { scrollEnd, toTop, toBottom } = useScrollEnds();
@@ -1104,12 +1166,18 @@ function Timeline({
   const filterGroups = useMemo<FilterGroup[]>(
     () => [
       ...serviceGroups,
-      timeGroup({
+      multiTimeGroup({
         description: "When the message was sent",
         presets,
         counts: presetCounts,
-        value: range,
-        onChange: setRange,
+        values: ranges,
+        onToggle: (r) =>
+          setRanges((prev) =>
+            prev.some((v) => v.lo === r.lo && v.hi === r.hi)
+              ? prev.filter((v) => !(v.lo === r.lo && v.hi === r.hi))
+              : [...prev, r],
+          ),
+        onClear: () => setRanges([]),
       }),
       ...(kinds.length >= 2
         ? [
@@ -1158,7 +1226,7 @@ function Timeline({
           ]
         : []),
     ],
-    [serviceGroups, presets, presetCounts, range, setRange, kinds, kindValue,
+    [serviceGroups, presets, presetCounts, ranges, setRanges, kinds, kindValue,
      onKindChange, unsafeOnly, markedMsgs.size],
   );
   useViewToolbar(
@@ -1188,7 +1256,7 @@ function Timeline({
         title={
           search
             ? "No messages match this search."
-            : kind !== null || range.lo != null || range.hi != null
+            : kind !== null || ranges.length > 0
               ? "No messages match these filters."
               : noMessages
         }
@@ -1201,16 +1269,15 @@ function Timeline({
         count={total ?? 0}
         underlap={!fromSafety}
         startAtBottom={!order.desc}
-        resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}:${unsafeOnly}`}
-        persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}:${unsafeOnly}`}
+        resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${JSON.stringify(ranges)}:${search}:${order.desc}:${unsafeOnly}`}
+        persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${JSON.stringify(ranges)}:${search}:${order.desc}:${unsafeOnly}`}
         scrollEnd={scrollEnd}
         estimateSize={56}
         windowKey={(page) => [
           "timelineWindow",
           service,
           kind,
-          range.lo,
-          range.hi,
+          ranges,
           search,
           order.desc,
           unsafeOnly,
@@ -1218,8 +1285,7 @@ function Timeline({
         ]}
         fetchWindow={(offset, limit) =>
           client.getRangeWindow(
-            range.lo,
-            range.hi,
+            ranges,
             offset,
             limit,
             service,
@@ -1582,6 +1648,7 @@ function Conversation({
   onScrolledToMessage,
   onContext,
   unsafeOnly,
+  ranges,
 }: {
   thread: ThreadSummary;
   resolve: Resolver;
@@ -1600,6 +1667,7 @@ function Conversation({
    *  keeping a header of its own. */
   onContext: (c: { total: number }) => void;
   unsafeOnly: boolean;
+  ranges: TimeRange[];
 }) {
   const group = isGroup(thread);
   const { marked: markedMsgs, toggle: toggleMsgMark } = useUnsafeMarks("message");
@@ -1617,8 +1685,9 @@ function Conversation({
     isPending: totalPending,
     error: totalError,
   } = useQuery({
-    queryKey: ["messageCount", thread.id, kind, searchTerm, unsafeOnly],
-    queryFn: () => client.countThreadMessages(thread.id, kind, searchTerm, unsafeOnly),
+    queryKey: ["messageCount", thread.id, kind, searchTerm, unsafeOnly, ranges],
+    queryFn: () =>
+      client.countThreadMessages(thread.id, kind, searchTerm, unsafeOnly, ranges),
   });
 
   // Scroll-to-message (from a Timeline jump): resolve the target's row index in
@@ -1690,8 +1759,12 @@ function Conversation({
       <LazyVirtualList<Message>
         count={total ?? 0}
         startAtBottom={!order.desc && !searchTerm}
-        resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}:${searchTerm ?? ""}`}
-        persistKey={`conv:${thread.id}:${kind ?? "all"}:${order.desc}:${searchTerm ?? ""}`}
+        // EVERY filter belongs in all three keys. A filter missing here does not
+        // fail loudly: the query returns the right rows the first time and a
+        // stale cached page every time after, so toggling a facet off and on
+        // shows the pre-filter list. `unsafeOnly` was missing until this change.
+        resetKey={`${thread.id}:${kind ?? "all"}:${order.desc}:${searchTerm ?? ""}:${unsafeOnly}:${JSON.stringify(ranges)}`}
+        persistKey={`conv:${thread.id}:${kind ?? "all"}:${order.desc}:${searchTerm ?? ""}:${unsafeOnly}:${JSON.stringify(ranges)}`}
         jumpTo={jumpTo}
         scrollEnd={scrollEnd}
         windowKey={(page) => [
@@ -1700,6 +1773,8 @@ function Conversation({
           kind,
           order.desc,
           searchTerm,
+          unsafeOnly,
+          ranges,
           page,
         ]}
         fetchWindow={(offset, limit) =>
@@ -1711,6 +1786,7 @@ function Conversation({
             kind,
             searchTerm,
             unsafeOnly,
+            ranges,
           )
         }
         renderItem={(message, _i, prev) => {
