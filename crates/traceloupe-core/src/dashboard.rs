@@ -445,6 +445,11 @@ mod tests {
     /// [`every_content_table_is_accounted_for`] — which is the whole mechanism
     /// behind "a new parser appears on the dashboard by itself".
     const NOT_A_TILE: &[(&str, &str)] = &[
+        (
+            "user_marks",
+            "the PERSON's own unsafe marks, not something the backup contains — \
+             a tile counting them would be counting their notes to self",
+        ),
         ("meta", "schema version and import bookkeeping"),
         (
             "attachments",

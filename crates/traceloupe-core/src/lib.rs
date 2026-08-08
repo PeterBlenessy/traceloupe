@@ -18,6 +18,7 @@ pub mod import;
 pub mod indicators;
 pub mod install;
 pub mod manifest;
+pub mod marks;
 pub mod normalize;
 pub mod nska;
 pub mod parsers;

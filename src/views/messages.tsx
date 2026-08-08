@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { UnsafeMarkButton, useUnsafeMarks } from "@/components/unsafe-mark";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -926,6 +927,12 @@ function Timeline({
 }) {
   const fromSafety = useFromSafety();
   const resolve = useContactResolver();
+  const { marked: markedMsgs, toggle: toggleMsgMark } = useUnsafeMarks("message");
+  // NOTE: no "Unsafe" FILTER here yet, deliberately. This list is fetched in
+  // windows, so filtering the loaded page client-side would return sparse pages
+  // and a count that disagrees with what is on screen. Doing it properly means
+  // threading the mark predicate into count_range/get_range_window — tracked in
+  // the follow-up issue. Marking works; filtering by the mark does not yet.
   const { showContactNames, showAvatars } = useSettings();
   // #268 was exactly this: sms.db decrypted truncated, would not open, and
   // this view read as "No messages in this backup." for months. It is the
@@ -1148,6 +1155,8 @@ function Timeline({
             resolve={resolve}
             showContactNames={showContactNames}
             showAvatars={showAvatars}
+            marked={markedMsgs.has(item.message.id)}
+            onToggleMark={() => toggleMsgMark(item.message.id)}
           />
         )}
       />
@@ -1178,6 +1187,8 @@ function TimelineRow({
   resolve,
   showContactNames,
   showAvatars,
+  marked,
+  onToggleMark,
 }: {
   item: TimelineMessage;
   showDate: boolean;
@@ -1192,6 +1203,8 @@ function TimelineRow({
   resolve: Resolver;
   showContactNames: boolean;
   showAvatars: boolean;
+  marked: boolean;
+  onToggleMark: () => void;
 }) {
   const m = item.message;
   // Hide iMessage plugin/app payloads (see isInternalAttachment) from the row's
@@ -1219,7 +1232,7 @@ function TimelineRow({
   const showBodyText =
     !!m.body && !replaceUrlWithCard && hasNonUrlText(m.body, new Set(omitUrls));
   return (
-    <div className="px-2 py-0.5">
+    <div className="group/row px-2 py-0.5">
       {showDate && m.sentAt && (
         <div className="px-4 py-1.5 text-center text-xs font-medium text-muted-foreground">
           {formatDateHeader(m.sentAt)}
@@ -1338,6 +1351,15 @@ function TimelineRow({
             />
           )}
           <span className="tabular-nums">{formatTimelineTime(m.sentAt)}</span>
+          {/* Same control, same place in the row's trailing stack, as everywhere
+              else the mark appears. */}
+          <div className={cn(marked ? "" : "opacity-0 group-hover/row:opacity-100")}>
+            <UnsafeMarkButton
+              marked={marked}
+              onToggle={onToggleMark}
+              label="this message"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -1493,6 +1515,7 @@ function Conversation({
   onContext: (c: { total: number }) => void;
 }) {
   const group = isGroup(thread);
+  const { marked: markedMsgs, toggle: toggleMsgMark } = useUnsafeMarks("message");
   // `order` and `q` are PROPS now, owned by Conversations so they can be
   // published into the single top toolbar rather than rendered as a second
   // control row in here. Debounced locally so each keystroke doesn't refire the
@@ -1624,11 +1647,13 @@ function Conversation({
                 ? named(message.sender)
                 : null;
           return (
-            <div className="px-4 pb-1">
+            <div className="group/msg px-4 pb-1">
               <MessageBubble
                 message={message}
                 showTime={showTimeBetween(prev, message)}
                 senderLabel={senderLabel}
+                marked={markedMsgs.has(message.id)}
+                onToggleMark={() => toggleMsgMark(message.id)}
               />
             </div>
           );
@@ -1649,10 +1674,14 @@ function MessageBubble({
   message,
   showTime,
   senderLabel,
+  marked,
+  onToggleMark,
 }: {
   message: Message;
   showTime: boolean;
   senderLabel?: string | null;
+  marked: boolean;
+  onToggleMark: () => void;
 }) {
   // Group-action rows (rename/add/remove/leave) render as a centered note, not a
   // chat bubble: "<actor> <action>".
@@ -1700,6 +1729,17 @@ function MessageBubble({
         </div>
       )}
       <MessageRow align={align}>
+        {/* Beside the bubble rather than inside it: inside would land in the
+            selectable text, and would flip sides with the bubble's alignment. */}
+        {align === "end" && (
+          <div className={cn("self-center", marked ? "" : "opacity-0 group-hover/msg:opacity-100")}>
+            <UnsafeMarkButton
+              marked={marked}
+              onToggle={onToggleMark}
+              label="this message"
+            />
+          </div>
+        )}
         <MessageContent>
           {senderLabel && <MessageHeader>{senderLabel}</MessageHeader>}
           <Bubble variant={message.isFromMe ? "default" : "muted"}>
@@ -1783,6 +1823,15 @@ function MessageBubble({
             </span>
           )}
         </MessageContent>
+        {align === "start" && (
+          <div className={cn("self-center", marked ? "" : "opacity-0 group-hover/msg:opacity-100")}>
+            <UnsafeMarkButton
+              marked={marked}
+              onToggle={onToggleMark}
+              label="this message"
+            />
+          </div>
+        )}
       </MessageRow>
     </div>
   );
