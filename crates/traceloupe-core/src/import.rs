@@ -324,6 +324,11 @@ pub fn import_backup(
             decryptor.as_ref(),
             &cache,
             work_dir,
+            &cache_path
+                .parent()
+                .map(|p| p.join("media"))
+                .unwrap_or_else(|| work_dir.join("media")),
+            discover_media,
             &mut native,
         );
         step!("Indexing TikTok Contacts");
@@ -1399,11 +1404,14 @@ fn extract_aweme_dbs(
 /// names live in the `AwemeContacts*` tables of `AwemeIM.db` — two DBs the generic
 /// single-file app-module API can't join, so it gets a dedicated importer. Best-
 /// effort: a backup without TikTok, or an unreadable DB, just yields nothing.
+#[allow(clippy::too_many_arguments)]
 fn import_tiktok_messages_native(
     backup_dir: &Path,
     decryptor: Option<&crate::crypto::BackupDecryptor>,
     cache: &CacheDb,
     work_dir: &Path,
+    media_dir: &Path,
+    discover: bool,
     report: &mut ImportReport,
 ) {
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
@@ -1462,6 +1470,8 @@ fn import_tiktok_messages_native(
             &uid_map,
         ) {
             Ok(msgs) if !msgs.is_empty() => {
+                let flagged = msgs.iter().filter(|m| m.has_attachment).count();
+                let produced: usize = msgs.iter().map(|m| m.attachments.len()).sum();
                 let resolve = app_media_resolver(&index, decryptor);
                 if let Err(e) = crate::parsers::apps::insert_app_conversation_with_media(
                     cache, "TikTok", true, msgs, report, &resolve,
@@ -1469,6 +1479,12 @@ fn import_tiktok_messages_native(
                     report
                         .warnings
                         .push(format!("TikTok messages: insert failed ({e})."));
+                }
+                // TikTok is imported here rather than through APP_CHAT_MODULES,
+                // so it sat outside the discovery loop entirely — the one app
+                // the pass silently did not cover. Same gap test as the others.
+                if discover && produced < flagged {
+                    discover_app_media(base, "TikTok", &index, decryptor, cache, media_dir, report);
                 }
             }
             Ok(_) => {}
@@ -1761,6 +1777,20 @@ fn mirror_discovered_paths(
             continue;
         }
         let Some(entry) = hits.pop() else { continue };
+        // The module may already have produced this exact file — discovery now
+        // runs alongside a partly-working module, not only a silent one, so the
+        // same photo can be reached twice. One item per file.
+        let dup: i64 = cache
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM media_items WHERE source = ?1 AND relative_path = ?2",
+                rusqlite::params![service, v],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if dup > 0 {
+            continue;
+        }
         let local = index
             .blob_path(&entry.file_id)
             .to_string_lossy()
@@ -1970,12 +2000,19 @@ fn import_app_chats_native(
             }
             continue; // recognized nothing / empty — leave the service to iLEAPP
         }
-        // Discovery only fills a gap. A module that named its own media columns
-        // knows things a scanner cannot infer — which message a file belongs to,
-        // which of several blobs is the full image — so it always wins. This runs
-        // when the module produced no media at all, which is the case a schema
-        // change produces and the case an unimplemented module produces.
-        let found_nothing = msgs.iter().all(|m| m.attachments.is_empty());
+        // Discovery fills a gap; it does not replace a module. A module that
+        // named its own media columns knows things a scanner cannot infer, so
+        // whatever it produced stands.
+        //
+        // The gap is "messages that say they carry media, and did not get any" —
+        // NOT "the module produced nothing at all". An all-or-nothing test lets a
+        // half-broken module through: WhatsApp reads ZMEDIALOCALPATH, and if a
+        // future schema moved that column while leaving the thumbnail path
+        // behind, it would still produce *some* attachments and discovery would
+        // never look at the ones it lost.
+        let flagged = msgs.iter().filter(|m| m.has_attachment).count();
+        let produced: usize = msgs.iter().map(|m| m.attachments.len()).sum();
+        let found_nothing = produced < flagged;
         let resolve = app_media_resolver(&index, decryptor);
         let inserted = crate::parsers::apps::insert_app_conversation_with_media(
             cache,

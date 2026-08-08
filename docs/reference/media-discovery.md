@@ -49,9 +49,36 @@ gallery something it cannot show.
 
 ## Where it runs, and where it does not
 
-Discovery **only fills a gap**. It runs for an app whose module produced no media
-of its own, which is both the case a schema change produces and the case an
-unimplemented module produces.
+Discovery **fills a gap**; it does not replace a module. Whatever a module
+produced stands.
+
+The gap is measured per app as *"messages that say they carry media, and did not
+get any"* — **not** "the module produced nothing at all". An all-or-nothing test
+lets a half-broken module through: WhatsApp reads `ZMEDIALOCALPATH`, and if a
+future schema moved that column while leaving the thumbnail path behind, it would
+still produce *some* attachments and discovery would never look at what it lost.
+
+Measured on the public iOS 17 backup, every app with a database present:
+
+```
+WhatsApp   flagged=19  produced=4   discovery runs
+Viber      flagged=10  produced=5   discovery runs
+Kik         flagged=4  produced=0   discovery runs
+imo         flagged=7  produced=0   discovery runs
+Threema     flagged=4  produced=0   discovery runs
+TeleGuard   flagged=8  produced=0   discovery runs
+LINE       flagged=19  produced=0   discovery runs
+MEGA       flagged=32  produced=0   discovery runs
+Gettr       flagged=4  produced=0   discovery runs
+```
+
+Because a module and discovery can now reach the same file, a discovered path is
+skipped when that app already has a gallery item for it — verified as zero
+duplicate `(source, relative_path)` groups after a full import.
+
+**TikTok is imported outside the app-module registry**, through its own path, so
+it sat outside this loop entirely and was the one app the pass silently did not
+cover. It is wired in with the same gap test.
 
 A module that names its own columns always wins, because it knows things a
 scanner cannot infer: which message a file belongs to, which of several blobs is
