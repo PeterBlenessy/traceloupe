@@ -1,6 +1,6 @@
 //! Native camera-roll reader for iOS backups (encrypted and unencrypted).
 //!
-//! Reads `Manifest.db` and enumerates the DCIM camera roll, pairing each asset
+//! Reads `Manifest.db` and enumerates the camera roll, pairing each asset
 //! with iOS's pre-rendered JPEG thumbnail from the `Media/PhotoData/Thumbnails/V2`
 //! store, so the gallery grid uses ready-made thumbnails (no HEIC decoding) while
 //! full images are transcoded on demand.
@@ -51,8 +51,21 @@ pub struct CameraRollAsset {
     pub plain_size: Option<u64>,
 }
 
-const THUMB_PREFIX: &str = "Media/PhotoData/Thumbnails/V2/DCIM/";
-const DCIM_PREFIX: &str = "Media/DCIM/";
+/// Where the camera roll's files live, relative to `Media/`.
+///
+/// `DCIM/` is only half of it. An iCloud Photo Library keeps its assets under
+/// `PhotoData/CPLAssets/group<N>/` instead, and a device with iCloud Photos on
+/// puts most of the roll there — including hidden items, screenshots and screen
+/// recordings. Reading only `DCIM/` silently dropped every one of them: measured
+/// on the public iOS 17 backup, 216 of the 519 assets whose files are present
+/// (42%) were never imported, and the gallery gave no sign that anything was
+/// missing. Both roots are read; `ZDIRECTORY` already names whichever applies.
+const ASSET_ROOTS: [&str; 2] = ["Media/DCIM/", "Media/PhotoData/CPLAssets/"];
+/// Thumbnails mirror the asset's own path under this prefix, e.g.
+/// `…/V2/DCIM/258APPLE/IMG_8998.HEIC/5005.JPG` and
+/// `…/V2/PhotoData/CPLAssets/group1/IMG_0042.HEIC/5005.JPG`.
+const THUMB_PREFIX: &str = "Media/PhotoData/Thumbnails/V2/";
+const MEDIA_PREFIX: &str = "Media/";
 
 /// Enumerate camera-roll assets. Pass `decryptor` for an encrypted backup (its
 /// keys decrypt Manifest.db, thumbnails, and Photos.sqlite); pass `None` for a
@@ -104,14 +117,15 @@ fn enumerate(
         backup_dir.join(&file_id[..2]).join(file_id)
     };
 
-    // Thumbnails keyed by "<album>/<original filename>" (e.g. "258APPLE/IMG_8998.HEIC").
-    // A relative path looks like `.../V2/DCIM/258APPLE/IMG_8998.HEIC/5005.JPG`.
+    // Thumbnails keyed by the asset's path relative to `Media/`
+    // (e.g. "DCIM/258APPLE/IMG_8998.HEIC", "PhotoData/CPLAssets/group1/IMG_1.HEIC"),
+    // which is the same key the Manifest and Photos.sqlite sides build below.
     let mut thumbs: HashMap<String, (String, Vec<u8>)> = HashMap::new();
     {
         let mut stmt = conn.prepare(
             "SELECT fileID, relativePath, file FROM Files
              WHERE domain = 'CameraRollDomain'
-               AND relativePath LIKE 'Media/PhotoData/Thumbnails/V2/DCIM/%.JPG'",
+               AND relativePath LIKE 'Media/PhotoData/Thumbnails/V2/%.JPG'",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok((
@@ -122,7 +136,7 @@ fn enumerate(
         })?;
         for (file_id, rel, blob) in rows.flatten() {
             if let Some(rest) = rel.strip_prefix(THUMB_PREFIX) {
-                // rest = "258APPLE/IMG_8998.HEIC/5005.JPG" → key drops the size file.
+                // rest = "DCIM/258APPLE/IMG_8998.HEIC/5005.JPG" → key drops the size file.
                 if let Some(idx) = rest.rfind('/') {
                     thumbs
                         .entry(rest[..idx].to_string())
@@ -137,11 +151,17 @@ fn enumerate(
     let meta =
         load_photos_metadata(&conn, backup_dir, decryptor, media_cache_dir).unwrap_or_default();
 
-    let mut stmt = conn.prepare(
+    // Built from ASSET_ROOTS so the roots can't drift from their documentation.
+    let roots = ASSET_ROOTS
+        .iter()
+        .map(|r| format!("relativePath LIKE '{r}%'"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let mut stmt = conn.prepare(&format!(
         "SELECT fileID, relativePath, file FROM Files
-         WHERE domain = 'CameraRollDomain' AND relativePath LIKE 'Media/DCIM/%'
-         ORDER BY relativePath",
-    )?;
+         WHERE domain = 'CameraRollDomain' AND ({roots})
+         ORDER BY relativePath"
+    ))?;
     let rows = stmt.query_map([], |r| {
         Ok((
             r.get::<_, String>(0)?,
@@ -155,7 +175,7 @@ fn enumerate(
         let Some((kind, mime)) = classify(&rel) else {
             continue; // skip directories, .AAE sidecars, etc.
         };
-        let key = rel.strip_prefix(DCIM_PREFIX).unwrap_or(&rel).to_string();
+        let key = rel.strip_prefix(MEDIA_PREFIX).unwrap_or(&rel).to_string();
         // A Live Photo is TWO files on disk — `IMG_0001.HEIC` and its paired
         // `IMG_0001.MOV` — but only ONE asset row (the still). So the `.MOV`
         // component finds no metadata and would show no capture date. Borrow the
@@ -309,7 +329,7 @@ fn read_photos_metadata(conn: &Connection) -> Result<HashMap<String, AssetMeta>>
     };
     let mut stmt = conn.prepare(&format!(
         "SELECT ZDIRECTORY, ZFILENAME, ZDATECREATED
-         FROM {asset_table} WHERE ZDIRECTORY LIKE 'DCIM/%'",
+         FROM {asset_table} WHERE ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL",
     ))?;
     let rows = stmt.query_map([], |r| {
         Ok((
@@ -321,7 +341,7 @@ fn read_photos_metadata(conn: &Connection) -> Result<HashMap<String, AssetMeta>>
 
     let mut map = HashMap::new();
     for (dir, fname, date) in rows.flatten() {
-        let key = format!("{}/{}", dir.strip_prefix("DCIM/").unwrap_or(&dir), fname);
+        let key = format!("{}/{}", dir.trim_end_matches('/'), fname);
         map.insert(
             key,
             AssetMeta {
@@ -365,6 +385,60 @@ fn classify(rel: &str) -> Option<(&'static str, &'static str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An iCloud Photo Library keeps the roll under `PhotoData/CPLAssets/`, not
+    /// `DCIM/`. Reading only `DCIM/` dropped those assets entirely and gave no
+    /// sign of it — on the public iOS 17 backup that was 216 of 519 present
+    /// assets (42%), and on a device with iCloud Photos on it is most of the
+    /// roll, hidden screenshots and screen recordings included.
+    #[test]
+    fn reads_icloud_library_assets_and_not_only_dcim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path();
+        let conn = Connection::open(backup.join("Manifest.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             INSERT INTO Files VALUES ('aa11', 'CameraRollDomain', 'Media/DCIM/100APPLE/IMG_0001.HEIC', 1, NULL);
+             INSERT INTO Files VALUES ('bb22', 'CameraRollDomain', 'Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_0001.HEIC/5005.JPG', 1, NULL);
+             INSERT INTO Files VALUES ('cc33', 'CameraRollDomain', 'Media/PhotoData/CPLAssets/group42/IMG_0099.HEIC', 1, NULL);
+             INSERT INTO Files VALUES ('dd44', 'CameraRollDomain', 'Media/PhotoData/Thumbnails/V2/PhotoData/CPLAssets/group42/IMG_0099.HEIC/5005.JPG', 1, NULL);
+             INSERT INTO Files VALUES ('ff55aa', 'CameraRollDomain', 'Media/PhotoData/Photos.sqlite', 1, NULL);",
+        )
+        .unwrap();
+        let photos = backup.join("ff").join("ff55aa");
+        std::fs::create_dir_all(photos.parent().unwrap()).unwrap();
+        let ph = Connection::open(&photos).unwrap();
+        ph.execute_batch(
+            "CREATE TABLE ZASSET (ZDIRECTORY TEXT, ZFILENAME TEXT, ZDATECREATED REAL, ZTRASHEDSTATE INTEGER);
+             INSERT INTO ZASSET VALUES ('DCIM/100APPLE', 'IMG_0001.HEIC', 700000000.0, 0);
+             INSERT INTO ZASSET VALUES ('PhotoData/CPLAssets/group42', 'IMG_0099.HEIC', 700000500.0, 0);",
+        )
+        .unwrap();
+
+        let assets = parse_camera_roll(backup, None, &backup.join("_cache")).unwrap();
+        let paths: Vec<&str> = assets.iter().map(|a| a.relative_path.as_str()).collect();
+        assert!(
+            paths.contains(&"Media/PhotoData/CPLAssets/group42/IMG_0099.HEIC"),
+            "the iCloud-library asset must be imported, got {paths:?}"
+        );
+        assert_eq!(assets.len(), 2, "both roots, got {paths:?}");
+
+        // Its thumbnail and its capture date have to resolve too — an asset that
+        // appears with neither is barely better than one that does not appear.
+        let cpl = assets
+            .iter()
+            .find(|a| a.relative_path.contains("CPLAssets"))
+            .unwrap();
+        assert!(
+            cpl.thumb_path.is_some(),
+            "iCloud-library thumbnail unresolved"
+        );
+        assert_eq!(
+            cpl.taken_at,
+            Some(700_000_500 + 978_307_200),
+            "iCloud-library capture date unresolved"
+        );
+    }
 
     #[test]
     fn pairs_dcim_assets_with_thumbnails_and_dates() {
