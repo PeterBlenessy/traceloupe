@@ -30,6 +30,35 @@ export interface BackupInfo {
  * nothing. Everything else the app says about emptiness is wording; this is a
  * fact the import knows and used to throw away.
  */
+/** A SQLite database belonging to an app, as found in the backup. */
+export interface RawDatabase {
+  domain: string;
+  relativePath: string;
+  name: string;
+}
+
+export interface RawTable {
+  name: string;
+  /** -1 when the table is present but could not be counted. */
+  rows: number;
+  columns: string[];
+}
+
+/** One cell, described rather than dumped — a blob reports its size and type. */
+export interface RawCell {
+  text: string;
+  kind: "null" | "text" | "integer" | "real" | "blob";
+  /** Unix seconds, when the column looks temporal. Shown beside the raw value. */
+  decodedUnix: number | null;
+}
+
+export interface RawRows {
+  columns: string[];
+  rows: RawCell[][];
+  /** Rows matching the query, not the page. */
+  total: number;
+}
+
 export interface ModuleStatus {
   module: string;
   status: "parsed" | "source-absent" | "failed";
@@ -1125,6 +1154,18 @@ export interface TraceLoupeClient {
   /** Why each module ended up empty or not, from the import that built the
    *  open cache. See `use-parse-failed.ts` (#288). */
   moduleStatus(): Promise<ModuleStatus[]>;
+  /** Every SQLite database in the backup belonging to this app. */
+  rawDatabases(bundleId: string): Promise<RawDatabase[]>;
+  /** The tables in one of those databases. */
+  rawTables(relativePath: string): Promise<RawTable[]>;
+  /** A page of one table, optionally filtered across every column. */
+  rawRows(args: {
+    relativePath: string;
+    table: string;
+    offset: number;
+    limit: number;
+    search?: string | null;
+  }): Promise<RawRows>;
   /** The macOS accent color as an oklch CSS string, or null when the host has
    *  no readable accent (non-macOS) — the UI then keeps its baked-in default. */
   systemAccentColor(): Promise<string | null>;
@@ -1705,6 +1746,9 @@ const tauriClient: TraceLoupeClient = {
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   moduleStatus: () => invoke<ModuleStatus[]>("module_status"),
+  rawDatabases: (bundleId) => invoke<RawDatabase[]>("raw_databases", { bundleId }),
+  rawTables: (relativePath) => invoke<RawTable[]>("raw_tables", { relativePath }),
+  rawRows: (args) => invoke<RawRows>("raw_rows", { args }),
   systemAccentColor: () => invoke<string | null>("get_system_accent_color"),
   listCalendarEvents: () => invoke<CalendarEvent[]>("list_calendar_events"),
   listReminders: () => invoke<Reminder[]>("list_reminders"),
@@ -3678,6 +3722,88 @@ const mockClient: TraceLoupeClient = {
           isEncrypted: !mockUnencrypted,
         }
       : null,
+  // A small stand-in schema that exercises every cell kind the real view has to
+  // render: text, integers, a NULL, a timestamp that decodes, and a blob that
+  // must report what it is rather than dumping bytes.
+  rawDatabases: async (bundleId) =>
+    !mockActive
+      ? []
+      : [
+          {
+            domain: `AppDomain-${bundleId}`,
+            relativePath: "Documents/ChatStorage.sqlite",
+            name: "ChatStorage.sqlite",
+          },
+          {
+            domain: `AppDomainGroup-group.${bundleId}`,
+            relativePath: "Library/Preferences/settings.db",
+            name: "settings.db",
+          },
+        ],
+  rawTables: async (relativePath) =>
+    !mockActive
+      ? []
+      : relativePath.endsWith("settings.db")
+        ? [{ name: "prefs", rows: 2, columns: ["key", "value"] }]
+        : [
+            {
+              name: "ZWAMESSAGE",
+              rows: 3,
+              columns: ["Z_PK", "ZTEXT", "ZMESSAGEDATE", "ZTHUMBNAIL"],
+            },
+            { name: "ZWACHATSESSION", rows: 1, columns: ["Z_PK", "ZPARTNERNAME"] },
+          ],
+  rawRows: async ({ relativePath, table, offset, limit, search }) => {
+    if (!mockActive) return { columns: [], rows: [], total: 0 };
+    const cell = (
+      text: string,
+      kind: RawCell["kind"],
+      decodedUnix: number | null = null,
+    ): RawCell => ({ text, kind, decodedUnix });
+    if (relativePath.endsWith("settings.db") || table === "prefs") {
+      const all = [
+        [cell("theme", "text"), cell("dark", "text")],
+        [cell("notifications", "text"), cell("1", "integer")],
+      ];
+      return { columns: ["key", "value"], rows: all, total: all.length };
+    }
+    if (table === "ZWACHATSESSION") {
+      return {
+        columns: ["Z_PK", "ZPARTNERNAME"],
+        rows: [[cell("1", "integer"), cell("Sam", "text")]],
+        total: 1,
+      };
+    }
+    const all: RawCell[][] = [
+      [
+        cell("1", "integer"),
+        cell("hey there", "text"),
+        cell("721692800", "integer", 1_700_000_000),
+        cell("", "null"),
+      ],
+      [
+        cell("2", "integer"),
+        cell("look at this", "text"),
+        cell("721692900", "integer", 1_700_000_100),
+        cell("<22663 bytes, jpeg image>", "blob"),
+      ],
+      [
+        cell("3", "integer"),
+        cell("", "null"),
+        cell("721693000", "integer", 1_700_000_200),
+        cell("<148 bytes, binary>", "blob"),
+      ],
+    ];
+    const q = search?.trim().toLowerCase();
+    const matched = q
+      ? all.filter((row) => row.some((c) => c.text.toLowerCase().includes(q)))
+      : all;
+    return {
+      columns: ["Z_PK", "ZTEXT", "ZMESSAGEDATE", "ZTHUMBNAIL"],
+      rows: matched.slice(offset, offset + limit),
+      total: matched.length,
+    };
+  },
   moduleStatus: async () =>
     !mockActive
       ? []
