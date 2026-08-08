@@ -2466,18 +2466,26 @@ async fn count_thread_messages(
     thread_id: i64,
     kind: Option<String>,
     search: Option<String>,
+    unsafe_only: Option<bool>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_messages(&cache, thread_id, kind.as_deref(), search.as_deref())
-            .map_err(|e| e.to_string())
+        query::count_messages(
+            &cache,
+            thread_id,
+            kind.as_deref(),
+            search.as_deref(),
+            unsafe_only.unwrap_or(false),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: thread + window + kind + dir + search + mark.
 async fn get_thread_message_window(
     active: State<'_, ActiveBackup>,
     thread_id: i64,
@@ -2486,6 +2494,7 @@ async fn get_thread_message_window(
     kind: Option<String>,
     desc: bool,
     search: Option<String>,
+    unsafe_only: Option<bool>,
 ) -> Result<Vec<Message>, String> {
     // Async + spawn_blocking: a synchronous command runs on the main thread and
     // would freeze the whole native UI. Only the requested window is read, so
@@ -2501,6 +2510,7 @@ async fn get_thread_message_window(
             kind.as_deref(),
             desc,
             search.as_deref(),
+            unsafe_only.unwrap_or(false),
         )
         .map_err(|e| e.to_string())
     })
@@ -2558,6 +2568,7 @@ async fn count_timeline_messages(
     service: Option<String>,
     search: Option<String>,
     kind: Option<String>,
+    unsafe_only: Option<bool>,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2567,6 +2578,7 @@ async fn count_timeline_messages(
             service.as_deref(),
             search.as_deref(),
             kind.as_deref(),
+            unsafe_only.unwrap_or(false),
         )
         .map_err(|e| e.to_string())
     })
@@ -2584,6 +2596,7 @@ async fn get_timeline_window(
     search: Option<String>,
     kind: Option<String>,
     desc: bool,
+    unsafe_only: Option<bool>,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2596,6 +2609,7 @@ async fn get_timeline_window(
             search.as_deref(),
             kind.as_deref(),
             desc,
+            unsafe_only.unwrap_or(false),
         )
         .map_err(|e| e.to_string())
     })
@@ -2636,6 +2650,7 @@ async fn count_message_ranges(
     service: Option<String>,
     search: Option<String>,
     kind: Option<String>,
+    unsafe_only: Option<bool>,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2646,6 +2661,7 @@ async fn count_message_ranges(
             service.as_deref(),
             search.as_deref(),
             kind.as_deref(),
+            unsafe_only.unwrap_or(false),
         )
         .map_err(|e| e.to_string())
     })
@@ -2679,6 +2695,7 @@ async fn get_range_window(
     search: Option<String>,
     kind: Option<String>,
     desc: bool,
+    unsafe_only: Option<bool>,
 ) -> Result<Vec<TimelineMessage>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -2692,6 +2709,7 @@ async fn get_range_window(
             search.as_deref(),
             kind.as_deref(),
             desc,
+            unsafe_only.unwrap_or(false),
         )
         .map_err(|e| e.to_string())
     })
