@@ -142,6 +142,10 @@ function PhotosViewInner() {
   );
   // Show only the photos/videos the user has marked as unsafe.
   const [unsafeOnly, setUnsafeOnly] = useState(false);
+  // Show only what was hidden ON THE DEVICE (Photos' Hidden album). Hiding is a
+  // flag on the asset, not a move — the files stay in DCIM — so these have
+  // always been in the gallery, just indistinguishable without a filter.
+  const [hiddenOnly, setHiddenOnly] = useState(false);
   // Free-text search over the filename (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
@@ -150,9 +154,9 @@ function PhotosViewInner() {
   const sourcesKey = sourcesSel.join(" ");
   const rangesKey = ranges.map((r) => `${r.lo}-${r.hi}`).join(" ");
   const { data: count, error } = useQuery({
-    queryKey: ["mediaCount", sourcesKey, rangesKey, search, unsafeOnly],
+    queryKey: ["mediaCount", sourcesKey, rangesKey, search, unsafeOnly, hiddenOnly],
     queryFn: () =>
-      client.countMedia(sourcesSel, ranges, search, unsafeOnly),
+      client.countMedia(sourcesSel, ranges, search, unsafeOnly, hiddenOnly),
     enabled: active === true,
   });
   // How many are marked unsafe, for the Unsafe pill's count (and whether to show it).
@@ -161,17 +165,32 @@ function PhotosViewInner() {
     queryFn: () => client.countMedia([], [], null, true),
     enabled: active === true,
   });
+  // How many the device hid, for the Hidden pill's count (and whether to show it).
+  const { data: hiddenCount } = useQuery({
+    queryKey: ["mediaHiddenCount"],
+    queryFn: () => client.countMedia([], [], null, false, true),
+    enabled: active === true,
+  });
   // Per-preset counts for the time chips, within the current sources + search.
   const { data: presetCounts } = useQuery({
     // `presets.length` keys the year chips: when the date bounds resolve and the
     // per-year presets appear, the counts must refetch to cover them.
-    queryKey: ["mediaRanges", now, sourcesKey, search, presets.length, unsafeOnly],
+    queryKey: [
+      "mediaRanges",
+      now,
+      sourcesKey,
+      search,
+      presets.length,
+      unsafeOnly,
+      hiddenOnly,
+    ],
     queryFn: () =>
       client.countMediaRanges(
         sourcesSel,
         presets.map((p) => ({ lo: p.lo, hi: p.hi })),
         search,
         unsafeOnly,
+        hiddenOnly,
       ),
     enabled: active === true,
   });
@@ -190,6 +209,7 @@ function PhotosViewInner() {
           sort.by,
           sort.desc,
           unsafeOnly,
+          hiddenOnly,
           page,
         ],
         queryFn: () =>
@@ -202,10 +222,21 @@ function PhotosViewInner() {
             sort.by,
             sort.desc,
             unsafeOnly,
+            hiddenOnly,
           ),
       });
     },
-    [qc, sourcesSel, ranges, sourcesKey, rangesKey, search, sort, unsafeOnly],
+    [
+      qc,
+      sourcesSel,
+      ranges,
+      sourcesKey,
+      rangesKey,
+      search,
+      sort,
+      unsafeOnly,
+      hiddenOnly,
+    ],
   );
 
   // Toggle the unsafe mark, persist it, and refresh the media queries so the
@@ -217,6 +248,7 @@ function PhotosViewInner() {
       void qc.invalidateQueries({ queryKey: ["mediaCount"] });
       void qc.invalidateQueries({ queryKey: ["mediaRanges"] });
       void qc.invalidateQueries({ queryKey: ["mediaFavCount"] });
+      void qc.invalidateQueries({ queryKey: ["mediaHiddenCount"] });
     },
     [qc],
   );
@@ -279,6 +311,35 @@ function PhotosViewInner() {
             ]
           : [],
       });
+    // "Hidden" — what the DEVICE hid (Photos' Hidden album), as distinct from
+    // the user's own "Unsafe" mark. Shown only when the backup actually has
+    // some, so it never reads as an empty "Hidden (0)".
+    if (hiddenOnly || (hiddenCount ?? 0) > 0)
+      list.push({
+        key: "hidden",
+        label: "Hidden",
+        description: "Photos and videos hidden on the device",
+        pills: [
+          {
+            key: "hidden",
+            label: "Hidden",
+            icon: <EyeOff className="size-3.5" />,
+            count: hiddenCount,
+            selected: hiddenOnly,
+            onSelect: () => setHiddenOnly((v) => !v),
+          },
+        ],
+        summary: hiddenOnly
+          ? [
+              {
+                key: "hidden",
+                label: "Hidden",
+                icon: <EyeOff className="size-3.5" />,
+                onClear: () => setHiddenOnly(false),
+              },
+            ]
+          : [],
+      });
     list.push(
       multiTimeGroup({
         description: "When the media was created",
@@ -290,7 +351,7 @@ function PhotosViewInner() {
       }),
     );
     return list;
-  }, [hasFilter, sourceOptions, sourcesSel, toggleSource, presets, presetCounts, ranges, toggleRange, unsafeOnly, favCount]);
+  }, [hasFilter, sourceOptions, sourcesSel, toggleSource, presets, presetCounts, ranges, toggleRange, unsafeOnly, favCount, hiddenOnly, hiddenCount]);
   const sortNode = useMemo(
     () => (
       <SortControl
@@ -370,13 +431,14 @@ function PhotosViewInner() {
         // key by sources+ranges+search+sort so the grid remounts (scroll +
         // measurement reset) on any filter change.
         <MediaGrid
-          key={`${sourcesKey}:${rangesKey}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}`}
+          key={`${sourcesKey}:${rangesKey}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}:${hiddenOnly}`}
           count={count}
           sources={sourcesSel}
           ranges={ranges}
           search={search}
           sort={sort}
           unsafeOnly={unsafeOnly}
+          hiddenOnly={hiddenOnly}
           onOpen={setOpenIndex}
           onMarkUnsafe={markUnsafe}
         />
@@ -390,6 +452,7 @@ function PhotosViewInner() {
         search={search}
         sort={sort}
         unsafeOnly={unsafeOnly}
+        hiddenOnly={hiddenOnly}
         onMarkUnsafe={markUnsafe}
         ensurePage={ensurePage}
         onNavigate={setOpenIndex}
@@ -417,6 +480,7 @@ function MediaGrid({
   search,
   sort,
   unsafeOnly,
+  hiddenOnly,
   onOpen,
   onMarkUnsafe,
 }: {
@@ -426,6 +490,7 @@ function MediaGrid({
   search: string | null;
   sort: SortState;
   unsafeOnly: boolean;
+  hiddenOnly: boolean;
   onOpen: (index: number) => void;
   onMarkUnsafe: (item: MediaItem) => void;
 }) {
@@ -486,6 +551,7 @@ function MediaGrid({
         sort.by,
         sort.desc,
         unsafeOnly,
+        hiddenOnly,
         p,
       ],
       queryFn: () =>
@@ -498,6 +564,7 @@ function MediaGrid({
           sort.by,
           sort.desc,
           unsafeOnly,
+          hiddenOnly,
         ),
     })),
   });
@@ -854,6 +921,7 @@ function Lightbox({
   search,
   sort,
   unsafeOnly,
+  hiddenOnly,
   onMarkUnsafe,
   ensurePage,
   onNavigate,
@@ -866,6 +934,7 @@ function Lightbox({
   search: string | null;
   sort: SortState;
   unsafeOnly: boolean;
+  hiddenOnly: boolean;
   onMarkUnsafe: (item: MediaItem) => void;
   ensurePage: (page: number) => void;
   onNavigate: (index: number) => void;
@@ -906,6 +975,7 @@ function Lightbox({
       sort.by,
       sort.desc,
       unsafeOnly,
+      hiddenOnly,
       page,
     ],
     queryFn: () =>
@@ -918,6 +988,7 @@ function Lightbox({
         sort.by,
         sort.desc,
         unsafeOnly,
+        hiddenOnly,
       ),
     enabled: index != null,
   });

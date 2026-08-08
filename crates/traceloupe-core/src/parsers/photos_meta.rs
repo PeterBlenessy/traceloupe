@@ -212,11 +212,36 @@ pub fn parse_photos_metadata(db_path: &Path, cache: &CacheDb) -> Result<usize> {
         } else {
             "NULL"
         };
+        // These four were inlined UNGUARDED while every column around them was
+        // checked. On a schema missing any one of them the whole statement
+        // fails to prepare, and this pass returns nothing at all — no hidden
+        // flag, no favourites, no people, no EXIF, on every asset. A per-column
+        // NULL costs one field; the alternative costs the entire enrichment.
+        let hidden_expr = if asset_cols.contains("ZHIDDEN") {
+            "a.ZHIDDEN"
+        } else {
+            "NULL"
+        };
+        let fav_expr = if asset_cols.contains("ZFAVORITE") {
+            "a.ZFAVORITE"
+        } else {
+            "NULL"
+        };
+        let subtype_expr = if asset_cols.contains("ZKINDSUBTYPE") {
+            "a.ZKINDSUBTYPE"
+        } else {
+            "NULL"
+        };
+        let screenshot_expr = if asset_cols.contains("ZISDETECTEDSCREENSHOT") {
+            "a.ZISDETECTEDSCREENSHOT"
+        } else {
+            "NULL"
+        };
         let mut stmt = src.prepare(&format!(
             "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, a.ZDATECREATED,
-                    a.ZLATITUDE, a.ZLONGITUDE, a.ZFAVORITE, m.ZTITLE,
-                    a.ZWIDTH, a.ZHEIGHT, a.ZDURATION, a.ZHIDDEN,
-                    a.ZKINDSUBTYPE, a.ZISDETECTEDSCREENSHOT, {play_expr}, {aval_expr},
+                    a.ZLATITUDE, a.ZLONGITUDE, {fav_expr}, m.ZTITLE,
+                    a.ZWIDTH, a.ZHEIGHT, a.ZDURATION, {hidden_expr},
+                    {subtype_expr}, {screenshot_expr}, {play_expr}, {aval_expr},
                     {trash_expr}, {trashdate_expr}, {added_expr}
              FROM {asset_table} a
              LEFT JOIN ZMOMENT m ON m.Z_PK = a.ZMOMENT
