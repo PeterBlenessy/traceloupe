@@ -13,6 +13,79 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.40.0] — 2026-08-08
+
+**The backup held more than the app was showing** — this release is mostly about
+data that was present all along and never reached the screen, and about the one
+habit that kept hiding it: asserting a schema instead of checking one.
+
+That habit fails silently, which is what makes it dangerous. A query naming a
+column the device does not have fails to *prepare*, taking the whole parse with
+it, and the result looks exactly like a device with no data. WhatsApp had been
+importing **nothing at all** for months because of a single column read off the
+wrong table — and its unit fixture declared the column in the wrong place too, so
+the test agreed with the bug. Notes' hashtags were read from a Core Data suffix
+that varies by iOS version, returning zero tags and reporting success. Four
+`ZASSET` columns were inlined unguarded, so one missing column cost the entire
+Photos enrichment pass.
+
+### Photos
+
+- **The camera roll is in two places, and only one was being read.** An iCloud
+  photo library keeps its assets under `PhotoData/CPLAssets/`, not `DCIM/`. On
+  the public iOS 17 backup that was 216 of 519 present assets — **42%** — never
+  imported, with nothing on screen to suggest anything was missing. Hidden
+  screenshots and screen recordings live there too, which is why they appeared to
+  be absent.
+- **Hidden photos are filterable.** Investigated first: hiding is a flag, not a
+  relocation, and `ZVISIBILITYSTATE=2` means cloud-shared, not hidden — both
+  plausible theories, both wrong.
+- Capture dates on older iOS and for Live Photo videos; year filter chips from
+  the library's real span; large videos stream with Range requests; thumbnails
+  decode off the main thread; black lightbox frames retry; a real right-click
+  menu with Download and Reveal in Finder; a user "Unsafe" mark that survives
+  re-import.
+- The hover flicker, chased through three wrong diagnoses to its actual cause:
+  animated opacity promoting a compositing layer.
+
+### Messages
+
+- **WhatsApp imports at all**, and group chats say who is talking — in every app,
+  not just iMessage. Group-ness is now a fact the parser records rather than a
+  guess from a participant list that every app module left empty.
+- WhatsApp and Viber media reach the gallery; iMessage picks up attachments
+  stored outside `Library/SMS/Attachments/`, accepting a basename match only when
+  it is unique.
+
+### Finding media without knowing the schema
+
+A new import pass asks which column holds values that are **actually media in
+this backup**, verified against the Manifest, rather than trusting a column name.
+It recovers Threema's photos, which live *inside* the database and no
+path-based parser could ever have found. On by default
+(Settings → Apps), and never silent: what it found and on what evidence is
+recorded against the app. See `docs/reference/media-discovery.md`.
+
+### Notes
+
+Folders nest properly, tags are found whatever the schema numbered them, pinning
+stops behaving like a folder, and note images that were being silently dropped
+now resolve.
+
+### More of the device
+
+Wi-Fi access points with locations, home-screen widgets, podcast episodes,
+iCloud Drive's file listing, the strongest identifiers (IMEI, IMSI, Find My
+DSID), Life360 circles, Waze, Google Duo/Meet calls, MEGA, LINE and Gettr chats,
+shared-album captions and likes, and browsing evidence from 42 apps.
+
+### Interface
+
+Dates show the year everywhere. The Messages, Notes and Contacts list panes
+scroll again, and so does the Device view — which was clipping 189px of itself
+with no way to reach it. The import warning toast stops reciting parser
+internals at the reader, and the Safari error it was reciting is fixed.
+
 ## [0.39.0] — 2026-08-02
 
 **An empty screen has to say why** — a view that shows nothing is making a claim
