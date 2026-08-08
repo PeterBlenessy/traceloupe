@@ -23,7 +23,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use super::AppMessage;
+use super::{column_exists, AppAttachment, AppMessage};
 use crate::manifest::{FileEntry, ManifestIndex};
 use crate::Result;
 
@@ -61,9 +61,32 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     if !table_exists(&conn, "ZVIBERMESSAGE")? || !table_exists(&conn, "ZCONVERSATION")? {
         return Ok(Vec::new());
     }
+    // Viber names its media file on `ZATTACHMENT` and stores no path — the
+    // Manifest lookup downstream is by basename anyway, so the name IS the
+    // handle. `ZTYPE` ("picture", "video") is Viber's own word for the kind, not
+    // a MIME type, so it only decides whether this is media at all; the actual
+    // kind is derived from the filename extension like everywhere else.
+    //
+    // Probed rather than assumed: a schema without these columns loses the
+    // attachment, not the whole conversation.
+    let att_name = if column_exists(&conn, "ZATTACHMENT", "ZNAME") {
+        "att.ZNAME"
+    } else {
+        "NULL"
+    };
+    let att_type = if column_exists(&conn, "ZATTACHMENT", "ZTYPE") {
+        "att.ZTYPE"
+    } else {
+        "NULL"
+    };
+    let att_join = if table_exists(&conn, "ZATTACHMENT")? {
+        "LEFT JOIN ZATTACHMENT att ON att.Z_PK = m.ZATTACHMENT"
+    } else {
+        ""
+    };
     // Title = group ZNAME or the 1:1 partner's name. Sender = the message's member
     // (ZPHONENUMINDEX), falling back to the conversation interlocutor for a 1:1.
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT
              m.ZCONVERSATION AS chat_key,
              COALESCE(conv.ZNAME, interloc.ZDISPLAYFULLNAME) AS chat_name,
@@ -73,14 +96,17 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
              COALESCE(m.ZPHONENUMINDEX, conv.ZINTERLOCUTOR) AS sender_id,
              sender.ZDISPLAYFULLNAME AS sender_name,
              (m.ZATTACHMENT IS NOT NULL) AS has_media,
-             (m.ZPHONENUMINDEX IS NOT NULL) AS has_member_sender
+             (m.ZPHONENUMINDEX IS NOT NULL) AS has_member_sender,
+             {att_name} AS att_name,
+             {att_type} AS att_type
          FROM ZVIBERMESSAGE m
          LEFT JOIN ZCONVERSATION conv ON m.ZCONVERSATION = conv.Z_PK
          LEFT JOIN ZMEMBER interloc ON interloc.Z_PK = conv.ZINTERLOCUTOR
          LEFT JOIN ZMEMBER sender
              ON sender.Z_PK = COALESCE(m.ZPHONENUMINDEX, conv.ZINTERLOCUTOR)
-         ORDER BY chat_key, ts",
-    )?;
+         {att_join}
+         ORDER BY chat_key, ts"
+    ))?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -98,6 +124,26 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let sender_name: Option<String> = super::col_string(r, 6)?.filter(|s| !s.trim().is_empty());
         let has_attachment = r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
         let has_member_sender = r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0;
+        let att_name: Option<String> = super::col_string(r, 9)?.filter(|s| !s.trim().is_empty());
+        let att_type: Option<String> = super::col_string(r, 10)?;
+        // Only real media: Viber also files locations, stickers and calls on
+        // ZATTACHMENT, and a "customLocation" row has a name that is not a file.
+        let attachments = att_name
+            .filter(|_| {
+                matches!(
+                    att_type.as_deref(),
+                    Some("picture") | Some("video") | Some("image") | None
+                )
+            })
+            .filter(|n| n.contains('.'))
+            .map(|n| {
+                vec![AppAttachment {
+                    path: n.clone(),
+                    mime: None,
+                    filename: Some(n),
+                }]
+            })
+            .unwrap_or_default();
 
         // Direction: `received` is the only inbound state; the sent-side states
         // (send/delivered/sending/failed — the owner's own actions) are outbound.
@@ -112,7 +158,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
 
         out.push(AppMessage {
             is_group: false,
-            attachments: Vec::new(),
+            attachments,
             chat_key,
             chat_name,
             timestamp,
@@ -136,11 +182,42 @@ mod tests {
     use crate::cache::CacheDb;
     use crate::normalize::ImportReport;
 
+    /// Viber files its media name on ZATTACHMENT and stores no path; that name
+    /// is the only handle the Manifest lookup needs. Producing no attachment at
+    /// all meant a Viber photo was flagged and then never resolved (#360).
+    #[test]
+    fn picture_attachments_yield_a_filename_and_locations_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_db(dir.path());
+        let msgs = parse(&db, "Contacts.data").unwrap();
+        let pic = msgs
+            .iter()
+            .find(|m| !m.attachments.is_empty())
+            .expect("the picture message should carry an attachment");
+        assert_eq!(pic.attachments.len(), 1);
+        assert_eq!(pic.attachments[0].path, "1704466684524144.jpg");
+        assert_eq!(
+            pic.attachments[0].filename.as_deref(),
+            Some("1704466684524144.jpg")
+        );
+        assert!(
+            msgs.iter()
+                .all(|m| m.attachments.iter().all(|a| a.path != "1705938520582674")),
+            "a customLocation is not a file and must not reach the resolver"
+        );
+    }
+
     fn make_db(dir: &Path) -> std::path::PathBuf {
         let db = dir.join("Contacts.data");
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(
             "CREATE TABLE ZMEMBER (Z_PK INTEGER PRIMARY KEY, ZDISPLAYFULLNAME TEXT);
+             CREATE TABLE ZATTACHMENT (Z_PK INTEGER PRIMARY KEY, ZNAME TEXT, ZTYPE TEXT);
+             -- A picture, and a location which files on ZATTACHMENT too but is
+             -- not a file and must not be offered to the resolver.
+             INSERT INTO ZATTACHMENT (Z_PK, ZNAME, ZTYPE)
+                VALUES (5, '1704466684524144.jpg', 'picture'),
+                       (6, '1705938520582674', 'customLocation');
              CREATE TABLE ZCONVERSATION (Z_PK INTEGER PRIMARY KEY, ZNAME TEXT, ZINTERLOCUTOR INTEGER);
              CREATE TABLE ZVIBERMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCONVERSATION INTEGER, ZTEXT TEXT,
                  ZSTATEDATE REAL, ZDATE REAL, ZSTATE TEXT, ZPHONENUMINDEX INTEGER, ZATTACHMENT INTEGER);
