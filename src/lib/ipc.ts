@@ -1263,6 +1263,8 @@ export interface TraceLoupeClient {
     threadId: number,
     kind?: string | null,
     search?: string | null,
+    /** Only messages the person marked unsafe. */
+    unsafeOnly?: boolean,
   ): Promise<number>;
   /** A window of a thread's messages from `offset`; `desc` newest-first.
    *  `search` matches body/sender (in-conversation search). */
@@ -1273,6 +1275,8 @@ export interface TraceLoupeClient {
     desc?: boolean,
     kind?: string | null,
     search?: string | null,
+    /** Only messages the person marked unsafe. */
+    unsafeOnly?: boolean,
   ): Promise<Message[]>;
   /** The 0-based row index of a message within its thread under the given order
    *  and `kind` filter, or null if absent. Used to scroll to a message. */
@@ -1291,6 +1295,8 @@ export interface TraceLoupeClient {
     service?: string | null,
     search?: string | null,
     kind?: string | null,
+    /** Only messages the person marked unsafe. */
+    unsafeOnly?: boolean,
   ): Promise<number>;
   /** A window of the all-conversations timeline from `offset`; `desc` newest-first.
    * `search` matches message body / sender / conversation; `kind` filters class. */
@@ -1301,6 +1307,8 @@ export interface TraceLoupeClient {
     search?: string | null,
     desc?: boolean,
     kind?: string | null,
+    /** Only messages the person marked unsafe. */
+    unsafeOnly?: boolean,
   ): Promise<TimelineMessage[]>;
   /** Message counts for each half-open [lo, hi) epoch-second window. */
   countMessageRanges(
@@ -1308,6 +1316,8 @@ export interface TraceLoupeClient {
     service?: string | null,
     search?: string | null,
     kind?: string | null,
+    /** Only messages the person marked unsafe. */
+    unsafeOnly?: boolean,
   ): Promise<number[]>;
   /** Notes per time range, dated like the Notes view — so a Safety-Scan filter
    *  count and the Notes view agree for the same period. */
@@ -1334,6 +1344,8 @@ export interface TraceLoupeClient {
     search?: string | null,
     desc?: boolean,
     kind?: string | null,
+    /** Only messages the person marked unsafe. */
+    unsafeOnly?: boolean,
   ): Promise<TimelineMessage[]>;
   listCalls(): Promise<Call[]>;
   listSafariHistory(): Promise<HistoryVisit[]>;
@@ -1841,11 +1853,12 @@ const tauriClient: TraceLoupeClient = {
       threadId: threadId ?? null,
       service: service ?? null,
     }),
-  countThreadMessages: (threadId, kind = null, search = null) =>
+  countThreadMessages: (threadId, kind = null, search = null, unsafeOnly = false) =>
     invoke<number>("count_thread_messages", {
       threadId,
       kind: kind ?? null,
       search: search ?? null,
+      unsafeOnly,
     }),
   getThreadMessageWindow: (
     threadId,
@@ -1854,6 +1867,7 @@ const tauriClient: TraceLoupeClient = {
     desc = false,
     kind = null,
     search = null,
+    unsafeOnly = false,
   ) =>
     invoke<Message[]>("get_thread_message_window", {
       threadId,
@@ -1862,6 +1876,7 @@ const tauriClient: TraceLoupeClient = {
       desc,
       kind: kind ?? null,
       search: search ?? null,
+      unsafeOnly,
     }),
   threadMessageIndex: (threadId, messageId, kind = null, desc = false) =>
     invoke<number | null>("thread_message_index", {
@@ -1872,11 +1887,12 @@ const tauriClient: TraceLoupeClient = {
     }),
   recoverAttachmentMedia: (attachmentId) =>
     invoke<RecoveredMedia | null>("recover_attachment_media", { attachmentId }),
-  countTimelineMessages: (service, search = null, kind = null) =>
+  countTimelineMessages: (service, search = null, kind = null, unsafeOnly = false) =>
     invoke<number>("count_timeline_messages", {
       service: service ?? null,
       search: search ?? null,
       kind: kind ?? null,
+      unsafeOnly,
     }),
   getTimelineWindow: (
     offset,
@@ -1885,6 +1901,7 @@ const tauriClient: TraceLoupeClient = {
     search = null,
     desc = false,
     kind = null,
+    unsafeOnly = false,
   ) =>
     invoke<TimelineMessage[]>("get_timeline_window", {
       offset,
@@ -1893,10 +1910,12 @@ const tauriClient: TraceLoupeClient = {
       search: search ?? null,
       desc,
       kind: kind ?? null,
+      unsafeOnly,
     }),
-  countMessageRanges: (ranges, service, search = null, kind = null) =>
+  countMessageRanges: (ranges, service, search = null, kind = null, unsafeOnly = false) =>
     invoke<number[]>("count_message_ranges", {
       ranges,
+      unsafeOnly,
       service: service ?? null,
       search: search ?? null,
       kind: kind ?? null,
@@ -1918,6 +1937,7 @@ const tauriClient: TraceLoupeClient = {
     search = null,
     desc = false,
     kind = null,
+    unsafeOnly = false,
   ) =>
     invoke<TimelineMessage[]>("get_range_window", {
       lo,
@@ -1928,6 +1948,7 @@ const tauriClient: TraceLoupeClient = {
       search: search ?? null,
       desc,
       kind: kind ?? null,
+      unsafeOnly,
     }),
   listCalls: () => invoke<Call[]>("list_calls"),
   listSafariHistory: () => invoke<HistoryVisit[]>("list_safari_history"),
@@ -2841,6 +2862,23 @@ const nowS = Math.floor(Date.now() / 1000);
 /** The browser mock's unsafe marks. In-memory: a reload starts clean, which is
  *  honest about it being a stand-in for the per-backup file. */
 const mockMarks: Record<string, Set<number>> = {};
+
+/** Apply the unsafe filter the same way the backend does — in the QUERY, so the
+ *  mock's count and its window agree the way the real ones must. */
+function markFilter(messages: Message[], unsafeOnly: boolean): Message[] {
+  if (!unsafeOnly) return messages;
+  const set = mockMarks.message ?? new Set<number>();
+  return messages.filter((m) => set.has(m.id));
+}
+
+function markFilterTimeline(
+  items: TimelineMessage[],
+  unsafeOnly: boolean,
+): TimelineMessage[] {
+  if (!unsafeOnly) return items;
+  const set = mockMarks.message ?? new Set<number>();
+  return items.filter((t) => set.has(t.message.id));
+}
 
 const mockNotes: Note[] = [
   {
@@ -6218,8 +6256,8 @@ const mockClient: TraceLoupeClient = {
   // The mock messages carry no `kind`, so no content-kinds are advertised and the
   // filter is a no-op here.
   messageKinds: async () => [],
-  countThreadMessages: async (threadId, _kind = null, search = null) =>
-    mockActive ? mockThreadMessages(threadId, search).length : 0,
+  countThreadMessages: async (threadId, _kind = null, search = null, unsafeOnly = false) =>
+    mockActive ? markFilter(mockThreadMessages(threadId, search), unsafeOnly).length : 0,
   getThreadMessageWindow: async (
     threadId,
     offset,
@@ -6227,9 +6265,10 @@ const mockClient: TraceLoupeClient = {
     desc = false,
     _kind = null,
     search = null,
+    unsafeOnly = false,
   ) => {
     if (!mockActive) return [];
-    const all = mockThreadMessages(threadId, search);
+    const all = markFilter(mockThreadMessages(threadId, search), unsafeOnly);
     const ordered = desc ? [...all].reverse() : all;
     return ordered.slice(offset, offset + limit);
   },
@@ -6241,8 +6280,10 @@ const mockClient: TraceLoupeClient = {
     return i < 0 ? null : i;
   },
   recoverAttachmentMedia: async () => null,
-  countTimelineMessages: async (service, search = null, _kind = null) =>
-    mockActive ? mockFilterTimeline(service, undefined, search).length : 0,
+  countTimelineMessages: async (service, search = null, _kind = null, unsafeOnly = false) =>
+    mockActive
+      ? markFilterTimeline(mockFilterTimeline(service, undefined, search), unsafeOnly).length
+      : 0,
   getTimelineWindow: async (
     offset,
     limit,
@@ -6250,15 +6291,21 @@ const mockClient: TraceLoupeClient = {
     search = null,
     desc = false,
     _kind = null,
+    unsafeOnly = false,
   ) => {
     if (!mockActive) return [];
-    const filtered = mockFilterTimeline(service, undefined, search);
+    const filtered = markFilterTimeline(
+      mockFilterTimeline(service, undefined, search),
+      unsafeOnly,
+    );
     const ordered = desc ? [...filtered].reverse() : filtered;
     return ordered.slice(offset, offset + limit);
   },
-  countMessageRanges: async (ranges, service, search = null, _kind = null) =>
+  countMessageRanges: async (ranges, service, search = null, _kind = null, unsafeOnly = false) =>
     ranges.map((r) =>
-      mockActive ? mockFilterTimeline(service, r, search).length : 0,
+      mockActive
+        ? markFilterTimeline(mockFilterTimeline(service, r, search), unsafeOnly).length
+        : 0,
     ),
   countNoteRanges: async (ranges) =>
     ranges.map((r) => {

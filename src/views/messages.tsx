@@ -22,6 +22,7 @@ import {
   MessageSquare,
   MessagesSquare,
   Paperclip,
+  ShieldAlert,
   Sparkles,
   Trash2,
   Users,
@@ -343,6 +344,9 @@ function MessagesViewInner() {
 
   // Content-kind filter (grouped buckets). The pill control lives in each view's
   // toolbar; the selection is shared + persisted across Timeline and conversations.
+  // Owned here, not in either mode: the mark is one thing, and a filter that is
+  // on in Timeline but off in Chats would be two features that disagree.
+  const [unsafeOnly, setUnsafeOnly] = useState(false);
   const [contentKind, setContentKind] = usePersistedState<string>(
     "messages:kind",
     "all",
@@ -482,6 +486,8 @@ function MessagesViewInner() {
       <div className="min-h-0 flex-1">
         {mode === "conversations" ? (
           <Conversations
+            unsafeOnly={unsafeOnly}
+            onUnsafeOnly={setUnsafeOnly}
             selectedId={selectedId}
             onSelect={setSelectedId}
             service={service}
@@ -496,6 +502,8 @@ function MessagesViewInner() {
           />
         ) : (
           <Timeline
+            unsafeOnly={unsafeOnly}
+            onUnsafeOnly={setUnsafeOnly}
             onOpenThread={(id, messageId) =>
               openThread(id, "timeline", messageId ?? null)
             }
@@ -536,6 +544,8 @@ function Conversations({
   backLabel,
   scrollToMessage,
   onScrolledToMessage,
+  unsafeOnly,
+  onUnsafeOnly,
 }: {
   selectedId: number | null;
   onSelect: (id: number) => void;
@@ -550,6 +560,8 @@ function Conversations({
   /** A message id to scroll the open conversation to (from a Timeline jump). */
   scrollToMessage?: number | null;
   onScrolledToMessage?: () => void;
+  unsafeOnly: boolean;
+  onUnsafeOnly: (v: boolean) => void;
 }) {
   // #268 was exactly this: sms.db decrypted truncated, would not open, and
   // this view read as "No messages in this backup." for months. It is the
@@ -575,6 +587,42 @@ function Conversations({
     queryFn: () => client.listThreads(),
     enabled: active === true,
   });
+  const { marked: markedConv } = useUnsafeMarks("message");
+  // The same facet the Timeline offers, built from the same hook — one mark, one
+  // filter, whichever mode you are in.
+  const unsafeGroup = useMemo<FilterGroup[]>(
+    () =>
+      unsafeOnly || markedConv.size > 0
+        ? [
+            {
+              key: "unsafe",
+              label: "Unsafe",
+              description: "Messages you marked to come back to",
+              pills: [
+                {
+                  key: "unsafe",
+                  label: "Unsafe",
+                  icon: <ShieldAlert className="size-3.5 text-amber-400" />,
+                  count: markedConv.size,
+                  selected: unsafeOnly,
+                  onSelect: () => onUnsafeOnly(!unsafeOnly),
+                },
+              ],
+              summary: unsafeOnly
+                ? [
+                    {
+                      key: "unsafe",
+                      label: "Unsafe",
+                      icon: <ShieldAlert className="size-3.5 text-amber-400" />,
+                      onClear: () => onUnsafeOnly(false),
+                    },
+                  ]
+                : [],
+            },
+          ]
+        : [],
+    [unsafeOnly, onUnsafeOnly, markedConv.size],
+  );
   const resolve = useContactResolver();
   const { showContactNames, showAvatars } = useSettings();
   const marks = useFindingMarks();
@@ -706,7 +754,7 @@ function Conversations({
         title: "Messages",
         count: visibleThreads?.length,
         modes: modesNode,
-        filter: serviceGroups,
+        filter: [...serviceGroups, ...unsafeGroup],
         // Only while a conversation is open: a search box or an order toggle
         // with nothing to act on is a control that does nothing, which is worse
         // than its absence.
@@ -723,7 +771,7 @@ function Conversations({
               // which contact is open — so nothing is lost by not repeating it.
               count: conv?.total,
               search: convSearchNode,
-              filter: [...serviceGroups, ...convKindGroup],
+              filter: [...serviceGroups, ...convKindGroup, ...unsafeGroup],
               sort: (
                 <>
                   {/* Back appears only when the conversation was jumped into
@@ -751,7 +799,7 @@ function Conversations({
       [
         visibleThreads?.length, modesNode, serviceGroups, sortNode, selected,
         convSearchNode, convKindGroup, order.desc, setOrder, conv,
-        onBack, backLabel,
+        onBack, backLabel, unsafeGroup,
       ],
     ),
   );
@@ -827,6 +875,7 @@ function Conversations({
         selected ? (
           <Conversation
             thread={selected}
+            unsafeOnly={unsafeOnly}
             resolve={resolve}
             showContactNames={showContactNames}
             kindValue={kindValue}
@@ -916,6 +965,8 @@ function Timeline({
   onKindChange,
   serviceGroups,
   modesNode,
+  unsafeOnly,
+  onUnsafeOnly,
 }: {
   onOpenThread: (threadId: number, messageId?: number) => void;
   service: string | null;
@@ -924,15 +975,15 @@ function Timeline({
   /** The shared app-filter group(s) from the parent, added to this mode's own. */
   serviceGroups: FilterGroup[];
   modesNode: React.ReactNode;
+  unsafeOnly: boolean;
+  onUnsafeOnly: (v: boolean) => void;
 }) {
   const fromSafety = useFromSafety();
   const resolve = useContactResolver();
   const { marked: markedMsgs, toggle: toggleMsgMark } = useUnsafeMarks("message");
-  // NOTE: no "Unsafe" FILTER here yet, deliberately. This list is fetched in
-  // windows, so filtering the loaded page client-side would return sparse pages
-  // and a count that disagrees with what is on screen. Doing it properly means
-  // threading the mark predicate into count_range/get_range_window — tracked in
-  // the follow-up issue. Marking works; filtering by the mark does not yet.
+  // Filtered in the QUERY, not the loaded page: this list is windowed, so a
+  // client-side filter would return sparse pages and a count that disagrees with
+  // what is on screen.
   const { showContactNames, showAvatars } = useSettings();
   // #268 was exactly this: sms.db decrypted truncated, would not open, and
   // this view read as "No messages in this backup." for months. It is the
@@ -1026,9 +1077,9 @@ function Timeline({
     isPending: totalPending,
     error: totalError,
   } = useQuery({
-    queryKey: ["timelineRangeCount", range.lo, range.hi, service, search, kind],
+    queryKey: ["timelineRangeCount", range.lo, range.hi, service, search, kind, unsafeOnly],
     queryFn: async () =>
-      (await client.countMessageRanges([range], service, search, kind))[0] ?? 0,
+      (await client.countMessageRanges([range], service, search, kind, unsafeOnly))[0] ?? 0,
     enabled: active === true,
   });
   const { scrollEnd, toTop, toBottom } = useScrollEnds();
@@ -1075,8 +1126,40 @@ function Timeline({
             }),
           ]
         : []),
+      // Offered once anything is marked, or while it is on so it can be turned
+      // off. A facet that can only ever say 0 is a promise the data cannot keep.
+      ...(unsafeOnly || markedMsgs.size > 0
+        ? [
+            {
+              key: "unsafe",
+              label: "Unsafe",
+              description: "Messages you marked to come back to",
+              pills: [
+                {
+                  key: "unsafe",
+                  label: "Unsafe",
+                  icon: <ShieldAlert className="size-3.5 text-amber-400" />,
+                  count: markedMsgs.size,
+                  selected: unsafeOnly,
+                  onSelect: () => onUnsafeOnly(!unsafeOnly),
+                },
+              ],
+              summary: unsafeOnly
+                ? [
+                    {
+                      key: "unsafe",
+                      label: "Unsafe",
+                      icon: <ShieldAlert className="size-3.5 text-amber-400" />,
+                      onClear: () => onUnsafeOnly(false),
+                    },
+                  ]
+                : [],
+            } as FilterGroup,
+          ]
+        : []),
     ],
-    [serviceGroups, presets, presetCounts, range, setRange, kinds, kindValue, onKindChange],
+    [serviceGroups, presets, presetCounts, range, setRange, kinds, kindValue,
+     onKindChange, unsafeOnly, markedMsgs.size],
   );
   useViewToolbar(
     useMemo(
@@ -1118,8 +1201,8 @@ function Timeline({
         count={total ?? 0}
         underlap={!fromSafety}
         startAtBottom={!order.desc}
-        resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
-        persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}`}
+        resetKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}:${unsafeOnly}`}
+        persistKey={`timeline:${service ?? "all"}:${kind ?? "all"}:${range.lo}:${range.hi}:${search}:${order.desc}:${unsafeOnly}`}
         scrollEnd={scrollEnd}
         estimateSize={56}
         windowKey={(page) => [
@@ -1130,6 +1213,7 @@ function Timeline({
           range.hi,
           search,
           order.desc,
+          unsafeOnly,
           page,
         ]}
         fetchWindow={(offset, limit) =>
@@ -1142,6 +1226,7 @@ function Timeline({
             search,
             order.desc,
             kind,
+            unsafeOnly,
           )
         }
         renderItem={(item, _i, prev) => (
@@ -1496,6 +1581,7 @@ function Conversation({
   scrollToMessage,
   onScrolledToMessage,
   onContext,
+  unsafeOnly,
 }: {
   thread: ThreadSummary;
   resolve: Resolver;
@@ -1513,6 +1599,7 @@ function Conversation({
    *  pane owns the scroller and the thread, so it hands them up rather than
    *  keeping a header of its own. */
   onContext: (c: { total: number }) => void;
+  unsafeOnly: boolean;
 }) {
   const group = isGroup(thread);
   const { marked: markedMsgs, toggle: toggleMsgMark } = useUnsafeMarks("message");
@@ -1530,8 +1617,8 @@ function Conversation({
     isPending: totalPending,
     error: totalError,
   } = useQuery({
-    queryKey: ["messageCount", thread.id, kind, searchTerm],
-    queryFn: () => client.countThreadMessages(thread.id, kind, searchTerm),
+    queryKey: ["messageCount", thread.id, kind, searchTerm, unsafeOnly],
+    queryFn: () => client.countThreadMessages(thread.id, kind, searchTerm, unsafeOnly),
   });
 
   // Scroll-to-message (from a Timeline jump): resolve the target's row index in
@@ -1623,6 +1710,7 @@ function Conversation({
             order.desc,
             kind,
             searchTerm,
+            unsafeOnly,
           )
         }
         renderItem={(message, _i, prev) => {
