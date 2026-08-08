@@ -85,6 +85,13 @@ const KINDS: Record<
 
 const MEDIA_KINDS: TimelineEvent["kind"][] = ["photo", "video", "screenshot"];
 
+/** Actions that ARE the row's obvious reading, so saying them adds nothing.
+ *  Anything else — added, edited, deleted, due — is stated on the entry. */
+const DEFAULT_ACTIONS = new Set([
+  "sent", "taken", "placed", "visited", "searched", "created",
+  "recorded", "started", "logged", "installed",
+]);
+
 /** A day heading, one event, or a run of media shown as a strip. */
 type Row =
   | { type: "day"; key: string; at: number }
@@ -135,9 +142,14 @@ export function buildRows(events: TimelineEvent[]): Row[] {
     }
     if (MEDIA_KINDS.includes(e.kind)) {
       const last = run[run.length - 1];
-      // Same kind AND close in time. Mixing a screenshot into a run of photos
-      // would hide the fact that the person did something different.
-      if (last && last.kind === e.kind && Math.abs(e.at - last.at) <= GROUP_GAP_S) {
+      // Same kind AND same act: forty shots are one moment, but a deletion
+      // among them is a different thing happening and must not be folded away.
+      if (
+        last &&
+        last.kind === e.kind &&
+        last.action === e.action &&
+        Math.abs(e.at - last.at) <= GROUP_GAP_S
+      ) {
         run.push(e);
       } else {
         flush();
@@ -454,6 +466,16 @@ function EventRow({ event, onOpen }: { event: TimelineEvent; onOpen: () => void 
           <span className="truncate text-sm font-medium">
             {event.title ?? KINDS[event.kind].label}
           </span>
+          {/* Only when it is not the obvious reading of the row. "Photo · taken"
+              is noise; "Photo · deleted" is the whole point of the entry. */}
+          {!DEFAULT_ACTIONS.has(event.action) && (
+            <Badge
+              variant="outline"
+              className="shrink-0 px-1.5 py-0 text-3xs font-normal capitalize"
+            >
+              {event.action}
+            </Badge>
+          )}
           {event.source && (
             <span className="min-w-0 truncate text-xs text-muted-foreground">
               {event.source}

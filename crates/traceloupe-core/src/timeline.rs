@@ -40,73 +40,118 @@ pub const EVENT_KINDS: &[&str] = &[
     "health",
 ];
 
-/// The cache tables this stream reads, and the tables it deliberately does not.
+/// Every (table, timestamp column) the stream reads, with the act it records.
 ///
-/// Declared rather than implied, because the timeline is a hand-written UNION:
-/// a parser that starts writing a new timestamped table would simply not appear
-/// here, and nothing on screen would say so. `timeline_covers_every_timestamped_table`
-/// fails when a table with a time column is in neither list, so the omission is
-/// a build failure instead of a silent gap.
-pub const SOURCE_TABLES: &[&str] = &[
-    "messages",
-    "media_items",
-    "calls",
-    "safari_history",
-    "safari_searches",
-    "notes",
-    "recordings",
-    "installed_apps",
-    "calendar_events",
-    "reminders",
-    "workouts",
-    "cycle_tracking",
+/// Declared as COLUMNS, not tables, because a record is not a single point in
+/// time. Anything with a lifecycle has several: a photo is shot, added to the
+/// library and deleted; a note is written and edited; a reminder is created,
+/// falls due and is completed. Listing tables would let a table "count as
+/// covered" while three of its four moments went unshown.
+pub const SOURCE_COLUMNS: &[(&str, &str, &str)] = &[
+    ("messages", "sent_at", "sent"),
+    ("messages", "deleted_at", "deleted"),
+    ("media_items", "taken_at", "taken"),
+    ("media_items", "added_at", "added"),
+    ("media_items", "trashed_at", "deleted"),
+    ("calls", "occurred_at", "placed"),
+    ("safari_history", "visited_at", "visited"),
+    ("safari_searches", "searched_at", "searched"),
+    ("notes", "created_at", "created"),
+    ("notes", "modified_at", "edited"),
+    ("recordings", "recorded_at", "recorded"),
+    ("calendar_events", "start_at", "started"),
+    ("reminders", "created_at", "created"),
+    ("reminders", "due_at", "due"),
+    ("reminders", "completed_at", "completed"),
+    ("workouts", "start_at", "started"),
+    ("cycle_tracking", "logged_at", "logged"),
+    ("installed_apps", "downloaded", "installed"),
 ];
 
-/// Timestamped tables that are deliberately NOT events, with the reason.
+/// Timestamp columns that are deliberately NOT events, with the reason.
 ///
 /// Each line is a decision someone can disagree with, which is the point — an
-/// undecided table fails the build rather than quietly never appearing.
-pub const NOT_EVENTS: &[(&str, &str)] = &[
+/// undecided column fails the build rather than quietly never appearing.
+pub const NOT_EVENTS: &[(&str, &str, &str)] = &[
     (
         "threads",
-        "last_message_at is a derived summary of its own messages, which are \
-         already events — a thread row would double every conversation",
+        "last_message_at",
+        "a derived summary of the thread's own messages, which are already \
+         events — it would double every conversation",
     ),
     (
         "contacts",
-        "a person in the address book is a record, not something that happened; \
-         what they DID is already here as messages and calls",
+        "birthday_at",
+        "an attribute OF the person, not a moment they acted. The moments that \
+         belong here are when the contact was created and last changed, which \
+         iOS records and this app does not yet capture (#370)",
+    ),
+    (
+        "messages",
+        "read_at",
+        "a delivery receipt, not an act by the person — and one per message \
+         would double the busiest source in the stream",
+    ),
+    (
+        "messages",
+        "delivered_at",
+        "as read_at: a transport receipt about a message already shown",
+    ),
+    (
+        "calendar_events",
+        "end_at",
+        "the far edge of an event already placed at its start; carried as the \
+         entry's duration instead",
+    ),
+    (
+        "workouts",
+        "end_at",
+        "as calendar end_at — carried as duration on the workout that started",
     ),
     (
         "interactions",
-        "an aggregate per person (first/last seen plus counts), not individual \
-         acts — the acts it summarises are already events",
+        "first_at",
+        "an aggregate per person, summarising acts already in the stream",
     ),
+    ("interactions", "last_at", "as first_at"),
     (
         "message_deletions",
-        "a record that messages are ABSENT between two times; the timeline shows \
-         what happened, and Messages is where a gap belongs",
+        "after_at",
+        "describes an ABSENCE of messages between two times; Messages is where \
+         a gap belongs",
     ),
+    ("message_deletions", "before_at", "as after_at"),
     (
         "scan_runs",
+        "started_at",
         "when THIS APP ran a scan, not something the device did",
+    ),
+    ("scan_runs", "finished_at", "as started_at"),
+    (
+        "scan_runs",
+        "feeds_generated_at",
+        "provenance of the indicator feeds",
     ),
     (
         "sleep_sessions",
+        "start_at",
         "stage-level sensor readings (In Bed / Core / Deep / REM), several an \
-         hour — a series, not discrete acts. It would bury a night's real events \
-         under dozens of rows. Health shows it as the curve it is; worth \
-         revisiting if it can be folded to one row per night",
+         hour — a series, not discrete acts. It would bury a night's real \
+         events under dozens of rows. Worth revisiting folded to one row a night",
     ),
+    ("sleep_sessions", "end_at", "as start_at"),
     (
         "health_timezones",
-        "which timezone the device was in, metadata about other records rather \
-         than an act",
+        "first_at",
+        "which timezone the device was in: metadata about other records",
     ),
+    ("health_timezones", "last_at", "as first_at"),
     (
         "health_device_use",
-        "which device recorded a health sample; metadata about provenance",
+        "first_at",
+        "which device recorded a health sample; provenance, not an act",
     ),
+    ("health_device_use", "last_at", "as first_at"),
 ];
 
 /// One thing that happened, with enough of its content to be read in place.
@@ -115,8 +160,15 @@ pub const NOT_EVENTS: &[(&str, &str)] = &[
 pub struct TimelineEvent {
     /// Row id within its own table — with `kind`, enough to open the source view.
     pub id: i64,
-    /// One of [`EVENT_KINDS`].
+    /// One of [`EVENT_KINDS`] — what the thing IS.
     pub kind: String,
+    /// What HAPPENED to it: "taken", "added", "edited", "deleted", "sent", …
+    ///
+    /// A record is not a single point in time. A contact is created and updated;
+    /// a photo is shot, added to the library, edited and deleted. Reading only
+    /// the first of those puts the row at one moment and loses every other
+    /// moment it was actually involved in.
+    pub action: String,
     /// Unix seconds. Never null: an event with no time cannot be placed.
     pub at: i64,
     /// Who or what it belongs to — a conversation, an album, a Safari profile.
@@ -149,6 +201,7 @@ fn row_to_event(r: &Row) -> rusqlite::Result<TimelineEvent> {
         thumb_path: r.get(6)?,
         duration_s: r.get(7)?,
         is_from_me: r.get::<_, i64>(8)? != 0,
+        action: r.get(9)?,
     })
 }
 
@@ -161,98 +214,146 @@ fn row_to_event(r: &Row) -> rusqlite::Result<TimelineEvent> {
 /// `?1` is the search term (NULL for none) — bound once and reused by every arm,
 /// which is why each arm repeats the same `(?1 IS NULL OR …)` shape.
 fn union_sql() -> String {
-    // Ordering the arms costs nothing (the outer ORDER BY decides) but keeps
-    // this readable next to EVENT_KINDS.
+    // Each arm is ONE (table, timestamp column) pair, because a row is not a
+    // single point in time. A photo is shot, added to the library and deleted;
+    // a note is written and later edited. Emitting only the first loses every
+    // other moment that thing was actually involved in, which is why this is a
+    // list of columns rather than a list of tables.
+    //
+    // The FIRST arm names the columns for the whole union — SQLite takes the
+    // result names from it, and without these the outer WHERE cannot say `kind`
+    // or `at` at all.
     let arms = [
-        // A message brings its text and the conversation it belongs to.
-        // The FIRST arm names the columns for the whole union — SQLite takes the
-        // result names from it, and without these the outer WHERE cannot say
-        // `kind` or `at` at all.
+        // --- messages -------------------------------------------------------
         "SELECT m.id AS id, 'message' AS kind, m.sent_at AS at,
                 COALESCE(t.display_name, t.identifier) AS source,
                 CASE WHEN m.is_from_me = 1 THEN 'You' ELSE m.sender END AS title,
-                m.body AS body, NULL AS thumb, NULL AS dur, m.is_from_me AS mine
+                m.body AS body, NULL AS thumb, NULL AS dur, m.is_from_me AS mine,
+                'sent' AS action
            FROM messages m JOIN threads t ON t.id = m.thread_id
-          WHERE m.sent_at IS NOT NULL
-            AND (?1 IS NULL OR m.body LIKE ?1 ESCAPE '\\' OR m.sender LIKE ?1 ESCAPE '\\'
+          WHERE m.sent_at IS NOT NULL AND (?1 IS NULL OR m.body LIKE ?1 ESCAPE '\\'
+                 OR m.sender LIKE ?1 ESCAPE '\\'
                  OR COALESCE(t.display_name, t.identifier) LIKE ?1 ESCAPE '\\')",
-        // Camera-roll media. `subtype` promotes a screenshot to its own kind:
-        // a screenshot is a different act from taking a photo, and reading a day
-        // is much easier when the two are told apart.
+        // Deleting a message is one of the most telling things in a backup, and
+        // it happened at a different moment from sending it.
+        "SELECT m.id, 'message', m.deleted_at, COALESCE(t.display_name, t.identifier),
+                CASE WHEN m.is_from_me = 1 THEN 'You' ELSE m.sender END,
+                m.body, NULL, NULL, m.is_from_me, 'deleted'
+           FROM messages m JOIN threads t ON t.id = m.thread_id
+          WHERE m.deleted_at IS NOT NULL AND (?1 IS NULL OR m.body LIKE ?1 ESCAPE '\\')",
+        // --- camera roll ----------------------------------------------------
         "SELECT mi.id,
                 CASE WHEN mi.subtype = 'screenshot' THEN 'screenshot'
                      WHEN mi.kind = 'video' THEN 'video' ELSE 'photo' END,
                 mi.taken_at, mi.source, mi.location, mi.persons, mi.thumb_path,
-                mi.duration_s, 0
+                mi.duration_s, 0, 'taken'
            FROM media_items mi
           WHERE mi.taken_at IS NOT NULL
             AND (?1 IS NULL OR mi.location LIKE ?1 ESCAPE '\\'
                  OR mi.persons LIKE ?1 ESCAPE '\\' OR mi.albums LIKE ?1 ESCAPE '\\'
                  OR mi.relative_path LIKE ?1 ESCAPE '\\')",
+        // Added to the library — saving someone else's picture, or importing an
+        // old one. Distinct from when it was shot, sometimes by years, and that
+        // gap is often the interesting part.
+        "SELECT mi.id,
+                CASE WHEN mi.subtype = 'screenshot' THEN 'screenshot'
+                     WHEN mi.kind = 'video' THEN 'video' ELSE 'photo' END,
+                mi.added_at, mi.source, mi.location, mi.persons, mi.thumb_path,
+                mi.duration_s, 0, 'added'
+           FROM media_items mi
+          WHERE mi.added_at IS NOT NULL
+            AND (mi.taken_at IS NULL OR mi.added_at <> mi.taken_at)
+            AND (?1 IS NULL OR mi.location LIKE ?1 ESCAPE '\\'
+                 OR mi.relative_path LIKE ?1 ESCAPE '\\')",
+        "SELECT mi.id,
+                CASE WHEN mi.subtype = 'screenshot' THEN 'screenshot'
+                     WHEN mi.kind = 'video' THEN 'video' ELSE 'photo' END,
+                mi.trashed_at, mi.source, mi.location, mi.persons, mi.thumb_path,
+                mi.duration_s, 0, 'deleted'
+           FROM media_items mi
+          WHERE mi.trashed_at IS NOT NULL
+            AND (?1 IS NULL OR mi.location LIKE ?1 ESCAPE '\\'
+                 OR mi.relative_path LIKE ?1 ESCAPE '\\')",
+        // --- calls, browsing, searches ---------------------------------------
         "SELECT c.id, 'call', c.occurred_at, c.service, c.address, c.direction,
                 NULL, CAST(c.duration_s AS REAL),
-                CASE WHEN c.direction = 'outgoing' THEN 1 ELSE 0 END
+                CASE WHEN c.direction = 'outgoing' THEN 1 ELSE 0 END, 'placed'
            FROM calls c
           WHERE c.occurred_at IS NOT NULL
             AND (?1 IS NULL OR c.address LIKE ?1 ESCAPE '\\')",
-        "SELECT s.id, 'visit', s.visited_at, s.profile, s.title, s.url, NULL, NULL, 0
+        "SELECT s.id, 'visit', s.visited_at, s.profile, s.title, s.url, NULL, NULL, 0,
+                'visited'
            FROM safari_history s
           WHERE s.visited_at IS NOT NULL
             AND (?1 IS NULL OR s.title LIKE ?1 ESCAPE '\\' OR s.url LIKE ?1 ESCAPE '\\')",
-        // Created, not modified: the timeline is about when something happened,
-        // and a note edited last week did not happen last week.
-        "SELECT n.id, 'note', n.created_at, n.folder, n.title, n.snippet, NULL, NULL, 1
-           FROM notes n
-          WHERE n.created_at IS NOT NULL
-            AND (?1 IS NULL OR n.title LIKE ?1 ESCAPE '\\' OR n.snippet LIKE ?1 ESCAPE '\\')",
-        "SELECT r.id, 'recording', r.recorded_at, r.folder, r.title, NULL, NULL,
-                r.duration_s, 1
-           FROM recordings r
-          WHERE r.recorded_at IS NOT NULL
-            AND (?1 IS NULL OR r.title LIKE ?1 ESCAPE '\\')",
-        // A search is a distinct act from opening the page it produced: a typed
-        // search that was never followed leaves no visit at all.
-        "SELECT sr.id, 'search', sr.searched_at, sr.engine, sr.term, sr.url, NULL, NULL, 1
+        "SELECT sr.id, 'search', sr.searched_at, sr.engine, sr.term, sr.url, NULL, NULL, 1,
+                'searched'
            FROM safari_searches sr
           WHERE sr.searched_at IS NOT NULL
             AND (?1 IS NULL OR sr.term LIKE ?1 ESCAPE '\\')",
-        // Calendar entries are placed at their START. An all-day event still has
-        // a start, and using end_at would file a week-long trip on the day it
-        // finished.
+        // --- notes ------------------------------------------------------------
+        "SELECT n.id, 'note', n.created_at, n.folder, n.title, n.snippet, NULL, NULL, 1,
+                'created'
+           FROM notes n
+          WHERE n.created_at IS NOT NULL
+            AND (?1 IS NULL OR n.title LIKE ?1 ESCAPE '\\' OR n.snippet LIKE ?1 ESCAPE '\\')",
+        // Editing is its own act. Suppressed when it equals creation, which is
+        // what an untouched note looks like — otherwise every note would appear
+        // twice at the same instant.
+        "SELECT n.id, 'note', n.modified_at, n.folder, n.title, n.snippet, NULL, NULL, 1,
+                'edited'
+           FROM notes n
+          WHERE n.modified_at IS NOT NULL
+            AND (n.created_at IS NULL OR n.modified_at <> n.created_at)
+            AND (?1 IS NULL OR n.title LIKE ?1 ESCAPE '\\' OR n.snippet LIKE ?1 ESCAPE '\\')",
+        "SELECT r.id, 'recording', r.recorded_at, r.folder, r.title, NULL, NULL,
+                r.duration_s, 1, 'recorded'
+           FROM recordings r
+          WHERE r.recorded_at IS NOT NULL
+            AND (?1 IS NULL OR r.title LIKE ?1 ESCAPE '\\')",
+        // --- calendar, reminders, health --------------------------------------
         "SELECT ce.id, 'event', ce.start_at, ce.calendar_name, ce.title,
                 COALESCE(ce.location, ce.notes), NULL,
                 CASE WHEN ce.end_at IS NOT NULL AND ce.end_at > ce.start_at
-                     THEN CAST(ce.end_at - ce.start_at AS REAL) END, 1
+                     THEN CAST(ce.end_at - ce.start_at AS REAL) END, 1, 'started'
            FROM calendar_events ce
           WHERE ce.start_at IS NOT NULL
             AND (?1 IS NULL OR ce.title LIKE ?1 ESCAPE '\\'
                  OR ce.location LIKE ?1 ESCAPE '\\' OR ce.notes LIKE ?1 ESCAPE '\\')",
-        // Completed first, then due: finishing a reminder is a thing that
-        // happened at a known time, where a due date is only a plan.
-        "SELECT rm.id, 'reminder', COALESCE(rm.completed_at, rm.due_at, rm.created_at),
-                rm.list_name, rm.title, rm.notes, NULL, NULL, 1
+        // Creating, being due, and completing are three different moments, and a
+        // COALESCE over them silently picked one and threw the others away.
+        "SELECT rm.id, 'reminder', rm.created_at, rm.list_name, rm.title, rm.notes,
+                NULL, NULL, 1, 'created'
            FROM reminders rm
-          WHERE COALESCE(rm.completed_at, rm.due_at, rm.created_at) IS NOT NULL
-            AND (?1 IS NULL OR rm.title LIKE ?1 ESCAPE '\\'
-                 OR rm.notes LIKE ?1 ESCAPE '\\' OR rm.list_name LIKE ?1 ESCAPE '\\')",
+          WHERE rm.created_at IS NOT NULL
+            AND (?1 IS NULL OR rm.title LIKE ?1 ESCAPE '\\' OR rm.notes LIKE ?1 ESCAPE '\\')",
+        "SELECT rm.id, 'reminder', rm.due_at, rm.list_name, rm.title, rm.notes,
+                NULL, NULL, 1, 'due'
+           FROM reminders rm
+          WHERE rm.due_at IS NOT NULL
+            AND (?1 IS NULL OR rm.title LIKE ?1 ESCAPE '\\' OR rm.notes LIKE ?1 ESCAPE '\\')",
+        "SELECT rm.id, 'reminder', rm.completed_at, rm.list_name, rm.title, rm.notes,
+                NULL, NULL, 1, 'completed'
+           FROM reminders rm
+          WHERE rm.completed_at IS NOT NULL
+            AND (?1 IS NULL OR rm.title LIKE ?1 ESCAPE '\\' OR rm.notes LIKE ?1 ESCAPE '\\')",
         "SELECT w.id, 'workout', w.start_at, 'Health', w.activity, NULL, NULL,
-                CAST(w.duration_s AS REAL), 1
+                CAST(w.duration_s AS REAL), 1, 'started'
            FROM workouts w
           WHERE w.start_at IS NOT NULL
             AND (?1 IS NULL OR w.activity LIKE ?1 ESCAPE '\\')",
-        // Something the person logged by hand, at a time they chose — a discrete
-        // act, unlike the sensor series that make up the rest of Health.
         "SELECT ct.id, 'health', ct.logged_at, 'Health', ct.category, ct.detail,
-                NULL, NULL, 1
+                NULL, NULL, 1, 'logged'
            FROM cycle_tracking ct
           WHERE ct.logged_at IS NOT NULL
             AND (?1 IS NULL OR ct.category LIKE ?1 ESCAPE '\\'
                  OR ct.detail LIKE ?1 ESCAPE '\\')",
+        // --- apps -------------------------------------------------------------
         // `downloaded` is RFC-3339 text, not epoch seconds — strftime converts it
         // rather than the column being read as a number, which would silently
         // place every install at 1970.
         "SELECT a.rowid, 'app', CAST(strftime('%s', a.downloaded) AS INTEGER),
-                a.seller, a.name, a.bundle_id, NULL, NULL, 0
+                a.seller, a.name, a.bundle_id, NULL, NULL, 0, 'installed'
            FROM installed_apps a
           WHERE a.downloaded IS NOT NULL
             AND strftime('%s', a.downloaded) IS NOT NULL
@@ -301,7 +402,7 @@ pub struct EventFilter<'a> {
 pub fn count_events(cache: &CacheDb, f: &EventFilter) -> Result<i64> {
     let sql = format!(
         "SELECT COUNT(*) FROM (
-             SELECT id, kind, at, source, title, body, thumb, dur, mine FROM ({})
+             SELECT id, kind, at, source, title, body, thumb, dur, mine, action FROM ({})
          ) {FILTERS}",
         union_sql()
     );
@@ -336,8 +437,8 @@ pub fn get_events(
         "at ASC, id ASC"
     };
     let sql = format!(
-        "SELECT id, kind, at, source, title, body, thumb, dur, mine FROM (
-             SELECT id, kind, at, source, title, body, thumb, dur, mine FROM ({})
+        "SELECT id, kind, at, source, title, body, thumb, dur, mine, action FROM (
+             SELECT id, kind, at, source, title, body, thumb, dur, mine, action FROM ({})
          ) {FILTERS}
          ORDER BY {order} LIMIT ?6 OFFSET ?7",
         union_sql()
@@ -376,7 +477,7 @@ pub fn facets(cache: &CacheDb) -> Result<(Vec<TimelineFacet>, Vec<TimelineFacet>
     let collect = |column: &str| -> Result<Vec<TimelineFacet>> {
         let sql = format!(
             "SELECT {column}, COUNT(*) FROM (
-                 SELECT id, kind, at, source, title, body, thumb, dur, mine FROM ({base})
+                 SELECT id, kind, at, source, title, body, thumb, dur, mine, action FROM ({base})
              ) WHERE {column} IS NOT NULL AND {column} <> ''
              GROUP BY {column} ORDER BY COUNT(*) DESC"
         );
@@ -454,27 +555,33 @@ mod tests {
             false,
         )
         .unwrap();
-        let kinds: Vec<&str> = all.iter().map(|e| e.kind.as_str()).collect();
+        let seen: Vec<(&str, &str)> = all
+            .iter()
+            .map(|e| (e.kind.as_str(), e.action.as_str()))
+            .collect();
         assert_eq!(
-            kinds,
+            seen,
             vec![
-                "message",
-                "message",
-                "photo",
-                "screenshot",
-                "video",
-                "call",
-                "visit",
-                "note",
-                "recording",
-                "search",
-                "event",
-                "reminder",
-                "workout",
-                "health",
-                "app",
+                ("message", "sent"),
+                ("message", "sent"),
+                ("photo", "taken"),
+                ("screenshot", "taken"),
+                ("video", "taken"),
+                ("call", "placed"),
+                ("visit", "visited"),
+                ("note", "created"),
+                ("recording", "recorded"),
+                ("search", "searched"),
+                ("event", "started"),
+                // The reminder appears TWICE, at the two different moments it
+                // was actually involved in — completed here, due later.
+                ("reminder", "completed"),
+                ("workout", "started"),
+                ("health", "logged"),
+                ("reminder", "due"),
+                ("app", "installed"),
             ],
-            "oldest first, one row per thing that happened"
+            "oldest first, one row per moment — not per row"
         );
         assert!(all.windows(2).all(|w| w[0].at <= w[1].at));
     }
@@ -674,7 +781,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(total, 15);
+        assert_eq!(total, 16);
         assert_eq!(
             count_events(
                 &c,
@@ -718,6 +825,70 @@ mod tests {
         assert_eq!(of("health").body.as_deref(), Some("Mild"));
     }
 
+    /// The correction that shaped this module: one ROW is many MOMENTS.
+    ///
+    /// A photo shot in 2019 and saved to the library in 2024 belongs at both
+    /// points; filing it only at the shot date hides the fact that someone went
+    /// and saved it years later, which is often the interesting part.
+    #[test]
+    fn one_row_yields_an_event_for_each_moment_of_its_life() {
+        let c = CacheDb::open_in_memory().unwrap();
+        {
+            let conn = c.conn();
+            conn.execute_batch(
+                "INSERT INTO media_items (id, relative_path, kind, source, taken_at,
+                                          added_at, trashed_at)
+                     VALUES (1, 'DCIM/a.HEIC', 'photo', 'Photos', 1000, 5000, 9000);
+                 INSERT INTO notes (id, title, created_at, modified_at)
+                     VALUES (1, 'Draft', 2000, 6000);
+                 -- Untouched: modified equals created, so it is NOT an edit.
+                 INSERT INTO notes (id, title, created_at, modified_at)
+                     VALUES (2, 'Untouched', 3000, 3000);",
+            )
+            .unwrap();
+        }
+        let all = get_events(&c, &EventFilter::default(), 0, 100, false).unwrap();
+        let photo: Vec<(&str, i64)> = all
+            .iter()
+            .filter(|e| e.kind == "photo")
+            .map(|e| (e.action.as_str(), e.at))
+            .collect();
+        assert_eq!(
+            photo,
+            vec![("taken", 1000), ("added", 5000), ("deleted", 9000)],
+            "shot, saved to the library, then deleted — three moments, one row"
+        );
+
+        let edits: Vec<(&str, i64)> = all
+            .iter()
+            .filter(|e| e.kind == "note")
+            .map(|e| (e.action.as_str(), e.at))
+            .collect();
+        assert_eq!(
+            edits,
+            vec![("created", 2000), ("created", 3000), ("edited", 6000)],
+            "the untouched note must not appear twice at the same instant"
+        );
+    }
+
+    /// A photo saved the moment it was shot has one moment, not two.
+    #[test]
+    fn an_added_time_equal_to_the_taken_time_is_not_a_second_event() {
+        let c = CacheDb::open_in_memory().unwrap();
+        {
+            let conn = c.conn();
+            conn.execute(
+                "INSERT INTO media_items (id, relative_path, kind, taken_at, added_at)
+                     VALUES (1, 'DCIM/a.HEIC', 'photo', 1000, 1000)",
+                [],
+            )
+            .unwrap();
+        }
+        let all = get_events(&c, &EventFilter::default(), 0, 100, false).unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].action, "taken");
+    }
+
     /// Paging must not drop or repeat a row when events share a second.
     #[test]
     fn paging_is_stable_when_timestamps_collide() {
@@ -746,17 +917,21 @@ mod tests {
         assert_eq!(seen, vec![1, 2, 3, 4, 5, 6], "no row lost, none repeated");
     }
 
-    /// The timeline is a hand-written UNION, so a parser that starts writing a
-    /// new timestamped table would simply not appear in it — and nothing on
-    /// screen would say so. That is the exact failure this app keeps having:
-    /// data present, silently unshown.
+    /// A record is not a single point in time, so coverage is checked per
+    /// COLUMN, not per table.
     ///
-    /// This walks the real schema and fails when a table with a time column is
-    /// neither read by the stream nor listed as deliberately-not-an-event. The
-    /// answer to "will future data show up automatically?" is no — so the
-    /// omission has to be a build failure instead of a discovery months later.
+    /// Anything with a lifecycle has several moments — a photo is shot, added
+    /// to the library and deleted; a note is written and edited; a reminder is
+    /// created, falls due and is completed. A table-level check would call
+    /// `media_items` "covered" by `taken_at` alone while `added_at` and
+    /// `trashed_at` went unshown, which is exactly what happened.
+    ///
+    /// So every timestamp column in the schema has to be either read by the
+    /// stream or listed in NOT_EVENTS with a reason. A new column — the shape a
+    /// new parser takes — fails the build instead of being discovered months
+    /// later.
     #[test]
-    fn timeline_covers_every_timestamped_table() {
+    fn timeline_accounts_for_every_timestamp_column() {
         let cache = CacheDb::open_in_memory().unwrap();
         let conn = cache.conn();
         let mut stmt = conn
@@ -771,14 +946,14 @@ mod tests {
             .filter_map(std::result::Result::ok)
             .collect();
 
-        let declared: std::collections::HashSet<&str> = SOURCE_TABLES
+        let declared: std::collections::HashSet<(&str, &str)> = SOURCE_COLUMNS
             .iter()
-            .copied()
-            .chain(NOT_EVENTS.iter().map(|(t, _)| *t))
+            .map(|(t, c, _)| (*t, *c))
+            .chain(NOT_EVENTS.iter().map(|(t, c, _)| (*t, *c)))
             .collect();
 
         let mut missed = Vec::new();
-        for table in tables {
+        for table in &tables {
             let mut cols = conn
                 .prepare(&format!("PRAGMA table_info(\"{table}\")"))
                 .unwrap();
@@ -787,43 +962,47 @@ mod tests {
                 .unwrap()
                 .filter_map(std::result::Result::ok)
                 .collect();
-            // What a timestamp column looks like in this schema. Deliberately
-            // broad: a false positive costs one line in NOT_EVENTS, a false
-            // negative costs a data type nobody notices is missing.
-            let temporal = names.iter().any(|c| {
-                let c = c.to_lowercase();
-                c.ends_with("_at") || c == "downloaded" || c.ends_with("_date")
-            });
-            if temporal && !declared.contains(table.as_str()) {
-                missed.push(table);
+            for c in names {
+                let lower = c.to_lowercase();
+                // What a timestamp column looks like here. Deliberately broad: a
+                // false positive costs one line of explanation, a false negative
+                // costs a moment nobody notices is missing.
+                let temporal =
+                    lower.ends_with("_at") || lower == "downloaded" || lower.ends_with("_date");
+                if temporal && !declared.contains(&(table.as_str(), c.as_str())) {
+                    missed.push(format!("{table}.{c}"));
+                }
             }
         }
+        missed.sort();
         assert!(
             missed.is_empty(),
-            "these tables carry a timestamp but the Timeline neither reads them \
-             nor says why not: {missed:?}\n\nAdd a UNION arm in `union_sql` and \
-             list the table in SOURCE_TABLES, or add it to NOT_EVENTS with the \
-             reason it is not something that happened."
+            "these columns carry a time the Timeline neither shows nor excuses: \
+             {missed:?}\n\nEvery lifecycle moment is an event — created, edited, \
+             deleted, shared. Add a UNION arm and a SOURCE_COLUMNS entry, or add \
+             the column to NOT_EVENTS with the reason it is not something that \
+             happened."
         );
     }
 
-    /// Every table the stream claims to read must exist, or the claim is stale.
+    /// Nothing may be declared that does not exist, in either list.
     #[test]
-    fn every_declared_source_table_is_real() {
+    fn every_declared_column_is_real() {
         let cache = CacheDb::open_in_memory().unwrap();
         let conn = cache.conn();
-        for t in SOURCE_TABLES
-            .iter()
-            .chain(NOT_EVENTS.iter().map(|(t, _)| t))
-        {
-            let n: i64 = conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                    [t],
-                    |r| r.get(0),
-                )
+        for (table, column, _) in SOURCE_COLUMNS.iter().chain(NOT_EVENTS.iter()) {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA table_info(\"{table}\")"))
                 .unwrap();
-            assert_eq!(n, 1, "{t} is declared but no such table exists");
+            let names: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .collect();
+            assert!(
+                names.iter().any(|n| n == column),
+                "{table}.{column} is declared but no such column exists"
+            );
         }
     }
 

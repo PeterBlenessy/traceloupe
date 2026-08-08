@@ -38,6 +38,8 @@ export interface TimelineEvent {
     | "message" | "photo" | "video" | "screenshot"
     | "call" | "visit" | "search" | "note" | "recording" | "app"
     | "event" | "reminder" | "workout" | "health";
+  /** What HAPPENED to it: "taken", "added", "edited", "deleted", "sent", … */
+  action: string;
   /** Unix seconds. */
   at: number;
   /** The conversation, album, profile or seller it belongs to. */
@@ -3783,7 +3785,7 @@ const mockClient: TraceLoupeClient = {
         for (const m of msgs) {
           if (m.sentAt == null) continue;
           out.push({
-            id: m.id, kind: "message", at: m.sentAt,
+            id: m.id, kind: "message", action: "sent", at: m.sentAt,
             source: thread?.displayName ?? thread?.identifier ?? null,
             title: m.isFromMe ? "You" : m.sender,
             body: m.body, thumbPath: null, durationS: null, isFromMe: m.isFromMe,
@@ -3795,7 +3797,7 @@ const mockClient: TraceLoupeClient = {
         out.push({
           id: m.id,
           kind: m.subtype === "screenshot" ? "screenshot" : m.kind === "video" ? "video" : "photo",
-          at: m.takenAt, source: m.source ?? null, title: m.location ?? null,
+          action: "taken", at: m.takenAt, source: m.source ?? null, title: m.location ?? null,
           body: m.persons ?? null, thumbPath: "mock",
           durationS: m.durationS ?? null, isFromMe: false,
         });
@@ -3803,7 +3805,7 @@ const mockClient: TraceLoupeClient = {
       for (const c of mockCalls) {
         if (c.occurredAt == null) continue;
         out.push({
-          id: c.id, kind: "call", at: c.occurredAt, source: c.service ?? null,
+          id: c.id, kind: "call", action: "placed", at: c.occurredAt, source: c.service ?? null,
           title: c.address, body: c.direction, thumbPath: null,
           durationS: c.durationS ?? null, isFromMe: c.direction === "outgoing",
         });
@@ -3811,14 +3813,14 @@ const mockClient: TraceLoupeClient = {
       for (const v of mockSafari) {
         if (v.visitedAt == null) continue;
         out.push({
-          id: v.id, kind: "visit", at: v.visitedAt, source: v.profile ?? null,
+          id: v.id, kind: "visit", action: "visited", at: v.visitedAt, source: v.profile ?? null,
           title: v.title, body: v.url, thumbPath: null, durationS: null, isFromMe: false,
         });
       }
       for (const n of mockNotes) {
         if (n.createdAt == null) continue;
         out.push({
-          id: n.id, kind: "note", at: n.createdAt, source: n.folder ?? null,
+          id: n.id, kind: "note", action: "created", at: n.createdAt, source: n.folder ?? null,
           title: n.title, body: n.snippet, thumbPath: null, durationS: null, isFromMe: true,
         });
       }
