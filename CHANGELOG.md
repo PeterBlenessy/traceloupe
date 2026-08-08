@@ -13,6 +13,67 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.42.0] — 2026-08-08
+
+**What happened, and what you want to find again** — a Timeline that puts every
+kind of content in one stream in the order it happened, and the ability to mark
+anything unsafe and get back to it.
+
+### Timeline
+
+A new view, with the scans rather than the content views, because like them it
+reads the whole backup rather than one slice of it. Messages, photos, videos,
+screenshots, calls, web visits, searches, notes, recordings, app installs,
+calendar entries, reminders, workouts and hand-logged health entries, in the
+order they happened.
+
+Each row carries its **content**, not a label saying something occurred: the
+message shows its text, the photo shows the photo, the note its snippet. "Photo
+taken" is a log line; the photo is the evidence. Consecutive media of the same
+kind collapse into one strip, because forty photos from one walk are one moment
+and forty rows of them bury the rest of the day.
+
+A screenshot is its own kind rather than a photo — screenshotting is a different
+act from taking a picture, and a day reads far better with the two apart.
+
+**A record is not a moment.** Anything with a lifecycle has several, so a photo
+appears when it was shot, when it was added to the library (often years later,
+and that gap is frequently the point) and when it was deleted; a note when it
+was written and when it was edited; a reminder when it was created, when it fell
+due and when it was completed. A `COALESCE` had been collapsing those three into
+one and silently keeping whichever came first.
+
+Coverage is enforced rather than hoped for: every timestamp column in the schema
+must be either read by the stream or listed with the reason it is not something
+that happened, so a new parser cannot quietly fail to appear. Writing that check
+immediately found twelve tables nobody had considered.
+
+### Mark anything unsafe
+
+Marking a photo unsafe existed and had the right shape; the scope was wrong. A
+message or a contact is every bit as likely to be the thing someone wants to
+find again. One mechanism now serves all of them, and the mark survives a
+re-import because it is keyed on the item's own content rather than a cache row
+id — which means nothing after the cache is rebuilt.
+
+Marking works on a message (in a conversation and in the timeline) and on a
+contact, and the matching filter retrieves them. Retrieval is the point: a mark
+you cannot search back to is only half the feature.
+
+### Filters
+
+Messages gains a date filter in Chats mode, where one period selection narrows
+both the conversation list — to the chats **active** then, not the ones that
+merely spoke last then — and the open conversation.
+
+Both Messages modes are now multi-select on time, matching Photos. "2023 or
+2025" means both. Time filters across the app now share one definition of "in
+any selected period" instead of several that could disagree.
+
+Year chips also now come from the backup's own span in every view. Chats offered
+a chip for the current year on a backup that ends in 2024 — a filter that could
+only ever match nothing.
+
 ## [0.41.0] — 2026-08-08
 
 **Look at the data yourself** — when a parser is wrong it is wrong silently, so
