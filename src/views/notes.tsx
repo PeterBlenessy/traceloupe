@@ -66,39 +66,110 @@ const NOTE_IMAGE_CAP = 50;
  *  view), a folder node (tree view), or a note. */
 type NoteRowItem =
   | { kind: "header"; key: string; label: string }
-  | { kind: "folder"; key: string; folder: string; count: number; collapsed: boolean }
-  | { kind: "note"; key: number; note: Note; indent?: boolean };
+  | {
+      kind: "folder";
+      key: string;
+      /** Full path, the collapse key ("folder-a/subfolder-b"). */
+      path: string;
+      /** Leaf name shown on the row ("subfolder-b"). */
+      name: string;
+      depth: number;
+      count: number;
+      collapsed: boolean;
+    }
+  | { kind: "note"; key: number; note: Note; depth?: number };
 
 /** Label for notes with no folder (e.g. "Recently Deleted" items were labelled
  *  in the parser; a genuine null falls back here). */
 const NO_FOLDER = "Notes";
 
-/** Flatten notes into a folder tree: each folder node followed by its notes (when
- *  expanded). Notes keep their incoming (sorted) order within a folder. */
+type FolderNode = {
+  name: string;
+  path: string;
+  children: Map<string, FolderNode>;
+  notes: Note[];
+};
+
+function emptyNode(name: string, path: string): FolderNode {
+  return { name, path, children: new Map(), notes: [] };
+}
+
+/** Notes carry their whole folder path ("a/b/c"), so a folder's own count would
+ *  read 0 for every non-leaf. Count the subtree instead. */
+function subtreeCount(node: FolderNode): number {
+  let n = node.notes.length;
+  for (const c of node.children.values()) n += subtreeCount(c);
+  return n;
+}
+
+/**
+ * Flatten notes into a real folder tree.
+ *
+ * The parser stores the full path, so "a/b/c" has to be split back into nested
+ * nodes — grouping on the raw string would list `a/b/c` as a sibling of `a`
+ * rather than inside it. Every level is independently collapsible, keyed by its
+ * full path so two folders that share a leaf name don't collapse together.
+ *
+ * Pinning is *not* a folder: it orders notes to the top **within** the folder
+ * they actually live in, which is what the Notes app does.
+ */
 function buildTreeRows(notes: Note[], collapsed: Set<string>): NoteRowItem[] {
-  const groups = new Map<string, Note[]>();
+  const root = emptyNode("", "");
   for (const n of notes) {
-    const f = n.folder ?? NO_FOLDER;
-    const list = groups.get(f);
-    if (list) list.push(n);
-    else groups.set(f, [n]);
-  }
-  const rows: NoteRowItem[] = [];
-  for (const folder of [...groups.keys()].sort((a, b) => a.localeCompare(b))) {
-    const items = groups.get(folder)!;
-    const isCollapsed = collapsed.has(folder);
-    rows.push({
-      kind: "folder",
-      key: `folder-${folder}`,
-      folder,
-      count: items.length,
-      collapsed: isCollapsed,
-    });
-    if (!isCollapsed) {
-      for (const n of items) rows.push({ kind: "note", key: n.id, note: n, indent: true });
+    const segments = (n.folder ?? NO_FOLDER).split("/").filter(Boolean);
+    let node = root;
+    for (const seg of segments.length > 0 ? segments : [NO_FOLDER]) {
+      const path = node.path ? `${node.path}/${seg}` : seg;
+      let child = node.children.get(seg);
+      if (!child) {
+        child = emptyNode(seg, path);
+        node.children.set(seg, child);
+      }
+      node = child;
     }
+    node.notes.push(n);
   }
+
+  const rows: NoteRowItem[] = [];
+  const walk = (node: FolderNode, depth: number) => {
+    for (const child of [...node.children.values()].sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const isCollapsed = collapsed.has(child.path);
+      rows.push({
+        kind: "folder",
+        key: `folder-${child.path}`,
+        path: child.path,
+        name: child.name,
+        depth,
+        count: subtreeCount(child),
+        collapsed: isCollapsed,
+      });
+      if (isCollapsed) continue;
+      walk(child, depth + 1);
+      // Pinned first, otherwise the incoming (sorted) order is preserved.
+      const ordered = [
+        ...child.notes.filter((n) => n.pinned),
+        ...child.notes.filter((n) => !n.pinned),
+      ];
+      for (const n of ordered)
+        rows.push({ kind: "note", key: n.id, note: n, depth: depth + 1 });
+    }
+  };
+  walk(root, 0);
   return rows;
+}
+
+/** The last segment of a folder path ("Work/2024/Q3" -> "Q3"). */
+function folderLeaf(path: string): string {
+  const segments = path.split("/").filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}
+
+/** Left inset for a tree row at `depth`. Capped: the master pane is narrow, and
+ *  past a few levels more indent only starves the title and snippet. */
+function indent(depth: number): string {
+  return `${0.5 + Math.min(depth, 4) * 0.75}rem`;
 }
 
 const MS_DAY = 86_400_000;
@@ -249,16 +320,24 @@ export function NotesView() {
   const { presets } = useTimePresets();
   const [range, setRange] = useState<TimeRange>({ lo: null, hi: null });
 
-  // The distinct folders present, for the folder dropdown.
-  const folders = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          (notes ?? []).map((n) => n.folder).filter((f): f is string => !!f),
-        ),
-      ).sort((a, b) => a.localeCompare(b)),
-    [notes],
-  );
+  // The folders present, for the folder dropdown. A note stores its full path,
+  // so the distinct values are only the *leaves* — every ancestor is added back
+  // or a parent folder could never be picked, even though it's visible in the
+  // tree.
+  const folders = useMemo(() => {
+    const out = new Set<string>();
+    for (const n of notes ?? []) {
+      if (!n.folder) continue;
+      const segments = n.folder.split("/").filter(Boolean);
+      for (let i = 1; i <= segments.length; i++)
+        out.add(segments.slice(0, i).join("/"));
+    }
+    return Array.from(out).sort((a, b) => a.localeCompare(b));
+  }, [notes]);
+  // A folder selection covers its subfolders too, matching what picking that
+  // node in the tree shows. Compared per segment so "Work" can't match "Workout".
+  const inFolder = (noteFolder: string | null, picked: string) =>
+    noteFolder === picked || (noteFolder?.startsWith(`${picked}/`) ?? false);
   const hasLocked = useMemo(() => (notes ?? []).some((n) => n.locked), [notes]);
   // Whether any note has an embedded image, so the media facet only shows when
   // it can do something.
@@ -302,7 +381,7 @@ export function NotesView() {
   // and the time-chip counts.
   const baseFiltered = useMemo(() => {
     return (notes ?? []).filter((n) => {
-      if (effFolder !== "all" && n.folder !== effFolder) return false;
+      if (effFolder !== "all" && !inFolder(n.folder, effFolder)) return false;
       if (effLock === "locked" && !n.locked) return false;
       if (effLock === "unlocked" && n.locked) return false;
       if (effMedia === "images" && n.imageCount === 0) return false;
@@ -369,7 +448,7 @@ export function NotesView() {
     if (viewMode === "flat" && folders.length > 1) {
       const folderOptions: BadgeFilterOption[] = [
         { value: "all", label: "All folders" },
-        ...folders.map((f) => ({ value: f, label: f, count: (notes ?? []).filter((n) => n.folder === f).length })),
+        ...folders.map((f) => ({ value: f, label: f, count: (notes ?? []).filter((n) => inFolder(n.folder, f)).length })),
       ];
       out.push(badgeGroup({ key: "folder", label: "Folder", description: "Which folder the note lives in", options: folderOptions, value: effFolder, onChange: setFolder }));
     }
@@ -406,7 +485,7 @@ export function NotesView() {
     if (tags.length > 0) {
       const tagOptions: BadgeFilterOption[] = tags.map((t) => ({
         value: t,
-        label: t,
+        label: `#${t}`,
         count: (notes ?? []).filter((n) => n.tags.includes(t)).length,
       }));
       out.push(
@@ -570,14 +649,18 @@ export function NotesView() {
                     <SectionHeader label={r.label} />
                   ) : r.kind === "folder" ? (
                     <FolderRow
-                      folder={r.folder}
+                      folder={r.name}
                       count={r.count}
+                      depth={r.depth}
                       collapsed={r.collapsed}
-                      onToggle={() => toggleFolder(r.folder)}
+                      onToggle={() => toggleFolder(r.path)}
                     />
                   ) : (
                     <div
-                      className={cn("py-0.5", r.indent ? "pl-6 pr-2" : "px-2")}
+                      className={cn("py-0.5", r.depth != null ? "pr-2" : "px-2")}
+                      style={
+                        r.depth != null ? { paddingLeft: indent(r.depth) } : undefined
+                      }
                       aria-current={selected?.id === r.note.id || undefined}
                     >
                       <NoteRow
@@ -647,11 +730,13 @@ function SectionHeader({ label }: { label: string }) {
 function FolderRow({
   folder,
   count,
+  depth,
   collapsed,
   onToggle,
 }: {
   folder: string;
   count: number;
+  depth: number;
   collapsed: boolean;
   onToggle: () => void;
 }) {
@@ -661,7 +746,10 @@ function FolderRow({
       onClick={onToggle}
       aria-expanded={!collapsed}
       data-slot="list-row"
-      className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-sm font-medium hover:bg-accent/50"
+      // Nesting is carried by the inline indent rather than a Tailwind class:
+      // depth is unbounded, and `pl-${n}` can't be generated at runtime.
+      style={{ paddingLeft: indent(depth) }}
+      className="flex w-full items-center gap-1.5 py-1.5 pr-2 text-left text-sm font-medium hover:bg-accent/50"
     >
       {/* One chevron that ROTATES rather than two that swap: swapping has no
           motion to give, and the rotation is the affordance. `transform` is used
@@ -704,61 +792,14 @@ function NoteRow({
         <ItemContent className="gap-0.5">
           <div className="flex items-baseline justify-between gap-2">
             <ItemTitle className="flex min-w-0 items-center gap-1.5">
-              {note.pinned && (
-                <Pin className="size-3.5 shrink-0 text-muted-foreground" />
-              )}
               {note.locked && (
                 <Lock className="size-3.5 shrink-0 text-muted-foreground" />
               )}
-              {note.sharedWith.length > 0 && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Users
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                      aria-label={`Shared with ${sharedNames(note)}`}
-                    />
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-72">
-                    Shared with {sharedNames(note)}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-              <span className="truncate">{noteTitle(note)}</span>
-              {flagSeverity && <SafetyFlagBadge severity={flagSeverity} />}
-              {note.hasChecklist && (
-                <ListChecks
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                  aria-label="Checklist"
-                />
-              )}
-              {note.imageCount > 0 && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
-                      <ImageIcon className="size-3.5" />
-                      {note.imageCount}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {note.imageCount} image{note.imageCount > 1 ? "s" : ""}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-              {note.attachmentCount > note.imageCount && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground">
-                      <Paperclip className="size-3.5" />
-                      {note.attachmentCount - note.imageCount}
-                    </span>
-                  </TooltipTrigger>
-                  {/* A native `title=` ten lines from a real Tooltip: different
-                      delay, different styling, invisible to the tooltip guard. */}
-                  <TooltipContent>
-                    Other attachments (tables, drawings, files)
-                  </TooltipContent>
-                </Tooltip>
-              )}
+              {/* `flex-1 min-w-0` and not a bare `truncate`: every sibling
+                  here is shrink-0, so without it the title is the only thing
+                  flex can take space from and it collapses to zero width —
+                  the row then shows badges and a date but no title at all. */}
+              <span className="min-w-0 flex-1 truncate">{noteTitle(note)}</span>
             </ItemTitle>
             <span className="shrink-0 text-xs text-muted-foreground">
               {formatListTime(note.modifiedAt)}
@@ -766,17 +807,83 @@ function NoteRow({
           </div>
           <ItemDescription className="flex items-center gap-1.5 truncate">
             {showFolder && note.folder && (
-              <Badge
-                variant="outline"
-                className="shrink-0 gap-1 px-1.5 py-0 text-3xs font-normal"
-              >
-                <Folder className="size-2.5" />
-                {note.folder}
-              </Badge>
+              /* Chip shows the leaf, tooltip the whole path. A nested path is
+                 long enough to crowd the snippet out of the row entirely, and
+                 the leaf is what identifies the folder at a glance anyway. */
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className="max-w-[45%] min-w-0 gap-1 px-1.5 py-0 text-3xs font-normal"
+                  >
+                    <Folder className="size-2.5 shrink-0" />
+                    <span className="truncate">{folderLeaf(note.folder)}</span>
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent>{note.folder}</TooltipContent>
+              </Tooltip>
             )}
-            <span className="truncate">
+            <span className="min-w-0 flex-1 truncate">
               {note.locked ? "Password protected" : (note.snippet ?? "")}
             </span>
+            {flagSeverity && <SafetyFlagBadge severity={flagSeverity} />}
+            {note.pinned && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Pin className="size-3.5 shrink-0" aria-label="Pinned" />
+                </TooltipTrigger>
+                <TooltipContent>Pinned</TooltipContent>
+              </Tooltip>
+            )}
+            {note.sharedWith.length > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Users
+                    className="size-3.5 shrink-0"
+                    aria-label={`Shared with ${sharedNames(note)}`}
+                  />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-72">
+                  Shared with {sharedNames(note)}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {note.hasChecklist && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <ListChecks className="size-3.5 shrink-0" aria-label="Checklist" />
+                </TooltipTrigger>
+                <TooltipContent>Has a checklist</TooltipContent>
+              </Tooltip>
+            )}
+            {note.imageCount > 0 && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex shrink-0 items-center gap-0.5 text-xs">
+                    <ImageIcon className="size-3.5" />
+                    {note.imageCount}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {note.imageCount} image{note.imageCount > 1 ? "s" : ""}
+                </TooltipContent>
+              </Tooltip>
+            )}
+            {note.attachmentCount > note.imageCount && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex shrink-0 items-center gap-0.5 text-xs">
+                    <Paperclip className="size-3.5" />
+                    {note.attachmentCount - note.imageCount}
+                  </span>
+                </TooltipTrigger>
+                {/* A native `title=` ten lines from a real Tooltip: different
+                    delay, different styling, invisible to the tooltip guard. */}
+                <TooltipContent>
+                  Other attachments (tables, drawings, files)
+                </TooltipContent>
+              </Tooltip>
+            )}
           </ItemDescription>
         </ItemContent>
         {note.hasImage && (
@@ -844,7 +951,7 @@ function NoteDetail({ note }: { note: Note }) {
                   key={t}
                   className="rounded-full bg-accent px-2 py-0.5 text-xs text-muted-foreground"
                 >
-                  {t}
+                  #{t}
                 </span>
               ))}
             </div>
