@@ -83,6 +83,24 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> bool {
     false
 }
 
+/// Read a URL column that may be stored as TEXT *or* BLOB.
+///
+/// SQLite columns are dynamically typed, and a real `History.db` does turn up
+/// with `history_items.url` holding a BLOB. `get::<String>` returns
+/// `InvalidColumnType` for that row — and because the error propagates out of
+/// the row loop it aborts the whole profile, so ONE oddly-stored row cost the
+/// entire Safari history ("Invalid column type Blob at index: 0, name: url",
+/// #343). A URL is text whichever way it was written; decode it, and skip only
+/// the row that genuinely isn't valid UTF-8.
+fn url_text(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option<String>> {
+    Ok(match r.get_ref(i)? {
+        rusqlite::types::ValueRef::Text(t) | rusqlite::types::ValueRef::Blob(t) => {
+            std::str::from_utf8(t).ok().map(str::to_owned)
+        }
+        _ => None,
+    })
+}
+
 /// Visit id → URL, so `redirect_source` / `redirect_destination` (which store
 /// visit ids) can be shown as the URLs an analyst actually wants to read. Ids
 /// are only unique within one database, so this map is rebuilt per file.
@@ -95,7 +113,9 @@ fn redirect_urls(src: &Connection) -> Result<HashMap<i64, String>> {
     let mut map = HashMap::new();
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        map.insert(r.get::<_, i64>(0)?, r.get::<_, String>(1)?);
+        if let Some(url) = url_text(r, 1)? {
+            map.insert(r.get::<_, i64>(0)?, url);
+        }
     }
     Ok(map)
 }
@@ -163,7 +183,9 @@ pub fn parse_safari(
     let mut searches: usize = 0;
     let mut rows = stmt.query([])?;
     while let Some(r) = rows.next()? {
-        let url: String = r.get(0)?;
+        let Some(url) = url_text(r, 0)? else {
+            continue;
+        };
         let title: Option<String> = r
             .get::<_, Option<String>>(1)?
             .filter(|s| !s.trim().is_empty());
@@ -224,7 +246,9 @@ pub fn parse_safari(
             src.prepare("SELECT url, end_time FROM history_tombstones WHERE url IS NOT NULL")?;
         let mut trows = tstmt.query([])?;
         while let Some(r) = trows.next()? {
-            let url: String = r.get(0)?;
+            let Some(url) = url_text(r, 0)? else {
+                continue;
+            };
             let deleted_at = r
                 .get::<_, Option<f64>>(1)?
                 .filter(|t| *t > 0.0)
@@ -250,6 +274,59 @@ pub fn parse_safari(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A History.db where one `url` is stored as a BLOB — which real ones are.
+    fn make_blob_url_history_db(dir: &Path) -> std::path::PathBuf {
+        let db = dir.join("HistoryBlob.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE history_items (id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER);
+             CREATE TABLE history_visits (id INTEGER PRIMARY KEY, history_item INTEGER,
+                 title TEXT, visit_time REAL, origin INTEGER,
+                 redirect_source INTEGER, redirect_destination INTEGER);
+             -- BLOB first, so a row-loop abort takes the TEXT rows down with it.
+             INSERT INTO history_items (id, url, visit_count)
+                VALUES (1, CAST('https://blob.example' AS BLOB), 2);
+             INSERT INTO history_items (id, url, visit_count)
+                VALUES (2, 'https://text.example', 1);
+             INSERT INTO history_visits (id, history_item, title, visit_time, origin)
+                VALUES (10, 1, 'Blob', 721692800.0, 0);
+             INSERT INTO history_visits (id, history_item, title, visit_time, origin)
+                VALUES (11, 2, 'Text', 721692700.0, 0);",
+        )
+        .unwrap();
+        db
+    }
+
+    /// One BLOB-stored URL used to abort the entire profile, so a whole
+    /// device's Safari history vanished behind "Invalid column type Blob at
+    /// index: 0, name: url" (#343). A URL is text however it was written.
+    #[test]
+    fn a_blob_stored_url_does_not_take_the_whole_history_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_blob_url_history_db(dir.path());
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        parse_safari(&db, &cache, &mut report, false, DEFAULT_PROFILE).unwrap();
+
+        let conn = cache.conn();
+        let mut stmt = conn
+            .prepare("SELECT url FROM safari_history ORDER BY url")
+            .unwrap();
+        let urls: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            urls,
+            vec![
+                "https://blob.example".to_string(),
+                "https://text.example".to_string()
+            ],
+            "both the blob-stored and the text-stored URL should survive"
+        );
+    }
 
     fn make_history_db(dir: &Path) -> std::path::PathBuf {
         let db = dir.join("History.db");

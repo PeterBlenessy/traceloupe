@@ -23,8 +23,19 @@ const Toaster = ({ ...props }: ToasterProps) => {
         error: <OctagonXIcon className="size-4" />,
         loading: <Loader2Icon className="size-4 animate-spin" />,
       }}
+      // `richColors` tints a warning toast's TEXT as well as its icon, which
+      // shouts at the reader over what is usually routine news. The icon alone
+      // carries the severity; the words stay normal text so they read as words.
+      toastOptions={{
+        classNames: {
+          warning: "[&_[data-icon]]:text-amber-500 dark:[&_[data-icon]]:text-amber-400",
+        },
+      }}
       style={
         {
+          "--warning-bg": "var(--popover)",
+          "--warning-border": "var(--border)",
+          "--warning-text": "var(--popover-foreground)",
           "--normal-bg": "var(--popover)",
           "--normal-text": "var(--popover-foreground)",
           "--normal-border": "var(--border)",
