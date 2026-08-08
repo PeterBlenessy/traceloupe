@@ -21,6 +21,7 @@ import { SafariView } from "@/views/safari";
 import { NotesView } from "@/views/notes";
 import { RecordingsView } from "@/views/recordings";
 import { RawDbView } from "@/views/raw-db";
+import { TimelineView } from "@/views/timeline";
 import { AppsView } from "@/views/apps";
 import { SecurityView } from "@/views/security";
 import { SafetyScanView } from "@/views/safety-scan";
@@ -96,6 +97,7 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/notes", component: NotesView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/apps", component: AppsView }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/timeline", component: TimelineView }),
   createRoute({
     getParentRoute: () => rootRoute,
     path: "/raw-db",

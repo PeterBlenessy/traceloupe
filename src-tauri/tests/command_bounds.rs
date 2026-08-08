@@ -23,6 +23,12 @@ use std::collections::BTreeSet;
 /// concrete (what caps it), not reassuring ("should be small").
 const BOUNDED: &[(&str, &str)] = &[
     (
+        "get_timeline_events",
+        "windowed by offset/limit — they live inside its TimelineQuery argument \
+         rather than as loose parameters, which is why this test cannot see them \
+         in the signature; the view pages 100 events at a time",
+    ),
+    (
         "raw_databases",
         "one row per SQLite file in ONE app's containers, filtered to database \
          extensions — an app ships a handful of stores, not thousands; the row \
