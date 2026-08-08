@@ -139,6 +139,24 @@ pub const APP_CHAT_MODULES: &[AppChatModule] = &[
 /// Read a column as a String whether it's stored TEXT or INTEGER — app schemas
 /// have inconsistent column affinity across versions, and a strict typed read
 /// would abort the whole DB on one mistyped row. NULL/other types → None.
+/// Whether `table` has `column`, for building a query the schema can satisfy.
+///
+/// Apps change their schemas between releases, and a SELECT naming a column the
+/// device does not have fails to PREPARE — which aborts the whole parse, not
+/// just that field. WhatsApp shipped for months importing literally nothing
+/// because of one such column (#360). Probe, and fall back to NULL: losing one
+/// field beats losing the conversation.
+pub(crate) fn column_exists(conn: &rusqlite::Connection, table: &str, column: &str) -> bool {
+    let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) else {
+        return false;
+    };
+    let names: Vec<String> = rows.flatten().collect();
+    names.iter().any(|c| c.eq_ignore_ascii_case(column))
+}
+
 pub(crate) fn col_string(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Option<String>> {
     Ok(match r.get_ref(i)? {
         rusqlite::types::ValueRef::Integer(n) => Some(n.to_string()),
