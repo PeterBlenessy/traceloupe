@@ -13,6 +13,52 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 _Nothing yet._
 
+## [0.41.0] — 2026-08-08
+
+**Look at the data yourself** — when a parser is wrong it is wrong silently, so
+this release adds the two things that make that visible: a raw view of an app's
+own database, and media discovery that attributes what it finds to a
+conversation rather than leaving it in a pile.
+
+### Raw database view
+
+A **Raw data** button on every app in the Apps view opens that app's databases as
+they are: tables with row counts, rows paged as SQLite stores them, and search
+across every column without needing to know which one holds the thing you
+remember.
+
+Offered for *every* app, not only the ones with a parser — the app whose data
+nothing reads yet is the whole reason to have it.
+
+Nothing here interprets. The two additions describe rather than substitute: a
+blob reports its size and what it actually is (`<22663 bytes, jpeg image>`), and
+a timestamp shows its decoded date **beside** the stored number rather than
+instead of it, because Apple writes time three ways in one database and the raw
+value is what a raw view exists to show. NULL is distinguished from the empty
+string, which in an examination is a real difference.
+
+### Discovered media reaches its conversation
+
+Photos found by schema discovery were landing in the gallery but not in the
+threads they were sent in, which reads as "no image was sent". They now attach
+to the right message, via a link inferred from the values because Core Data
+records a relationship as a bare integer column with nothing to say it is one.
+
+The inference is deliberately hard to satisfy, because it can be confidently
+wrong and twice was: `Z_ENT` is the same number on every row of a table and,
+having matched a message id, put eight photos on one line of a conversation that
+had none; a contact's avatar in a single-row table did the same to "Are you here
+yet?". A candidate now needs three quarters of its values to be real message
+ids, a mapping that does not collapse, and evidence across at least three
+distinct messages. When nothing qualifies the media still reaches the gallery —
+it is simply not claimed to belong to a conversation.
+
+Discovery also now covers **every** app. TikTok is imported outside the app
+registry and had been missed entirely, and any app that produced *some* media
+was skipped whole — WhatsApp gave four attachments for nineteen messages that
+claim to carry media and was excluded, which is exactly the case the pass exists
+to catch. The test is now the actual gap rather than all-or-nothing.
+
 ## [0.40.0] — 2026-08-08
 
 **The backup held more than the app was showing** — this release is mostly about
