@@ -14,6 +14,7 @@
 //! modules (`whatsApp.py`, `tikTok.py`, `telegramMesssages.py`); the Rust is
 //! written from those facts, not ported.
 
+pub mod discovery;
 pub mod facebook_messenger;
 pub mod gettr;
 pub mod imo;

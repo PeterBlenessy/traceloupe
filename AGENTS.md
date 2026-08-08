@@ -424,6 +424,12 @@ is indistinguishable from a rule that passes.
   wrong one.
 - Domain glossary: `docs/CONTEXT.md`. Field-level data-coverage roadmap:
   `docs/reference/app-data-coverage.md`.
+- **Never assert a schema you have not probed.** A `SELECT` naming a column the
+  device does not have fails to *prepare*, which aborts the whole parse rather
+  than losing one field — that is how WhatsApp came to import literally nothing
+  for months (#360). Use `parsers::apps::column_exists` and fall back to NULL.
+  When an app's media cannot be found by column name at all, the schema-blind
+  discovery pass picks it up: `docs/reference/media-discovery.md`.
 - **Cutting a release: follow [`RELEASING.md`](RELEASING.md).** Never bump the
   version by hand-editing one manifest — run `scripts/release.sh X.Y.Z` (bumps
   `package.json` + workspace `Cargo.toml` + `tauri.conf.json` + `Cargo.lock`
