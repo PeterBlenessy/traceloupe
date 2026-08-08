@@ -26,7 +26,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use super::AppMessage;
+use super::{AppAttachment, AppMessage};
 use crate::manifest::{FileEntry, ManifestIndex};
 use crate::Result;
 
@@ -119,20 +119,59 @@ fn table_has(src: &Connection, table: &str, column: &str) -> bool {
 fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let member = group_member_exprs(&src);
+    // `ZPARTNERNAME` is a column of the SESSION, not the message. Reading it off
+    // `m` made the statement fail to prepare — "no such column: m.ZPARTNERNAME"
+    // — which aborts the parse, so WhatsApp imported NOTHING at all on this
+    // schema: no messages, no media, no threads. The unit fixture happened to
+    // declare it on ZWAMESSAGE, so the test agreed with the bug. Probe both, and
+    // prefer the session, which is where every real ChatStorage.sqlite has it.
+    let partner = if table_has(&src, "ZWACHATSESSION", "ZPARTNERNAME") {
+        "s.ZPARTNERNAME"
+    } else if table_has(&src, "ZWAMESSAGE", "ZPARTNERNAME") {
+        "m.ZPARTNERNAME"
+    } else {
+        "NULL"
+    };
+    // Per-message author, straight off the message row: WhatsApp stores the
+    // sender's push name here, which is present even when the group-member row
+    // is not.
+    let push = if table_has(&src, "ZWAMESSAGE", "ZPUSHNAME") {
+        "m.ZPUSHNAME"
+    } else {
+        "NULL"
+    };
+    let from_jid = if table_has(&src, "ZWAMESSAGE", "ZFROMJID") {
+        "m.ZFROMJID"
+    } else {
+        "NULL"
+    };
+    // The media file's path on the device, relative to the app container —
+    // e.g. "Media/1911111111@s.whatsapp.net/a/9/a929….jpg". Without it every
+    // photo and video sent in WhatsApp was flagged as an attachment and then
+    // never resolved to anything.
+    let media = if table_has(&src, "ZWAMEDIAITEM", "ZMEDIALOCALPATH") {
+        "md.ZMEDIALOCALPATH"
+    } else {
+        "NULL"
+    };
     let mut stmt = src.prepare(&format!(
         // has_attachment via EXISTS (not a JOIN) so a message with several media
         // items isn't fanned out into duplicate rows.
         "SELECT
              s.ZCONTACTJID,
-             m.ZPARTNERNAME,
+             {partner},
              m.ZMESSAGEDATE,
              m.ZISFROMME,
              m.ZTEXT,
-             EXISTS(SELECT 1 FROM ZWAMEDIAITEM md WHERE md.ZMESSAGE = m.Z_PK) AS has_media,
+             EXISTS(SELECT 1 FROM ZWAMEDIAITEM x WHERE x.ZMESSAGE = m.Z_PK) AS has_media,
              {name},
-             {jid}
+             {jid},
+             {push},
+             {from_jid},
+             {media}
          FROM ZWAMESSAGE m
          LEFT JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
+         LEFT JOIN ZWAMEDIAITEM md ON md.ZMESSAGE = m.Z_PK
          {join}
          ORDER BY s.ZCONTACTJID, m.ZMESSAGEDATE",
         name = member.name,
@@ -162,14 +201,36 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let member_jid: Option<String> = r
             .get::<_, Option<String>>(7)?
             .filter(|s| !s.trim().is_empty());
+        let push_name: Option<String> = r
+            .get::<_, Option<String>>(8)?
+            .filter(|s| !s.trim().is_empty());
+        let from_jid: Option<String> = r
+            .get::<_, Option<String>>(9)?
+            .filter(|s| !s.trim().is_empty());
+        let media_path: Option<String> = super::col_string(r, 10)?.filter(|s| !s.trim().is_empty());
         // A group jid is definitive, and it has to be, because the shared
         // inserter's fallback (count distinct senders) is only accumulated for
         // chats WITHOUT a name of their own — and WhatsApp always supplies one.
         let is_group = chat_key.ends_with("@g.us");
 
+        let attachments = media_path
+            .map(|p| {
+                let filename = p
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned);
+                vec![AppAttachment {
+                    path: p,
+                    mime: None,
+                    filename,
+                }]
+            })
+            .unwrap_or_default();
+
         out.push(AppMessage {
             is_group,
-            attachments: Vec::new(),
+            attachments,
             chat_key,
             chat_name: name.clone(),
             timestamp,
@@ -181,12 +242,18 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             sender_name: if is_from_me {
                 None
             } else if is_group {
-                member_name.or_else(|| member_jid.clone())
+                // Group-member row first (a saved contact name), then the push
+                // name the sender set, then their bare jid. Never the session
+                // partner: that labels every message in the group one person.
+                member_name
+                    .or_else(|| push_name.clone())
+                    .or_else(|| member_jid.clone())
+                    .or_else(|| from_jid.clone())
             } else {
                 name
             },
             sender_handle: None,
-            sender_id: member_jid,
+            sender_id: member_jid.or(from_jid),
             has_attachment,
             kind: None,
         });
@@ -206,25 +273,27 @@ mod tests {
         let db = dir.join("ChatStorageGroup.sqlite");
         let conn = Connection::open(&db).unwrap();
         conn.execute_batch(
-            "CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT);
+            "CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT,
+                 ZPARTNERNAME TEXT);
              CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT);
              CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY, ZMEMBERJID TEXT,
                  ZCONTACTNAME TEXT, ZPUSHNAME TEXT);
              CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER,
-                 ZGROUPMEMBER INTEGER, ZPARTNERNAME TEXT, ZMESSAGEDATE REAL,
+                 ZGROUPMEMBER INTEGER, ZPUSHNAME TEXT, ZMESSAGEDATE REAL,
                  ZISFROMME INTEGER, ZTEXT TEXT);
-             INSERT INTO ZWACHATSESSION (Z_PK, ZCONTACTJID) VALUES (1, '12036300@g.us');
+             INSERT INTO ZWACHATSESSION (Z_PK, ZCONTACTJID, ZPARTNERNAME)
+                VALUES (1, '12036300@g.us', 'Hiking Crew');
              INSERT INTO ZWAGROUPMEMBER (Z_PK, ZMEMBERJID, ZCONTACTNAME, ZPUSHNAME) VALUES
                 (1, '1@s.whatsapp.net', 'Nadia', NULL),
                 (2, '2@s.whatsapp.net', NULL, 'Tom'),
                 (3, '3@s.whatsapp.net', NULL, NULL);
              INSERT INTO ZWAMESSAGE
-                (Z_PK, ZCHATSESSION, ZGROUPMEMBER, ZPARTNERNAME, ZMESSAGEDATE, ZISFROMME, ZTEXT)
+                (Z_PK, ZCHATSESSION, ZGROUPMEMBER, ZPUSHNAME, ZMESSAGEDATE, ZISFROMME, ZTEXT)
              VALUES
-                (1, 1, 1, 'Hiking Crew', 721692800.0, 0, 'are we on?'),
-                (2, 1, 2, 'Hiking Crew', 721692900.0, 0, 'yes'),
-                (3, 1, 3, 'Hiking Crew', 721693000.0, 0, 'bringing snacks'),
-                (4, 1, NULL, 'Hiking Crew', 721693100.0, 1, 'see you there');",
+                (1, 1, 1, NULL, 721692800.0, 0, 'are we on?'),
+                (2, 1, 2, NULL, 721692900.0, 0, 'yes'),
+                (3, 1, 3, NULL, 721693000.0, 0, 'bringing snacks'),
+                (4, 1, NULL, NULL, 721693100.0, 1, 'see you there');",
         )
         .unwrap();
         db
@@ -256,6 +325,48 @@ mod tests {
         );
     }
 
+    /// The whole parse used to die on `no such column: m.ZPARTNERNAME`, because
+    /// that column belongs to ZWACHATSESSION. A statement that fails to prepare
+    /// aborts everything, so WhatsApp imported nothing at all — no messages, no
+    /// threads, no media — while the unit fixture, which declared the column in
+    /// the wrong place, reported success.
+    #[test]
+    fn parses_against_the_real_schema_where_partner_name_is_on_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_chatstorage(dir.path());
+        let msgs = parse(&db, "ChatStorage.sqlite").unwrap();
+        assert_eq!(msgs.len(), 2, "both messages, or the statement never ran");
+        assert_eq!(msgs[0].chat_name.as_deref(), Some("Sam"));
+    }
+
+    /// A photo sent in WhatsApp has to reach the gallery. `ZMEDIALOCALPATH` was
+    /// never read, so every message was flagged as having an attachment and the
+    /// attachment list was left empty — the resolver downstream had nothing to
+    /// resolve, and no WhatsApp media ever appeared in Photos.
+    #[test]
+    fn media_items_yield_an_attachment_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_chatstorage(dir.path());
+        let msgs = parse(&db, "ChatStorage.sqlite").unwrap();
+        let with_media = msgs
+            .iter()
+            .find(|m| m.has_attachment)
+            .expect("the first message has a ZWAMEDIAITEM");
+        assert_eq!(
+            with_media.attachments.len(),
+            1,
+            "has_attachment without a path is a dead end"
+        );
+        assert_eq!(
+            with_media.attachments[0].path,
+            "Media/15551234567@s.whatsapp.net/a/9/photo.jpg"
+        );
+        assert_eq!(
+            with_media.attachments[0].filename.as_deref(),
+            Some("photo.jpg")
+        );
+    }
+
     /// The 1:1 path must keep using ZPARTNERNAME, which is the author there.
     #[test]
     fn one_to_one_messages_still_use_the_partner_name() {
@@ -270,19 +381,26 @@ mod tests {
     fn make_chatstorage(dir: &Path) -> std::path::PathBuf {
         let db = dir.join("ChatStorage.sqlite");
         let conn = Connection::open(&db).unwrap();
+        // The REAL ChatStorage layout: ZPARTNERNAME belongs to the SESSION. The
+        // fixture used to declare it on ZWAMESSAGE, which is what let the parser
+        // ship a `m.ZPARTNERNAME` that no real backup can satisfy.
         conn.execute_batch(
-            "CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT);
-             CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT);
+            "CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT,
+                 ZPARTNERNAME TEXT);
+             CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER,
+                 ZMEDIALOCALPATH TEXT, ZTHUMBNAILLOCALPATH TEXT);
              CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER,
-                 ZPARTNERNAME TEXT, ZMESSAGEDATE REAL, ZISFROMME INTEGER, ZTEXT TEXT);
-             INSERT INTO ZWACHATSESSION (Z_PK, ZCONTACTJID) VALUES (1, '15551234567@s.whatsapp.net');
+                 ZGROUPMEMBER INTEGER, ZPUSHNAME TEXT, ZFROMJID TEXT,
+                 ZMESSAGEDATE REAL, ZISFROMME INTEGER, ZTEXT TEXT);
+             INSERT INTO ZWACHATSESSION (Z_PK, ZCONTACTJID, ZPARTNERNAME)
+                VALUES (1, '15551234567@s.whatsapp.net', 'Sam');
              -- Incoming, Mac-time 721692800 = unix 1_700_000_000.
-             INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZPARTNERNAME, ZMESSAGEDATE, ZISFROMME, ZTEXT)
-                VALUES (1, 1, 'Sam', 721692800.0, 0, 'hey there');
-             INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZPARTNERNAME, ZMESSAGEDATE, ZISFROMME, ZTEXT)
-                VALUES (2, 1, 'Sam', 721692900.0, 1, 'hi Sam');
+             INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZMESSAGEDATE, ZISFROMME, ZTEXT)
+                VALUES (1, 1, 721692800.0, 0, 'hey there');
+             INSERT INTO ZWAMESSAGE (Z_PK, ZCHATSESSION, ZMESSAGEDATE, ZISFROMME, ZTEXT)
+                VALUES (2, 1, 721692900.0, 1, 'hi Sam');
              INSERT INTO ZWAMEDIAITEM (Z_PK, ZMESSAGE, ZMEDIALOCALPATH)
-                VALUES (5, 1, 'Media/x.jpg');",
+                VALUES (5, 1, 'Media/15551234567@s.whatsapp.net/a/9/photo.jpg');",
         )
         .unwrap();
         db
