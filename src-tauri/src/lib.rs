@@ -605,7 +605,12 @@ async fn import_backup(
     backup_id: String,
     password: String,
     modules: Vec<String>,
+    // Schema-blind media discovery for app chats. Defaults to ON when the
+    // caller says nothing, so an older frontend (or a scripted call) keeps the
+    // behaviour the setting describes rather than silently losing media.
+    discover_media: Option<bool>,
 ) -> Result<ImportResult, String> {
+    let discover_media = discover_media.unwrap_or(true);
     if !valid_backup_id(&backup_id) {
         return Err("invalid backup id".to_string());
     }
@@ -661,6 +666,7 @@ async fn import_backup(
             &cache_path,
             &work_dir,
             &modules,
+            discover_media,
             &cancel,
             |phase| {
                 let event = match &phase {

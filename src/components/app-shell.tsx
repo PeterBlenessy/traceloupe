@@ -641,6 +641,8 @@ function SettingsMenu() {
     recoverFromPhotos,
     setRecoverFromPhotos,
     fetchAppIcons,
+    discoverAppMedia,
+    setDiscoverAppMedia,
     setFetchAppIcons,
     importModules,
     setImportModules,
@@ -948,6 +950,16 @@ function SettingsMenu() {
                   aria-label="Fetch real app icons"
                   checked={fetchAppIcons}
                   onCheckedChange={setFetchAppIcons}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Find app media by inspecting the data"
+                description="When an app's photos aren't where TraceLoupe expects, look through its database for values that are files in this backup, and use what verifies. Apps rename their columns between releases, and without this their media just stops appearing with nothing to explain why. Whatever it finds is recorded on the app so you can see how it was located. Runs on the next import."
+              >
+                <Switch
+                  aria-label="Find app media by inspecting the data"
+                  checked={discoverAppMedia}
+                  onCheckedChange={setDiscoverAppMedia}
                 />
               </SettingsRow>
             </SettingsGroup>

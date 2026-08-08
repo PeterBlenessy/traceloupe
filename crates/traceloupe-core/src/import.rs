@@ -52,6 +52,10 @@ pub fn import_backup(
     cache_path: &Path,
     work_dir: &Path,
     module_ids: &[String],
+    // Run the schema-blind media discovery pass for app chats whose module
+    // produced no media of its own. On by default; see
+    // docs/reference/media-discovery.md.
+    discover_media: bool,
     cancel: &CancelToken,
     mut on_phase: impl FnMut(ImportPhase),
 ) -> Result<ImportOutcome> {
@@ -302,6 +306,11 @@ pub fn import_backup(
         decryptor.as_ref(),
         &cache,
         work_dir,
+        &cache_path
+            .parent()
+            .map(|p| p.join("media"))
+            .unwrap_or_else(|| work_dir.join("media")),
+        discover_media,
         &mut native,
     );
 
@@ -1634,11 +1643,205 @@ fn app_media_resolver<'a>(
     }
 }
 
+/// Run the schema-blind media discovery pass over one app database and mirror
+/// whatever it verifies into the gallery.
+///
+/// Everything it finds is written to `module_status` as well. Discovery must
+/// never be silent: a file that appears because a scanner inferred which column
+/// held it has to be explainable — an examiner needs to know a photo was
+/// attributed by inference, and on what evidence, not merely that it showed up.
+fn discover_app_media(
+    db_path: &Path,
+    service: &str,
+    index: &crate::manifest::ManifestIndex,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+    media_dir: &Path,
+    report: &mut ImportReport,
+) {
+    use crate::parsers::apps::discovery::{discover_media, MediaShape};
+
+    let Ok(conn) =
+        rusqlite::Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return;
+    };
+    // Ground truth: a path only counts if the backup actually holds that file.
+    let present = |base: &str| {
+        index
+            .find_relative_like(&format!("%/{base}"))
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    };
+    let found = discover_media(&conn, &present);
+    if found.is_empty() {
+        return;
+    }
+
+    let mut added = 0usize;
+    let mut notes: Vec<String> = Vec::new();
+    for d in found.iter().take(4) {
+        let n = match d.shape {
+            MediaShape::Path => mirror_discovered_paths(&conn, d, service, index, decryptor, cache),
+            MediaShape::Inline => mirror_discovered_blobs(&conn, d, service, cache, media_dir),
+        };
+        added += n;
+        notes.push(format!("{} -> {n} item(s)", d.describe()));
+    }
+    if added > 0 {
+        report.media_items += added;
+        report.note_module(
+            service,
+            crate::normalize::ModuleOutcome::Parsed,
+            Some(format!(
+                "Media located by schema discovery: {}",
+                notes.join("; ")
+            )),
+        );
+    }
+}
+
+/// Insert a gallery row per verified path in a discovered column.
+fn mirror_discovered_paths(
+    conn: &rusqlite::Connection,
+    d: &crate::parsers::apps::discovery::Discovery,
+    service: &str,
+    index: &crate::manifest::ManifestIndex,
+    decryptor: Option<&crate::crypto::BackupDecryptor>,
+    cache: &CacheDb,
+) -> usize {
+    let sql = format!(
+        "SELECT DISTINCT \"{}\" FROM \"{}\" WHERE \"{}\" IS NOT NULL",
+        d.column, d.table, d.column
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return 0;
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+        return 0;
+    };
+    let values: Vec<String> = rows.flatten().collect();
+    let mut n = 0;
+    for v in values {
+        let Some(base) = v.rsplit(['/', '\\']).next().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let Some(kind) = crate::parsers::messages::media_kind(None, Some(base)) else {
+            continue;
+        };
+        // Unique match only. Duplicate basenames are common in a backup, and
+        // attaching the wrong file to an app is a confident error — worse than
+        // the missing file it would replace.
+        let Ok(mut hits) = index.find_relative_like(&format!("%/{base}")) else {
+            continue;
+        };
+        if hits.len() != 1 {
+            continue;
+        }
+        let Some(entry) = hits.pop() else { continue };
+        let local = index
+            .blob_path(&entry.file_id)
+            .to_string_lossy()
+            .into_owned();
+        let (key, size) = match decryptor {
+            Some(_) => crate::crypto::file_key_field(&entry.file_blob)
+                .map(|(k, s)| (Some(k), s))
+                .unwrap_or((None, None)),
+            None => (None, None),
+        };
+        if cache
+            .conn()
+            .execute(
+                "INSERT INTO media_items
+                     (domain, relative_path, kind, source, mime_type, taken_at,
+                      thumb_path, local_path, decrypt_key, plain_size)
+                 VALUES ('AppDomain', ?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?6)",
+                rusqlite::params![v, kind, service, local, key, size],
+            )
+            .is_ok()
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
+/// Write each inline image out to the media cache and add a gallery row.
+///
+/// Some apps keep photos in the database instead of on disk, so there is no
+/// backup file to point at — the bytes have to be materialized before anything
+/// can serve them.
+fn mirror_discovered_blobs(
+    conn: &rusqlite::Connection,
+    d: &crate::parsers::apps::discovery::Discovery,
+    service: &str,
+    cache: &CacheDb,
+    media_dir: &Path,
+) -> usize {
+    use crate::parsers::apps::discovery::media_magic;
+    let dir = media_dir.join("discovered");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return 0;
+    }
+    let sql = format!(
+        "SELECT rowid, \"{}\" FROM \"{}\" WHERE \"{}\" IS NOT NULL",
+        d.column, d.table, d.column
+    );
+    let Ok(mut stmt) = conn.prepare(&sql) else {
+        return 0;
+    };
+    let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+    else {
+        return 0;
+    };
+    let mut n = 0;
+    for (rowid, bytes) in rows.flatten() {
+        let Some(fmt) = media_magic(&bytes) else {
+            continue;
+        };
+        // Skip the Core Data prefix so what lands on disk is a valid file.
+        let start = bytes
+            .windows(3)
+            .position(|w| w == [0xFF, 0xD8, 0xFF])
+            .or_else(|| bytes.windows(4).position(|w| w == [0x89, b'P', b'N', b'G']))
+            .or_else(|| bytes.windows(4).position(|w| w == *b"GIF8"))
+            .unwrap_or(0);
+        let ext = if fmt == "mp4" { "mp4" } else { fmt };
+        let name = format!("{}-{}-{}.{ext}", service.to_lowercase(), d.table, rowid);
+        let path = dir.join(&name);
+        if std::fs::write(&path, &bytes[start..]).is_err() {
+            continue;
+        }
+        let kind = if fmt == "mp4" { "video" } else { "photo" };
+        if cache
+            .conn()
+            .execute(
+                "INSERT INTO media_items
+                     (domain, relative_path, kind, source, mime_type, taken_at,
+                      thumb_path, local_path, decrypt_key, plain_size)
+                 VALUES ('AppDomain', ?1, ?2, ?3, NULL, NULL, NULL, ?4, NULL, NULL)",
+                rusqlite::params![
+                    format!("{}/{}", d.table, name),
+                    kind,
+                    service,
+                    path.to_string_lossy()
+                ],
+            )
+            .is_ok()
+        {
+            n += 1;
+        }
+    }
+    n
+}
+
 fn import_app_chats_native(
     backup_dir: &Path,
     decryptor: Option<&crate::crypto::BackupDecryptor>,
     cache: &CacheDb,
     work_dir: &Path,
+    media_dir: &Path,
+    discover: bool,
     report: &mut ImportReport,
 ) -> Vec<&'static str> {
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
@@ -1667,6 +1870,8 @@ fn import_app_chats_native(
         // Some apps (Messenger) have several candidate DBs; parse each and combine.
         let mut msgs = Vec::new();
         let mut parsed_any = false;
+        // Held until after the discovery pass, which reads the same files.
+        let mut extracted: Vec<std::path::PathBuf> = Vec::new();
         for (i, entry) in entries.iter().enumerate() {
             let out = work_dir.join(format!(".app-{}-{i}.sqlite", m.id));
             if let Err(e) = index.extract_to(entry, decryptor, &out) {
@@ -1685,7 +1890,7 @@ fn import_app_chats_native(
                     .warnings
                     .push(format!("Native {}: parse failed ({e}).", m.service)),
             }
-            let _ = std::fs::remove_file(&out);
+            extracted.push(out);
         }
         // Only claim the app (and skip iLEAPP for it) when the native path actually
         // produced messages. A located-but-unrecognized DB (schema drift) parses to
@@ -1693,6 +1898,9 @@ fn import_app_chats_native(
         // let iLEAPP run rather than risk silently dropping messages it could parse.
         // (Worst case here is a redundant, empty iLEAPP pass for a truly-empty app.)
         if !parsed_any {
+            for f in &extracted {
+                let _ = std::fs::remove_file(f);
+            }
             report.warnings.push(format!(
                 "Native {}: no DB could be read; using iLEAPP.",
                 m.service
@@ -1700,7 +1908,24 @@ fn import_app_chats_native(
             continue;
         }
         if msgs.is_empty() {
+            for f in &extracted {
+                let _ = std::fs::remove_file(f);
+            }
             continue; // recognized nothing / empty — leave the service to iLEAPP
+        }
+        // Discovery only fills a gap. A module that named its own media columns
+        // knows things a scanner cannot infer — which message a file belongs to,
+        // which of several blobs is the full image — so it always wins. This runs
+        // when the module produced no media at all, which is the case a schema
+        // change produces and the case an unimplemented module produces.
+        let found_nothing = msgs.iter().all(|m| m.attachments.is_empty());
+        if discover && found_nothing {
+            for db in &extracted {
+                discover_app_media(db, m.service, &index, decryptor, cache, media_dir, report);
+            }
+        }
+        for f in &extracted {
+            let _ = std::fs::remove_file(f);
         }
         let resolve = app_media_resolver(&index, decryptor);
         match crate::parsers::apps::insert_app_conversation_with_media(
