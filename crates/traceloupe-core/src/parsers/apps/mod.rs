@@ -371,21 +371,31 @@ pub fn insert_app_conversation_with_media(
                 rusqlite::params![message_id, filename, att.mime, local_path, key, size],
             )?;
             // Mirror image/video into the gallery (source = the app), like iMessage.
-            if let (Some(lp), Some(mime)) = (&local_path, att.mime.as_deref()) {
-                let media_kind = if mime.starts_with("video/") {
-                    Some("video")
-                } else if mime.starts_with("image/") {
-                    Some("photo")
-                } else {
-                    None
-                };
+            //
+            // Keyed off the FILENAME as well as the MIME, via the same helper
+            // iMessage uses. Most app modules have no MIME to give — WhatsApp
+            // stores a path and nothing else — and requiring one meant a file
+            // plainly named `photo.jpg` was written to `attachments` and then
+            // never mirrored, so no app's photos reached Photos at all.
+            if let Some(lp) = &local_path {
+                let media_kind =
+                    crate::parsers::messages::media_kind(att.mime.as_deref(), filename.as_deref());
                 if let Some(mk) = media_kind {
                     tx.execute(
                         "INSERT INTO media_items
                              (domain, relative_path, kind, source, mime_type, taken_at,
                               thumb_path, local_path, decrypt_key, plain_size)
                          VALUES ('AppDomain', ?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8)",
-                        rusqlite::params![att.path, mk, service, mime, m.timestamp, lp, key, size],
+                        rusqlite::params![
+                            att.path,
+                            mk,
+                            service,
+                            att.mime,
+                            m.timestamp,
+                            lp,
+                            key,
+                            size
+                        ],
                     )?;
                 }
             }
@@ -494,6 +504,49 @@ mod tests {
             .query_row("SELECT is_group FROM threads", [], |r| r.get(0))
             .unwrap();
         assert_eq!(is_group, 0);
+    }
+
+    /// An attachment with no MIME must still reach the gallery when its name
+    /// says what it is. Most app modules have no MIME to give — WhatsApp stores
+    /// a path and nothing else — and the mirror used to require one, so a file
+    /// plainly named `photo.jpg` landed in `attachments` and never in Photos.
+    #[test]
+    fn an_attachment_with_no_mime_still_mirrors_when_the_filename_says_photo() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        let msg = AppMessage {
+            chat_key: "c1".into(),
+            timestamp: Some(1_700_000_000),
+            body: None,
+            sender_name: Some("Robin".into()),
+            attachments: vec![AppAttachment {
+                path: "Media/1555@s.whatsapp.net/a/9/photo.jpg".into(),
+                mime: None,
+                filename: None,
+            }],
+            ..Default::default()
+        };
+        let resolve = |_a: &AppAttachment| Some(("blob/zzz".to_string(), None, Some(2048)));
+        insert_app_conversation_with_media(
+            &cache,
+            "WhatsApp",
+            false,
+            vec![msg],
+            &mut report,
+            &resolve,
+        )
+        .unwrap();
+
+        let (src, kind): (String, String) = cache
+            .conn()
+            .query_row(
+                "SELECT source, kind FROM media_items WHERE source = 'WhatsApp'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("a .jpg with no MIME should still be mirrored into the gallery");
+        assert_eq!(src, "WhatsApp");
+        assert_eq!(kind, "photo");
     }
 
     #[test]
