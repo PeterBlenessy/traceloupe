@@ -2130,6 +2130,161 @@ async fn module_status(
     .map_err(|e| e.to_string())?
 }
 
+/// Prepare an app's database for raw inspection: locate it, decrypt it out to a
+/// temp file, and hand back the path.
+///
+/// The extracted copy is a plaintext copy of evidence, so it lives in the
+/// backup's work dir (already treated as sensitive scratch) and is replaced
+/// rather than accumulated — one file per database, reused across paging and
+/// searching so a scroll does not decrypt the same store fifty times.
+async fn stage_raw_db(
+    app: &AppHandle,
+    active: &State<'_, ActiveBackup>,
+    session: &State<'_, SessionKeys>,
+    relative_path: String,
+) -> Result<std::path::PathBuf, String> {
+    let cache_path = active.path()?;
+    let (backup_id, work_dir) = backup_layout(&cache_path)?;
+    let source_dir = {
+        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+        cache
+            .get_meta("source_dir")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "this backup's source folder is not recorded".to_string())?
+    };
+    let mut decryptor = session.get();
+    if decryptor.is_none() {
+        let cp = cache_path.clone();
+        let bid = backup_id.clone();
+        let app_k = app.clone();
+        decryptor =
+            tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&app_k, &cp, &bid))
+                .await
+                .ok()
+                .flatten();
+        if let Some(d) = &decryptor {
+            session.set(Some(d.clone()));
+        }
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let idx = ManifestIndex::open(Path::new(&source_dir), decryptor.as_deref(), &work_dir)
+            .map_err(|e| e.to_string())?;
+        let entry = idx
+            .find_relative_like(&relative_path)
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|e| e.relative_path == relative_path)
+            .ok_or_else(|| format!("{relative_path} is not in this backup"))?;
+        // Named from a hash of the path so paging reuses one file per database
+        // instead of leaving a trail of decrypted copies.
+        let mut h: u64 = 1469598103934665603;
+        for b in relative_path.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(1099511628211);
+        }
+        let dest = work_dir.join(format!(".rawdb-{h:016x}.sqlite"));
+        if !dest.exists() {
+            idx.extract_db(&entry, decryptor.as_deref(), &dest)
+                .map_err(|e| e.to_string())?;
+        }
+        Ok::<_, String>(dest)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Every SQLite database this app has in the backup.
+#[tauri::command]
+async fn raw_databases(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    bundle_id: String,
+) -> Result<Vec<traceloupe_core::rawdb::RawDatabase>, String> {
+    let cache_path = active.path()?;
+    let (backup_id, work_dir) = backup_layout(&cache_path)?;
+    let source_dir = {
+        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+        cache
+            .get_meta("source_dir")
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "this backup's source folder is not recorded".to_string())?
+    };
+    let mut decryptor = session.get();
+    if decryptor.is_none() {
+        let cp = cache_path.clone();
+        let bid = backup_id.clone();
+        let app_k = app.clone();
+        decryptor =
+            tauri::async_runtime::spawn_blocking(move || reopen_decryptor(&app_k, &cp, &bid))
+                .await
+                .ok()
+                .flatten();
+        if let Some(d) = &decryptor {
+            session.set(Some(d.clone()));
+        }
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let idx = ManifestIndex::open(Path::new(&source_dir), decryptor.as_deref(), &work_dir)
+            .map_err(|e| e.to_string())?;
+        traceloupe_core::rawdb::databases_for_app(&idx, &bundle_id).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The tables in one of those databases, with row counts.
+#[tauri::command]
+async fn raw_tables(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    relative_path: String,
+) -> Result<Vec<traceloupe_core::rawdb::RawTable>, String> {
+    let db = stage_raw_db(&app, &active, &session, relative_path).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        traceloupe_core::rawdb::tables(&db).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Which page of which table to read. One struct rather than five loose
+/// parameters, so the command reads the way the caller writes it.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRowsQuery {
+    relative_path: String,
+    table: String,
+    offset: i64,
+    limit: i64,
+    search: Option<String>,
+}
+
+/// A page of one table, optionally filtered.
+#[tauri::command]
+async fn raw_rows(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    session: State<'_, SessionKeys>,
+    args: RawRowsQuery,
+) -> Result<traceloupe_core::rawdb::RawRows, String> {
+    let RawRowsQuery {
+        relative_path,
+        table,
+        offset,
+        limit,
+        search,
+    } = args;
+    let db = stage_raw_db(&app, &active, &session, relative_path).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        traceloupe_core::rawdb::rows(&db, &table, offset, limit, search.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// One home-dashboard tile. Carries its own label, route and icon, so the view
 /// renders whatever arrives without knowing which modules exist (#157).
 #[derive(Clone, serde::Serialize)]
@@ -4742,6 +4897,9 @@ pub fn run() {
             list_threads,
             device_info,
             module_status,
+            raw_databases,
+            raw_tables,
+            raw_rows,
             module_metrics,
             list_calendar_events,
             list_reminders,

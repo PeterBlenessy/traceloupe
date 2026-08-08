@@ -22,6 +22,7 @@ pub mod normalize;
 pub mod nska;
 pub mod parsers;
 pub mod query;
+pub mod rawdb;
 pub mod safety_scan;
 pub mod shorteners;
 pub mod sidecar;
