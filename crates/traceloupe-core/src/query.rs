@@ -133,23 +133,46 @@ pub fn count_messages(
     thread_id: i64,
     kind: Option<&str>,
     search: Option<&str>,
+    unsafe_only: bool,
 ) -> Result<i64> {
     let search = search.map(escape_like);
     let n = cache.conn().query_row(
-        "SELECT COUNT(*) FROM messages
-         WHERE thread_id = ?1 AND (?2 IS NULL OR kind = ?2)
-           AND (?3 IS NULL OR body LIKE '%' || ?3 || '%' ESCAPE '\\'
-                          OR sender LIKE '%' || ?3 || '%' ESCAPE '\\')",
+        &format!(
+            "SELECT COUNT(*) FROM messages m
+             WHERE m.thread_id = ?1 AND (?2 IS NULL OR m.kind = ?2)
+               AND (?3 IS NULL OR m.body LIKE '%' || ?3 || '%' ESCAPE '\\'
+                              OR m.sender LIKE '%' || ?3 || '%' ESCAPE '\\')
+               AND {}",
+            marked_clause(unsafe_only, "m")
+        ),
         rusqlite::params![thread_id, kind, search],
         |r| r.get(0),
     )?;
     Ok(n)
 }
 
+/// The mark filter as a `WHERE` term, or a true constant when it is off.
+///
+/// A term rather than a conditionally-appended clause so every query reads the
+/// same whether the filter is on or not — the counting query and the windowing
+/// query must agree exactly, or the list shows a different number of rows than
+/// the header claims.
+fn marked_clause(unsafe_only: bool, alias: &str) -> String {
+    if unsafe_only {
+        crate::marks::marked_predicate(crate::marks::MarkKind::Message, alias)
+    } else {
+        "1".to_string()
+    }
+}
+
 /// A window of a thread's messages, oldest first, each with its attachments.
 /// `offset` counts from the oldest message. Threads can hold tens of thousands
 /// of messages, so the UI never loads a whole thread — it requests the slices
 /// it is about to display.
+// One more than clippy's ceiling, and each is load-bearing: which thread, which
+// window, which content kind, which direction, which search, and whether the
+// person's own mark filter is on.
+#[allow(clippy::too_many_arguments)]
 pub fn get_message_window(
     cache: &CacheDb,
     thread_id: i64,
@@ -158,19 +181,22 @@ pub fn get_message_window(
     kind: Option<&str>,
     desc: bool,
     search: Option<&str>,
+    unsafe_only: bool,
 ) -> Result<Vec<Message>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
     // Direction is a fixed keyword chosen here, never interpolated user input.
     let dir = if desc { "DESC" } else { "ASC" };
     let mut stmt = conn.prepare(&format!(
-        "SELECT id, is_from_me, sender, body, sent_at, read_at, delivered_at, reactions, reply_to_snippet, edited, kind, effect, deleted, deleted_at
-         FROM messages
-         WHERE thread_id = ?1 AND (?4 IS NULL OR kind = ?4)
-           AND (?5 IS NULL OR body LIKE '%' || ?5 || '%' ESCAPE '\\'
-                          OR sender LIKE '%' || ?5 || '%' ESCAPE '\\')
-         ORDER BY sent_at {dir}, id {dir}
+        "SELECT m.id, m.is_from_me, m.sender, m.body, m.sent_at, m.read_at, m.delivered_at, m.reactions, m.reply_to_snippet, m.edited, m.kind, m.effect, m.deleted, m.deleted_at
+         FROM messages m
+         WHERE m.thread_id = ?1 AND (?4 IS NULL OR m.kind = ?4)
+           AND (?5 IS NULL OR m.body LIKE '%' || ?5 || '%' ESCAPE '\\'
+                          OR m.sender LIKE '%' || ?5 || '%' ESCAPE '\\')
+           AND {marked}
+         ORDER BY m.sent_at {dir}, m.id {dir}
          LIMIT ?2 OFFSET ?3",
+        marked = marked_clause(unsafe_only, "m"),
     ))?;
     let mut messages = stmt
         .query_map(
@@ -427,6 +453,7 @@ pub fn count_all_messages(
     service: Option<&str>,
     search: Option<&str>,
     kind: Option<&str>,
+    unsafe_only: bool,
 ) -> Result<i64> {
     let conn = cache.conn();
     // Undated messages can't be placed chronologically, so the timeline (and the
@@ -438,8 +465,12 @@ pub fn count_all_messages(
     let search = search.map(escape_like);
     let n = if service.is_none() && search.is_none() {
         conn.query_row(
-            "SELECT COUNT(*) FROM messages
-             WHERE sent_at IS NOT NULL AND (?1 IS NULL OR kind = ?1)",
+            &format!(
+                "SELECT COUNT(*) FROM messages m
+                 WHERE m.sent_at IS NOT NULL AND (?1 IS NULL OR m.kind = ?1)
+                   AND {}",
+                marked_clause(unsafe_only, "m")
+            ),
             rusqlite::params![kind],
             |r| r.get(0),
         )?
@@ -462,6 +493,7 @@ pub fn count_all_messages(
 
 /// A window of the cross-conversation timeline: every message from every thread,
 /// oldest first, sliced by `offset`. `service` filters by source app (None=all).
+#[allow(clippy::too_many_arguments)] // every one is a filter the toolbar shows
 pub fn get_timeline_window(
     cache: &CacheDb,
     offset: i64,
@@ -470,6 +502,7 @@ pub fn get_timeline_window(
     search: Option<&str>,
     kind: Option<&str>,
     desc: bool,
+    unsafe_only: bool,
 ) -> Result<Vec<TimelineMessage>> {
     range_window(
         cache,
@@ -480,6 +513,7 @@ pub fn get_timeline_window(
         search,
         kind,
         desc,
+        unsafe_only,
     )
 }
 
@@ -515,6 +549,7 @@ pub fn count_message_ranges(
     service: Option<&str>,
     search: Option<&str>,
     kind: Option<&str>,
+    unsafe_only: bool,
 ) -> Result<Vec<i64>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
@@ -526,18 +561,21 @@ pub fn count_message_ranges(
         // `sent_at IS NOT NULL` so an all-open range (lo/hi both NULL) counts only
         // what range_window returns — undated messages are excluded from both,
         // keeping count and rows aligned.
-        let mut stmt = conn.prepare(
-            "SELECT COUNT(*) FROM messages
-             WHERE sent_at IS NOT NULL AND (?3 IS NULL OR kind = ?3)
-               AND (?1 IS NULL OR sent_at >= ?1) AND (?2 IS NULL OR sent_at < ?2)",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT COUNT(*) FROM messages m
+             WHERE m.sent_at IS NOT NULL AND (?3 IS NULL OR m.kind = ?3)
+               AND (?1 IS NULL OR m.sent_at >= ?1) AND (?2 IS NULL OR m.sent_at < ?2)
+               AND {}",
+            marked_clause(unsafe_only, "m")
+        ))?;
         for r in ranges {
             out.push(stmt.query_row(rusqlite::params![r.lo, r.hi, kind], |row| row.get(0))?);
         }
     } else {
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "SELECT COUNT(*) FROM messages m JOIN threads t ON t.id = m.thread_id
              WHERE m.sent_at IS NOT NULL
+               AND {marked}
                AND (?1 IS NULL OR m.sent_at >= ?1)
                AND (?2 IS NULL OR m.sent_at < ?2)
                AND (?3 IS NULL OR t.service = ?3)
@@ -546,7 +584,8 @@ pub fn count_message_ranges(
                               OR m.sender LIKE '%' || ?4 || '%' ESCAPE '\\'
                               OR t.display_name LIKE '%' || ?4 || '%' ESCAPE '\\'
                               OR t.identifier LIKE '%' || ?4 || '%' ESCAPE '\\')",
-        )?;
+            marked = marked_clause(unsafe_only, "m")
+        ))?;
         for r in ranges {
             out.push(stmt.query_row(
                 rusqlite::params![r.lo, r.hi, service, search, kind],
@@ -588,14 +627,25 @@ pub fn get_range_window(
     search: Option<&str>,
     kind: Option<&str>,
     desc: bool,
+    unsafe_only: bool,
 ) -> Result<Vec<TimelineMessage>> {
-    range_window(cache, range, offset, limit, service, search, kind, desc)
+    range_window(
+        cache,
+        range,
+        offset,
+        limit,
+        service,
+        search,
+        kind,
+        desc,
+        unsafe_only,
+    )
 }
 
 /// Shared implementation: messages in `range` (open bounds allowed) and optional
 /// `service`, joined to their thread for labeling, with attachments, ordered
 /// chronologically.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)] // every one is a filter the toolbar shows
 fn range_window(
     cache: &CacheDb,
     range: TimeRange,
@@ -605,6 +655,7 @@ fn range_window(
     search: Option<&str>,
     kind: Option<&str>,
     desc: bool,
+    unsafe_only: bool,
 ) -> Result<Vec<TimelineMessage>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
@@ -624,8 +675,10 @@ fn range_window(
                           OR m.sender LIKE '%' || ?6 || '%' ESCAPE '\\'
                           OR t.display_name LIKE '%' || ?6 || '%' ESCAPE '\\'
                           OR t.identifier LIKE '%' || ?6 || '%' ESCAPE '\\')
+           AND {marked}
          ORDER BY m.sent_at {dir}, m.id {dir}
          LIMIT ?3 OFFSET ?4",
+        marked = marked_clause(unsafe_only, "m"),
     ))?;
     let mut items = stmt
         .query_map(
@@ -2741,6 +2794,47 @@ pub fn meta_value(cache: &CacheDb, key: &str) -> Result<Option<String>> {
 
 #[cfg(test)]
 mod tests {
+    /// The mark filter has to give the same answer to "how many" and "which" —
+    /// a header that says 2 over a list showing 5 is worse than no filter.
+    #[test]
+    fn the_unsafe_filter_agrees_between_the_count_and_the_window() {
+        let c = CacheDb::open_in_memory().unwrap();
+        {
+            let conn = c.conn();
+            conn.execute_batch(
+                "INSERT INTO threads (id, identifier, display_name, service)
+                     VALUES (1, 'chat-1', 'Sam', 'iMessage');
+                 INSERT INTO messages (id, thread_id, sender, is_from_me, body, sent_at)
+                     VALUES (1, 1, 'Sam', 0, 'one', 1000),
+                            (2, 1, 'Sam', 0, 'two', 2000),
+                            (3, 1, NULL, 1, 'three', 3000);",
+            )
+            .unwrap();
+        }
+        crate::marks::set(&c, crate::marks::MarkKind::Message, 2, true).unwrap();
+
+        // Off: everything.
+        assert_eq!(count_messages(&c, 1, None, None, false).unwrap(), 3);
+        assert_eq!(
+            get_message_window(&c, 1, 0, 50, None, false, None, false)
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // On: the marked one, and the same number both ways.
+        assert_eq!(count_messages(&c, 1, None, None, true).unwrap(), 1);
+        let win = get_message_window(&c, 1, 0, 50, None, false, None, true).unwrap();
+        assert_eq!(win.len(), 1);
+        assert_eq!(win[0].body.as_deref(), Some("two"));
+
+        // And across conversations, where the timeline reads.
+        assert_eq!(count_all_messages(&c, None, None, None, true).unwrap(), 1);
+        let tl = get_timeline_window(&c, 0, 50, None, None, None, false, true).unwrap();
+        assert_eq!(tl.len(), 1);
+        assert_eq!(tl[0].message.body.as_deref(), Some("two"));
+    }
+
     use super::*;
 
     fn seed_calls(cache: &CacheDb) {

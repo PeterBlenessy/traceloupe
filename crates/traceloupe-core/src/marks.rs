@@ -170,14 +170,21 @@ pub fn count(cache: &CacheDb, kind: MarkKind) -> Result<i64> {
     Ok(n)
 }
 
-/// A `WHERE` fragment selecting marked rows of `kind`, for a query that has the
-/// table aliased as `t`. Exposed so list queries filter by the same definition
-/// the badge counts, rather than a second one that can drift.
-pub fn marked_predicate(kind: MarkKind) -> String {
+/// A `WHERE` fragment selecting marked rows of `kind`, for a query whose row is
+/// reachable as `alias`.
+///
+/// Exposed so a list query filters by the same definition the badge counts,
+/// rather than a second one that can drift — the two disagreeing is how a filter
+/// comes to show three of five marked items.
+///
+/// The subquery is aliased `um` rather than `m`, because the message queries
+/// already use `m` for the message itself and a silent shadow there would make
+/// the predicate compare a row to itself.
+pub fn marked_predicate(kind: MarkKind, alias: &str) -> String {
     format!(
-        "EXISTS(SELECT 1 FROM user_marks m WHERE m.kind = '{}' AND m.key = {})",
+        "EXISTS(SELECT 1 FROM user_marks um WHERE um.kind = '{}' AND um.key = {})",
         kind.as_str(),
-        kind.key_expr()
+        kind.key_expr().replace("t.", &format!("{alias}."))
     )
 }
 
