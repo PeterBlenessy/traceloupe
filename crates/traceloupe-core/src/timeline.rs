@@ -30,9 +30,83 @@ pub const EVENT_KINDS: &[&str] = &[
     "screenshot",
     "call",
     "visit",
+    "search",
     "note",
     "recording",
     "app",
+    "event",
+    "reminder",
+    "workout",
+    "health",
+];
+
+/// The cache tables this stream reads, and the tables it deliberately does not.
+///
+/// Declared rather than implied, because the timeline is a hand-written UNION:
+/// a parser that starts writing a new timestamped table would simply not appear
+/// here, and nothing on screen would say so. `timeline_covers_every_timestamped_table`
+/// fails when a table with a time column is in neither list, so the omission is
+/// a build failure instead of a silent gap.
+pub const SOURCE_TABLES: &[&str] = &[
+    "messages",
+    "media_items",
+    "calls",
+    "safari_history",
+    "safari_searches",
+    "notes",
+    "recordings",
+    "installed_apps",
+    "calendar_events",
+    "reminders",
+    "workouts",
+    "cycle_tracking",
+];
+
+/// Timestamped tables that are deliberately NOT events, with the reason.
+///
+/// Each line is a decision someone can disagree with, which is the point — an
+/// undecided table fails the build rather than quietly never appearing.
+pub const NOT_EVENTS: &[(&str, &str)] = &[
+    (
+        "threads",
+        "last_message_at is a derived summary of its own messages, which are \
+         already events — a thread row would double every conversation",
+    ),
+    (
+        "contacts",
+        "a person in the address book is a record, not something that happened; \
+         what they DID is already here as messages and calls",
+    ),
+    (
+        "interactions",
+        "an aggregate per person (first/last seen plus counts), not individual \
+         acts — the acts it summarises are already events",
+    ),
+    (
+        "message_deletions",
+        "a record that messages are ABSENT between two times; the timeline shows \
+         what happened, and Messages is where a gap belongs",
+    ),
+    (
+        "scan_runs",
+        "when THIS APP ran a scan, not something the device did",
+    ),
+    (
+        "sleep_sessions",
+        "stage-level sensor readings (In Bed / Core / Deep / REM), several an \
+         hour — a series, not discrete acts. It would bury a night's real events \
+         under dozens of rows. Health shows it as the curve it is; worth \
+         revisiting if it can be folded to one row per night",
+    ),
+    (
+        "health_timezones",
+        "which timezone the device was in, metadata about other records rather \
+         than an act",
+    ),
+    (
+        "health_device_use",
+        "which device recorded a health sample; metadata about provenance",
+    ),
 ];
 
 /// One thing that happened, with enough of its content to be read in place.
@@ -136,6 +210,44 @@ fn union_sql() -> String {
            FROM recordings r
           WHERE r.recorded_at IS NOT NULL
             AND (?1 IS NULL OR r.title LIKE ?1 ESCAPE '\\')",
+        // A search is a distinct act from opening the page it produced: a typed
+        // search that was never followed leaves no visit at all.
+        "SELECT sr.id, 'search', sr.searched_at, sr.engine, sr.term, sr.url, NULL, NULL, 1
+           FROM safari_searches sr
+          WHERE sr.searched_at IS NOT NULL
+            AND (?1 IS NULL OR sr.term LIKE ?1 ESCAPE '\\')",
+        // Calendar entries are placed at their START. An all-day event still has
+        // a start, and using end_at would file a week-long trip on the day it
+        // finished.
+        "SELECT ce.id, 'event', ce.start_at, ce.calendar_name, ce.title,
+                COALESCE(ce.location, ce.notes), NULL,
+                CASE WHEN ce.end_at IS NOT NULL AND ce.end_at > ce.start_at
+                     THEN CAST(ce.end_at - ce.start_at AS REAL) END, 1
+           FROM calendar_events ce
+          WHERE ce.start_at IS NOT NULL
+            AND (?1 IS NULL OR ce.title LIKE ?1 ESCAPE '\\'
+                 OR ce.location LIKE ?1 ESCAPE '\\' OR ce.notes LIKE ?1 ESCAPE '\\')",
+        // Completed first, then due: finishing a reminder is a thing that
+        // happened at a known time, where a due date is only a plan.
+        "SELECT rm.id, 'reminder', COALESCE(rm.completed_at, rm.due_at, rm.created_at),
+                rm.list_name, rm.title, rm.notes, NULL, NULL, 1
+           FROM reminders rm
+          WHERE COALESCE(rm.completed_at, rm.due_at, rm.created_at) IS NOT NULL
+            AND (?1 IS NULL OR rm.title LIKE ?1 ESCAPE '\\'
+                 OR rm.notes LIKE ?1 ESCAPE '\\' OR rm.list_name LIKE ?1 ESCAPE '\\')",
+        "SELECT w.id, 'workout', w.start_at, 'Health', w.activity, NULL, NULL,
+                CAST(w.duration_s AS REAL), 1
+           FROM workouts w
+          WHERE w.start_at IS NOT NULL
+            AND (?1 IS NULL OR w.activity LIKE ?1 ESCAPE '\\')",
+        // Something the person logged by hand, at a time they chose — a discrete
+        // act, unlike the sensor series that make up the rest of Health.
+        "SELECT ct.id, 'health', ct.logged_at, 'Health', ct.category, ct.detail,
+                NULL, NULL, 1
+           FROM cycle_tracking ct
+          WHERE ct.logged_at IS NOT NULL
+            AND (?1 IS NULL OR ct.category LIKE ?1 ESCAPE '\\'
+                 OR ct.detail LIKE ?1 ESCAPE '\\')",
         // `downloaded` is RFC-3339 text, not epoch seconds — strftime converts it
         // rather than the column being read as a number, which would silently
         // place every install at 1970.
@@ -307,7 +419,17 @@ mod tests {
              INSERT INTO recordings (id, title, recorded_at, relative_path, local_path, duration_s)
                  VALUES (1, 'Memo', 1080, 'r.m4a', '/tmp/r.m4a', 12.5);
              INSERT INTO installed_apps (bundle_id, name, downloaded)
-                 VALUES ('com.example.app', 'Example App', '2023-11-14T22:13:20Z');",
+                 VALUES ('com.example.app', 'Example App', '2023-11-14T22:13:20Z');
+             INSERT INTO safari_searches (id, term, searched_at, source, engine)
+                 VALUES (1, 'tide times', 1090, 'typed', 'google.com');
+             INSERT INTO calendar_events (id, title, start_at, end_at, calendar_name, location)
+                 VALUES (1, 'Dentist', 1100, 1700, 'Work', 'Clinic');
+             INSERT INTO reminders (id, title, list_name, due_at, completed_at)
+                 VALUES (1, 'Buy stamps', 'Errands', 1200, 1110);
+             INSERT INTO workouts (id, activity, start_at, end_at, duration_s)
+                 VALUES (1, 'Outdoor Walk', 1120, 1400, 280);
+             INSERT INTO cycle_tracking (id, category, detail, logged_at)
+                 VALUES (1, 'Cramps', 'Mild', 1130);",
             )
             .unwrap();
         }
@@ -345,6 +467,11 @@ mod tests {
                 "visit",
                 "note",
                 "recording",
+                "search",
+                "event",
+                "reminder",
+                "workout",
+                "health",
                 "app",
             ],
             "oldest first, one row per thing that happened"
@@ -547,7 +674,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(total, 10);
+        assert_eq!(total, 15);
         assert_eq!(
             count_events(
                 &c,
@@ -562,6 +689,33 @@ mod tests {
             .unwrap(),
             2
         );
+    }
+
+    /// The sources added after the first cut have to carry their content too,
+    /// and be placed at the moment they happened rather than a nearby one.
+    #[test]
+    fn the_later_sources_carry_their_content_and_their_moment() {
+        let c = seeded();
+        let all = get_events(&c, &EventFilter::default(), 0, 100, false).unwrap();
+        let of = |k: &str| all.iter().find(|e| e.kind == k).unwrap();
+
+        let search = of("search");
+        assert_eq!(search.title.as_deref(), Some("tide times"));
+        assert_eq!(search.source.as_deref(), Some("google.com"));
+
+        let event = of("event");
+        assert_eq!(event.at, 1100, "a calendar entry is placed at its START");
+        assert_eq!(event.body.as_deref(), Some("Clinic"));
+        assert_eq!(event.duration_s, Some(600.0));
+
+        // Completing it is the thing that happened; the due date was only a plan.
+        let reminder = of("reminder");
+        assert_eq!(reminder.at, 1110);
+        assert_eq!(reminder.title.as_deref(), Some("Buy stamps"));
+
+        assert_eq!(of("workout").title.as_deref(), Some("Outdoor Walk"));
+        assert_eq!(of("health").title.as_deref(), Some("Cramps"));
+        assert_eq!(of("health").body.as_deref(), Some("Mild"));
     }
 
     /// Paging must not drop or repeat a row when events share a second.
@@ -590,6 +744,87 @@ mod tests {
         }
         seen.sort_unstable();
         assert_eq!(seen, vec![1, 2, 3, 4, 5, 6], "no row lost, none repeated");
+    }
+
+    /// The timeline is a hand-written UNION, so a parser that starts writing a
+    /// new timestamped table would simply not appear in it — and nothing on
+    /// screen would say so. That is the exact failure this app keeps having:
+    /// data present, silently unshown.
+    ///
+    /// This walks the real schema and fails when a table with a time column is
+    /// neither read by the stream nor listed as deliberately-not-an-event. The
+    /// answer to "will future data show up automatically?" is no — so the
+    /// omission has to be a build failure instead of a discovery months later.
+    #[test]
+    fn timeline_covers_every_timestamped_table() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let conn = cache.conn();
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                  WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            )
+            .unwrap();
+        let tables: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .collect();
+
+        let declared: std::collections::HashSet<&str> = SOURCE_TABLES
+            .iter()
+            .copied()
+            .chain(NOT_EVENTS.iter().map(|(t, _)| *t))
+            .collect();
+
+        let mut missed = Vec::new();
+        for table in tables {
+            let mut cols = conn
+                .prepare(&format!("PRAGMA table_info(\"{table}\")"))
+                .unwrap();
+            let names: Vec<String> = cols
+                .query_map([], |r| r.get::<_, String>(1))
+                .unwrap()
+                .filter_map(std::result::Result::ok)
+                .collect();
+            // What a timestamp column looks like in this schema. Deliberately
+            // broad: a false positive costs one line in NOT_EVENTS, a false
+            // negative costs a data type nobody notices is missing.
+            let temporal = names.iter().any(|c| {
+                let c = c.to_lowercase();
+                c.ends_with("_at") || c == "downloaded" || c.ends_with("_date")
+            });
+            if temporal && !declared.contains(table.as_str()) {
+                missed.push(table);
+            }
+        }
+        assert!(
+            missed.is_empty(),
+            "these tables carry a timestamp but the Timeline neither reads them \
+             nor says why not: {missed:?}\n\nAdd a UNION arm in `union_sql` and \
+             list the table in SOURCE_TABLES, or add it to NOT_EVENTS with the \
+             reason it is not something that happened."
+        );
+    }
+
+    /// Every table the stream claims to read must exist, or the claim is stale.
+    #[test]
+    fn every_declared_source_table_is_real() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let conn = cache.conn();
+        for t in SOURCE_TABLES
+            .iter()
+            .chain(NOT_EVENTS.iter().map(|(t, _)| t))
+        {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                    [t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{t} is declared but no such table exists");
+        }
     }
 
     /// The filter must offer only what this backup holds.
