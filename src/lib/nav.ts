@@ -8,6 +8,7 @@
 import {
   Boxes,
   CalendarDays,
+  Clock,
   Globe,
   HeartPulse,
   Image,
@@ -68,6 +69,10 @@ export const nav: readonly NavItem[] = [
 export const scanNav: readonly NavItem[] = [
   { to: "/security", label: "Security", icon: ShieldAlert },
   { to: "/safety-scan", label: "Safety", icon: ShieldUser },
+  // Sits with the scans rather than the content views: it is not "a kind of
+  // data" but a way of reading all of them at once, which is the same shape as
+  // a scan.
+  { to: "/timeline", label: "Timeline", icon: Clock },
 ] as const;
 
 /** Nav entry for a route, content or scan — how the dashboard borrows a

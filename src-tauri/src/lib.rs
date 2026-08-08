@@ -2193,6 +2193,94 @@ async fn stage_raw_db(
     .map_err(|e| e.to_string())?
 }
 
+/// Which slice of the timeline to read.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TimelineQuery {
+    kinds: Vec<String>,
+    sources: Vec<String>,
+    lo: Option<i64>,
+    hi: Option<i64>,
+    search: Option<String>,
+    offset: i64,
+    limit: i64,
+    desc: bool,
+}
+
+/// How many timeline events match, for the virtualizer.
+#[tauri::command]
+async fn count_timeline_events(
+    active: State<'_, ActiveBackup>,
+    args: TimelineQuery,
+) -> Result<i64, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        traceloupe_core::timeline::count_events(
+            &cache,
+            &traceloupe_core::timeline::EventFilter {
+                kinds: &args.kinds,
+                sources: &args.sources,
+                lo: args.lo,
+                hi: args.hi,
+                search: args.search.as_deref(),
+            },
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// A window of the timeline.
+#[tauri::command]
+async fn get_timeline_events(
+    active: State<'_, ActiveBackup>,
+    args: TimelineQuery,
+) -> Result<Vec<traceloupe_core::timeline::TimelineEvent>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        traceloupe_core::timeline::get_events(
+            &cache,
+            &traceloupe_core::timeline::EventFilter {
+                kinds: &args.kinds,
+                sources: &args.sources,
+                lo: args.lo,
+                hi: args.hi,
+                search: args.search.as_deref(),
+            },
+            args.offset,
+            args.limit,
+            args.desc,
+        )
+        .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Kind and source counts, so the filter offers only what this backup holds.
+#[tauri::command]
+async fn timeline_facets(active: State<'_, ActiveBackup>) -> Result<TimelineFacets, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        let (kinds, sources) =
+            traceloupe_core::timeline::facets(&cache).map_err(|e| e.to_string())?;
+        Ok(TimelineFacets { kinds, sources })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TimelineFacets {
+    kinds: Vec<traceloupe_core::timeline::TimelineFacet>,
+    sources: Vec<traceloupe_core::timeline::TimelineFacet>,
+}
+
 /// Every SQLite database this app has in the backup.
 #[tauri::command]
 async fn raw_databases(
@@ -4897,6 +4985,9 @@ pub fn run() {
             list_threads,
             device_info,
             module_status,
+            count_timeline_events,
+            get_timeline_events,
+            timeline_facets,
             raw_databases,
             raw_tables,
             raw_rows,

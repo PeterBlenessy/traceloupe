@@ -3,6 +3,7 @@ import { Link, Outlet, useRouterState } from "@tanstack/react-router";
 import { cn } from "@/lib/utils";
 import {
   Boxes,
+  Clock,
   ShieldAlert,
   ShieldUser,
   FolderOpen,
@@ -247,6 +248,20 @@ export function AppShell() {
                       <SidebarMenuBadge className="text-3xs font-medium uppercase tracking-wide text-muted-foreground">
                         Beta
                       </SidebarMenuBadge>
+                    </SidebarMenuItem>
+                    {/* Sits with the scans, not the content views: it reads the
+                        WHOLE backup rather than one slice of it. */}
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === "/timeline"}
+                        tooltip="Timeline"
+                      >
+                        <Link to="/timeline">
+                          <Clock />
+                          <span>Timeline</span>
+                        </Link>
+                      </SidebarMenuButton>
                     </SidebarMenuItem>
                   </SidebarMenu>
                 </SidebarGroupContent>

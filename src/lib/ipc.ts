@@ -30,6 +30,42 @@ export interface BackupInfo {
  * nothing. Everything else the app says about emptiness is wording; this is a
  * fact the import knows and used to throw away.
  */
+/** One thing that happened, carrying enough of its content to be read in place. */
+export interface TimelineEvent {
+  /** Row id within its own table; with `kind`, enough to open the source view. */
+  id: number;
+  kind:
+    | "message" | "photo" | "video" | "screenshot"
+    | "call" | "visit" | "note" | "recording" | "app";
+  /** Unix seconds. */
+  at: number;
+  /** The conversation, album, profile or seller it belongs to. */
+  source: string | null;
+  /** Headline: a message's sender, a page's title, an app's name. */
+  title: string | null;
+  /** The content: message text, note snippet, a URL. */
+  body: string | null;
+  thumbPath: string | null;
+  durationS: number | null;
+  isFromMe: boolean;
+}
+
+export interface TimelineFacet {
+  value: string;
+  count: number;
+}
+
+export interface TimelineQuery {
+  kinds: string[];
+  sources: string[];
+  lo: number | null;
+  hi: number | null;
+  search: string | null;
+  offset: number;
+  limit: number;
+  desc: boolean;
+}
+
 /** A SQLite database belonging to an app, as found in the backup. */
 export interface RawDatabase {
   domain: string;
@@ -1154,6 +1190,12 @@ export interface TraceLoupeClient {
   /** Why each module ended up empty or not, from the import that built the
    *  open cache. See `use-parse-failed.ts` (#288). */
   moduleStatus(): Promise<ModuleStatus[]>;
+  /** How many timeline events match, for the virtualizer. */
+  countTimelineEvents(args: TimelineQuery): Promise<number>;
+  /** A window of the timeline. */
+  getTimelineEvents(args: TimelineQuery): Promise<TimelineEvent[]>;
+  /** Kind + source counts, so the filter offers only what this backup holds. */
+  timelineFacets(): Promise<{ kinds: TimelineFacet[]; sources: TimelineFacet[] }>;
   /** Every SQLite database in the backup belonging to this app. */
   rawDatabases(bundleId: string): Promise<RawDatabase[]>;
   /** The tables in one of those databases. */
@@ -1746,6 +1788,10 @@ const tauriClient: TraceLoupeClient = {
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   moduleStatus: () => invoke<ModuleStatus[]>("module_status"),
+  countTimelineEvents: (args) => invoke<number>("count_timeline_events", { args }),
+  getTimelineEvents: (args) => invoke<TimelineEvent[]>("get_timeline_events", { args }),
+  timelineFacets: () =>
+    invoke<{ kinds: TimelineFacet[]; sources: TimelineFacet[] }>("timeline_facets"),
   rawDatabases: (bundleId) => invoke<RawDatabase[]>("raw_databases", { bundleId }),
   rawTables: (relativePath) => invoke<RawTable[]>("raw_tables", { relativePath }),
   rawRows: (args) => invoke<RawRows>("raw_rows", { args }),
@@ -3725,6 +3771,94 @@ const mockClient: TraceLoupeClient = {
   // A small stand-in schema that exercises every cell kind the real view has to
   // render: text, integers, a NULL, a timestamp that decodes, and a blob that
   // must report what it is rather than dumping bytes.
+  // Built from the other mock fixtures rather than a separate list, so the
+  // timeline shows the same content the individual views do — a mock that
+  // disagreed with itself would hide exactly the bugs this view exists to find.
+  ...(() => {
+    const build = (): TimelineEvent[] => {
+      const out: TimelineEvent[] = [];
+      for (const [tid, msgs] of Object.entries(mockMessages)) {
+        const thread = mockThreads.find((t) => t.id === Number(tid));
+        for (const m of msgs) {
+          if (m.sentAt == null) continue;
+          out.push({
+            id: m.id, kind: "message", at: m.sentAt,
+            source: thread?.displayName ?? thread?.identifier ?? null,
+            title: m.isFromMe ? "You" : m.sender,
+            body: m.body, thumbPath: null, durationS: null, isFromMe: m.isFromMe,
+          });
+        }
+      }
+      for (const m of mockMedia) {
+        if (m.takenAt == null) continue;
+        out.push({
+          id: m.id,
+          kind: m.subtype === "screenshot" ? "screenshot" : m.kind === "video" ? "video" : "photo",
+          at: m.takenAt, source: m.source ?? null, title: m.location ?? null,
+          body: m.persons ?? null, thumbPath: "mock",
+          durationS: m.durationS ?? null, isFromMe: false,
+        });
+      }
+      for (const c of mockCalls) {
+        if (c.occurredAt == null) continue;
+        out.push({
+          id: c.id, kind: "call", at: c.occurredAt, source: c.service ?? null,
+          title: c.address, body: c.direction, thumbPath: null,
+          durationS: c.durationS ?? null, isFromMe: c.direction === "outgoing",
+        });
+      }
+      for (const v of mockSafari) {
+        if (v.visitedAt == null) continue;
+        out.push({
+          id: v.id, kind: "visit", at: v.visitedAt, source: v.profile ?? null,
+          title: v.title, body: v.url, thumbPath: null, durationS: null, isFromMe: false,
+        });
+      }
+      for (const n of mockNotes) {
+        if (n.createdAt == null) continue;
+        out.push({
+          id: n.id, kind: "note", at: n.createdAt, source: n.folder ?? null,
+          title: n.title, body: n.snippet, thumbPath: null, durationS: null, isFromMe: true,
+        });
+      }
+      return out.sort((a, b) => a.at - b.at);
+    };
+    const matches = (e: TimelineEvent, q: TimelineQuery) => {
+      if (q.kinds.length && !q.kinds.includes(e.kind)) return false;
+      if (q.sources.length && !q.sources.includes(e.source ?? "")) return false;
+      if (q.lo != null && e.at < q.lo) return false;
+      if (q.hi != null && e.at > q.hi) return false;
+      const s = q.search?.trim().toLowerCase();
+      if (s) {
+        const hay = [e.title, e.body, e.source].filter(Boolean).join(" ").toLowerCase();
+        if (!hay.includes(s)) return false;
+      }
+      return true;
+    };
+    return {
+      countTimelineEvents: async (q: TimelineQuery) =>
+        !mockActive ? 0 : build().filter((e) => matches(e, q)).length,
+      getTimelineEvents: async (q: TimelineQuery) => {
+        if (!mockActive) return [];
+        const rows = build().filter((e) => matches(e, q));
+        if (q.desc) rows.reverse();
+        return rows.slice(q.offset, q.offset + q.limit);
+      },
+      timelineFacets: async () => {
+        if (!mockActive) return { kinds: [], sources: [] };
+        const tally = (pick: (e: TimelineEvent) => string | null) => {
+          const m = new Map<string, number>();
+          for (const e of build()) {
+            const v = pick(e);
+            if (v) m.set(v, (m.get(v) ?? 0) + 1);
+          }
+          return [...m].map(([value, count]) => ({ value, count }))
+            .sort((a, b) => b.count - a.count);
+        };
+        return { kinds: tally((e) => e.kind), sources: tally((e) => e.source) };
+      },
+    };
+  })(),
   rawDatabases: async (bundleId) =>
     !mockActive
       ? []
