@@ -1069,6 +1069,9 @@ export interface TraceLoupeClient {
     password: string;
     /** Module ids to import (empty = all defaults). */
     modules: string[];
+    /** Find app media by inspecting database values rather than trusting
+     *  hardcoded column names. Omitted = on. */
+    discoverMedia?: boolean;
   }): Promise<ImportResult>;
   /** Subscribe to import progress events. Returns an unsubscribe fn. */
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
