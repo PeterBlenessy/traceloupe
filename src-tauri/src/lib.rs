@@ -757,6 +757,7 @@ async fn import_backup(
     // per-backup file onto it (they'd otherwise all reset to 0).
     if let Ok(cache) = CacheDb::open(&outcome.cache_path) {
         apply_favorites(&cache, &outcome.cache_path);
+        apply_marks(&cache, &outcome.cache_path);
     }
     repair_stranded_safety_scans(&app_for_passive, &outcome.cache_path);
     relink_findings_to_cache(&app_for_passive, &outcome.cache_path);
@@ -971,6 +972,7 @@ async fn open_backup(app: AppHandle, backup_id: String) -> bool {
     // Stamp the user's persisted stars onto the cache this session will query.
     if let Ok(cache) = CacheDb::open(&cache_path) {
         apply_favorites(&cache, &cache_path);
+        apply_marks(&cache, &cache_path);
     }
     repair_stranded_safety_scans(&app, &cache_path);
     phase!("repair stranded safety scans");
@@ -3367,6 +3369,115 @@ async fn get_media_window(
 
 /// Path to a backup's durable star file — a sibling of the cache DB, so a
 /// re-import (which rebuilds the cache) leaves it untouched.
+/// Where the person's own marks live, durably.
+///
+/// Beside the cache rather than inside it: the cache is deleted and rebuilt by
+/// every import, and a mark that only lived there would vanish at the one moment
+/// someone most wants it back.
+fn marks_file(cache_path: &Path) -> PathBuf {
+    cache_path.with_file_name("marks.json")
+}
+
+fn read_marks(cache_path: &Path) -> Vec<traceloupe_core::marks::Mark> {
+    let mut marks: Vec<traceloupe_core::marks::Mark> = std::fs::read(marks_file(cache_path))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    // Carry the photo stars written before marks existed. They were a bare list
+    // of relative paths; the same value is a media key, so they migrate as-is
+    // rather than being lost to a rename.
+    for path in read_favorites(cache_path) {
+        let m = traceloupe_core::marks::Mark {
+            kind: "media".into(),
+            key: path,
+        };
+        if !marks.contains(&m) {
+            marks.push(m);
+        }
+    }
+    marks
+}
+
+fn write_marks(cache_path: &Path, marks: &[traceloupe_core::marks::Mark]) {
+    if let Ok(json) = serde_json::to_vec(marks) {
+        let _ = std::fs::write(marks_file(cache_path), json);
+    }
+}
+
+/// Re-apply the persisted marks onto a freshly opened/imported cache.
+fn apply_marks(cache: &CacheDb, cache_path: &Path) {
+    let _ = traceloupe_core::marks::apply(cache, &read_marks(cache_path));
+}
+
+/// Mark or unmark one item as unsafe.
+#[tauri::command]
+async fn set_item_mark(
+    active: State<'_, ActiveBackup>,
+    kind: String,
+    id: i64,
+    marked: bool,
+) -> Result<(), String> {
+    let path = active.path()?;
+    let kind = traceloupe_core::marks::MarkKind::parse(&kind)
+        .ok_or_else(|| format!("unknown mark kind '{kind}'"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        if traceloupe_core::marks::set(&cache, kind, id, marked)
+            .map_err(|e| e.to_string())?
+            .is_none()
+        {
+            return Ok(()); // no such row
+        }
+        // Persist the whole set: cheap at this size, and it keeps the file a
+        // straight mirror of the table rather than a log that can drift.
+        let all = traceloupe_core::marks::all(&cache).map_err(|e| e.to_string())?;
+        write_marks(&path, &all);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The row ids marked in this backup, for badging rows without a column on
+/// every query.
+#[tauri::command]
+async fn marked_ids(active: State<'_, ActiveBackup>, kind: String) -> Result<Vec<i64>, String> {
+    let path = active.path()?;
+    let kind = traceloupe_core::marks::MarkKind::parse(&kind)
+        .ok_or_else(|| format!("unknown mark kind '{kind}'"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        traceloupe_core::marks::marked_ids(&cache, kind).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// How many items of each kind are marked, for the filter badges.
+#[tauri::command]
+async fn mark_counts(active: State<'_, ActiveBackup>) -> Result<MarkCounts, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        use traceloupe_core::marks::MarkKind;
+        Ok(MarkCounts {
+            media: traceloupe_core::marks::count(&cache, MarkKind::Media).unwrap_or(0),
+            message: traceloupe_core::marks::count(&cache, MarkKind::Message).unwrap_or(0),
+            contact: traceloupe_core::marks::count(&cache, MarkKind::Contact).unwrap_or(0),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MarkCounts {
+    media: i64,
+    message: i64,
+    contact: i64,
+}
+
 fn favorites_file(cache_path: &Path) -> PathBuf {
     cache_path.with_file_name("favorites.json")
 }
@@ -4985,6 +5096,9 @@ pub fn run() {
             list_threads,
             device_info,
             module_status,
+            set_item_mark,
+            marked_ids,
+            mark_counts,
             count_timeline_events,
             get_timeline_events,
             timeline_facets,

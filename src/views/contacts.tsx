@@ -10,6 +10,7 @@ import {
   MapPin,
   MessageSquare,
   Phone,
+  ShieldAlert,
   StickyNote,
   Tag,
   User,
@@ -38,6 +39,7 @@ import { contactName, initials } from "@/lib/contact";
 import { phoneOrEmailKey } from "@/lib/use-contact-resolver";
 import { cn } from "@/lib/utils";
 import { client, type Contact } from "@/lib/ipc";
+import { UnsafeMarkButton, useUnsafeMarks } from "@/components/unsafe-mark";
 import { formatDate } from "@/lib/format";
 import { useBoundedList } from "@/lib/bounded-list";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
@@ -95,12 +97,17 @@ export function ContactsView() {
   // while the title said "Contacts".
   const activeSource = source === "all" || sources.includes(source) ? source : "all";
 
+  const { marked, toggle: toggleMark } = useUnsafeMarks("contact");
+  // Show only the people the person marked unsafe.
+  const [unsafeOnly, setUnsafeOnly] = useState(false);
+
   const filtered = useMemo(() => {
     if (!contacts) return [];
     const needle = q.trim().toLowerCase();
     return contacts.filter((c) => {
       if (activeSource !== "all" && sources.length > 1 && c.source !== activeSource)
         return false;
+      if (unsafeOnly && !marked.has(c.id)) return false;
       if (!needle) return true;
       const hay = [
         contactName(c),
@@ -113,7 +120,7 @@ export function ContactsView() {
         .toLowerCase();
       return hay.includes(needle);
     });
-  }, [contacts, q, activeSource, sources]);
+  }, [contacts, q, activeSource, sources, unsafeOnly, marked]);
 
   const sorted = useMemo(
     () =>
@@ -129,7 +136,6 @@ export function ContactsView() {
   );
 
   const filterGroups = useMemo<FilterGroup[]>(() => {
-    if (sources.length <= 1) return [];
     const sourceOptions: BadgeFilterOption[] = [
       { value: "all", label: "All", count: (contacts ?? []).length },
       ...sources.map((s) => ({
@@ -138,10 +144,44 @@ export function ContactsView() {
         count: (contacts ?? []).filter((c) => c.source === s).length,
       })),
     ];
-    return [
-      badgeGroup({ key: "source", label: "Source", description: "Address Book or a third-party app", options: sourceOptions, value: activeSource, onChange: setSource }),
-    ];
-  }, [sources, contacts, activeSource, setSource]);
+    const out: FilterGroup[] = [];
+    if (sources.length > 1) {
+      out.push(
+        badgeGroup({ key: "source", label: "Source", description: "Address Book or a third-party app", options: sourceOptions, value: activeSource, onChange: setSource }),
+      );
+    }
+    // Offered once anything is marked (or while the filter is on, so it can be
+    // turned back off) — an always-present facet that can only ever say 0 is a
+    // promise the data cannot keep.
+    if (unsafeOnly || marked.size > 0) {
+      out.push({
+        key: "unsafe",
+        label: "Unsafe",
+        description: "People you marked to come back to",
+        pills: [
+          {
+            key: "unsafe",
+            label: "Unsafe",
+            icon: <ShieldAlert className="size-3.5 text-amber-400" />,
+            count: marked.size,
+            selected: unsafeOnly,
+            onSelect: () => setUnsafeOnly((v) => !v),
+          },
+        ],
+        summary: unsafeOnly
+          ? [
+              {
+                key: "unsafe",
+                label: "Unsafe",
+                icon: <ShieldAlert className="size-3.5 text-amber-400" />,
+                onClear: () => setUnsafeOnly(false),
+              },
+            ]
+          : [],
+      });
+    }
+    return out;
+  }, [sources, contacts, activeSource, setSource, unsafeOnly, marked.size]);
   const sortNode = useMemo(
     () => (
       <SortControl
@@ -239,6 +279,8 @@ export function ContactsView() {
                       contact={c}
                       showAvatars={showAvatars}
                       active={selected?.id === c.id}
+                      marked={marked.has(c.id)}
+                      onToggleMark={() => toggleMark(c.id)}
                       onClick={() => setSelectedId(c.id)}
                     />
                   </div>
@@ -270,11 +312,15 @@ function ContactRow({
   contact,
   showAvatars,
   active,
+  marked,
+  onToggleMark,
   onClick,
 }: {
   contact: Contact;
   showAvatars: boolean;
   active: boolean;
+  marked: boolean;
+  onToggleMark: () => void;
   onClick: () => void;
 }) {
   const name = contactName(contact);
@@ -286,7 +332,21 @@ function ContactRow({
       data-active={active}
       className="rounded-md transition-colors hover:bg-accent/50 data-[active=true]:bg-accent data-[active=true]:hover:bg-accent"
     >
-      <button onClick={onClick} className="w-full text-left">
+      {/* A div with role="button", not a <button>: the unsafe mark below is a
+          real button, and a button inside a button is invalid HTML — React says
+          so at runtime. TimelineRow solved this the same way. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onClick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onClick();
+          }
+        }}
+        className="flex w-full cursor-pointer items-center gap-2 text-left"
+      >
         {showAvatars && (
           <ItemMedia>
             <Avatar>
@@ -303,7 +363,12 @@ function ContactRow({
             <ItemDescription className="truncate">{contact.organization}</ItemDescription>
           )}
         </ItemContent>
-      </button>
+        {/* Shown only once marked, or on hover — an always-visible control on
+            every row would compete with the name for attention. */}
+        <div className={cn("shrink-0", marked ? "" : "opacity-0 group-hover/item:opacity-100")}>
+          <UnsafeMarkButton marked={marked} onToggle={onToggleMark} label={name} />
+        </div>
+      </div>
     </Item>
   );
 }
