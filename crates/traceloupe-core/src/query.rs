@@ -1478,6 +1478,7 @@ pub fn count_media(
     ranges: &[TimeRange],
     search: Option<&str>,
     favorites_only: bool,
+    hidden_only: bool,
 ) -> Result<i64> {
     let search = search.map(escape_like);
     let sql = format!(
@@ -1486,6 +1487,7 @@ pub fn count_media(
            AND {SOURCE_IN}
            AND {RANGES_IN}
            AND (?4 = 0 OR user_favorite = 1)
+           AND (?5 = 0 OR hidden = 1)
            AND (?3 IS NULL OR relative_path LIKE '%' || ?3 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?3 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?3 || '%' ESCAPE '\\'
@@ -1497,7 +1499,8 @@ pub fn count_media(
             filter_json(sources),
             filter_json(ranges),
             search,
-            favorites_only as i64
+            favorites_only as i64,
+            hidden_only as i64
         ],
         |r| r.get(0),
     )?;
@@ -1513,6 +1516,7 @@ pub fn count_media_ranges(
     ranges: &[TimeRange],
     search: Option<&str>,
     favorites_only: bool,
+    hidden_only: bool,
 ) -> Result<Vec<i64>> {
     let search = search.map(escape_like);
     let conn = cache.conn();
@@ -1525,6 +1529,7 @@ pub fn count_media_ranges(
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
            AND (?5 = 0 OR user_favorite = 1)
+           AND (?6 = 0 OR hidden = 1)
            AND (?4 IS NULL OR relative_path LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?4 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?4 || '%' ESCAPE '\\'
@@ -1535,7 +1540,14 @@ pub fn count_media_ranges(
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
         out.push(stmt.query_row(
-            rusqlite::params![sources_json, r.lo, r.hi, search, favorites_only as i64],
+            rusqlite::params![
+                sources_json,
+                r.lo,
+                r.hi,
+                search,
+                favorites_only as i64,
+                hidden_only as i64
+            ],
             |row| row.get(0),
         )?);
     }
@@ -1552,6 +1564,7 @@ pub fn get_media_window(
     limit: i64,
     sort: Sort,
     favorites_only: bool,
+    hidden_only: bool,
 ) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
@@ -1568,6 +1581,7 @@ pub fn get_media_window(
            AND {SOURCE_IN}
            AND {RANGES_IN}
            AND (?6 = 0 OR user_favorite = 1)
+           AND (?7 = 0 OR hidden = 1)
            AND (?5 IS NULL OR relative_path LIKE '%' || ?5 || '%' ESCAPE '\\'
                           OR persons LIKE '%' || ?5 || '%' ESCAPE '\\'
                           OR location LIKE '%' || ?5 || '%' ESCAPE '\\'
@@ -1584,7 +1598,8 @@ pub fn get_media_window(
             limit,
             offset,
             search,
-            favorites_only as i64
+            favorites_only as i64,
+            hidden_only as i64
         ],
         row_to_media,
     )?;
@@ -2943,8 +2958,11 @@ mod tests {
         assert_eq!(set_user_favorite(&cache, 999, true).unwrap(), None); // no such row
 
         // favorites_only now returns just the starred one.
-        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 1);
-        assert_eq!(count_media(&cache, &[], &[], None, false).unwrap(), 2);
+        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 1);
+        assert_eq!(
+            count_media(&cache, &[], &[], None, false, false).unwrap(),
+            2
+        );
         let starred = get_media_window(
             &cache,
             &[],
@@ -2954,6 +2972,7 @@ mod tests {
             50,
             Sort::new("taken_at", true),
             true,
+            false,
         )
         .unwrap();
         assert_eq!(starred.len(), 1);
@@ -2966,13 +2985,13 @@ mod tests {
             .conn()
             .execute("UPDATE media_items SET user_favorite = 0", [])
             .unwrap();
-        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 0);
+        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 0);
         apply_user_favorites(&cache, &["Media/DCIM/IMG_0001.png".to_string()]).unwrap();
-        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 1);
+        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 1);
 
         // Unstarring clears it.
         set_user_favorite(&cache, 1, false).unwrap();
-        assert_eq!(count_media(&cache, &[], &[], None, true).unwrap(), 0);
+        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 0);
     }
 
     #[test]
@@ -2999,8 +3018,9 @@ mod tests {
             hi: Some(1735689600),
         };
         let s = Sort::new("taken_at", true);
-        let count =
-            |src: &[String], r: &[TimeRange]| count_media(&cache, src, r, None, false).unwrap();
+        let count = |src: &[String], r: &[TimeRange]| {
+            count_media(&cache, src, r, None, false, false).unwrap()
+        };
 
         // Empty = everything (including the undated item).
         assert_eq!(count(&[], &[]), 5);
@@ -3022,10 +3042,54 @@ mod tests {
             50,
             s,
             false,
+            false,
         )
         .unwrap();
         let ids: Vec<i64> = rows.iter().map(|m| m.id).collect();
         assert_eq!(ids, vec![4, 2]); // newest first
+    }
+
+    #[test]
+    fn hidden_filter_selects_only_the_hidden_and_composes_with_the_rest() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO media_items (id, kind, source, relative_path, taken_at, local_path, hidden, user_favorite) VALUES
+                    (1,'photo','Photos','a', 100, '/a', 0, 0),
+                    (2,'photo','Photos','b', 200, '/b', 1, 0),
+                    (3,'photo','Messages','c', 300, '/c', 1, 1);",
+            )
+            .unwrap();
+        let n = |hidden_only: bool, fav: bool, src: &[String]| {
+            count_media(&cache, src, &[], None, fav, hidden_only).unwrap()
+        };
+
+        // Off = everything; on = only the hidden ones.
+        assert_eq!(n(false, false, &[]), 3);
+        assert_eq!(n(true, false, &[]), 2);
+
+        // Composes with the other facets rather than replacing them: hidden AND
+        // marked unsafe, hidden AND from a given source.
+        assert_eq!(n(true, true, &[]), 1);
+        assert_eq!(n(true, false, &["Messages".to_string()]), 1);
+        assert_eq!(n(true, false, &["Photos".to_string()]), 1);
+
+        // The window returns the same rows the count promised.
+        let rows = get_media_window(
+            &cache,
+            &[],
+            &[],
+            None,
+            0,
+            50,
+            Sort::new("taken_at", true),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(rows.iter().map(|m| m.id).collect::<Vec<_>>(), vec![3, 2]);
+        assert!(rows.iter().all(|m| m.hidden));
     }
 
     #[test]

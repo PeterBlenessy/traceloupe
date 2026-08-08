@@ -3037,12 +3037,20 @@ async fn count_media(
     ranges: Vec<query::TimeRange>,
     search: Option<String>,
     favorites_only: bool,
+    hidden_only: bool,
 ) -> Result<i64, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media(&cache, &sources, &ranges, search.as_deref(), favorites_only)
-            .map_err(|e| e.to_string())
+        query::count_media(
+            &cache,
+            &sources,
+            &ranges,
+            search.as_deref(),
+            favorites_only,
+            hidden_only,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3055,12 +3063,20 @@ async fn count_media_ranges(
     ranges: Vec<query::TimeRange>,
     search: Option<String>,
     favorites_only: bool,
+    hidden_only: bool,
 ) -> Result<Vec<i64>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
-        query::count_media_ranges(&cache, &sources, &ranges, search.as_deref(), favorites_only)
-            .map_err(|e| e.to_string())
+        query::count_media_ranges(
+            &cache,
+            &sources,
+            &ranges,
+            search.as_deref(),
+            favorites_only,
+            hidden_only,
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -3078,6 +3094,7 @@ async fn get_media_window(
     sort_by: String,
     desc: bool,
     favorites_only: bool,
+    hidden_only: bool,
 ) -> Result<Vec<MediaItem>, String> {
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
@@ -3091,6 +3108,7 @@ async fn get_media_window(
             limit,
             media_sort(&sort_by, desc),
             favorites_only,
+            hidden_only,
         )
         .map_err(|e| e.to_string())
     })
