@@ -3601,7 +3601,18 @@ const mockClient: TraceLoupeClient = {
       calls: 3,
       safariVisits: 3,
       contacts: 4,
-      warnings: [],
+      // Opt-in, like `traceloupe-mock-bulk`: an import warning raises a toast
+      // that sits over the bottom-right of every view for 12s, which would
+      // cover interactive controls in every other mock session and guard run.
+      // Set `traceloupe-mock-import-warnings` to exercise the toast.
+      // Deliberately raw and ugly, the way the backend really reports them —
+      // the toast's job is to not put this in front of a person.
+      warnings: localStorage.getItem("traceloupe-mock-import-warnings")
+        ? [
+            "Native Safari: Default parse failed (cache database error: Invalid column type Blob at index: 0, name: url).",
+            "Artifact icloud_app_libraries: parse failed (no such column: auto_client_item_count).",
+          ]
+        : [],
     };
   },
   onImportProgress: async (cb) => {
