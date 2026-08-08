@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 58;
+const SCHEMA_VERSION: i64 = 59;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS threads (
     service          TEXT,                     -- 'iMessage' | 'SMS' | app module id
     last_message_at  INTEGER,
     message_count    INTEGER NOT NULL DEFAULT 0,
-    participants_json TEXT NOT NULL DEFAULT '[]'  -- group member handles
+    participants_json TEXT NOT NULL DEFAULT '[]',  -- group member handles
+    is_group         INTEGER NOT NULL DEFAULT 0    -- set by the parser, not inferred
 );
 CREATE INDEX IF NOT EXISTS idx_threads_last_message ON threads(last_message_at DESC);
 
@@ -867,6 +868,13 @@ impl CacheDb {
             // v57: shared-album activity carried on the photo it happened to.
             ensure_column(&conn, "media_items", "shared_caption", "TEXT")?;
             ensure_column(&conn, "media_items", "shared_likes", "INTEGER")?;
+            // v59: whether a thread is a group chat, as a fact the parser states
+            // rather than something guessed from participants_json. Only the
+            // iMessage path ever filled that array; every app module wrote '[]'
+            // even for a group it had just counted the members of, so a
+            // "participants > 1" test was false for every non-iMessage group and
+            // per-message sender names went unrendered.
+            ensure_column(&conn, "threads", "is_group", "INTEGER NOT NULL DEFAULT 0")?;
             // v58: the user's own star on a photo/video, re-applied from a
             // per-backup file after each import (the cache is rebuilt; the star
             // is user state that must outlive it).

@@ -534,6 +534,8 @@ export interface ThreadSummary {
   snippet: string | null;
   /** Member handles for a group chat (empty or one for a 1:1). */
   participants: string[];
+  /** Whether the parser identified this thread as a group chat. */
+  isGroup: boolean;
 }
 
 /** OpenGraph link preview (all fields best-effort). */
@@ -2134,6 +2136,7 @@ const mockThreads: ThreadSummary[] = [
     messageCount: 6,
     snippet: "Here's the trailhead 📷",
     participants: ["+15551234567"],
+    isGroup: false,
   },
   {
     id: 2,
@@ -2144,6 +2147,7 @@ const mockThreads: ThreadSummary[] = [
     messageCount: 2,
     snippet: "Call me when you land ❤️",
     participants: ["+15559876543"],
+    isGroup: false,
   },
   {
     // A group chat: displayName holds the group's name; members via participants.
@@ -2155,6 +2159,21 @@ const mockThreads: ThreadSummary[] = [
     messageCount: 3,
     snippet: "See you at the trailhead!",
     participants: ["+15551234567", "+15559876543", "+15550001111"],
+    isGroup: true,
+  },
+  {
+    // A third-party app GROUP chat. App modules never populate `participants`
+    // — group-ness only survives via `isGroup`, and each message carries its own
+    // sender name. This is the thread that proves #346.
+    id: 6,
+    identifier: "120363000000000000@g.us",
+    displayName: "Group chat · 4 people",
+    service: "WhatsApp",
+    lastMessageAt: 1717700000,
+    messageCount: 3,
+    snippet: "I'll bring the tent",
+    participants: [],
+    isGroup: true,
   },
   {
     // A third-party app DM (TikTok), tagged by its service for the app filter.
@@ -2166,6 +2185,7 @@ const mockThreads: ThreadSummary[] = [
     messageCount: 2,
     snippet: "sent you a video 🎵",
     participants: ["@hembokke"],
+    isGroup: false,
   },
 ];
 
@@ -2307,6 +2327,47 @@ const mockMessages: Record<number, Message[]> = {
       attachments: [],
     },
   ],
+  6: [
+    {
+      id: 60,
+      isFromMe: false,
+      sender: "Nadia Farr",
+      body: "Are we still on for Saturday?",
+      sentAt: 1717699000,
+      readAt: null,
+      deliveredAt: null,
+      reactions: null,
+      replyToSnippet: null,
+      edited: false,
+      attachments: [],
+    },
+    {
+      id: 61,
+      isFromMe: false,
+      sender: "Tom Okafor",
+      body: "Yes — leaving at 7",
+      sentAt: 1717699500,
+      readAt: null,
+      deliveredAt: null,
+      reactions: null,
+      replyToSnippet: null,
+      edited: false,
+      attachments: [],
+    },
+    {
+      id: 62,
+      isFromMe: true,
+      sender: null,
+      body: "I'll bring the tent",
+      sentAt: 1717700000,
+      readAt: null,
+      deliveredAt: null,
+      reactions: null,
+      replyToSnippet: null,
+      edited: false,
+      attachments: [],
+    },
+  ],
   5: [
     {
       id: 9,
@@ -2348,6 +2409,7 @@ mockThreads.push({
   messageCount: 3000,
   snippet: "Message number 3000",
   participants: ["Big Test Group"],
+    isGroup: true,
 });
 mockMessages[3] = Array.from({ length: 3000 }, (_, i) => ({
   id: 1000 + i,

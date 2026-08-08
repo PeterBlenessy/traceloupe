@@ -56,6 +56,11 @@ pub struct AppMessage {
     pub sender_handle: Option<String>,
     /// Stable sender id, to count distinct participants (group detection).
     pub sender_id: Option<String>,
+    /// Set when the app states outright that this conversation is a group (e.g.
+    /// WhatsApp's `@g.us` jid). Counting distinct senders can't stand in for
+    /// this: the count is only accumulated for chats with no name of their own,
+    /// and a quiet group where one member spoke still counts as one.
+    pub is_group: bool,
     /// Whether this message carries an attachment (media).
     pub has_attachment: bool,
     /// Explicit content class for the message filter ('shared', 'sticker',
@@ -207,6 +212,7 @@ pub fn insert_app_conversation_with_media(
     let mut n_messages: usize = 0;
     let mut peer_nick: Option<String> = None;
     let mut peer_handle: Option<String> = None;
+    let mut stated_group = false;
     let mut member_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     // Set a finished thread's name + participants. A group (several distinct
@@ -218,7 +224,8 @@ pub fn insert_app_conversation_with_media(
                     named: bool,
                     nick: &mut Option<String>,
                     handle: &mut Option<String>,
-                    members: &mut std::collections::HashSet<String>|
+                    members: &mut std::collections::HashSet<String>,
+                    stated_group: bool|
      -> Result<()> {
         let member_count = members.len();
         members.clear();
@@ -229,18 +236,33 @@ pub fn insert_app_conversation_with_media(
             && !named
             && !key.is_empty()
             && key.bytes().all(|b| b.is_ascii_digit());
-        if member_count > 1 || id_is_group {
-            let label = if member_count > 1 {
-                format!("Group chat · {} people", member_count + 1)
-            } else {
-                "Group chat".to_string()
-            };
+        if member_count > 1 || id_is_group || stated_group {
             nick.take();
             handle.take();
-            tx.execute(
-                "UPDATE threads SET display_name = ?1, participants_json = '[]' WHERE id = ?2",
-                rusqlite::params![label, id],
-            )?;
+            // The group-ness is known right here — record it instead of throwing
+            // it away and leaving the UI to re-derive it from participants_json,
+            // which this branch has never populated.
+            //
+            // A group the app gave a real name to keeps that name: the synthetic
+            // "Group chat · N people" label exists only for groups with nothing
+            // better, and overwriting "Trip Crew" with it loses information.
+            if named {
+                tx.execute(
+                    "UPDATE threads SET participants_json = '[]', is_group = 1 WHERE id = ?1",
+                    rusqlite::params![id],
+                )?;
+            } else {
+                let label = if member_count > 1 {
+                    format!("Group chat · {} people", member_count + 1)
+                } else {
+                    "Group chat".to_string()
+                };
+                tx.execute(
+                    "UPDATE threads SET display_name = ?1, participants_json = '[]', is_group = 1
+                     WHERE id = ?2",
+                    rusqlite::params![label, id],
+                )?;
+            }
         } else {
             let participants: Vec<String> = handle.take().into_iter().collect();
             let pj = serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into());
@@ -264,6 +286,7 @@ pub fn insert_app_conversation_with_media(
                     &mut peer_nick,
                     &mut peer_handle,
                     &mut member_ids,
+                    stated_group,
                 )?;
             }
             tx.execute(
@@ -278,9 +301,11 @@ pub fn insert_app_conversation_with_media(
             peer_nick = None;
             peer_handle = None;
             member_ids.clear();
+            stated_group = false;
             n_threads += 1;
         }
 
+        stated_group |= m.is_group;
         let sender = if m.is_from_me {
             None
         } else {
@@ -375,6 +400,7 @@ pub fn insert_app_conversation_with_media(
             &mut peer_nick,
             &mut peer_handle,
             &mut member_ids,
+            stated_group,
         )?;
     }
 
@@ -397,6 +423,78 @@ pub fn insert_app_conversation_with_media(
 mod tests {
     use super::*;
     use crate::cache::CacheDb;
+
+    /// An app group chat must say so on the thread row.
+    ///
+    /// This branch has always written `participants_json = '[]'`, so the UI's
+    /// "more than one participant" test was false for every app group and the
+    /// per-message sender name — which the parser had already stored — was never
+    /// rendered (#346). The count is known right here; it has to be recorded.
+    #[test]
+    fn an_app_group_chat_is_marked_as_one_even_though_it_lists_no_participants() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        let msg = |sender: &str, body: &str, at: i64| AppMessage {
+            chat_key: "group-1".into(),
+            timestamp: Some(at),
+            body: Some(body.into()),
+            sender_name: Some(sender.into()),
+            sender_id: Some(sender.into()),
+            ..Default::default()
+        };
+        // Three distinct senders ⇒ a group by member count.
+        insert_app_conversation(
+            &cache,
+            "WhatsApp",
+            false,
+            vec![
+                msg("Nadia", "are we on?", 1_700_000_000),
+                msg("Tom", "yes", 1_700_000_100),
+                msg("Ivy", "bringing snacks", 1_700_000_200),
+            ],
+            &mut report,
+        )
+        .unwrap();
+
+        let (is_group, participants, senders): (i64, String, i64) = cache
+            .conn()
+            .query_row(
+                "SELECT t.is_group, t.participants_json,
+                        (SELECT COUNT(DISTINCT m.sender) FROM messages m WHERE m.thread_id = t.id)
+                 FROM threads t",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(is_group, 1, "a 3-sender app chat is a group chat");
+        assert_eq!(
+            participants, "[]",
+            "app modules don't fill participants — which is exactly why is_group has to exist"
+        );
+        assert_eq!(senders, 3, "each message keeps its own author");
+    }
+
+    /// The mirror image: a 1:1 app chat must not be flagged, or every DM grows a
+    /// sender label above every bubble.
+    #[test]
+    fn a_one_to_one_app_chat_is_not_marked_as_a_group() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        let mut report = ImportReport::default();
+        let msg = AppMessage {
+            chat_key: "dm-1".into(),
+            timestamp: Some(1_700_000_000),
+            body: Some("hey".into()),
+            sender_name: Some("Robin".into()),
+            sender_id: Some("robin".into()),
+            ..Default::default()
+        };
+        insert_app_conversation(&cache, "WhatsApp", false, vec![msg], &mut report).unwrap();
+        let is_group: i64 = cache
+            .conn()
+            .query_row("SELECT is_group FROM threads", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(is_group, 0);
+    }
 
     #[test]
     fn media_attachments_resolve_and_mirror_to_gallery() {
