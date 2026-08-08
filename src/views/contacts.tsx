@@ -334,7 +334,13 @@ function ContactDetail({ contact, showAvatars }: { contact: Contact; showAvatars
     <div className="flex h-full flex-col">
       {/* No header-bar name here — it's already the big name under the avatar
           below (and highlighted in the list), so a top-bar title just repeats it. */}
-      <ScrollArea className="flex-1">
+      {/* `min-h-0` lets this flex child shrink to the pane height so the
+          ScrollArea actually clips and scrolls, instead of growing with the
+          contact's fields — without it a contact with phone, email, address,
+          related names and social handles ran 517px past the bottom of the
+          window with nothing to scroll (#344). Notes documents the same rule;
+          Contacts had the `flex-1` and not the `min-h-0`. */}
+      <ScrollArea className="min-h-0 flex-1">
         <div className="mx-auto max-w-xl p-6">
           <div className="flex flex-col items-center gap-3 pb-6 text-center">
             <Avatar className="size-20 text-xl">

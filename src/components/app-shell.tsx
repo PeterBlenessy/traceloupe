@@ -309,7 +309,14 @@ export function AppShell() {
                 view keeps starting below it. */}
             {/* Keyed on the locale so a region change re-mounts the view and
                 every date, time and number is formatted afresh. */}
-            <div key={localeVersion} className="min-h-0 flex-1 overflow-hidden pt-13">
+            {/* `data-slot` so scripts/check-view-scroll.mjs can find this exact
+                box: it is the clipping boundary, and anything a view overflows
+                past it is unreachable rather than merely below the fold. */}
+            <div
+              key={localeVersion}
+              data-slot="view-frame"
+              className="min-h-0 flex-1 overflow-hidden pt-13"
+            >
               <Outlet />
             </div>
           </SidebarInset>
