@@ -673,13 +673,14 @@ pub fn parse_messages(
                 chat.map(|c| c.identifier.clone())
             };
             tx.execute(
-                "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count, participants_json)
-                 VALUES (?1, ?2, ?3, NULL, 0, ?4)",
+                "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count, participants_json, is_group)
+                 VALUES (?1, ?2, ?3, NULL, 0, ?4, ?5)",
                 rusqlite::params![
                     chat_id.to_string(),
                     display_name,
                     chat.and_then(|c| c.service.clone()),
                     serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into()),
+                    is_group,
                 ],
             )?;
             thread_id = tx.last_insert_rowid();

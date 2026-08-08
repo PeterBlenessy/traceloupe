@@ -103,6 +103,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let is_from_me = ztype == 2;
 
         out.push(AppMessage {
+            is_group,
             attachments: Vec::new(),
             chat_key,
             // Groups are named by the group; the per-message author is unknown in

@@ -649,13 +649,14 @@ fn normalize_sms(
                 row.contact_id.clone()
             };
             tx.execute(
-                "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count, participants_json)
-                 VALUES (?1, ?2, ?3, NULL, 0, ?4)",
+                "INSERT INTO threads (identifier, display_name, service, last_message_at, message_count, participants_json, is_group)
+                 VALUES (?1, ?2, ?3, NULL, 0, ?4, ?5)",
                 rusqlite::params![
                     key,
                     display_name,
                     row.service,
                     serde_json::to_string(&participants).unwrap_or_else(|_| "[]".into()),
+                    is_group,
                 ],
             )?;
             thread_id = tx.last_insert_rowid();
@@ -895,7 +896,8 @@ fn normalize_app_conversation(
             nick.take();
             handle.take();
             tx.execute(
-                "UPDATE threads SET display_name = ?1, participants_json = '[]' WHERE id = ?2",
+                "UPDATE threads SET display_name = ?1, participants_json = '[]', is_group = 1
+                 WHERE id = ?2",
                 rusqlite::params![label, id],
             )?;
         } else {

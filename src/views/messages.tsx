@@ -863,8 +863,18 @@ function threadHandle(thread: ThreadSummary): string {
 
 type Resolver = (handle: string | null | undefined) => ResolvedContact | null;
 
+/**
+ * Group-ness comes from the parser, not from counting participants.
+ *
+ * Only the iMessage/SMS path ever fills `participants`; every app module writes
+ * an empty array even for a group whose members it just counted. Deriving it
+ * from the array therefore reported `false` for every WhatsApp/Telegram/
+ * Instagram/Messenger group, which suppressed the per-message sender label and
+ * left group chats looking anonymous (#346). `participants.length > 1` is kept
+ * as a fallback so a cache written before `is_group` existed still behaves.
+ */
 function isGroup(thread: ThreadSummary): boolean {
-  return thread.participants.length > 1;
+  return thread.isGroup || thread.participants.length > 1;
 }
 
 /** Resolve a single handle to a display string (contact name or the handle). */
