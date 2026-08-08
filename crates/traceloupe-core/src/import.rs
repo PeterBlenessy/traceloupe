@@ -324,6 +324,11 @@ pub fn import_backup(
             decryptor.as_ref(),
             &cache,
             work_dir,
+            &cache_path
+                .parent()
+                .map(|p| p.join("media"))
+                .unwrap_or_else(|| work_dir.join("media")),
+            discover_media,
             &mut native,
         );
         step!("Indexing TikTok Contacts");
@@ -1399,11 +1404,14 @@ fn extract_aweme_dbs(
 /// names live in the `AwemeContacts*` tables of `AwemeIM.db` — two DBs the generic
 /// single-file app-module API can't join, so it gets a dedicated importer. Best-
 /// effort: a backup without TikTok, or an unreadable DB, just yields nothing.
+#[allow(clippy::too_many_arguments)]
 fn import_tiktok_messages_native(
     backup_dir: &Path,
     decryptor: Option<&crate::crypto::BackupDecryptor>,
     cache: &CacheDb,
     work_dir: &Path,
+    media_dir: &Path,
+    discover: bool,
     report: &mut ImportReport,
 ) {
     let index = match crate::manifest::ManifestIndex::open(backup_dir, decryptor, work_dir) {
@@ -1462,6 +1470,8 @@ fn import_tiktok_messages_native(
             &uid_map,
         ) {
             Ok(msgs) if !msgs.is_empty() => {
+                let flagged = msgs.iter().filter(|m| m.has_attachment).count();
+                let produced: usize = msgs.iter().map(|m| m.attachments.len()).sum();
                 let resolve = app_media_resolver(&index, decryptor);
                 if let Err(e) = crate::parsers::apps::insert_app_conversation_with_media(
                     cache, "TikTok", true, msgs, report, &resolve,
@@ -1469,6 +1479,12 @@ fn import_tiktok_messages_native(
                     report
                         .warnings
                         .push(format!("TikTok messages: insert failed ({e})."));
+                }
+                // TikTok is imported here rather than through APP_CHAT_MODULES,
+                // so it sat outside the discovery loop entirely — the one app
+                // the pass silently did not cover. Same gap test as the others.
+                if discover && produced < flagged {
+                    discover_app_media(base, "TikTok", &index, decryptor, cache, media_dir, report);
                 }
             }
             Ok(_) => {}
@@ -1677,13 +1693,35 @@ fn discover_app_media(
     if found.is_empty() {
         return;
     }
+    // What this app's messages were called in its OWN database, so a discovered
+    // photo can be put back in the conversation it came from rather than only in
+    // the gallery. Empty when the module does not record source ids — discovery
+    // then still surfaces the media, just unattributed.
+    let by_source: std::collections::HashMap<i64, i64> = {
+        let mut m = std::collections::HashMap::new();
+        if let Ok(mut stmt) = cache.conn().prepare(
+            "SELECT m.source_id, m.id FROM messages m
+               JOIN threads t ON t.id = m.thread_id
+              WHERE t.service = ?1 AND m.source_id IS NOT NULL",
+        ) {
+            if let Ok(rows) = stmt.query_map([service], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            }) {
+                m.extend(rows.flatten());
+            }
+        }
+        m
+    };
+    let known: std::collections::HashSet<i64> = by_source.keys().copied().collect();
 
     let mut added = 0usize;
     let mut notes: Vec<String> = Vec::new();
     for d in found.iter().take(4) {
         let n = match d.shape {
             MediaShape::Path => mirror_discovered_paths(&conn, d, service, index, decryptor, cache),
-            MediaShape::Inline => mirror_discovered_blobs(&conn, d, service, cache, media_dir),
+            MediaShape::Inline => {
+                mirror_discovered_blobs(&conn, d, service, cache, media_dir, &by_source, &known)
+            }
         };
         added += n;
         notes.push(format!("{} -> {n} item(s)", d.describe()));
@@ -1739,6 +1777,20 @@ fn mirror_discovered_paths(
             continue;
         }
         let Some(entry) = hits.pop() else { continue };
+        // The module may already have produced this exact file — discovery now
+        // runs alongside a partly-working module, not only a silent one, so the
+        // same photo can be reached twice. One item per file.
+        let dup: i64 = cache
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM media_items WHERE source = ?1 AND relative_path = ?2",
+                rusqlite::params![service, v],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if dup > 0 {
+            continue;
+        }
         let local = index
             .blob_path(&entry.file_id)
             .to_string_lossy()
@@ -1771,31 +1823,47 @@ fn mirror_discovered_paths(
 /// Some apps keep photos in the database instead of on disk, so there is no
 /// backup file to point at — the bytes have to be materialized before anything
 /// can serve them.
+#[allow(clippy::too_many_arguments)]
 fn mirror_discovered_blobs(
     conn: &rusqlite::Connection,
     d: &crate::parsers::apps::discovery::Discovery,
     service: &str,
     cache: &CacheDb,
     media_dir: &Path,
+    by_source: &std::collections::HashMap<i64, i64>,
+    known: &std::collections::HashSet<i64>,
 ) -> usize {
-    use crate::parsers::apps::discovery::media_magic;
+    use crate::parsers::apps::discovery::{infer_message_fk, media_magic};
+    // Which column of this table points back at a message. Inferred from the
+    // values, because Core Data records a relationship as a bare integer column
+    // with nothing to say it is one.
+    let fk = infer_message_fk(conn, &d.table, known);
     let dir = media_dir.join("discovered");
     if std::fs::create_dir_all(&dir).is_err() {
         return 0;
     }
+    let fk_sel = fk
+        .as_deref()
+        .map(|c| format!("\"{c}\""))
+        .unwrap_or_else(|| "NULL".to_string());
     let sql = format!(
-        "SELECT rowid, \"{}\" FROM \"{}\" WHERE \"{}\" IS NOT NULL",
+        "SELECT rowid, \"{}\", {fk_sel} FROM \"{}\" WHERE \"{}\" IS NOT NULL",
         d.column, d.table, d.column
     );
     let Ok(mut stmt) = conn.prepare(&sql) else {
         return 0;
     };
-    let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
-    else {
+    let Ok(rows) = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, Vec<u8>>(1)?,
+            r.get::<_, Option<i64>>(2)?,
+        ))
+    }) else {
         return 0;
     };
     let mut n = 0;
-    for (rowid, bytes) in rows.flatten() {
+    for (rowid, bytes, src) in rows.flatten() {
         let Some(fmt) = media_magic(&bytes) else {
             continue;
         };
@@ -1813,6 +1881,25 @@ fn mirror_discovered_blobs(
             continue;
         }
         let kind = if fmt == "mp4" { "video" } else { "photo" };
+        // Put it in the conversation too, when the link resolved. Without this
+        // a discovered photo reaches the gallery but the message it belongs to
+        // still shows nothing, which reads as "no image was sent".
+        if let Some(message_id) = src.and_then(|s| by_source.get(&s)) {
+            let _ = cache.conn().execute(
+                "INSERT INTO attachments (message_id, filename, mime_type, local_path)
+                 VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    message_id,
+                    name,
+                    format!("image/{}", if fmt == "jpeg" { "jpeg" } else { fmt }),
+                    path.to_string_lossy()
+                ],
+            );
+            let _ = cache.conn().execute(
+                "UPDATE messages SET has_attachments = 1 WHERE id = ?1",
+                rusqlite::params![message_id],
+            );
+        }
         if cache
             .conn()
             .execute(
@@ -1913,12 +2000,39 @@ fn import_app_chats_native(
             }
             continue; // recognized nothing / empty — leave the service to iLEAPP
         }
-        // Discovery only fills a gap. A module that named its own media columns
-        // knows things a scanner cannot infer — which message a file belongs to,
-        // which of several blobs is the full image — so it always wins. This runs
-        // when the module produced no media at all, which is the case a schema
-        // change produces and the case an unimplemented module produces.
-        let found_nothing = msgs.iter().all(|m| m.attachments.is_empty());
+        // Discovery fills a gap; it does not replace a module. A module that
+        // named its own media columns knows things a scanner cannot infer, so
+        // whatever it produced stands.
+        //
+        // The gap is "messages that say they carry media, and did not get any" —
+        // NOT "the module produced nothing at all". An all-or-nothing test lets a
+        // half-broken module through: WhatsApp reads ZMEDIALOCALPATH, and if a
+        // future schema moved that column while leaving the thumbnail path
+        // behind, it would still produce *some* attachments and discovery would
+        // never look at the ones it lost.
+        let flagged = msgs.iter().filter(|m| m.has_attachment).count();
+        let produced: usize = msgs.iter().map(|m| m.attachments.len()).sum();
+        let found_nothing = produced < flagged;
+        let resolve = app_media_resolver(&index, decryptor);
+        let inserted = crate::parsers::apps::insert_app_conversation_with_media(
+            cache,
+            m.service,
+            m.numeric_id_groups,
+            msgs,
+            report,
+            &resolve,
+        );
+        match inserted {
+            Ok(()) => handled.push(m.service),
+            Err(e) => report.warnings.push(format!(
+                "Native {}: insert failed ({e}); using iLEAPP.",
+                m.service
+            )),
+        }
+        // AFTER the insert, deliberately: discovery attaches a photo to the
+        // message it belongs to, and can only do that once those messages exist
+        // in the cache with their source ids. Running it first left every
+        // discovered image in the gallery and none of them in a conversation.
         if discover && found_nothing {
             for db in &extracted {
                 discover_app_media(db, m.service, &index, decryptor, cache, media_dir, report);
@@ -1926,21 +2040,6 @@ fn import_app_chats_native(
         }
         for f in &extracted {
             let _ = std::fs::remove_file(f);
-        }
-        let resolve = app_media_resolver(&index, decryptor);
-        match crate::parsers::apps::insert_app_conversation_with_media(
-            cache,
-            m.service,
-            m.numeric_id_groups,
-            msgs,
-            report,
-            &resolve,
-        ) {
-            Ok(()) => handled.push(m.service),
-            Err(e) => report.warnings.push(format!(
-                "Native {}: insert failed ({e}); using iLEAPP.",
-                m.service
-            )),
         }
     }
     handled

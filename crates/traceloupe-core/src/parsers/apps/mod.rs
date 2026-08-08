@@ -57,6 +57,13 @@ pub struct AppMessage {
     pub sender_handle: Option<String>,
     /// Stable sender id, to count distinct participants (group detection).
     pub sender_id: Option<String>,
+    /// This message's primary key in the app's own database.
+    ///
+    /// Only used to re-find the message later: the media-discovery pass reads
+    /// the same database and needs to say "this photo belongs to app row 41".
+    /// `None` leaves discovered media in the gallery, attributed to the app but
+    /// not to a conversation.
+    pub source_id: Option<i64>,
     /// Set when the app states outright that this conversation is a group (e.g.
     /// WhatsApp's `@g.us` jid). Counting distinct senders can't stand in for
     /// this: the count is only accumulated for chats with no name of their own,
@@ -353,8 +360,8 @@ pub fn insert_app_conversation_with_media(
             .unwrap_or_else(|| crate::normalize::message_kind(m.body.as_deref(), has_att));
         tx.execute(
             "INSERT INTO messages
-                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (thread_id, sender, is_from_me, body, sent_at, has_attachments, kind, source_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
                 thread_id,
                 sender,
@@ -363,6 +370,7 @@ pub fn insert_app_conversation_with_media(
                 m.timestamp,
                 has_att as i64,
                 kind,
+                m.source_id,
             ],
         )?;
         let message_id = tx.last_insert_rowid();

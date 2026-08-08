@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 59;
+const SCHEMA_VERSION: i64 = 60;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -868,6 +868,12 @@ impl CacheDb {
             // v57: shared-album activity carried on the photo it happened to.
             ensure_column(&conn, "media_items", "shared_caption", "TEXT")?;
             ensure_column(&conn, "media_items", "shared_likes", "INTEGER")?;
+            // v60: the row id this message had in the app's OWN database. The
+            // media-discovery pass runs over that database after the fact and
+            // finds a photo attached to app row 41 — without this there is no
+            // way back to the message we imported, so the photo could only be
+            // put in the gallery and never in the conversation it belongs to.
+            ensure_column(&conn, "messages", "source_id", "INTEGER")?;
             // v59: whether a thread is a group chat, as a fact the parser states
             // rather than something guessed from participants_json. Only the
             // iMessage path ever filled that array; every app module wrote '[]'

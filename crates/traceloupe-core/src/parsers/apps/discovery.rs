@@ -35,6 +35,9 @@ const SAMPLE: usize = 200;
 /// A column has to be *mostly* media to count. A stray URL in a text column
 /// that also holds message bodies is not a media column.
 const MIN_RATIO: f64 = 0.5;
+/// How many distinct message links a column must demonstrate before it is
+/// believed. Below this, a coincidence is indistinguishable from a relationship.
+const MIN_LINK_ROWS: usize = 3;
 
 /// What a discovered column holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -335,5 +338,180 @@ mod tests {
         }
         let present = |_: &str| true;
         assert!(discover_media(&c, &present).is_empty());
+    }
+}
+
+/// The column in `table` that points at a message, if there is one.
+///
+/// Core Data writes a relationship as a plain integer column, so a media table's
+/// link to its message is just "some INTEGER column whose values are message row
+/// ids". There is no metadata saying which — so this tests the candidates
+/// against the ids we actually imported and takes the one that mostly hits.
+///
+/// A name like `ZMESSAGE` is a hint, not proof, and is used only to break ties:
+/// the evidence is the overlap.
+pub fn infer_message_fk(
+    conn: &Connection,
+    table: &str,
+    known_ids: &std::collections::HashSet<i64>,
+) -> Option<String> {
+    if known_ids.is_empty() {
+        return None;
+    }
+    let mut best: Option<(String, usize)> = None;
+    for column in columns_of(conn, table) {
+        // The row's own key is not a link to anything, and Core Data's
+        // bookkeeping columns are constants. `Z_ENT` is the entity number —
+        // every row of a table carries the same value, and if that number
+        // happens to equal a message id, EVERY image in the table gets
+        // attached to that one message. Which is exactly what it did.
+        if ["Z_PK", "rowid", "Z_ENT", "Z_OPT"]
+            .iter()
+            .any(|c| column.eq_ignore_ascii_case(c))
+        {
+            continue;
+        }
+        let sql = format!(
+            "SELECT \"{column}\" FROM \"{table}\" WHERE \"{column}\" IS NOT NULL LIMIT {SAMPLE}"
+        );
+        let Ok(mut stmt) = conn.prepare(&sql) else {
+            continue;
+        };
+        let Ok(rows) = stmt.query_map([], |r| r.get::<_, i64>(0)) else {
+            continue;
+        };
+        let vals: Vec<i64> = rows.flatten().collect();
+        if vals.is_empty() {
+            continue;
+        }
+        let hits = vals.iter().filter(|v| known_ids.contains(v)).count();
+        // Most of the column has to land on real messages. A counter or a size
+        // column will hit a few ids by coincidence; a relationship hits nearly
+        // all of them.
+        if hits * 4 < vals.len() * 3 {
+            continue;
+        }
+        // And it must not collapse. A real one-media-per-message relationship
+        // is close to injective; a column that maps twenty rows onto two ids is
+        // a category or a flag that happens to share values with message ids,
+        // and using it would attribute a pile of photos to one message.
+        let distinct: std::collections::HashSet<i64> = vals
+            .iter()
+            .copied()
+            .filter(|v| known_ids.contains(v))
+            .collect();
+        if distinct.len() * 2 < hits {
+            continue;
+        }
+        // One row of evidence is not evidence. A single-row table whose key
+        // happens to equal a message id looks like a perfect relationship —
+        // that is how a contact's avatar came to be attached to "Are you here
+        // yet?". A relationship has to be demonstrated across several rows, and
+        // if it cannot be, the media still reaches the gallery; it just is not
+        // claimed to belong to a conversation.
+        if hits < MIN_LINK_ROWS || distinct.len() < MIN_LINK_ROWS {
+            continue;
+        }
+        let named = column.to_uppercase().contains("MESSAGE");
+        let score = hits * 2 + usize::from(named);
+        if best.as_ref().is_none_or(|(_, b)| score > *b) {
+            best = Some((column, score));
+        }
+    }
+    best.map(|(c, _)| c)
+}
+
+#[cfg(test)]
+mod fk_tests {
+    use super::*;
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE ZIMAGEDATA (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER,
+                 ZWIDTH INTEGER, ZDATA BLOB);",
+        )
+        .unwrap();
+        for (pk, msg, w) in [(1, 41, 512), (2, 42, 433), (3, 43, 319)] {
+            c.execute(
+                "INSERT INTO ZIMAGEDATA (Z_PK, ZMESSAGE, ZWIDTH) VALUES (?1, ?2, ?3)",
+                rusqlite::params![pk, msg, w],
+            )
+            .unwrap();
+        }
+        c
+    }
+
+    /// The link is found from the values, not the name — Core Data gives no
+    /// metadata saying which integer column is a relationship.
+    #[test]
+    fn finds_the_message_relationship_by_overlap() {
+        let ids: std::collections::HashSet<i64> = [41, 42, 43, 44].into_iter().collect();
+        assert_eq!(
+            infer_message_fk(&db(), "ZIMAGEDATA", &ids).as_deref(),
+            Some("ZMESSAGE")
+        );
+    }
+
+    /// A column of unrelated numbers must not be mistaken for the link. ZWIDTH
+    /// holds plausible-looking integers and would attach photos to whichever
+    /// messages happened to share an id with a pixel count.
+    #[test]
+    fn a_column_of_unrelated_numbers_is_not_a_link() {
+        // Only ZWIDTH's values are "known", so ZMESSAGE cannot win on overlap.
+        let ids: std::collections::HashSet<i64> = [512].into_iter().collect();
+        assert_eq!(infer_message_fk(&db(), "ZIMAGEDATA", &ids), None);
+    }
+
+    /// `Z_ENT` is the same number on every row of a Core Data table. When that
+    /// number happened to be a message id, every image in the table was
+    /// attached to that single message — eight photos on one line of a
+    /// conversation. A constant is never a relationship.
+    #[test]
+    fn a_constant_core_data_column_is_never_the_link() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE ZIMAGEDATA (Z_PK INTEGER PRIMARY KEY, Z_ENT INTEGER,
+                 ZMESSAGE INTEGER, ZDATA BLOB);",
+        )
+        .unwrap();
+        for pk in 1..=8 {
+            // ZMESSAGE unpopulated, exactly as Threema ships it.
+            c.execute(
+                "INSERT INTO ZIMAGEDATA (Z_PK, Z_ENT, ZMESSAGE) VALUES (?1, 12, NULL)",
+                rusqlite::params![pk],
+            )
+            .unwrap();
+        }
+        // 12 IS a real message id — the coincidence that caused the bug.
+        let ids: std::collections::HashSet<i64> = (1..=200).collect();
+        assert_eq!(
+            infer_message_fk(&c, "ZIMAGEDATA", &ids),
+            None,
+            "no column says which message these belong to, so nothing may be claimed"
+        );
+    }
+
+    /// A lone coincidental match is not a relationship. A contact avatar whose
+    /// table key happened to equal a message id was attached to that message,
+    /// which read as "someone sent this picture" when nobody had.
+    #[test]
+    fn a_single_coincidental_match_is_not_a_link() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE ZCONTACT (Z_PK INTEGER PRIMARY KEY, ZIMAGEDATA BLOB);")
+            .unwrap();
+        c.execute("INSERT INTO ZCONTACT (Z_PK) VALUES (2)", [])
+            .unwrap();
+        let ids: std::collections::HashSet<i64> = (1..=200).collect();
+        assert_eq!(infer_message_fk(&c, "ZCONTACT", &ids), None);
+    }
+
+    /// Nothing to match against means no guessing.
+    #[test]
+    fn no_known_ids_means_no_link() {
+        assert_eq!(
+            infer_message_fk(&db(), "ZIMAGEDATA", &std::collections::HashSet::new()),
+            None
+        );
     }
 }
