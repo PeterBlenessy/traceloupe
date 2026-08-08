@@ -17,14 +17,19 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
+  Activity,
   AppWindow,
+  CalendarDays,
   Camera,
   Clock,
   Globe,
+  HeartPulse,
+  ListTodo,
   Mic,
   MessageSquare,
   NotebookText,
   Phone,
+  Search,
   Smartphone,
   Video,
 } from "lucide-react";
@@ -71,6 +76,11 @@ const KINDS: Record<
   note: { label: "Notes", icon: NotebookText, tint: "text-yellow-400" },
   recording: { label: "Recordings", icon: Mic, tint: "text-rose-400" },
   app: { label: "Apps installed", icon: AppWindow, tint: "text-teal-400" },
+  search: { label: "Searches", icon: Search, tint: "text-blue-400" },
+  event: { label: "Calendar", icon: CalendarDays, tint: "text-orange-400" },
+  reminder: { label: "Reminders", icon: ListTodo, tint: "text-lime-400" },
+  workout: { label: "Workouts", icon: Activity, tint: "text-pink-400" },
+  health: { label: "Health entries", icon: HeartPulse, tint: "text-rose-300" },
 };
 
 const MEDIA_KINDS: TimelineEvent["kind"][] = ["photo", "video", "screenshot"];
@@ -342,6 +352,11 @@ export function TimelineView() {
               if (e.kind === "call") return void navigate({ to: "/calls" });
               if (e.kind === "recording") return void navigate({ to: "/recordings" });
               if (e.kind === "app") return void navigate({ to: "/apps" });
+              if (e.kind === "search") return void navigate({ to: "/safari" });
+              if (e.kind === "event") return void navigate({ to: "/calendar" });
+              if (e.kind === "reminder") return void navigate({ to: "/reminders" });
+              if (e.kind === "workout" || e.kind === "health")
+                return void navigate({ to: "/health" });
             }}
           />
         )

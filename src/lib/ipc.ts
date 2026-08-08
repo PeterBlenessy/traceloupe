@@ -36,7 +36,8 @@ export interface TimelineEvent {
   id: number;
   kind:
     | "message" | "photo" | "video" | "screenshot"
-    | "call" | "visit" | "note" | "recording" | "app";
+    | "call" | "visit" | "search" | "note" | "recording" | "app"
+    | "event" | "reminder" | "workout" | "health";
   /** Unix seconds. */
   at: number;
   /** The conversation, album, profile or seller it belongs to. */
