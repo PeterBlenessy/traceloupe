@@ -92,11 +92,49 @@ rediscovered `ZWAMEDIAITEM.ZMEDIALOCALPATH` (WhatsApp) and `ZATTACHMENT.ZNAME`
 (Viber) — the two columns that had been found by hand — with matching resolve
 counts.
 
-## Deliberate limits
+## Putting it back in the conversation
 
-- **Gallery only.** Discovered media is attributed to the *app*, not to an
-  individual message. Linking a discovered row back to its conversation needs
-  foreign-key inference, which is a separate problem and a riskier one.
+A photo in the gallery but not in the thread it was sent in reads as "no image
+was sent". So discovery also tries to attach what it finds to the right message.
+
+Core Data records a relationship as a plain integer column with no metadata
+saying it is one, so the link is **inferred from the values**: which integer
+column of the media table holds ids of messages we actually imported. Messages
+carry `source_id`, the row id they had in the app's own database, so there is
+something to match against.
+
+This is the part that can go confidently wrong, so it is deliberately hard to
+satisfy. A candidate column is rejected unless:
+
+- it is not Core Data bookkeeping (`Z_PK`, `Z_ENT`, `Z_OPT`). **`Z_ENT` is the
+  same number on every row of a table** — when that number happened to equal a
+  message id, all eight of Threema's photos were attached to one message.
+- **at least 75%** of its non-null values are ids of real messages;
+- the mapping does not **collapse** — a column putting twenty rows onto two ids
+  is a flag that shares values with message ids, not a relationship;
+- it demonstrates the link across **at least three distinct messages**. One row
+  of evidence is not evidence: a single-row table whose key happened to equal a
+  message id is how a *contact's avatar* came to be attached to "Are you here
+  yet?".
+
+When no column passes, nothing is claimed. The media still reaches the gallery
+tagged with the app; it simply is not asserted to belong to a conversation.
+
+Measured on the public iOS 17 backup, Threema:
+
+```
+12 images in the gallery
+ 3 attached to their own messages (ZFILEDATA — each an attachment-only message)
+ 8 unattached (ZIMAGEDATA — the database's ZMESSAGE column is NULL on every row,
+   so nothing says which message they belong to)
+ 1 unattached (a contact avatar, which is not a message attachment at all)
+```
+
+Discovery runs **after** the messages are inserted, not before — it can only
+match against messages that exist. Running it first left every discovered image
+in the gallery and none of them in a conversation.
+
+## Deliberate limits
 - **Unique matches only.** A path is used only when exactly one file in the
   Manifest carries that basename. On the iOS 17 backup, 1456 of 6734 basenames
   are shared by more than one file, so "first match wins" would eventually
