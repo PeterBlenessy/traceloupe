@@ -26,6 +26,7 @@ pub mod rawdb;
 pub mod safety_scan;
 pub mod shorteners;
 pub mod sidecar;
+pub mod timeline;
 
 pub use error::{Error, Result};
 

@@ -1680,7 +1680,7 @@ impl Sort {
 
 /// Escape LIKE metacharacters (`%`, `_`, `\`) in a user search term so they match
 /// literally instead of acting as wildcards. Pair with `ESCAPE '\'` in the query.
-fn escape_like(s: &str) -> String {
+pub(crate) fn escape_like(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if matches!(c, '\\' | '%' | '_') {
