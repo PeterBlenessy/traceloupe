@@ -169,6 +169,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
 
         let is_group = groups.get(&chat).copied().unwrap_or(false);
         out.push(AppMessage {
+            source_id: None,
             is_group,
             chat_name: names.get(&chat).cloned(),
             // A group's members are named individually; a 1:1 thread's peer is the

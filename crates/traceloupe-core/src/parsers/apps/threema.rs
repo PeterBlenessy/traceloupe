@@ -76,7 +76,8 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
                  sd.ZPUBLICNICKNAME
              ) AS sender_name,
              (m.ZAUDIO IS NOT NULL OR m.ZVIDEO IS NOT NULL
-                  OR m.ZIMAGE IS NOT NULL OR m.ZFILENAME IS NOT NULL) AS has_media
+                  OR m.ZIMAGE IS NOT NULL OR m.ZFILENAME IS NOT NULL) AS has_media,
+             m.Z_PK AS source_id
          FROM ZMESSAGE m
          LEFT JOIN ZCONVERSATION conv ON m.ZCONVERSATION = conv.Z_PK
          LEFT JOIN ZCONTACT cont ON conv.ZCONTACT = cont.Z_PK
@@ -115,6 +116,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         };
 
         out.push(AppMessage {
+            source_id: r.get::<_, Option<i64>>(8)?,
             is_group: false,
             attachments: Vec::new(),
             chat_key,

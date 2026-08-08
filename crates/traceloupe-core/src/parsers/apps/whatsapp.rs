@@ -229,6 +229,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             .unwrap_or_default();
 
         out.push(AppMessage {
+            source_id: None,
             is_group,
             attachments,
             chat_key,

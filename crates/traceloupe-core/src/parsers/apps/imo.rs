@@ -92,6 +92,7 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         // alias) lets the framework detect a group by distinct-sender count.
         let sender = alias.clone().or_else(|| conv_name.clone());
         out.push(AppMessage {
+            source_id: None,
             is_group: false,
             attachments: Vec::new(),
             chat_key,
