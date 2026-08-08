@@ -1193,6 +1193,12 @@ export interface TraceLoupeClient {
   /** Why each module ended up empty or not, from the import that built the
    *  open cache. See `use-parse-failed.ts` (#288). */
   moduleStatus(): Promise<ModuleStatus[]>;
+  /** Mark or unmark one item as unsafe. `kind` is "media" | "message" | "contact". */
+  setItemMark(kind: string, id: number, marked: boolean): Promise<void>;
+  /** The row ids of `kind` marked unsafe in this backup. */
+  markedIds(kind: string): Promise<number[]>;
+  /** How many of each kind are marked, for the filter badges. */
+  markCounts(): Promise<{ media: number; message: number; contact: number }>;
   /** How many timeline events match, for the virtualizer. */
   countTimelineEvents(args: TimelineQuery): Promise<number>;
   /** A window of the timeline. */
@@ -1791,6 +1797,10 @@ const tauriClient: TraceLoupeClient = {
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   moduleStatus: () => invoke<ModuleStatus[]>("module_status"),
+  setItemMark: (kind, id, marked) => invoke("set_item_mark", { kind, id, marked }),
+  markedIds: (kind) => invoke<number[]>("marked_ids", { kind }),
+  markCounts: () =>
+    invoke<{ media: number; message: number; contact: number }>("mark_counts"),
   countTimelineEvents: (args) => invoke<number>("count_timeline_events", { args }),
   getTimelineEvents: (args) => invoke<TimelineEvent[]>("get_timeline_events", { args }),
   timelineFacets: () =>
@@ -2828,6 +2838,10 @@ const mockSafariBookmarks: SafariBookmark[] = [
 // Days, Last 30 Days, …) are demonstrable in the browser preview.
 const DAY = 86_400;
 const nowS = Math.floor(Date.now() / 1000);
+/** The browser mock's unsafe marks. In-memory: a reload starts clean, which is
+ *  honest about it being a stand-in for the per-backup file. */
+const mockMarks: Record<string, Set<number>> = {};
+
 const mockNotes: Note[] = [
   {
     id: 2,
@@ -3862,6 +3876,17 @@ const mockClient: TraceLoupeClient = {
       },
     };
   })(),
+  setItemMark: async (kind, id, marked) => {
+    const set = mockMarks[kind] ?? (mockMarks[kind] = new Set());
+    if (marked) set.add(id);
+    else set.delete(id);
+  },
+  markedIds: async (kind) => [...(mockMarks[kind] ?? [])].sort((a, b) => a - b),
+  markCounts: async () => ({
+    media: mockMarks.media?.size ?? 0,
+    message: mockMarks.message?.size ?? 0,
+    contact: mockMarks.contact?.size ?? 0,
+  }),
   rawDatabases: async (bundleId) =>
     !mockActive
       ? []

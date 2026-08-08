@@ -23,6 +23,11 @@ use std::collections::BTreeSet;
 /// concrete (what caps it), not reassuring ("should be small").
 const BOUNDED: &[(&str, &str)] = &[
     (
+        "marked_ids",
+        "one id per item the PERSON marked unsafe by hand — bounded by how many \
+         someone can click, not by how much the backup holds",
+    ),
+    (
         "get_timeline_events",
         "windowed by offset/limit — they live inside its TimelineQuery argument \
          rather than as loose parameters, which is why this test cannot see them \
