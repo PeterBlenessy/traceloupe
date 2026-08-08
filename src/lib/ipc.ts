@@ -2656,7 +2656,7 @@ const nowS = Math.floor(Date.now() / 1000);
 const mockNotes: Note[] = [
   {
     id: 2,
-    folder: "Work",
+    folder: "Work/2024/Q3",
     title: "Q3 ideas",
     snippet: "Ship the importer, then…",
     body: "Ship the importer, then work on lazy decode and the encrypted path.",
@@ -2669,7 +2669,7 @@ const mockNotes: Note[] = [
     imageCount: 2,
     availableImageCount: 0,
     attachmentCount: 2,
-    tags: [],
+    tags: ["planning", "roadmap"],
     sharedWith: [
       { name: "This Is DFIR", email: "thisisdfir@gmail.com", status: 2 },
       { name: null, email: "someone.else@example.com", status: 1 },
@@ -2692,7 +2692,7 @@ const mockNotes: Note[] = [
     imageCount: 0,
     availableImageCount: 0,
     attachmentCount: 0,
-    tags: [],
+    tags: ["outdoors"],
     sharedWith: [],
     hasImage: false,
     bodyRich: null,
@@ -2719,7 +2719,7 @@ const mockNotes: Note[] = [
   },
   {
     id: 4,
-    folder: "Personal",
+    folder: "Work/2024/Receipts",
     title: "Passwords",
     snippet: null,
     body: null,

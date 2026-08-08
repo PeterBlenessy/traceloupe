@@ -265,12 +265,11 @@ pub fn parse_notes(
         ],
     );
     let deleted = col_or_null(&cols, &["ZMARKEDFORDELETION"]);
-    // Folders use ZTITLE2 for their name; join the note's ZFOLDER back to it.
-    let folder_title = if cols.contains("ZTITLE2") {
-        "f.ZTITLE2"
-    } else {
-        "NULL"
-    };
+    // Folders nest: a folder's ZPARENT points at its parent folder, so the note's
+    // ZFOLDER alone gives only the leaf ("subfolder-c"), losing where it sits.
+    // Resolve the whole chain up front and select the FK instead of joining one
+    // level, so the note carries its full "folder-a/subfolder-b/subfolder-c" path.
+    let folder_paths = load_folder_paths(&src, &cols)?;
 
     // Password-protected (locked) notes: the body ciphertext is `ZICNOTEDATA.ZDATA`
     // (same column an unlocked note's gzip body uses), AES-GCM'd under a per-note key
@@ -328,11 +327,10 @@ pub fn parse_notes(
     // the note's own Z_PK (last), used to attach its tags.
     // `WHERE ZNOTEDATA IS NOT NULL` selects note objects (folders/accounts have none).
     let sql = format!(
-        "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_title}, d.ZDATA,
+        "SELECT {title}, {snippet}, {created}, {modified}, {deleted}, {folder_fk}, d.ZDATA,
                 {protected}, {wrapped}, {salt}, {iter}, {iv}, {tag}, {hint}, {pinned},
                 {checklist}, {image_count_expr}, {attach_count_expr}, n.Z_PK
          FROM ZICCLOUDSYNCINGOBJECT n
-         LEFT JOIN ZICCLOUDSYNCINGOBJECT f ON f.Z_PK = {folder_fk}
          LEFT JOIN ZICNOTEDATA d ON d.Z_PK = n.ZNOTEDATA
          WHERE n.ZNOTEDATA IS NOT NULL"
     );
@@ -353,7 +351,9 @@ pub fn parse_notes(
         let created_at = coredata_to_unix(r.get::<_, Option<f64>>(2)?);
         let modified_at = coredata_to_unix(r.get::<_, Option<f64>>(3)?);
         let marked_deleted = r.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0;
-        let folder_name: Option<String> = r.get(5)?;
+        let folder_name = r
+            .get::<_, Option<i64>>(5)?
+            .and_then(|fk| folder_paths.get(&fk).cloned());
         let zdata: Option<Vec<u8>> = r.get(6)?;
         let protected = r.get::<_, Option<i64>>(7)?.unwrap_or(0) != 0;
         let crypto_wrapped: Option<Vec<u8>> = r.get(8)?;
@@ -534,31 +534,116 @@ fn load_note_tags(
     cols: &HashSet<String>,
 ) -> Result<std::collections::HashMap<i64, Vec<String>>> {
     let mut map: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
-    if !(cols.contains("ZTYPEUTI1") && cols.contains("ZNOTE1") && cols.contains("ZALTTEXT")) {
-        return Ok(map);
+    // Core Data disambiguates same-named attributes with a numeric suffix, and
+    // which suffix an attribute lands on depends on the schema version — the
+    // note back-ref is ZNOTE on one iOS and ZNOTE1 on the next. Hardcoding one
+    // spelling doesn't fail loudly; it silently yields zero tags on every device
+    // whose schema numbered them differently. Probe the combinations that this
+    // DB actually has and merge whatever answers.
+    let present = |names: &[&'static str]| -> Vec<&'static str> {
+        names
+            .iter()
+            .copied()
+            .filter(|n| cols.contains(*n))
+            .collect()
+    };
+    let utis = present(&["ZTYPEUTI", "ZTYPEUTI1", "ZTYPEUTI2"]);
+    let notes = present(&["ZNOTE", "ZNOTE1", "ZNOTE2"]);
+    // ZALTTEXT is the rendered "#tag"; ZTOKENCONTENTIDENTIFIER is the bare name.
+    let texts = present(&["ZALTTEXT", "ZTOKENCONTENTIDENTIFIER"]);
+    for uti in &utis {
+        for note in &notes {
+            for text in &texts {
+                let sql = format!(
+                    "SELECT {note}, {text} FROM ZICCLOUDSYNCINGOBJECT
+                     WHERE {uti} LIKE '%hashtag%'
+                       AND {note} IS NOT NULL AND {text} IS NOT NULL"
+                );
+                let Ok(mut stmt) = conn.prepare(&sql) else {
+                    continue;
+                };
+                let Ok(mut rows) = stmt.query([]) else {
+                    continue;
+                };
+                // Best-effort per row: a wrongly-typed cell (SQLite is dynamically
+                // typed) skips that tag rather than aborting the whole Notes import.
+                while let Ok(Some(r)) = rows.next() {
+                    let (Ok(note_pk), Ok(tag)) = (r.get::<_, i64>(0), r.get::<_, String>(1)) else {
+                        continue;
+                    };
+                    // The two text columns spell the same tag differently
+                    // ("#work" vs "work"), so normalize before dedupe or a note
+                    // ends up with both and the filter lists it twice.
+                    let tag = tag.trim().trim_start_matches('#').trim().to_string();
+                    if tag.is_empty() {
+                        continue;
+                    }
+                    let entry = map.entry(note_pk).or_default();
+                    if !entry.contains(&tag) {
+                        entry.push(tag);
+                    }
+                }
+            }
+        }
     }
-    let mut stmt = conn.prepare(
-        "SELECT ZNOTE1, ZALTTEXT FROM ZICCLOUDSYNCINGOBJECT
-         WHERE ZTYPEUTI1 = 'com.apple.notes.inlinetextattachment.hashtag'
-           AND ZNOTE1 IS NOT NULL AND ZALTTEXT IS NOT NULL",
-    )?;
-    let mut rows = stmt.query([])?;
-    // Best-effort per row: a wrongly-typed cell (SQLite is dynamically typed)
-    // skips that tag rather than aborting the whole Notes import.
-    while let Ok(Some(r)) = rows.next() {
-        let (Ok(note_pk), Ok(tag)) = (r.get::<_, i64>(0), r.get::<_, String>(1)) else {
-            continue;
-        };
-        let tag = tag.trim().to_string();
-        if tag.is_empty() {
-            continue;
-        }
-        let entry = map.entry(note_pk).or_default();
-        if !entry.contains(&tag) {
-            entry.push(tag);
-        }
+    for tags in map.values_mut() {
+        tags.sort_by_key(|a| a.to_lowercase());
     }
     Ok(map)
+}
+
+/// Folder `Z_PK` -> full slash-joined path ("folder-a/subfolder-b").
+///
+/// Folder rows are the `ZICCLOUDSYNCINGOBJECT` entries carrying a `ZTITLE2`;
+/// `ZPARENT` chains them. Walks each chain to the root, with a depth cap so a
+/// corrupt DB whose `ZPARENT` cycles can't spin here forever.
+fn load_folder_paths(
+    conn: &Connection,
+    cols: &HashSet<String>,
+) -> Result<std::collections::HashMap<i64, String>> {
+    let mut out: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    if !cols.contains("ZTITLE2") {
+        return Ok(out);
+    }
+    let parent = if cols.contains("ZPARENT") {
+        "ZPARENT"
+    } else {
+        "NULL"
+    };
+    let mut stmt = conn.prepare(&format!(
+        "SELECT Z_PK, ZTITLE2, {parent} FROM ZICCLOUDSYNCINGOBJECT WHERE ZTITLE2 IS NOT NULL"
+    ))?;
+    let mut rows = stmt.query([])?;
+    let mut folders: std::collections::HashMap<i64, (String, Option<i64>)> = Default::default();
+    while let Ok(Some(r)) = rows.next() {
+        let (Ok(pk), Ok(title)) = (r.get::<_, i64>(0), r.get::<_, String>(1)) else {
+            continue;
+        };
+        let title = title.trim().to_string();
+        if title.is_empty() {
+            continue;
+        }
+        folders.insert(pk, (title, r.get::<_, Option<i64>>(2).unwrap_or(None)));
+    }
+    const MAX_DEPTH: usize = 32;
+    for &pk in folders.keys() {
+        let mut parts: Vec<&str> = Vec::new();
+        let mut cur = Some(pk);
+        let mut seen: HashSet<i64> = HashSet::new();
+        while let Some(id) = cur {
+            if !seen.insert(id) || parts.len() >= MAX_DEPTH {
+                break;
+            }
+            let Some((title, up)) = folders.get(&id) else {
+                break;
+            };
+            parts.push(title);
+            cur = *up;
+        }
+        parts.reverse();
+        out.insert(pk, parts.join("/"));
+    }
+    Ok(out)
 }
 
 /// Image UTIs we resolve — and the SAME set `image_count` counts.
@@ -1508,6 +1593,71 @@ mod tests {
         db
     }
 
+    /// A NoteStore that nests folders three deep and spells its hashtag columns
+    /// the way a *different* schema version does — `ZTYPEUTI`/`ZNOTE` with no
+    /// suffix, and the bare-name `ZTOKENCONTENTIDENTIFIER` instead of `ZALTTEXT`.
+    fn make_nested_note_store(dir: &Path) -> std::path::PathBuf {
+        let db = dir.join("NoteStoreNested.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZNOTE INTEGER, ZDATA BLOB);
+             CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+                Z_PK INTEGER PRIMARY KEY, ZTITLE1 TEXT, ZTITLE2 TEXT, ZSNIPPET TEXT,
+                ZFOLDER INTEGER, ZPARENT INTEGER, ZNOTEDATA INTEGER, ZISPINNED INTEGER,
+                ZCREATIONDATE1 REAL, ZMODIFICATIONDATE1 REAL, ZMARKEDFORDELETION INTEGER,
+                ZTYPEUTI TEXT, ZNOTE INTEGER, ZTOKENCONTENTIDENTIFIER TEXT);
+             -- folder-a / subfolder-b / subfolder-c
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTITLE2, ZPARENT)
+                VALUES (1, 'folder-a', NULL), (2, 'subfolder-b', 1), (3, 'subfolder-c', 2);
+             INSERT INTO ZICCLOUDSYNCINGOBJECT (Z_PK, ZTYPEUTI, ZNOTE, ZTOKENCONTENTIDENTIFIER)
+                VALUES (20, 'com.apple.notes.inlinetextattachment.hashtag', 10, 'travel');",
+        )
+        .unwrap();
+        let zdata = make_zdata("Deep\nBody");
+        conn.execute(
+            "INSERT INTO ZICNOTEDATA (Z_PK, ZNOTE, ZDATA) VALUES (5, 10, ?1)",
+            rusqlite::params![zdata],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, ZTITLE1, ZFOLDER, ZNOTEDATA, ZISPINNED, ZCREATIONDATE1, ZMODIFICATIONDATE1, ZMARKEDFORDELETION)
+             VALUES (10, 'Deep', 3, 5, 0, 721692800.0, 721692900.0, 0)",
+            [],
+        )
+        .unwrap();
+        db
+    }
+
+    /// A note three folders deep must carry the whole path, not just its leaf —
+    /// and its tags must be found on a schema that suffixes the columns
+    /// differently, which is what silently produced "no tags at all".
+    #[test]
+    fn resolves_the_full_folder_path_and_finds_tags_on_a_variant_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_nested_note_store(dir.path());
+        let cache = CacheDb::open(&dir.path().join("cache.db")).unwrap();
+        let mut report = ImportReport::default();
+        parse_notes(&db, &cache, &mut report, true, None).unwrap();
+
+        let (folder, tags): (Option<String>, Option<String>) = cache
+            .conn()
+            .query_row("SELECT folder, tags FROM notes", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(
+            folder.as_deref(),
+            Some("folder-a/subfolder-b/subfolder-c"),
+            "the whole ZPARENT chain should be resolved, not only the leaf folder"
+        );
+        assert_eq!(
+            tags.as_deref(),
+            Some(r##"["travel"]"##),
+            "hashtags must be found via ZTYPEUTI/ZNOTE/ZTOKENCONTENTIDENTIFIER too"
+        );
+    }
+
     /// A Manifest holding just the paths a test cares about.
     fn make_manifest(dir: &Path, paths: &[&str]) -> ManifestIndex {
         let m = Connection::open(dir.join("Manifest.db")).unwrap();
@@ -1640,11 +1790,13 @@ mod tests {
             .unwrap();
         assert_eq!(folder.as_deref(), Some("Groceries"));
         assert_eq!(title.as_deref(), Some("Shopping"));
-        // Hashtag tags: deduped, in first-seen order.
+        // Hashtag tags: deduped and normalized bare (the '#' is presentation, and
+        // the two source columns spell it differently), then sorted for a stable
+        // filter list.
         let tags: Option<String> = c
             .query_row("SELECT tags FROM notes", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(tags.as_deref(), Some(r##"["#shopping","#errands"]"##));
+        assert_eq!(tags.as_deref(), Some(r##"["errands","shopping"]"##));
         // Title stripped from the body; plain text with newlines preserved.
         assert_eq!(body.as_deref(), Some("Milk\nEggs"));
         assert_eq!(snippet.as_deref(), Some("Milk"));
