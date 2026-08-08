@@ -121,14 +121,21 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
       // rather than only how many things were.
       if (result.warnings.length > 0) {
         const n = result.warnings.length;
-        toast.warning(
-          `Import finished — ${n === 1 ? "1 thing was" : `${n} things were`} skipped`,
-          {
-            description: result.warnings.slice(0, 3).join("\n") +
-              (n > 3 ? `\n…and ${n - 3} more` : ""),
-            duration: 30_000,
-          },
-        );
+        // The warnings themselves are diagnostics — SQLite column types, missing
+        // columns, parser internals. They belong in the log, and they are in it.
+        // Putting them in a toast asks the reader to act on a sentence they have
+        // no way to act on, and buries the one fact that matters: some data in
+        // this backup could not be read, so a view being empty may be on us.
+        //
+        // The same call the empty states make (`use-parse-failed`): say what it
+        // means, say where it shows up, keep the detail available in the log.
+        toast.warning("Import finished, with some data skipped", {
+          description:
+            `${n === 1 ? "One part of" : `${n} parts of`} this backup couldn't be read. ` +
+            "The views affected will say so instead of looking empty. " +
+            "Technical details are in the log.",
+          duration: 12_000,
+        });
         console.warn("[traceloupe] import warnings:", result.warnings);
       }
       unlisten.current?.();
