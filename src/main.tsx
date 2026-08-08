@@ -20,6 +20,7 @@ import { CallsView } from "@/views/calls";
 import { SafariView } from "@/views/safari";
 import { NotesView } from "@/views/notes";
 import { RecordingsView } from "@/views/recordings";
+import { RawDbView } from "@/views/raw-db";
 import { AppsView } from "@/views/apps";
 import { SecurityView } from "@/views/security";
 import { SafetyScanView } from "@/views/safety-scan";
@@ -95,6 +96,20 @@ const routes = [
   createRoute({ getParentRoute: () => rootRoute, path: "/notes", component: NotesView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/recordings", component: RecordingsView }),
   createRoute({ getParentRoute: () => rootRoute, path: "/apps", component: AppsView }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/raw-db",
+    // Which app, which of its databases, which table — all in the URL, so a
+    // particular table is a link someone can come back to.
+    validateSearch: (
+      search: Record<string, unknown>,
+    ): { app?: string; db?: string; table?: string } => ({
+      app: typeof search.app === "string" ? search.app : undefined,
+      db: typeof search.db === "string" ? search.db : undefined,
+      table: typeof search.table === "string" ? search.table : undefined,
+    }),
+    component: RawDbView,
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/security", component: SecurityView }),
   createRoute({
     getParentRoute: () => rootRoute,

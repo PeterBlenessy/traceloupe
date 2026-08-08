@@ -22,6 +22,18 @@ use std::collections::BTreeSet;
 /// bounded anyway. Adding a line here is a claim you are making — keep it
 /// concrete (what caps it), not reassuring ("should be small").
 const BOUNDED: &[(&str, &str)] = &[
+    (
+        "raw_databases",
+        "one row per SQLite file in ONE app's containers, filtered to database \
+         extensions — an app ships a handful of stores, not thousands; the row \
+         data itself is windowed by raw_rows",
+    ),
+    (
+        "raw_tables",
+        "one row per table in ONE database; a schema's table count is fixed by \
+         the app's own design (tens, not thousands) and cannot grow with how \
+         much the person used it — the rows inside are windowed by raw_rows",
+    ),
     // --- bounded by a UI constant or a fixed set ---
     (
         "module_status",

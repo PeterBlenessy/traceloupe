@@ -3,7 +3,7 @@ import { dateFormat } from "@/lib/format";
 import { toast } from "sonner";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Boxes } from "lucide-react";
+import { Boxes, Database } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
@@ -475,8 +475,12 @@ function AppItem({
             </div>
           ))}
       </ItemContent>
-      {app.support === "native" && (
-        <ItemActions>
+      {/* Always offered, for every app — not only the ones with a parser.
+          The whole point of a raw view is the app whose data nothing reads yet,
+          and gating it on `support === "native"` would hide it exactly where it
+          matters most (#362). */}
+      <ItemActions className="flex-col items-end gap-0.5">
+        {app.support === "native" && (
           <Button
             variant="ghost"
             size="sm"
@@ -487,8 +491,28 @@ function AppItem({
           >
             Chats in Messages →
           </Button>
-        </ItemActions>
-      )}
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Raw data for ${app.name}`}
+              onClick={() =>
+                navigate({ to: "/raw-db", search: { app: app.bundleId } })
+              }
+              className="gap-1.5 text-xs text-muted-foreground"
+            >
+              <Database className="size-3.5" />
+              Raw data
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            Browse this app&apos;s own database tables exactly as stored — no
+            parsing in the way
+          </TooltipContent>
+        </Tooltip>
+      </ItemActions>
     </Item>
   );
 }
