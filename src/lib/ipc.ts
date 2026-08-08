@@ -1193,6 +1193,8 @@ export interface TraceLoupeClient {
   /** Why each module ended up empty or not, from the import that built the
    *  open cache. See `use-parse-failed.ts` (#288). */
   moduleStatus(): Promise<ModuleStatus[]>;
+  /** The conversations with at least one message in ANY of these periods. */
+  threadsInRanges(ranges: TimeRange[]): Promise<number[]>;
   /** Mark or unmark one item as unsafe. `kind` is "media" | "message" | "contact". */
   setItemMark(kind: string, id: number, marked: boolean): Promise<void>;
   /** The row ids of `kind` marked unsafe in this backup. */
@@ -1265,6 +1267,9 @@ export interface TraceLoupeClient {
     search?: string | null,
     /** Only messages the person marked unsafe. */
     unsafeOnly?: boolean,
+    /** Narrow to any of these periods (empty = all time). Multi-select, like
+     *  every other time filter in the app. */
+    ranges?: TimeRange[],
   ): Promise<number>;
   /** A window of a thread's messages from `offset`; `desc` newest-first.
    *  `search` matches body/sender (in-conversation search). */
@@ -1277,6 +1282,8 @@ export interface TraceLoupeClient {
     search?: string | null,
     /** Only messages the person marked unsafe. */
     unsafeOnly?: boolean,
+    /** Narrow to any of these periods (empty = all time). */
+    ranges?: TimeRange[],
   ): Promise<Message[]>;
   /** The 0-based row index of a message within its thread under the given order
    *  and `kind` filter, or null if absent. Used to scroll to a message. */
@@ -1297,6 +1304,8 @@ export interface TraceLoupeClient {
     kind?: string | null,
     /** Only messages the person marked unsafe. */
     unsafeOnly?: boolean,
+    /** Any of these periods (empty = all time). Multi-select. */
+    ranges?: TimeRange[],
   ): Promise<number>;
   /** A window of the all-conversations timeline from `offset`; `desc` newest-first.
    * `search` matches message body / sender / conversation; `kind` filters class. */
@@ -1336,8 +1345,8 @@ export interface TraceLoupeClient {
   mediaDateBounds(): Promise<[number, number] | null>;
   /** A window of messages whose time falls in [lo, hi); `desc` newest-first. */
   getRangeWindow(
-    lo: number | null,
-    hi: number | null,
+    /** Any of these periods (empty = all time). Multi-select. */
+    ranges: TimeRange[],
     offset: number,
     limit: number,
     service?: string | null,
@@ -1809,6 +1818,7 @@ const tauriClient: TraceLoupeClient = {
   listThreads: () => invoke<ThreadSummary[]>("list_threads"),
   deviceInfo: () => invoke<BackupInfo | null>("device_info"),
   moduleStatus: () => invoke<ModuleStatus[]>("module_status"),
+  threadsInRanges: (ranges) => invoke<number[]>("threads_in_ranges", { ranges }),
   setItemMark: (kind, id, marked) => invoke("set_item_mark", { kind, id, marked }),
   markedIds: (kind) => invoke<number[]>("marked_ids", { kind }),
   markCounts: () =>
@@ -1853,12 +1863,19 @@ const tauriClient: TraceLoupeClient = {
       threadId: threadId ?? null,
       service: service ?? null,
     }),
-  countThreadMessages: (threadId, kind = null, search = null, unsafeOnly = false) =>
+  countThreadMessages: (
+    threadId,
+    kind = null,
+    search = null,
+    unsafeOnly = false,
+    ranges = [],
+  ) =>
     invoke<number>("count_thread_messages", {
       threadId,
       kind: kind ?? null,
       search: search ?? null,
       unsafeOnly,
+      ranges,
     }),
   getThreadMessageWindow: (
     threadId,
@@ -1868,6 +1885,7 @@ const tauriClient: TraceLoupeClient = {
     kind = null,
     search = null,
     unsafeOnly = false,
+    ranges = [],
   ) =>
     invoke<Message[]>("get_thread_message_window", {
       threadId,
@@ -1877,6 +1895,7 @@ const tauriClient: TraceLoupeClient = {
       kind: kind ?? null,
       search: search ?? null,
       unsafeOnly,
+      ranges,
     }),
   threadMessageIndex: (threadId, messageId, kind = null, desc = false) =>
     invoke<number | null>("thread_message_index", {
@@ -1887,12 +1906,13 @@ const tauriClient: TraceLoupeClient = {
     }),
   recoverAttachmentMedia: (attachmentId) =>
     invoke<RecoveredMedia | null>("recover_attachment_media", { attachmentId }),
-  countTimelineMessages: (service, search = null, kind = null, unsafeOnly = false) =>
+  countTimelineMessages: (service, search = null, kind = null, unsafeOnly = false, ranges = []) =>
     invoke<number>("count_timeline_messages", {
       service: service ?? null,
       search: search ?? null,
       kind: kind ?? null,
       unsafeOnly,
+      ranges,
     }),
   getTimelineWindow: (
     offset,
@@ -1929,8 +1949,7 @@ const tauriClient: TraceLoupeClient = {
   mediaDateBounds: () =>
     invoke<[number, number] | null>("media_date_bounds"),
   getRangeWindow: (
-    lo,
-    hi,
+    ranges,
     offset,
     limit,
     service,
@@ -1940,8 +1959,7 @@ const tauriClient: TraceLoupeClient = {
     unsafeOnly = false,
   ) =>
     invoke<TimelineMessage[]>("get_range_window", {
-      lo,
-      hi,
+      ranges,
       offset,
       limit,
       service: service ?? null,
@@ -2869,6 +2887,20 @@ function markFilter(messages: Message[], unsafeOnly: boolean): Message[] {
   if (!unsafeOnly) return messages;
   const set = mockMarks.message ?? new Set<number>();
   return messages.filter((m) => set.has(m.id));
+}
+
+/** Union, not intersection: two selected periods mean BOTH. Empty = all time. */
+function inAnyRange(at: number | null, ranges: TimeRange[]): boolean {
+  if (ranges.length === 0) return true;
+  if (at == null) return false;
+  return ranges.some(
+    (r) => (r.lo == null || at >= r.lo) && (r.hi == null || at < r.hi),
+  );
+}
+
+function rangeFilter(messages: Message[], ranges: TimeRange[]): Message[] {
+  if (ranges.length === 0) return messages;
+  return messages.filter((m) => inAnyRange(m.sentAt, ranges));
 }
 
 function markFilterTimeline(
@@ -3914,6 +3946,17 @@ const mockClient: TraceLoupeClient = {
       },
     };
   })(),
+  threadsInRanges: async (ranges) => {
+    if (!mockActive) return [];
+    const out = new Set<number>();
+    for (const [tid, msgs] of Object.entries(mockMessages)) {
+      // ACTIVE in ANY selected period, not "spoke last" in it — the same rule
+      // the query uses, so the mock cannot flatter a filter the real one gets
+      // wrong.
+      if (msgs.some((m) => inAnyRange(m.sentAt, ranges))) out.add(Number(tid));
+    }
+    return [...out].sort((a, b) => a - b);
+  },
   setItemMark: async (kind, id, marked) => {
     const set = mockMarks[kind] ?? (mockMarks[kind] = new Set());
     if (marked) set.add(id);
@@ -6256,8 +6299,16 @@ const mockClient: TraceLoupeClient = {
   // The mock messages carry no `kind`, so no content-kinds are advertised and the
   // filter is a no-op here.
   messageKinds: async () => [],
-  countThreadMessages: async (threadId, _kind = null, search = null, unsafeOnly = false) =>
-    mockActive ? markFilter(mockThreadMessages(threadId, search), unsafeOnly).length : 0,
+  countThreadMessages: async (
+    threadId,
+    _kind = null,
+    search = null,
+    unsafeOnly = false,
+    ranges = [],
+  ) =>
+    mockActive
+      ? rangeFilter(markFilter(mockThreadMessages(threadId, search), unsafeOnly), ranges).length
+      : 0,
   getThreadMessageWindow: async (
     threadId,
     offset,
@@ -6266,9 +6317,13 @@ const mockClient: TraceLoupeClient = {
     _kind = null,
     search = null,
     unsafeOnly = false,
+    ranges = [],
   ) => {
     if (!mockActive) return [];
-    const all = markFilter(mockThreadMessages(threadId, search), unsafeOnly);
+    const all = rangeFilter(
+      markFilter(mockThreadMessages(threadId, search), unsafeOnly),
+      ranges,
+    );
     const ordered = desc ? [...all].reverse() : all;
     return ordered.slice(offset, offset + limit);
   },
@@ -6280,9 +6335,17 @@ const mockClient: TraceLoupeClient = {
     return i < 0 ? null : i;
   },
   recoverAttachmentMedia: async () => null,
-  countTimelineMessages: async (service, search = null, _kind = null, unsafeOnly = false) =>
+  countTimelineMessages: async (
+    service,
+    search = null,
+    _kind = null,
+    unsafeOnly = false,
+    ranges = [],
+  ) =>
     mockActive
-      ? markFilterTimeline(mockFilterTimeline(service, undefined, search), unsafeOnly).length
+      ? markFilterTimeline(mockFilterTimeline(service, undefined, search), unsafeOnly).filter(
+          (t) => inAnyRange(t.message.sentAt, ranges),
+        ).length
       : 0,
   getTimelineWindow: async (
     offset,
@@ -6471,17 +6534,20 @@ const mockClient: TraceLoupeClient = {
     return ts.length ? [Math.min(...ts), Math.max(...ts)] : null;
   },
   getRangeWindow: async (
-    lo,
-    hi,
+    ranges,
     offset,
     limit,
     service,
     search = null,
     desc = false,
     _kind = null,
+    unsafeOnly = false,
   ) => {
     if (!mockActive) return [];
-    const filtered = mockFilterTimeline(service, { lo, hi }, search);
+    const filtered = markFilterTimeline(
+      mockFilterTimeline(service, undefined, search),
+      unsafeOnly,
+    ).filter((t) => inAnyRange(t.message.sentAt, ranges));
     const ordered = desc ? [...filtered].reverse() : filtered;
     return ordered.slice(offset, offset + limit);
   },
