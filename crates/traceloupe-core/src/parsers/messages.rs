@@ -230,7 +230,7 @@ fn truncate_snippet(body: &str, max: usize) -> String {
 /// Classify an attachment as gallery media by MIME, falling back to the filename
 /// extension (sms.db often stores a NULL mime for image attachments). Returns the
 /// `media_items.kind` ("photo"/"video"), or None for non-media (docs, vCards, …).
-fn media_kind(mime: Option<&str>, filename: Option<&str>) -> Option<&'static str> {
+pub(crate) fn media_kind(mime: Option<&str>, filename: Option<&str>) -> Option<&'static str> {
     if let Some(m) = mime {
         if m.starts_with("image/") {
             return Some("photo");
@@ -980,8 +980,32 @@ fn resolve_attachment(
     src: &AttachmentSource,
     on_device_path: &str,
 ) -> Option<(PathBuf, Option<Vec<u8>>, Option<u64>)> {
-    let rel = normalize_attachment_path(on_device_path)?;
-    let entry = src.index.find("MediaDomain", &rel).ok().flatten()?;
+    let entry = match normalize_attachment_path(on_device_path)
+        .and_then(|rel| src.index.find("MediaDomain", &rel).ok().flatten())
+    {
+        Some(e) => e,
+        // Not every attachment sits under `Library/SMS/Attachments/` — measured
+        // on the public iOS 17 backup, one of 28 was under
+        // `var/tmp/com.apple.messages/…` and resolved nowhere, so the message
+        // showed a paperclip and no file.
+        //
+        // The fallback searches the whole Manifest by basename, and accepts the
+        // hit ONLY when it is unique. 1456 of that backup's 6734 basenames are
+        // shared by more than one file, so "take the first match" would sooner
+        // or later attach the wrong image to a message — a silent, confident
+        // error, which is worse than the missing file it replaces.
+        None => {
+            let base = on_device_path
+                .rsplit(['/', '\\'])
+                .next()
+                .filter(|s| !s.is_empty())?;
+            let mut hits = src.index.find_relative_like(&format!("%/{base}")).ok()?;
+            if hits.len() != 1 {
+                return None;
+            }
+            hits.pop()?
+        }
+    };
     let path = src.index.blob_path(&entry.file_id);
     let (key, size) = if src.decryptor.is_some() {
         match crypto::file_key_field(&entry.file_blob) {
