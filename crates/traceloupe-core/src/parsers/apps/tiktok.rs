@@ -176,6 +176,7 @@ pub fn parse_tiktok_messages(
             .unwrap_or((None, None));
 
         out.push(AppMessage {
+            is_group: false,
             attachments: Vec::new(),
             chat_key,
             chat_name: None, // derived from the peer

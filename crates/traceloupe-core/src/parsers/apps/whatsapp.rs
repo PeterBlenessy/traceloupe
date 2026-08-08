@@ -11,11 +11,16 @@
 //!   stable per-conversation key (a `@g.us` group jid or `@s.whatsapp.net` 1:1).
 //! - `ZWAMEDIAITEM(ZMESSAGE, ZMEDIALOCALPATH, …)` — attachment per message.
 //!
-//! LIMITATION: `ZPARTNERNAME` is the chat/session partner, not the per-message
-//! author, so in a GROUP chat every inbound message is attributed to the session
-//! partner (the real author lives in a member/jid table, e.g. `ZGROUPMEMBER`).
-//! 1:1 attribution is correct. Resolving group members needs validation against a
-//! real backup — tracked in docs/reference/app-data-coverage.md.
+//! - `ZWAGROUPMEMBER(Z_PK, ZMEMBERJID, ZCONTACTNAME, ZPUSHNAME, …)` — one row per
+//!   participant of a group; `ZWAMESSAGE.ZGROUPMEMBER` points at the row for the
+//!   message's actual author.
+//!
+//! `ZPARTNERNAME` is the chat/session *partner*, not the per-message author, so
+//! using it in a group attributes every inbound message to one person — worse
+//! than showing nothing, because it reads as a fact. The group-member join is
+//! what makes a group chat legible (#346). Both the table and its name columns
+//! are probed rather than assumed: an older `ChatStorage.sqlite` without them
+//! falls back to the partner name, which is correct for 1:1.
 
 use std::path::Path;
 
@@ -53,9 +58,68 @@ fn locate(index: &ManifestIndex) -> Result<Vec<FileEntry>> {
         .collect())
 }
 
+/// The SELECT fragments for the group-member join, or literal NULLs when the
+/// table (or the columns this schema version spells differently) isn't there.
+struct MemberExprs {
+    name: String,
+    jid: String,
+    join: String,
+}
+
+fn group_member_exprs(src: &Connection) -> MemberExprs {
+    let none = || MemberExprs {
+        name: "NULL".into(),
+        jid: "NULL".into(),
+        join: String::new(),
+    };
+    let has_table = src
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ZWAGROUPMEMBER'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .is_ok();
+    if !has_table || !table_has(src, "ZWAMESSAGE", "ZGROUPMEMBER") {
+        return none();
+    }
+    // Display name first, push name second, bare jid last — a jid is ugly but
+    // it still distinguishes one participant from another, which is the point.
+    let candidates = ["ZCONTACTNAME", "ZPUSHNAME"]
+        .into_iter()
+        .filter(|c| table_has(src, "ZWAGROUPMEMBER", c))
+        .map(|c| format!("gm.{c}"))
+        .collect::<Vec<_>>();
+    let has_jid = table_has(src, "ZWAGROUPMEMBER", "ZMEMBERJID");
+    if candidates.is_empty() && !has_jid {
+        return none();
+    }
+    let jid = if has_jid { "gm.ZMEMBERJID" } else { "NULL" };
+    let mut parts = candidates;
+    if has_jid {
+        parts.push(jid.to_string());
+    }
+    MemberExprs {
+        name: format!("COALESCE({})", parts.join(", ")),
+        jid: jid.to_string(),
+        join: "LEFT JOIN ZWAGROUPMEMBER gm ON gm.Z_PK = m.ZGROUPMEMBER".into(),
+    }
+}
+
+fn table_has(src: &Connection, table: &str, column: &str) -> bool {
+    let Ok(mut stmt) = src.prepare(&format!("PRAGMA table_info({table})")) else {
+        return false;
+    };
+    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(1)) else {
+        return false;
+    };
+    let names: Vec<String> = rows.flatten().collect();
+    names.iter().any(|c| c.eq_ignore_ascii_case(column))
+}
+
 fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
     let src = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut stmt = src.prepare(
+    let member = group_member_exprs(&src);
+    let mut stmt = src.prepare(&format!(
         // has_attachment via EXISTS (not a JOIN) so a message with several media
         // items isn't fanned out into duplicate rows.
         "SELECT
@@ -64,11 +128,17 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
              m.ZMESSAGEDATE,
              m.ZISFROMME,
              m.ZTEXT,
-             EXISTS(SELECT 1 FROM ZWAMEDIAITEM md WHERE md.ZMESSAGE = m.Z_PK) AS has_media
+             EXISTS(SELECT 1 FROM ZWAMEDIAITEM md WHERE md.ZMESSAGE = m.Z_PK) AS has_media,
+             {name},
+             {jid}
          FROM ZWAMESSAGE m
          LEFT JOIN ZWACHATSESSION s ON s.Z_PK = m.ZCHATSESSION
+         {join}
          ORDER BY s.ZCONTACTJID, m.ZMESSAGEDATE",
-    )?;
+        name = member.name,
+        jid = member.jid,
+        join = member.join,
+    ))?;
     let mut rows = stmt.query([])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -86,18 +156,37 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
         let is_from_me = r.get::<_, Option<i64>>(3)?.unwrap_or(0) != 0;
         let body: Option<String> = super::col_string(r, 4)?;
         let has_attachment = r.get::<_, Option<i64>>(5)?.unwrap_or(0) != 0;
+        let member_name: Option<String> = r
+            .get::<_, Option<String>>(6)?
+            .filter(|s| !s.trim().is_empty());
+        let member_jid: Option<String> = r
+            .get::<_, Option<String>>(7)?
+            .filter(|s| !s.trim().is_empty());
+        // A group jid is definitive, and it has to be, because the shared
+        // inserter's fallback (count distinct senders) is only accumulated for
+        // chats WITHOUT a name of their own — and WhatsApp always supplies one.
+        let is_group = chat_key.ends_with("@g.us");
 
         out.push(AppMessage {
+            is_group,
             attachments: Vec::new(),
             chat_key,
             chat_name: name.clone(),
             timestamp,
             body,
             is_from_me,
-            // iLEAPP surfaces the partner name as the sender; match that for 1:1.
-            sender_name: if is_from_me { None } else { name },
+            // In a group the author is the joined member row; `ZPARTNERNAME` is
+            // the session partner and would label everyone the same person.
+            // Outside a group the partner name IS the author (matching iLEAPP).
+            sender_name: if is_from_me {
+                None
+            } else if is_group {
+                member_name.or_else(|| member_jid.clone())
+            } else {
+                name
+            },
             sender_handle: None,
-            sender_id: None,
+            sender_id: member_jid,
             has_attachment,
             kind: None,
         });
@@ -110,6 +199,73 @@ mod tests {
     use super::*;
     use crate::cache::CacheDb;
     use crate::normalize::ImportReport;
+
+    /// A ChatStorage with one GROUP chat whose three inbound messages come from
+    /// three different members, all sharing one `ZPARTNERNAME`.
+    fn make_group_chatstorage(dir: &Path) -> std::path::PathBuf {
+        let db = dir.join("ChatStorageGroup.sqlite");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE ZWACHATSESSION (Z_PK INTEGER PRIMARY KEY, ZCONTACTJID TEXT);
+             CREATE TABLE ZWAMEDIAITEM (Z_PK INTEGER PRIMARY KEY, ZMESSAGE INTEGER, ZMEDIALOCALPATH TEXT);
+             CREATE TABLE ZWAGROUPMEMBER (Z_PK INTEGER PRIMARY KEY, ZMEMBERJID TEXT,
+                 ZCONTACTNAME TEXT, ZPUSHNAME TEXT);
+             CREATE TABLE ZWAMESSAGE (Z_PK INTEGER PRIMARY KEY, ZCHATSESSION INTEGER,
+                 ZGROUPMEMBER INTEGER, ZPARTNERNAME TEXT, ZMESSAGEDATE REAL,
+                 ZISFROMME INTEGER, ZTEXT TEXT);
+             INSERT INTO ZWACHATSESSION (Z_PK, ZCONTACTJID) VALUES (1, '12036300@g.us');
+             INSERT INTO ZWAGROUPMEMBER (Z_PK, ZMEMBERJID, ZCONTACTNAME, ZPUSHNAME) VALUES
+                (1, '1@s.whatsapp.net', 'Nadia', NULL),
+                (2, '2@s.whatsapp.net', NULL, 'Tom'),
+                (3, '3@s.whatsapp.net', NULL, NULL);
+             INSERT INTO ZWAMESSAGE
+                (Z_PK, ZCHATSESSION, ZGROUPMEMBER, ZPARTNERNAME, ZMESSAGEDATE, ZISFROMME, ZTEXT)
+             VALUES
+                (1, 1, 1, 'Hiking Crew', 721692800.0, 0, 'are we on?'),
+                (2, 1, 2, 'Hiking Crew', 721692900.0, 0, 'yes'),
+                (3, 1, 3, 'Hiking Crew', 721693000.0, 0, 'bringing snacks'),
+                (4, 1, NULL, 'Hiking Crew', 721693100.0, 1, 'see you there');",
+        )
+        .unwrap();
+        db
+    }
+
+    /// In a group, each message must carry its own author. `ZPARTNERNAME` is the
+    /// session partner, so using it labels every inbound message the same
+    /// person — a wrong attribution stated as fact (#346).
+    #[test]
+    fn group_messages_are_attributed_to_their_own_member_not_the_session_partner() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_group_chatstorage(dir.path());
+        let msgs = parse(&db, "ChatStorage.sqlite").unwrap();
+
+        assert!(msgs.iter().all(|m| m.is_group), "a @g.us jid is a group");
+        let senders: Vec<Option<&str>> = msgs.iter().map(|m| m.sender_name.as_deref()).collect();
+        assert_eq!(
+            senders,
+            vec![
+                Some("Nadia"),            // ZCONTACTNAME
+                Some("Tom"),              // falls back to ZPUSHNAME
+                Some("3@s.whatsapp.net"), // ...and to the bare jid
+                None,                     // outgoing has no sender
+            ]
+        );
+        assert!(
+            !senders.contains(&Some("Hiking Crew")),
+            "the session partner name must never be used as a group author"
+        );
+    }
+
+    /// The 1:1 path must keep using ZPARTNERNAME, which is the author there.
+    #[test]
+    fn one_to_one_messages_still_use_the_partner_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = make_chatstorage(dir.path());
+        let msgs = parse(&db, "ChatStorage.sqlite").unwrap();
+        assert!(!msgs.iter().any(|m| m.is_group));
+        assert_eq!(msgs[0].sender_name.as_deref(), Some("Sam"));
+        assert_eq!(msgs[1].sender_name, None, "outgoing has no sender");
+    }
 
     fn make_chatstorage(dir: &Path) -> std::path::PathBuf {
         let db = dir.join("ChatStorage.sqlite");

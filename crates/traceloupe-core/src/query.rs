@@ -23,7 +23,13 @@ pub struct ThreadSummary {
     /// Body of the most recent message, for the list preview.
     pub snippet: Option<String>,
     /// Member handles for a group chat (empty/one for a 1:1).
+    ///
+    /// Only the iMessage/SMS path fills this — every app module leaves it empty
+    /// even for groups, so it can't be used to decide group-ness. Use
+    /// [`ThreadSummary::is_group`] for that.
     pub participants: Vec<String>,
+    /// Whether the parser identified this thread as a group chat.
+    pub is_group: bool,
 }
 
 /// One message in a conversation.
@@ -95,7 +101,7 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
     let conn = cache.conn();
     let mut stmt = conn.prepare(
         "SELECT t.id, t.identifier, t.display_name, t.service,
-                t.last_message_at, t.message_count, t.participants_json,
+                t.last_message_at, t.message_count, t.participants_json, t.is_group,
                 (SELECT m.body FROM messages m
                   WHERE m.thread_id = t.id
                   ORDER BY m.sent_at DESC, m.id DESC LIMIT 1) AS snippet
@@ -112,7 +118,8 @@ pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
             last_message_at: r.get(4)?,
             message_count: r.get(5)?,
             participants: serde_json::from_str(&participants).unwrap_or_default(),
-            snippet: r.get(7)?,
+            is_group: r.get::<_, i64>(7)? != 0,
+            snippet: r.get(8)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()

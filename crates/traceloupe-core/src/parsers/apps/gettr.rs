@@ -184,6 +184,7 @@ fn parse(path: &Path, rel_path: &str) -> Result<Vec<AppMessage>> {
         };
 
         out.push(AppMessage {
+            is_group,
             chat_key: cid,
             chat_name,
             timestamp,
