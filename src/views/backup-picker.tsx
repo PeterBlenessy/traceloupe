@@ -164,7 +164,12 @@ export function BackupPicker() {
   const showHeaderButton = data?.status === "ok" && data.backups.length > 0;
 
   return (
-    <div className="mx-auto max-w-2xl p-8">
+    // Own scroll container, for the same reason DeviceHome has one: the shell's
+    // content wrapper clips rather than scrolls (#344). With several backups
+    // listed plus the feature cards, the bottom of this page was unreachable in
+    // a short window.
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Your iPhone backups</h1>
@@ -237,6 +242,7 @@ export function BackupPicker() {
       </div>
 
       <AppFeatures />
+      </div>
     </div>
   );
 }
@@ -463,14 +469,39 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
       </span>
     );
 
+  // Everything the header can say without a second glance: what was backed up
+  // and whether it is readable in full. Both used to cost a row each in the
+  // detail grid.
+  const summary = [
+    info?.lastBackupDate != null
+      ? `Backed up ${formatDateTime(info.lastBackupDate)}`
+      : null,
+    info?.isEncrypted == null
+      ? null
+      : info.isEncrypted
+        ? "Encrypted"
+        : "Not encrypted",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div className="mx-auto max-w-2xl p-8">
+    // The app shell's content wrapper is `overflow-hidden` on purpose — it is
+    // the clipping box that lets an opted-in list rise under the translucent
+    // bar. Every view therefore owns its own scrolling, and this one never did:
+    // measured at 1089px of content in a 900px window, so the last 189px simply
+    // could not be reached (#344).
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto max-w-2xl p-8">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h1 className="truncate text-2xl font-semibold">
             {info?.deviceName ?? "Device"}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
+          {summary && (
+            <p className="mt-0.5 text-sm text-muted-foreground">{summary}</p>
+          )}
         </div>
         {/* The backup-management actions the old /device toolbar carried. */}
         <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border/70 bg-muted/40 p-0.5">
@@ -523,6 +554,43 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
         </div>
       </div>
 
+
+      <DeviceExtractionPrompt />
+
+      <DeviceMoreInformation
+        details={
+          <DeviceDetails info={info} model={model} encryption={encryption} />
+        }
+      />
+
+      <HomeDashboard />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The full identity grid: two columns of label/value rows, plus the artifact
+ * facts.
+ *
+ * It used to sit ABOVE the "More information" disclosure, so the view opened on
+ * seven label/value rows largely restating what the heading already said — the
+ * device's name, model and iOS version are all in the title and subtitle, and
+ * the backup date and encryption state are now one summary line. #344: "we keep
+ * displaying too much information above the expandable". The heading keeps the
+ * summary; the detail lives in the disclosure that exists for exactly this.
+ */
+function DeviceDetails({
+  info,
+  model,
+  encryption,
+}: {
+  info: BackupInfo | null | undefined;
+  model: string | null;
+  encryption: React.ReactNode;
+}) {
+  return (
+    <>
       {/* Full device detail, dense: two columns of label/value rows. */}
       <div className="mt-6 grid gap-x-6 sm:grid-cols-2">
         <div className="overflow-hidden rounded-lg border">
@@ -564,13 +632,7 @@ function DeviceHome({ onChooseOther }: { onChooseOther: () => void }) {
           Apple devices are excluded by iOS. Encrypt the backup to include them.
         </p>
       )}
-
-      <DeviceExtractionPrompt />
-
-      <DeviceMoreInformation />
-
-      <HomeDashboard />
-    </div>
+    </>
   );
 }
 
@@ -802,7 +864,7 @@ function DeviceHistory() {
   );
 }
 
-function DeviceMoreInformation() {
+function DeviceMoreInformation({ details }: { details?: React.ReactNode }) {
   const { hosted } = useHostedArtifacts("device", true);
   const { data: extraction } = useQuery({
     queryKey: ["artifactsExtractionState"],
@@ -848,7 +910,7 @@ function DeviceMoreInformation() {
   // Never offered when there is nothing to disclose and nothing to read. But once
   // it is open, it stays — a control that vanishes under the pointer is worse than
   // one that admits it found nothing, and unmounting would also discard `open`.
-  if (nothingToShow && !open) return null;
+  if (nothingToShow && !open && !details) return null;
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="mt-6">
@@ -883,6 +945,7 @@ function DeviceMoreInformation() {
         </TooltipContent>
       </Tooltip>
       <CollapsibleContent>
+        {details && <div className="mt-3">{details}</div>}
         {nothingToShow && (
           <p className="mt-3 text-xs text-muted-foreground">
             This backup carried no device-level records TraceLoupe can read yet.

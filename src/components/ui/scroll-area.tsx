@@ -45,7 +45,11 @@ function ScrollBar({
       data-slot="scroll-area-scrollbar"
       orientation={orientation}
       className={cn(
-        "flex touch-none p-px transition-colors select-none",
+        // `p-0.5`, not shadcn's `p-px`: 1px is off the 2px spacing grid the
+        // design lint enforces. It only ever surfaced once a scrollbar actually
+        // became visible (Contacts, #344) — the rule was being satisfied by the
+        // component being invisible rather than by it being right.
+        "flex touch-none p-0.5 transition-colors select-none",
         orientation === "vertical" &&
           "h-full w-2.5 border-l border-l-transparent",
         orientation === "horizontal" &&

@@ -111,7 +111,8 @@ jobs:
             "node scripts/check-design.mjs" \
             "node scripts/check-encrypted-empty.mjs http://localhost:1420" \
             "node scripts/check-clickable.mjs http://localhost:1420" \
-            "node scripts/check-view-intro.mjs http://localhost:1420"; do
+            "node scripts/check-view-intro.mjs http://localhost:1420" \
+            "node scripts/check-view-scroll.mjs http://localhost:1420"; do
             echo "::group::$check"
             # shellcheck disable=SC2086
             $check || rc=1
