@@ -37,6 +37,7 @@ const BOUNDED: &[(&str, &str)] = &[
         "windowed by offset/limit — they live inside its TimelineQuery argument \
          rather than as loose parameters, which is why this test cannot see them \
          in the signature; the view pages 100 events at a time",
+        // ^ a page size, not-a-backup-count
     ),
     (
         "raw_databases",

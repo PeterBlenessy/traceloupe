@@ -25,6 +25,8 @@ jobs:
       # Fails the PR if any relative Markdown link points at a missing file
       # (catches links left dangling by a doc move or rename).
       - run: bash scripts/check-doc-links.sh
+      # Never commit a real backup's own row counts (AGENTS.md).
+      - run: node scripts/check-no-backup-stats.mjs
       - run: node scripts/check-list-scroll.mjs
       - run: python3 tools/coverage-gap.py --self-test
       - run: node scripts/check-dates.mjs
