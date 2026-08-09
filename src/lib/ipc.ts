@@ -869,6 +869,10 @@ export interface Suppression {
    *  people stay distinct. */
   sender: string;
   reason: string | null;
+  /** How many findings this rule is dismissing right now. Zero means it is
+   *  stale or was never needed — the panel says so, because a standing rule
+   *  whose effect nobody can see is the shape this feature exists to avoid. */
+  hits: number;
 }
 
 export interface ContentFindingCounts {
@@ -1564,12 +1568,14 @@ export interface TraceLoupeClient {
     reason?: string,
   ): Promise<number>;
   listSafetySuppressions(): Promise<Suppression[]>;
+  /** Returns how many findings came back — a rule's own dismissals are taken
+   *  back with it, decisions you made yourself are not. */
   removeSafetySuppression(
     scope: string,
     value: string,
     category: string | null,
     sender: string | null,
-  ): Promise<void>;
+  ): Promise<number>;
   /** A scan's report + per-thread summaries. Latest scan when `scanId` is
    *  omitted, or a specific past scan from the history list. */
   getSafetyScanReport(scanId?: number): Promise<SafetyScanReport>;
@@ -2265,7 +2271,12 @@ const tauriClient: TraceLoupeClient = {
   listSafetySuppressions: () =>
     invoke<Suppression[]>("list_safety_suppressions"),
   removeSafetySuppression: (scope, value, category, sender) =>
-    invoke("remove_safety_suppression", { scope, value, category, sender }),
+    invoke<number>("remove_safety_suppression", {
+      scope,
+      value,
+      category,
+      sender,
+    }),
   getSafetyScanReport: (scanId) =>
     invoke<SafetyScanReport>("get_safety_scan_report", {
       scanId: scanId ?? null,
@@ -7135,6 +7146,7 @@ const mockClient: TraceLoupeClient = {
       category,
       sender: sender ?? "",
       reason: reason ?? null,
+      hits: n,
     });
     return n;
   },
@@ -7147,7 +7159,18 @@ const mockClient: TraceLoupeClient = {
         s.category === category &&
         s.sender === (sender ?? ""),
     );
-    if (i >= 0) mockSuppressions.splice(i, 1);
+    if (i < 0) return 0;
+    const [gone] = mockSuppressions.splice(i, 1);
+    // Mirror the backend: a rule's own dismissals come back with it.
+    let back = 0;
+    for (const f of mockContentFindings) {
+      if (f.dismissed && f.dismissReason === (gone.reason ?? "Matched a rule you set")) {
+        f.dismissed = false;
+        f.dismissReason = null;
+        back += 1;
+      }
+    }
+    return back;
   },
   markContentFindingSeen: async (fingerprint, category) => {
     for (const f of mockContentFindings) {
