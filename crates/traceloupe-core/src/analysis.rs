@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -360,13 +360,23 @@ CREATE INDEX IF NOT EXISTS idx_verdict ON finding_verdicts(verdict);
 -- category and service, but the sender lives on the message in cache.db — a
 -- different database. For a one-to-one chat "this conversation" is the same
 -- thing; for a group it is broader, which the UI says out loud.
+--
+-- `category` bounds the rule to ONE Forensic 9 category (#394). Every rule made
+-- from v10 on sets it. NULL means a rule from before, when a conversation rule
+-- silenced every category at every severity — kept at that breadth because
+-- which category the user was looking at when they clicked was never recorded,
+-- and deleting the rule would resurface findings they deliberately set aside.
+-- The rules panel labels those so they can be re-made deliberately.
+--
+-- UNIQUE includes category, so one conversation carries one rule per category.
 CREATE TABLE IF NOT EXISTS suppressions (
     id         INTEGER PRIMARY KEY,
     scope      TEXT NOT NULL,                  -- 'thread' | 'category'
     value      TEXT NOT NULL,
+    category   TEXT,                           -- NULL = pre-v10, every category
     reason     TEXT,
     created_at INTEGER NOT NULL,
-    UNIQUE(scope, value)
+    UNIQUE(scope, value, category)
 );
 
 -- Per-Chunk classification progress. One row per chunk_key (latest state);
@@ -770,6 +780,44 @@ impl AnalysisDb {
                 .any(|c| c == "error");
             if !has_error {
                 conn.execute("ALTER TABLE scans ADD COLUMN error TEXT", [])?;
+            }
+            // v10: a rule is scoped to a CATEGORY as well (#394). Before this,
+            // the thread arm of `apply_suppressions` joined on the thread alone,
+            // so "this conversation is fine" pre-dismissed every future finding
+            // of every category from that number.
+            //
+            // A rebuild, not an ALTER: the old UNIQUE(scope, value) is exactly
+            // what has to go — it would forbid the second rule on the same
+            // conversation for a different category, which is the whole point.
+            let has_category = conn
+                .prepare("PRAGMA table_info(suppressions)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "category");
+            if !has_category {
+                // Existing rules carry NULL = "every category", the breadth they
+                // were created with. Narrowing them is impossible — which
+                // category the user was looking at when they clicked was never
+                // recorded — and deleting them would resurface findings someone
+                // deliberately set aside. So they are grandfathered, and the
+                // rules panel labels them so they can be re-made deliberately.
+                conn.execute_batch(
+                    "CREATE TABLE suppressions_v10 (
+                         id         INTEGER PRIMARY KEY,
+                         scope      TEXT NOT NULL,
+                         value      TEXT NOT NULL,
+                         category   TEXT,
+                         reason     TEXT,
+                         created_at INTEGER NOT NULL,
+                         UNIQUE(scope, value, category)
+                     );
+                     INSERT INTO suppressions_v10
+                         (id, scope, value, category, reason, created_at)
+                     SELECT id, scope, value, NULL, reason, created_at
+                     FROM suppressions;
+                     DROP TABLE suppressions;
+                     ALTER TABLE suppressions_v10 RENAME TO suppressions;",
+                )?;
             }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
@@ -1641,18 +1689,23 @@ impl AnalysisDb {
     /// that dismissed it. The case this app exists to catch is a conversation
     /// that was safe until it wasn't — so a rule must never make a finding
     /// disappear, only pre-judge it visibly.
+    /// `category` bounds the rule to one Forensic 9 category. It is not
+    /// optional for new rules — `None` recreates the pre-v10 breadth where a
+    /// conversation rule silenced everything, and only the migration is
+    /// allowed to leave it unset.
     pub fn add_suppression(
         &self,
         scope: &str,
         value: &str,
+        category: &str,
         reason: Option<&str>,
         at: i64,
     ) -> Result<usize> {
         self.conn.execute(
-            "INSERT INTO suppressions (scope, value, reason, created_at)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(scope, value) DO UPDATE SET reason = excluded.reason",
-            params![scope, value, reason, at],
+            "INSERT INTO suppressions (scope, value, category, reason, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(scope, value, category) DO UPDATE SET reason = excluded.reason",
+            params![scope, value, category, reason, at],
         )?;
         self.apply_suppressions(at)
     }
@@ -1663,6 +1716,16 @@ impl AnalysisDb {
     /// so a rule made today still covers what tomorrow's scan turns up. An
     /// existing verdict is left alone: a rule must not overwrite a decision the
     /// user made by hand.
+    /// Two constraints beyond the scope match, both load-bearing:
+    ///
+    /// - **The rule's category must match the finding's.** Without it, a
+    ///   conversation rule made about a heart emoji pre-dismissed a
+    ///   threat-violence finding from the same number months later (#394).
+    /// - **Severity 3 is never auto-dismissed.** A standing rule is a blanket
+    ///   judgement made before the finding existed, and the most serious tier
+    ///   is where a blanket judgement is least defensible. The reviewer can
+    ///   still dismiss such a finding by hand — that is a decision about
+    ///   something they have actually seen.
     pub fn apply_suppressions(&self, at: i64) -> Result<usize> {
         Ok(self.conn.execute(
             "INSERT INTO finding_verdicts (fingerprint, category, verdict, reason, at)
@@ -1670,9 +1733,11 @@ impl AnalysisDb {
                     COALESCE(s.reason, 'Matched a rule you set'), ?1
              FROM content_findings f
              JOIN suppressions s
-               ON (s.scope = 'thread'   AND s.value = f.thread_identifier)
-               OR (s.scope = 'category' AND s.value = f.category)
-             WHERE NOT EXISTS (SELECT 1 FROM finding_verdicts v
+               ON ((s.scope = 'thread'   AND s.value = f.thread_identifier)
+                OR (s.scope = 'category' AND s.value = f.category))
+              AND (s.category IS NULL OR s.category = f.category)
+             WHERE f.severity < 3
+               AND NOT EXISTS (SELECT 1 FROM finding_verdicts v
                                WHERE v.fingerprint = f.fingerprint
                                  AND v.category = f.category)
              ON CONFLICT(fingerprint, category) DO NOTHING",
@@ -1680,22 +1745,37 @@ impl AnalysisDb {
         )?)
     }
 
-    /// Every standing rule, newest first.
-    pub fn list_suppressions(&self) -> Result<Vec<(String, String, Option<String>)>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT scope, value, reason FROM suppressions ORDER BY created_at DESC")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    /// Every standing rule, newest first, as (scope, value, category, reason).
+    /// A `None` category is a pre-v10 rule covering every category — the UI
+    /// must say so rather than presenting it as an ordinary narrow rule.
+    #[allow(clippy::type_complexity)] // four columns of one row; a struct buys nothing here
+    pub fn list_suppressions(
+        &self,
+    ) -> Result<Vec<(String, String, Option<String>, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT scope, value, category, reason FROM suppressions ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     /// Drop a rule. Findings it already dismissed keep their verdict — undoing a
     /// rule is not the same as re-opening every judgement it made, and silently
     /// resurrecting a hundred findings would be its own surprise.
-    pub fn remove_suppression(&self, scope: &str, value: &str) -> Result<()> {
+    /// `category` identifies WHICH rule on that conversation to drop; `None`
+    /// targets a grandfathered pre-v10 rule (the row whose category IS NULL),
+    /// never every rule on the conversation.
+    pub fn remove_suppression(
+        &self,
+        scope: &str,
+        value: &str,
+        category: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
-            "DELETE FROM suppressions WHERE scope = ?1 AND value = ?2",
-            params![scope, value],
+            "DELETE FROM suppressions
+             WHERE scope = ?1 AND value = ?2
+               AND category IS ?3",
+            params![scope, value, category],
         )?;
         Ok(())
     }
@@ -3459,7 +3539,13 @@ mod tests {
         db.replace_findings(scan, &rows, 100).unwrap();
 
         let n = db
-            .add_suppression("thread", "safe-chat", Some("Work group, all jokes"), 200)
+            .add_suppression(
+                "thread",
+                "safe-chat",
+                "scam-fraud",
+                Some("Work group, all jokes"),
+                200,
+            )
             .unwrap();
         assert_eq!(n, 1, "one existing finding matched");
 
@@ -3480,8 +3566,14 @@ mod tests {
     #[test]
     fn a_rule_covers_findings_that_did_not_exist_when_it_was_made() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
-        db.add_suppression("category", "scam-fraud", Some("Junk texts"), 100)
-            .unwrap();
+        db.add_suppression(
+            "category",
+            "scam-fraud",
+            "scam-fraud",
+            Some("Junk texts"),
+            100,
+        )
+        .unwrap();
 
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
         db.replace_findings(
@@ -3518,7 +3610,7 @@ mod tests {
         )
         .unwrap();
 
-        db.add_suppression("category", "scam-fraud", Some("Junk"), 200)
+        db.add_suppression("category", "scam-fraud", "scam-fraud", Some("Junk"), 200)
             .unwrap();
 
         let c = db.count_findings_breakdown("all", None, None).unwrap();
@@ -3541,14 +3633,15 @@ mod tests {
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 100)
             .unwrap();
-        db.add_suppression("category", "scam-fraud", None, 200)
+        db.add_suppression("category", "scam-fraud", "scam-fraud", None, 200)
             .unwrap();
         assert_eq!(
             db.count_findings_breakdown("all", None, None).unwrap().live,
             0
         );
 
-        db.remove_suppression("category", "scam-fraud").unwrap();
+        db.remove_suppression("category", "scam-fraud", Some("scam-fraud"))
+            .unwrap();
         assert!(db.list_suppressions().unwrap().is_empty());
         assert_eq!(
             db.count_findings_breakdown("all", None, None)
@@ -3605,6 +3698,156 @@ mod tests {
             (0, 1, 0),
             "undismissing restores it to the list WITHOUT marking it unread"
         );
+    }
+
+    /// #394. The bug: dismissing one heart emoji "for this conversation"
+    /// pre-dismissed every future finding of every category from that number,
+    /// including a threat months later.
+    #[test]
+    fn a_conversation_rule_covers_only_the_category_it_was_made_for() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                NewFinding {
+                    thread_identifier: Some("gran".into()),
+                    ..finding("hearts", Category::HarassmentBullying)
+                },
+                NewFinding {
+                    thread_identifier: Some("gran".into()),
+                    ..finding("threat", Category::ThreatViolence)
+                },
+            ],
+            100,
+        )
+        .unwrap();
+
+        let n = db
+            .add_suppression("thread", "gran", "harassment-bullying", None, 200)
+            .unwrap();
+        assert_eq!(n, 1, "only the harassment finding matched");
+
+        let dismissed: Vec<String> = db
+            .conn()
+            .prepare("SELECT fingerprint FROM finding_verdicts WHERE verdict = 'dismissed'")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(dismissed, vec!["hearts".to_string()]);
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.live, 1, "the threat is still in the default view");
+    }
+
+    /// A standing rule is a blanket judgement made before the finding existed.
+    /// The most serious tier is where that is least defensible, so a rule never
+    /// reaches it — the reviewer can still dismiss one by hand, having seen it.
+    #[test]
+    fn a_rule_never_dismisses_the_most_serious_findings() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                NewFinding {
+                    thread_identifier: Some("gran".into()),
+                    severity: 3,
+                    ..finding("grave", Category::ThreatViolence)
+                },
+                NewFinding {
+                    thread_identifier: Some("gran".into()),
+                    severity: 2,
+                    ..finding("mild", Category::ThreatViolence)
+                },
+            ],
+            100,
+        )
+        .unwrap();
+
+        let n = db
+            .add_suppression("thread", "gran", "threat-violence", None, 200)
+            .unwrap();
+        assert_eq!(n, 1, "the severity-3 finding was left alone");
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.live, 1);
+        let live: String = db
+            .conn()
+            .query_row(
+                "SELECT fingerprint FROM content_findings f
+                 WHERE NOT EXISTS (SELECT 1 FROM finding_verdicts v
+                                   WHERE v.fingerprint = f.fingerprint
+                                     AND v.verdict = 'dismissed')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(live, "grave");
+    }
+
+    /// The migration users will actually run. A pre-v10 rule kept the breadth
+    /// it was made with: narrowing it is impossible (which category the user
+    /// was looking at was never recorded) and deleting it would resurface
+    /// findings they deliberately set aside.
+    #[test]
+    fn a_v9_rule_keeps_its_every_category_breadth() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(SCHEMA_V1).unwrap();
+            // The v9 shape by hand: no category column, UNIQUE(scope, value).
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS suppressions;
+                 CREATE TABLE suppressions (
+                     id         INTEGER PRIMARY KEY,
+                     scope      TEXT NOT NULL,
+                     value      TEXT NOT NULL,
+                     reason     TEXT,
+                     created_at INTEGER NOT NULL,
+                     UNIQUE(scope, value)
+                 );
+                 INSERT INTO suppressions (scope, value, reason, created_at)
+                 VALUES ('thread', 'gran', 'Family group', 4242);",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 9).unwrap();
+        }
+
+        let mut db = AnalysisDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+
+        let rules = db.list_suppressions().unwrap();
+        assert_eq!(rules.len(), 1, "the rule survived the rebuild");
+        assert_eq!(rules[0].2, None, "and is marked as covering every category");
+        assert_eq!(rules[0].3.as_deref(), Some("Family group"));
+
+        // Its old breadth still applies: two different categories, both covered.
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                NewFinding {
+                    thread_identifier: Some("gran".into()),
+                    ..finding("a", Category::HarassmentBullying)
+                },
+                NewFinding {
+                    thread_identifier: Some("gran".into()),
+                    ..finding("b", Category::ScamFraud)
+                },
+            ],
+            100,
+        )
+        .unwrap();
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.dismissed, 2, "a grandfathered rule still covers both");
+
+        // And the new shape is in place: the same conversation can now carry a
+        // second, narrow rule, which the old UNIQUE(scope, value) forbade.
+        db.add_suppression("thread", "gran", "self-harm", None, 300)
+            .unwrap();
+        assert_eq!(db.list_suppressions().unwrap().len(), 2);
     }
 
     #[test]

@@ -1408,6 +1408,9 @@ pub fn safety_scan_finding_marks(active: State<'_, ActiveBackup>) -> Result<Find
 pub struct SuppressionDto {
     pub scope: String,
     pub value: String,
+    /// Which category the rule covers. `None` is a rule made before #394, when
+    /// a conversation rule covered every category — the UI must say so.
+    pub category: Option<String>,
     pub reason: Option<String>,
 }
 
@@ -1422,10 +1425,16 @@ pub fn add_safety_suppression(
     active: State<'_, ActiveBackup>,
     scope: String,
     value: String,
+    category: String,
     reason: Option<String>,
 ) -> Result<usize, String> {
     if scope != "thread" && scope != "category" {
         return Err("unknown suppression scope".into());
+    }
+    // A rule with no category is the pre-#394 breadth that silenced a whole
+    // conversation. Only the schema migration may create one.
+    if traceloupe_core::analysis::Category::parse(&category).is_none() {
+        return Err("unknown category".into());
     }
     let path = analysis_path(&active.path()?)?;
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
@@ -1433,7 +1442,7 @@ pub fn add_safety_suppression(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    db.add_suppression(&scope, &value, reason.as_deref(), now)
+    db.add_suppression(&scope, &value, &category, reason.as_deref(), now)
         .map_err(|e| e.to_string())
 }
 
@@ -1450,9 +1459,10 @@ pub fn list_safety_suppressions(
         .list_suppressions()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|(scope, value, reason)| SuppressionDto {
+        .map(|(scope, value, category, reason)| SuppressionDto {
             scope,
             value,
+            category,
             reason,
         })
         .collect())
@@ -1463,10 +1473,11 @@ pub fn remove_safety_suppression(
     active: State<'_, ActiveBackup>,
     scope: String,
     value: String,
+    category: Option<String>,
 ) -> Result<(), String> {
     let path = analysis_path(&active.path()?)?;
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
-    db.remove_suppression(&scope, &value)
+    db.remove_suppression(&scope, &value, category.as_deref())
         .map_err(|e| e.to_string())
 }
 
