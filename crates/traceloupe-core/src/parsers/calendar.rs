@@ -150,12 +150,12 @@ mod tests {
              INSERT INTO Calendar VALUES (5, 'Work');
              INSERT INTO Location VALUES (9, 'HQ', '1 Main St');
              -- start 721692800 Mac = 1_700_000_000 unix.
-             INSERT INTO CalendarItem VALUES (1,'Standup','daily sync',721692800.«redacted»694600.0,0,5,9,NULL,2,NULL);
+             INSERT INTO CalendarItem VALUES (1,'Standup','daily sync',721692800.0,721694600.0,0,5,9,NULL,2,NULL);
              -- a location with no title falls back to its address.
              INSERT INTO Location VALUES (10, NULL, '2 Elm Ave');
              INSERT INTO CalendarItem VALUES (2,'Lunch',NULL,721700000.0,NULL,0,5,10,NULL,2,NULL);
              -- a reminder (entity_type 1) is ignored.
-             INSERT INTO CalendarItem VALUES (3,'Buy milk',NULL,NULL,NULL,0,5,NULL,NULL,«redacted»800000.0);",
+             INSERT INTO CalendarItem VALUES (3,'Buy milk',NULL,NULL,NULL,0,5,NULL,NULL,1,721800000.0);",
         )
         .unwrap();
 

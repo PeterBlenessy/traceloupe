@@ -1065,13 +1065,13 @@ mod tests {
              INSERT INTO handle VALUES (1, '+15551234567');
              -- ROWIDs 2 and 5 are absent: one gap of one, one gap of two (5,6 -> 7).
              INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
-                 VALUES (1,'A','first',«redacted»700010000000000,1);
+                 VALUES (1,'A','first',0,721700010000000000,1);
              INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
-                 VALUES (3,'B','second',«redacted»700020000000000,1);
+                 VALUES (3,'B','second',0,721700020000000000,1);
              INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
-                 VALUES (4,'C','third',«redacted»700030000000000,1);
+                 VALUES (4,'C','third',0,721700030000000000,1);
              INSERT INTO message (ROWID, guid, text, is_from_me, date, handle_id)
-                 VALUES (7,'D','fourth',«redacted»700040000000000,1);
+                 VALUES (7,'D','fourth',0,721700040000000000,1);
              INSERT INTO chat_message_join VALUES (1,1),(1,3),(1,4),(1,7);
              INSERT INTO chat_handle_join VALUES (1,1);
              -- iOS's own record of the same deletions.
@@ -1121,19 +1121,19 @@ mod tests {
              INSERT INTO chat VALUES (20,'chat99','Hiking Crew','iMessage');
              INSERT INTO chat_handle_join VALUES (10,1),(20,1),(20,2);
              -- date is Apple-absolute nanoseconds; unix 1_700_000_000 = 721692800000000000.
-             INSERT INTO message VALUES (100,'hey there',«redacted»692800000000000,1,0,0,0,'GUID-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (100,'hey there',0,721692800000000000,1,0,0,0,'GUID-100',NULL,0,NULL,NULL,NULL,0);
              -- outgoing, delivered + read (date_delivered / date_read set).
-             INSERT INTO message VALUES (101,'hi back',«redacted»692860000000000,0,«redacted»692900000000000,721692880000000000,'GUID-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,'hi back',1,721692860000000000,0,0,721692900000000000,721692880000000000,'GUID-101',NULL,0,NULL,NULL,NULL,0);
              -- an inline reply to message 100 ('hey there').
-             INSERT INTO message VALUES (102,'reply body',«redacted»692920000000000,0,0,0,0,'GUID-102',NULL,0,NULL,'p:0/GUID-100',NULL,0);
-             INSERT INTO message VALUES (200,'who is in?',«redacted»700000000000000,2,0,0,0,'GUID-200',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (102,'reply body',1,721692920000000000,0,0,0,0,'GUID-102',NULL,0,NULL,'p:0/GUID-100',NULL,0);
+             INSERT INTO message VALUES (200,'who is in?',0,721700000000000000,2,0,0,0,'GUID-200',NULL,0,NULL,NULL,NULL,0);
              -- an attachment-only message (NULL text) is kept.
-             INSERT INTO message VALUES (201,NULL,«redacted»700060000000000,0,1,0,0,'GUID-201',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (201,NULL,1,721700060000000000,0,1,0,0,'GUID-201',NULL,0,NULL,NULL,NULL,0);
              -- a pure action item (NULL text, no attachment) is skipped.
-             INSERT INTO message VALUES (202,NULL,«redacted»700120000000000,1,0,0,0,'GUID-202',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (202,NULL,0,721700120000000000,1,0,0,0,'GUID-202',NULL,0,NULL,NULL,NULL,0);
              -- a tapback (Loved) on message 100 from the device owner; not a message.
-             INSERT INTO message VALUES (300,NULL,«redacted»692900000000000,0,0,0,0,'GUID-300','p:0/GUID-100',2000,NULL,NULL,NULL,0);
-             INSERT INTO chat_message_join VALUES («redacted»),(«redacted»),(«redacted»),(«redacted»),(«redacted»),(«redacted»),(«redacted»);",
+             INSERT INTO message VALUES (300,NULL,1,721692900000000000,0,0,0,0,'GUID-300','p:0/GUID-100',2000,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100),(10,101),(10,102),(20,200),(20,201),(20,202),(10,300);",
         )
         .unwrap();
         db
@@ -1158,8 +1158,8 @@ mod tests {
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
              -- NULL text, STALE cache_has_attachments = 0, but a real join row.
-             INSERT INTO message VALUES (500,NULL,«redacted»700060000000000,0,0,0,0,'GUID-500',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO chat_message_join VALUES («redacted»);
+             INSERT INTO message VALUES (500,NULL,1,721700060000000000,0,0,0,0,'GUID-500',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,500);
              INSERT INTO message_attachment_join VALUES (500,1);",
         )
         .unwrap();
@@ -1197,11 +1197,11 @@ mod tests {
              INSERT INTO handle VALUES (1,'+15550001111');
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
-             INSERT INTO message VALUES (1,NULL,«redacted»700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.DigitalTouchBalloonProvider');
-             INSERT INTO message VALUES (2,NULL,«redacted»700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.MSMessageExtensionBalloonPlugin:EWFNLB79LQ:com.gamerdelights.gamepigeon.ext');
-             INSERT INTO message VALUES (3,'https://example.com',«redacted»700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.URLBalloonProvider');
+             INSERT INTO message VALUES (1,NULL,0,721700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.DigitalTouchBalloonProvider');
+             INSERT INTO message VALUES (2,NULL,1,721700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.MSMessageExtensionBalloonPlugin:EWFNLB79LQ:com.gamerdelights.gamepigeon.ext');
+             INSERT INTO message VALUES (3,'https://example.com',0,721700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.URLBalloonProvider');
              -- A URL balloon with NO recoverable text still buckets as a link.
-             INSERT INTO message VALUES (4,NULL,«redacted»700040000000000,1,0,0,0,'G4',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.URLBalloonProvider');
+             INSERT INTO message VALUES (4,NULL,0,721700040000000000,1,0,0,0,'G4',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.URLBalloonProvider');
              INSERT INTO chat_message_join VALUES (10,1),(10,2),(10,3),(10,4);",
         )
         .unwrap();
@@ -1243,9 +1243,9 @@ mod tests {
              INSERT INTO handle VALUES (1,'+15550001111');
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
-             INSERT INTO message VALUES (1,'happy bday!',«redacted»700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.effect.CKConfettiEffect');
-             INSERT INTO message VALUES (2,'boom',«redacted»700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.MobileSMS.expressivesend.impact');
-             INSERT INTO message VALUES (3,'plain',«redacted»700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,NULL);
+             INSERT INTO message VALUES (1,'happy bday!',1,721700010000000000,1,0,0,0,'G1',NULL,0,NULL,NULL,NULL,0,'com.apple.messages.effect.CKConfettiEffect');
+             INSERT INTO message VALUES (2,'boom',0,721700020000000000,1,0,0,0,'G2',NULL,0,NULL,NULL,NULL,0,'com.apple.MobileSMS.expressivesend.impact');
+             INSERT INTO message VALUES (3,'plain',0,721700030000000000,1,0,0,0,'G3',NULL,0,NULL,NULL,NULL,0,NULL);
              INSERT INTO chat_message_join VALUES (10,1),(10,2),(10,3);",
         )
         .unwrap();
@@ -1285,11 +1285,11 @@ mod tests {
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
              -- A live message and a deleted-but-recoverable one, both in chat 10.
-             INSERT INTO message VALUES (100,'still here',«redacted»692800000000000,1,0,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO message VALUES (101,'oops deleted this',«redacted»692860000000000,0,0,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO chat_message_join VALUES («redacted»);
+             INSERT INTO message VALUES (100,'still here',0,721692800000000000,1,0,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,'oops deleted this',1,721692860000000000,0,0,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100);
              -- 101 is ONLY in the recoverable join (never in chat_message_join).
-             INSERT INTO chat_recoverable_message_join VALUES («redacted»692900000000000,0);",
+             INSERT INTO chat_recoverable_message_join VALUES (10,101,721692900000000000,0);",
         )
         .unwrap();
 
@@ -1337,10 +1337,10 @@ mod tests {
              -- 100: a sticker that ALSO carries body text (real stickers decode an
              -- attributedBody placeholder) — must still classify as sticker.
              -- 101: a plain image. 102: a text message.
-             INSERT INTO message VALUES (100,'[Sticker]',«redacted»700010000000000,1,1,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO message VALUES (101,NULL,«redacted»700020000000000,1,1,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO message VALUES (102,'hi',«redacted»700030000000000,0,0,0,0,'G-102',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO chat_message_join VALUES («redacted»),(«redacted»),(«redacted»);
+             INSERT INTO message VALUES (100,'[Sticker]',0,721700010000000000,1,1,0,0,'G-100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (101,NULL,0,721700020000000000,1,1,0,0,'G-101',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO message VALUES (102,'hi',1,721700030000000000,0,0,0,0,'G-102',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100),(10,101),(10,102);
              INSERT INTO attachment VALUES (1,'/a/sticker.heic','sticker.heic','image/heic',1);
              INSERT INTO attachment VALUES (2,'/a/photo.jpg','photo.jpg','image/jpeg',0);
              INSERT INTO message_attachment_join VALUES (100,1),(101,2);",

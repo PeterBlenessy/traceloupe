@@ -196,7 +196,7 @@ export function formatDuration(seconds: number | null): string {
 }
 
 /**
- * A count with the separator the user's REGION uses — "«redacted»" in the US,
+ * A count with the separator the user's REGION uses — "450,897" in the US,
  * "450 897" in Sweden, "450.897" in Germany.
  *
  * This used to insert a space with a regex and consult no locale at all, which

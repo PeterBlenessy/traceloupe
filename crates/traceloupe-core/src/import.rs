@@ -2321,8 +2321,8 @@ mod tests {
              INSERT INTO handle VALUES (1,'+15550001111');
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
-             INSERT INTO message VALUES (100,'hi',«redacted»692800000000000,1,0,0,0,'G100',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO chat_message_join VALUES («redacted»);",
+             INSERT INTO message VALUES (100,'hi',0,721692800000000000,1,0,0,0,'G100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100);",
         )
         .unwrap();
         drop(sms);
@@ -2386,8 +2386,8 @@ mod tests {
              INSERT INTO chat VALUES (10,'+15550001111',NULL,'iMessage');
              INSERT INTO chat_handle_join VALUES (10,1);
              -- an attachment-only message (NULL text, has_attachments=1).
-             INSERT INTO message VALUES (100,NULL,«redacted»692800000000000,1,1,0,0,'G100',NULL,0,NULL,NULL,NULL,0);
-             INSERT INTO chat_message_join VALUES («redacted»);
+             INSERT INTO message VALUES (100,NULL,0,721692800000000000,1,1,0,0,'G100',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100);
              INSERT INTO attachment VALUES (5,'~/Library/SMS/Attachments/ab/00/GUID/pic.jpg','pic.jpg','image/jpeg');
              INSERT INTO message_attachment_join VALUES (100,5);",
         )

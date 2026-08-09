@@ -288,8 +288,8 @@ impl BackupDecryptor {
         // go stale if the file changed in between.
         //
         // That is not a theory. `Library/SMS/sms.db` on the iOS 17.3 public
-        // image has `Size` = «redacted» against a «redacted»-byte ciphertext carrying
-        // «redacted» bytes of database plus one padding block. Trusting `Size`
+        // image has `Size` = 495,616 against a 499,728-byte ciphertext carrying
+        // 499,712 bytes of database plus one padding block. Trusting `Size`
         // discarded a whole 4 KB page and produced a file whose header promised
         // 122 pages with 121 present — SQLite rejected it outright, so Messages
         // was unreadable from that backup (#268). Across the five stores checked
@@ -436,8 +436,8 @@ fn plaintext_len(pt: &[u8], size: Option<usize>) -> usize {
 /// not valid padding.
 ///
 /// PKCS#7 appends `n` bytes of value `n`, with `n` in 1..=16 — and a FULL block
-/// when the plaintext is already block-aligned, which is why a «redacted»-byte
-/// database encrypts to «redacted» bytes rather than «redacted».
+/// when the plaintext is already block-aligned, which is why a 499,712-byte
+/// database encrypts to 499,728 bytes rather than 499,712.
 ///
 /// Returning None rather than guessing matters: a wrong key yields garbage whose
 /// final byte is arbitrary, and ~6% of the time that garbage will look like
@@ -701,8 +701,8 @@ mod tests {
     /// fails if the rule ever reverts to trusting `Size`.
     #[test]
     fn plaintext_len_prefers_the_padding_over_a_stale_size() {
-        // sms.db: «redacted» bytes of database + one full padding block. `Size`
-        // says «redacted» — a whole 4 KB page short of what was encrypted.
+        // sms.db: 499,712 bytes of database + one full padding block. `Size`
+        // says 495,616 — a whole 4 KB page short of what was encrypted.
         let mut sms = vec![0xAAu8; 499_728];
         sms[499_712..].fill(16);
         assert_eq!(

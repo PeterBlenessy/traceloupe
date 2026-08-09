@@ -165,9 +165,9 @@ mod tests {
                  ZLASTOUTGOINGRECIPIENTDATE REAL, ZLASTINCOMINGRECIPIENTDATE REAL,
                  ZINCOMINGRECIPIENTCOUNT INTEGER);
              -- first 721692800 Mac = 1_700_000_000 unix.
-             INSERT INTO ZCONTACTS VALUES (1,'Robin','+15551234567',10,«redacted»692800.«redacted»692900.0,NULL,721700000.«redacted»710000.0,NULL,7);
+             INSERT INTO ZCONTACTS VALUES (1,'Robin','+15551234567',10,25,721692800.0,721692900.0,NULL,721700000.0,721710000.0,NULL,7);
              -- an identifier-only contact with interactions.
-             INSERT INTO ZCONTACTS VALUES (2,NULL,'a@b.com',3,«redacted»695000.0,NULL,NULL,721696000.0,NULL,NULL,0);
+             INSERT INTO ZCONTACTS VALUES (2,NULL,'a@b.com',3,0,721695000.0,NULL,NULL,721696000.0,NULL,NULL,0);
              -- zero interactions → excluded.
              INSERT INTO ZCONTACTS VALUES (3,'Ghost','x@y.com',0,0,NULL,NULL,NULL,NULL,NULL,NULL,0);
              -- raw per-interaction rows carry the app (ZBUNDLEID) + direction.

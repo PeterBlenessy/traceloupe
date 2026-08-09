@@ -11,7 +11,7 @@
 # It is the only place the backup describes ITSELF. "This backup is 4 GB" is a
 # file listing; "3.2 GB of it is CameraRollDomain and 400 MB is one app's group
 # container" is a shape, and it answers a question a reader actually has — where
-# did the data go — without walking «redacted» manifest entries. It also names domains
+# did the data go — without walking 14,000 manifest entries. It also names domains
 # that are IN the backup, which is a cross-check on the coverage audit's rules
 # rather than a restatement of them.
 #

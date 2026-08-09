@@ -1667,7 +1667,7 @@ fn run_one(
 /// when the backup is taken, so a truncated multi-byte character at the tail is
 /// normal — and rejecting the whole file for it would lose every complete record
 /// before it. Individual lines that do not parse are skipped for the same
-/// reason: one malformed record is not evidence the other «redacted» are wrong.
+/// reason: one malformed record is not evidence the other 1,700 are wrong.
 fn run_log_module(spec: &ModuleSpec, lg: &LogSpec, bytes: &[u8]) -> Result<Vec<ArtifactRow>> {
     let text = String::from_utf8_lossy(bytes);
     let mut out = Vec::new();
@@ -3694,12 +3694,12 @@ from = "nope"
         .unwrap();
         c.execute_batch(
             "INSERT INTO access (service, client, client_type, auth_value, auth_reason, auth_version, last_modified) VALUES
-                ('kTCCServiceCamera','com.example.chatapp',0,2,2,«redacted»0000000),
-                ('kTCCServiceLocation','com.example.weather',0,0,2,«redacted»0000300),
-                ('kTCCServicePhotos','com.example.chatapp',0,3,2,«redacted»0000200),
-                ('kTCCServiceReminders','com.example.todo',0,9,2,«redacted»0000500),
-                ('kTCCServiceContacts','com.example.notprompted',0,1,2,«redacted»0000600),
-                ('kTCCServiceMicrophone','com.example.norecord',0,NULL,2,«redacted»0000700);",
+                ('kTCCServiceCamera','com.example.chatapp',0,2,2,1,1700000000),
+                ('kTCCServiceLocation','com.example.weather',0,0,2,1,1700000300),
+                ('kTCCServicePhotos','com.example.chatapp',0,3,2,1,1700000200),
+                ('kTCCServiceReminders','com.example.todo',0,9,2,1,1700000500),
+                ('kTCCServiceContacts','com.example.notprompted',0,1,2,1,1700000600),
+                ('kTCCServiceMicrophone','com.example.norecord',0,NULL,2,1,1700000700);",
         )
         .unwrap();
     }
@@ -3750,7 +3750,7 @@ from = "nope"
                  'C9FA6B49-5667-4CE7-A88A-60C0543E82B5','accountsd',NULL),
                 -- A CHILD of account 1: on real data these are what make one
                 -- sign-in look like several duplicate rows.
-                (5,1,1,3,«redacted»000000,NULL,
+                (5,1,1,3,1,722000000,NULL,
                  '0EE306D8-66AF-47E5-8FD1-CF2EAF5DC8C2','accountsd',NULL);",
         )
         .unwrap();
@@ -4032,11 +4032,11 @@ from = "nope"
                 (4,NULL,'CumulativeUsageTracker');
              INSERT INTO ZLIVEUSAGE
                 (Z_PK, ZKIND, ZHASPROCESS, ZTIMESTAMP, ZWIFIIN, ZWIFIOUT, ZWWANIN, ZWWANOUT) VALUES
-                (1,0,«redacted»000000,1000,2000,3000,4000),
-                (2,0,«redacted»001000,«redacted»),
-                (3,0,«redacted»000000,0,«redacted»000,10000),
-                (4,0,«redacted»000000,10,20,30,40),
-                («redacted»,«redacted»002000,1510,2620,903730,14840);",
+                (1,0,1,726000000,1000,2000,3000,4000),
+                (2,0,1,726001000,500,600,700,800),
+                (3,0,2,725000000,0,0,900000,10000),
+                (4,0,3,724000000,10,20,30,40),
+                (5,255,4,726002000,1510,2620,903730,14840);",
         )
         .unwrap();
     }
@@ -4064,8 +4064,8 @@ from = "nope"
         c.execute_batch(
             "INSERT INTO subscriber_info
                 (subscriber_id, subscriber_mdn, tag, last_update_time, slot_id) VALUES
-                ('8901260971148676693','+15550100',«redacted»000000,1),
-                ('8944500000000000001','+15550199',«redacted»000000,2);
+                ('8901260971148676693','+15550100',1,726000000,1),
+                ('8944500000000000001','+15550199',1,725000000,2);
              -- Present but deliberately unread: an opaque flag with one value.
              INSERT INTO bundle_info (bundle_id, flags) VALUES ('com.example.watchapp',48);",
         )
@@ -4866,14 +4866,14 @@ from = "nope"
             "INSERT INTO ZMTPODCAST
                 (ZSUBSCRIBED, ZADDEDDATE, ZLASTDATEPLAYED, ZAUTHOR, ZCATEGORY, ZFEEDURL, ZTITLE)
              VALUES
-                («redacted»856862,632849727,'A tech journalist','Tech News',
+                (1,606856862,632849727,'A tech journalist','Tech News',
                  'https://example.com/feed','Listened Show'),
-                («redacted»856678,NULL,'Example Radio','Daily News',
+                (1,606856678,NULL,'Example Radio','Daily News',
                  'https://example.org/rss','Never Played Show');",
         )
         .unwrap();
         // Episodes. The subscription caches a whole FEED -- on the validation
-        // device «redacted» rows for 6 shows, of which «redacted» were never touched --
+        // device 1,774 rows for 6 shows, of which 1,745 were never touched --
         // so the fixture carries untouched rows too. A module that forgets the
         // engagement filter returns them and looks like it found more.
         c.execute_batch(
@@ -4891,9 +4891,9 @@ from = "nope"
              VALUES
                 -- Downloaded and part-listened: the playhead beside the duration
                 -- is what says 'started, did not finish'.
-                (1,'Half heard',3600,900,1,NULL,«redacted»628215,711630000,711626308),
+                (1,'Half heard',3600,900,1,NULL,0,711628215,711630000,711626308),
                 -- Downloaded, never opened.
-                (1,'Queued up',764,0,0,NULL,«redacted»543114,NULL,711540859),
+                (1,'Queued up',764,0,0,NULL,0,711543114,NULL,711540859),
                 -- Bookmarked without a download.
                 (2,'Saved for later',1200,0,0,NULL,1,NULL,NULL,711000000),
                 -- Feed cache: no download, no play, no bookmark. MUST NOT show.
@@ -4926,13 +4926,13 @@ from = "nope"
                 (2,1,38.70,-77.20,38.90,-77.40,'Morning hike');
              INSERT INTO ZTRACK (Z_PK, ZELEVATIONGAIN, ZTIMEMOVING, ZTIMETOTAL, ZMAP,
                 ZCALORIES, ZDISTANCETOTAL) VALUES
-                (1,«redacted»6,3025,«redacted».«redacted»9.33),
-                (2,«redacted»8,4498,«redacted».«redacted»6.12);
+                (1,29,2846,3025,1,411.0,3049.33),
+                (2,84,4498,4498,2,650.0,6796.12);
              INSERT INTO ZLINETIMEDSEGMENT (Z_PK, ZTRACK, ZDATETIMESTART, ZDATETIMESTOP) VALUES
                 -- One hike, paused and resumed: TWO segments, one activity.
-                (1,«redacted»000000,660001000),
-                (2,«redacted»002000,660003025),
-                (3,«redacted»000000,726004498);",
+                (1,1,660000000,660001000),
+                (2,1,660002000,660003025),
+                (3,2,726000000,726004498);",
         )
         .unwrap();
     }
@@ -6403,8 +6403,8 @@ name = "Which"
     /// headed "Service". The three rungs and this test exist because of that.
     #[test]
     fn podcast_episodes_lists_choices_not_the_cached_feed() {
-        // Subscribing caches a whole back catalogue: «redacted» rows for 6 shows on
-        // the validation device, «redacted» of them never touched. Listing those
+        // Subscribing caches a whole back catalogue: 1,774 rows for 6 shows on
+        // the validation device, 1,745 of them never touched. Listing those
         // would bury the real events in a table that LOOKS like thousands of
         // them, which is the failure this module's filter exists to prevent.
         let mods = load_modules(&builtin_modules_dir()).unwrap();
@@ -7190,7 +7190,7 @@ when_any_of = [\"yes\"]
                  INSERT INTO ZPROCESS (Z_PK, ZBUNDLENAME, ZPROCNAME)
                     VALUES (1,'com.example.old','OldApp/com.example.old');
                  INSERT INTO ZLIVEUSAGE (Z_PK, ZKIND, ZHASPROCESS, ZTIMESTAMP, ZWWANIN, ZWWANOUT)
-                    VALUES (1,0,«redacted»000000,1234,5678);",
+                    VALUES (1,0,1,726000000,1234,5678);",
             )
             .unwrap();
         });
@@ -7337,7 +7337,7 @@ when_any_of = [\"yes\"]
             )
             .unwrap();
             c.execute_batch(
-                "INSERT INTO access VALUES ('kTCCServiceCamera','com.mid.app',1,«redacted»0000000);",
+                "INSERT INTO access VALUES ('kTCCServiceCamera','com.mid.app',1,1,1700000000);",
             )
             .unwrap();
         });

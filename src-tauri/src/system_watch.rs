@@ -125,8 +125,8 @@ pub fn get_full_keyboard_access() -> bool {
 ///
 /// **Passing the raw value through does not work**, and looks like it does:
 /// ```text
-/// en-US                «redacted»   Jun 8, 2024, 2:40 PM
-/// en-US-u-rg-sezzzz    «redacted»   Jun 8, 2024, 2:40 PM   ← the override is ignored
+/// en-US                408,937   Jun 8, 2024, 2:40 PM
+/// en-US-u-rg-sezzzz    408,937   Jun 8, 2024, 2:40 PM   ← the override is ignored
 /// en-SE                408 937   8 Jun 2024, 14:40      ← what the user set
 /// ```
 /// Intl does not honour the `rg` extension, so the region has to be folded into

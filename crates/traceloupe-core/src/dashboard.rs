@@ -910,7 +910,7 @@ mod tests {
                 "UPDATE threads SET service = 'iMessage' WHERE id = 1;
                  INSERT INTO threads (id, identifier, service) VALUES (2,'t2','SMS');
                  INSERT INTO messages (id, thread_id, sent_at, body)
-                   VALUES (1,«redacted»5689600,'a'),(2,«redacted»5689601,'b'),(3,«redacted»5689602,'c');",
+                   VALUES (1,1,1735689600,'a'),(2,1,1735689601,'b'),(3,2,1735689602,'c');",
             )
             .unwrap();
         let msg = module_metrics(db.conn(), 1_760_000_000)

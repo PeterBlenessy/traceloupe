@@ -107,8 +107,8 @@ mod tests {
              CREATE TABLE ZREMCDBASELIST (Z_PK INTEGER PRIMARY KEY, ZNAME TEXT);
              INSERT INTO ZREMCDBASELIST VALUES (3, 'Groceries');
              -- due 721692800 Mac = 1_700_000_000 unix.
-             INSERT INTO ZREMCDREMINDER VALUES (1,'Buy milk','2%',721692800.0,0,NULL,0,«redacted»600000.0,3,0);
-             INSERT INTO ZREMCDREMINDER VALUES (2,'Call bank',NULL,NULL,«redacted»695000.0,0,«redacted»600000.0,3,0);
+             INSERT INTO ZREMCDREMINDER VALUES (1,'Buy milk','2%',721692800.0,0,NULL,0,1,721600000.0,3,0);
+             INSERT INTO ZREMCDREMINDER VALUES (2,'Call bank',NULL,NULL,1,721695000.0,0,0,721600000.0,3,0);
              -- trashed → excluded.
              INSERT INTO ZREMCDREMINDER VALUES (3,'old',NULL,NULL,0,NULL,0,0,NULL,3,1);",
         )

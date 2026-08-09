@@ -31,7 +31,7 @@
       "archive_bytes": 22132295131,
       "backup_glob": "*/Backup/*",
       "backup_password": "MyPassword123",
-      "notes": "The image every parser and module in the repo is currently validated against. «redacted» manifest entries, 57 third-party apps."
+      "notes": "The image every parser and module in the repo is currently validated against. 14,773 manifest entries, 57 third-party apps."
     },
     {
       "id": "ios16",

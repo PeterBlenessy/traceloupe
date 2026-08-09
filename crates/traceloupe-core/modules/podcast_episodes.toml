@@ -3,13 +3,13 @@
 # `ZMTEPISODE` in `Documents/MTLibrary.sqlite` — the same store
 # `podcasts.toml` reads for subscriptions, a different table.
 #
-# WHY THIS DOES NOT LIST ALL «redacted» EPISODES
+# WHY THIS DOES NOT LIST ALL 1,774 EPISODES
 #
 # Subscribing to a show caches its whole feed: on the validation device that is
-# «redacted» episode rows for 6 podcasts, and «redacted» of them were never touched. They
+# 1,774 episode rows for 6 podcasts, and 1,745 of them were never touched. They
 # are the show's back catalogue as the server described it, not anything the
 # person did — listing them would bury 32 real events in a table that looks like
-# «redacted» of them.
+# 1,774 of them.
 #
 # So the filter is ENGAGEMENT: downloaded, played at least once, part-listened
 # (a non-zero playhead), or bookmarked. That is 29 downloads and 3 plays here.
@@ -30,7 +30,7 @@
 #
 # Timestamps are Cocoa / Core Data seconds.
 #
-# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: «redacted»
+# VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 1,774
 # episodes in the store, 29 downloaded and 3 with a play count — the module
 # returns those, led by Up First and The CultCast, with real durations.
 # Reproduce with:
@@ -39,7 +39,7 @@
 id          = "podcast_episodes"
 name        = "Podcast episodes"
 description = "Episodes this device downloaded, played or saved — the ones someone chose, not the whole cached feed of every show they follow."
-verified    = "iphone11_ios17 — 35 of «redacted» cached episodes, i.e. the ~2% someone acted on; iphone11_ios16 — 35; iphone_se_ios13 — 18 and iphone_se_ios13_4 — 24, the SAME device three days apart, so the count tracks real listening rather than the feed"
+verified    = "iphone11_ios17 — 35 of 1,774 cached episodes, i.e. the ~2% someone acted on; iphone11_ios16 — 35; iphone_se_ios13 — 18 and iphone_se_ios13_4 — 24, the SAME device three days apart, so the count tracks real listening rather than the feed"
 surface     = "device"
 category    = "Media"
 domain      = "AppDomainGroup-243LU875E5.groups.com.apple.podcasts"
