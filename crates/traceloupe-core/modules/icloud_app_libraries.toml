@@ -27,6 +27,20 @@
 # `app_library_plist` is a blob and is not read; nothing establishes what it
 # holds, and a column of byte counts is not an answer.
 #
+# THE SECOND ALTERNATIVE, and why it reports less
+#
+# iOS 26 no longer has `auto_client_item_count`, so the first query cannot run
+# and the whole module used to decline — an examiner then saw no containers at
+# all, when the container LIST was still perfectly readable. The fallback names
+# the containers and leaves every count NULL.
+#
+# It does not guess replacement column names. Which columns iOS 26 uses instead
+# is not established, and inventing a mapping to fill the numbers would put
+# figures on screen that nothing supports — worse than the empty cells, because
+# an empty cell is legible as "not known" and a wrong number is not. Use the
+# raw-database view on a client.db from that iOS version to find the real
+# columns, then add a third alternative naming them.
+#
 # VERIFIED against Josh Hickman's public iPhone 11 / iOS 17.3 image: 43
 # containers, led by com.apple.CloudDocs with 25 items / 20 documents / 22 MB,
 # and including iCloud.com.apple.MobileSMS and iCloud.com.apple.mobilesafari.
@@ -53,6 +67,16 @@ sql = [
   FROM app_libraries
   WHERE app_library_name IS NOT NULL
   ORDER BY auto_aggregate_size DESC, app_library_name
+  """,
+  """
+  SELECT app_library_name AS app,
+         NULL             AS items,
+         NULL             AS documents,
+         NULL             AS unsynced,
+         NULL             AS bytes
+  FROM app_libraries
+  WHERE app_library_name IS NOT NULL
+  ORDER BY app_library_name
   """,
 ]
 

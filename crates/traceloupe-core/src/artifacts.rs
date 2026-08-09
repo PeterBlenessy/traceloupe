@@ -6081,6 +6081,49 @@ from = "nope"
         assert!(err.contains("not an enum"), "{err}");
     }
 
+    /// iOS 26's `client.db` has no `auto_client_item_count`, so the module's
+    /// only query could not run and it declined entirely — an examiner saw NO
+    /// iCloud containers, when the container list itself was perfectly
+    /// readable. A second alternative names them and leaves the counts empty:
+    /// an empty cell reads as "not known", whereas a guessed number would read
+    /// as fact.
+    #[test]
+    fn icloud_containers_survive_a_schema_without_the_count_columns() {
+        let spec = load_modules(&builtin_modules_dir())
+            .unwrap()
+            .into_iter()
+            .find(|m| m.id == "icloud_app_libraries")
+            .expect("module is shipped");
+
+        // The iOS 26 shape: the container list, none of the auto_* counts.
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(
+            "CREATE TABLE app_libraries (rowid INTEGER PRIMARY KEY, app_library_name TEXT);
+             INSERT INTO app_libraries VALUES (1, 'com.apple.CloudDocs');
+             INSERT INTO app_libraries VALUES (2, 'iCloud.com.apple.MobileSMS');",
+        )
+        .unwrap();
+
+        let mut names: Vec<String> = Vec::new();
+        for sql in &spec.sql {
+            let Ok(mut stmt) = db.prepare(sql) else {
+                continue; // this alternative does not fit the schema
+            };
+            let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+                continue;
+            };
+            names = rows.flatten().collect();
+            if !names.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(
+            names,
+            vec!["com.apple.CloudDocs", "iCloud.com.apple.MobileSMS"],
+            "no alternative could list the containers on an iOS 26 schema"
+        );
+    }
+
     #[test]
     fn every_shipped_module_loads_and_runs() {
         let mods = load_modules(&builtin_modules_dir()).unwrap();
