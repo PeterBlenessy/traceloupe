@@ -1,3 +1,6 @@
+> Adding an app? Start with [Adding a chat app](adding-a-chat-app.md) —
+> it lists what a parser owes, and every item on it was skipped once and shipped.
+
 # App support tracker
 
 A **living table** of what TraceLoupe reads, and the version each source gains
