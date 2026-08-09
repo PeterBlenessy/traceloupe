@@ -1117,12 +1117,6 @@ function Lightbox({
                 aria-label="In Recently Deleted"
               />
             )}
-            {item.availability === "thumbnail" && (
-              <span className="flex items-center gap-1 text-xs">
-                <Cloud className="size-3.5 shrink-0" />
-                Thumbnail only — full size is in iCloud
-              </span>
-            )}
             {item.hidden && (
               <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />
             )}
@@ -1223,7 +1217,35 @@ function Lightbox({
       onPrev={() => go(-1)}
       onNext={() => go(1)}
       media={
-        item && fullFailed ? (
+        item && item.availability === "thumbnail" ? (
+          // The original is in iCloud, so there is no full-size file to open —
+          // but the thumbnail iOS backed up IS here. Showing it beats an error
+          // for the same reason the grid shows it: a soft picture answers "which
+          // photo is this?", and "could not be read" answers nothing and implies
+          // damage that has not occurred.
+          <MediaMenu item={item} onMarkUnsafe={onMarkUnsafe}>
+            <div className="flex max-h-full flex-col items-center gap-4">
+              <img
+                key={item.id}
+                src={client.mediaUrl(item.id, { thumb: true, cacheKey })}
+                alt={item.filename ?? "Photo"}
+                className="max-h-[60vh] max-w-full rounded-lg object-contain"
+              />
+              <div className="flex max-w-md flex-col items-center gap-1 px-8 text-center">
+                <p className="flex items-center gap-1.5 text-sm text-white/80">
+                  <Cloud className="size-4 shrink-0" />
+                  Thumbnail only — the full-size original is in iCloud
+                </p>
+                <p className="text-xs text-white/50">
+                  With iCloud Photos on, iOS leaves the photo file out of the
+                  device backup and keeps only this thumbnail. TraceLoupe reads
+                  the backup and nothing else, so this is everything there is to
+                  show offline.
+                </p>
+              </div>
+            </div>
+          </MediaMenu>
+        ) : item && fullFailed ? (
           // Same rule as the tile: a black modal with nothing in it is not an
           // answer. Decryption is the usual cause, so name it.
           <div className="flex flex-col items-center gap-2 px-8 text-center text-white/70">
