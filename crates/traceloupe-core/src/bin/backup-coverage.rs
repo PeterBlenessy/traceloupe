@@ -208,6 +208,9 @@ fn survey_media_dirs(
     probe_missed(index, backup_dir, &rows)?;
 
     println!();
+    app_media(index, backup_dir)?;
+
+    println!();
     println!("== file types found, and whether the camera roll decodes them ==");
     let mut es: Vec<_> = exts.into_iter().collect();
     es.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
@@ -274,6 +277,82 @@ fn catalogue_keys(conn: &Connection) -> Result<HashSet<String>> {
     })?;
     Ok(rows.flatten().collect())
 }
+
+/// Media each APP container actually holds, per app.
+///
+/// The per-directory survey answers "where is media", but an app's files are
+/// spread across many directories and a top-N list buries the small ones. This
+/// answers the question that decides whether a chat app's photos are recoverable
+/// at all: does this app keep IMAGES on the device, or only references to
+/// something remote?
+///
+/// It matters most for apps that send through a CDN. A received photo may exist
+/// only as a URL — nothing local, nothing to show. But a photo the OWNER SENT
+/// was theirs first, and is often still in the app's own container. Assuming
+/// both are remote would write off half the evidence, so this counts them.
+///
+/// Median size separates the two populations without opening anything: UI chrome
+/// and cached avatars run to a few KB, a real photo to hundreds.
+fn app_media(index: &ManifestIndex, backup_dir: &Path) -> Result<()> {
+    let mut per_app: HashMap<String, Vec<String>> = HashMap::new();
+    index.for_each_path(|domain, rel| {
+        if !domain.starts_with("AppDomain") {
+            return;
+        }
+        if media_ext(&rel).is_some() {
+            per_app.entry(domain).or_default().push(rel);
+        }
+    })?;
+
+    println!("== media inside app containers, per app ==");
+    println!("   'over 100 KB' counts plausible PHOTOS; the median is dragged down");
+    println!("   by icons and cached avatars, which an app has many more of.");
+    let mut rows: Vec<(String, Vec<String>)> = per_app.into_iter().collect();
+    rows.sort_by_key(|(app, files)| (std::cmp::Reverse(files.len()), app.clone()));
+    if rows.is_empty() {
+        println!("   (no app container holds any image or video)");
+        return Ok(());
+    }
+    for (app, files) in rows.iter().take(20) {
+        // Sizes come from the on-disk blob; the Manifest lookup per file would
+        // cost more than it tells us, so sample rather than enumerate.
+        let mut sizes: Vec<u64> = Vec::new();
+        for e in index.find_prefix(app, "")?.iter() {
+            if sizes.len() >= PROBE_LIMIT {
+                break;
+            }
+            if media_ext(&e.relative_path).is_none() || e.file_id.len() < 2 {
+                continue;
+            }
+            if let Ok(m) = std::fs::metadata(backup_dir.join(&e.file_id[..2]).join(&e.file_id)) {
+                sizes.push(m.len());
+            }
+        }
+        sizes.sort_unstable();
+        let median = sizes.get(sizes.len() / 2).copied().unwrap_or(0);
+        // A median is not enough on its own. An app with a hundred cached
+        // avatars and three photos the owner SENT has a tiny median, and those
+        // three are the whole point — they are the ones a CDN assumption would
+        // wrongly write off. Count them separately.
+        let photos = sizes.iter().filter(|b| **b >= PHOTO_BYTES).count();
+        println!(
+            "{:>7} files  median {:>9}  {photos:>5} over {}  {app}",
+            files.len(),
+            human(median),
+            human(PHOTO_BYTES)
+        );
+    }
+    if rows.len() > 20 {
+        println!("   … and {} more app containers", rows.len() - 20);
+    }
+    Ok(())
+}
+
+/// Above this, a file in an app container is a plausible PHOTO rather than an
+/// icon, avatar or cached sprite. Deliberately low: the cost of a false positive
+/// here is one row to look at, the cost of a false negative is concluding an app
+/// stores nothing locally when it stores the owner's own sent pictures.
+const PHOTO_BYTES: u64 = 100 * 1024;
 
 /// How many files to stat per directory before extrapolating. A backup can hold
 /// hundreds of thousands; the median is stable long before that.
