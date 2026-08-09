@@ -1507,15 +1507,15 @@ pub struct MediaItem {
 /// `local_path` on disk are listed — the gallery can't show what isn't there.
 pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
                 trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
          FROM media_items
-         WHERE local_path IS NOT NULL
-         ORDER BY taken_at DESC NULLS LAST, id DESC",
-    )?;
+         WHERE {HAS_PIXELS}
+         ORDER BY taken_at DESC NULLS LAST, id DESC"
+    ))?;
     let rows = stmt.query_map([], row_to_media)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
@@ -1562,6 +1562,18 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
 // happens in SQL so the count and the windows stay consistent. A NULL filter
 // matches everything.
 
+/// SQL for "this row has something to display".
+///
+/// It used to be `local_path IS NOT NULL` — bytes on disk or nothing. That was
+/// right while the camera roll only ever enumerated files, but with iCloud
+/// Photos on most assets have no original in the backup and only a thumbnail,
+/// and the old predicate hid every one of them. A message attachment with
+/// neither is still excluded, which is what that rule was really protecting.
+///
+/// Shared by every gallery query so the count, the windows and the facets can
+/// never disagree about which rows exist.
+const HAS_PIXELS: &str = "(local_path IS NOT NULL OR thumb_path IS NOT NULL)";
+
 /// SQL matching a JSON array of source labels bound at `?1`; `'[]'` = no source
 /// restriction. `COALESCE(source,'Other')` so the synthesized "Other" bucket
 /// (NULL source) is selectable, matching `media_sources`' label.
@@ -1596,7 +1608,7 @@ pub fn count_media(
     let search = search.map(escape_like);
     let sql = format!(
         "SELECT COUNT(*) FROM media_items
-         WHERE local_path IS NOT NULL
+         WHERE {HAS_PIXELS}
            AND {SOURCE_IN}
            AND {RANGES_IN}
            AND (?4 = 0 OR user_favorite = 1)
@@ -1637,7 +1649,7 @@ pub fn count_media_ranges(
     // `?2`/`?3` pair, so RANGES_IN is not used here.
     let sql = format!(
         "SELECT COUNT(*) FROM media_items
-         WHERE local_path IS NOT NULL
+         WHERE {HAS_PIXELS}
            AND {SOURCE_IN}
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
@@ -1690,7 +1702,7 @@ pub fn get_media_window(
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
                 trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
          FROM media_items
-         WHERE local_path IS NOT NULL
+         WHERE {HAS_PIXELS}
            AND {SOURCE_IN}
            AND {RANGES_IN}
            AND (?6 = 0 OR user_favorite = 1)
@@ -2329,28 +2341,33 @@ pub fn message_deletion_evidence(cache: &CacheDb) -> Result<DeletionEvidence> {
 /// Ordered by count descending (biggest sources first).
 pub fn media_sources(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
     let conn = cache.conn();
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT COALESCE(source, 'Other') AS s, COUNT(*) AS n
          FROM media_items
-         WHERE local_path IS NOT NULL
+         WHERE {HAS_PIXELS}
          GROUP BY s
-         ORDER BY n DESC, s",
-    )?;
+         ORDER BY n DESC, s"
+    ))?;
     let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
 
 /// What the media protocol needs to serve one item:
-/// `(local_path, mime, thumb_path, decrypt_key, plain_size)`. Returns `None` if
-/// the id is unknown or has no materialized bytes. `decrypt_key` is the
+/// `(local_path, mime, thumb_path, decrypt_key, plain_size, thumb_key,
+/// thumb_size)`. Returns `None` if the id is unknown or has no pixels at all.
+///
+/// `local_path` is `None` for an asset whose original stayed in iCloud — it is
+/// still servable from its thumbnail, so this is a normal state, not an error. `decrypt_key` is the
 /// class-prefixed wrapped key for an encrypted backup's original (see
 /// [`crate::crypto`]) and `plain_size` its real length (to trim CBC padding);
 /// both are `None` when `local_path` is already plaintext.
 pub type MediaBlob = (
-    String,
     Option<String>,
     Option<String>,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<i64>,
     Option<Vec<u8>>,
     Option<i64>,
 );
@@ -2359,17 +2376,22 @@ pub fn media_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
     Ok(cache
         .conn()
         .query_row(
-            "SELECT local_path, mime_type, thumb_path, decrypt_key, plain_size
-             FROM media_items
-             WHERE id = ?1 AND local_path IS NOT NULL",
+            &format!(
+                "SELECT local_path, mime_type, thumb_path, decrypt_key, plain_size,
+                        thumb_key, thumb_size
+                 FROM media_items
+                 WHERE id = ?1 AND {HAS_PIXELS}"
+            ),
             [id],
             |r| {
                 Ok((
-                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(0)?,
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
                     r.get::<_, Option<Vec<u8>>>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<Vec<u8>>>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
                 ))
             },
         )
@@ -2482,17 +2504,20 @@ pub fn note_image_blob(cache: &CacheDb, id: i64) -> Result<Option<MediaBlob>> {
     Ok(cache
         .conn()
         .query_row(
-            "SELECT image_local_path, image_mime, NULL, image_decrypt_key, image_plain_size
+            "SELECT image_local_path, image_mime, NULL, image_decrypt_key, image_plain_size,
+                    NULL, NULL
              FROM notes
              WHERE id = ?1 AND image_local_path IS NOT NULL",
             [id],
             |r| {
                 Ok((
-                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(0)?,
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
                     r.get::<_, Option<Vec<u8>>>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<Vec<u8>>>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
                 ))
             },
         )
@@ -2505,17 +2530,20 @@ pub fn note_media_blob(cache: &CacheDb, note_id: i64, index: i64) -> Result<Opti
     Ok(cache
         .conn()
         .query_row(
-            "SELECT local_path, mime, NULL, decrypt_key, plain_size
+            "SELECT local_path, mime, NULL, decrypt_key, plain_size,
+                    NULL, NULL
              FROM note_media
              WHERE note_id = ?1 AND position = ?2",
             [note_id, index],
             |r| {
                 Ok((
-                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(0)?,
                     r.get::<_, Option<String>>(1)?,
                     r.get::<_, Option<String>>(2)?,
                     r.get::<_, Option<Vec<u8>>>(3)?,
                     r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<Vec<u8>>>(5)?,
+                    r.get::<_, Option<i64>>(6)?,
                 ))
             },
         )
@@ -3149,8 +3177,10 @@ mod tests {
         assert_eq!(
             media_blob(&cache, 1).unwrap(),
             Some((
-                "/cache/media/a.png".into(),
+                Some("/cache/media/a.png".into()),
                 Some("image/png".into()),
+                None,
+                None,
                 None,
                 None,
                 None

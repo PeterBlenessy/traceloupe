@@ -414,8 +414,10 @@ pub fn import_backup(
                     tx.execute(
                         "INSERT INTO media_items
                             (domain, relative_path, kind, source, mime_type,
-                             taken_at, thumb_path, local_path, decrypt_key, plain_size)
-                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6, ?7, ?8)",
+                             taken_at, thumb_path, local_path, decrypt_key, plain_size,
+                             availability, thumb_key, thumb_size)
+                         VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6, ?7, ?8,
+                                 ?9, ?10, ?11)",
                         rusqlite::params![
                             a.relative_path,
                             a.kind,
@@ -424,9 +426,14 @@ pub fn import_backup(
                             a.thumb_path
                                 .as_ref()
                                 .map(|p| p.to_string_lossy().into_owned()),
-                            a.full_path.to_string_lossy(),
+                            a.full_path
+                                .as_ref()
+                                .map(|p| p.to_string_lossy().into_owned()),
                             a.decrypt_key,
                             a.plain_size,
+                            a.availability.as_str(),
+                            a.thumb_key,
+                            a.thumb_size,
                         ],
                     )?;
                 }
@@ -2121,8 +2128,10 @@ pub fn reimport_module(
                 tx.execute(
                     "INSERT INTO media_items
                         (domain, relative_path, kind, source, mime_type,
-                         taken_at, thumb_path, local_path, decrypt_key, plain_size)
-                     VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6, ?7, ?8)",
+                         taken_at, thumb_path, local_path, decrypt_key, plain_size,
+                         availability, thumb_key, thumb_size)
+                     VALUES ('CameraRollDomain', ?1, ?2, 'Photos', ?3, ?4, ?5, ?6, ?7, ?8,
+                             ?9, ?10, ?11)",
                     rusqlite::params![
                         a.relative_path,
                         a.kind,
@@ -2131,9 +2140,14 @@ pub fn reimport_module(
                         a.thumb_path
                             .as_ref()
                             .map(|p| p.to_string_lossy().into_owned()),
-                        a.full_path.to_string_lossy(),
+                        a.full_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().into_owned()),
                         a.decrypt_key,
                         a.plain_size,
+                        a.availability.as_str(),
+                        a.thumb_key,
+                        a.thumb_size,
                     ],
                 )?;
             }

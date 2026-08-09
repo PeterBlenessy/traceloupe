@@ -26,6 +26,35 @@ use rusqlite::{Connection, OpenFlags};
 use crate::crypto::{self, BackupDecryptor};
 use crate::{Error, Result};
 
+/// How much of an asset this backup actually holds.
+///
+/// A device with iCloud Photos on does not put most of its photo *files* in the
+/// backup — the catalogue lists every asset, but the originals stay in iCloud.
+/// Measured on a real 95,334-asset library, 10,396 assets had their original and
+/// 92,720 had only a thumbnail. Enumerating files alone therefore shows about a
+/// tenth of the library and gives no sign that the rest exists, which is what
+/// made tens of thousands of hidden photos look like they had been lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Availability {
+    /// The full-resolution file is in the backup.
+    Original,
+    /// Only iOS's pre-rendered thumbnail is here; the original is in iCloud.
+    ThumbnailOnly,
+    /// The catalogue knows the asset but the backup holds no pixels at all.
+    MetadataOnly,
+}
+
+impl Availability {
+    /// Stored on the cache row and matched by the UI filter.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Availability::Original => "original",
+            Availability::ThumbnailOnly => "thumbnail",
+            Availability::MetadataOnly => "metadata",
+        }
+    }
+}
+
 /// One camera-roll asset resolved to on-disk backup files.
 #[derive(Debug, Clone)]
 pub struct CameraRollAsset {
@@ -33,10 +62,20 @@ pub struct CameraRollAsset {
     pub relative_path: String,
     /// Full-resolution file in the backup (hashed name). Ciphertext on an
     /// encrypted backup — decrypt with [`Self::decrypt_key`] before serving.
-    pub full_path: PathBuf,
-    /// Pre-rendered JPEG thumbnail, ready to serve (decrypted into the cache on
-    /// an encrypted backup), if one exists.
+    /// `None` when the original was offloaded to iCloud and never backed up.
+    pub full_path: Option<PathBuf>,
+    /// What this backup actually holds for the asset.
+    pub availability: Availability,
+    /// iOS's pre-rendered JPEG thumbnail in the backup, if one exists. Still
+    /// CIPHERTEXT on an encrypted backup — decrypt with [`Self::thumb_key`] on
+    /// demand. Eagerly decrypting every one used to be affordable because only
+    /// assets with an original were enumerated; across a whole iCloud library it
+    /// would mean tens of thousands of decryptions and gigabytes written before
+    /// the first photo appears.
     pub thumb_path: Option<PathBuf>,
+    /// Encrypted backups only: wrapped key + plaintext length for `thumb_path`.
+    pub thumb_key: Option<Vec<u8>>,
+    pub thumb_size: Option<u64>,
     /// "photo" | "video".
     pub kind: &'static str,
     pub mime: Option<String>,
@@ -170,12 +209,38 @@ fn enumerate(
         ))
     })?;
 
-    let mut assets = Vec::new();
+    // Files whose original is present, keyed like the catalogue and the
+    // thumbnails. BTreeMap so the output order stays deterministic now that it
+    // no longer comes from the Manifest's ORDER BY.
+    let mut files: std::collections::BTreeMap<String, (String, String, Vec<u8>)> =
+        std::collections::BTreeMap::new();
     for (file_id, rel, blob) in rows.flatten() {
-        let Some((kind, mime)) = classify(&rel) else {
+        if classify(&rel).is_none() {
             continue; // skip directories, .AAE sidecars, etc.
-        };
+        }
         let key = rel.strip_prefix(MEDIA_PREFIX).unwrap_or(&rel).to_string();
+        files.insert(key, (file_id, rel, blob));
+    }
+
+    // THE UNION, not either side alone. The catalogue holds assets whose files
+    // stayed in iCloud; the file set holds things the catalogue never lists —
+    // notably the `.MOV` half of a Live Photo, which has no ZASSET row of its
+    // own. Enumerating either side alone silently drops the other's population.
+    let keys: std::collections::BTreeSet<&String> = files.keys().chain(meta.keys()).collect();
+
+    let mut assets = Vec::new();
+    for key in keys {
+        let key = key.clone();
+        let present = files.get(&key);
+        // A catalogue-only asset has no Manifest row, so its path is derived from
+        // the key the catalogue itself gave us.
+        let rel = match present {
+            Some((_, rel, _)) => rel.clone(),
+            None => format!("{MEDIA_PREFIX}{key}"),
+        };
+        let Some((kind, mime)) = classify(&rel) else {
+            continue;
+        };
         // A Live Photo is TWO files on disk — `IMG_0001.HEIC` and its paired
         // `IMG_0001.MOV` — but only ONE asset row (the still). So the `.MOV`
         // component finds no metadata and would show no capture date. Borrow the
@@ -193,34 +258,54 @@ fn enumerate(
         // Recently-deleted (trashed) assets are ingested too and badged later by
         // photos_meta (ZTRASHEDSTATE) — surfaced, not excluded, for forensics.
 
-        // Resolve the thumbnail to a servable plaintext path (decrypt to the
-        // cache for encrypted backups, raw path otherwise).
-        let thumb_path = match thumbs.get(&key) {
-            None => None,
-            Some((tid, tblob)) => Some(resolve_thumb(
-                decryptor,
-                media_cache_dir,
-                &file_path(tid),
-                tid,
-                tblob,
-            )?),
+        // Point at the thumbnail's backup blob and carry its key; the media
+        // handler decrypts on first request and caches the result. Doing it here
+        // instead would decrypt the whole library up front.
+        let (thumb_path, thumb_key, thumb_size) = match thumbs.get(&key) {
+            None => (None, None, None),
+            Some((tid, tblob)) => {
+                let (k, s) = match decryptor {
+                    Some(_) => match crypto::file_key_field(tblob) {
+                        Ok((k, s)) => (Some(k), s),
+                        // A thumbnail we cannot unwrap is not worth losing the
+                        // asset over — it still has its metadata and maybe its
+                        // original.
+                        Err(_) => (None, None),
+                    },
+                    None => (None, None),
+                };
+                (Some(file_path(tid)), k, s)
+            }
         };
 
         // Encrypted backups: keep the wrapped key + real size so the original
         // decrypts (and trims) on demand. Plaintext backups serve it directly.
-        // One asset with a missing/malformed `file` blob is skipped, not fatal —
-        // the rest of the roll still loads.
-        let (decrypt_key, plain_size) = match decryptor {
-            Some(_) => match crypto::file_key_field(&blob) {
-                Ok((enc_key, size)) => (Some(enc_key), size),
-                Err(_) => continue,
+        // An asset with a missing/malformed `file` blob keeps its metadata and
+        // thumbnail rather than vanishing — dropping it is how a photo silently
+        // disappears from the gallery.
+        let (full_path, decrypt_key, plain_size) = match present {
+            None => (None, None, None),
+            Some((file_id, _, blob)) => match decryptor {
+                Some(_) => match crypto::file_key_field(blob) {
+                    Ok((enc_key, size)) => (Some(file_path(file_id)), Some(enc_key), size),
+                    Err(_) => (None, None, None),
+                },
+                None => (Some(file_path(file_id)), None, None),
             },
-            None => (None, None),
+        };
+
+        let availability = match (&full_path, &thumb_path) {
+            (Some(_), _) => Availability::Original,
+            (None, Some(_)) => Availability::ThumbnailOnly,
+            (None, None) => Availability::MetadataOnly,
         };
 
         assets.push(CameraRollAsset {
-            full_path: file_path(&file_id),
+            full_path,
+            availability,
             thumb_path,
+            thumb_key,
+            thumb_size,
             kind,
             mime: Some(mime.to_string()),
             taken_at: asset_meta.and_then(|m| m.taken_at),
@@ -230,29 +315,6 @@ fn enumerate(
         });
     }
     Ok(assets)
-}
-
-/// Resolve a thumbnail to a plaintext path the media protocol can serve raw. For
-/// plaintext backups that's the backup blob itself; for encrypted backups we
-/// decrypt it once into `<media_cache_dir>/thumbs/<fileID>.JPG` and reuse it.
-fn resolve_thumb(
-    decryptor: Option<&BackupDecryptor>,
-    media_cache_dir: &Path,
-    raw_path: &Path,
-    file_id: &str,
-    blob: &[u8],
-) -> Result<PathBuf> {
-    let Some(dec) = decryptor else {
-        return Ok(raw_path.to_path_buf());
-    };
-    let dir = media_cache_dir.join("thumbs");
-    std::fs::create_dir_all(&dir).map_err(|e| Error::io(&dir, e))?;
-    let dest = dir.join(format!("{file_id}.JPG"));
-    if !dest.exists() {
-        let plain = dec.decrypt_file(blob, file_id)?;
-        crate::write_private(&dest, &plain).map_err(|e| Error::io(&dest, e))?;
-    }
-    Ok(dest)
 }
 
 struct AssetMeta {
@@ -392,6 +454,75 @@ mod tests {
     /// assets (42%), and on a device with iCloud Photos on it is most of the
     /// roll, hidden screenshots and screen recordings included.
     #[test]
+    /// The whole point of the inversion. With iCloud Photos on, the catalogue
+    /// lists tens of thousands of assets whose ORIGINALS were never backed up —
+    /// on a real 95,334-asset library only 10,396 had one. Enumerating files
+    /// alone showed a tenth of the library and gave no sign the rest existed,
+    /// which is what made a user's hidden photos look permanently lost. They are
+    /// recoverable as thumbnails, and must be emitted.
+    #[test]
+    fn emits_offloaded_assets_that_have_only_a_thumbnail() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path();
+        let conn = Connection::open(backup.join("Manifest.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             -- One asset with its original present.
+             INSERT INTO Files VALUES ('aa11', 'CameraRollDomain', 'Media/DCIM/100APPLE/IMG_0001.HEIC', 1, NULL);
+             INSERT INTO Files VALUES ('bb22', 'CameraRollDomain', 'Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_0001.HEIC/5005.JPG', 1, NULL);
+             -- One offloaded: thumbnail only, NO original in the backup.
+             INSERT INTO Files VALUES ('cc33', 'CameraRollDomain', 'Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_0002.HEIC/5005.JPG', 1, NULL);
+             -- The Live Photo video half, which has no catalogue row of its own
+             -- and would be dropped by a catalogue-only enumeration.
+             INSERT INTO Files VALUES ('ee55', 'CameraRollDomain', 'Media/DCIM/100APPLE/IMG_0001.MOV', 1, NULL);
+             INSERT INTO Files VALUES ('ff55aa', 'CameraRollDomain', 'Media/PhotoData/Photos.sqlite', 1, NULL);",
+        )
+        .unwrap();
+        let photos = backup.join("ff").join("ff55aa");
+        std::fs::create_dir_all(photos.parent().unwrap()).unwrap();
+        let ph = Connection::open(&photos).unwrap();
+        ph.execute_batch(
+            "CREATE TABLE ZASSET (ZDIRECTORY TEXT, ZFILENAME TEXT, ZDATECREATED REAL, ZTRASHEDSTATE INTEGER);
+             INSERT INTO ZASSET VALUES ('DCIM/100APPLE', 'IMG_0001.HEIC', 700000000.0, 0);
+             INSERT INTO ZASSET VALUES ('DCIM/100APPLE', 'IMG_0002.HEIC', 700000500.0, 0);
+             -- Catalogued but nothing local at all: neither original nor thumbnail.
+             INSERT INTO ZASSET VALUES ('DCIM/100APPLE', 'IMG_0003.HEIC', 700000900.0, 0);",
+        )
+        .unwrap();
+
+        let assets = parse_camera_roll(backup, None, &backup.join("_cache")).unwrap();
+        let by = |n: &str| {
+            assets
+                .iter()
+                .find(|a| a.relative_path.ends_with(n))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{n} missing from {:?}",
+                        assets.iter().map(|a| &a.relative_path).collect::<Vec<_>>()
+                    )
+                })
+        };
+
+        assert_eq!(by("IMG_0001.HEIC").availability, Availability::Original);
+        assert!(by("IMG_0001.HEIC").full_path.is_some());
+
+        // The offloaded one: present, showable, and honest about what it is.
+        let off = by("IMG_0002.HEIC");
+        assert_eq!(off.availability, Availability::ThumbnailOnly);
+        assert!(off.full_path.is_none(), "there is no original to point at");
+        assert!(
+            off.thumb_path.is_some(),
+            "its thumbnail is what makes it viewable"
+        );
+        assert_eq!(off.taken_at, Some(700_000_500 + 978_307_200));
+
+        assert_eq!(by("IMG_0003.HEIC").availability, Availability::MetadataOnly);
+
+        // The union, not the catalogue alone — the .MOV half has no ZASSET row.
+        assert_eq!(by("IMG_0001.MOV").availability, Availability::Original);
+        assert_eq!(assets.len(), 4);
+    }
+
     fn reads_icloud_library_assets_and_not_only_dcim() {
         let tmp = tempfile::tempdir().unwrap();
         let backup = tmp.path();
@@ -479,7 +610,7 @@ mod tests {
             .find(|a| a.relative_path.ends_with("IMG_8998.HEIC"))
             .unwrap();
         assert_eq!(photo.kind, "photo");
-        assert_eq!(photo.full_path, backup.join("aa").join("aa11"));
+        assert_eq!(photo.full_path, Some(backup.join("aa").join("aa11")));
         assert_eq!(photo.thumb_path, Some(backup.join("bb").join("bb22")));
         assert_eq!(photo.mime.as_deref(), Some("image/heic"));
         assert_eq!(photo.decrypt_key, None); // plaintext backup
