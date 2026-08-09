@@ -30,10 +30,12 @@ use crate::{Error, Result};
 ///
 /// A device with iCloud Photos on does not put most of its photo *files* in the
 /// backup — the catalogue lists every asset, but the originals stay in iCloud.
-/// Measured on a real 95,334-asset library, 10,396 assets had their original and
-/// 92,720 had only a thumbnail. Enumerating files alone therefore shows about a
-/// tenth of the library and gives no sign that the rest exists, which is what
-/// made tens of thousands of hidden photos look like they had been lost.
+/// On a device with iCloud Photos on this is the COMMON case, not an edge one:
+/// only a small minority of assets keep their original locally, while nearly all
+/// of them keep a thumbnail. Enumerating files alone therefore shows a fraction
+/// of the library and gives no sign that the rest exists, which is what made a
+/// large hidden-photo collection look like it had been lost. Run
+/// `backup-coverage` against a backup to see the split for that device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
     /// The full-resolution file is in the backup.
@@ -449,11 +451,10 @@ mod tests {
     use super::*;
 
     /// The whole point of the inversion. With iCloud Photos on, the catalogue
-    /// lists tens of thousands of assets whose ORIGINALS were never backed up —
-    /// on a real 95,334-asset library only 10,396 had one. Enumerating files
-    /// alone showed a tenth of the library and gave no sign the rest existed,
-    /// which is what made a user's hidden photos look permanently lost. They are
-    /// recoverable as thumbnails, and must be emitted.
+    /// lists many assets whose ORIGINALS were never backed up. Enumerating files
+    /// alone showed only the minority that kept one, and gave no sign the rest
+    /// existed — which is what made a hidden-photo collection look permanently
+    /// lost. They are recoverable as thumbnails, and must be emitted.
     #[test]
     fn emits_offloaded_assets_that_have_only_a_thumbnail() {
         let tmp = tempfile::tempdir().unwrap();

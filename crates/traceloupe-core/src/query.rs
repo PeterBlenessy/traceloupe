@@ -3365,8 +3365,8 @@ mod tests {
     }
 
     /// An offloaded asset has NO local_path — only a thumbnail. The old
-    /// `local_path IS NOT NULL` rule hid every one of them, which on a real
-    /// library was 92,720 of 95,334 photos. They must be listed, countable, and
+    /// `local_path IS NOT NULL` rule hid every one of them, which with iCloud
+    /// Photos on is most of a library. They must be listed, countable, and
     /// selectable on their own.
     #[test]
     fn offloaded_assets_are_listed_and_filterable() {
