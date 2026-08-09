@@ -56,6 +56,11 @@ pub fn import_backup(
     // produced no media of its own. On by default; see
     // docs/reference/media-discovery.md.
     discover_media: bool,
+    // Include assets whose full-resolution originals stayed in iCloud, shown
+    // from the thumbnails that WERE backed up. On by default: with iCloud Photos
+    // enabled these are most of the library, so excluding them silently hides
+    // the majority of a person's photos.
+    show_offloaded: bool,
     cancel: &CancelToken,
     mut on_phase: impl FnMut(ImportPhase),
 ) -> Result<ImportOutcome> {
@@ -410,6 +415,17 @@ pub fn import_backup(
                 // a commit per row is what stalls a large import.
                 let conn = cache.conn();
                 let tx = conn.unchecked_transaction()?;
+                // The setting decides presentation, not parsing: the parser
+                // always reports the whole library and the filter drops what the
+                // person asked not to see, so turning it back on needs no
+                // different parse.
+                let assets: Vec<_> = assets
+                    .into_iter()
+                    .filter(|a| {
+                        show_offloaded
+                            || a.availability == crate::parsers::camera_roll::Availability::Original
+                    })
+                    .collect();
                 for a in &assets {
                     tx.execute(
                         "INSERT INTO media_items
@@ -2075,6 +2091,10 @@ pub fn reimport_module(
     decryptor: Option<&crate::crypto::BackupDecryptor>,
     cache_path: &Path,
     work_dir: &Path,
+    // Same meaning as in `import_backup`. Threaded here too because a per-module
+    // refresh that ignored the setting would quietly contradict it: re-importing
+    // Photos would repopulate exactly what the person had switched off.
+    show_offloaded: bool,
 ) -> Result<ImportReport> {
     let _ = std::fs::create_dir_all(work_dir);
     let cache = CacheDb::open(cache_path)?;
@@ -2119,6 +2139,13 @@ pub fn reimport_module(
                 decryptor,
                 &media_cache_dir,
             )?;
+            let assets: Vec<_> = assets
+                .into_iter()
+                .filter(|a| {
+                    show_offloaded
+                        || a.availability == crate::parsers::camera_roll::Availability::Original
+                })
+                .collect();
             let conn = cache.conn();
             let tx = conn.unchecked_transaction()?;
             // Only the camera roll (source 'Photos'); message/app attachments in
@@ -2616,7 +2643,8 @@ mod tests {
         let work = tmp.path().join("work");
 
         for _ in 0..2 {
-            let report = reimport_module("recordings", &backup, None, &cache_path, &work).unwrap();
+            let report =
+                reimport_module("recordings", &backup, None, &cache_path, &work, true).unwrap();
             assert_eq!(report.recordings, 1);
         }
         // Still one row after two runs — the DELETE ran, no duplication.

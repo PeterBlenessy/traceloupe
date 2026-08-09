@@ -448,12 +448,6 @@ fn classify(rel: &str) -> Option<(&'static str, &'static str)> {
 mod tests {
     use super::*;
 
-    /// An iCloud Photo Library keeps the roll under `PhotoData/CPLAssets/`, not
-    /// `DCIM/`. Reading only `DCIM/` dropped those assets entirely and gave no
-    /// sign of it — on the public iOS 17 backup that was 216 of 519 present
-    /// assets (42%), and on a device with iCloud Photos on it is most of the
-    /// roll, hidden screenshots and screen recordings included.
-    #[test]
     /// The whole point of the inversion. With iCloud Photos on, the catalogue
     /// lists tens of thousands of assets whose ORIGINALS were never backed up —
     /// on a real 95,334-asset library only 10,396 had one. Enumerating files
@@ -523,6 +517,12 @@ mod tests {
         assert_eq!(assets.len(), 4);
     }
 
+    /// An iCloud Photo Library keeps the roll under `PhotoData/CPLAssets/`, not
+    /// `DCIM/`. Reading only `DCIM/` dropped those assets entirely and gave no
+    /// sign of it — on the public iOS 17 backup that was 216 of 519 present
+    /// assets (42%), and on a device with iCloud Photos on it is most of the
+    /// roll, hidden screenshots and screen recordings included.
+    #[test]
     fn reads_icloud_library_assets_and_not_only_dcim() {
         let tmp = tempfile::tempdir().unwrap();
         let backup = tmp.path();

@@ -545,6 +545,13 @@ export interface MediaItem {
   id: number;
   kind: string;
   source: string | null;
+  /**
+   * How much of the asset this backup holds: "original" | "thumbnail" |
+   * "metadata". "thumbnail" is a real photo whose full-size original stayed in
+   * iCloud — showable, but not at full resolution, and the grid says so rather
+   * than letting it pass for a complete image.
+   */
+  availability: string;
   mimeType: string | null;
   filename: string | null;
   takenAt: number | null;
@@ -1140,6 +1147,9 @@ export interface TraceLoupeClient {
     /** Find app media by inspecting database values rather than trusting
      *  hardcoded column names. Omitted = on. */
     discoverMedia?: boolean;
+    /** Include photos whose originals stayed in iCloud, shown from their
+     *  backed-up thumbnails. Omitted = on. */
+    showOffloaded?: boolean;
   }): Promise<ImportResult>;
   /** Subscribe to import progress events. Returns an unsubscribe fn. */
   onImportProgress(cb: (p: ImportProgress) => void): Promise<UnlistenFn>;
@@ -1535,6 +1545,8 @@ export interface TraceLoupeClient {
   /** Remove a past scan and everything scoped to it. */
   deleteSafetyScan(scanId: number): Promise<void>;
   mediaSources(): Promise<MediaSource[]>;
+  /** (availability, count) pairs: how much of each asset the backup holds. */
+  mediaAvailability(): Promise<MediaSource[]>;
   // Windowed/filterable list queries (null filter = all), for lazy-loading
   // huge lists a slice at a time.
   // `sources`/`ranges` are MULTI-select: empty array = no restriction (all).
@@ -1545,6 +1557,7 @@ export interface TraceLoupeClient {
     search?: string | null,
     favoritesOnly?: boolean,
     hiddenOnly?: boolean,
+    availability?: string[],
   ): Promise<number>;
   /** Count for each preset window (one range each) within `sources` — the
    *  Photos time-filter chip counts. */
@@ -1554,6 +1567,7 @@ export interface TraceLoupeClient {
     search?: string | null,
     favoritesOnly?: boolean,
     hiddenOnly?: boolean,
+    availability?: string[],
   ): Promise<number[]>;
   getMediaWindow(
     sources: string[],
@@ -1565,6 +1579,7 @@ export interface TraceLoupeClient {
     desc: boolean,
     favoritesOnly?: boolean,
     hiddenOnly?: boolean,
+    availability?: string[],
   ): Promise<MediaItem[]>;
   /** Toggle the user's star on a photo/video; persists across re-import. */
   setMediaFavorite(id: number, favorite: boolean): Promise<void>;
@@ -1701,7 +1716,7 @@ export interface TraceLoupeClient {
    * that type's rows (no iLEAPP). `moduleId` is one of "recordings",
    * "camera_roll", "messages", "notes", "calls", "safari".
    */
-  reimportModule(moduleId: string): Promise<ReimportResult>;
+  reimportModule(moduleId: string, showOffloaded?: boolean): Promise<ReimportResult>;
 }
 
 /** Build the `?thumb=1&k=…` query suffix shared by media/attachment URLs. */
@@ -1974,14 +1989,29 @@ const tauriClient: TraceLoupeClient = {
   unlockNote: (noteId, password) =>
     invoke<string>("unlock_note", { noteId, password }),
   listRecordings: () => invoke<Recording[]>("list_recordings"),
-  countMedia: (sources, ranges, search = null, favoritesOnly = false, hiddenOnly = false) =>
-    invoke<number>("count_media", { sources, ranges, search, favoritesOnly, hiddenOnly }),
+  countMedia: (
+    sources,
+    ranges,
+    search = null,
+    favoritesOnly = false,
+    hiddenOnly = false,
+    availability = [],
+  ) =>
+    invoke<number>("count_media", {
+      sources,
+      ranges,
+      search,
+      favoritesOnly,
+      hiddenOnly,
+      availability,
+    }),
   countMediaRanges: (
     sources,
     ranges,
     search = null,
     favoritesOnly = false,
     hiddenOnly = false,
+    availability = [],
   ) =>
     invoke<number[]>("count_media_ranges", {
       sources,
@@ -1989,6 +2019,7 @@ const tauriClient: TraceLoupeClient = {
       search,
       favoritesOnly,
       hiddenOnly,
+      availability,
     }),
   getMediaWindow: (
     sources,
@@ -2000,6 +2031,7 @@ const tauriClient: TraceLoupeClient = {
     desc,
     favoritesOnly = false,
     hiddenOnly = false,
+    availability = [],
   ) =>
     invoke<MediaItem[]>("get_media_window", {
       sources,
@@ -2011,6 +2043,7 @@ const tauriClient: TraceLoupeClient = {
       desc,
       favoritesOnly,
       hiddenOnly,
+      availability,
     }),
   setMediaFavorite: (id, favorite) =>
     invoke<void>("set_media_favorite", { id, favorite }),
@@ -2224,6 +2257,7 @@ const tauriClient: TraceLoupeClient = {
     return path;
   },
   mediaSources: () => invoke<MediaSource[]>("media_sources"),
+  mediaAvailability: () => invoke<MediaSource[]>("media_availability"),
   // Served by the register_uri_scheme_protocol handler in the Rust shell.
   // (mediaQuery below builds the `?thumb=1&k=…` suffix.)
   mediaUrl: (id, opts) =>
@@ -2241,8 +2275,8 @@ const tauriClient: TraceLoupeClient = {
     return path;
   },
   revealMedia: (id) => invoke<void>("reveal_media", { id }),
-  reimportModule: (moduleId) =>
-    invoke<ReimportResult>("reimport_module", { moduleId }),
+  reimportModule: (moduleId, showOffloaded) =>
+    invoke<ReimportResult>("reimport_module", { moduleId, showOffloaded }),
 };
 
 const mockBackups: BackupInfo[] = [
@@ -3129,6 +3163,7 @@ const mockMedia: MediaItem[] = [
   {
     id: 1,
     kind: "photo",
+    availability: "original",
     source: "Messages",
     mimeType: "image/png",
     filename: "traceloupe-test.png",
@@ -3158,6 +3193,7 @@ const mockMedia: MediaItem[] = [
   {
     id: 2,
     kind: "photo",
+    availability: "original",
     source: "Messages",
     mimeType: "image/png",
     filename: "sunset.png",
@@ -3187,6 +3223,7 @@ const mockMedia: MediaItem[] = [
   {
     id: 3,
     kind: "photo",
+    availability: "original",
     source: "Photos",
     mimeType: "image/png",
     filename: "forest.png",
@@ -3216,6 +3253,7 @@ const mockMedia: MediaItem[] = [
   {
     id: 4,
     kind: "photo",
+    availability: "thumbnail",
     source: "WhatsApp",
     mimeType: "image/heic",
     filename: "IMG_0421.heic",
@@ -7183,6 +7221,15 @@ const mockClient: TraceLoupeClient = {
     for (const m of mockMedia) {
       const s = m.source ?? "Other";
       counts.set(s, (counts.get(s) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  },
+  mediaAvailability: async () => {
+    if (!mockActive) return [];
+    const counts = new Map<string, number>();
+    for (const m of mockMedia) {
+      const a = m.availability ?? "original";
+      counts.set(a, (counts.get(a) ?? 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   },

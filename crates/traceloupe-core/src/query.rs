@@ -1460,6 +1460,11 @@ pub struct MediaItem {
     pub kind: String,
     /// App/artifact the media was found in ("Messages", "WhatsApp", …).
     pub source: Option<String>,
+    /// "original" | "thumbnail" | "metadata": how much of the asset this backup
+    /// holds. A "thumbnail" row is a real photo shown at thumbnail resolution
+    /// because its full-size original stayed in iCloud, and the grid has to say
+    /// so rather than let it pass as a full-resolution image.
+    pub availability: String,
     pub mime_type: Option<String>,
     pub filename: Option<String>,
     pub taken_at: Option<i64>,
@@ -1511,7 +1516,8 @@ pub fn list_media(cache: &CacheDb) -> Result<Vec<MediaItem>> {
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
-                trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
+                trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite,
+                availability
          FROM media_items
          WHERE {HAS_PIXELS}
          ORDER BY taken_at DESC NULLS LAST, id DESC"
@@ -1552,6 +1558,9 @@ fn row_to_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         shared_caption: r.get(24)?,
         shared_likes: r.get(25)?,
         user_favorite: r.get::<_, i64>(26)? != 0,
+        availability: r
+            .get::<_, Option<String>>(27)?
+            .unwrap_or_else(|| "original".into()),
     })
 }
 
@@ -1580,6 +1589,12 @@ const HAS_PIXELS: &str = "(local_path IS NOT NULL OR thumb_path IS NOT NULL)";
 const SOURCE_IN: &str =
     "(?1 = '[]' OR COALESCE(source, 'Other') IN (SELECT value FROM json_each(?1)))";
 
+/// SQL matching a JSON array of availability values ('original' | 'thumbnail')
+/// bound at `?8`; `'[]'` = no restriction. Multi-select like every other facet,
+/// so "show me the ones whose originals are missing" is one click.
+const AVAIL_IN: &str =
+    "(?8 = '[]' OR COALESCE(availability, 'original') IN (SELECT value FROM json_each(?8)))";
+
 /// SQL matching a JSON array of {lo,hi} time ranges bound at `?2`; `'[]'` = no
 /// time restriction. An item matches if it falls in ANY selected range (union);
 /// a null bound is open on that end. Undated media (`taken_at` NULL) match no
@@ -1604,6 +1619,7 @@ pub fn count_media(
     search: Option<&str>,
     favorites_only: bool,
     hidden_only: bool,
+    availability: &[String],
 ) -> Result<i64> {
     let search = search.map(escape_like);
     let sql = format!(
@@ -1611,6 +1627,7 @@ pub fn count_media(
          WHERE {HAS_PIXELS}
            AND {SOURCE_IN}
            AND {RANGES_IN}
+           AND {AVAIL_IN}
            AND (?4 = 0 OR user_favorite = 1)
            AND (?5 = 0 OR hidden = 1)
            AND (?3 IS NULL OR relative_path LIKE '%' || ?3 || '%' ESCAPE '\\'
@@ -1625,7 +1642,10 @@ pub fn count_media(
             filter_json(ranges),
             search,
             favorites_only as i64,
-            hidden_only as i64
+            hidden_only as i64,
+            "",
+            "",
+            filter_json(availability)
         ],
         |r| r.get(0),
     )?;
@@ -1642,6 +1662,7 @@ pub fn count_media_ranges(
     search: Option<&str>,
     favorites_only: bool,
     hidden_only: bool,
+    availability: &[String],
 ) -> Result<Vec<i64>> {
     let search = search.map(escape_like);
     let conn = cache.conn();
@@ -1651,6 +1672,7 @@ pub fn count_media_ranges(
         "SELECT COUNT(*) FROM media_items
          WHERE {HAS_PIXELS}
            AND {SOURCE_IN}
+           AND {AVAIL_IN}
            AND (?2 IS NULL OR taken_at >= ?2)
            AND (?3 IS NULL OR taken_at < ?3)
            AND (?5 = 0 OR user_favorite = 1)
@@ -1661,6 +1683,7 @@ pub fn count_media_ranges(
                           OR albums LIKE '%' || ?4 || '%' ESCAPE '\\')"
     );
     let sources_json = filter_json(sources);
+    let availability_json = filter_json(availability);
     let mut stmt = conn.prepare(&sql)?;
     let mut out = Vec::with_capacity(ranges.len());
     for r in ranges {
@@ -1671,7 +1694,9 @@ pub fn count_media_ranges(
                 r.hi,
                 search,
                 favorites_only as i64,
-                hidden_only as i64
+                hidden_only as i64,
+                "",
+                availability_json.as_str()
             ],
             |row| row.get(0),
         )?);
@@ -1690,6 +1715,7 @@ pub fn get_media_window(
     sort: Sort,
     favorites_only: bool,
     hidden_only: bool,
+    availability: &[String],
 ) -> Result<Vec<MediaItem>> {
     let conn = cache.conn();
     let search = search.map(escape_like);
@@ -1700,11 +1726,13 @@ pub fn get_media_window(
         "SELECT id, kind, source, mime_type, relative_path, taken_at, persons,
                 latitude, longitude, is_favorite, location, albums,
                 width, height, duration_s, file_size, camera, lens, exif, hidden, subtype,
-                trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite
+                trashed, trashed_at, added_at, shared_caption, shared_likes, user_favorite,
+                availability
          FROM media_items
          WHERE {HAS_PIXELS}
            AND {SOURCE_IN}
            AND {RANGES_IN}
+           AND {AVAIL_IN}
            AND (?6 = 0 OR user_favorite = 1)
            AND (?7 = 0 OR hidden = 1)
            AND (?5 IS NULL OR relative_path LIKE '%' || ?5 || '%' ESCAPE '\\'
@@ -1724,7 +1752,8 @@ pub fn get_media_window(
             offset,
             search,
             favorites_only as i64,
-            hidden_only as i64
+            hidden_only as i64,
+            filter_json(availability)
         ],
         row_to_media,
     )?;
@@ -2335,6 +2364,25 @@ pub fn message_deletion_evidence(cache: &CacheDb) -> Result<DeletionEvidence> {
         first_gap_at: first,
         last_gap_at: last,
     })
+}
+
+/// Availability values present, with a count each, for the gallery filter.
+///
+/// Only values that actually occur are returned, so a backup taken without
+/// iCloud Photos shows a single "original" bucket and the filter stays out of
+/// the way instead of offering an option that would match nothing.
+pub fn media_availability(cache: &CacheDb) -> Result<Vec<(String, i64)>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT COALESCE(availability, 'original') AS a, COUNT(*) AS n
+         FROM media_items
+         WHERE {HAS_PIXELS}
+         GROUP BY a
+         ORDER BY n DESC, a"
+    ))?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 /// Distinct media sources present, with a count each, for the gallery filter.
@@ -3211,9 +3259,12 @@ mod tests {
         assert_eq!(set_user_favorite(&cache, 999, true).unwrap(), None); // no such row
 
         // favorites_only now returns just the starred one.
-        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 1);
         assert_eq!(
-            count_media(&cache, &[], &[], None, false, false).unwrap(),
+            count_media(&cache, &[], &[], None, true, false, &[]).unwrap(),
+            1
+        );
+        assert_eq!(
+            count_media(&cache, &[], &[], None, false, false, &[]).unwrap(),
             2
         );
         let starred = get_media_window(
@@ -3226,6 +3277,7 @@ mod tests {
             Sort::new("taken_at", true),
             true,
             false,
+            &[],
         )
         .unwrap();
         assert_eq!(starred.len(), 1);
@@ -3238,13 +3290,22 @@ mod tests {
             .conn()
             .execute("UPDATE media_items SET user_favorite = 0", [])
             .unwrap();
-        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 0);
+        assert_eq!(
+            count_media(&cache, &[], &[], None, true, false, &[]).unwrap(),
+            0
+        );
         apply_user_favorites(&cache, &["Media/DCIM/IMG_0001.png".to_string()]).unwrap();
-        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 1);
+        assert_eq!(
+            count_media(&cache, &[], &[], None, true, false, &[]).unwrap(),
+            1
+        );
 
         // Unstarring clears it.
         set_user_favorite(&cache, 1, false).unwrap();
-        assert_eq!(count_media(&cache, &[], &[], None, true, false).unwrap(), 0);
+        assert_eq!(
+            count_media(&cache, &[], &[], None, true, false, &[]).unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -3272,7 +3333,7 @@ mod tests {
         };
         let s = Sort::new("taken_at", true);
         let count = |src: &[String], r: &[TimeRange]| {
-            count_media(&cache, src, r, None, false, false).unwrap()
+            count_media(&cache, src, r, None, false, false, &[]).unwrap()
         };
 
         // Empty = everything (including the undated item).
@@ -3296,10 +3357,65 @@ mod tests {
             s,
             false,
             false,
+            &[],
         )
         .unwrap();
         let ids: Vec<i64> = rows.iter().map(|m| m.id).collect();
         assert_eq!(ids, vec![4, 2]); // newest first
+    }
+
+    /// An offloaded asset has NO local_path — only a thumbnail. The old
+    /// `local_path IS NOT NULL` rule hid every one of them, which on a real
+    /// library was 92,720 of 95,334 photos. They must be listed, countable, and
+    /// selectable on their own.
+    #[test]
+    fn offloaded_assets_are_listed_and_filterable() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO media_items
+                    (id, kind, source, relative_path, taken_at, local_path, thumb_path, availability)
+                 VALUES
+                    (1,'photo','Photos','a.heic', 100, '/a', '/at', 'original'),
+                    (2,'photo','Photos','b.heic', 200, NULL, '/bt', 'thumbnail'),
+                    (3,'photo','Photos','c.heic', 300, NULL, '/ct', 'thumbnail'),
+                    -- A message attachment with no bytes at all: still excluded,
+                    -- which is what the old local_path rule was really for.
+                    (4,'photo','Messages','d.heic', 400, NULL, NULL, 'metadata');",
+            )
+            .unwrap();
+
+        let n =
+            |avail: &[String]| count_media(&cache, &[], &[], None, false, false, avail).unwrap();
+        assert_eq!(n(&[]), 3, "offloaded assets must be counted, not hidden");
+        assert_eq!(n(&["thumbnail".into()]), 2);
+        assert_eq!(n(&["original".into()]), 1);
+        // Multi-select is a union, like every other facet.
+        assert_eq!(n(&["original".into(), "thumbnail".into()]), 3);
+
+        let rows = get_media_window(
+            &cache,
+            &[],
+            &[],
+            None,
+            0,
+            50,
+            Sort::new("taken_at", true),
+            false,
+            false,
+            &["thumbnail".into()],
+        )
+        .unwrap();
+        assert_eq!(rows.iter().map(|m| m.id).collect::<Vec<_>>(), vec![3, 2]);
+        assert!(rows.iter().all(|m| m.availability == "thumbnail"));
+
+        // The facet must not offer a bucket that selects nothing visible.
+        let facets = media_availability(&cache).unwrap();
+        assert_eq!(
+            facets,
+            vec![("thumbnail".into(), 2), ("original".into(), 1)]
+        );
     }
 
     #[test]
@@ -3315,7 +3431,7 @@ mod tests {
             )
             .unwrap();
         let n = |hidden_only: bool, fav: bool, src: &[String]| {
-            count_media(&cache, src, &[], None, fav, hidden_only).unwrap()
+            count_media(&cache, src, &[], None, fav, hidden_only, &[]).unwrap()
         };
 
         // Off = everything; on = only the hidden ones.
@@ -3339,6 +3455,7 @@ mod tests {
             Sort::new("taken_at", true),
             false,
             true,
+            &[],
         )
         .unwrap();
         assert_eq!(rows.iter().map(|m| m.id).collect::<Vec<_>>(), vec![3, 2]);

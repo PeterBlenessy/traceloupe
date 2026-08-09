@@ -63,6 +63,8 @@ type SettingsProviderState = {
    *  On by default — see docs/reference/media-discovery.md. */
   discoverAppMedia: boolean;
   setDiscoverAppMedia: (v: boolean) => void;
+  showOffloadedPhotos: boolean;
+  setShowOffloadedPhotos: (v: boolean) => void;
   /** Import module ids the user chose, or null to use the catalog defaults. */
   importModules: string[] | null;
   setImportModules: (ids: string[]) => void;
@@ -110,6 +112,7 @@ const MEDIA_META_KEY = "traceloupe-media-metadata";
 const RECOVER_PHOTOS_KEY = "traceloupe-recover-from-photos";
 const FETCH_APP_ICONS_KEY = "traceloupe-fetch-app-icons";
 const DISCOVER_APP_MEDIA_KEY = "traceloupe-discover-app-media";
+const SHOW_OFFLOADED_PHOTOS_KEY = "traceloupe-show-offloaded-photos";
 const IMPORT_MODULES_KEY = "traceloupe-import-modules";
 const LOG_LEVEL_KEY = "traceloupe-log-level";
 const BIOMETRIC_KEY = "traceloupe-biometric-unlock";
@@ -220,6 +223,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   // would explain.
   const [discoverAppMedia, setDiscoverAppMediaState] = useState<boolean>(() =>
     readBool(DISCOVER_APP_MEDIA_KEY),
+  );
+  const [showOffloadedPhotos, setShowOffloadedPhotosState] = useState<boolean>(
+    () => readBool(SHOW_OFFLOADED_PHOTOS_KEY),
   );
   const [importModules, setImportModulesState] = useState<string[] | null>(() =>
     readStringArray(IMPORT_MODULES_KEY),
@@ -363,6 +369,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(FETCH_APP_ICONS_KEY, String(v));
     setFetchAppIconsState(v);
   };
+  const setShowOffloadedPhotos = (v: boolean) => {
+    localStorage.setItem(SHOW_OFFLOADED_PHOTOS_KEY, String(v));
+    setShowOffloadedPhotosState(v);
+  };
+
   const setDiscoverAppMedia = (v: boolean) => {
     localStorage.setItem(DISCOVER_APP_MEDIA_KEY, String(v));
     setDiscoverAppMediaState(v);
@@ -431,6 +442,8 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         fetchAppIcons,
         discoverAppMedia,
         setDiscoverAppMedia,
+        showOffloadedPhotos,
+        setShowOffloadedPhotos,
         setFetchAppIcons,
         importModules,
         setImportModules,

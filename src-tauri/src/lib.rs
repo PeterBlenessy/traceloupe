@@ -609,8 +609,13 @@ async fn import_backup(
     // caller says nothing, so an older frontend (or a scripted call) keeps the
     // behaviour the setting describes rather than silently losing media.
     discover_media: Option<bool>,
+    // Include assets whose originals stayed in iCloud, shown from their
+    // backed-up thumbnails. Same default reasoning as `discover_media`: silence
+    // means ON, so an older frontend does not quietly hide most of the library.
+    show_offloaded: Option<bool>,
 ) -> Result<ImportResult, String> {
     let discover_media = discover_media.unwrap_or(true);
+    let show_offloaded = show_offloaded.unwrap_or(true);
     if !valid_backup_id(&backup_id) {
         return Err("invalid backup id".to_string());
     }
@@ -667,6 +672,7 @@ async fn import_backup(
             &work_dir,
             &modules,
             discover_media,
+            show_offloaded,
             &cancel,
             |phase| {
                 let event = match &phase {
@@ -1157,7 +1163,9 @@ async fn reimport_module(
     session: State<'_, SessionKeys>,
     gate: State<'_, ImportGate>,
     module_id: String,
+    show_offloaded: Option<bool>,
 ) -> Result<ReimportResult, String> {
+    let show_offloaded = show_offloaded.unwrap_or(true);
     if !import::REIMPORTABLE_NATIVE.contains(&module_id.as_str()) {
         return Err(format!("'{module_id}' can't be re-imported on its own"));
     }
@@ -1250,6 +1258,7 @@ async fn reimport_module(
             decryptor.as_deref(),
             &cp,
             &work_dir,
+            show_offloaded,
         )
     })
     .await
@@ -3267,6 +3276,18 @@ async fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i
     .map_err(|e| e.to_string())?
 }
 
+/// (availability, count) pairs for the gallery's "in this backup" filter.
+#[tauri::command]
+async fn media_availability(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::media_availability(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // Windowed, filterable list commands (async + spawn_blocking) so the UI can
 // lazily load huge lists a slice at a time — the same pattern as messages.
 
@@ -3321,7 +3342,9 @@ async fn count_media(
     search: Option<String>,
     favorites_only: bool,
     hidden_only: bool,
+    availability: Option<Vec<String>>,
 ) -> Result<i64, String> {
+    let availability = availability.unwrap_or_default();
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -3332,6 +3355,7 @@ async fn count_media(
             search.as_deref(),
             favorites_only,
             hidden_only,
+            &availability,
         )
         .map_err(|e| e.to_string())
     })
@@ -3347,7 +3371,9 @@ async fn count_media_ranges(
     search: Option<String>,
     favorites_only: bool,
     hidden_only: bool,
+    availability: Option<Vec<String>>,
 ) -> Result<Vec<i64>, String> {
+    let availability = availability.unwrap_or_default();
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -3358,6 +3384,7 @@ async fn count_media_ranges(
             search.as_deref(),
             favorites_only,
             hidden_only,
+            &availability,
         )
         .map_err(|e| e.to_string())
     })
@@ -3378,7 +3405,9 @@ async fn get_media_window(
     desc: bool,
     favorites_only: bool,
     hidden_only: bool,
+    availability: Option<Vec<String>>,
 ) -> Result<Vec<MediaItem>, String> {
+    let availability = availability.unwrap_or_default();
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -3392,6 +3421,7 @@ async fn get_media_window(
             media_sort(&sort_by, desc),
             favorites_only,
             hidden_only,
+            &availability,
         )
         .map_err(|e| e.to_string())
     })
@@ -5213,6 +5243,7 @@ pub fn run() {
             list_installed_apps,
             get_app_icons,
             media_sources,
+            media_availability,
             count_media,
             count_media_ranges,
             get_media_window,
