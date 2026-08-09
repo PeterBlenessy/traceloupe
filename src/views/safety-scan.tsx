@@ -1889,9 +1889,39 @@ function SuppressionChip() {
   const remove = useMutation({
     mutationFn: (r: Suppression) =>
       client.removeSafetySuppression(r.scope, r.value, r.category, r.sender),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["safetyScan"] }),
+    onSuccess: (back) => {
+      qc.invalidateQueries({ queryKey: ["safetyScan"] });
+      // Say what came back. The earlier behaviour left a removed rule's
+      // dismissals in place, which meant the blind spot outlived the rule with
+      // nothing left pointing at it.
+      toast.success(
+        back === 0
+          ? "Rule removed"
+          : `Rule removed — ${back} finding${back === 1 ? "" : "s"} back in view`,
+        {
+          description:
+            back === 0
+              ? "It was not dismissing anything."
+              : "Anything you dismissed by hand stays dismissed.",
+        },
+      );
+    },
   });
   const resolve = useThreadLabel();
+  const resolveContact = useContactResolver();
+  /** A rule's subject, named the way the rest of the app names people. */
+  const subject = (r: Suppression): string => {
+    if (r.scope === "content+sender") {
+      const who =
+        r.sender === "me"
+          ? "you"
+          : (resolveContact(r.sender)?.name ?? r.sender);
+      return `“${displayKey(r.value)}” from ${who}`;
+    }
+    if (r.scope === "content+any") return `“${displayKey(r.value)}” from anyone`;
+    if (r.scope === "thread") return (resolve(r.value) ?? r.value);
+    return CATEGORY_LABEL[r.value as ContentCategory] ?? r.value;
+  };
   if (!rules?.length) return null;
 
   return (
@@ -1912,7 +1942,8 @@ function SuppressionChip() {
       <PopoverContent align="end" className="w-96 space-y-2">
         <p className="text-xs text-muted-foreground">
           These dismiss matching findings automatically, in this scan and future
-          ones. Nothing is hidden — they are counted under “Show dismissed”.
+          ones. Nothing is hidden — they are counted under “Show dismissed”. The
+          number beside each rule is what it is swallowing right now.
         </p>
         <ul className="space-y-1">
           {rules.map((r) => (
@@ -1921,20 +1952,40 @@ function SuppressionChip() {
               className="flex items-center gap-2 rounded-md border px-2 py-1.5"
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium">
-                  {r.scope === "thread"
-                    ? (resolve(r.value) ?? r.value)
-                    : (CATEGORY_LABEL[r.value as ContentCategory] ?? r.value)}
-                </p>
+                <p className="truncate text-xs font-medium">{subject(r)}</p>
                 <p className="truncate text-3xs text-muted-foreground">
                   {r.scope === "thread"
                     ? r.category
                       ? `${CATEGORY_LABEL[r.category as ContentCategory] ?? r.category} in this conversation`
                       : "Every category in this conversation — made before rules were per-category"
-                    : "Whole category"}
+                    : r.scope === "category"
+                      ? "Whole category"
+                      : (CATEGORY_LABEL[r.category as ContentCategory] ??
+                        r.category ??
+                        "")}
                   {r.reason ? ` · ${r.reason}` : ""}
                 </p>
               </div>
+              {/* What it is actually swallowing. A rule you cannot see the
+                  effect of is the dangerous version of this feature. */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className={
+                      r.hits === 0
+                        ? "shrink-0 rounded-full border border-dashed px-1.5 py-0.5 text-3xs text-muted-foreground"
+                        : "shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-3xs tabular-nums"
+                    }
+                  >
+                    {r.hits === 0 ? "nothing" : r.hits}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {r.hits === 0
+                    ? "This rule is not dismissing anything — it is either stale or was never needed"
+                    : `Dismissing ${r.hits} finding${r.hits === 1 ? "" : "s"} right now. Turn on “Show dismissed” to read them.`}
+                </TooltipContent>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Button
@@ -1947,8 +1998,8 @@ function SuppressionChip() {
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  Stop dismissing these automatically. Findings it already
-                  dismissed keep their verdict.
+                  Stop dismissing these automatically. What this rule dismissed
+                  comes back; anything you dismissed by hand stays dismissed.
                 </TooltipContent>
               </Tooltip>
             </li>

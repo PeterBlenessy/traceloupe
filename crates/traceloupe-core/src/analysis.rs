@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 12;
+const SCHEMA_VERSION: i64 = 13;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -354,6 +354,15 @@ CREATE TABLE IF NOT EXISTS finding_verdicts (
     verdict     TEXT,                          -- 'dismissed' | NULL
     reason      TEXT,                          -- why, when dismissed
     seen_at     INTEGER,                       -- NULL = nobody has looked
+    -- Who put this row here. NULL = nobody decided anything, the finding was
+    -- merely READ (mark_seen). 'person' = a decision, which no rule may
+    -- overrule and no rule removal may undo. 'rule' = a standing rule, which
+    -- removing that rule takes back.
+    --
+    -- A boolean cannot express this: a NULL verdict means "merely read" after
+    -- mark_seen but "explicitly kept" after set_verdict, and a rule must cover
+    -- the first and never the second.
+    origin      TEXT,
     at          INTEGER NOT NULL,
     PRIMARY KEY (fingerprint, category)
 );
@@ -542,6 +551,21 @@ pub struct NewFinding {
     /// `safety_scan::content_key`. `None` when the text is too long to recur,
     /// which is exactly when no content rule should ever match it (#404).
     pub content_key: Option<String>,
+}
+
+/// A standing rule as the panel shows it, including what it is currently
+/// swallowing.
+#[derive(Debug, Clone)]
+pub struct SuppressionRow {
+    pub scope: String,
+    pub value: String,
+    /// `None` for a pre-v10 rule covering every category.
+    pub category: Option<String>,
+    /// `""` when the rule is not bound to one person.
+    pub sender: String,
+    pub reason: Option<String>,
+    /// Live count of findings this rule is dismissing right now.
+    pub hits: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -902,6 +926,28 @@ impl AnalysisDb {
                      FROM suppressions;
                      DROP TABLE suppressions;
                      ALTER TABLE suppressions_v12 RENAME TO suppressions;",
+                )?;
+            }
+            // v13: which verdicts a rule made (#406), so removing a rule can
+            // take back exactly what it dismissed and nothing a person decided.
+            let has_by_rule = conn
+                .prepare("PRAGMA table_info(finding_verdicts)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "origin");
+            if !has_by_rule {
+                // Verdicts written before this stay 0 — indistinguishable from a
+                // hand decision now, so they are treated as one. Conservative:
+                // removing an old rule leaves its old dismissals in place rather
+                // than resurfacing something the user may have judged themselves.
+                conn.execute("ALTER TABLE finding_verdicts ADD COLUMN origin TEXT", [])?;
+                // Existing verdicts are indistinguishable from a hand decision
+                // now, so they are treated as one: removing an old rule leaves
+                // its old dismissals rather than resurfacing something the user
+                // may have judged themselves.
+                conn.execute(
+                    "UPDATE finding_verdicts SET origin = 'person' WHERE verdict IS NOT NULL",
+                    [],
                 )?;
             }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -1763,11 +1809,16 @@ impl AnalysisDb {
         at: i64,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO finding_verdicts (fingerprint, category, verdict, reason, at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
+            // origin = 'person': this is a decision, whichever way it went.
+            // Keeping a finding explicitly is as much a decision as dismissing
+            // it, and no standing rule may overrule either.
+            "INSERT INTO finding_verdicts
+                 (fingerprint, category, verdict, reason, origin, at)
+             VALUES (?1, ?2, ?3, ?4, 'person', ?5)
              ON CONFLICT(fingerprint, category) DO UPDATE SET
                  verdict = excluded.verdict,
                  reason  = excluded.reason,
+                 origin  = 'person',
                  at      = excluded.at",
             params![fingerprint, category.as_str(), verdict, reason, at],
         )?;
@@ -1813,13 +1864,34 @@ impl AnalysisDb {
         )?;
         self.apply_suppressions(at)
     }
+}
 
+/// How a rule matches a finding. ONE definition: `apply_suppressions` uses it
+/// to dismiss, and `list_suppressions` uses it to count what each rule is
+/// currently swallowing. Two copies of this predicate would drift, and the
+/// panel would report a number the engine does not act on.
+const RULE_MATCH: &str = "\
+    ((s.scope = 'thread'   AND s.value = f.thread_identifier) \
+  OR (s.scope = 'category' AND s.value = f.category) \
+  OR (s.scope = 'content+any' \
+      AND f.content_key IS NOT NULL AND s.value = f.content_key) \
+  OR (s.scope = 'content+sender' \
+      AND f.content_key IS NOT NULL AND s.value = f.content_key \
+      AND f.sender IS NOT NULL AND s.sender = f.sender)) \
+ AND (s.category IS NULL OR s.category = f.category)";
+
+impl AnalysisDb {
     /// Dismiss every finding a rule covers that is not already judged.
     ///
     /// Called when a rule is created and again whenever findings are written,
-    /// so a rule made today still covers what tomorrow's scan turns up. An
-    /// existing verdict is left alone: a rule must not overwrite a decision the
-    /// user made by hand.
+    /// so a rule made today still covers what tomorrow's scan turns up. A
+    /// verdict a person made is left alone: a rule must not overwrite a
+    /// decision the user made by hand. A row that exists only because the
+    /// finding was READ (`mark_seen` writes one with a NULL verdict) is not a
+    /// decision, and a rule still covers it — testing for the row rather than
+    /// for a verdict put every finding the reviewer had opened permanently
+    /// beyond every rule's reach (#406).
+    ///
     /// The four scopes, narrow to broad:
     ///
     /// - `content+sender` — this exact short content, from this person. The one
@@ -1852,27 +1924,25 @@ impl AnalysisDb {
     ///   something they have actually seen.
     pub fn apply_suppressions(&self, at: i64) -> Result<usize> {
         Ok(self.conn.execute(
-            "INSERT INTO finding_verdicts (fingerprint, category, verdict, reason, at)
-             SELECT f.fingerprint, f.category, 'dismissed',
-                    COALESCE(s.reason, 'Matched a rule you set'), ?1
-             FROM content_findings f
-             JOIN suppressions s
-               ON ((s.scope = 'thread'   AND s.value = f.thread_identifier)
-                OR (s.scope = 'category' AND s.value = f.category)
-                OR (s.scope = 'content+any'
-                    AND f.content_key IS NOT NULL
-                    AND s.value = f.content_key)
-                OR (s.scope = 'content+sender'
-                    AND f.content_key IS NOT NULL
-                    AND s.value = f.content_key
-                    AND f.sender IS NOT NULL
-                    AND s.sender = f.sender))
-              AND (s.category IS NULL OR s.category = f.category)
-             WHERE f.severity < 3
-               AND NOT EXISTS (SELECT 1 FROM finding_verdicts v
-                               WHERE v.fingerprint = f.fingerprint
-                                 AND v.category = f.category)
-             ON CONFLICT(fingerprint, category) DO NOTHING",
+            &format!(
+                "INSERT INTO finding_verdicts
+                     (fingerprint, category, verdict, reason, origin, at)
+                 SELECT f.fingerprint, f.category, 'dismissed',
+                        COALESCE(s.reason, 'Matched a rule you set'), 'rule', ?1
+                 FROM content_findings f
+                 JOIN suppressions s ON {RULE_MATCH}
+                 WHERE f.severity < 3
+                   AND NOT EXISTS (SELECT 1 FROM finding_verdicts v
+                                   WHERE v.fingerprint = f.fingerprint
+                                     AND v.category = f.category
+                                     AND v.origin = 'person')
+                 ON CONFLICT(fingerprint, category) DO UPDATE SET
+                     verdict = excluded.verdict,
+                     reason  = excluded.reason,
+                     origin  = 'rule',
+                     at      = excluded.at
+                 WHERE finding_verdicts.origin IS NOT 'person'"
+            ),
             params![at],
         )?)
     }
@@ -1880,16 +1950,30 @@ impl AnalysisDb {
     /// Every standing rule, newest first, as (scope, value, category, reason).
     /// A `None` category is a pre-v10 rule covering every category — the UI
     /// must say so rather than presenting it as an ordinary narrow rule.
-    #[allow(clippy::type_complexity)] // one row's columns; a struct buys nothing here
-    pub fn list_suppressions(
-        &self,
-    ) -> Result<Vec<(String, String, Option<String>, String, Option<String>)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT scope, value, category, sender, reason
-             FROM suppressions ORDER BY created_at DESC",
-        )?;
+    /// `hits` is what the rule is dismissing RIGHT NOW, counted with the same
+    /// predicate the engine acts on. A rule with zero is either stale or was
+    /// never needed, and the panel says so — a standing rule nobody can see the
+    /// effect of is the shape this whole feature is trying to avoid.
+    pub fn list_suppressions(&self) -> Result<Vec<SuppressionRow>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT s.scope, s.value, s.category, s.sender, s.reason,
+                    (SELECT COUNT(*) FROM content_findings f
+                     WHERE {RULE_MATCH}
+                       AND EXISTS (SELECT 1 FROM finding_verdicts v
+                                   WHERE v.fingerprint = f.fingerprint
+                                     AND v.category = f.category
+                                     AND v.verdict = 'dismissed'))
+             FROM suppressions s ORDER BY s.created_at DESC"
+        ))?;
         let rows = stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            Ok(SuppressionRow {
+                scope: r.get(0)?,
+                value: r.get(1)?,
+                category: r.get(2)?,
+                sender: r.get(3)?,
+                reason: r.get(4)?,
+                hits: r.get(5)?,
+            })
         })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
@@ -1906,7 +1990,8 @@ impl AnalysisDb {
         value: &str,
         category: Option<&str>,
         sender: Option<&str>,
-    ) -> Result<()> {
+        at: i64,
+    ) -> Result<usize> {
         self.conn.execute(
             "DELETE FROM suppressions
              WHERE scope = ?1 AND value = ?2
@@ -1914,7 +1999,32 @@ impl AnalysisDb {
                AND sender = ?4",
             params![scope, value, category, sender.unwrap_or("")],
         )?;
-        Ok(())
+        // Take back every rule-made verdict, then re-apply what is left. A
+        // finding two rules covered stays dismissed; one only this rule covered
+        // comes back. Verdicts a person made carry origin = 'person' and are
+        // never touched — undoing YOUR rule is not undoing YOUR judgement.
+        //
+        // The row is updated rather than deleted so `seen_at` survives: a
+        // finding you had already read must not become unread because a rule
+        // was removed.
+        let before: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM finding_verdicts WHERE verdict = 'dismissed'",
+            [],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "UPDATE finding_verdicts
+             SET verdict = NULL, reason = NULL, origin = NULL, at = ?1
+             WHERE origin = 'rule'",
+            params![at],
+        )?;
+        self.apply_suppressions(at)?;
+        let after: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM finding_verdicts WHERE verdict = 'dismissed'",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok((before - after).max(0) as usize)
     }
 
     /// Mark a finding read — the first time its flagged text is revealed.
@@ -3675,6 +3785,27 @@ mod tests {
         assert_eq!(db.scan_by_id(scan).unwrap().unwrap().error, None);
     }
 
+    /// Reading a finding must not put it out of a rule's reach. `mark_seen`
+    /// writes a verdict row with a NULL verdict, so a guard that tested for the
+    /// ROW rather than for a decision made every finding the reviewer had
+    /// opened permanently invisible to every standing rule — including the rule
+    /// they had just made from that very finding.
+    #[test]
+    fn a_rule_covers_a_finding_the_reviewer_has_already_read() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 100)
+            .unwrap();
+        db.mark_seen("fp1", Category::ScamFraud, 150).unwrap();
+        let n = db
+            .add_suppression("category", "scam-fraud", "scam-fraud", None, None, 200)
+            .unwrap();
+        assert_eq!(
+            n, 1,
+            "a rule must cover a finding the reviewer has looked at"
+        );
+    }
+
     #[test]
     fn a_rule_dismisses_rather_than_hides() {
         // The safety property. A conversation marked fine today may not be fine
@@ -3788,9 +3919,12 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_rule_leaves_the_verdicts_it_made() {
-        // Undoing a rule is not re-opening every judgement it made; resurrecting
-        // a hundred findings silently would be its own surprise.
+    fn removing_a_rule_takes_back_what_it_dismissed_but_not_your_own_judgement() {
+        // The earlier contract left them dismissed, reasoning that resurrecting
+        // a hundred findings SILENTLY would be its own surprise. The silence was
+        // the problem, not the resurrection: a rule whose effect outlives it
+        // leaves a blind spot with nothing left pointing at it. Removal now
+        // takes back exactly what the rule dismissed and reports the number.
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 100)
@@ -3802,15 +3936,107 @@ mod tests {
             0
         );
 
-        db.remove_suppression("category", "scam-fraud", Some("scam-fraud"), None)
+        let back = db
+            .remove_suppression("category", "scam-fraud", Some("scam-fraud"), None, 300)
             .unwrap();
+        assert_eq!(back, 1, "and it says how many came back");
         assert!(db.list_suppressions().unwrap().is_empty());
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.dismissed, 0, "the rule's verdict went with the rule");
+        assert_eq!(c.live, 1);
+    }
+
+    /// The half that must NOT move: a decision made by hand outlives every
+    /// rule, because removing your rule is not undoing your judgement.
+    #[test]
+    fn removing_a_rule_leaves_a_dismissal_you_made_yourself() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(scan, &[finding("mine", Category::ScamFraud)], 100)
+            .unwrap();
+        db.set_verdict(
+            "mine",
+            Category::ScamFraud,
+            Some("dismissed"),
+            Some("I checked"),
+            150,
+        )
+        .unwrap();
+        db.add_suppression("category", "scam-fraud", "scam-fraud", None, None, 200)
+            .unwrap();
+
+        let back = db
+            .remove_suppression("category", "scam-fraud", Some("scam-fraud"), None, 300)
+            .unwrap();
+        assert_eq!(back, 0, "nothing of yours was taken back");
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.dismissed, 1);
+        let reason: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT reason FROM finding_verdicts WHERE fingerprint = 'mine'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(reason.as_deref(), Some("I checked"), "your words, still");
+    }
+
+    /// A finding two rules cover stays dismissed when only one is removed.
+    #[test]
+    fn removing_one_of_two_overlapping_rules_keeps_the_finding_dismissed() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[NewFinding {
+                thread_identifier: Some("gran".into()),
+                ..finding("both", Category::ScamFraud)
+            }],
+            100,
+        )
+        .unwrap();
+        db.add_suppression("category", "scam-fraud", "scam-fraud", None, None, 200)
+            .unwrap();
+        db.add_suppression("thread", "gran", "scam-fraud", None, None, 200)
+            .unwrap();
+
+        let back = db
+            .remove_suppression("thread", "gran", Some("scam-fraud"), None, 300)
+            .unwrap();
+        assert_eq!(back, 0, "the category rule still covers it");
         assert_eq!(
             db.count_findings_breakdown("all", None, None)
                 .unwrap()
                 .dismissed,
-            1,
-            "the verdict stands until the user changes it"
+            1
+        );
+    }
+
+    /// What the panel reports must be what the engine acts on.
+    #[test]
+    fn a_rule_reports_how_many_it_is_swallowing() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (0..3)
+            .map(|i| NewFinding {
+                thread_identifier: Some(if i < 2 { "gran" } else { "other" }.into()),
+                ..finding(&format!("f{i}"), Category::ScamFraud)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 100).unwrap();
+        db.add_suppression("thread", "gran", "scam-fraud", None, None, 200)
+            .unwrap();
+        db.add_suppression("thread", "nobody", "scam-fraud", None, None, 200)
+            .unwrap();
+
+        let rules = db.list_suppressions().unwrap();
+        let by_value: std::collections::HashMap<_, _> =
+            rules.iter().map(|r| (r.value.as_str(), r.hits)).collect();
+        assert_eq!(by_value["gran"], 2);
+        assert_eq!(
+            by_value["nobody"], 0,
+            "a rule that has never matched shows 0"
         );
     }
 
@@ -4141,9 +4367,9 @@ mod tests {
 
         let rules = db.list_suppressions().unwrap();
         assert_eq!(rules.len(), 1, "the rule survived the rebuild");
-        assert_eq!(rules[0].2, None, "and is marked as covering every category");
-        assert_eq!(rules[0].3, "", "and to no particular sender");
-        assert_eq!(rules[0].4.as_deref(), Some("Family group"));
+        assert_eq!(rules[0].category, None, "it covers every category");
+        assert_eq!(rules[0].sender, "", "and no particular sender");
+        assert_eq!(rules[0].reason.as_deref(), Some("Family group"));
 
         // Its old breadth still applies: two different categories, both covered.
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();

@@ -1426,6 +1426,11 @@ pub struct SuppressionDto {
     /// people stay distinct.
     pub sender: String,
     pub reason: Option<String>,
+    /// How many findings this rule is dismissing right now, counted with the
+    /// same predicate the engine acts on. Zero means it is stale or was never
+    /// needed — a rule nobody can see the effect of is the shape this feature
+    /// exists to avoid.
+    pub hits: i64,
 }
 
 /// Dismiss a whole conversation or category, now and in future.
@@ -1489,12 +1494,13 @@ pub fn list_safety_suppressions(
         .list_suppressions()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|(scope, value, category, sender, reason)| SuppressionDto {
-            scope,
-            value,
-            category,
-            sender,
-            reason,
+        .map(|r| SuppressionDto {
+            scope: r.scope,
+            value: r.value,
+            category: r.category,
+            sender: r.sender,
+            reason: r.reason,
+            hits: r.hits,
         })
         .collect())
 }
@@ -1506,10 +1512,14 @@ pub fn remove_safety_suppression(
     value: String,
     category: Option<String>,
     sender: Option<String>,
-) -> Result<(), String> {
+) -> Result<usize, String> {
     let path = analysis_path(&active.path()?)?;
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
-    db.remove_suppression(&scope, &value, category.as_deref(), sender.as_deref())
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    db.remove_suppression(&scope, &value, category.as_deref(), sender.as_deref(), now)
         .map_err(|e| e.to_string())
 }
 
