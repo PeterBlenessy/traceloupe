@@ -67,6 +67,12 @@ pub struct ScanOutcome {
     pub reused: usize,
     /// Chunks the model failed on (recorded, scan continued).
     pub skipped: usize,
+    /// Chunks never sent to the model because every item in them was
+    /// contentless, so no verdict could have survived validation anyway
+    /// (see [`trivial::is_contentless`]). Counted apart from `classified` and
+    /// `reused`: they are neither — the scan looked at them and decided there
+    /// was nothing to ask.
+    pub trivial: usize,
     /// Live findings in the scan's scope at the end of the run — the same
     /// number as [`ScanProgress::findings`] and the Findings panel.
     pub findings: usize,
@@ -256,6 +262,7 @@ pub fn run_scan(
         classified: 0,
         reused: 0,
         skipped: 0,
+        trivial: 0,
         // Not zero: a scan whose scope already contains findings (a re-scan, a
         // resume, or another run that covered the same data) must report them
         // from the very first frame, like the panel does.
@@ -278,9 +285,40 @@ pub fn run_scan(
                 // Persisted progress must count reused chunks too, or a
                 // resumed scan completes with chunks_done < chunks_total.
                 analysis.bump_chunks_done(scan_id)?;
+            } else if chunk.items.iter().all(|i| trivial::is_contentless(&i.text)) {
+                // Nothing here could become a finding — every verdict over it
+                // would be refused in `verdicts_to_findings`. Asking the model
+                // costs a full prefill for a guaranteed empty answer.
+                //
+                // ONLY when every item qualifies. One real message among the
+                // reactions makes the whole chunk ordinary, and the trivial
+                // items around it are the conversational rhythm the pattern
+                // categories read.
+                //
+                // Recorded Done with its fingerprint (never `flagged`), so a
+                // re-scan skips it for the ordinary resume reason rather than
+                // re-deciding it, and `record_chunk` counts it toward
+                // persisted progress.
+                analysis.record_chunk(
+                    scan_id,
+                    &chunk.key,
+                    &chunk.fingerprint,
+                    ChunkStatus::Done,
+                    false,
+                    now(),
+                )?;
+                outcome.trivial += 1;
             } else {
                 pending.push(chunk);
             }
+        }
+        if outcome.trivial > 0 {
+            analysis.audit(
+                scan_id,
+                now(),
+                "chunks_trivial",
+                &format!("chunks={} of={}", outcome.trivial, chunks.len()),
+            )?;
         }
         // The first tick lands AFTER settling, so the UI flips from "loading" to
         // "scanning" already at the TRUE state: a resumed scan shows its reused
@@ -288,7 +326,7 @@ pub fn run_scan(
         // a fresh scan shows 0/total. Settling is DB-only (fast), so this still
         // arrives well before the first slow inference chunk.
         on_progress(ScanProgress {
-            chunks_done: outcome.reused,
+            chunks_done: outcome.reused + outcome.trivial,
             chunks_total: outcome.chunks_total,
             findings: outcome.findings,
             preexisting: outcome.preexisting,
@@ -415,8 +453,13 @@ pub fn run_scan(
         now(),
         "scan_finished",
         &format!(
-            "status={:?} classified={} reused={} skipped={} findings={}",
-            outcome.status, outcome.classified, outcome.reused, outcome.skipped, outcome.findings
+            "status={:?} classified={} reused={} skipped={} trivial={} findings={}",
+            outcome.status,
+            outcome.classified,
+            outcome.reused,
+            outcome.skipped,
+            outcome.trivial,
+            outcome.findings
         ),
     )?;
     Ok(outcome)
@@ -515,7 +558,10 @@ fn classify_batch(
                 }
             }
             on_progress(ScanProgress {
-                chunks_done: outcome.reused + outcome.classified + outcome.skipped,
+                chunks_done: outcome.reused
+                    + outcome.trivial
+                    + outcome.classified
+                    + outcome.skipped,
                 chunks_total: outcome.chunks_total,
                 findings: outcome.findings,
                 preexisting: outcome.preexisting,
@@ -762,6 +808,143 @@ mod tests {
                 .unwrap();
         }
         cache
+    }
+
+    /// A one-thread cache with exactly these message bodies, in order.
+    fn cache_with_bodies(bodies: &[&str]) -> CacheDb {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO threads (identifier, service, last_message_at) VALUES ('chatA', 'SMS', 999)",
+                [],
+            )
+            .unwrap();
+        for (i, body) in bodies.iter().enumerate() {
+            cache
+                .conn()
+                .execute(
+                    "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind)
+                     VALUES (1, 'them', 0, ?1, ?2, 'text')",
+                    params![body, 1000 + i as i64],
+                )
+                .unwrap();
+        }
+        cache
+    }
+
+    /// A thread of nothing but hearts cannot produce a finding — every verdict
+    /// over it would be refused in validation — so it must not cost a prefill.
+    #[test]
+    fn a_thread_of_nothing_but_hearts_never_reaches_the_model() {
+        let clean = serde_json::json!({ "verdicts": [] });
+        let (base, hits) = mock_server(vec![envelope(&clean)]);
+        let cache = cache_with_bodies(&["\u{2764}\u{FE0F}"; 30]);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let outcome = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            None,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcome.status, ScanStatus::Completed);
+        assert_eq!(hits.load(Ordering::SeqCst), 0, "no inference call at all");
+        assert_eq!(outcome.classified, 0);
+        assert_eq!(outcome.trivial, outcome.chunks_total, "every chunk skipped");
+
+        // Persisted progress must still reach 100%, or the scan looks stalled
+        // to anyone who reloads.
+        let row = analysis.latest_scan().unwrap().unwrap();
+        assert_eq!(row.chunks_done, row.chunks_total);
+        assert_eq!(row.chunks_done as usize, outcome.chunks_total);
+    }
+
+    /// The line the skip must not cross: one real message makes its whole
+    /// window ordinary, reactions and all.
+    #[test]
+    fn one_real_message_among_the_reactions_still_gets_classified() {
+        let clean = serde_json::json!({ "verdicts": [] });
+        let (base, hits) = mock_server(vec![envelope(&clean)]);
+        let mut bodies = vec!["\u{1F44D}"; 29];
+        bodies.push("i know where you live");
+        let cache = cache_with_bodies(&bodies);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let outcome = run_scan(
+            &cache,
+            &mut analysis,
+            &client_for(&base),
+            TimeRange::default(),
+            chunker::ScanSources::default(),
+            None,
+            1,
+            None,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(outcome.status, ScanStatus::Completed);
+        assert!(
+            outcome.classified > 0,
+            "the window holding the real message went to the model"
+        );
+        assert!(
+            outcome.trivial > 0,
+            "the all-reaction window did not — this fixture exercises both"
+        );
+        assert_eq!(outcome.classified + outcome.trivial, outcome.chunks_total);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            outcome.classified,
+            "one call per classified chunk, none for the skipped one"
+        );
+    }
+
+    /// A skipped chunk is checkpointed like any other, so the second run
+    /// reuses it instead of re-deciding it.
+    #[test]
+    fn a_skipped_chunk_is_reused_on_the_next_run() {
+        let clean = serde_json::json!({ "verdicts": [] });
+        let (base, hits) = mock_server(vec![envelope(&clean)]);
+        let cache = cache_with_bodies(&["\u{2764}\u{FE0F}"; 30]);
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let run = |analysis: &mut AnalysisDb| {
+            run_scan(
+                &cache,
+                analysis,
+                &client_for(&base),
+                TimeRange::default(),
+                chunker::ScanSources::default(),
+                None,
+                1,
+                None,
+                &CancelToken::new(),
+                |_| {},
+            )
+            .unwrap()
+        };
+        let first = run(&mut analysis);
+        let second = run(&mut analysis);
+
+        assert_eq!(
+            second.reused, first.chunks_total,
+            "all reused, not re-skipped"
+        );
+        assert_eq!(second.trivial, 0);
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        let row = analysis.latest_scan().unwrap().unwrap();
+        assert_eq!(
+            row.chunks_done, row.chunks_total,
+            "resume completes at 100%"
+        );
     }
 
     fn client_for(base: &str) -> LlmClient {
