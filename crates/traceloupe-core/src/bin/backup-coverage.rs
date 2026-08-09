@@ -68,17 +68,26 @@ fn run(backup_dir: &Path, password: Option<&str>) -> Result<()> {
 
     println!();
     println!("== assets the photo catalogue knows about (Photos.sqlite) ==");
-    match catalogue_counts(&index, decryptor.as_ref(), &work_dir) {
-        Ok(rows) => {
-            for (label, n) in &rows {
-                println!("{label:<38} {n:>8}");
+    // Hold the catalogue open: its per-asset keys are what turn "there are
+    // 227k thumbnail files" into "N of the library's assets can be shown".
+    let mut keys: HashSet<String> = HashSet::new();
+    match open_photos(&index, decryptor.as_ref(), &work_dir) {
+        Ok(conn) => {
+            match catalogue_counts(&conn) {
+                Ok(rows) => {
+                    for (label, n) in &rows {
+                        println!("{label:<38} {n:>8}");
+                    }
+                }
+                Err(e) => println!("(could not count the catalogue: {e})"),
             }
+            keys = catalogue_keys(&conn).unwrap_or_default();
         }
         Err(e) => println!("(could not read Photos.sqlite: {e})"),
     }
 
     println!();
-    survey_media_dirs(&index, backup_dir)?;
+    survey_media_dirs(&index, backup_dir, &keys)?;
 
     let _ = std::fs::remove_dir_all(&work_dir);
     Ok(())
@@ -92,7 +101,11 @@ fn run(backup_dir: &Path, password: Option<&str>) -> Result<()> {
 /// by directory shape. A directory holding thousands of images that the camera
 /// roll does not cover is a gap, and it shows up here as a row marked `MISSED`
 /// instead of as a number nobody can explain.
-fn survey_media_dirs(index: &ManifestIndex, backup_dir: &Path) -> Result<()> {
+fn survey_media_dirs(
+    index: &ManifestIndex,
+    backup_dir: &Path,
+    keys: &HashSet<String>,
+) -> Result<()> {
     let mut dirs: HashMap<(String, String), i64> = HashMap::new();
     let mut exts: HashMap<String, i64> = HashMap::new();
     // Thumbnails mirror their asset's own path, so the PARENT directory of each
@@ -100,21 +113,37 @@ fn survey_media_dirs(index: &ManifestIndex, backup_dir: &Path) -> Result<()> {
     // that decides whether offloaded assets can be shown as real pictures or
     // only as placeholders: how many of the library's assets have a thumbnail
     // sitting in this backup, regardless of whether the original came along.
-    let mut thumb_assets: HashSet<String> = HashSet::new();
+    let mut derivatives: HashMap<&'static str, HashSet<String>> = HashMap::new();
     index.for_each_path(|domain, rel| {
-        if let Some(asset) = thumb_asset(&rel) {
-            thumb_assets.insert(asset.to_string());
+        for (_, root) in DERIVATIVE_ROOTS {
+            if let Some(key) = asset_key_under(root, &rel) {
+                derivatives.entry(root).or_default().insert(key);
+            }
         }
         let Some(ext) = media_ext(&rel) else { return };
         *exts.entry(ext).or_default() += 1;
         *dirs.entry((domain, generalize(&rel))).or_default() += 1;
     })?;
 
-    println!("== thumbnail coverage ==");
-    println!(
-        "{:>8}  distinct assets that have a thumbnail in this backup",
-        thumb_assets.len()
-    );
+    println!("== derivative coverage: can an offloaded asset still be SHOWN? ==");
+    println!("   'joins' = derivative files whose asset is in the catalogue.");
+    println!("   A big count that joins to nothing is useless; a smaller count");
+    println!("   that joins is a picture we could put on screen.");
+    for (label, root) in DERIVATIVE_ROOTS {
+        let Some(found) = derivatives.get(root) else {
+            continue;
+        };
+        let joined = found.iter().filter(|k| keys.contains(*k)).count();
+        let pct = if keys.is_empty() {
+            0.0
+        } else {
+            100.0 * joined as f64 / keys.len() as f64
+        };
+        println!(
+            "{:>8} assets  {joined:>8} join the catalogue ({pct:.1}% of the library)  {label}",
+            found.len()
+        );
+    }
     println!();
 
     println!("== where image/video files actually live (all domains) ==");
@@ -159,14 +188,45 @@ fn survey_media_dirs(index: &ManifestIndex, backup_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The asset a thumbnail belongs to, as its path relative to the thumbnail root.
-/// `…/V2/DCIM/100APPLE/IMG_1.HEIC/5005.JPG` names the asset `DCIM/100APPLE/IMG_1.HEIC`
-/// — several thumbnail sizes share one parent, so distinct parents count assets,
-/// not files.
-fn thumb_asset(rel: &str) -> Option<&str> {
-    let rest = rel.strip_prefix(THUMB_PREFIX)?;
-    let (asset, _size) = rest.rsplit_once('/')?;
-    Some(asset)
+/// Places Photos keeps per-asset derivatives, each nesting under a mirror of the
+/// asset's own `DCIM/<shard>/<file>` path. These are the candidates for showing
+/// an asset whose original stayed in iCloud.
+const DERIVATIVE_ROOTS: [(&str, &str); 4] = [
+    ("Thumbnails/V2", "Media/PhotoData/Thumbnails/V2/"),
+    ("Metadata", "Media/PhotoData/Metadata/"),
+    ("Mutations (edited versions)", "Media/PhotoData/Mutations/"),
+    ("UBF/resources", "Media/PhotoData/UBF/resources/"),
+];
+
+/// The asset a derivative belongs to: strip the derivative root, then keep the
+/// first three components, which is the mirrored `DCIM/<shard>/<file>` key.
+/// `…/Thumbnails/V2/DCIM/100APPLE/IMG_1.HEIC/5005.JPG` → `dcim/100apple/img_1.heic`.
+///
+/// Lowercased because the catalogue's `ZDIRECTORY`/`ZFILENAME` and the Manifest
+/// do not agree on case, and a case-sensitive compare silently joins nothing —
+/// which would read as "these derivatives are unusable" rather than as a bug.
+fn asset_key_under(root: &str, rel: &str) -> Option<String> {
+    let rest = rel.strip_prefix(root)?;
+    let mut it = rest.split('/');
+    let (a, b, c) = (it.next()?, it.next()?, it.next()?);
+    Some(format!("{a}/{b}/{c}").to_ascii_lowercase())
+}
+
+/// Catalogue keys in the same shape, so the two sides can actually be compared.
+fn catalogue_keys(conn: &Connection) -> Result<HashSet<String>> {
+    let asset = asset_table(conn)?;
+    let cols = columns(conn, asset)?;
+    if !cols.contains("ZDIRECTORY") || !cols.contains("ZFILENAME") {
+        return Ok(HashSet::new());
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT ZDIRECTORY, ZFILENAME FROM {asset}
+         WHERE ZDIRECTORY IS NOT NULL AND ZFILENAME IS NOT NULL"
+    ))?;
+    let rows = stmt.query_map([], |r| {
+        Ok(format!("{}/{}", r.get::<_, String>(0)?, r.get::<_, String>(1)?).to_ascii_lowercase())
+    })?;
+    Ok(rows.flatten().collect())
 }
 
 /// How many files to stat per directory before extrapolating. A backup can hold
@@ -360,39 +420,45 @@ fn manifest_counts(index: &ManifestIndex) -> Result<Vec<(String, i64)>> {
 /// Count catalogue rows. The catalogue lists every asset in the library whether
 /// or not its file came along in the backup, so the gap between this and the
 /// Manifest counts above is exactly the iCloud-offloaded population.
-fn catalogue_counts(
+fn open_photos(
     index: &ManifestIndex,
     decryptor: Option<&BackupDecryptor>,
     work_dir: &Path,
-) -> Result<Vec<(String, i64)>> {
+) -> Result<Connection> {
     let entry = index
         .find("CameraRollDomain", "Media/PhotoData/Photos.sqlite")?
         .ok_or_else(|| Error::Parse("Photos.sqlite is not in this backup".into()))?;
     let db: PathBuf = work_dir.join(".coverage-photos.sqlite");
     index.extract_db(&entry, decryptor, &db)?;
-    let conn = Connection::open(&db)?;
+    Ok(Connection::open(&db)?)
+}
 
-    // iOS 15+ calls it ZASSET; iOS 13/14 ZGENERICASSET. Same probe the real
-    // parser does, so this reports on the table the import would actually use.
-    let asset = if table_exists(&conn, "ZASSET")? {
-        "ZASSET"
-    } else if table_exists(&conn, "ZGENERICASSET")? {
-        "ZGENERICASSET"
+/// iOS 15+ calls it `ZASSET`; iOS 13/14 `ZGENERICASSET`. Same probe the real
+/// parser does, so this reports on the table the import would actually use.
+fn asset_table(conn: &Connection) -> Result<&'static str> {
+    if table_exists(conn, "ZASSET")? {
+        Ok("ZASSET")
+    } else if table_exists(conn, "ZGENERICASSET")? {
+        Ok("ZGENERICASSET")
     } else {
-        return Err(Error::Parse("no asset table in Photos.sqlite".into()));
-    };
-    let cols = columns(&conn, asset)?;
+        Err(Error::Parse("no asset table in Photos.sqlite".into()))
+    }
+}
+
+fn catalogue_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let asset = asset_table(conn)?;
+    let cols = columns(conn, asset)?;
 
     let mut out = Vec::new();
     out.push((
         format!("  {asset} rows (whole library)"),
-        count(&conn, &format!("SELECT COUNT(*) FROM {asset}"))?,
+        count(conn, &format!("SELECT COUNT(*) FROM {asset}"))?,
     ));
     if cols.contains("ZHIDDEN") {
         out.push((
             "    of which hidden".into(),
             count(
-                &conn,
+                conn,
                 &format!("SELECT COUNT(*) FROM {asset} WHERE ZHIDDEN = 1"),
             )?,
         ));
@@ -401,7 +467,7 @@ fn catalogue_counts(
         out.push((
             "    of which in Recently Deleted".into(),
             count(
-                &conn,
+                conn,
                 &format!("SELECT COUNT(*) FROM {asset} WHERE ZTRASHEDSTATE = 1"),
             )?,
         ));
@@ -411,8 +477,8 @@ fn catalogue_counts(
     // (original, adjusted, thumbnail); ZLOCALAVAILABILITY = 1 means the bytes
     // were on the device. Assets with no locally-available resource are the ones
     // iCloud holds and the backup cannot contain.
-    if table_exists(&conn, "ZINTERNALRESOURCE")? {
-        let ir = columns(&conn, "ZINTERNALRESOURCE")?;
+    if table_exists(conn, "ZINTERNALRESOURCE")? {
+        let ir = columns(conn, "ZINTERNALRESOURCE")?;
         if ir.contains("ZLOCALAVAILABILITY") {
             // The FK column name drifts across iOS versions (ZASSET / ZASSETFORFOO);
             // take whichever one this schema has rather than assuming.
@@ -420,7 +486,7 @@ fn catalogue_counts(
                 out.push((
                     "  assets with a local resource".into(),
                     count(
-                        &conn,
+                        conn,
                         &format!(
                             "SELECT COUNT(DISTINCT {fk}) FROM ZINTERNALRESOURCE
                              WHERE ZLOCALAVAILABILITY = 1"
@@ -430,7 +496,7 @@ fn catalogue_counts(
                 out.push((
                     "  assets with NO local resource".into(),
                     count(
-                        &conn,
+                        conn,
                         &format!(
                             "SELECT COUNT(*) FROM {asset} a WHERE NOT EXISTS (
                                SELECT 1 FROM ZINTERNALRESOURCE r
@@ -441,7 +507,6 @@ fn catalogue_counts(
             }
         }
     }
-    let _ = std::fs::remove_file(&db);
     Ok(out)
 }
 
@@ -519,14 +584,19 @@ mod tests {
     }
 
     /// Several thumbnail sizes share one parent directory, so counting FILES
-    /// would inflate library coverage severalfold. Distinct parents count assets.
+    /// would inflate library coverage severalfold. Distinct keys count assets.
     #[test]
     fn thumbnails_count_assets_not_files() {
         let a = "Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_1.HEIC/5005.JPG";
         let b = "Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_1.HEIC/5003.JPG";
-        assert_eq!(thumb_asset(a), Some("DCIM/100APPLE/IMG_1.HEIC"));
-        assert_eq!(thumb_asset(a), thumb_asset(b));
-        assert_eq!(thumb_asset("Media/DCIM/100APPLE/IMG_1.HEIC"), None);
+        assert_eq!(
+            asset_key_under(THUMB_PREFIX, a),
+            asset_key_under(THUMB_PREFIX, b)
+        );
+        assert_eq!(
+            asset_key_under(THUMB_PREFIX, "Media/DCIM/100APPLE/IMG_1.HEIC"),
+            None
+        );
     }
 
     /// Byte counts are the whole point of the size probe; a wrong unit boundary
@@ -537,5 +607,34 @@ mod tests {
         assert_eq!(human(1024), "1.0 KB");
         assert_eq!(human(1024 * 1024), "1.0 MB");
         assert_eq!(human(3 * 1024 * 1024 / 2), "1.5 MB");
+    }
+
+    /// The catalogue and the Manifest disagree on case, so a case-sensitive
+    /// compare joins nothing — which reads as "these derivatives are unusable"
+    /// rather than as the bug it is. Both sides must lowercase.
+    #[test]
+    fn derivative_keys_match_the_catalogue_shape() {
+        let k = asset_key_under(
+            "Media/PhotoData/Thumbnails/V2/",
+            "Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_1.HEIC/5005.JPG",
+        );
+        assert_eq!(k.as_deref(), Some("dcim/100apple/img_1.heic"));
+
+        // A mutation nests deeper but keys to the same asset, so an edited photo
+        // is recognised as a version of the original rather than a new asset.
+        let m = asset_key_under(
+            "Media/PhotoData/Mutations/",
+            "Media/PhotoData/Mutations/DCIM/100APPLE/IMG_1.HEIC/Adjustments/FullSizeRender.jpg",
+        );
+        assert_eq!(m, k);
+
+        // Too shallow to name an asset — must not produce a bogus key.
+        assert_eq!(
+            asset_key_under(
+                "Media/PhotoData/UBF/resources/",
+                "Media/PhotoData/UBF/resources/x.jpg"
+            ),
+            None
+        );
     }
 }
