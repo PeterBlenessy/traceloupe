@@ -116,6 +116,12 @@ const BOUNDED: &[(&str, &str)] = &[
         "one row per distinct media source; a device has a handful",
     ),
     (
+        "recover_attachment_media",
+        "library photos sharing ONE attachment's filename, capped at 8 by the \
+         query — past that the name is so generic that a chooser stops being \
+         evidence and becomes a haystack",
+    ),
+    (
         "media_availability",
         "one row per availability value; three at most (original/thumbnail/metadata)",
     ),

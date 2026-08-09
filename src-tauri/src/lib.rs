@@ -2564,7 +2564,7 @@ struct RecoveredMedia {
 async fn recover_attachment_media(
     active: State<'_, ActiveBackup>,
     attachment_id: i64,
-) -> Result<Option<RecoveredMedia>, String> {
+) -> Result<Vec<RecoveredMedia>, String> {
     let path = active.path()?;
     let found = tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -2572,7 +2572,10 @@ async fn recover_attachment_media(
     })
     .await
     .map_err(|e| e.to_string())??;
-    Ok(found.map(|(id, kind)| RecoveredMedia { id, kind }))
+    Ok(found
+        .into_iter()
+        .map(|(id, kind)| RecoveredMedia { id, kind })
+        .collect())
 }
 
 #[tauri::command]

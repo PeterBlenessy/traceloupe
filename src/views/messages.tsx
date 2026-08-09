@@ -1477,7 +1477,18 @@ function TimelineRow({
                 <span
                   key={a.id}
                   className="ml-2 inline-flex max-w-[16rem] items-center gap-1 align-middle text-xs text-muted-foreground"
-                  title={a.localPath ? undefined : "This attachment isn't in the backup"}
+                  title={
+                    a.localPath
+                      ? undefined
+                      : // Say what is likely, and only that. Unlike a Photos
+                        // asset — where the catalogue records that no local
+                        // resource exists — nothing here establishes WHY the
+                        // file is absent. Messages in iCloud is the usual
+                        // cause, but "never downloaded" and "deleted later"
+                        // leave identical evidence, so the wording hedges
+                        // rather than claiming a lookup we did not perform.
+                        "This attachment isn't in the backup — the file is probably in iCloud. TraceLoupe reads the backup and nothing else."
+                  }
                 >
                   <Icon className="size-3.5 shrink-0" />
                   <span className="truncate">{a.filename ?? "attachment"}</span>
@@ -2492,14 +2503,20 @@ function RecoveredAttachment({
     retry: false,
   });
   const [open, setOpen] = useState(false);
-  if (!data) return <>{fallback}</>;
-  const isVideo = data.kind === "video";
+  // Which candidate is on screen. Several library photos can share a filename,
+  // and the examiner picks — the app must not decide for them.
+  const [pick, setPick] = useState(0);
+  const candidates = data ?? [];
+  if (candidates.length === 0) return <>{fallback}</>;
+  const shown = candidates[Math.min(pick, candidates.length - 1)];
+  const isVideo = shown.kind === "video";
   const meta = showMediaMetadata ? (
     <div className="flex items-center gap-2">
       <Sparkles className="size-3.5 shrink-0 text-status-warning-text" />
       <span>
-        Recovered from Photos — a camera-roll item named “{att.filename}”. Matched
-        by file name, so it may not be the exact attachment.
+        {candidates.length > 1
+          ? `Recovered from Photos — ${candidates.length} camera-roll items are named “${att.filename}”. Matched by file name, so any of them may be the attachment, or none.`
+          : `Recovered from Photos — a camera-roll item named “${att.filename}”. Matched by file name, so it may not be the exact attachment.`}
       </span>
     </div>
   ) : undefined;
@@ -2515,17 +2532,21 @@ function RecoveredAttachment({
             className="relative block max-w-[240px] overflow-hidden rounded-lg"
           >
             <img
-              src={client.mediaUrl(data.id, { thumb: true, cacheKey })}
+              src={client.mediaUrl(shown.id, { thumb: true, cacheKey })}
               alt=""
               className="max-h-64 w-full object-cover"
             />
             <span className="absolute bottom-1 right-1 inline-flex items-center gap-1 rounded bg-black/65 px-1.5 py-0.5 text-3xs font-medium text-white">
               <Sparkles className="size-3" /> Photos
+              {candidates.length > 1 &&
+                ` · ${Math.min(pick, candidates.length - 1) + 1} of ${candidates.length}`}
             </span>
           </button>
         </TooltipTrigger>
         <TooltipContent>
-          {`${att.filename ?? "attachment"} — recovered from Photos (matched by name)`}
+          {candidates.length > 1
+            ? `${att.filename ?? "attachment"} — ${candidates.length} photos share this name; open to compare`
+            : `${att.filename ?? "attachment"} — recovered from Photos (matched by name)`}
         </TooltipContent>
       </Tooltip>
       <MediaLightbox
@@ -2536,20 +2557,47 @@ function RecoveredAttachment({
         media={
           isVideo ? (
             <video
-              key={data.id}
-              src={client.mediaUrl(data.id, { cacheKey })}
-              poster={client.mediaUrl(data.id, { thumb: true, cacheKey })}
+              key={shown.id}
+              src={client.mediaUrl(shown.id, { cacheKey })}
+              poster={client.mediaUrl(shown.id, { thumb: true, cacheKey })}
               controls
               autoPlay
               className="max-h-full max-w-full object-contain"
             />
           ) : (
-            <img
-              key={data.id}
-              src={client.mediaUrl(data.id, { cacheKey })}
-              alt=""
-              className="max-h-full max-w-full object-contain"
-            />
+            <div className="flex max-h-full flex-col items-center gap-3">
+              <img
+                key={shown.id}
+                src={client.mediaUrl(shown.id, { cacheKey })}
+                alt=""
+                className="max-h-[70vh] max-w-full object-contain"
+              />
+              {candidates.length > 1 && (
+                // The chooser IS the feature: the app cannot know which of these
+                // was attached, so it shows all of them and lets the examiner
+                // decide rather than asserting one.
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {candidates.map((c, i) => (
+                    <button
+                      key={c.id}
+                      onClick={() => setPick(i)}
+                      aria-label={`Candidate ${i + 1} of ${candidates.length}`}
+                      className={`overflow-hidden rounded border-2 ${
+                        i === Math.min(pick, candidates.length - 1)
+                          ? "border-white"
+                          : "border-transparent opacity-60"
+                      }`}
+                    >
+                      <img
+                        src={client.mediaUrl(c.id, { thumb: true, cacheKey })}
+                        alt=""
+                        className="size-14 object-cover"
+                      />
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )
         }
         meta={meta}
