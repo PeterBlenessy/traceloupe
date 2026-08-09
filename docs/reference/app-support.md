@@ -77,7 +77,7 @@ what's actually in the backup (confirmed by whether iLEAPP even has a module):
 > (`ChatFiles/<uid>/db.sqlite` `TIMMessageORM`, JSON `content` classified into text
 > + typed markers for shared video/sticker/profile) AND contacts/social-graph
 > (`AwemeIM.db` `TTKIMContactBaseUser*`/`AwemeContacts*`). Both TikTok DBs are now
-> **validated against a real backup** (263k messages, 145 contacts). Instagram is
+> **validated against a real backup**. Instagram is
 > *unvalidated* against a real backup.
 > Investigate (data exists but not open-source-documented — see Research notes):
 > **Snapchat**, **X/Twitter**, **Facebook** (main app).

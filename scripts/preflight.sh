@@ -54,6 +54,7 @@ fi
 # --- hygiene ---------------------------------------------------------------
 run "releases"        bash scripts/check-releases.sh
 run "doc links"       bash scripts/check-doc-links.sh
+run "no backup stats" node scripts/check-no-backup-stats.mjs
 run "coverage map"    python3 tools/coverage-gap.py --self-test
 run "dates"           node scripts/check-dates.mjs
 run "mock parity"     node scripts/check-mock-parity.mjs
