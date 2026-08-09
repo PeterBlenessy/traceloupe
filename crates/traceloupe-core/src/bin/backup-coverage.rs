@@ -114,8 +114,16 @@ fn survey_media_dirs(
     // only as placeholders: how many of the library's assets have a thumbnail
     // sitting in this backup, regardless of whether the original came along.
     let mut derivatives: HashMap<&'static str, HashSet<String>> = HashMap::new();
+    let mut depths: HashMap<&'static str, HashMap<usize, i64>> = HashMap::new();
     index.for_each_path(|domain, rel| {
         for (_, root) in DERIVATIVE_ROOTS {
+            if let Some(rest) = rel.strip_prefix(root) {
+                *depths
+                    .entry(root)
+                    .or_default()
+                    .entry(rest.split('/').count())
+                    .or_default() += 1;
+            }
             if let Some(key) = asset_key_under(root, &rel) {
                 derivatives.entry(root).or_default().insert(key);
             }
@@ -129,20 +137,46 @@ fn survey_media_dirs(
     println!("   'joins' = derivative files whose asset is in the catalogue.");
     println!("   A big count that joins to nothing is useless; a smaller count");
     println!("   that joins is a picture we could put on screen.");
+    let stems: HashSet<String> = keys.iter().map(|k| stem(k)).collect();
     for (label, root) in DERIVATIVE_ROOTS {
         let Some(found) = derivatives.get(root) else {
             continue;
         };
-        let joined = found.iter().filter(|k| keys.contains(*k)).count();
-        let pct = if keys.is_empty() {
-            0.0
-        } else {
-            100.0 * joined as f64 / keys.len() as f64
+        let exact = found.iter().filter(|k| keys.contains(*k)).count();
+        // A rendered derivative is often a different format of the same asset, so
+        // score both ways: an extension-sensitive miss is a key-shape artefact,
+        // not evidence that the asset is absent.
+        let by_stem = found.iter().filter(|k| stems.contains(&stem(k))).count();
+        let pct = |n: usize| {
+            if keys.is_empty() {
+                0.0
+            } else {
+                100.0 * n as f64 / keys.len() as f64
+            }
         };
         println!(
-            "{:>8} assets  {joined:>8} join the catalogue ({pct:.1}% of the library)  {label}",
-            found.len()
+            "{:>8} keys  {exact:>8} exact ({:.1}%)  {by_stem:>8} ignoring extension ({:.1}%)  {label}",
+            found.len(),
+            pct(exact),
+            pct(by_stem),
         );
+        // When neither join lands, the shape is wrong rather than the data
+        // missing — the depth spread says where the asset name actually sits.
+        if by_stem * 20 < keys.len() {
+            if let Some(d) = depths.get(root) {
+                let mut v: Vec<_> = d.iter().collect();
+                v.sort_by_key(|(_, n)| std::cmp::Reverse(**n));
+                let top: Vec<String> = v
+                    .iter()
+                    .take(3)
+                    .map(|(depth, n)| format!("{depth} deep ×{n}"))
+                    .collect();
+                println!(
+                    "           ↳ joins almost nothing; path depths: {}",
+                    top.join(", ")
+                );
+            }
+        }
     }
     println!();
 
@@ -210,6 +244,18 @@ fn asset_key_under(root: &str, rel: &str) -> Option<String> {
     let mut it = rest.split('/');
     let (a, b, c) = (it.next()?, it.next()?, it.next()?);
     Some(format!("{a}/{b}/{c}").to_ascii_lowercase())
+}
+
+/// Drop the extension from a key's last component. Photos stores a derivative as
+/// `IMG_0001.JPG` beside a catalogue entry that says `IMG_0001.HEIC` — a rendered
+/// copy is a different FORMAT of the same asset. Comparing with the extension
+/// attached scores that as "no such asset" and hides the whole population.
+fn stem(key: &str) -> String {
+    match key.rsplit_once('.') {
+        // Only strip a real extension, never a dot inside a directory name.
+        Some((head, ext)) if !ext.contains('/') && !ext.is_empty() => head.to_string(),
+        _ => key.to_string(),
+    }
 }
 
 /// Catalogue keys in the same shape, so the two sides can actually be compared.
@@ -636,5 +682,21 @@ mod tests {
             ),
             None
         );
+    }
+
+    /// A rendered derivative is a different FORMAT of the same asset: Photos
+    /// writes IMG_1.JPG beside a catalogue row saying IMG_1.HEIC. Comparing with
+    /// the extension attached scores that as "no such asset" and hides the whole
+    /// population — which is exactly what a 0.0%% join rate looked like.
+    #[test]
+    fn a_rendered_copy_joins_its_original_despite_the_extension() {
+        assert_eq!(stem("dcim/100apple/img_1.jpg"), "dcim/100apple/img_1");
+        assert_eq!(
+            stem("dcim/100apple/img_1.jpg"),
+            stem("dcim/100apple/img_1.heic")
+        );
+        // A dot in a DIRECTORY name is not an extension; stripping there would
+        // fabricate joins between unrelated assets.
+        assert_eq!(stem("dcim/1.0dir/img_1"), "dcim/1.0dir/img_1");
     }
 }
