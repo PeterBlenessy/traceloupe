@@ -1305,7 +1305,9 @@ export interface TraceLoupeClient {
   ): Promise<number | null>;
   /** A same-named camera-roll item for a missing message attachment (best-effort;
    *  null if none). Lets an offloaded attachment show from Photos. */
-  recoverAttachmentMedia(attachmentId: number): Promise<RecoveredMedia | null>;
+  /** Library photos sharing this attachment's filename, closest in time
+   *  first. Several may match — they are candidates, not the attachment. */
+  recoverAttachmentMedia(attachmentId: number): Promise<RecoveredMedia[]>;
   /** Total messages across all conversations (filtered by `service`, null=all);
    * drives the timeline scroller. `kind` filters by content class. */
   countTimelineMessages(
@@ -1920,7 +1922,7 @@ const tauriClient: TraceLoupeClient = {
       desc,
     }),
   recoverAttachmentMedia: (attachmentId) =>
-    invoke<RecoveredMedia | null>("recover_attachment_media", { attachmentId }),
+    invoke<RecoveredMedia[]>("recover_attachment_media", { attachmentId }),
   countTimelineMessages: (service, search = null, kind = null, unsafeOnly = false, ranges = []) =>
     invoke<number>("count_timeline_messages", {
       service: service ?? null,
@@ -6372,7 +6374,7 @@ const mockClient: TraceLoupeClient = {
     const i = ordered.findIndex((m) => m.id === messageId);
     return i < 0 ? null : i;
   },
-  recoverAttachmentMedia: async () => null,
+  recoverAttachmentMedia: async () => [],
   countTimelineMessages: async (
     service,
     search = null,

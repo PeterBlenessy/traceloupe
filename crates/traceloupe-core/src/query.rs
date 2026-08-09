@@ -122,8 +122,38 @@ mod recover_attachment_tests {
 
         assert_eq!(
             recover_attachment_media(&cache, 1).unwrap(),
-            Some((7, "photo".to_string())),
+            vec![(7, "photo".to_string())],
             "a thumbnail-only library photo must still be offered"
+        );
+    }
+
+    /// Filenames collide. When several library photos share an attachment's
+    /// name, all of them are offered and the examiner chooses — picking one
+    /// silently would assert something the data does not support.
+    #[test]
+    fn every_photo_sharing_the_name_is_offered_closest_in_time_first() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO threads (id, identifier) VALUES (1, 't');
+                 INSERT INTO messages (id, thread_id, is_from_me, sent_at) VALUES (1, 1, 0, 1000);
+                 INSERT INTO attachments (id, message_id, filename) VALUES (1, 1, 'IMG_0001.HEIC');
+                 -- Three library photos with the same name, different dates.
+                 INSERT INTO media_items (id, kind, relative_path, thumb_path, taken_at)
+                   VALUES (5, 'photo', 'DCIM/100APPLE/IMG_0001.HEIC', '/t/5.jpg', 5000);
+                 INSERT INTO media_items (id, kind, relative_path, thumb_path, taken_at)
+                   VALUES (6, 'photo', 'DCIM/101APPLE/IMG_0001.HEIC', '/t/6.jpg', 1100);
+                 INSERT INTO media_items (id, kind, relative_path, local_path, taken_at)
+                   VALUES (7, 'photo', 'DCIM/102APPLE/IMG_0001.HEIC', '/o/7.heic', 950);",
+            )
+            .unwrap();
+
+        let got = recover_attachment_media(&cache, 1).unwrap();
+        assert_eq!(
+            got.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![7, 6, 5],
+            "all three offered, nearest the message time first"
         );
     }
 }
@@ -398,14 +428,16 @@ pub type AttachmentBlob = (
 /// the message. Name matching can be wrong — especially for *received* files,
 /// whose `IMG_####` counter can collide with one of your own photos — so callers
 /// gate this behind a user setting and label the result as recovered.
-pub fn recover_attachment_media(
-    cache: &CacheDb,
-    attachment_id: i64,
-) -> Result<Option<(i64, String)>> {
-    cache
-        .conn()
-        .query_row(
-            "SELECT mi.id, mi.kind
+///
+/// Returns EVERY match, closest in time first, not one. Filenames collide, and
+/// when several library photos share this attachment's name the honest answer is
+/// to show them all and let the examiner choose; picking one silently asserts
+/// something the data does not support. Capped at 8 — beyond that the name is so
+/// generic that a chooser stops being evidence and starts being a haystack.
+pub fn recover_attachment_media(cache: &CacheDb, attachment_id: i64) -> Result<Vec<(i64, String)>> {
+    let conn = cache.conn();
+    let mut stmt = conn.prepare(
+        "SELECT mi.id, mi.kind
              FROM attachments a
              JOIN messages m ON m.id = a.message_id
              JOIN media_items mi
@@ -425,11 +457,12 @@ pub fn recover_attachment_media(
                         = '/' || a.filename)
              WHERE a.id = ?1 AND a.filename IS NOT NULL AND a.local_path IS NULL
              ORDER BY ABS(COALESCE(mi.taken_at, 0) - COALESCE(m.sent_at, 0))
-             LIMIT 1",
-            [attachment_id],
-            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
-        )
-        .optional()
+             LIMIT 8",
+    )?;
+    let rows = stmt.query_map([attachment_id], |r| {
+        Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
 
