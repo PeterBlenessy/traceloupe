@@ -11,6 +11,46 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+### Safety Scan
+
+**A heart emoji is no longer a finding.** A message whose whole content is an
+affectionate emoji — a heart, a thumbs-up, a laughing face — carries no harm
+signal on its own, and it was the commonest false alarm in real review. Those
+verdicts are now refused outright, and a run of nothing but reactions is skipped
+before it costs any time.
+
+This is an allowlist, not "ignore all emoji": a lone 🔫 or 🔪 sent to someone is
+exactly the wordless message the scanner exists to catch, so anything not on the
+list — menacing, ambiguous, or simply not yet considered — is still classified.
+
+**You can now mark something safe for one person.** A grandmother sending a heart
+emoji is not a stranger sending the same heart emoji, and the scanner cannot know
+that up front. After dismissing a finding you can widen it to "this, from them",
+"this, from anyone", the conversation, or the whole category — narrowest first.
+The narrow options only appear when they would mean something: a rule keyed on a
+long message could never match a second message, so it is not offered.
+
+**A rule about one thing no longer silences everything.** Marking a conversation
+fine used to dismiss every future finding of every category from that number, at
+every severity — so a threat months later would have arrived pre-dismissed.
+Rules now cover only the category they were made for, and **no standing rule ever
+dismisses the most serious findings**. Rules made before this keep their old
+breadth and are labelled in the rules list, because there is no way to know which
+category they were meant for.
+
+**Rules say what they are doing, and undo cleanly.** Each one shows how many
+findings it is dismissing right now, or "nothing" if it is stale. Removing a rule
+gives back exactly what that rule dismissed and tells you how many; anything you
+dismissed by hand stays dismissed.
+
+#### Fixed
+
+- A rule never covered any finding you had **opened**. Reading a finding recorded
+  a row that the rule engine mistook for a decision, so the rule you made from a
+  finding you were looking at did not cover that finding — it stayed flagged.
+- Findings in group chats record **who sent the message**, so they can name the
+  speaker rather than only the conversation.
+
 ## [0.43.3] — 2026-08-09
 
 ### Messages
