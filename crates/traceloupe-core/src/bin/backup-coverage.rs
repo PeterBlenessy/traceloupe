@@ -20,7 +20,7 @@
 //! `password` is only needed for an encrypted backup. It is read as an argument
 //! for one-shot convenience; it is never logged or written anywhere.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
@@ -77,8 +77,150 @@ fn run(backup_dir: &Path, password: Option<&str>) -> Result<()> {
         Err(e) => println!("(could not read Photos.sqlite: {e})"),
     }
 
+    println!();
+    survey_media_dirs(&index)?;
+
     let _ = std::fs::remove_dir_all(&work_dir);
     Ok(())
+}
+
+/// Where image/video files ACTUALLY live, discovered rather than assumed.
+///
+/// `ASSET_ROOTS` is a hardcoded guess, and a wrong guess is invisible — reading
+/// only `DCIM/` silently dropped 42% of one public backup's assets and nothing
+/// reported it. So this sweeps every domain, classifies by extension, and groups
+/// by directory shape. A directory holding thousands of images that the camera
+/// roll does not cover is a gap, and it shows up here as a row marked `MISSED`
+/// instead of as a number nobody can explain.
+fn survey_media_dirs(index: &ManifestIndex) -> Result<()> {
+    let mut dirs: HashMap<(String, String), i64> = HashMap::new();
+    let mut exts: HashMap<String, i64> = HashMap::new();
+    index.for_each_path(|domain, rel| {
+        let Some(ext) = media_ext(&rel) else { return };
+        *exts.entry(ext).or_default() += 1;
+        *dirs.entry((domain, generalize(&rel))).or_default() += 1;
+    })?;
+
+    println!("== where image/video files actually live (all domains) ==");
+    println!("   'MISSED' = holds media the camera-roll import does not read.");
+    let mut rows: Vec<_> = dirs.into_iter().collect();
+    rows.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    let (mut covered, mut thumbs, mut missed) = (0i64, 0i64, 0i64);
+    for ((domain, dir), n) in &rows {
+        match coverage(domain, dir) {
+            Coverage::Asset => covered += n,
+            Coverage::Thumbnail => thumbs += n,
+            Coverage::Missed => missed += n,
+        }
+    }
+    for ((domain, dir), n) in rows.iter().take(30) {
+        println!("{n:>8}  {}  {domain}  {dir}", coverage(domain, dir).tag());
+    }
+    if rows.len() > 30 {
+        println!("   … and {} more directories", rows.len() - 30);
+    }
+    println!("{covered:>8}  total read as camera-roll assets");
+    println!("{thumbs:>8}  total read as thumbnails");
+    println!("{missed:>8}  total NOT read by the camera roll");
+
+    println!();
+    println!("== file types found, and whether the camera roll decodes them ==");
+    let mut es: Vec<_> = exts.into_iter().collect();
+    es.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    for (ext, n) in &es {
+        let tag = if DECODED.contains(&ext.as_str()) {
+            "  ok  "
+        } else {
+            "MISSED"
+        };
+        println!("{n:>8}  {tag}  .{ext}");
+    }
+    Ok(())
+}
+
+/// What the camera-roll import does with a directory's media.
+#[derive(PartialEq, Debug)]
+enum Coverage {
+    /// Enumerated as assets — these become rows in Photos.
+    Asset,
+    /// Read, but only as thumbnails paired to an asset. Not a gap: calling it
+    /// one would bury the real gaps under a guaranteed false alarm.
+    Thumbnail,
+    /// Not read at all. This is the row worth acting on.
+    Missed,
+}
+
+impl Coverage {
+    fn tag(&self) -> &'static str {
+        match self {
+            Coverage::Asset => "  ok  ",
+            Coverage::Thumbnail => " thumb",
+            Coverage::Missed => "MISSED",
+        }
+    }
+}
+
+fn coverage(domain: &str, dir: &str) -> Coverage {
+    if domain != "CameraRollDomain" {
+        return Coverage::Missed;
+    }
+    if dir.starts_with(THUMB_PREFIX.trim_end_matches('/')) {
+        return Coverage::Thumbnail;
+    }
+    if ASSET_ROOTS
+        .iter()
+        .any(|r| dir.starts_with(r.trim_end_matches('/')))
+    {
+        return Coverage::Asset;
+    }
+    Coverage::Missed
+}
+
+/// Extensions the camera-roll import can actually turn into a thumbnail today
+/// (mirrors `camera_roll::classify`). Anything outside this set that shows up in
+/// quantity is a decoder gap.
+const DECODED: [&str; 10] = [
+    "heic", "heif", "jpg", "jpeg", "png", "gif", "mov", "mp4", "m4v", "avif",
+];
+
+/// Media extensions worth counting — deliberately WIDER than what we decode, so
+/// formats we cannot yet render still surface as a gap rather than vanishing.
+fn media_ext(rel: &str) -> Option<String> {
+    let lower = rel.to_ascii_lowercase();
+    let ext = lower.rsplit('.').next()?;
+    const MEDIA: [&str; 22] = [
+        "heic", "heif", "avif", "jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif", "dng",
+        "cr2", "nef", "arw", "raf", "mov", "mp4", "m4v", "avi", "3gp", "webm",
+    ];
+    MEDIA.contains(&ext).then(|| ext.to_string())
+}
+
+/// Collapse a path to its directory shape: drop the filename, keep at most four
+/// components, and replace shard/bucket names (`100APPLE`, `group1`, hex fanout)
+/// with `*`. Without this the report is thousands of near-identical rows and the
+/// real outlier directory hides among them.
+fn generalize(rel: &str) -> String {
+    let dir = match rel.rsplit_once('/') {
+        Some((d, _)) => d,
+        None => return "(root)".into(),
+    };
+    dir.split('/')
+        .take(4)
+        .map(|c| {
+            let shard = (c.chars().any(|ch| ch.is_ascii_digit())
+                && c.chars()
+                    .all(|ch| ch.is_ascii_digit() || ch.is_ascii_uppercase()))
+                || c.strip_prefix("group")
+                    .is_some_and(|r| r.parse::<u32>().is_ok())
+                || (c.len() >= 8 && c.chars().all(|ch| ch.is_ascii_hexdigit()));
+            if shard && c != "V2" {
+                "*"
+            } else {
+                c
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Count Manifest rows per camera-roll root. These are FILES — the ceiling on
@@ -202,4 +344,59 @@ fn columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
 
 fn count(conn: &Connection, sql: &str) -> Result<i64> {
     Ok(conn.query_row(sql, [], |r| r.get(0))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Shard directories must collapse, or the survey is thousands of one-row
+    /// entries and the outlier directory it exists to reveal is invisible.
+    #[test]
+    fn collapses_shard_directories_but_keeps_meaningful_names() {
+        assert_eq!(generalize("Media/DCIM/100APPLE/IMG_1.HEIC"), "Media/DCIM/*");
+        assert_eq!(
+            generalize("Media/PhotoData/CPLAssets/group1/IMG_1.HEIC"),
+            "Media/PhotoData/CPLAssets/*"
+        );
+        // `V2` has a digit but names a real directory — collapsing it would merge
+        // thumbnails into whatever else lives under PhotoData.
+        assert_eq!(
+            generalize("Media/PhotoData/Thumbnails/V2/DCIM/1.JPG"),
+            "Media/PhotoData/Thumbnails/V2"
+        );
+    }
+
+    /// Thumbnails are READ, just not as assets. Reporting them as a gap would
+    /// cry wolf on every single backup and train the reader to skip the section.
+    #[test]
+    fn thumbnails_are_not_reported_as_a_gap() {
+        assert_eq!(
+            coverage("CameraRollDomain", "Media/PhotoData/Thumbnails/V2"),
+            Coverage::Thumbnail
+        );
+        assert_eq!(
+            coverage("CameraRollDomain", "Media/DCIM/*"),
+            Coverage::Asset
+        );
+        // My Photo Stream is a real iOS location the camera roll does not read.
+        assert_eq!(
+            coverage("CameraRollDomain", "Media/PhotoStreamsData/*/*"),
+            Coverage::Missed
+        );
+        assert_eq!(
+            coverage("MediaDomain", "Media/Recordings"),
+            Coverage::Missed
+        );
+    }
+
+    /// The survey counts formats we cannot yet decode on purpose — a RAW or WebP
+    /// pile we silently skip is exactly the kind of gap this tool is for.
+    #[test]
+    fn counts_media_we_cannot_decode() {
+        assert_eq!(media_ext("a/b/RAW_1.DNG").as_deref(), Some("dng"));
+        assert_eq!(media_ext("a/b/x.webp").as_deref(), Some("webp"));
+        assert!(!DECODED.contains(&"dng"));
+        assert_eq!(media_ext("a/b/notes.sqlite"), None);
+    }
 }
