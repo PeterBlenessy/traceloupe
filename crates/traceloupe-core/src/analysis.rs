@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -323,6 +323,10 @@ CREATE TABLE IF NOT EXISTS content_findings (
     fingerprint       TEXT NOT NULL,        -- sha256 hex of the normalized source text
     sender            TEXT,                 -- who said it ('me' for the device owner);
                                             -- NULL on rows written before v11
+    content_key       TEXT,                 -- normalized identity of SHORT content
+                                            -- (safety_scan::content_key); NULL when the
+                                            -- text is too long to recur, so a content
+                                            -- rule can never match it
     category          TEXT NOT NULL,        -- Forensic 9 slug (see Category)
     severity          INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 3),
     rationale         TEXT NOT NULL,        -- the model's one-line justification
@@ -373,12 +377,15 @@ CREATE INDEX IF NOT EXISTS idx_verdict ON finding_verdicts(verdict);
 -- UNIQUE includes category, so one conversation carries one rule per category.
 CREATE TABLE IF NOT EXISTS suppressions (
     id         INTEGER PRIMARY KEY,
-    scope      TEXT NOT NULL,                  -- 'thread' | 'category'
+    -- 'thread' | 'category' | 'content+sender' | 'content+any'.
+    -- For the content scopes `value` is a normalized content key, not a thread.
+    scope      TEXT NOT NULL,
     value      TEXT NOT NULL,
     category   TEXT,                           -- NULL = pre-v10, every category
+    sender     TEXT NOT NULL DEFAULT '',       -- '' = any sender; else the handle
     reason     TEXT,
     created_at INTEGER NOT NULL,
-    UNIQUE(scope, value, category)
+    UNIQUE(scope, value, category, sender)
 );
 
 -- Per-Chunk classification progress. One row per chunk_key (latest state);
@@ -531,6 +538,10 @@ pub struct NewFinding {
     /// which is why the schema comment used to record sender scope as
     /// impossible (#402).
     pub sender: Option<String>,
+    /// Normalized identity of the flagged text, from
+    /// `safety_scan::content_key`. `None` when the text is too long to recur,
+    /// which is exactly when no content rule should ever match it (#404).
+    pub content_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -547,6 +558,9 @@ pub struct FindingRow {
     pub rationale: String,
     /// Who sent it; `None` for notes and pre-v11 rows.
     pub sender: Option<String>,
+    /// Normalized identity of the flagged text; `None` when it is too long to
+    /// recur, or on pre-v12 rows. No content rule can match a `None`.
+    pub content_key: Option<String>,
     pub stale: bool,
     pub dismissed: bool,
     /// 1 = confirmed by the cascade's strong tier (E4B re-checked and kept it);
@@ -846,6 +860,50 @@ impl AnalysisDb {
             if !has_sender {
                 conn.execute("ALTER TABLE content_findings ADD COLUMN sender TEXT", [])?;
             }
+            // v12: content-scoped rules (#404). Two pieces — the identity a
+            // rule matches on, stored per finding so the match is a plain
+            // indexed comparison, and the sender a rule is bounded to.
+            let has_key = conn
+                .prepare("PRAGMA table_info(content_findings)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "content_key");
+            if !has_key {
+                // Existing findings keep NULL: the flagged text is not in this
+                // database, so the key cannot be recomputed here. A content
+                // rule simply never matches them, which is the safe direction.
+                conn.execute(
+                    "ALTER TABLE content_findings ADD COLUMN content_key TEXT",
+                    [],
+                )?;
+            }
+            let has_supp_sender = conn
+                .prepare("PRAGMA table_info(suppressions)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "sender");
+            if !has_supp_sender {
+                // Rebuild again: the UNIQUE has to grow a column, and existing
+                // thread/category rules are sender-agnostic ('').
+                conn.execute_batch(
+                    "CREATE TABLE suppressions_v12 (
+                         id         INTEGER PRIMARY KEY,
+                         scope      TEXT NOT NULL,
+                         value      TEXT NOT NULL,
+                         category   TEXT,
+                         sender     TEXT NOT NULL DEFAULT '',
+                         reason     TEXT,
+                         created_at INTEGER NOT NULL,
+                         UNIQUE(scope, value, category, sender)
+                     );
+                     INSERT INTO suppressions_v12
+                         (id, scope, value, category, sender, reason, created_at)
+                     SELECT id, scope, value, category, '', reason, created_at
+                     FROM suppressions;
+                     DROP TABLE suppressions;
+                     ALTER TABLE suppressions_v12 RENAME TO suppressions;",
+                )?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1080,8 +1138,9 @@ impl AnalysisDb {
             tx.execute(
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
-                    fingerprint, category, severity, rationale, service, sender, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                    fingerprint, category, severity, rationale, service, sender,
+                    content_key, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -1094,6 +1153,7 @@ impl AnalysisDb {
                     f.rationale,
                     f.service,
                     f.sender,
+                    f.content_key,
                     at
                 ],
             )?;
@@ -1480,7 +1540,7 @@ impl AnalysisDb {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
-                    f.sender, f.stale, f.created_at, f.rechecked,
+                    f.sender, f.content_key, f.stale, f.created_at, f.rechecked,
                     {DISMISSED_EXPR}
              FROM content_findings f
              WHERE {where_clause}
@@ -1499,10 +1559,11 @@ impl AnalysisDb {
                 r.get::<_, u8>(8)?,
                 r.get::<_, String>(9)?,
                 r.get::<_, Option<String>>(10)?,
-                r.get::<_, bool>(11)?,
-                r.get::<_, i64>(12)?,
-                r.get::<_, bool>(13)?,
+                r.get::<_, Option<String>>(11)?,
+                r.get::<_, bool>(12)?,
+                r.get::<_, i64>(13)?,
                 r.get::<_, bool>(14)?,
+                r.get::<_, bool>(15)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -1519,6 +1580,7 @@ impl AnalysisDb {
                 severity,
                 rationale,
                 sender,
+                content_key,
                 stale,
                 created_at,
                 rechecked,
@@ -1540,6 +1602,7 @@ impl AnalysisDb {
                 severity,
                 rationale,
                 sender,
+                content_key,
                 stale,
                 dismissed,
                 rechecked,
@@ -1629,8 +1692,8 @@ impl AnalysisDb {
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
                     fingerprint, category, severity, rationale, service, sender,
-                    rechecked, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12)",
+                    content_key, rechecked, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, ?13)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -1643,6 +1706,7 @@ impl AnalysisDb {
                     f.rationale,
                     f.service,
                     f.sender,
+                    f.content_key,
                     at
                 ],
             )?;
@@ -1726,19 +1790,26 @@ impl AnalysisDb {
     /// optional for new rules — `None` recreates the pre-v10 breadth where a
     /// conversation rule silenced everything, and only the migration is
     /// allowed to leave it unset.
+    ///
+    /// `sender` bounds the rule to one person and belongs to the
+    /// `content+sender` scope; `None` (stored as `''`) means any sender. It is
+    /// never NULL, so the UNIQUE index still tells two rules on the same
+    /// content from different people apart.
     pub fn add_suppression(
         &self,
         scope: &str,
         value: &str,
         category: &str,
+        sender: Option<&str>,
         reason: Option<&str>,
         at: i64,
     ) -> Result<usize> {
         self.conn.execute(
-            "INSERT INTO suppressions (scope, value, category, reason, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(scope, value, category) DO UPDATE SET reason = excluded.reason",
-            params![scope, value, category, reason, at],
+            "INSERT INTO suppressions (scope, value, category, sender, reason, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(scope, value, category, sender)
+                 DO UPDATE SET reason = excluded.reason",
+            params![scope, value, category, sender.unwrap_or(""), reason, at],
         )?;
         self.apply_suppressions(at)
     }
@@ -1749,6 +1820,26 @@ impl AnalysisDb {
     /// so a rule made today still covers what tomorrow's scan turns up. An
     /// existing verdict is left alone: a rule must not overwrite a decision the
     /// user made by hand.
+    /// The four scopes, narrow to broad:
+    ///
+    /// - `content+sender` — this exact short content, from this person. The one
+    ///   the widening offer defaults to: grandmother's ❤️ is covered, an
+    ///   identical ❤️ from a stranger is not, because the sender differs.
+    /// - `content+any` — this content from anyone.
+    /// - `thread` — this conversation.
+    /// - `category` — everywhere.
+    ///
+    /// Two `IS NOT NULL` guards carry real weight rather than defending against
+    /// SQL quirks:
+    ///
+    /// - **A finding with no `content_key` is never matched by a content rule.**
+    ///   That is every finding written before v12, and every finding whose text
+    ///   was too long to generalize. Both should be unreachable by a rule keyed
+    ///   on content.
+    /// - **A finding with no `sender` never matches a sender-scoped rule.** A
+    ///   finding whose sender was never recorded must not inherit an exemption
+    ///   somebody made for a different person (#402).
+    ///
     /// Two constraints beyond the scope match, both load-bearing:
     ///
     /// - **The rule's category must match the finding's.** Without it, a
@@ -1767,7 +1858,15 @@ impl AnalysisDb {
              FROM content_findings f
              JOIN suppressions s
                ON ((s.scope = 'thread'   AND s.value = f.thread_identifier)
-                OR (s.scope = 'category' AND s.value = f.category))
+                OR (s.scope = 'category' AND s.value = f.category)
+                OR (s.scope = 'content+any'
+                    AND f.content_key IS NOT NULL
+                    AND s.value = f.content_key)
+                OR (s.scope = 'content+sender'
+                    AND f.content_key IS NOT NULL
+                    AND s.value = f.content_key
+                    AND f.sender IS NOT NULL
+                    AND s.sender = f.sender))
               AND (s.category IS NULL OR s.category = f.category)
              WHERE f.severity < 3
                AND NOT EXISTS (SELECT 1 FROM finding_verdicts v
@@ -1781,14 +1880,17 @@ impl AnalysisDb {
     /// Every standing rule, newest first, as (scope, value, category, reason).
     /// A `None` category is a pre-v10 rule covering every category — the UI
     /// must say so rather than presenting it as an ordinary narrow rule.
-    #[allow(clippy::type_complexity)] // four columns of one row; a struct buys nothing here
+    #[allow(clippy::type_complexity)] // one row's columns; a struct buys nothing here
     pub fn list_suppressions(
         &self,
-    ) -> Result<Vec<(String, String, Option<String>, Option<String>)>> {
+    ) -> Result<Vec<(String, String, Option<String>, String, Option<String>)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT scope, value, category, reason FROM suppressions ORDER BY created_at DESC",
+            "SELECT scope, value, category, sender, reason
+             FROM suppressions ORDER BY created_at DESC",
         )?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
@@ -1803,12 +1905,14 @@ impl AnalysisDb {
         scope: &str,
         value: &str,
         category: Option<&str>,
+        sender: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
             "DELETE FROM suppressions
              WHERE scope = ?1 AND value = ?2
-               AND category IS ?3",
-            params![scope, value, category],
+               AND category IS ?3
+               AND sender = ?4",
+            params![scope, value, category, sender.unwrap_or("")],
         )?;
         Ok(())
     }
@@ -2171,6 +2275,7 @@ mod tests {
                 rationale: "why".into(),
                 service: Some("iMessage".into()),
                 sender: None,
+                content_key: None,
             })
             .collect();
         db.replace_findings(scan, &rows, 1).unwrap();
@@ -2354,6 +2459,7 @@ mod tests {
             rationale: "test rationale".into(),
             service: Some("iMessage".into()),
             sender: None,
+            content_key: None,
         }
     }
 
@@ -2601,6 +2707,7 @@ mod tests {
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
                 sender: None,
+                content_key: None,
             }
         };
         let findings = vec![
@@ -2666,6 +2773,7 @@ mod tests {
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
                 sender: None,
+                content_key: None,
             }],
             105,
         )
@@ -2904,6 +3012,7 @@ mod tests {
             rationale: "x".into(),
             service: Some("iMessage".into()),
             sender: None,
+            content_key: None,
         };
 
         // Two scans over the SAME data. The first classifies and owns the rows;
@@ -2985,6 +3094,7 @@ mod tests {
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
                 sender: None,
+                content_key: None,
             }],
             105,
         )
@@ -3019,6 +3129,7 @@ mod tests {
                 rationale: "x".into(),
                 service: None,
                 sender: None,
+                content_key: None,
             }],
             105,
         )
@@ -3068,6 +3179,7 @@ mod tests {
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
                 sender: None,
+                content_key: None,
             }],
             105,
         )
@@ -3584,6 +3696,7 @@ mod tests {
                 "thread",
                 "safe-chat",
                 "scam-fraud",
+                None,
                 Some("Work group, all jokes"),
                 200,
             )
@@ -3611,6 +3724,7 @@ mod tests {
             "category",
             "scam-fraud",
             "scam-fraud",
+            None,
             Some("Junk texts"),
             100,
         )
@@ -3651,8 +3765,15 @@ mod tests {
         )
         .unwrap();
 
-        db.add_suppression("category", "scam-fraud", "scam-fraud", Some("Junk"), 200)
-            .unwrap();
+        db.add_suppression(
+            "category",
+            "scam-fraud",
+            "scam-fraud",
+            None,
+            Some("Junk"),
+            200,
+        )
+        .unwrap();
 
         let c = db.count_findings_breakdown("all", None, None).unwrap();
         assert_eq!(
@@ -3674,14 +3795,14 @@ mod tests {
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
         db.replace_findings(scan, &[finding("fp1", Category::ScamFraud)], 100)
             .unwrap();
-        db.add_suppression("category", "scam-fraud", "scam-fraud", None, 200)
+        db.add_suppression("category", "scam-fraud", "scam-fraud", None, None, 200)
             .unwrap();
         assert_eq!(
             db.count_findings_breakdown("all", None, None).unwrap().live,
             0
         );
 
-        db.remove_suppression("category", "scam-fraud", Some("scam-fraud"))
+        db.remove_suppression("category", "scam-fraud", Some("scam-fraud"), None)
             .unwrap();
         assert!(db.list_suppressions().unwrap().is_empty());
         assert_eq!(
@@ -3741,6 +3862,165 @@ mod tests {
         );
     }
 
+    /// Three findings with the same content from different people, so the
+    /// sender is the only thing that can distinguish them. This is the whole
+    /// point of #404: grandmother's ❤️ is covered, a stranger's identical ❤️ is
+    /// not.
+    fn hearts_from(db: &mut AnalysisDb) -> i64 {
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = [("gran", "gran-fp"), ("stranger", "str-fp")]
+            .iter()
+            .map(|(who, fp)| NewFinding {
+                thread_identifier: Some((*who).into()),
+                sender: Some((*who).into()),
+                content_key: Some("\u{2764}".into()),
+                ..finding(fp, Category::HarassmentBullying)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 100).unwrap();
+        scan
+    }
+
+    fn live_fingerprints(db: &AnalysisDb) -> Vec<String> {
+        let mut stmt = db
+            .conn()
+            .prepare(
+                "SELECT fingerprint FROM content_findings f
+                 WHERE NOT EXISTS (SELECT 1 FROM finding_verdicts v
+                                   WHERE v.fingerprint = f.fingerprint
+                                     AND v.verdict = 'dismissed')
+                 ORDER BY fingerprint",
+            )
+            .unwrap();
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0)).unwrap();
+        rows.map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn a_content_rule_for_one_sender_leaves_the_same_content_from_another() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        hearts_from(&mut db);
+
+        let n = db
+            .add_suppression(
+                "content+sender",
+                "\u{2764}",
+                "harassment-bullying",
+                Some("gran"),
+                None,
+                200,
+            )
+            .unwrap();
+        assert_eq!(n, 1, "only grandmother's heart matched");
+        assert_eq!(
+            live_fingerprints(&db),
+            vec!["str-fp".to_string()],
+            "the stranger's identical heart is still flagged"
+        );
+    }
+
+    #[test]
+    fn a_content_rule_for_anyone_covers_both() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        hearts_from(&mut db);
+        let n = db
+            .add_suppression(
+                "content+any",
+                "\u{2764}",
+                "harassment-bullying",
+                None,
+                None,
+                200,
+            )
+            .unwrap();
+        assert_eq!(n, 2);
+        assert!(live_fingerprints(&db).is_empty());
+    }
+
+    /// A finding whose sender was never recorded — every finding written before
+    /// #402 — must not inherit an exemption somebody made for a different
+    /// person. NULL means unknown, never "matches anyone".
+    #[test]
+    fn an_unknown_sender_never_inherits_someone_elses_rule() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[NewFinding {
+                thread_identifier: Some("gran".into()),
+                sender: None, // pre-v11 row
+                content_key: Some("\u{2764}".into()),
+                ..finding("legacy-fp", Category::HarassmentBullying)
+            }],
+            100,
+        )
+        .unwrap();
+
+        let n = db
+            .add_suppression(
+                "content+sender",
+                "\u{2764}",
+                "harassment-bullying",
+                Some("gran"),
+                None,
+                200,
+            )
+            .unwrap();
+        assert_eq!(n, 0, "an unknown sender is not grandmother");
+        assert_eq!(live_fingerprints(&db), vec!["legacy-fp".to_string()]);
+    }
+
+    /// A finding with no content key — too long to generalize, or written
+    /// before v12 — is unreachable by a content rule by construction.
+    #[test]
+    fn a_finding_without_a_content_key_is_unreachable_by_a_content_rule() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        db.replace_findings(
+            scan,
+            &[NewFinding {
+                sender: Some("gran".into()),
+                content_key: None,
+                ..finding("long-fp", Category::HarassmentBullying)
+            }],
+            100,
+        )
+        .unwrap();
+        let n = db
+            .add_suppression(
+                "content+any",
+                "\u{2764}",
+                "harassment-bullying",
+                None,
+                None,
+                200,
+            )
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(live_fingerprints(&db), vec!["long-fp".to_string()]);
+    }
+
+    /// The same conversation, the same content, two different people — two
+    /// rules. The pre-v12 UNIQUE could not hold both.
+    #[test]
+    fn two_senders_can_carry_their_own_rule_for_the_same_content() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        hearts_from(&mut db);
+        for who in ["gran", "stranger"] {
+            db.add_suppression(
+                "content+sender",
+                "\u{2764}",
+                "harassment-bullying",
+                Some(who),
+                None,
+                200,
+            )
+            .unwrap();
+        }
+        assert_eq!(db.list_suppressions().unwrap().len(), 2);
+        assert!(live_fingerprints(&db).is_empty());
+    }
+
     /// #394. The bug: dismissing one heart emoji "for this conversation"
     /// pre-dismissed every future finding of every category from that number,
     /// including a threat months later.
@@ -3765,7 +4045,7 @@ mod tests {
         .unwrap();
 
         let n = db
-            .add_suppression("thread", "gran", "harassment-bullying", None, 200)
+            .add_suppression("thread", "gran", "harassment-bullying", None, None, 200)
             .unwrap();
         assert_eq!(n, 1, "only the harassment finding matched");
 
@@ -3808,7 +4088,7 @@ mod tests {
         .unwrap();
 
         let n = db
-            .add_suppression("thread", "gran", "threat-violence", None, 200)
+            .add_suppression("thread", "gran", "threat-violence", None, None, 200)
             .unwrap();
         assert_eq!(n, 1, "the severity-3 finding was left alone");
         let c = db.count_findings_breakdown("all", None, None).unwrap();
@@ -3862,7 +4142,8 @@ mod tests {
         let rules = db.list_suppressions().unwrap();
         assert_eq!(rules.len(), 1, "the rule survived the rebuild");
         assert_eq!(rules[0].2, None, "and is marked as covering every category");
-        assert_eq!(rules[0].3.as_deref(), Some("Family group"));
+        assert_eq!(rules[0].3, "", "and to no particular sender");
+        assert_eq!(rules[0].4.as_deref(), Some("Family group"));
 
         // Its old breadth still applies: two different categories, both covered.
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
@@ -3886,7 +4167,7 @@ mod tests {
 
         // And the new shape is in place: the same conversation can now carry a
         // second, narrow rule, which the old UNIQUE(scope, value) forbade.
-        db.add_suppression("thread", "gran", "self-harm", None, 300)
+        db.add_suppression("thread", "gran", "self-harm", None, None, 300)
             .unwrap();
         assert_eq!(db.list_suppressions().unwrap().len(), 2);
     }

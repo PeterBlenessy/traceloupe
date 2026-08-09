@@ -495,6 +495,7 @@ mod tests {
                 rationale: "repeated insults".into(),
                 service: None,
                 sender: None,
+                content_key: None,
             });
         }
         db.replace_findings(scan, &findings, 101).unwrap();
@@ -615,6 +616,7 @@ mod tests {
                 rationale: "explicit threat".into(),
                 service: None,
                 sender: None,
+                content_key: None,
             }],
             201,
         )

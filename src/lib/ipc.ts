@@ -841,13 +841,33 @@ export interface ContentFindingPage {
 /** A standing "this is fine" rule. Scope is conversation or category — NOT
  *  sender: a finding carries thread_identifier and category, but the sender
  *  lives on the message in the cache, a different database. */
+/** How far a standing rule reaches, narrowest first.
+ *
+ *  - `content+sender` — this exact short content, from this person. A heart
+ *    emoji from a grandmother is covered; an identical one from a stranger is
+ *    not, because the sender differs.
+ *  - `content+any` — this content from anyone.
+ *  - `thread` — this conversation.
+ *  - `category` — everywhere. */
+export type SuppressionScope =
+  | "content+sender"
+  | "content+any"
+  | "thread"
+  | "category";
+
 export interface Suppression {
-  scope: "thread" | "category";
+  scope: SuppressionScope;
+  /** A thread identifier, a category slug, or — for the content scopes — a
+   *  normalized content key. */
   value: string;
   /** The Forensic 9 category the rule covers. `null` is a rule made before the
    *  category scope existed, when a conversation rule silenced EVERY category —
    *  the panel labels those, because they are far broader than they look. */
   category: string | null;
+  /** Who the rule is bounded to, for `content+sender`. Empty string means any
+   *  sender — never null, so two rules on the same content from different
+   *  people stay distinct. */
+  sender: string;
   reason: string | null;
 }
 
@@ -969,6 +989,10 @@ export interface ContentFinding {
    *  handle. null for notes, and for findings written before the sender was
    *  recorded. A group chat needs this to say who spoke. */
   sender: string | null;
+  /** Normalized identity of the flagged text, or null when it is too long to
+   *  recur. null means no content rule can ever match it, so none should be
+   *  offered — see `content_key` in the core. */
+  contentKey: string | null;
   stale: boolean;
   dismissed: boolean;
   /** True when the cascade's strong tier (E4B) re-checked and kept this finding
@@ -1530,10 +1554,13 @@ export interface TraceLoupeClient {
    *  The rule DISMISSES what it covers rather than hiding it — a dismissed
    *  finding is counted, reachable and says why; a hidden one is gone. Returns
    *  how many existing findings it dismissed. */
+  /** `sender` is required for `content+sender` and ignored otherwise; without
+   *  it that scope would silently widen to everyone. */
   addSafetySuppression(
-    scope: "thread" | "category",
+    scope: SuppressionScope,
     value: string,
     category: string,
+    sender: string | null,
     reason?: string,
   ): Promise<number>;
   listSafetySuppressions(): Promise<Suppression[]>;
@@ -1541,6 +1568,7 @@ export interface TraceLoupeClient {
     scope: string,
     value: string,
     category: string | null,
+    sender: string | null,
   ): Promise<void>;
   /** A scan's report + per-thread summaries. Latest scan when `scanId` is
    *  omitted, or a specific past scan from the history list. */
@@ -2226,17 +2254,18 @@ const tauriClient: TraceLoupeClient = {
     }),
   markContentFindingSeen: (fingerprint, category) =>
     invoke("mark_content_finding_seen", { fingerprint, category }),
-  addSafetySuppression: (scope, value, category, reason) =>
+  addSafetySuppression: (scope, value, category, sender, reason) =>
     invoke<number>("add_safety_suppression", {
       scope,
       value,
       category,
+      sender,
       reason: reason ?? null,
     }),
   listSafetySuppressions: () =>
     invoke<Suppression[]>("list_safety_suppressions"),
-  removeSafetySuppression: (scope, value, category) =>
-    invoke("remove_safety_suppression", { scope, value, category }),
+  removeSafetySuppression: (scope, value, category, sender) =>
+    invoke("remove_safety_suppression", { scope, value, category, sender }),
   getSafetyScanReport: (scanId) =>
     invoke<SafetyScanReport>("get_safety_scan_report", {
       scanId: scanId ?? null,
@@ -3432,6 +3461,10 @@ const mockContentFindings: ContentFinding[] = (
     // The handle the parser resolved, exactly as the backend records it —
     // notes have no sender at all (#402).
     sender: who === "note" ? null : thread.identifier,
+    // Short rationales stand in for short flagged text: enough of the mock has
+    // a key for the widening offer to be exercised, and enough lacks one for
+    // the "cannot generalize" path to be reachable.
+    contentKey: i % 3 === 0 ? "\u2764" : null,
     // One stale (source content gone: the report drops it, the panel keeps it)
     // and one dismissed, so the two disclosures the charts owe the reader are
     // never zero in the mock.
@@ -3465,6 +3498,7 @@ mockContentFindings.push({
   severity: 1,
   rationale: "Message whose timestamp did not decode.",
   sender: "8",
+  contentKey: null,
   stale: false,
   dismissed: false,
   seen: false,
@@ -3482,6 +3516,7 @@ mockContentFindings.push({
   occurredAt: null,
   fingerprint: "mockfp-self-harm-undated",
   sender: null,
+  contentKey: null,
   category: "self-harm",
   severity: 1,
   rationale: "Undated note referring to wanting to disappear.",
@@ -7068,11 +7103,22 @@ const mockClient: TraceLoupeClient = {
       }
     }
   },
-  addSafetySuppression: async (scope, value, category, reason) => {
+  addSafetySuppression: async (scope, value, category, sender, reason) => {
     let n = 0;
     for (const f of mockContentFindings) {
+      // A finding with no content key or no sender is unreachable by the
+      // scopes that need them — the backend's two IS NOT NULL guards.
       const inScope =
-        scope === "thread" ? f.threadIdentifier === value : f.category === value;
+        scope === "thread"
+          ? f.threadIdentifier === value
+          : scope === "category"
+            ? f.category === value
+            : scope === "content+any"
+              ? f.contentKey != null && f.contentKey === value
+              : f.contentKey != null &&
+                f.contentKey === value &&
+                f.sender != null &&
+                f.sender === sender;
       // Same three rules as the backend's `apply_suppressions`: the scope must
       // match, the CATEGORY must match, and severity 3 is never dismissed by a
       // standing rule. Never overwrite a decision made by hand.
@@ -7083,13 +7129,23 @@ const mockClient: TraceLoupeClient = {
         n += 1;
       }
     }
-    mockSuppressions.push({ scope, value, category, reason: reason ?? null });
+    mockSuppressions.push({
+      scope,
+      value,
+      category,
+      sender: sender ?? "",
+      reason: reason ?? null,
+    });
     return n;
   },
   listSafetySuppressions: async () => (mockActive ? mockSuppressions : []),
-  removeSafetySuppression: async (scope, value, category) => {
+  removeSafetySuppression: async (scope, value, category, sender) => {
     const i = mockSuppressions.findIndex(
-      (s) => s.scope === scope && s.value === value && s.category === category,
+      (s) =>
+        s.scope === scope &&
+        s.value === value &&
+        s.category === category &&
+        s.sender === (sender ?? ""),
     );
     if (i >= 0) mockSuppressions.splice(i, 1);
   },

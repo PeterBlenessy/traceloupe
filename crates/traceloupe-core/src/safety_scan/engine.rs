@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 
 use super::chunker::{self, Chunk, TimeRange};
 use super::client::LlmClient;
+use super::content_key;
 use super::prompt;
 use super::trivial;
 use crate::analysis::{AnalysisDb, Category, ChunkStatus, NewFinding, ScanStatus};
@@ -184,6 +185,11 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
                 crate::analysis::SourceKind::Message => Some(item.sender.clone()),
                 crate::analysis::SourceKind::Note => None,
             },
+            // Computed here, where the text is, so matching a content rule is
+            // a plain indexed comparison later. `None` for anything too long
+            // to recur — such a finding is unreachable by a content rule, by
+            // construction rather than by threshold.
+            content_key: content_key::content_key(&item.text),
         });
     }
     out
@@ -1501,6 +1507,7 @@ mod tests {
                     rationale: "earlier run".into(),
                     service: Some("iMessage".into()),
                     sender: None,
+                    content_key: None,
                 }],
                 11,
             )
