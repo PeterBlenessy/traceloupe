@@ -11,6 +11,33 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+## [0.43.1] — 2026-08-09
+
+**Two fixes found by running 0.43.0 against a real device.**
+
+### Photos
+
+Message photos are labelled with the service they came from — **iMessage**,
+**SMS** — instead of all collapsing into one "Messages" bucket. The source
+filter exists to say where a photo came from, and the chat already records
+which service it is. App chats (TikTok, WhatsApp, …) were already listed under
+their own names.
+
+The re-import that rewrites those labels also had to change: rows are now
+cleared by domain rather than by the old label, without which a second import
+would have silently doubled every message photo. Re-import to see the new
+labels — they are written at import time.
+
+### Artifacts
+
+**iCloud containers** are listed again on iOS 26. The module named a column
+that version no longer has, so it declined entirely and reported a parse
+failure — showing no containers at all, when only the per-container counts were
+unavailable. It now lists them with the counts left empty rather than guessing
+replacement column names: an empty cell reads as "not known", a fabricated
+number reads as fact.
+
+
 ## [0.43.0] — 2026-08-09
 
 **Most of your photos were never missing** — with iCloud Photos on, iOS leaves
