@@ -11,6 +11,18 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+## [0.43.2] — 2026-08-09
+
+### Photos
+
+Opening a photo whose original is in iCloud now shows **the thumbnail**, with
+the reason underneath, instead of "This file could not be read from the
+backup." Nothing had failed — the thumbnail iOS backed up was there all along,
+it just stopped being offered once the full-size file turned out to be absent.
+A soft picture answers "which photo is this?"; an error answers nothing and
+implies damage that has not occurred.
+
+
 ## [0.43.1] — 2026-08-09
 
 **Two fixes found by running 0.43.0 against a real device.**
