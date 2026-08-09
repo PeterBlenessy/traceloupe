@@ -454,6 +454,96 @@ mod tests {
     /// alone showed only the minority that kept one, and gave no sign the rest
     /// existed — which is what made a hidden collection look permanently lost.
     /// They are recoverable as thumbnails, and must be emitted.
+    /// Library-scale timing for the enumeration. The union made this parse the
+    /// WHOLE catalogue rather than just the files present, which is ~9x the rows
+    /// on a device with iCloud Photos on — so its cost has to be measured, not
+    /// assumed. Prints a breakdown; asserts nothing.
+    #[test]
+    #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
+    fn measure_enumeration_at_library_scale() {
+        const ASSETS: usize = 95_000;
+        const ORIGINALS: usize = 11_000;
+        const THUMB_SIZES: usize = 2;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let backup = tmp.path();
+        let t0 = std::time::Instant::now();
+        let conn = Connection::open(backup.join("Manifest.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             CREATE TABLE ZZ (x);",
+        )
+        .unwrap();
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            let mut ins = tx
+                .prepare("INSERT INTO Files VALUES (?1,'CameraRollDomain',?2,1,NULL)")
+                .unwrap();
+            for i in 0..ASSETS {
+                let rel = format!("DCIM/{:03}APPLE/IMG_{:05}.HEIC", i / 1000, i);
+                if i < ORIGINALS {
+                    ins.execute(rusqlite::params![
+                        format!("{i:08x}"),
+                        format!("Media/{rel}")
+                    ])
+                    .unwrap();
+                }
+                for s in 0..THUMB_SIZES {
+                    ins.execute(rusqlite::params![
+                        format!("t{s}{i:07x}"),
+                        format!("Media/PhotoData/Thumbnails/V2/{rel}/500{s}.JPG")
+                    ])
+                    .unwrap();
+                }
+            }
+            ins.execute(rusqlite::params!["ff55aa", "Media/PhotoData/Photos.sqlite"])
+                .unwrap();
+            drop(ins);
+            tx.commit().unwrap();
+        }
+        let photos = backup.join("ff").join("ff55aa");
+        std::fs::create_dir_all(photos.parent().unwrap()).unwrap();
+        let ph = Connection::open(&photos).unwrap();
+        ph.execute_batch(
+            "CREATE TABLE ZASSET (ZDIRECTORY TEXT, ZFILENAME TEXT, ZDATECREATED REAL, ZTRASHEDSTATE INTEGER);",
+        )
+        .unwrap();
+        {
+            let tx = ph.unchecked_transaction().unwrap();
+            let mut ins = tx
+                .prepare("INSERT INTO ZASSET VALUES (?1,?2,700000000.0,0)")
+                .unwrap();
+            for i in 0..ASSETS {
+                ins.execute(rusqlite::params![
+                    format!("DCIM/{:03}APPLE", i / 1000),
+                    format!("IMG_{i:05}.HEIC")
+                ])
+                .unwrap();
+            }
+            drop(ins);
+            tx.commit().unwrap();
+        }
+        println!("fixture built in {:?}", t0.elapsed());
+
+        let t1 = std::time::Instant::now();
+        let assets = parse_camera_roll(backup, None, &backup.join("_cache")).unwrap();
+        let dt = t1.elapsed();
+        let orig = assets
+            .iter()
+            .filter(|a| a.availability == Availability::Original)
+            .count();
+        println!(
+            "parse_camera_roll: {:?} for {} assets ({orig} with originals, {} thumbnail-only)",
+            dt,
+            assets.len(),
+            assets.len() - orig
+        );
+        println!(
+            "  → {:.1} µs/asset",
+            dt.as_micros() as f64 / assets.len() as f64
+        );
+    }
+
     #[test]
     fn emits_offloaded_assets_that_have_only_a_thumbnail() {
         let tmp = tempfile::tempdir().unwrap();

@@ -30,6 +30,25 @@ pub struct AttachmentSource<'a> {
     /// `Some` for an encrypted backup — attachment blobs are then ciphertext and
     /// their wrapped keys are stored for on-demand decryption at view time.
     pub decryptor: Option<&'a BackupDecryptor>,
+    /// Basename → the single file owning it, built once on first fallback use.
+    /// Without it the fallback is a full-Manifest `LIKE` scan PER attachment,
+    /// which on a large backup reads as a hung import rather than a slow one.
+    /// `OnceCell` so a backup whose attachments all resolve normally never pays
+    /// for the scan at all.
+    pub basenames: std::cell::OnceCell<std::collections::HashMap<String, Option<String>>>,
+}
+
+impl AttachmentSource<'_> {
+    pub fn new<'b>(
+        index: &'b ManifestIndex,
+        decryptor: Option<&'b BackupDecryptor>,
+    ) -> AttachmentSource<'b> {
+        AttachmentSource {
+            index,
+            decryptor,
+            basenames: std::cell::OnceCell::new(),
+        }
+    }
 }
 
 /// Apple absolute time counts from 2001-01-01 UTC. iOS 11+ stores nanoseconds;
@@ -999,11 +1018,13 @@ fn resolve_attachment(
                 .rsplit(['/', '\\'])
                 .next()
                 .filter(|s| !s.is_empty())?;
-            let mut hits = src.index.find_relative_like(&format!("%/{base}")).ok()?;
-            if hits.len() != 1 {
-                return None;
-            }
-            hits.pop()?
+            let map = src
+                .basenames
+                .get_or_init(|| src.index.unique_basenames().unwrap_or_default());
+            // `None` in the map means the basename is shared, which is a refusal,
+            // not a miss — same rule as before, now decided from memory.
+            let file_id = map.get(base)?.as_ref()?;
+            src.index.find_by_file_id(file_id).ok()??
         }
     };
     let path = src.index.blob_path(&entry.file_id);

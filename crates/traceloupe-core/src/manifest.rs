@@ -10,6 +10,7 @@
 //! provenance: reference (own implementation) of the iTunes-backup Manifest
 //! layout; decryption via [`crate::crypto`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -103,6 +104,57 @@ impl ManifestIndex {
         let rows = stmt.query_map(rusqlite::params![domain, prefix], Self::row_to_entry)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
+    }
+
+    /// One entry by its content-addressed id. `fileID` is the table's primary
+    /// key, so this is an index seek — unlike a basename `LIKE`, which cannot
+    /// use an index at all.
+    pub fn find_by_file_id(&self, file_id: &str) -> Result<Option<FileEntry>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT fileID, domain, relativePath, file FROM Files WHERE fileID = ?1")?;
+        let mut rows = stmt.query_map([file_id], Self::row_to_entry)?;
+        Ok(match rows.next() {
+            Some(r) => Some(r?),
+            None => None,
+        })
+    }
+
+    /// Basename → the file that owns it, but ONLY where exactly one file does.
+    ///
+    /// The attachment fallback needs "find the single file with this name".
+    /// Doing that as `LIKE '%/name'` per attachment is a full Manifest scan
+    /// each time — on a large backup that is hundreds of thousands of rows
+    /// times thousands of attachments, which is why import appeared to hang.
+    /// This pays for ONE scan and answers every lookup from memory.
+    ///
+    /// Ambiguous basenames map to `None` and stay that way: attaching the
+    /// wrong image to a message is a silent, confident error, and worse than
+    /// the missing file it would replace.
+    pub fn unique_basenames(&self) -> Result<HashMap<String, Option<String>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT fileID, relativePath FROM Files WHERE relativePath != ''")?;
+        let mut rows = stmt.query([])?;
+        let mut map: HashMap<String, Option<String>> = HashMap::new();
+        while let Some(r) = rows.next()? {
+            let file_id: String = r.get(0)?;
+            let rel: String = r.get(1)?;
+            let Some(base) = rel.rsplit('/').next() else {
+                continue;
+            };
+            if base.is_empty() {
+                continue;
+            }
+            match map.get_mut(base) {
+                None => {
+                    map.insert(base.to_string(), Some(file_id));
+                }
+                // Seen before → ambiguous. Drop the id; never resurrect it.
+                Some(slot) => *slot = None,
+            }
+        }
+        Ok(map)
     }
 
     /// Every file whose `relativePath` matches a SQL `LIKE` pattern, across ALL
@@ -271,5 +323,107 @@ mod tests {
             .find("WrongDomain", "Library/SMS/sms.db")
             .unwrap()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod basename_tests {
+    use super::*;
+
+    /// The fallback exists to rescue attachments stored outside the expected
+    /// directory, but it must REFUSE when a basename is shared: attaching the
+    /// wrong image to a message is a silent, confident error, and worse than the
+    /// missing file it replaces. Speeding the lookup up must not relax that.
+    #[test]
+    fn a_shared_basename_is_refused_not_guessed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = Connection::open(tmp.path().join("Manifest.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             INSERT INTO Files VALUES ('a1','MediaDomain','Media/one/IMG_0001.HEIC',1,NULL);
+             INSERT INTO Files VALUES ('b2','MediaDomain','Media/two/IMG_0001.HEIC',1,NULL);
+             INSERT INTO Files VALUES ('c3','MediaDomain','Media/three/UNIQUE.HEIC',1,NULL);",
+        )
+        .unwrap();
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+        let map = index.unique_basenames().unwrap();
+
+        assert_eq!(
+            map.get("IMG_0001.HEIC"),
+            Some(&None),
+            "a basename owned by two files must resolve to nothing"
+        );
+        assert_eq!(map.get("UNIQUE.HEIC"), Some(&Some("c3".to_string())));
+        assert_eq!(map.get("NEVER.HEIC"), None);
+
+        // And the id it hands back must actually resolve to that file.
+        let e = index.find_by_file_id("c3").unwrap().unwrap();
+        assert_eq!(e.relative_path, "Media/three/UNIQUE.HEIC");
+    }
+}
+
+#[cfg(test)]
+mod basename_bench {
+    use super::*;
+
+    /// The attachment fallback used to run a `LIKE '%/name'` per attachment —
+    /// a full Manifest scan each time. This measures both shapes at a scale a
+    /// real device reaches, because "it felt slow" is not a diagnosis.
+    #[test]
+    #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
+    fn measure_basename_fallback_shapes() {
+        const FILES: usize = 300_000;
+        const LOOKUPS: usize = 3_000;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("Manifest.db");
+        let conn = Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);",
+        )
+        .unwrap();
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            let mut ins = tx
+                .prepare("INSERT INTO Files VALUES (?1,'MediaDomain',?2,1,NULL)")
+                .unwrap();
+            for i in 0..FILES {
+                ins.execute(rusqlite::params![
+                    format!("{i:08x}"),
+                    format!("Media/dir{}/file_{i:06}.dat", i % 997)
+                ])
+                .unwrap();
+            }
+            drop(ins);
+            tx.commit().unwrap();
+        }
+        let index = ManifestIndex::open(tmp.path(), None, tmp.path()).unwrap();
+
+        let t = std::time::Instant::now();
+        for i in 0..LOOKUPS {
+            let base = format!("file_{:06}.dat", i * 7);
+            let _ = index.find_relative_like(&format!("%/{base}")).unwrap();
+        }
+        let old = t.elapsed();
+
+        let t = std::time::Instant::now();
+        let map = index.unique_basenames().unwrap();
+        let build = t.elapsed();
+        let t = std::time::Instant::now();
+        for i in 0..LOOKUPS {
+            let base = format!("file_{:06}.dat", i * 7);
+            if let Some(Some(id)) = map.get(&base) {
+                let _ = index.find_by_file_id(id).unwrap();
+            }
+        }
+        let new = t.elapsed();
+
+        println!("{FILES} files, {LOOKUPS} attachment lookups");
+        println!("  per-attachment LIKE scan : {old:?}");
+        println!("  one scan + hash + seek   : {build:?} build + {new:?} lookups");
+        println!(
+            "  speedup on the lookup phase: {:.0}x",
+            old.as_secs_f64() / (build + new).as_secs_f64()
+        );
     }
 }
