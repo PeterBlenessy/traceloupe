@@ -178,6 +178,10 @@ pub fn parse_tiktok_messages(
         out.push(AppMessage {
             source_id: None,
             is_group: false,
+            // MEDIA: TODO #431 — this parser extracts no attachments, so a
+            // photo sent here is invisible unless discovery infers it.
+            // Not yet measured: run backup-coverage against a backup with
+            // the app installed before deciding there is nothing local.
             attachments: Vec::new(),
             chat_key,
             chat_name: None, // derived from the peer

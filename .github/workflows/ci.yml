@@ -27,6 +27,8 @@ jobs:
       - run: bash scripts/check-doc-links.sh
       # Never commit a real backup's own row counts (AGENTS.md).
       - run: node scripts/check-no-backup-stats.mjs
+      # A chat parser must extract media or say why not (#418).
+      - run: node scripts/check-app-parser-coverage.mjs
       - run: node scripts/check-list-scroll.mjs
       - run: python3 tools/coverage-gap.py --self-test
       - run: node scripts/check-dates.mjs

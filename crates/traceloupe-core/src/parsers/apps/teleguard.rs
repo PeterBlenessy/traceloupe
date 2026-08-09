@@ -188,6 +188,10 @@ fn parse(db_path: &Path, _rel_path: &str) -> Result<Vec<AppMessage>> {
             is_from_me,
             has_attachment: kind_raw == "MEDIA",
             kind,
+            // MEDIA: TODO #429 — this parser extracts no attachments, so a
+            // photo sent here is invisible unless discovery infers it.
+            // Not yet measured: run backup-coverage against a backup with
+            // the app installed before deciding there is nothing local.
             attachments: Vec::new(),
         });
     }
