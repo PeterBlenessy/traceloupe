@@ -8,6 +8,7 @@
 
 pub mod chunker;
 pub mod client;
+pub mod content_key;
 pub mod engine;
 pub mod eval;
 pub mod models;
