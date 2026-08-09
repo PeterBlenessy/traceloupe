@@ -502,8 +502,14 @@ pub fn parse_messages(
             [],
         )?;
         tx.execute(&format!("DELETE FROM threads WHERE {NATIVE_THREADS}"), [])?;
-        // Also clear the gallery mirror of message media (see below).
-        tx.execute("DELETE FROM media_items WHERE source = 'Messages'", [])?;
+        // Also clear the gallery mirror of message media (see below). Matched by
+        // DOMAIN, not by source: these rows are now labelled with the chat's own
+        // service (iMessage / SMS), so a source = 'Messages' delete would leave
+        // every one of them behind and the next import would double them. This
+        // parser is the only writer of 'MediaDomain' media rows — the camera roll
+        // uses CameraRollDomain and app chats their own — so the domain is
+        // exactly "the rows this parse owns".
+        tx.execute("DELETE FROM media_items WHERE domain = 'MediaDomain'", [])?;
     }
 
     // Messages in chat order (grouped), then time. Skip pure "action" items
@@ -580,6 +586,12 @@ pub fn parse_messages(
     let mut rows = mstmt.query([])?;
 
     let mut current_chat: Option<i64> = None;
+    // The service of the chat currently being written, so an attachment mirrored
+    // into the gallery is labelled with the app it actually came from. Hardcoding
+    // "Messages" collapsed iMessage and SMS into one bucket, which is not what
+    // the Photos source filter is for — it exists to say WHERE a photo came
+    // from, and "Messages" answers that less precisely than the data allows.
+    let mut current_service: Option<String> = None;
     let mut thread_id: i64 = 0;
     let mut is_group = false;
     // Tapbacks are separate message rows that point at their target by GUID. Map
@@ -704,6 +716,7 @@ pub fn parse_messages(
             )?;
             thread_id = tx.last_insert_rowid();
             current_chat = Some(chat_id);
+            current_service = chat.and_then(|c| c.service.clone());
             report.threads += 1;
         }
 
@@ -845,7 +858,7 @@ pub fn parse_messages(
                         "INSERT INTO media_items
                             (domain, relative_path, kind, source, mime_type, taken_at,
                              thumb_path, local_path, decrypt_key, plain_size)
-                         VALUES ('MediaDomain', ?1, ?2, 'Messages', ?3, ?4, NULL, ?5, ?6, ?7)",
+                         VALUES ('MediaDomain', ?1, ?2, ?8, ?3, ?4, NULL, ?5, ?6, ?7)",
                         rusqlite::params![
                             a.path.clone().unwrap_or_else(|| lp.clone()),
                             kind,
@@ -854,6 +867,9 @@ pub fn parse_messages(
                             lp,
                             decrypt_key,
                             plain_size,
+                            // Fall back to "Messages" only when the chat records
+                            // no service — a real gap, not a default.
+                            current_service.as_deref().unwrap_or("Messages"),
                         ],
                     )?;
                 }
@@ -1502,6 +1518,90 @@ mod tests {
             .unwrap();
         assert_eq!(has_att, 1);
         assert_eq!(from_me, 1);
+    }
+
+    /// The Photos source filter exists to say WHERE a photo came from, and
+    /// labelling every message attachment "Messages" answers that less precisely
+    /// than the data allows — iMessage and SMS are different services and the
+    /// chat already records which. It has drifted back to the collapsed label
+    /// more than once, hence a guard.
+    ///
+    /// Also pins the re-import delete: once these rows carry a service, a
+    /// `source = 'Messages'` delete leaves every one behind and the next import
+    /// doubles them. It is scoped by DOMAIN instead.
+    #[test]
+    fn mirrored_attachments_carry_the_chats_own_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = CacheDb::open_in_memory().unwrap();
+        // A row from a previous import, under the OLD collapsed label — the
+        // delete has to remove it, or re-importing accumulates duplicates.
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO media_items (domain, relative_path, kind, source, local_path)
+                 VALUES ('MediaDomain', 'stale.jpg', 'photo', 'Messages', '/stale.jpg');",
+            )
+            .unwrap();
+
+        // sms.db with an SMS chat whose one message carries a photo.
+        let db = tmp.path().join("sms.db");
+        let c = Connection::open(&db).unwrap();
+        c.execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, chat_identifier TEXT, display_name TEXT, service_name TEXT);
+             CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
+             CREATE TABLE message (ROWID INTEGER PRIMARY KEY, text TEXT, is_from_me INTEGER, date INTEGER, handle_id INTEGER, cache_has_attachments INTEGER, date_read INTEGER, date_delivered INTEGER, guid TEXT, associated_message_guid TEXT, associated_message_type INTEGER, associated_message_emoji TEXT, thread_originator_guid TEXT, attributedBody BLOB, date_edited INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT, transfer_name TEXT, total_bytes INTEGER, is_sticker INTEGER);
+             CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
+             INSERT INTO handle VALUES (1,'+15550001111');
+             INSERT INTO chat VALUES (10,'+15550001111',NULL,'SMS');
+             INSERT INTO chat_handle_join VALUES (10,1);
+             INSERT INTO message VALUES (100,NULL,0,721692800000000000,1,1,0,0,'G1',NULL,0,NULL,NULL,NULL,0);
+             INSERT INTO chat_message_join VALUES (10,100);
+             INSERT INTO attachment VALUES (1,'~/Library/SMS/Attachments/ab/pic.jpeg','image/jpeg','pic.jpeg',10,0);
+             INSERT INTO message_attachment_join VALUES (100,1);",
+        )
+        .unwrap();
+        drop(c);
+
+        // A backup holding that attachment, so the mirror actually fires.
+        let backup = tmp.path().join("backup");
+        std::fs::create_dir_all(backup.join("aa")).unwrap();
+        std::fs::write(backup.join("aa").join("aa11"), b"jpegbytes").unwrap();
+        let m = Connection::open(backup.join("Manifest.db")).unwrap();
+        m.execute_batch(
+            "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             INSERT INTO Files VALUES ('aa11','MediaDomain','Library/SMS/Attachments/ab/pic.jpeg',1,NULL);",
+        )
+        .unwrap();
+        drop(m);
+        let index =
+            crate::manifest::ManifestIndex::open(&backup, None, &tmp.path().join("w")).unwrap();
+        let att = AttachmentSource::new(&index, None);
+
+        let mut report = ImportReport::default();
+        parse_messages(&db, &cache, &mut report, true, Some(&att)).unwrap();
+
+        let sources: Vec<(String, i64)> = {
+            let conn = cache.conn();
+            let mut st = conn
+                .prepare(
+                    "SELECT source, COUNT(*) FROM media_items
+                     WHERE domain = 'MediaDomain' GROUP BY source ORDER BY source",
+                )
+                .unwrap();
+            let r = st
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+                .unwrap();
+            r.flatten().collect()
+        };
+        assert_eq!(
+            sources,
+            vec![("SMS".to_string(), 1)],
+            "attachments must be labelled with the chat's service, and the stale \
+             'Messages' row must be gone"
+        );
     }
 
     #[test]
