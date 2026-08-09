@@ -317,10 +317,14 @@ export function SafetyScanView() {
           ? "Rule saved — it will apply to future scans"
           : `Dismissed ${n} finding${n === 1 ? "" : "s"}`,
         {
-          description:
-            r.scope === "thread"
-              ? `“${CATEGORY_LABEL[r.category as ContentCategory] ?? r.category}” in this conversation, now and in future scans. Other categories still get flagged.`
-              : "Everything in this category, now and in future scans",
+          description: {
+            "content+sender":
+              "Only this, and only from them — the same thing from anyone else still gets flagged.",
+            "content+any":
+              "This exact thing from anyone, in every conversation, now and in future scans.",
+            thread: `“${CATEGORY_LABEL[r.category as ContentCategory] ?? r.category}” in this conversation, now and in future scans. Other categories still get flagged.`,
+            category: "Everything in this category, now and in future scans",
+          }[r.scope],
         },
       );
     },
@@ -620,8 +624,8 @@ export function SafetyScanView() {
                     })
                   }
                   onOpenReport={() => setReportScan(selectedScan)}
-                  onRule={(scope, value, category, reason) =>
-                    addRule.mutate({ scope, value, category, reason })
+                  onRule={(scope, value, category, sender, reason) =>
+                    addRule.mutate({ scope, value, category, sender, reason })
                   }
                 />
             </div>
@@ -1671,9 +1675,10 @@ function FindingRow({
   onSeen: () => void;
   /** Dismiss a whole conversation or category rather than one finding. */
   onRule: (
-    scope: "thread" | "category",
+    scope: SuppressionScope,
     value: string,
     category: string,
+    sender: string | null,
     reason?: string,
   ) => void;
 }) {
@@ -1954,6 +1959,19 @@ function SuppressionChip() {
   );
 }
 
+/** A content key rendered as the user actually saw it.
+ *
+ *  The stored key strips emoji presentation selectors so that ❤ and ❤️ share
+ *  one identity — correct for matching, wrong for display: it comes back as a
+ *  monochrome text-style heart when what was dismissed was a red one. VS16 goes
+ *  back on for display only, and only on characters outside the ASCII range, so
+ *  punctuation keys like "!" are untouched. */
+function displayKey(key: string): string {
+  return [...key]
+    .map((c) => (c.codePointAt(0)! > 0x2000 ? `${c}\uFE0F` : c))
+    .join("");
+}
+
 /** Dismissing, with a reason and a choice of how far it reaches.
  *
  *  A scoped dismissal becomes a standing rule. It DISMISSES what it covers
@@ -1961,10 +1979,17 @@ function SuppressionChip() {
  *  "Show dismissed", and carry the reason — because a conversation that is fine
  *  today may not be next month, and that is the case this app exists to catch.
  *
- *  "This sender" is deliberately absent: a finding carries its conversation and
- *  category, but the sender lives on the message in the cache, a different
- *  database. For a one-to-one chat the conversation IS the sender, which the
- *  wording says. */
+ *  The rungs run narrow to broad, and the narrow ones only appear when they
+ *  would mean something: a content rule needs a `contentKey` (short enough to
+ *  recur — see `content_key` in the core), and the sender rung needs a sender.
+ *  Offering a rule keyed on a 200-word message would be a lie, since no second
+ *  message could ever match it, and a dialog that offers rules covering nothing
+ *  teaches people to dismiss dialogs.
+ *
+ *  Nothing here is the primary button. The least destructive action and the
+ *  convenient one look alike on purpose: a suppression is a deliberate blind
+ *  spot, and the UI should not lean on anyone to create one. "Recommended"
+ *  marks the narrowest useful rule, which is guidance, not a nudge. */
 function DismissPopover({
   finding: f,
   onDismiss,
@@ -1973,15 +1998,22 @@ function DismissPopover({
   finding: ContentFinding;
   onDismiss: (dismissed: boolean, reason?: string) => void;
   onRule: (
-    scope: "thread" | "category",
+    scope: SuppressionScope,
     value: string,
     category: string,
+    sender: string | null,
     reason?: string,
   ) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const trimmed = reason.trim() || undefined;
+  const resolveContact = useContactResolver();
+  // "me" is the device owner, not a handle to look up.
+  const senderLabel =
+    f.sender === "me"
+      ? "you"
+      : (resolveContact(f.sender ?? "")?.name ?? f.sender);
   const close = () => {
     setOpen(false);
     setReason("");
@@ -2002,8 +2034,8 @@ function DismissPopover({
           </PopoverTrigger>
         </TooltipTrigger>
         <TooltipContent>
-          Dismiss as a false positive — optionally for the whole conversation or
-          category
+          Dismiss as a false positive — optionally as a standing rule, from
+          just this sender upwards
         </TooltipContent>
       </Tooltip>
       <PopoverContent align="end" className="w-80 space-y-3">
@@ -2021,50 +2053,140 @@ function DismissPopover({
         </div>
         <div className="space-y-1">
           <p className="text-xs text-muted-foreground">Apply to</p>
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
-            onClick={() => {
-              onDismiss(true, trimmed);
-              close();
-            }}
-          >
-            Just this finding
-          </Button>
-          {f.threadIdentifier && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start"
-              onClick={() => {
-                onRule("thread", f.threadIdentifier!, f.category, trimmed);
-                close();
-              }}
-            >
-              All “{CATEGORY_LABEL[f.category]}” in this conversation
-            </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  onDismiss(true, trimmed);
+                  close();
+                }}
+              >
+                Just this finding
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              Dismiss this one. Nothing is remembered for next time.
+            </TooltipContent>
+          </Tooltip>
+          {f.contentKey && f.sender && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    onRule(
+                      "content+sender",
+                      f.contentKey!,
+                      f.category,
+                      f.sender,
+                      trimmed,
+                    );
+                    close();
+                  }}
+                >
+                  <span className="truncate">
+                    “{displayKey(f.contentKey)}” from {senderLabel}
+                  </span>
+                  <span className="ml-auto shrink-0 text-3xs text-muted-foreground">
+                    Recommended
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                The narrowest rule that stops this repeating. The same thing
+                from anyone else still gets flagged.
+              </TooltipContent>
+            </Tooltip>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
-            onClick={() => {
-              onRule("category", f.category, f.category, trimmed);
-              close();
-            }}
-          >
-            Everything in “{CATEGORY_LABEL[f.category]}”
-          </Button>
+          {f.contentKey && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    onRule(
+                      "content+any",
+                      f.contentKey!,
+                      f.category,
+                      null,
+                      trimmed,
+                    );
+                    close();
+                  }}
+                >
+                  <span className="truncate">“{displayKey(f.contentKey)}” from anyone</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Covers this exact thing whoever sends it, in every conversation
+              </TooltipContent>
+            </Tooltip>
+          )}
+          {f.threadIdentifier && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => {
+                    onRule(
+                      "thread",
+                      f.threadIdentifier!,
+                      f.category,
+                      null,
+                      trimmed,
+                    );
+                    close();
+                  }}
+                >
+                  <span className="truncate">
+                    All “{CATEGORY_LABEL[f.category]}” in this conversation
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                Every {CATEGORY_LABEL[f.category].toLowerCase()} finding in this
+                conversation, whatever it says
+              </TooltipContent>
+            </Tooltip>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => {
+                  onRule("category", f.category, f.category, null, trimmed);
+                  close();
+                }}
+              >
+                <span className="truncate">
+                  Everything in “{CATEGORY_LABEL[f.category]}”
+                </span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              The broadest rule — every conversation, every sender
+            </TooltipContent>
+          </Tooltip>
         </div>
         {/* Said plainly, because a rule that quietly swallowed future findings
             would be the dangerous version of this feature. */}
         <p className="text-3xs leading-relaxed text-muted-foreground">
           A rule also applies to future scans, and only to the category you
-          picked — anything else from this conversation still gets flagged.
-          Nothing is hidden: findings it covers are dismissed, still counted,
-          and shown under “Show dismissed”. The most serious findings are never
-          dismissed by a rule.
+          picked. A rule about one person covers only them — the same message
+          from anyone else still gets flagged. Nothing is hidden: findings a
+          rule covers are dismissed, still counted, and shown under “Show
+          dismissed”. The most serious findings are never dismissed by a rule.
         </p>
       </PopoverContent>
     </Popover>
@@ -2097,9 +2219,10 @@ function FindingsList({
   onDismiss: (f: ContentFinding, dismissed: boolean, reason?: string) => void;
   onSeen: (f: ContentFinding) => void;
   onRule: (
-    scope: "thread" | "category",
+    scope: SuppressionScope,
     value: string,
     category: string,
+    sender: string | null,
     reason?: string,
   ) => void;
   onOpenReport: () => void;
