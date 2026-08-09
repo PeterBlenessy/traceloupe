@@ -702,10 +702,7 @@ fn import_messages_native(
         );
         return false;
     }
-    let att = crate::parsers::messages::AttachmentSource {
-        index: &index,
-        decryptor,
-    };
+    let att = crate::parsers::messages::AttachmentSource::new(&index, decryptor);
     let ok =
         match crate::parsers::messages::parse_messages(&sms_db, cache, report, false, Some(&att)) {
             Ok(()) => true,
@@ -2197,10 +2194,7 @@ pub fn reimport_module(
                 let _ = std::fs::remove_file(&sms_db);
                 return Err(e);
             }
-            let att = crate::parsers::messages::AttachmentSource {
-                index: &index,
-                decryptor,
-            };
+            let att = crate::parsers::messages::AttachmentSource::new(&index, decryptor);
             // replace=true does the delete + re-insert atomically (see parse_messages).
             let r = crate::parsers::messages::parse_messages(
                 &sms_db,
