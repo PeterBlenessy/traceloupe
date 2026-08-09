@@ -52,6 +52,7 @@ import {
   type ContentFinding,
   type ContentFindingCounts,
   type Suppression,
+  type SuppressionScope,
   type FindingAnalytics,
   type SafetyScanHistoryItem,
   type SafetyScanReport,
@@ -295,11 +296,20 @@ export function SafetyScanView() {
   // to re-read — unlike marking one finding seen.
   const addRule = useMutation({
     mutationFn: (r: {
-      scope: "thread" | "category";
+      scope: SuppressionScope;
       value: string;
       category: string;
+      /** Required for `content+sender`; ignored by the other scopes. */
+      sender?: string | null;
       reason?: string;
-    }) => client.addSafetySuppression(r.scope, r.value, r.category, r.reason),
+    }) =>
+      client.addSafetySuppression(
+        r.scope,
+        r.value,
+        r.category,
+        r.sender ?? null,
+        r.reason,
+      ),
     onSuccess: (n, r) => {
       qc.invalidateQueries({ queryKey: ["safetyScan"] });
       toast.success(
@@ -1873,7 +1883,7 @@ function SuppressionChip() {
   });
   const remove = useMutation({
     mutationFn: (r: Suppression) =>
-      client.removeSafetySuppression(r.scope, r.value, r.category),
+      client.removeSafetySuppression(r.scope, r.value, r.category, r.sender),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["safetyScan"] }),
   });
   const resolve = useThreadLabel();

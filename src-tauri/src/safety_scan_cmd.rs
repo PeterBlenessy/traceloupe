@@ -1018,6 +1018,10 @@ pub struct ContentFindingDto {
     /// handle. None for notes, and for findings written before the column
     /// existed. Lets a group-chat finding name who spoke (#402).
     pub sender: Option<String>,
+    /// Normalized identity of the flagged text, or None when it is too long to
+    /// recur. The UI uses None to mean "do not offer a content rule" — a rule
+    /// keyed on content that can never match again would be a lie (#403).
+    pub content_key: Option<String>,
     pub stale: bool,
     pub dismissed: bool,
     /// True when the cascade's strong tier (E4B) re-checked and kept this
@@ -1225,6 +1229,7 @@ pub fn list_content_findings(
                 severity: f.severity,
                 rationale: f.rationale,
                 sender: f.sender,
+                content_key: f.content_key,
                 stale: f.stale,
                 dismissed: f.dismissed,
                 rechecked: f.rechecked,
@@ -1416,6 +1421,10 @@ pub struct SuppressionDto {
     /// Which category the rule covers. `None` is a rule made before #394, when
     /// a conversation rule covered every category — the UI must say so.
     pub category: Option<String>,
+    /// Who the rule is bounded to, for `content+sender`. Empty means any
+    /// sender — never NULL, so two rules on the same content from different
+    /// people stay distinct.
+    pub sender: String,
     pub reason: Option<String>,
 }
 
@@ -1431,10 +1440,19 @@ pub fn add_safety_suppression(
     scope: String,
     value: String,
     category: String,
+    sender: Option<String>,
     reason: Option<String>,
 ) -> Result<usize, String> {
-    if scope != "thread" && scope != "category" {
+    if !matches!(
+        scope.as_str(),
+        "thread" | "category" | "content+sender" | "content+any"
+    ) {
         return Err("unknown suppression scope".into());
+    }
+    // A sender-scoped rule with no sender would silently widen to everyone —
+    // the opposite of what the reviewer asked for.
+    if scope == "content+sender" && sender.as_deref().unwrap_or("").is_empty() {
+        return Err("content+sender needs a sender".into());
     }
     // A rule with no category is the pre-#394 breadth that silenced a whole
     // conversation. Only the schema migration may create one.
@@ -1447,8 +1465,15 @@ pub fn add_safety_suppression(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
-    db.add_suppression(&scope, &value, &category, reason.as_deref(), now)
-        .map_err(|e| e.to_string())
+    db.add_suppression(
+        &scope,
+        &value,
+        &category,
+        sender.as_deref(),
+        reason.as_deref(),
+        now,
+    )
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1464,10 +1489,11 @@ pub fn list_safety_suppressions(
         .list_suppressions()
         .map_err(|e| e.to_string())?
         .into_iter()
-        .map(|(scope, value, category, reason)| SuppressionDto {
+        .map(|(scope, value, category, sender, reason)| SuppressionDto {
             scope,
             value,
             category,
+            sender,
             reason,
         })
         .collect())
@@ -1479,10 +1505,11 @@ pub fn remove_safety_suppression(
     scope: String,
     value: String,
     category: Option<String>,
+    sender: Option<String>,
 ) -> Result<(), String> {
     let path = analysis_path(&active.path()?)?;
     let db = AnalysisDb::open(&path).map_err(|e| e.to_string())?;
-    db.remove_suppression(&scope, &value, category.as_deref())
+    db.remove_suppression(&scope, &value, category.as_deref(), sender.as_deref())
         .map_err(|e| e.to_string())
 }
 
