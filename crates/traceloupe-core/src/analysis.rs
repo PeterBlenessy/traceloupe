@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -321,6 +321,8 @@ CREATE TABLE IF NOT EXISTS content_findings (
     thread_identifier TEXT,                 -- threads.identifier (messages) — stable across imports
     occurred_at       INTEGER,              -- messages.sent_at / notes.modified_at
     fingerprint       TEXT NOT NULL,        -- sha256 hex of the normalized source text
+    sender            TEXT,                 -- who said it ('me' for the device owner);
+                                            -- NULL on rows written before v11
     category          TEXT NOT NULL,        -- Forensic 9 slug (see Category)
     severity          INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 3),
     rationale         TEXT NOT NULL,        -- the model's one-line justification
@@ -520,6 +522,15 @@ pub struct NewFinding {
     /// The message thread's service (iMessage/SMS/TikTok…); None for notes. Lets
     /// a scan scoped to specific services count/list exactly its findings.
     pub service: Option<String>,
+    /// Who sent the message — `me` for the device owner, otherwise the handle
+    /// the parser resolved. `None` for notes and for rows written before v11.
+    ///
+    /// The chunker has always had this (`ChunkItem::sender`); it was simply
+    /// dropped when the finding was built. Without it a group-chat finding
+    /// cannot say who spoke, and a rule cannot mean "from this person" —
+    /// which is why the schema comment used to record sender scope as
+    /// impossible (#402).
+    pub sender: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -534,6 +545,8 @@ pub struct FindingRow {
     pub category: Category,
     pub severity: u8,
     pub rationale: String,
+    /// Who sent it; `None` for notes and pre-v11 rows.
+    pub sender: Option<String>,
     pub stale: bool,
     pub dismissed: bool,
     /// 1 = confirmed by the cascade's strong tier (E4B re-checked and kept it);
@@ -819,6 +832,20 @@ impl AnalysisDb {
                      ALTER TABLE suppressions_v10 RENAME TO suppressions;",
                 )?;
             }
+            // v11: who sent the flagged message (#402). The chunker always had
+            // it; the finding simply never carried it, so a group-chat finding
+            // could not say who spoke and no rule could mean "from this person".
+            // Existing rows stay NULL — the sender was never recorded and cannot
+            // be reconstructed here — and NULL must never match a sender-scoped
+            // rule, or an unknown sender would silently inherit someone else's.
+            let has_sender = conn
+                .prepare("PRAGMA table_info(content_findings)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "sender");
+            if !has_sender {
+                conn.execute("ALTER TABLE content_findings ADD COLUMN sender TEXT", [])?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1053,8 +1080,8 @@ impl AnalysisDb {
             tx.execute(
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
-                    fingerprint, category, severity, rationale, service, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    fingerprint, category, severity, rationale, service, sender, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -1066,6 +1093,7 @@ impl AnalysisDb {
                     f.severity,
                     f.rationale,
                     f.service,
+                    f.sender,
                     at
                 ],
             )?;
@@ -1452,7 +1480,7 @@ impl AnalysisDb {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT f.id, f.scan_id, f.source_kind, f.source_id, f.thread_identifier,
                     f.occurred_at, f.fingerprint, f.category, f.severity, f.rationale,
-                    f.stale, f.created_at, f.rechecked,
+                    f.sender, f.stale, f.created_at, f.rechecked,
                     {DISMISSED_EXPR}
              FROM content_findings f
              WHERE {where_clause}
@@ -1470,10 +1498,11 @@ impl AnalysisDb {
                 r.get::<_, String>(7)?,
                 r.get::<_, u8>(8)?,
                 r.get::<_, String>(9)?,
-                r.get::<_, bool>(10)?,
-                r.get::<_, i64>(11)?,
-                r.get::<_, bool>(12)?,
+                r.get::<_, Option<String>>(10)?,
+                r.get::<_, bool>(11)?,
+                r.get::<_, i64>(12)?,
                 r.get::<_, bool>(13)?,
+                r.get::<_, bool>(14)?,
             ))
         })?;
         let mut out = Vec::new();
@@ -1489,6 +1518,7 @@ impl AnalysisDb {
                 cat,
                 severity,
                 rationale,
+                sender,
                 stale,
                 created_at,
                 rechecked,
@@ -1509,6 +1539,7 @@ impl AnalysisDb {
                 category,
                 severity,
                 rationale,
+                sender,
                 stale,
                 dismissed,
                 rechecked,
@@ -1597,8 +1628,9 @@ impl AnalysisDb {
             tx.execute(
                 "INSERT INTO content_findings
                    (scan_id, source_kind, source_id, thread_identifier, occurred_at,
-                    fingerprint, category, severity, rationale, service, rechecked, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11)",
+                    fingerprint, category, severity, rationale, service, sender,
+                    rechecked, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, ?12)",
                 params![
                     scan_id,
                     f.source_kind.as_str(),
@@ -1610,6 +1642,7 @@ impl AnalysisDb {
                     f.severity,
                     f.rationale,
                     f.service,
+                    f.sender,
                     at
                 ],
             )?;
@@ -2137,6 +2170,7 @@ mod tests {
                 severity: (i % 3 + 1) as u8,
                 rationale: "why".into(),
                 service: Some("iMessage".into()),
+                sender: None,
             })
             .collect();
         db.replace_findings(scan, &rows, 1).unwrap();
@@ -2319,6 +2353,7 @@ mod tests {
             severity: 2,
             rationale: "test rationale".into(),
             service: Some("iMessage".into()),
+            sender: None,
         }
     }
 
@@ -2565,6 +2600,7 @@ mod tests {
                 severity: sev,
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
+                sender: None,
             }
         };
         let findings = vec![
@@ -2629,6 +2665,7 @@ mod tests {
                 severity: 1,
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
+                sender: None,
             }],
             105,
         )
@@ -2866,6 +2903,7 @@ mod tests {
             severity: 2,
             rationale: "x".into(),
             service: Some("iMessage".into()),
+            sender: None,
         };
 
         // Two scans over the SAME data. The first classifies and owns the rows;
@@ -2946,6 +2984,7 @@ mod tests {
                 severity: 2,
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
+                sender: None,
             }],
             105,
         )
@@ -2979,6 +3018,7 @@ mod tests {
                 severity: 3,
                 rationale: "x".into(),
                 service: None,
+                sender: None,
             }],
             105,
         )
@@ -3027,6 +3067,7 @@ mod tests {
                 severity: 2,
                 rationale: "x".into(),
                 service: Some("iMessage".into()),
+                sender: None,
             }],
             105,
         )

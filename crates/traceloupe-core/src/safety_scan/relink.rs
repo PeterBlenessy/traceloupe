@@ -210,6 +210,7 @@ mod tests {
                         severity: 3,
                         rationale: "x".into(),
                         service: Some("iMessage".into()),
+                        sender: None,
                     },
                     NewFinding {
                         source_kind: SourceKind::Note,
@@ -221,6 +222,7 @@ mod tests {
                         severity: 2,
                         rationale: "y".into(),
                         service: None,
+                        sender: None,
                     },
                 ],
                 2,
@@ -286,6 +288,7 @@ mod tests {
                     severity: 1,
                     rationale: "z".into(),
                     service: Some("iMessage".into()),
+                    sender: None,
                 }],
                 2,
             )
@@ -328,6 +331,7 @@ mod tests {
                     severity: 2,
                     rationale: "y".into(),
                     service: None,
+                    sender: None,
                 }],
                 2,
             )

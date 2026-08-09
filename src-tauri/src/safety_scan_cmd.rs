@@ -1014,6 +1014,10 @@ pub struct ContentFindingDto {
     pub category: String,
     pub severity: u8,
     pub rationale: String,
+    /// Who sent the flagged message — `me` for the device owner, else the
+    /// handle. None for notes, and for findings written before the column
+    /// existed. Lets a group-chat finding name who spoke (#402).
+    pub sender: Option<String>,
     pub stale: bool,
     pub dismissed: bool,
     /// True when the cascade's strong tier (E4B) re-checked and kept this
@@ -1220,6 +1224,7 @@ pub fn list_content_findings(
                 category: f.category.as_str().into(),
                 severity: f.severity,
                 rationale: f.rationale,
+                sender: f.sender,
                 stale: f.stale,
                 dismissed: f.dismissed,
                 rechecked: f.rechecked,
