@@ -14,10 +14,12 @@
  * its output.
  *
  * What trips it: a number that reads as a tally of someone's data — a
- * thousands-separated figure next to a data noun ("95,334 camera-roll assets"),
- * or a bare count of one ("3,842 notes"). Version numbers, issue references,
- * byte sizes, dates, and schema constants are not counts of anybody's content
- * and are left alone.
+ * thousands-separated figure next to a data noun, or a bare count of one.
+ * (Examples are deliberately not spelled out here with realistic values: this
+ * file is scanned like every other, and an illustration would be indistinguishable
+ * from the thing it illustrates.) Version numbers, issue references, byte sizes,
+ * dates, and schema constants are not counts of anybody's content, and are left
+ * alone.
  */
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
