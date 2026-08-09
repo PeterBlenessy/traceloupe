@@ -240,6 +240,66 @@ mod tests {
         }
     }
 
+    /// The emoji hard negatives are clean *by construction*, not by the
+    /// model's good judgement: every message in them is refused before it can
+    /// become a finding, so no classifier — however badly it behaves — can
+    /// flag one. Editing one of these to contain words breaks that guarantee,
+    /// and this test is what says so.
+    ///
+    /// The counters exist because a loop that silently matches nothing reports
+    /// success identically to one that checked everything.
+    #[test]
+    fn the_emoji_negatives_are_unflaggable_by_construction() {
+        use crate::safety_scan::trivial;
+        let f = load_fixtures();
+        const EMOJI_NEGATIVES: &[&str] = &["neg-emoji-affection", "neg-emoji-run"];
+
+        let mut cases_seen = 0;
+        let mut messages_checked = 0;
+        for c in f
+            .cases
+            .iter()
+            .filter(|c| EMOJI_NEGATIVES.contains(&c.id.as_str()))
+        {
+            cases_seen += 1;
+            for m in &c.messages {
+                assert!(
+                    trivial::is_contentless(&m.text),
+                    "{}: {:?} could still be flagged",
+                    c.id,
+                    m.text
+                );
+                messages_checked += 1;
+            }
+        }
+        assert_eq!(cases_seen, EMOJI_NEGATIVES.len(), "a fixture went missing");
+        assert!(
+            messages_checked >= 7,
+            "expected to check every message, saw {messages_checked}"
+        );
+    }
+
+    /// The filter must not become an escape hatch. A threat that happens to
+    /// carry an emoji, and a bare weapon emoji, both stay classifiable.
+    #[test]
+    fn an_emoji_does_not_make_a_threat_unflaggable() {
+        use crate::safety_scan::trivial;
+        let f = load_fixtures();
+        let c = f
+            .cases
+            .iter()
+            .find(|c| c.id == "threat-with-emoji")
+            .expect("threat-with-emoji fixture");
+        assert!(!c.expect.is_empty(), "it is a positive case");
+        for m in &c.messages {
+            assert!(
+                !trivial::is_contentless(&m.text),
+                "{:?} was filtered out of a positive case",
+                m.text
+            );
+        }
+    }
+
     /// The golden path with NO model: a perfect classifier (labels → itself)
     /// scores 1.0 everywhere and raises no false alarm. This guards `score_against`
     /// and proves the fixtures are internally consistent.

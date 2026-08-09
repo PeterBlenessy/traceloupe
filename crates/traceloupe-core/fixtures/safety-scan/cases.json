@@ -201,6 +201,48 @@
         { "sender": "them", "text": "hope you feel better soon!" }
       ],
       "expect": []
+    },
+    {
+      "id": "neg-emoji-affection",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "❤️" },
+        { "sender": "me", "text": "❤️" },
+        { "sender": "them", "text": "🥰" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-emoji-run",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "❤️❤️❤️" },
+        { "sender": "them", "text": "👍" },
+        { "sender": "me", "text": "😂😂" },
+        { "sender": "them", "text": "!!!" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-emoji-affirmation",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "can you pick up milk on the way home" },
+        { "sender": "them", "text": "👍" },
+        { "sender": "me", "text": "thanks ❤️" },
+        { "sender": "them", "text": "🤗" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "threat-with-emoji",
+      "kind": "positive",
+      "messages": [
+        { "sender": "me", "text": "im blocking you" },
+        { "sender": "them", "text": "try it. i know where you sleep 🔪" },
+        { "sender": "them", "text": "🔫" }
+      ],
+      "expect": [{ "category": "threat-violence", "minSeverity": 3 }]
     }
   ]
 }
