@@ -11,6 +11,35 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+## [0.43.3] — 2026-08-09
+
+### Messages
+
+Photos attached to messages that are **not in the backup** now show a matching
+photo from your library instead of only saying the file is missing. This existed
+but had stopped working: it required a full-resolution original on disk, and
+since 0.43.0 most of a library is thumbnail-only because the originals stayed in
+iCloud — so it excluded exactly the photos it was meant to find.
+
+Where **several** library photos share the attachment's filename, all of them are
+offered and you choose, instead of the app silently picking one. Filenames
+collide, so picking one asserts something the data cannot support; a set of
+labelled candidates is evidence. The bubble shows "1 of N" and the lightbox
+gains a strip to compare them.
+
+When nothing matches, the placeholder now says why — the file is probably in
+iCloud — hedged, because unlike a photo in your library nothing here records the
+cause.
+
+### Tools
+
+`backup-coverage` reports media per app container, counting files over 100 KB
+separately from the median. An app with a hundred cached avatars and three
+photos you sent has a tiny median, and those three are the point: a photo you
+sent was yours first and is often still on the device, even when received ones
+exist only as links.
+
+
 ## [0.43.2] — 2026-08-09
 
 ### Photos
