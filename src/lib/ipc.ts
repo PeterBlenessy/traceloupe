@@ -844,6 +844,10 @@ export interface ContentFindingPage {
 export interface Suppression {
   scope: "thread" | "category";
   value: string;
+  /** The Forensic 9 category the rule covers. `null` is a rule made before the
+   *  category scope existed, when a conversation rule silenced EVERY category —
+   *  the panel labels those, because they are far broader than they look. */
+  category: string | null;
   reason: string | null;
 }
 
@@ -1525,10 +1529,15 @@ export interface TraceLoupeClient {
   addSafetySuppression(
     scope: "thread" | "category",
     value: string,
+    category: string,
     reason?: string,
   ): Promise<number>;
   listSafetySuppressions(): Promise<Suppression[]>;
-  removeSafetySuppression(scope: string, value: string): Promise<void>;
+  removeSafetySuppression(
+    scope: string,
+    value: string,
+    category: string | null,
+  ): Promise<void>;
   /** A scan's report + per-thread summaries. Latest scan when `scanId` is
    *  omitted, or a specific past scan from the history list. */
   getSafetyScanReport(scanId?: number): Promise<SafetyScanReport>;
@@ -2213,12 +2222,17 @@ const tauriClient: TraceLoupeClient = {
     }),
   markContentFindingSeen: (fingerprint, category) =>
     invoke("mark_content_finding_seen", { fingerprint, category }),
-  addSafetySuppression: (scope, value, reason) =>
-    invoke<number>("add_safety_suppression", { scope, value, reason: reason ?? null }),
+  addSafetySuppression: (scope, value, category, reason) =>
+    invoke<number>("add_safety_suppression", {
+      scope,
+      value,
+      category,
+      reason: reason ?? null,
+    }),
   listSafetySuppressions: () =>
     invoke<Suppression[]>("list_safety_suppressions"),
-  removeSafetySuppression: (scope, value) =>
-    invoke("remove_safety_suppression", { scope, value }),
+  removeSafetySuppression: (scope, value, category) =>
+    invoke("remove_safety_suppression", { scope, value, category }),
   getSafetyScanReport: (scanId) =>
     invoke<SafetyScanReport>("get_safety_scan_report", {
       scanId: scanId ?? null,
@@ -7045,24 +7059,29 @@ const mockClient: TraceLoupeClient = {
       }
     }
   },
-  addSafetySuppression: async (scope, value, reason) => {
+  addSafetySuppression: async (scope, value, category, reason) => {
     let n = 0;
     for (const f of mockContentFindings) {
-      const hit =
+      const inScope =
         scope === "thread" ? f.threadIdentifier === value : f.category === value;
-      // Never overwrite a decision made by hand — same rule as the backend.
+      // Same three rules as the backend's `apply_suppressions`: the scope must
+      // match, the CATEGORY must match, and severity 3 is never dismissed by a
+      // standing rule. Never overwrite a decision made by hand.
+      const hit = inScope && f.category === category && f.severity < 3;
       if (hit && !f.dismissed && f.dismissReason == null) {
         f.dismissed = true;
         f.dismissReason = reason ?? "Matched a rule you set";
         n += 1;
       }
     }
-    mockSuppressions.push({ scope, value, reason: reason ?? null });
+    mockSuppressions.push({ scope, value, category, reason: reason ?? null });
     return n;
   },
   listSafetySuppressions: async () => (mockActive ? mockSuppressions : []),
-  removeSafetySuppression: async (scope, value) => {
-    const i = mockSuppressions.findIndex((s) => s.scope === scope && s.value === value);
+  removeSafetySuppression: async (scope, value, category) => {
+    const i = mockSuppressions.findIndex(
+      (s) => s.scope === scope && s.value === value && s.category === category,
+    );
     if (i >= 0) mockSuppressions.splice(i, 1);
   },
   markContentFindingSeen: async (fingerprint, category) => {

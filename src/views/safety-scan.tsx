@@ -297,8 +297,9 @@ export function SafetyScanView() {
     mutationFn: (r: {
       scope: "thread" | "category";
       value: string;
+      category: string;
       reason?: string;
-    }) => client.addSafetySuppression(r.scope, r.value, r.reason),
+    }) => client.addSafetySuppression(r.scope, r.value, r.category, r.reason),
     onSuccess: (n, r) => {
       qc.invalidateQueries({ queryKey: ["safetyScan"] });
       toast.success(
@@ -308,7 +309,7 @@ export function SafetyScanView() {
         {
           description:
             r.scope === "thread"
-              ? "Everything in this conversation, now and in future scans"
+              ? `“${CATEGORY_LABEL[r.category as ContentCategory] ?? r.category}” in this conversation, now and in future scans. Other categories still get flagged.`
               : "Everything in this category, now and in future scans",
         },
       );
@@ -609,8 +610,8 @@ export function SafetyScanView() {
                     })
                   }
                   onOpenReport={() => setReportScan(selectedScan)}
-                  onRule={(scope, value, reason) =>
-                    addRule.mutate({ scope, value, reason })
+                  onRule={(scope, value, category, reason) =>
+                    addRule.mutate({ scope, value, category, reason })
                   }
                 />
             </div>
@@ -1659,7 +1660,12 @@ function FindingRow({
    *  the flagged text was read. */
   onSeen: () => void;
   /** Dismiss a whole conversation or category rather than one finding. */
-  onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
+  onRule: (
+    scope: "thread" | "category",
+    value: string,
+    category: string,
+    reason?: string,
+  ) => void;
 }) {
   const navigate = useNavigate();
   const resolve = useContactResolver();
@@ -1866,7 +1872,8 @@ function SuppressionChip() {
     queryFn: () => client.listSafetySuppressions(),
   });
   const remove = useMutation({
-    mutationFn: (r: Suppression) => client.removeSafetySuppression(r.scope, r.value),
+    mutationFn: (r: Suppression) =>
+      client.removeSafetySuppression(r.scope, r.value, r.category),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["safetyScan"] }),
   });
   const resolve = useThreadLabel();
@@ -1895,7 +1902,7 @@ function SuppressionChip() {
         <ul className="space-y-1">
           {rules.map((r) => (
             <li
-              key={`${r.scope}:${r.value}`}
+              key={`${r.scope}:${r.value}:${r.category ?? "*"}`}
               className="flex items-center gap-2 rounded-md border px-2 py-1.5"
             >
               <div className="min-w-0 flex-1">
@@ -1905,7 +1912,11 @@ function SuppressionChip() {
                     : (CATEGORY_LABEL[r.value as ContentCategory] ?? r.value)}
                 </p>
                 <p className="truncate text-3xs text-muted-foreground">
-                  {r.scope === "thread" ? "Whole conversation" : "Whole category"}
+                  {r.scope === "thread"
+                    ? r.category
+                      ? `${CATEGORY_LABEL[r.category as ContentCategory] ?? r.category} in this conversation`
+                      : "Every category in this conversation — made before rules were per-category"
+                    : "Whole category"}
                   {r.reason ? ` · ${r.reason}` : ""}
                 </p>
               </div>
@@ -1951,7 +1962,12 @@ function DismissPopover({
 }: {
   finding: ContentFinding;
   onDismiss: (dismissed: boolean, reason?: string) => void;
-  onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
+  onRule: (
+    scope: "thread" | "category",
+    value: string,
+    category: string,
+    reason?: string,
+  ) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
@@ -2012,11 +2028,11 @@ function DismissPopover({
               size="sm"
               className="w-full justify-start"
               onClick={() => {
-                onRule("thread", f.threadIdentifier!, trimmed);
+                onRule("thread", f.threadIdentifier!, f.category, trimmed);
                 close();
               }}
             >
-              Everything in this conversation
+              All “{CATEGORY_LABEL[f.category]}” in this conversation
             </Button>
           )}
           <Button
@@ -2024,7 +2040,7 @@ function DismissPopover({
             size="sm"
             className="w-full justify-start"
             onClick={() => {
-              onRule("category", f.category, trimmed);
+              onRule("category", f.category, f.category, trimmed);
               close();
             }}
           >
@@ -2034,9 +2050,11 @@ function DismissPopover({
         {/* Said plainly, because a rule that quietly swallowed future findings
             would be the dangerous version of this feature. */}
         <p className="text-3xs leading-relaxed text-muted-foreground">
-          A conversation or category rule also applies to future scans. Nothing
-          is hidden — findings it covers are dismissed, still counted, and shown
-          under “Show dismissed”.
+          A rule also applies to future scans, and only to the category you
+          picked — anything else from this conversation still gets flagged.
+          Nothing is hidden: findings it covers are dismissed, still counted,
+          and shown under “Show dismissed”. The most serious findings are never
+          dismissed by a rule.
         </p>
       </PopoverContent>
     </Popover>
@@ -2068,7 +2086,12 @@ function FindingsList({
   setShowDismissed: (v: boolean) => void;
   onDismiss: (f: ContentFinding, dismissed: boolean, reason?: string) => void;
   onSeen: (f: ContentFinding) => void;
-  onRule: (scope: "thread" | "category", value: string, reason?: string) => void;
+  onRule: (
+    scope: "thread" | "category",
+    value: string,
+    category: string,
+    reason?: string,
+  ) => void;
   onOpenReport: () => void;
 }) {
   const [severity, setSeverity] = useState("all");
