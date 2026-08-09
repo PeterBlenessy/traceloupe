@@ -11,6 +11,72 @@ Pre-1.0, the **minor** version marks a milestone; the per-version entries below 
 
 ## [Unreleased]
 
+## [0.43.0] — 2026-08-09
+
+**Most of your photos were never missing** — with iCloud Photos on, iOS leaves
+the photo *files* out of the backup while the library's catalogue still lists
+every one. Photos read only the files, so it showed a fraction of the library
+and gave no sign the rest existed.
+
+### Photos offloaded to iCloud
+
+Photos now enumerates the **catalogue**, not just what is on disk — the union of
+the two, so nothing on either side is dropped (the `.MOV` half of a Live Photo
+has no catalogue row of its own and would otherwise vanish).
+
+Assets whose originals stayed in iCloud appear, drawn from the thumbnails iOS
+*did* back up. On a device with iCloud Photos enabled that is the great majority
+of a library, hidden items included.
+
+Each one is **labelled**, on the tile and in the lightbox. Without that an
+iCloud-only photo looks exactly like a full-resolution one until you open it and
+find it soft, and the grid would be quietly overstating what the backup holds.
+Asking for full resolution now says the original is in iCloud, rather than "not
+available", which reads like corruption.
+
+A multi-select **Full resolution** filter (In this backup / iCloud only) sits
+beside Hidden, offered only when a backup actually holds both kinds.
+
+New setting, **Show photos offloaded to iCloud**, on by default — these are most
+of a library, so defaulting off would hide the majority. It and *Find app media
+by inspecting the data* moved to **Media**: both decide which media an import
+finds, whereas Apps is about how the Apps view presents an app.
+
+### Import
+
+Fixed an import that appeared to **hang** — first at "Indexing Messages", then
+at "Indexing Notes". Both had the same cause: an iOS backup's file manifest
+carries no index on the columns every lookup filters by, so each lookup scanned
+the whole table, and any step resolving files per item paid one scan per item.
+Notes tries up to eight lookups per embedded image.
+
+The manifest is now indexed once per import — on a copy, never on your backup's
+own file — and prefix searches use a range the index can serve instead of a
+`LIKE` it cannot. Measured over 300,000 files: 79.7 s → 0.41 s for 2,000
+lookups. The attachment fallback that started this got the same treatment:
+159 s → 0.22 s for 3,000 lookups, and it is skipped entirely when nothing
+needs it.
+
+Thumbnails are no longer decrypted during import. That only scaled while just
+the assets with originals were read; across a whole library it meant tens of
+thousands of decryptions before the first photo appeared. They now decrypt on
+first view and are cached — so imports are faster than before this release, not
+slower, despite reading far more.
+
+### Privacy
+
+Removed real-backup row counts that had been committed to this public repo —
+one device's message, photo, contact, call, note and recording totals — from the
+working tree, the git history and the tags. `scripts/check-no-backup-stats.mjs`
+now fails the build if any return, distinguishing a real tally from the things
+that resemble one (counts from public research images, payload projections,
+years).
+
+New `backup-coverage` tool: run it against a backup to see, for that backup, how
+much of its library kept an original, a thumbnail, or nothing. It prints counts
+only — no filenames, no content.
+
+
 _Nothing yet._
 
 ## [0.42.0] — 2026-08-08
