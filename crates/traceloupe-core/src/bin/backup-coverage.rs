@@ -78,7 +78,7 @@ fn run(backup_dir: &Path, password: Option<&str>) -> Result<()> {
     }
 
     println!();
-    survey_media_dirs(&index)?;
+    survey_media_dirs(&index, backup_dir)?;
 
     let _ = std::fs::remove_dir_all(&work_dir);
     Ok(())
@@ -92,17 +92,35 @@ fn run(backup_dir: &Path, password: Option<&str>) -> Result<()> {
 /// by directory shape. A directory holding thousands of images that the camera
 /// roll does not cover is a gap, and it shows up here as a row marked `MISSED`
 /// instead of as a number nobody can explain.
-fn survey_media_dirs(index: &ManifestIndex) -> Result<()> {
+fn survey_media_dirs(index: &ManifestIndex, backup_dir: &Path) -> Result<()> {
     let mut dirs: HashMap<(String, String), i64> = HashMap::new();
     let mut exts: HashMap<String, i64> = HashMap::new();
+    // Thumbnails mirror their asset's own path, so the PARENT directory of each
+    // thumbnail names one asset. Counting distinct parents answers the question
+    // that decides whether offloaded assets can be shown as real pictures or
+    // only as placeholders: how many of the library's assets have a thumbnail
+    // sitting in this backup, regardless of whether the original came along.
+    let mut thumb_assets: HashSet<String> = HashSet::new();
     index.for_each_path(|domain, rel| {
+        if let Some(asset) = thumb_asset(&rel) {
+            thumb_assets.insert(asset.to_string());
+        }
         let Some(ext) = media_ext(&rel) else { return };
         *exts.entry(ext).or_default() += 1;
         *dirs.entry((domain, generalize(&rel))).or_default() += 1;
     })?;
 
+    println!("== thumbnail coverage ==");
+    println!(
+        "{:>8}  distinct assets that have a thumbnail in this backup",
+        thumb_assets.len()
+    );
+    println!();
+
     println!("== where image/video files actually live (all domains) ==");
-    println!("   'MISSED' = holds media the camera-roll import does not read.");
+    println!("   'MISSED' = the CAMERA ROLL does not read it. App media (SMS");
+    println!("   attachments, WhatsApp, TikTok…) is read by the app parsers");
+    println!("   instead, so a MISSED app directory is not necessarily a gap.");
     let mut rows: Vec<_> = dirs.into_iter().collect();
     rows.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
     let (mut covered, mut thumbs, mut missed) = (0i64, 0i64, 0i64);
@@ -124,6 +142,9 @@ fn survey_media_dirs(index: &ManifestIndex) -> Result<()> {
     println!("{missed:>8}  total NOT read by the camera roll");
 
     println!();
+    probe_missed(index, backup_dir, &rows)?;
+
+    println!();
     println!("== file types found, and whether the camera roll decodes them ==");
     let mut es: Vec<_> = exts.into_iter().collect();
     es.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
@@ -136,6 +157,103 @@ fn survey_media_dirs(index: &ManifestIndex) -> Result<()> {
         println!("{n:>8}  {tag}  .{ext}");
     }
     Ok(())
+}
+
+/// The asset a thumbnail belongs to, as its path relative to the thumbnail root.
+/// `…/V2/DCIM/100APPLE/IMG_1.HEIC/5005.JPG` names the asset `DCIM/100APPLE/IMG_1.HEIC`
+/// — several thumbnail sizes share one parent, so distinct parents count assets,
+/// not files.
+fn thumb_asset(rel: &str) -> Option<&str> {
+    let rest = rel.strip_prefix(THUMB_PREFIX)?;
+    let (asset, _size) = rest.rsplit_once('/')?;
+    Some(asset)
+}
+
+/// How many files to stat per directory before extrapolating. A backup can hold
+/// hundreds of thousands; the median is stable long before that.
+const PROBE_LIMIT: usize = 4000;
+
+/// Size up the biggest MISSED directories, because a count alone cannot tell a
+/// pile of full-resolution originals from a pile of derivatives — and only the
+/// former is a photo we are failing to show. Median bytes settles it: originals
+/// run to megabytes, derivatives and caches to tens of kilobytes.
+///
+/// Sizes come from the on-disk blob rather than the Manifest's `Size` field. For
+/// an encrypted backup that overstates by up to one 16-byte AES block, which is
+/// irrelevant at this resolution and avoids decrypting anything.
+fn probe_missed(
+    index: &ManifestIndex,
+    backup_dir: &Path,
+    rows: &[((String, String), i64)],
+) -> Result<()> {
+    println!("== what the biggest MISSED directories actually contain ==");
+    println!("   median size says whether these are originals or derivatives.");
+    let mut shown = 0;
+    for ((domain, dir), _) in rows.iter() {
+        if coverage(domain, dir) != Coverage::Missed {
+            continue;
+        }
+        if shown >= 10 {
+            break;
+        }
+        // Generalized dirs carry `*` where shard names were collapsed; the literal
+        // prefix up to the first `*` is what the Manifest can actually match.
+        let prefix = dir.split('*').next().unwrap_or(dir);
+        let entries = index.find_prefix(domain, prefix)?;
+        let mut sizes: Vec<u64> = Vec::new();
+        let mut capped = false;
+        for e in entries.iter() {
+            if media_ext(&e.relative_path).is_none() {
+                continue;
+            }
+            if sizes.len() >= PROBE_LIMIT {
+                capped = true;
+                break;
+            }
+            if e.file_id.len() >= 2 {
+                let p = backup_dir.join(&e.file_id[..2]).join(&e.file_id);
+                if let Ok(m) = std::fs::metadata(&p) {
+                    sizes.push(m.len());
+                }
+            }
+        }
+        if sizes.is_empty() {
+            continue;
+        }
+        sizes.sort_unstable();
+        let median = sizes[sizes.len() / 2];
+        let total: u64 = sizes.iter().sum();
+        // Say so when the sample was capped — a silent cap reads as "measured
+        // everything" and would make the totals quietly wrong.
+        let note = if capped {
+            format!(" (median from first {PROBE_LIMIT})")
+        } else {
+            String::new()
+        };
+        println!(
+            "  {:>7} files  median {:>8}  sampled {:>9}  {domain}  {dir}{note}",
+            sizes.len(),
+            human(median),
+            human(total),
+        );
+        shown += 1;
+    }
+    Ok(())
+}
+
+fn human(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = bytes as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
 }
 
 /// What the camera-roll import does with a directory's media.
@@ -398,5 +516,26 @@ mod tests {
         assert_eq!(media_ext("a/b/x.webp").as_deref(), Some("webp"));
         assert!(!DECODED.contains(&"dng"));
         assert_eq!(media_ext("a/b/notes.sqlite"), None);
+    }
+
+    /// Several thumbnail sizes share one parent directory, so counting FILES
+    /// would inflate library coverage severalfold. Distinct parents count assets.
+    #[test]
+    fn thumbnails_count_assets_not_files() {
+        let a = "Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_1.HEIC/5005.JPG";
+        let b = "Media/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_1.HEIC/5003.JPG";
+        assert_eq!(thumb_asset(a), Some("DCIM/100APPLE/IMG_1.HEIC"));
+        assert_eq!(thumb_asset(a), thumb_asset(b));
+        assert_eq!(thumb_asset("Media/DCIM/100APPLE/IMG_1.HEIC"), None);
+    }
+
+    /// Byte counts are the whole point of the size probe; a wrong unit boundary
+    /// would turn a 900 KB derivative into something that reads like an original.
+    #[test]
+    fn human_sizes_do_not_slip_a_unit() {
+        assert_eq!(human(512), "512 B");
+        assert_eq!(human(1024), "1.0 KB");
+        assert_eq!(human(1024 * 1024), "1.0 MB");
+        assert_eq!(human(3 * 1024 * 1024 / 2), "1.5 MB");
     }
 }
