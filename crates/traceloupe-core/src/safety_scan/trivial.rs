@@ -96,7 +96,7 @@ const BENIGN: &[char] = &[
 /// Characters that carry no meaning of their own and are skipped before the
 /// item is judged: whitespace, emoji presentation selectors, skin-tone
 /// modifiers, and the zero-width joiner that builds compound emoji.
-fn is_modifier(c: char) -> bool {
+pub(super) fn is_modifier(c: char) -> bool {
     c.is_whitespace()
         || matches!(c, '\u{FE0F}' | '\u{FE0E}' | '\u{200D}')
         || ('\u{1F3FB}'..='\u{1F3FF}').contains(&c)
