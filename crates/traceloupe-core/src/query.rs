@@ -96,6 +96,38 @@ pub struct Attachment {
     pub local_path: Option<String>,
 }
 
+#[cfg(test)]
+mod recover_attachment_tests {
+    use super::*;
+
+    /// Since v0.43.0 most of a library is thumbnail-only — the originals stayed
+    /// in iCloud. Requiring `local_path` here meant this recovery found almost
+    /// nothing on exactly the devices that need it: the attachment read as
+    /// absent while a thumbnail of the same picture sat in the cache.
+    #[test]
+    fn recovery_matches_a_library_photo_that_has_only_a_thumbnail() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute_batch(
+                "INSERT INTO threads (id, identifier) VALUES (1, 't');
+                 INSERT INTO messages (id, thread_id, is_from_me, sent_at) VALUES (1, 1, 0, 100);
+                 -- The attachment's own file is NOT in the backup.
+                 INSERT INTO attachments (id, message_id, filename) VALUES (1, 1, 'IMG_0001.HEIC');
+                 -- A library photo of the same name, thumbnail only.
+                 INSERT INTO media_items (id, kind, relative_path, thumb_path, taken_at)
+                   VALUES (7, 'photo', 'DCIM/100APPLE/IMG_0001.HEIC', '/t/7.jpg', 100);",
+            )
+            .unwrap();
+
+        assert_eq!(
+            recover_attachment_media(&cache, 1).unwrap(),
+            Some((7, "photo".to_string())),
+            "a thumbnail-only library photo must still be offered"
+        );
+    }
+}
+
 /// Threads ordered most-recent first, for the Messages list.
 pub fn list_threads(cache: &CacheDb) -> Result<Vec<ThreadSummary>> {
     let conn = cache.conn();
@@ -377,7 +409,13 @@ pub fn recover_attachment_media(
              FROM attachments a
              JOIN messages m ON m.id = a.message_id
              JOIN media_items mi
-               ON mi.local_path IS NOT NULL
+               -- Anything with PIXELS, not only a full original. Since v0.43.0
+               -- most of a library is thumbnail-only (the originals stayed in
+               -- iCloud), so requiring local_path meant this recovery found
+               -- almost nothing on exactly the devices that need it most — the
+               -- attachment showed as absent while a thumbnail of the same
+               -- picture sat in the cache.
+               ON (mi.local_path IS NOT NULL OR mi.thumb_path IS NOT NULL)
               AND (mi.relative_path = a.filename
                    -- exact trailing slash+filename match. LIKE is wrong here:
                    -- filenames like IMG_0001.HEIC contain an underscore, a LIKE
