@@ -21,7 +21,7 @@ pub struct CacheDb {
 // up (v2 added columns/index; v3 adds the `recordings` table; v4 adds the native
 // attachment decrypt columns; v5 adds the locked-note columns), then skip it on
 // every subsequent open.
-const SCHEMA_VERSION: i64 = 61;
+const SCHEMA_VERSION: i64 = 62;
 
 const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -244,6 +244,15 @@ CREATE TABLE IF NOT EXISTS media_items (
     shared_caption  TEXT,
     shared_likes    INTEGER,
     local_path      TEXT,
+    -- 'original' | 'thumbnail' | 'metadata': how much of the asset this backup
+    -- actually holds. With iCloud Photos on, most originals never reach the
+    -- backup while the catalogue still lists them, so the gallery has to say
+    -- which it is showing rather than imply every row is a full photo.
+    availability    TEXT NOT NULL DEFAULT 'original',
+    -- The thumbnail's own wrapped key + plaintext size, so it can be decrypted
+    -- on first view instead of decrypting the whole library at import.
+    thumb_key       BLOB,
+    thumb_size      INTEGER,
     -- Encrypted backups only: the class-prefixed wrapped key that decrypts
     -- local_path on demand (useless without the backup keys). NULL otherwise.
     decrypt_key     BLOB,
@@ -868,6 +877,23 @@ impl CacheDb {
             // v57: shared-album activity carried on the photo it happened to.
             ensure_column(&conn, "media_items", "shared_caption", "TEXT")?;
             ensure_column(&conn, "media_items", "shared_likes", "INTEGER")?;
+            // v62: how much of the asset this backup actually holds. With iCloud
+            // Photos on, most originals never reach the backup while the
+            // catalogue still lists them, so 'original' is a minority state and
+            // the gallery has to say which it is showing. Defaults to 'original'
+            // so rows written before this column keep their old meaning.
+            ensure_column(
+                &conn,
+                "media_items",
+                "availability",
+                "TEXT NOT NULL DEFAULT 'original'",
+            )?;
+            // v62: the thumbnail's own wrapped key + plaintext size. Thumbnails
+            // used to be decrypted at import, which only scaled because just the
+            // assets with originals were enumerated; across a whole library that
+            // is tens of thousands of decryptions before the first photo shows.
+            ensure_column(&conn, "media_items", "thumb_key", "BLOB")?;
+            ensure_column(&conn, "media_items", "thumb_size", "INTEGER")?;
             // v61: the person's own "unsafe" mark, on anything — not only
             // photos. Keyed by (kind, durable key) rather than a row id, because
             // the cache is rebuilt on every import and an id means nothing

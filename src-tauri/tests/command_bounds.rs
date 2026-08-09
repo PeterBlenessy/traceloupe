@@ -115,6 +115,10 @@ const BOUNDED: &[(&str, &str)] = &[
         "one row per distinct media source; a device has a handful",
     ),
     (
+        "media_availability",
+        "one row per availability value; three at most (original/thumbnail/metadata)",
+    ),
+    (
         "message_kinds",
         "one row per distinct message kind; an enum, not data",
     ),

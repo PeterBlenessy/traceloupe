@@ -87,7 +87,8 @@ fn parses_encrypted_camera_roll() {
         .as_ref()
         .expect("wrapped key for encrypted asset");
     let size = asset.plain_size.map(|s| s as usize);
-    let ct = std::fs::read(&asset.full_path).expect("read encrypted original");
+    let full = asset.full_path.as_ref().expect("original is in the backup");
+    let ct = std::fs::read(full).expect("read encrypted original");
     let full = dec
         .decrypt_bytes(key, &ct, size)
         .expect("decrypt original on demand");

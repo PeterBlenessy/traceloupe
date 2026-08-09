@@ -3,6 +3,7 @@ import { formatCount } from "@/lib/format";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { client, type ReimportResult } from "@/lib/ipc";
+import { useSettings } from "@/components/settings-provider";
 
 /**
  * React Query key prefixes each module's data feeds, so a re-import invalidates
@@ -64,6 +65,7 @@ const ReimportContext = createContext<ReimportContextValue | null>(null);
  * stays until dismissed (a decrypt/parse error is worth reading) and is logged.
  */
 export function ReimportProvider({ children }: { children: React.ReactNode }) {
+  const { showOffloadedPhotos: showOffloaded } = useSettings();
   const qc = useQueryClient();
   const [running, setRunning] = useState<Set<string>>(new Set());
 
@@ -93,7 +95,7 @@ export function ReimportProvider({ children }: { children: React.ReactNode }) {
     if (running.has(module)) return;
     setModuleRunning(module, true);
     try {
-      const result = await client.reimportModule(module);
+      const result = await client.reimportModule(module, showOffloaded);
       const prefixes = INVALIDATE_KEYS[module] ?? [];
       await Promise.all(
         prefixes.map((key) => qc.invalidateQueries({ queryKey: [key] })),
