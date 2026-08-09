@@ -38,6 +38,53 @@ pub struct FileEntry {
 
 /// Opens a backup's `Manifest.db` and resolves paths to on-disk files. Cheap to
 /// hold; reads a single file only when asked (the lazy primitive).
+/// Give the manifest at `path` an index on `(domain, relativePath)`, returning
+/// the path to use. Best effort: on any failure the caller keeps the original
+/// path and merely stays slow, because a missing index is a performance problem
+/// and refusing to open the backup over one would be a correctness problem.
+///
+/// A plaintext backup's Manifest.db belongs to the user and is never written to
+/// — it is copied into the work dir first. The copy is reused across the many
+/// `ManifestIndex::open` calls one import makes, so the cost is paid once.
+fn ensure_indexed(path: &Path, work_dir: &Path) -> Option<PathBuf> {
+    const IDX: &str = "CREATE INDEX IF NOT EXISTS idx_files_domain_path
+                       ON Files(domain, relativePath)";
+    // Ours already (decrypted temp): index in place.
+    if path.starts_with(work_dir) {
+        let conn = Connection::open(path).ok()?;
+        conn.execute_batch(IDX).ok()?;
+        return Some(path.to_path_buf());
+    }
+    let copy = work_dir.join(".manifest-indexed.db");
+    let fresh = std::fs::metadata(&copy).ok().and_then(|c| {
+        let src = std::fs::metadata(path).ok()?;
+        Some(c.len() > 0 && c.modified().ok()? >= src.modified().ok()?)
+    });
+    if fresh != Some(true) {
+        std::fs::create_dir_all(work_dir).ok()?;
+        std::fs::copy(path, &copy).ok()?;
+    }
+    let conn = Connection::open(&copy).ok()?;
+    conn.execute_batch(IDX).ok()?;
+    Some(copy)
+}
+
+/// The exclusive upper bound for a prefix range: the prefix with its last byte
+/// incremented. `"abc"` → `"abd"`, so `>= "abc" AND < "abd"` is exactly
+/// "starts with abc". Falls back to an unbounded high sentinel when the last
+/// byte cannot be incremented, which keeps the query correct rather than empty.
+fn prefix_upper_bound(prefix: &str) -> String {
+    let mut b = prefix.as_bytes().to_vec();
+    while let Some(last) = b.pop() {
+        if last < 0xFF {
+            b.push(last + 1);
+            return String::from_utf8_lossy(&b).into_owned();
+        }
+    }
+    // Empty prefix (or all-0xFF): match everything from here up.
+    format!("{prefix}\u{10FFFF}")
+}
+
 pub struct ManifestIndex {
     conn: Connection,
     backup_dir: PathBuf,
@@ -65,6 +112,16 @@ impl ManifestIndex {
         } else {
             (backup_dir.join("Manifest.db"), None)
         };
+        // An iOS Manifest.db declares `Files(fileID PRIMARY KEY, domain,
+        // relativePath, …)` and NOTHING else — no index on the two columns every
+        // lookup filters by. So each `find`/`find_prefix` scans the whole table,
+        // and a caller resolving per item (note images, app attachments) pays one
+        // scan per item. That is what made import look hung rather than slow.
+        //
+        // Build the index once. The decrypted temp is ours to write to; the
+        // backup's own Manifest.db is NOT, so for a plaintext backup we index a
+        // copy in the work dir instead of touching the user's file.
+        let manifest_path = ensure_indexed(&manifest_path, work_dir).unwrap_or(manifest_path);
         let conn = Connection::open_with_flags(&manifest_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         Ok(Self {
             conn,
@@ -96,12 +153,20 @@ impl ManifestIndex {
     /// Every file under `domain` whose relativePath starts with `prefix`,
     /// ordered by path.
     pub fn find_prefix(&self, domain: &str, prefix: &str) -> Result<Vec<FileEntry>> {
+        // A RANGE, not `LIKE ?||'%'`. SQLite will not use an index for LIKE
+        // (it is case-insensitive by default, so the optimisation is off), which
+        // left every prefix search scanning the whole table even once the index
+        // existed — measured at 47 s for 2,000 searches over 300,000 files. A
+        // half-open range on the same column is an index seek.
         let mut stmt = self.conn.prepare(
             "SELECT fileID, domain, relativePath, file FROM Files
-             WHERE domain = ?1 AND relativePath LIKE ?2 || '%'
+             WHERE domain = ?1 AND relativePath >= ?2 AND relativePath < ?3
              ORDER BY relativePath",
         )?;
-        let rows = stmt.query_map(rusqlite::params![domain, prefix], Self::row_to_entry)?;
+        let rows = stmt.query_map(
+            rusqlite::params![domain, prefix, prefix_upper_bound(prefix)],
+            Self::row_to_entry,
+        )?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(Into::into)
     }
@@ -323,6 +388,127 @@ mod tests {
             .find("WrongDomain", "Library/SMS/sms.db")
             .unwrap()
             .is_none());
+    }
+}
+
+#[cfg(test)]
+mod lookup_bench {
+    use super::*;
+
+    /// An iOS `Manifest.db` ships no index on `(domain, relativePath)`, so every
+    /// lookup was a full scan — and a caller resolving per item (note images,
+    /// app attachments) paid one scan per item. Compares the OLD shape (no
+    /// index, `LIKE ?||'%'`) against what `ManifestIndex` now does.
+    #[test]
+    #[ignore = "measurement, not an assertion — run with --ignored --nocapture"]
+    fn measure_lookup_old_shape_vs_indexed_range() {
+        const FILES: usize = 300_000;
+        const LOOKUPS: usize = 2_000;
+        const DOMAIN: &str = "AppDomainGroup-group.com.apple.notes";
+
+        let tmp = tempfile::tempdir().unwrap();
+        let raw = tmp.path().join("Manifest.db");
+        let conn = Connection::open(&raw).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);",
+        )
+        .unwrap();
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            let mut ins = tx
+                .prepare("INSERT INTO Files VALUES (?1,?2,?3,1,NULL)")
+                .unwrap();
+            for i in 0..FILES {
+                ins.execute(rusqlite::params![
+                    format!("{i:08x}"),
+                    if i % 3 == 0 { DOMAIN } else { "MediaDomain" },
+                    format!("Accounts/A1/Media/{i:06}/img_{i:06}.png")
+                ])
+                .unwrap();
+            }
+            drop(ins);
+            tx.commit().unwrap();
+        }
+
+        // OLD: no index, LIKE prefix — exactly what shipped before.
+        let t = std::time::Instant::now();
+        {
+            let mut st = conn
+                .prepare(
+                    "SELECT fileID FROM Files
+                     WHERE domain = ?1 AND relativePath LIKE ?2 || '%'",
+                )
+                .unwrap();
+            for i in 0..LOOKUPS {
+                let _: Vec<String> = st
+                    .query_map(
+                        rusqlite::params![DOMAIN, format!("Accounts/A1/Media/{:06}/", i * 3)],
+                        |r| r.get(0),
+                    )
+                    .unwrap()
+                    .flatten()
+                    .collect();
+            }
+        }
+        let old = t.elapsed();
+        drop(conn);
+
+        // NEW: ManifestIndex builds the index on open and searches by range.
+        let t = std::time::Instant::now();
+        let index = ManifestIndex::open(tmp.path(), None, &tmp.path().join("w")).unwrap();
+        let open_cost = t.elapsed();
+        let t = std::time::Instant::now();
+        for i in 0..LOOKUPS {
+            let _ = index
+                .find_prefix(DOMAIN, &format!("Accounts/A1/Media/{:06}/", i * 3))
+                .unwrap();
+        }
+        let new = t.elapsed();
+
+        println!("{FILES} files, {LOOKUPS} prefix lookups");
+        println!("  old (no index, LIKE)      : {old:?}");
+        println!("  new (indexed copy, range) : {open_cost:?} open + {new:?} lookups");
+        println!(
+            "  speedup: {:.0}x",
+            old.as_secs_f64() / (open_cost + new).as_secs_f64()
+        );
+    }
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    /// `find_prefix` became a half-open RANGE so it can use an index. The bound
+    /// has to be exact: too wide and a sibling directory leaks in, too narrow
+    /// and the last file of a directory disappears.
+    #[test]
+    fn a_prefix_range_takes_the_directory_and_nothing_beside_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let conn = Connection::open(tmp.path().join("Manifest.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE Files (fileID TEXT PRIMARY KEY, domain TEXT, relativePath TEXT, flags INTEGER, file BLOB);
+             INSERT INTO Files VALUES ('a','D','Media/DCIM/a.heic',1,NULL);
+             INSERT INTO Files VALUES ('z','D','Media/DCIM/zzz.heic',1,NULL);
+             -- Sorts immediately after 'Media/DCIM/' and must NOT be included.
+             INSERT INTO Files VALUES ('s','D','Media/DCIM0/other.heic',1,NULL);
+             INSERT INTO Files VALUES ('o','D','Media/Other/x.heic',1,NULL);",
+        )
+        .unwrap();
+        let index = ManifestIndex::open(tmp.path(), None, &tmp.path().join("w")).unwrap();
+        let got: Vec<String> = index
+            .find_prefix("D", "Media/DCIM/")
+            .unwrap()
+            .into_iter()
+            .map(|e| e.relative_path)
+            .collect();
+        assert_eq!(got, vec!["Media/DCIM/a.heic", "Media/DCIM/zzz.heic"]);
+    }
+
+    #[test]
+    fn the_upper_bound_increments_the_last_byte() {
+        assert_eq!(prefix_upper_bound("abc"), "abd");
+        assert_eq!(prefix_upper_bound("Media/DCIM/"), "Media/DCIM0");
     }
 }
 
