@@ -965,6 +965,10 @@ export interface ContentFinding {
   /** 1 = concerning, 2 = clearly harmful, 3 = serious/imminent. */
   severity: 1 | 2 | 3;
   rationale: string;
+  /** Who sent the flagged message — "me" for the device owner, otherwise the
+   *  handle. null for notes, and for findings written before the sender was
+   *  recorded. A group chat needs this to say who spoke. */
+  sender: string | null;
   stale: boolean;
   dismissed: boolean;
   /** True when the cascade's strong tier (E4B) re-checked and kept this finding
@@ -3425,6 +3429,9 @@ const mockContentFindings: ContentFinding[] = (
     category,
     severity,
     rationale,
+    // The handle the parser resolved, exactly as the backend records it —
+    // notes have no sender at all (#402).
+    sender: who === "note" ? null : thread.identifier,
     // One stale (source content gone: the report drops it, the panel keeps it)
     // and one dismissed, so the two disclosures the charts owe the reader are
     // never zero in the mock.
@@ -3457,6 +3464,7 @@ mockContentFindings.push({
   category: "harassment-bullying",
   severity: 1,
   rationale: "Message whose timestamp did not decode.",
+  sender: "8",
   stale: false,
   dismissed: false,
   seen: false,
@@ -3473,6 +3481,7 @@ mockContentFindings.push({
   service: "Notes",
   occurredAt: null,
   fingerprint: "mockfp-self-harm-undated",
+  sender: null,
   category: "self-harm",
   severity: 1,
   rationale: "Undated note referring to wanting to disappear.",

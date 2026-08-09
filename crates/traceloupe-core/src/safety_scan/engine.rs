@@ -176,6 +176,14 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
             severity: severity as u8,
             rationale: rationale.to_string(),
             service: chunk.service.clone(),
+            // The chunker has always resolved this; it used to stop here.
+            // Notes have no sender worth recording — the chunker labels them
+            // "me" because a prompt needs a speaker, which is not the same as
+            // the device owner having said it to someone.
+            sender: match chunk.kind {
+                crate::analysis::SourceKind::Message => Some(item.sender.clone()),
+                crate::analysis::SourceKind::Note => None,
+            },
         });
     }
     out
@@ -833,6 +841,90 @@ mod tests {
         cache
     }
 
+    /// #402: the chunker always resolved the sender; the finding used to drop
+    /// it, so a group-chat finding could not say who spoke. Asserted through
+    /// the real path — cache → chunker → verdict → stored row.
+    #[test]
+    fn a_finding_records_who_sent_the_message() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO threads (identifier, service, last_message_at)
+                 VALUES ('groupchat', 'iMessage', 999)",
+                [],
+            )
+            .unwrap();
+        // A group chat: two different people, plus the device owner.
+        for (i, (sender, from_me, body)) in [
+            ("+15550001", 0, "i know where you live"),
+            ("+15550002", 0, "leave them alone"),
+            ("+15550001", 1, "sorry"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            cache
+                .conn()
+                .execute(
+                    "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind)
+                     VALUES (1, ?1, ?2, ?3, ?4, 'text')",
+                    params![sender, from_me, body, 1000 + i as i64],
+                )
+                .unwrap();
+        }
+        let chunks = chunker::chunk_all(
+            &cache,
+            TimeRange::default(),
+            &chunker::ScanSources::default(),
+        )
+        .unwrap();
+        let chunk = &chunks[0];
+        let output = serde_json::json!({"verdicts": [
+            {"index": 0, "category": "threat-violence", "severity": 2,
+             "rationale": "explicit threat"},
+        ]});
+
+        let v = verdicts_to_findings(chunk, &output);
+        assert_eq!(v.findings.len(), 1);
+        assert_eq!(
+            v.findings[0].sender.as_deref(),
+            Some("+15550001"),
+            "the finding names the person who said it, not the thread"
+        );
+
+        // And it survives the write.
+        let mut analysis = AnalysisDb::open_in_memory().unwrap();
+        let scan = analysis.begin_scan("m", (None, None), "all", 1).unwrap();
+        analysis.replace_findings(scan, &v.findings, 100).unwrap();
+        let stored = analysis.list_findings(Some(scan)).unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].sender.as_deref(), Some("+15550001"));
+    }
+
+    /// A note has no sender. The chunker labels its single item "me" because a
+    /// prompt needs a speaker, which is not the same as the device owner having
+    /// said it to anyone — recording that would invent a fact.
+    #[test]
+    fn a_note_finding_has_no_sender() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO notes (title, body_html, created_at, modified_at)
+                 VALUES ('n', 'i cannot keep doing this', 1000, 1000)",
+                [],
+            )
+            .unwrap();
+        let chunks = chunker::chunk_notes(&cache, TimeRange::default()).unwrap();
+        let output = serde_json::json!({"verdicts": [
+            {"index": 0, "category": "self-harm", "severity": 2, "rationale": "distress"},
+        ]});
+        let v = verdicts_to_findings(&chunks[0], &output);
+        assert_eq!(v.findings.len(), 1);
+        assert_eq!(v.findings[0].sender, None);
+    }
+
     /// A thread of nothing but hearts cannot produce a finding — every verdict
     /// over it would be refused in validation — so it must not cost a prefill.
     #[test]
@@ -1408,6 +1500,7 @@ mod tests {
                     severity: 2,
                     rationale: "earlier run".into(),
                     service: Some("iMessage".into()),
+                    sender: None,
                 }],
                 11,
             )

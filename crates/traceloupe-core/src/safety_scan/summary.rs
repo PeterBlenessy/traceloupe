@@ -494,6 +494,7 @@ mod tests {
                 severity: 2,
                 rationale: "repeated insults".into(),
                 service: None,
+                sender: None,
             });
         }
         db.replace_findings(scan, &findings, 101).unwrap();
@@ -613,6 +614,7 @@ mod tests {
                 severity: 3,
                 rationale: "explicit threat".into(),
                 service: None,
+                sender: None,
             }],
             201,
         )
