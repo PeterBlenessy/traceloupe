@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use super::chunker::{self, Chunk, TimeRange};
 use super::client::LlmClient;
 use super::prompt;
+use super::trivial;
 use crate::analysis::{AnalysisDb, Category, ChunkStatus, NewFinding, ScanStatus};
 use crate::cache::CacheDb;
 use crate::sidecar::CancelToken;
@@ -105,21 +106,35 @@ fn now() -> i64 {
         .unwrap_or(0)
 }
 
+/// What one chunk's model output turned into, and what was thrown away getting
+/// there. The two rejection counts are kept apart because they mean different
+/// things to a reader of the audit log: `rejected` is the model misbehaving,
+/// `contentless` is the model behaving normally over an item that was never
+/// classifiable.
+#[derive(Debug, Default)]
+struct Verdicts {
+    findings: Vec<NewFinding>,
+    /// Malformed verdicts, or ones naming an item the chunk doesn't contain.
+    rejected: usize,
+    /// Verdicts refused because the item cannot support a finding on its own
+    /// (see [`trivial::is_contentless`]).
+    contentless: usize,
+}
+
 /// Eval-only view of the verdict validator (T10 live eval): returns just the
 /// findings, reusing the exact production parsing/validation path.
 #[cfg(test)]
 pub(crate) fn verdicts_to_findings_for_eval(chunk: &Chunk, output: &Value) -> Vec<NewFinding> {
-    verdicts_to_findings(chunk, output).0
+    verdicts_to_findings(chunk, output).findings
 }
 
 /// Parse + validate one chunk's model output into findings. Verdict indexes
 /// that don't exist in the chunk are rejected (hallucinated ids must never
-/// become findings); the count of rejects is returned for the audit log.
-fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> (Vec<NewFinding>, usize) {
-    let mut findings = Vec::new();
-    let mut rejected = 0usize;
+/// become findings), and so are verdicts over items with no standalone content.
+fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
+    let mut out = Verdicts::default();
     let Some(verdicts) = output["verdicts"].as_array() else {
-        return (findings, rejected);
+        return out;
     };
     for v in verdicts {
         let (Some(index), Some(cat), Some(severity), Some(rationale)) = (
@@ -128,18 +143,24 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> (Vec<NewFinding>, usiz
             v["severity"].as_u64(),
             v["rationale"].as_str(),
         ) else {
-            rejected += 1;
+            out.rejected += 1;
             continue;
         };
         let Some(item) = chunk.items.get(index as usize) else {
-            rejected += 1;
+            out.rejected += 1;
             continue;
         };
         let (Some(category), true) = (Category::parse(cat), (1..=3).contains(&severity)) else {
-            rejected += 1;
+            out.rejected += 1;
             continue;
         };
-        findings.push(NewFinding {
+        // Refused last, so the counts stay honest: a malformed verdict over a
+        // heart emoji is the model misbehaving, not this filter working.
+        if trivial::is_contentless(&item.text) {
+            out.contentless += 1;
+            continue;
+        }
+        out.findings.push(NewFinding {
             source_kind: chunk.kind,
             source_id: Some(item.source_id),
             thread_identifier: chunk.thread_identifier.clone(),
@@ -151,7 +172,7 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> (Vec<NewFinding>, usiz
             service: chunk.service.clone(),
         });
     }
-    (findings, rejected)
+    out
 }
 
 /// Run a full Safety Scan. Progress is reported after every chunk; the scan is
@@ -512,15 +533,15 @@ fn persist_recheck(
     chunk: &Chunk,
     output: &Value,
 ) -> Result<usize> {
-    let (findings, rejected) = verdicts_to_findings(chunk, output);
-    let n = findings.len();
+    let v = verdicts_to_findings(chunk, output);
+    let n = v.findings.len();
     let item_fps: Vec<String> = chunk.items.iter().map(|i| i.fingerprint.clone()).collect();
     analysis.apply_recheck(
         scan_id,
         &chunk.key,
         &chunk.fingerprint,
         &item_fps,
-        &findings,
+        &v.findings,
         now(),
     )?;
     analysis.audit(
@@ -528,9 +549,11 @@ fn persist_recheck(
         now(),
         "chunk_rechecked",
         &format!(
-            "chunk={} items={} verdicts={n} rejected={rejected}",
+            "chunk={} items={} verdicts={n} rejected={} contentless={}",
             audit_key(&chunk.key),
-            chunk.items.len()
+            chunk.items.len(),
+            v.rejected,
+            v.contentless
         ),
     )?;
     Ok(n)
@@ -546,9 +569,9 @@ fn persist_classified(
     key_suffix: &str,
     output: &Value,
 ) -> Result<usize> {
-    let (findings, rejected) = verdicts_to_findings(chunk, output);
-    let n = findings.len();
-    analysis.replace_findings(scan_id, &findings, now())?;
+    let v = verdicts_to_findings(chunk, output);
+    let n = v.findings.len();
+    analysis.replace_findings(scan_id, &v.findings, now())?;
     analysis.record_chunk(
         scan_id,
         &format!("{}{}", chunk.key, key_suffix),
@@ -564,9 +587,11 @@ fn persist_classified(
         now(),
         "chunk_classified",
         &format!(
-            "chunk={} items={} verdicts={n} rejected={rejected}",
+            "chunk={} items={} verdicts={n} rejected={} contentless={}",
             audit_key(&chunk.key),
-            chunk.items.len()
+            chunk.items.len(),
+            v.rejected,
+            v.contentless
         ),
     )?;
     Ok(n)
@@ -652,6 +677,62 @@ mod tests {
             }
         });
         (base, hits)
+    }
+
+    /// The point of the contentless filter, through the real path: the model
+    /// flags a bare heart emoji and a genuine threat in the same chunk, and
+    /// only the threat survives validation. The refusal is counted separately
+    /// from a malformed verdict, so the audit log can tell them apart.
+    #[test]
+    fn a_verdict_on_a_bare_emoji_is_refused_but_its_neighbour_is_not() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO threads (identifier, service, last_message_at)
+                 VALUES ('chatA', 'SMS', 999)",
+                [],
+            )
+            .unwrap();
+        for (i, body) in ["\u{2764}\u{FE0F}", "i know where you live"]
+            .iter()
+            .enumerate()
+        {
+            cache
+                .conn()
+                .execute(
+                    "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind)
+                     VALUES (1, 'them', 0, ?1, ?2, 'text')",
+                    params![body, 1000 + i as i64],
+                )
+                .unwrap();
+        }
+        let chunks = chunker::chunk_all(
+            &cache,
+            TimeRange::default(),
+            &chunker::ScanSources::default(),
+        )
+        .unwrap();
+        let chunk = &chunks[0];
+        assert_eq!(chunk.items.len(), 2, "both messages are in scope");
+
+        // The model flags both — which is exactly what it does today.
+        let output = serde_json::json!({"verdicts": [
+            {"index": 0, "category": "harassment-bullying", "severity": 1,
+             "rationale": "affectionate emoji from an unknown contact"},
+            {"index": 1, "category": "threat-violence", "severity": 3,
+             "rationale": "explicit threat"},
+        ]});
+
+        let v = verdicts_to_findings(chunk, &output);
+        assert_eq!(v.contentless, 1, "the heart emoji verdict was refused");
+        assert_eq!(v.rejected, 0, "nothing was malformed");
+        assert_eq!(
+            v.findings.len(),
+            1,
+            "only the real message became a finding"
+        );
+        assert_eq!(v.findings[0].category, Category::ThreatViolence);
     }
 
     fn envelope(content: &Value) -> String {
