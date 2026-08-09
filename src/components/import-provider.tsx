@@ -41,7 +41,8 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   // SettingsProvider is mounted above the whole app (main.tsx), so this reads
   // the persisted flag rather than a default.
-  const { discoverAppMedia: discoverMedia } = useSettings();
+  const { discoverAppMedia: discoverMedia, showOffloadedPhotos: showOffloaded } =
+    useSettings();
   // The backup whose dialog is open (null = dialog hidden/closed).
   const [dialogBackup, setDialogBackup] = useState<BackupInfo | null>(null);
   const [active, setActive] = useState<ActiveImport | null>(null);
@@ -115,6 +116,7 @@ export function ImportProvider({ children }: { children: React.ReactNode }) {
         password,
         modules,
         discoverMedia,
+        showOffloaded,
       });
       // Partial-failure warnings (a malformed store was skipped) must reach the
       // PERSON, not the devtools console. The comment here used to say "so they

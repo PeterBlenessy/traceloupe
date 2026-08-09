@@ -658,6 +658,8 @@ function SettingsMenu() {
     fetchAppIcons,
     discoverAppMedia,
     setDiscoverAppMedia,
+    showOffloadedPhotos,
+    setShowOffloadedPhotos,
     setFetchAppIcons,
     importModules,
     setImportModules,
@@ -907,6 +909,31 @@ function SettingsMenu() {
             className="mt-0 flex flex-col gap-6"
           >
             <SettingsGroup
+              title="What media to find"
+              description="Which photos and videos an import pulls in. Both apply to the next import or re-import."
+            >
+              <SettingsRow
+                label="Find app media by inspecting the data"
+                description="When an app's photos aren't where TraceLoupe expects, look through its database for values that are files in this backup, and use what verifies. Apps rename their columns between releases, and without this their media just stops appearing with nothing to explain why. Whatever it finds is recorded on the app so you can see how it was located. Runs on the next import."
+              >
+                <Switch
+                  aria-label="Find app media by inspecting the data"
+                  checked={discoverAppMedia}
+                  onCheckedChange={setDiscoverAppMedia}
+                />
+              </SettingsRow>
+              <SettingsRow
+                label="Show photos offloaded to iCloud"
+                description="With iCloud Photos on, iOS leaves most photo files out of the backup — the library's catalogue still lists them, but only their thumbnails were backed up. Include those assets in Photos, shown at thumbnail resolution and labelled so you can tell them from the ones held in full. Turn this off to see only photos whose full-resolution originals are in the backup. Runs on the next import."
+              >
+                <Switch
+                  aria-label="Show photos offloaded to iCloud"
+                  checked={showOffloadedPhotos}
+                  onCheckedChange={setShowOffloadedPhotos}
+                />
+              </SettingsRow>
+            </SettingsGroup>
+            <SettingsGroup
               title="Photo & video viewer"
               description="How images and videos open from Photos and Messages."
             >
@@ -965,16 +992,6 @@ function SettingsMenu() {
                   aria-label="Fetch real app icons"
                   checked={fetchAppIcons}
                   onCheckedChange={setFetchAppIcons}
-                />
-              </SettingsRow>
-              <SettingsRow
-                label="Find app media by inspecting the data"
-                description="When an app's photos aren't where TraceLoupe expects, look through its database for values that are files in this backup, and use what verifies. Apps rename their columns between releases, and without this their media just stops appearing with nothing to explain why. Whatever it finds is recorded on the app so you can see how it was located. Runs on the next import."
-              >
-                <Switch
-                  aria-label="Find app media by inspecting the data"
-                  checked={discoverAppMedia}
-                  onCheckedChange={setDiscoverAppMedia}
                 />
               </SettingsRow>
             </SettingsGroup>

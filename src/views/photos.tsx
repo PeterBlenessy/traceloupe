@@ -18,6 +18,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  Cloud,
   FolderOpen,
   Frame,
   Heart,
@@ -146,6 +147,18 @@ function PhotosViewInner() {
   // flag on the asset, not a move — the files stay in DCIM — so these have
   // always been in the gallery, just indistinguishable without a filter.
   const [hiddenOnly, setHiddenOnly] = useState(false);
+  // Multi-select, like every other facet: "original" and "thumbnail" are not
+  // opposites you toggle between, they are two populations you may want either
+  // or both of.
+  const [availability, setAvailability] = useState<string[]>([]);
+  const toggleAvailability = (k: string) =>
+    setAvailability((prev) =>
+      prev.includes(k) ? prev.filter((v) => v !== k) : [...prev, k],
+    );
+  const { data: availabilityFacets } = useQuery({
+    queryKey: ["mediaAvailability"],
+    queryFn: () => client.mediaAvailability(),
+  });
   // Free-text search over the filename (debounced).
   const [q, setQ] = useState("");
   const search = useDebounced(q.trim()) || null;
@@ -154,9 +167,24 @@ function PhotosViewInner() {
   const sourcesKey = sourcesSel.join(" ");
   const rangesKey = ranges.map((r) => `${r.lo}-${r.hi}`).join(" ");
   const { data: count, error } = useQuery({
-    queryKey: ["mediaCount", sourcesKey, rangesKey, search, unsafeOnly, hiddenOnly],
+    queryKey: [
+      "mediaCount",
+      sourcesKey,
+      rangesKey,
+      search,
+      unsafeOnly,
+      hiddenOnly,
+      availability.join(","),
+    ],
     queryFn: () =>
-      client.countMedia(sourcesSel, ranges, search, unsafeOnly, hiddenOnly),
+      client.countMedia(
+        sourcesSel,
+        ranges,
+        search,
+        unsafeOnly,
+        hiddenOnly,
+        availability,
+      ),
     enabled: active === true,
   });
   // How many are marked unsafe, for the Unsafe pill's count (and whether to show it).
@@ -183,6 +211,7 @@ function PhotosViewInner() {
       presets.length,
       unsafeOnly,
       hiddenOnly,
+      availability.join(","),
     ],
     queryFn: () =>
       client.countMediaRanges(
@@ -191,6 +220,7 @@ function PhotosViewInner() {
         search,
         unsafeOnly,
         hiddenOnly,
+        availability,
       ),
     enabled: active === true,
   });
@@ -210,6 +240,7 @@ function PhotosViewInner() {
           sort.desc,
           unsafeOnly,
           hiddenOnly,
+          availability.join(","),
           page,
         ],
         queryFn: () =>
@@ -223,6 +254,7 @@ function PhotosViewInner() {
             sort.desc,
             unsafeOnly,
             hiddenOnly,
+            availability,
           ),
       });
     },
@@ -340,6 +372,28 @@ function PhotosViewInner() {
             ]
           : [],
       });
+    // Only offer this when the backup actually holds both kinds. A backup taken
+    // without iCloud Photos is all originals, and a facet whose every option
+    // selects everything is noise.
+    const availOptions = (availabilityFacets ?? [])
+      .filter(([k]) => k === "original" || k === "thumbnail")
+      .map(([k, n]) => ({
+        value: k,
+        label: k === "original" ? "In this backup" : "iCloud only",
+        count: n,
+      }));
+    if (availOptions.length > 1 || availability.length > 0)
+      list.push(
+        multiBadgeGroup({
+          key: "availability",
+          label: "Full resolution",
+          description:
+            "Whether the full-size original is in this backup. iCloud-only photos are shown from the thumbnail iOS backed up.",
+          options: availOptions,
+          selected: availability,
+          onToggle: toggleAvailability,
+        }),
+      );
     list.push(
       multiTimeGroup({
         description: "When the media was created",
@@ -351,7 +405,7 @@ function PhotosViewInner() {
       }),
     );
     return list;
-  }, [hasFilter, sourceOptions, sourcesSel, toggleSource, presets, presetCounts, ranges, toggleRange, unsafeOnly, favCount, hiddenOnly, hiddenCount]);
+  }, [hasFilter, sourceOptions, sourcesSel, toggleSource, presets, presetCounts, ranges, toggleRange, unsafeOnly, favCount, hiddenOnly, hiddenCount, availability, availabilityFacets, toggleAvailability]);
   const sortNode = useMemo(
     () => (
       <SortControl
@@ -431,12 +485,13 @@ function PhotosViewInner() {
         // key by sources+ranges+search+sort so the grid remounts (scroll +
         // measurement reset) on any filter change.
         <MediaGrid
-          key={`${sourcesKey}:${rangesKey}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}:${hiddenOnly}`}
+          key={`${sourcesKey}:${rangesKey}:${search}:${sort.by}:${sort.desc}:${unsafeOnly}:${hiddenOnly}:${availability.join(",")}`}
           count={count}
           sources={sourcesSel}
           ranges={ranges}
           search={search}
           sort={sort}
+          availability={availability}
           unsafeOnly={unsafeOnly}
           hiddenOnly={hiddenOnly}
           onOpen={setOpenIndex}
@@ -453,6 +508,7 @@ function PhotosViewInner() {
         sort={sort}
         unsafeOnly={unsafeOnly}
         hiddenOnly={hiddenOnly}
+        availability={availability}
         onMarkUnsafe={markUnsafe}
         ensurePage={ensurePage}
         onNavigate={setOpenIndex}
@@ -481,6 +537,7 @@ function MediaGrid({
   sort,
   unsafeOnly,
   hiddenOnly,
+  availability,
   onOpen,
   onMarkUnsafe,
 }: {
@@ -491,6 +548,7 @@ function MediaGrid({
   sort: SortState;
   unsafeOnly: boolean;
   hiddenOnly: boolean;
+  availability: string[];
   onOpen: (index: number) => void;
   onMarkUnsafe: (item: MediaItem) => void;
 }) {
@@ -552,6 +610,7 @@ function MediaGrid({
         sort.desc,
         unsafeOnly,
         hiddenOnly,
+        availability.join(","),
         p,
       ],
       queryFn: () =>
@@ -565,6 +624,7 @@ function MediaGrid({
           sort.desc,
           unsafeOnly,
           hiddenOnly,
+          availability,
         ),
     })),
   });
@@ -874,6 +934,17 @@ const Thumb = forwardRef<
             <EyeOff className="size-3" />
           </span>
         )}
+        {/* Say it on the tile. Without this an iCloud-only photo looks exactly
+            like a full-resolution one until you open it and find it soft — the
+            grid would be quietly overstating what this backup contains. */}
+        {item.availability === "thumbnail" && (
+          <span
+            className="rounded-full bg-black/55 p-1 text-white"
+            title="Only the thumbnail is in this backup — the full-size original is in iCloud"
+          >
+            <Cloud className="size-3" />
+          </span>
+        )}
         {item.favorite && (
           <span className="rounded-full bg-black/55 p-1" title="Favorite">
             <Heart className="size-3 fill-status-danger text-status-danger-text" />
@@ -922,6 +993,7 @@ function Lightbox({
   sort,
   unsafeOnly,
   hiddenOnly,
+  availability,
   onMarkUnsafe,
   ensurePage,
   onNavigate,
@@ -935,6 +1007,7 @@ function Lightbox({
   sort: SortState;
   unsafeOnly: boolean;
   hiddenOnly: boolean;
+  availability: string[];
   onMarkUnsafe: (item: MediaItem) => void;
   ensurePage: (page: number) => void;
   onNavigate: (index: number) => void;
@@ -976,6 +1049,7 @@ function Lightbox({
       sort.desc,
       unsafeOnly,
       hiddenOnly,
+      availability.join(","),
       page,
     ],
     queryFn: () =>
@@ -989,6 +1063,7 @@ function Lightbox({
         sort.desc,
         unsafeOnly,
         hiddenOnly,
+        availability,
       ),
     enabled: index != null,
   });
@@ -1041,6 +1116,12 @@ function Lightbox({
                 className="size-3.5 shrink-0 text-status-danger-text"
                 aria-label="In Recently Deleted"
               />
+            )}
+            {item.availability === "thumbnail" && (
+              <span className="flex items-center gap-1 text-xs">
+                <Cloud className="size-3.5 shrink-0" />
+                Thumbnail only — full size is in iCloud
+              </span>
             )}
             {item.hidden && (
               <EyeOff className="size-3.5 shrink-0" aria-label="In the Hidden album" />

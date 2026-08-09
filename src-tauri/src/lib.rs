@@ -609,8 +609,13 @@ async fn import_backup(
     // caller says nothing, so an older frontend (or a scripted call) keeps the
     // behaviour the setting describes rather than silently losing media.
     discover_media: Option<bool>,
+    // Include assets whose originals stayed in iCloud, shown from their
+    // backed-up thumbnails. Same default reasoning as `discover_media`: silence
+    // means ON, so an older frontend does not quietly hide most of the library.
+    show_offloaded: Option<bool>,
 ) -> Result<ImportResult, String> {
     let discover_media = discover_media.unwrap_or(true);
+    let show_offloaded = show_offloaded.unwrap_or(true);
     if !valid_backup_id(&backup_id) {
         return Err("invalid backup id".to_string());
     }
@@ -667,6 +672,7 @@ async fn import_backup(
             &work_dir,
             &modules,
             discover_media,
+            show_offloaded,
             &cancel,
             |phase| {
                 let event = match &phase {
@@ -1157,7 +1163,9 @@ async fn reimport_module(
     session: State<'_, SessionKeys>,
     gate: State<'_, ImportGate>,
     module_id: String,
+    show_offloaded: Option<bool>,
 ) -> Result<ReimportResult, String> {
+    let show_offloaded = show_offloaded.unwrap_or(true);
     if !import::REIMPORTABLE_NATIVE.contains(&module_id.as_str()) {
         return Err(format!("'{module_id}' can't be re-imported on its own"));
     }
@@ -1250,6 +1258,7 @@ async fn reimport_module(
             decryptor.as_deref(),
             &cp,
             &work_dir,
+            show_offloaded,
         )
     })
     .await
@@ -2809,9 +2818,18 @@ fn media_plain_bytes(
     id: i64,
 ) -> Result<(Vec<u8>, String, Option<String>, PathBuf), String> {
     let cache = CacheDb::open(active_path).map_err(|e| e.to_string())?;
-    let (local_path, mime, _thumb, decrypt_key, plain_size) = query::media_blob(&cache, id)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "this item's file is not available in the backup".to_string())?;
+    let (local_path, mime, _thumb, decrypt_key, plain_size, _tk, _ts) =
+        query::media_blob(&cache, id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "this item's file is not available in the backup".to_string())?;
+    // An offloaded asset is browsable from its thumbnail but has no original to
+    // hand back. Say which it is — "not available" reads like corruption, when
+    // the truth is the full-resolution file only ever lived in iCloud.
+    let local_path = local_path.ok_or_else(|| {
+        "the full-resolution file for this photo is in iCloud, not in this backup \
+         (only its thumbnail was backed up)"
+            .to_string()
+    })?;
     let plain = if let Some(key) = decrypt_key {
         let dec = ensure_session_decryptor(app, active_path)
             .ok_or_else(|| "backup keys are not loaded (unlock the backup first)".to_string())?;
@@ -3258,6 +3276,18 @@ async fn media_sources(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i
     .map_err(|e| e.to_string())?
 }
 
+/// (availability, count) pairs for the gallery's "in this backup" filter.
+#[tauri::command]
+async fn media_availability(active: State<'_, ActiveBackup>) -> Result<Vec<(String, i64)>, String> {
+    let path = active.path()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
+        query::media_availability(&cache).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // Windowed, filterable list commands (async + spawn_blocking) so the UI can
 // lazily load huge lists a slice at a time — the same pattern as messages.
 
@@ -3312,7 +3342,9 @@ async fn count_media(
     search: Option<String>,
     favorites_only: bool,
     hidden_only: bool,
+    availability: Option<Vec<String>>,
 ) -> Result<i64, String> {
+    let availability = availability.unwrap_or_default();
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -3323,6 +3355,7 @@ async fn count_media(
             search.as_deref(),
             favorites_only,
             hidden_only,
+            &availability,
         )
         .map_err(|e| e.to_string())
     })
@@ -3338,7 +3371,9 @@ async fn count_media_ranges(
     search: Option<String>,
     favorites_only: bool,
     hidden_only: bool,
+    availability: Option<Vec<String>>,
 ) -> Result<Vec<i64>, String> {
+    let availability = availability.unwrap_or_default();
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -3349,6 +3384,7 @@ async fn count_media_ranges(
             search.as_deref(),
             favorites_only,
             hidden_only,
+            &availability,
         )
         .map_err(|e| e.to_string())
     })
@@ -3369,7 +3405,9 @@ async fn get_media_window(
     desc: bool,
     favorites_only: bool,
     hidden_only: bool,
+    availability: Option<Vec<String>>,
 ) -> Result<Vec<MediaItem>, String> {
+    let availability = availability.unwrap_or_default();
     let path = active.path()?;
     tauri::async_runtime::spawn_blocking(move || {
         let cache = CacheDb::open(&path).map_err(|e| e.to_string())?;
@@ -3383,6 +3421,7 @@ async fn get_media_window(
             media_sort(&sort_by, desc),
             favorites_only,
             hidden_only,
+            &availability,
         )
         .map_err(|e| e.to_string())
     })
@@ -3950,35 +3989,60 @@ fn media_protocol_response(
     let Ok(cache) = CacheDb::open(&cache_path) else {
         return not_found();
     };
-    let Ok(Some((local_path, mime, thumb_path, decrypt_key, plain_size))) =
+    let Ok(Some((local_path, mime, thumb_path, decrypt_key, plain_size, thumb_key, thumb_size))) =
         query::media_blob(&cache, id)
     else {
         return not_found();
     };
-
-    // Camera-roll items carry iOS's pre-rendered JPEG thumbnail — serve it
-    // directly for grid requests (no HEIC decode at all). On encrypted backups
-    // this thumbnail was decrypted into the cache at import, so the grid works
-    // even without the keys. Videos use this for the grid tile AND the lightbox
-    // poster.
-    if want_thumb {
-        if let Some(tp) = thumb_path {
-            if let Ok(bytes) = std::fs::read(&tp) {
-                return Response::builder()
-                    .status(StatusCode::OK)
-                    .header("Content-Type", "image/jpeg")
-                    .header("Cache-Control", cache_ctl)
-                    .body(bytes)
-                    .unwrap();
-            }
-        }
-    }
 
     // Converted thumbnails/full-JPEGs are cached alongside the backup's cache DB.
     let thumbs_dir = cache_path
         .parent()
         .map(|p| p.join("thumbs"))
         .unwrap_or_else(|| PathBuf::from("thumbs"));
+
+    // Camera-roll items carry iOS's pre-rendered JPEG thumbnail — serve it
+    // directly for grid requests (no HEIC decode at all). Videos use this for
+    // the grid tile AND the lightbox poster.
+    //
+    // On an encrypted backup the thumbnail is decrypted HERE, on first request,
+    // and cached. It used to be decrypted for every asset during import, which
+    // was affordable only while the camera roll enumerated files alone; across a
+    // whole iCloud library that is tens of thousands of decryptions and
+    // gigabytes written before the first photo appears.
+    if want_thumb {
+        if let Some(tp) = thumb_path {
+            let resolved: Option<PathBuf> = match &thumb_key {
+                None => Some(PathBuf::from(&tp)),
+                Some(key) => ensure_session_decryptor(app, &cache_path).and_then(|dec| {
+                    decrypt_to_cache(
+                        &dec,
+                        key,
+                        Path::new(&tp),
+                        thumb_size,
+                        &thumbs_dir.join(format!("thumb-{id}.jpg")),
+                    )
+                }),
+            };
+            if let Some(p) = resolved {
+                if let Ok(bytes) = std::fs::read(&p) {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "image/jpeg")
+                        .header("Cache-Control", cache_ctl)
+                        .body(bytes)
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    // Past this point everything needs the ORIGINAL. An asset whose original
+    // stayed in iCloud has none, so stop rather than fall through into the video
+    // and transcode branches with an empty path.
+    let Some(local_path) = local_path else {
+        return not_found();
+    };
 
     // VIDEO: stream it (Range-seekable), never buffer the whole file. `<video>`
     // in WKWebView needs `206`/`Accept-Ranges` to start playing at all — without
@@ -4199,7 +4263,9 @@ fn note_image_protocol_response(app: &AppHandle, path: &str) -> tauri::http::Res
         Some(i) => query::note_media_blob(&cache, id, i),
         None => query::note_image_blob(&cache, id),
     };
-    let Ok(Some((local_path, mime, _thumb, decrypt_key, plain_size))) = blob else {
+    // Notes share MediaBlob's shape; their images always have a local path, so a
+    // missing one is a genuine miss rather than the iCloud-offloaded case.
+    let Ok(Some((Some(local_path), mime, _thumb, decrypt_key, plain_size, _tk, _ts))) = blob else {
         return not_found();
     };
     // A cache key unique per (note, index) so rendered/decrypted files don't clash.
@@ -5177,6 +5243,7 @@ pub fn run() {
             list_installed_apps,
             get_app_icons,
             media_sources,
+            media_availability,
             count_media,
             count_media_ranges,
             get_media_window,
