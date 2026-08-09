@@ -28,14 +28,14 @@
 # say which session produced it cannot be corroborated against anything.
 #
 # VALIDATED against a real iPhone 11 / iOS 17.3 backup (Josh Hickman's public
-# image): «redacted» rows from 48 logs across all three directories.
+# image): 1,635 rows from 48 logs across all three directories.
 #
 # That number was checked against the files rather than against iLEAPP. Dumping
-# all 48 logs and counting the marker directly gives «redacted» occurrences, all of
-# them parseable — so «redacted» is every record the backup contains, not merely
+# all 48 logs and counting the marker directly gives 1,635 occurrences, all of
+# them parseable — so 1,635 is every record the backup contains, not merely
 # every record we managed to read.
 #
-# iLEAPP reports «redacted» for the same device. The difference is not a parsing gap:
+# iLEAPP reports 1,722 for the same device. The difference is not a parsing gap:
 # iLEAPP reads the FULL-FILESYSTEM extraction, which keeps log files a backup
 # excludes. Worth knowing before treating an iLEAPP row count as a target — for
 # log artifacts it is an upper bound a backup cannot reach.
@@ -46,7 +46,7 @@
 id          = "life360_locations"
 name        = "Life360 location history"
 description = "Every position Life360 reported to its servers — time, coordinates, speed, heading and the activity iOS inferred — recovered from the app's own logs."
-verified    = "iphone11_ios17 — «redacted» rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives «redacted»…"
+verified    = "iphone11_ios17 — 1,635 rows from 48 logs across all three directories. That number was checked against the files rather than against iLEAPP. Dumping all 48 logs and counting the marker directly gives 1,635…"
 surface     = "apps"
 join_column = "App"
 category    = "Location"

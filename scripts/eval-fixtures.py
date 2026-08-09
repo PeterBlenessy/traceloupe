@@ -71,7 +71,7 @@ def grammar(m):
         f'category ::= {cat_alt}\n'
         'severity ::= "1" | "2" | "3"\n'
         'index ::= [0-9] | [1-9] [0-9] [0-9]?\n'
-        'rationale ::= "\\"" char{«redacted»} "\\""\n'
+        'rationale ::= "\\"" char{1,140} "\\""\n'
         'char ::= [^"\\\\\\x00-\\x1F] | "\\\\" (["\\\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])\n'
         'ws ::= [ \\t\\n]{0,4}'
     )

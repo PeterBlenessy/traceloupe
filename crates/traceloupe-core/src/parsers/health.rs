@@ -795,7 +795,7 @@ fn parse_cycle(src: &Connection, cache: &CacheDb, replace: bool) -> Result<()> {
          FROM samples s
          JOIN category_samples c ON c.data_id = s.data_id
          WHERE s.data_type IN
-             (91,92,95,96,«redacted»)
+             (91,92,95,96,97,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171)
          ORDER BY s.start_date",
     )?;
 

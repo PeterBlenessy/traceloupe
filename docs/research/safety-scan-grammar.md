@@ -79,7 +79,7 @@ verdict ::= "{" ws "\"index\"" ws ":" ws index ws "," ws "\"category\"" ws ":" w
 category ::= "\"threat-violence\"" | … all 9 slugs …
 severity ::= "1" | "2" | "3"
 index ::= [0-9] | [1-9] [0-9] [0-9]?
-rationale ::= "\"" char{«redacted»} "\""
+rationale ::= "\"" char{1,140} "\""
 char ::= [^"\\\x00-\x1F] | "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
 ws ::= [ \t\n]{0,4}
 ```

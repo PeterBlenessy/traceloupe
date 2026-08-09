@@ -2027,10 +2027,10 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE access (service TEXT, client TEXT, client_type INTEGER,
                 auth_value INTEGER, auth_reason INTEGER, auth_version INTEGER, last_modified INTEGER);
-             INSERT INTO access VALUES ('kTCCServiceMicrophone','com.evil.tracker',0,2,0,«redacted»);
-             INSERT INTO access VALUES ('kTCCServiceCamera','com.evil.tracker',0,3,0,«redacted»);
-             INSERT INTO access VALUES ('kTCCServiceCamera','com.good.app',0,0,0,«redacted»);
-             INSERT INTO access VALUES ('kTCCServiceLiverpool','com.apple.x',0,2,0,«redacted»);",
+             INSERT INTO access VALUES ('kTCCServiceMicrophone','com.evil.tracker',0,2,0,1,100);
+             INSERT INTO access VALUES ('kTCCServiceCamera','com.evil.tracker',0,3,0,1,200);
+             INSERT INTO access VALUES ('kTCCServiceCamera','com.good.app',0,0,0,1,300);
+             INSERT INTO access VALUES ('kTCCServiceLiverpool','com.apple.x',0,2,0,1,400);",
         )
         .unwrap();
         drop(conn);

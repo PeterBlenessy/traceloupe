@@ -55,7 +55,7 @@ row exists in the app database, but the blob does not resolve in `Manifest.db`.
   (images the note *references*, from `ZICCLOUDSYNCINGOBJECT`) separately from
   `available_image_count` (rows in `note_media`, written only when
   `resolve_note_image()` finds a real blob in the Notes-domain Manifest,
-  `notes.rs:503`). On one real backup: **«redacted» referenced images, 0 present.**
+  `notes.rs:503`). On one real backup: **2,698 referenced images, 0 present.**
   `src/views/notes.tsx` surfaces this honestly ("N image(s) not included in this
   backup … Notes media is often stored in iCloud and not downloaded").
 - **Messages** (`messages.rs:727`): `resolve_attachment()` returns `None` when the
@@ -219,13 +219,13 @@ Concretely, in priority order:
    immediately and is a prerequisite for good fetch UX. Touches `notes.rs` /
    `messages.rs` schema-read only.
 2. **Prototype (opt-in) — Option B for Photos.** Photos is the proven,
-   best-supported case and the highest-value one («redacted» assets in our reference
+   best-supported case and the highest-value one (95k assets in our reference
    backup). Build a small authenticated-iCloud client (or shell to a vendored
    `icloudpd`) behind a feature flag, driven from the camera-roll/attachment
    absence branch. Gate on: user opts in, no ADP, clear ToS disclosure,
    keychain-stored creds/session.
 3. **Then — Option B for Notes**, *after* verifying it retrieves cloud-only note
-   attachments (the one unverified claim). This directly closes the "«redacted»
+   attachments (the one unverified claim). This directly closes the "2,698
    referenced, 0 present" gap that motivated this spike.
 4. **Do not promise Messages attachments.** No self-hosted path exists today.
    Keep the current "not in backup" + camera-roll filename recovery. Track as an

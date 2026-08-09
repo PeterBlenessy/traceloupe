@@ -396,7 +396,7 @@ mod tests {
              INSERT INTO bookmarks (id,special_id,parent,type,title,order_index) VALUES (1,1,0,1,'BookmarksBar',0);
              INSERT INTO bookmarks (id,special_id,parent,type,title,order_index) VALUES (2,3,0,1,'com.apple.ReadingList',1);
              INSERT INTO bookmarks (id,special_id,parent,type,title,order_index) VALUES (3,4,0,1,'com.apple.WebFilterWhiteList',2);
-             INSERT INTO bookmarks (id,parent,type,title,url,order_index,last_modified) VALUES (5,1,0,'Apple','https://apple.com',«redacted»0000000.0);
+             INSERT INTO bookmarks (id,parent,type,title,url,order_index,last_modified) VALUES (5,1,0,'Apple','https://apple.com',0,1700000000.0);
              INSERT INTO bookmarks (id,parent,type,title,url,order_index) VALUES (6,3,0,'KidSite','https://disney.com',0);",
         )
         .unwrap();
@@ -459,9 +459,9 @@ mod tests {
                  user_visible_url TEXT, order_index INTEGER, last_viewed_time REAL,
                  private_browsing INTEGER, browser_window_uuid TEXT);
              -- a normal tab with a real last-viewed (721692800 CFAbsolute → 1_700_000_000 unix)
-             INSERT INTO tabs VALUES (1,'Example','https://example.com/x','https://example.com',«redacted»692800.0,0,'w1');
+             INSERT INTO tabs VALUES (1,'Example','https://example.com/x','https://example.com',0,721692800.0,0,'w1');
              -- a private tab, no user_visible_url (falls back to url), corrupt far-future last-viewed → dropped
-             INSERT INTO tabs VALUES (2,'Secret',NULL,'https://private.example',«redacted»3839264.0,1,'w2');
+             INSERT INTO tabs VALUES (2,'Secret',NULL,'https://private.example',1,1783839264.0,1,'w2');
              -- a row with no url at all → skipped
              INSERT INTO tabs VALUES (3,'Blank',NULL,'',2,0,0,'w1');",
         )

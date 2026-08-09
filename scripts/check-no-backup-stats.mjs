@@ -15,9 +15,9 @@
  *
  * What trips it: a number that reads as a tally of someone's data — a
  * thousands-separated figure next to a data noun, or a bare count of one.
- * (Examples are deliberately not spelled out here with realistic values: this
- * file is scanned like every other, and an illustration would be indistinguishable
- * from the thing it illustrates.) Version numbers, issue references, byte sizes,
+ * (Examples are deliberately not spelled out with realistic values: this file is
+ * scanned like every other, and an illustration would be indistinguishable from
+ * the thing it illustrates.) Version numbers, issue references, byte sizes,
  * dates, and schema constants are not counts of anybody's content, and are left
  * alone.
  */
@@ -30,9 +30,8 @@ const NOUNS =
   "samples|workouts|visits|bookmarks|threads|conversations|attachments|events|" +
   "chats|sessions|ring days|quantity samples|camera-roll assets|history items";
 
-// "«redacted» camera-roll assets" / "3842 notes" / "«redacted» GPS points". A bare
-// four-digit year is not a tally ("2021 Photos" labels a fixture row), so
-// 19xx/20xx without a thousands separator is excluded.
+// A bare four-digit year is not a tally ("2021 Photos" labels a fixture row),
+// so 19xx/20xx without a thousands separator is excluded.
 const COUNTED = new RegExp(
   String.raw`\b\d{1,3}(?:,\d{3})+\s*(?:${NOUNS})\b|\b(?!(?:19|20)\d{2}\b)\d{3,}\s*(?:${NOUNS})\b|\b\d+k\s+(?:GPS points|samples)\b`,
   "i",

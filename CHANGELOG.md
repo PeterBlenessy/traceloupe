@@ -712,7 +712,7 @@ backup.
   Restarting a scan of a range that had been scanned before read
   "0% · 8823 findings so far" — the count includes everything the range already
   held, which is what the Findings panel shows, but the wording claimed it for
-  the run just started. It now reads "12% · 17 new · «redacted» from earlier scans of
+  the run just started. It now reads "12% · 17 new · 8,823 from earlier scans of
   this range".
   ([#65](https://github.com/PeterBlenessy/traceloupe/issues/65))
 
@@ -749,7 +749,7 @@ backup.
   security findings now render only the rows on screen. Each of these grows
   forever — a row per scan, never removed — and a long one used to put every row
   in the document at once, which is what locked up the machine in an earlier
-  release. Verified against «redacted»-row lists.
+  release. Verified against 4,000-row lists.
   ([#67](https://github.com/PeterBlenessy/traceloupe/issues/67))
 - **A note packed with photos, and a finding with many shortened links, stay
   responsive.** Both now show a sensible number and say plainly how many aren't
@@ -1115,7 +1115,7 @@ experience.
 
 - Security Check runs now carry a per-run feed receipt: the result cards and
   the exported CSV cite the exact indicator feeds the scan ran against
-  ("Checked against Pegasus «redacted» · … — feeds updated 2026-07-20"), even
+  ("Checked against Pegasus 1,549 · … — feeds updated 2026-07-20"), even
   after the installed feeds have since been updated. Runs recorded before
   this change list their feeds without the updated-date. (#25)
 - Scan by source: the Content picker is a multi-select of the actual sources in
@@ -1387,7 +1387,7 @@ Tier-B surface: the domains an app's in-app browser (WebKit) contacted.
 - **On-demand extraction** during an Explicit Scan: every per-app
   `observations.db` is located via the Manifest index and parsed. Passive Check
   unaffected.
-- Validated against the real dev backup: «redacted» observed domains extracted across
+- Validated against the real dev backup: 2,692 observed domains extracted across
   34 apps, zero indicator matches (clean). See `docs/validation/security-check-validation.md`.
 
 With WebKit, every MVT iOS module that matches an indicator class our feeds
@@ -1474,7 +1474,7 @@ against process-name indicators.
   the Manifest index (WirelessDomain / HomeDomain), best-effort — a missing or
   unreadable file just yields fewer processes, never fails the scan. The Passive
   Check stays apps-only.
-- Validated against the real dev backup: «redacted» processes extracted, no mercenary
+- Validated against the real dev backup: 1,825 processes extracted, no mercenary
   process-name matches; the bundle-name cross-check independently re-surfaced the
   known Kaspersky Safe Kids watchware (Info) found in M1. See
   `docs/validation/security-check-validation.md`.
@@ -1492,7 +1492,7 @@ Echap stalkerware feed).
 - **Indicator feeds.** STIX2 bundles + Echap `ioc.yaml`/`watchware.yaml`
   normalized into one indicator set (domains, URLs, emails, process names,
   file names/paths, bundle IDs, cert hashes, IPs), with evidence-graded
-  severity. A snapshot of ~«redacted» indicators is bundled for offline use and can
+  severity. A snapshot of ~5,800 indicators is bundled for offline use and can
   be refreshed over HTTPS from the public feed repos.
 - **Scan engine.** Evaluates the set against the cache (messages, attachments,
   Safari history/bookmarks, notes, calendar, contacts, interactions, installed
@@ -1533,7 +1533,7 @@ populate for existing caches.
   library (`ZASSET.ZADDEDDATE`) is surfaced in the lightbox as "Added &lt;date&gt;"
   whenever it differs from the capture date by more than a day — flagging media
   that was received, saved, or imported rather than shot on this device (schema
-  v44). ~«redacted» such assets in the reference backup.
+  v44). ~1,174 such assets in the reference backup.
 
 ## [0.18.0] — 2026-07-20
 
@@ -1647,14 +1647,14 @@ them).
   day into a new `health_daily` cache table (schema v30) and shown in a new
   **Daily activity** section: one row per day with totals and the heart-rate
   min/avg/max (canonical count/sec scaled to bpm), time-filterable and sortable
-  by date/steps/distance. «redacted» days in the reference backup.
+  by date/steps/distance. 2,742 days in the reference backup.
 - **Health: sleep sessions** — sleep-analysis category samples (data type 63)
   become a `sleep_sessions` table (schema v31) with friendly stage names
   (In Bed / Asleep / Awake / Core / Deep / REM) and a **Sleep** section
   (start–end, duration, date/duration sort).
 - **Health: workout GPS routes** — each workout's location series
   (`associations` → `data_series` → `location_series_data`, tombstoned links
-  skipped) is stored downsampled to ≤«redacted» points (schema v32). Workout rows
+  skipped) is stored downsampled to ≤1,000 points (schema v32). Workout rows
   with a route expand to an inline SVG route preview (equirectangular
   projection, start/end markers, altitude-range caption). The Health view now
   has a **Section** filter (Workouts | Daily activity | Sleep).
@@ -2110,7 +2110,7 @@ and the remaining (large-feature / password-blocked) gaps.
 
 ### Added
 
-- **Native TikTok DM messages**, validated on a real backup («redacted» messages). Parsed
+- **Native TikTok DM messages**, validated on a real backup (263k messages). Parsed
   from `ChatFiles/<uid>/db.sqlite` (`TIMMessageORM`) — a *separate* DB from the
   `AwemeIM.db` social graph — with sender names resolved from `AwemeContacts*`. The
   `-wal` sidecar is extracted alongside each DB so unflushed rows are replayed.

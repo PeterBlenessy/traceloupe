@@ -138,8 +138,8 @@ the `rg` extension:
 
 | locale | number | date |
 |---|---|---|
-| `en-US` | «redacted» | Jun 8, 2024, 2:40 PM |
-| `en-US-u-rg-sezzzz` | «redacted» | Jun 8, 2024, 2:40 PM |
+| `en-US` | 408,937 | Jun 8, 2024, 2:40 PM |
+| `en-US-u-rg-sezzzz` | 408,937 | Jun 8, 2024, 2:40 PM |
 | `en-SE` | 408 937 | 8 Jun 2024, 14:40 |
 
 So the region has to be folded into the locale itself: `system_watch::to_bcp47`
