@@ -43,6 +43,23 @@ findings it is dismissing right now, or "nothing" if it is stale. Removing a rul
 gives back exactly what that rule dismissed and tells you how many; anything you
 dismissed by hand stays dismissed.
 
+**Scans are faster and find more.** Installing both models used to make a scan
+run them as a cascade — the smaller one reading everything, the larger one
+re-checking what it flagged. Measured, the smaller model was *slower* per chunk,
+noisier, and never detected harassment at all, so anything it missed was missed
+for good. Scans now use one model. That is roughly 30% quicker and no longer has
+a category it cannot see.
+
+**Fewer findings are noise.** Findings marked "concerning" — the weakest of the
+three levels — are hidden by default. Every false alarm measured on ordinary
+conversation was at that level, and no genuinely harmful message in the test set
+sits there. They are hidden, never deleted: the count is always shown and one
+click brings them back.
+
+**The scan describes itself more honestly.** The model picker used to claim the
+smaller model was "~2× faster"; it is measurably slower on Apple silicon, and now
+says so.
+
 #### Fixed
 
 - A rule never covered any finding you had **opened**. Reading a finding recorded
@@ -50,6 +67,18 @@ dismissed by hand stays dismissed.
   finding you were looking at did not cover that finding — it stayed flagged.
 - Findings in group chats record **who sent the message**, so they can name the
   speaker rather than only the conversation.
+
+#### Known limits
+
+Safety Scan is still experimental, and now it is experimental with numbers behind
+it. On this release's own test set the classifier leaves **44% of deliberately
+tricky non-findings unflagged** — it flags a parent setting a curfew, a person
+describing abuse they survived, a novelist quoting their villain. It reads the
+words of harm rather than the situation of harm.
+
+A full scan of a large backup takes **hours**. Treat a finding as a prompt to go
+and read the conversation yourself, and do not read a clean result as a
+guarantee. The measurements are in `docs/validation/safety-scan-validation.md`.
 
 ## [0.43.3] — 2026-08-09
 
