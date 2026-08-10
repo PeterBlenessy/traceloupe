@@ -554,23 +554,27 @@ pub async fn run_safety_scan(
         .ok_or("model not installed — download it first")?;
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
 
-    // Cascade (#35): when the effective model is E4B and E2B is also
-    // installed, sweep everything with the fast tier and re-check flagged
-    // chunks with the strong one. Single-tier machines keep one-pass behavior.
-    // Computed BEFORE the row is created so the row records the SWEEP model —
-    // stamping the E4B id up front would falsely claim E4B judged content even
-    // when it never re-checked anything (verification Finding B).
-    let cascade_sweep = if spec.id.contains("E4B") {
-        models::spec_by_id("gemma-4-E2B-it-Q4_K_M").filter(|e| e.installed_at(&dir).is_some())
-    } else {
-        None
-    };
-    let primary_spec = cascade_sweep.unwrap_or(spec);
-    let primary_path = primary_spec
-        .installed_at(&dir)
-        .ok_or("model not installed — download it first")?;
-    // The strong tier's identity/path for the re-check phase (None = no cascade).
-    let strong = cascade_sweep.map(|_| (spec.id.to_string(), model_path.clone(), spec.ctx_size));
+    // The cascade (#35) is OFF (#446). It swept with E2B and re-checked the
+    // flagged chunks with E4B, which is only worth a second model load and a
+    // second pass if the sweep is fast and high-recall. Measured on an M3, three
+    // runs per tier (docs/validation/safety-scan-validation.md), E2B is neither:
+    //
+    //   per chunk          E4B 7.5-8.9s     E2B 10.3-12.0s
+    //   harassment P/R     E4B 0.50/1.00    E2B 0.00/0.00
+    //   findings on 200 generated mundane messages   E4B 6   E2B 10
+    //   chunks failing to classify                   E4B 0/8  E2B 1/8
+    //
+    // A sweep miss is permanent — the strong tier only ever sees what the sweep
+    // flagged — so E2B's zero recall on harassment-bullying meant a two-tier
+    // machine could not surface a harassment finding at all. The pairing cost
+    // wall clock AND findings.
+    //
+    // `run_scan` still takes a `recheck` provider and the engine still tests it:
+    // the mechanism is sound, the PAIRING was wrong. A future tier that is
+    // genuinely faster and higher-recall can be wired back in here.
+    let strong: Option<(String, std::path::PathBuf, u32)> = None;
+    let primary_spec = spec;
+    let primary_path = model_path.clone();
 
     // Flip the scan row to 'running' NOW — before the slow (30–180 s) model
     // load — so the stored state and the history rail reflect the user's
