@@ -27,7 +27,8 @@ import { cn } from "@/lib/utils";
  * one-time multi-GB setup concern rather than per-scan content.
  *
  * Also home to two visibility features the user asked for (NoteSage parity):
- * - a picker for *which* installed model scans (E2B is an explicit fallback);
+ * - a picker for *which* installed model scans (E2B is the low-memory
+ *   fallback, and slower than E4B despite being smaller — see models.rs);
  * - an on-demand health check that proves the local server actually loads.
  */
 
@@ -90,27 +91,19 @@ export function SafetyModelSettings() {
         network access — your data never leaves this Mac.
       </p>
 
-      {/* The cascade makes both models complementary, not either/or — surface
-          that so it's clear why you'd keep both. */}
+      {/* The cascade is off (#446): measured, E2B was slower than E4B AND
+          missed more, so pairing them cost time and findings. Say which model
+          scans rather than implying the pair is better than either. */}
       {installed.length >= 2 ? (
-        <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">
-            Both models installed — scans run as a cascade.
-          </span>{" "}
-          E2B sweeps everything fast, then E4B re-checks only what E2B flagged.
-          You get close to E4B's accuracy at close to E2B's speed, and most
-          content (which is clean) is only ever read by the fast model.
-        </div>
-      ) : (
         <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">
-            Tip: keep both models for the fastest accurate scan.
+            Both models installed — one scans at a time.
           </span>{" "}
-          With E2B and E4B both installed, scans cascade — E2B sweeps quickly
-          and E4B re-checks only the flagged content, instead of running the
-          slower model over everything.
+          Pick it below. E4B is recommended: on Apple silicon it is both more
+          accurate and faster than E2B, which is only worth choosing if E4B does
+          not fit in memory.
         </div>
-      )}
+      ) : null}
 
       {/* The list is always rendered so it never jumps; progress appears inside
           the downloading model's own row. When two models are installed the

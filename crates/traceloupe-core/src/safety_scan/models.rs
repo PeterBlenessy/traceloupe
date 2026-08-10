@@ -58,12 +58,20 @@ const GIB: u64 = 1024 * 1024 * 1024;
 
 /// The whole catalog. Deliberately two entries (grill decision): no model
 /// picker sprawl, just the default and the low-RAM fallback.
+///
+/// The `note` on each is what the picker shows a user, so it must survive
+/// measurement. E2B's used to claim "~2× faster"; on an M3 it is consistently
+/// ~30% SLOWER than E4B (docs/validation/safety-scan-validation.md). E2B is a
+/// nested sub-model of E4B rather than an independent smaller model, and
+/// per-chunk cost tracks how much the model generates, not parameter count —
+/// E2B flags more, so it writes more. Do not restore a speed claim here without
+/// a measurement behind it.
 pub const CATALOG: [ModelSpec; 2] = [
     ModelSpec {
         id: "gemma-4-E4B-it-Q4_K_M",
         display_name: "Gemma 4 E4B",
-        note: "Highest accuracy. With E2B also installed, it re-checks only the \
-               content E2B flagged — near-E4B accuracy at close to E2B speed.",
+        note: "The recommended model, and the faster of the two on Apple \
+               silicon. Measured at roughly 8 seconds per 25-message chunk.",
         repo: "unsloth/gemma-4-E4B-it-GGUF",
         filename: "gemma-4-E4B-it-Q4_K_M.gguf",
         sha256: "85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
@@ -74,8 +82,8 @@ pub const CATALOG: [ModelSpec; 2] = [
     ModelSpec {
         id: "gemma-4-E2B-it-Q4_K_M",
         display_name: "Gemma 4 E2B",
-        note: "Smaller and ~2× faster. On its own it's the low-RAM choice; \
-               alongside E4B it's the fast first-pass sweep of the cascade.",
+        note: "For machines that cannot fit E4B. Smaller on disk, but NOT \
+               faster — measured slower per chunk — and it misses more.",
         repo: "unsloth/gemma-4-E2B-it-GGUF",
         filename: "gemma-4-E2B-it-Q4_K_M.gguf",
         sha256: "740185b21d22ceb83a11c3aa62ad5842ef32c70f6096d756bbee85a1e4ec34b8",
