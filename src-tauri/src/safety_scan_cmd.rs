@@ -1100,6 +1100,7 @@ pub fn content_finding_rank(
     scan_id: Option<i64>,
     severity: Option<u8>,
     include_dismissed: bool,
+    include_low: bool,
     sort_by: String,
     desc: bool,
     group_by_thread: bool,
@@ -1114,6 +1115,7 @@ pub fn content_finding_rank(
     let q = FindingQuery {
         severity,
         include_dismissed,
+        include_low,
         sort: if sort_by == "date" {
             FindingSort::Date
         } else {
@@ -1145,6 +1147,7 @@ pub fn list_content_findings(
     scan_id: Option<i64>,
     severity: Option<u8>,
     include_dismissed: bool,
+    include_low: bool,
     sort_by: String,
     desc: bool,
     group_by_thread: bool,
@@ -1184,6 +1187,7 @@ pub fn list_content_findings(
     let q = FindingQuery {
         severity,
         include_dismissed,
+        include_low,
         sort: if sort_by == "date" {
             FindingSort::Date
         } else {
@@ -1740,6 +1744,7 @@ pub fn count_content_findings(
     scan_id: Option<i64>,
     severity: Option<u8>,
     include_dismissed: bool,
+    include_low: bool,
     exclude_stale: bool,
 ) -> Result<ContentFindingCounts, String> {
     let cache_path = active.path()?;
@@ -1775,6 +1780,7 @@ pub fn count_content_findings(
             &FindingQuery {
                 severity,
                 include_dismissed,
+                include_low,
                 exclude_stale,
                 ..Default::default()
             },
@@ -1840,6 +1846,7 @@ pub fn content_finding_analytics(
     scan_id: Option<i64>,
     severity: Option<u8>,
     include_dismissed: bool,
+    include_low: bool,
     exclude_stale: bool,
 ) -> Result<FindingAnalyticsDto, String> {
     let cache_path = active.path()?;
@@ -1879,6 +1886,7 @@ pub fn content_finding_analytics(
             &FindingQuery {
                 severity,
                 include_dismissed,
+                include_low,
                 exclude_stale,
                 ..Default::default()
             },
