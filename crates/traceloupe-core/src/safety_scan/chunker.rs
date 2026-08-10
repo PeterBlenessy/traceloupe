@@ -134,6 +134,14 @@ pub struct TimeRange {
 /// Which content the scan covers. Everything by default.
 #[derive(Debug, Clone)]
 pub struct ScanSources {
+    /// Scan ONE conversation instead of whole services. When set, `notes` and
+    /// `message_services` are ignored.
+    ///
+    /// A whole-backup scan takes hours and flags a few percent of ordinary
+    /// conversation, which makes "find problems in 100k messages" the wrong
+    /// shape for this feature. Scoped to one conversation a reviewer already
+    /// suspects, both costs collapse: a 500-message thread is ~25 chunks.
+    pub thread: Option<String>,
     pub notes: bool,
     /// Which message services to include: `None` = every service (all message
     /// threads); `Some(list)` = only threads whose service is in `list` (empty
@@ -144,6 +152,7 @@ pub struct ScanSources {
 impl Default for ScanSources {
     fn default() -> Self {
         Self {
+            thread: None,
             notes: true,
             message_services: None,
         }
@@ -153,11 +162,17 @@ impl Default for ScanSources {
 impl ScanSources {
     /// Whether any message threads are in scope.
     pub fn includes_messages(&self) -> bool {
+        if self.thread.is_some() {
+            return true;
+        }
         !matches!(&self.message_services, Some(v) if v.is_empty())
     }
 
     /// Whether a thread with `service` is in scope for this scan.
     fn wants_service(&self, service: Option<&str>) -> bool {
+        if self.thread.is_some() {
+            return true; // the thread filter decides, not the service
+        }
         match &self.message_services {
             None => true, // all services
             Some(list) => service.is_some_and(|s| list.iter().any(|w| w == s)),
@@ -165,9 +180,19 @@ impl ScanSources {
     }
 
     /// The canonical `sources` string stored on the scan row and matched by the
-    /// scope predicates: "all", "messages" (every service, no notes), or a
-    /// comma-joined list of service names plus optionally "notes".
+    /// scope predicates: "all", "messages" (every service, no notes), a
+    /// comma-joined list of service names plus optionally "notes", or
+    /// `thread:<identifier>` for one conversation.
+    ///
+    /// It must round-trip. Findings are matched
+    /// against it, so it must round-trip: a per-conversation scan is
+    /// `thread:<identifier>` and nothing else, which is what lets the scope
+    /// predicate compare `f.thread_identifier` for EQUALITY rather than
+    /// pattern-matching an identifier that may contain SQL wildcards.
     pub fn slug(&self) -> String {
+        if let Some(t) = &self.thread {
+            return format!("thread:{t}");
+        }
         match &self.message_services {
             None if self.notes => "all".to_string(),
             None => "messages".to_string(),
@@ -379,6 +404,12 @@ pub fn chunk_messages(
     let range_params = range.params();
     let mut chunks = Vec::new();
     for (thread_id, identifier, display_name, service) in threads {
+        // One conversation, when the scan asked for one.
+        if let Some(want) = &sources.thread {
+            if &identifier != want {
+                continue;
+            }
+        }
         // Skip threads whose service the scan didn't select.
         if !sources.wants_service(service.as_deref()) {
             continue;
@@ -610,7 +641,9 @@ pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Re
     if sources.includes_messages() {
         chunks.extend(chunk_messages(cache, range, sources)?);
     }
-    if sources.notes {
+    // A conversation scan is messages only — notes belong to no conversation,
+    // and silently folding them in would make the scope a lie.
+    if sources.notes && sources.thread.is_none() {
         chunks.extend(chunk_notes(cache, range)?);
     }
     Ok(chunks)
