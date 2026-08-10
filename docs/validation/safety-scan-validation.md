@@ -124,7 +124,8 @@ on an otherwise idle machine.
 |---|---|---|
 | per chunk (3 runs) | **7.5–8.9s** | **10.3–12.0s** |
 | 100k messages (~5000 chunks) | **~11 hours** | **~15 hours** |
-| findings on 200 generated messages | **6** (every run) | **10** (every run) | <!-- not-a-backup-count -->
+| findings on generated domestic chat | **6** (every run) | **10** (every run) | <!-- not-a-backup-count -->
+| findings on generated work chat | **0** | not measured |
 | chunks failing to classify | 0 of 8 | **1 of 8** (every run) |
 
 No backup is involved: the messages are generated in the test — ordinary
@@ -134,8 +135,10 @@ touching anyone's data.
 
 #### Three things this contradicts
 
-**A scan takes about eleven hours.** Not minutes. Every speed proposal in the
-tracker should be argued against this number.
+**A scan takes hours, not minutes.** Between ~7 and ~12 hours for 100k messages
+depending on machine state and on how much the model flags — see below, per-chunk
+cost tracks generation. Every speed proposal in the tracker should be argued
+against that, not against a guess.
 
 **"E2B is ~2× faster" is backwards.** The model catalog tells users E2B is
 "Smaller and ~2× faster". Measured, it is consistently ~30% *slower* than E4B.
@@ -149,17 +152,46 @@ substantially cheaper. It is slower, it has the recall holes, and it fails to
 produce valid output on one chunk in eight. A two-tier scan currently costs more
 wall clock than E4B alone and finds less.
 
-#### The false-alarm rate is the headline
+#### The false alarms are one category, one severity, one kind of conversation
 
-Six findings across the generated small talk is a **3% false-alarm rate on
-ordinary text**, and E2B's ten is 5%. Extrapolated to a large backup that is
-thousands of findings nobody should have to read. It is deterministic — the same
-count every run — so it is the model's steady behaviour, not variance.
+Counted on two generated corpora of equal size, same model, same run:
 
-It also matches the shape the engine already assumes: `ScanProgress` carries a
-`preexisting` count precisely because a real scan's finding total is large enough
-that a reader cannot tell this run's work from what was already there. A
-few percent of over-flagging is what produces totals of that size.
+| corpus | findings | severity | category |
+|---|---|---|---|
+| colleagues discussing a deploy | **0** | — | — |
+| a couple coordinating an evening | **6** | all severity 1 | all coercive-control | <!-- not-a-backup-count -->
+
+The first framing of this number — "the classifier flags ~3% of ordinary
+conversation" — was wrong, and wrong in a way worth recording: the first corpus
+written happened to be domestic, and reporting it alone turned a property of the
+test text into a claimed property of the model.
+
+What is true is narrower and more serious. The model does not over-flag in
+general; it over-flags **coercive-control on ordinary relationship logistics** —
+"text me if you are late", "do not start without me". Coercive control is the
+category defined by ordinary-looking messages, so this is the classifier failing
+at the hard case rather than failing everywhere.
+
+**Every false alarm is severity 1, and no labelled positive in the fixture set
+expects severity 1** (all 16 expectations are 2 or 3). A severity ≥ 2 floor would
+therefore remove every false alarm measured here at no measured cost to recall —
+but "no positive is severity 1" is a property of how these fixtures were
+labelled, not proof that no real harm warrants severity 1. Widen the fixtures
+before making that floor permanent.
+
+#### Over-flagging is also why it is slow
+
+Per-chunk time tracks how much the model generates, not how much it reads:
+
+| corpus | findings | per chunk |
+|---|---|---|
+| work | 0 | **3.5s** |
+| domestic | 6 | **5.9s** |
+
+Same prompt size either way (~4090 chars). This explains E2B being slower than
+E4B despite being smaller — it flags more, so it writes more — and it means the
+noise problem and the speed problem are partly the same problem. Reducing false
+alarms shortens scans.
 
 #### Read these with the caveats
 

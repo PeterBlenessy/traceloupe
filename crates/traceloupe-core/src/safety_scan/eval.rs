@@ -474,6 +474,40 @@ mod tests {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
 
+        // A SECOND mundane corpus, deliberately unlike the first. The domestic
+        // one below is a couple coordinating an evening, which contains
+        // check-ins ("text me if you are late") that a coercive-control
+        // classifier could reasonably latch onto — so measuring false alarms
+        // only against it risks reporting a property of the fixture as a
+        // property of the model. This one has no relationship in it at all.
+        const WORK_LINES: &[&str] = &[
+            "the deploy finished, staging looks fine",
+            "great, i will run through the smoke tests after lunch",
+            "did the migration script take long in the end",
+            "about forty minutes, mostly the index rebuild",
+            "worth doing it out of hours next time then",
+            "agreed. i will put it in the runbook",
+            "any word from the vendor about the api limits",
+            "they raised it to ten thousand a day, should be plenty",
+            "good. that was the last blocker for the release",
+            "i will draft the notes this afternoon",
+            "send them over and i will review before we publish",
+            "will do. anything you want called out specifically",
+            "the caching change, people have been asking for it",
+            "makes sense. i will lead with that",
+            "thanks. how is the new starter settling in",
+            "well, picked up the codebase faster than i expected",
+            "good to hear. pair them on the next ticket",
+            "planning to. they asked for something backend heavy",
+            "plenty of that around at the moment",
+            "there always is. i will sort it in standup tomorrow",
+            "sounds good. i am off at four today, dentist",
+            "no problem, i will cover the release call",
+            "appreciate it. talk tomorrow",
+            "see you tomorrow",
+            "bye",
+        ];
+
         // Ordinary conversation, deliberately unremarkable: a sweep's cost is
         // paid on chunks that produce nothing, and that is what we are timing.
         const LINES: &[&str] = &[
@@ -530,6 +564,11 @@ mod tests {
         let load_secs = load_started.elapsed().as_secs_f64();
         let client = LlmClient::new(server.base_url(), "bench", Duration::from_secs(300));
 
+        // Which corpus: "work" has no relationship in it, "domestic" does.
+        let corpus: &[&str] = match std::env::var("TRACELOUPE_BENCH_CORPUS").as_deref() {
+            Ok("work") => WORK_LINES,
+            _ => LINES,
+        };
         let chunk_of = |n: usize| Chunk {
             key: format!("bench-{n}"),
             fingerprint: format!("bench-{n}"),
@@ -549,7 +588,7 @@ mod tests {
                     // Vary per chunk so no two prompts are identical — an
                     // identical prompt would be served from the prefix cache
                     // and report a speed no real scan ever sees.
-                    text: format!("{} ({n})", LINES[i % LINES.len()]),
+                    text: format!("{} ({n})", corpus[i % corpus.len()]),
                     fingerprint: format!("bench-{n}-{i}"),
                 })
                 .collect(),
@@ -573,6 +612,11 @@ mod tests {
         // of them is a false alarm, and counting them here measures the thing
         // the user actually complains about, in the most direct form there is.
         let mut findings = 0usize;
+        // Severity and category of every false alarm. If the noise is
+        // concentrated at severity 1, a floor removes it for free; if it is
+        // spread across 2 and 3, only the model or the prompt can.
+        let mut by_severity = [0usize; 4];
+        let mut by_category: std::collections::BTreeMap<&'static str, usize> = Default::default();
         for n in 0..chunks_to_run {
             let chunk = chunk_of(n);
             let user = prompt::render_chunk(&chunk);
@@ -584,7 +628,11 @@ mod tests {
                 1200,
             ) {
                 Ok(out) => {
-                    findings += engine::verdicts_to_findings_for_eval(&chunk, &out).len();
+                    for f in engine::verdicts_to_findings_for_eval(&chunk, &out) {
+                        findings += 1;
+                        by_severity[(f.severity as usize).min(3)] += 1;
+                        *by_category.entry(f.category.as_str()).or_default() += 1;
+                    }
                 }
                 Err(e) => {
                     eprintln!("chunk {n}: {e}");
@@ -613,6 +661,13 @@ mod tests {
             chunks_to_run * WINDOW,
             findings as f64 / chunks_to_run as f64
         );
+        println!(
+            "  by severity     1:{}  2:{}  3:{}",
+            by_severity[1], by_severity[2], by_severity[3]
+        );
+        for (cat, n) in &by_category {
+            println!("  {cat:<24} {n}");
+        }
         // What this means for a real backup, stated so nobody has to redo the
         // arithmetic: stride is WINDOW - OVERLAP.
         for messages in [10_000usize, 100_000] {
