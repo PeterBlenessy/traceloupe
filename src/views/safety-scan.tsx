@@ -9,7 +9,7 @@ import { useNavigate, useSearch} from "@tanstack/react-router";
 import { toast } from "sonner";
 import { usePersistedState } from "@/lib/use-persisted-state";
 import {
-  Square, ChartColumn, ChevronDown, ExternalLink, Filter, EyeOff, FileText, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, TriangleAlert, } from "lucide-react";
+  Square, ChartColumn, ChevronDown, ExternalLink, Filter, EyeOff, FileText, Gauge, HeartPulse, History, LayoutList, Loader2, MessageSquare, MessageSquareWarning, MessagesSquare, NotebookText, Play, Printer, RotateCcw, RotateCw, ShieldCheck, ShieldUser, ShieldQuestion, Trash2, TriangleAlert, } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -156,6 +156,9 @@ export function SafetyScanView() {
   // service present + Notes). null = "all selected" until the user narrows it.
   const [selectedSources, setSelectedSources] = useState<string[] | null>(null);
   const [showDismissed, setShowDismissed] = useState(false);
+  // Severity 1 is where every measured false alarm lives and no measured true
+  // positive does, so it is off by default — see `include_low` in the core.
+  const [showLow, setShowLow] = useState(false);
   // Immediate feedback for Stop: the backend aborts within ~1s, but reflect the
   // click at once. Reset when the scan actually clears.
   const [stopping, setStopping] = useState(false);
@@ -608,6 +611,8 @@ export function SafetyScanView() {
                   scan={selectedScan}
                   counts={findingCounts.data}
                   showDismissed={showDismissed}
+                  showLow={showLow}
+                  setShowLow={setShowLow}
                   setShowDismissed={setShowDismissed}
                   onDismiss={(f, dismissed, reason) =>
                     dismiss.mutate({
@@ -1595,6 +1600,7 @@ function SafetyReportDialog({
     queryFn: () =>
       client.listContentFindings(scan.id, {
         includeDismissed: false,
+        includeLow: false,
         excludeStale: true,
         sortBy: "severity",
         desc: true,
@@ -1614,6 +1620,7 @@ function SafetyReportDialog({
     queryFn: () =>
       client.contentFindingAnalytics(scan.id, {
         includeDismissed: false,
+        includeLow: false,
         excludeStale: true,
       }),
   });
@@ -2257,6 +2264,8 @@ function FindingsList({
   counts,
   showDismissed,
   setShowDismissed,
+  showLow,
+  setShowLow,
   onDismiss,
   onSeen,
   onRule,
@@ -2267,6 +2276,8 @@ function FindingsList({
   counts: ContentFindingCounts | undefined;
   showDismissed: boolean;
   setShowDismissed: (v: boolean) => void;
+  showLow: boolean;
+  setShowLow: (v: boolean) => void;
   onDismiss: (f: ContentFinding, dismissed: boolean, reason?: string) => void;
   onSeen: (f: ContentFinding) => void;
   onRule: (
@@ -2295,11 +2306,12 @@ function FindingsList({
       severity:
         severity === "all" ? undefined : (Number(severity) as 1 | 2 | 3),
       includeDismissed: showDismissed,
+      includeLow: showLow,
       sortBy: sort.by === "date" ? ("date" as const) : ("severity" as const),
       desc: sort.desc,
       groupByThread: grouped,
     }),
-    [severity, showDismissed, sort, grouped],
+    [severity, showDismissed, showLow, sort, grouped],
   );
 
   // Resolve the finding to a row index. Null means the current filter excludes
@@ -2323,6 +2335,9 @@ function FindingsList({
   });
   const total = matching.data?.matching ?? 0;
   const dismissedCount = counts?.dismissed ?? 0;
+  // Severity 1, hidden by the default view — counted so the toggle can say how
+  // many, because a reviewer must be able to see what they are not being shown.
+  const lowCount = counts?.concerning ?? 0;
   // Disabled, not hidden. The rail is master–detail, so controls that vanish and
   // reappear per selection reflow the row under the pointer — and a control that
   // changes between states is worse than one that is merely wrong (#171).
@@ -2435,6 +2450,36 @@ function FindingsList({
                     {showDismissed
                       ? `Hide the ${dismissedCount} dismissed finding${dismissedCount === 1 ? "" : "s"}`
                       : `Show the ${dismissedCount} dismissed finding${dismissedCount === 1 ? "" : "s"} as well`}
+                  </TooltipContent>
+                </Tooltip>
+              </ToggleGroup>
+            )}
+            {/* Low-confidence findings. Severity 1 is where every measured
+                false alarm lives and no measured true positive does, so the
+                default view hides it — but hiding is not deleting, and a
+                reviewer who wants maximum sensitivity gets it back here. Only
+                shown when there ARE some, like the dismissed island. */}
+            {lowCount > 0 && (
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                size="island"
+                value={showLow ? "show" : ""}
+                onValueChange={(v) => setShowLow(v === "show")}
+              >
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <ToggleGroupItem
+                      value="show"
+                      aria-label="Show low-confidence findings"
+                    >
+                      <Gauge className="size-4" />
+                    </ToggleGroupItem>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {showLow
+                      ? `Hide the ${lowCount} low-confidence finding${lowCount === 1 ? "" : "s"} again`
+                      : `Show ${lowCount} more marked “concerning” — the weakest tier, where most false alarms are`}
                   </TooltipContent>
                 </Tooltip>
               </ToggleGroup>

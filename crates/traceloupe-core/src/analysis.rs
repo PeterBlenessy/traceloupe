@@ -38,6 +38,12 @@ const SCHEMA_VERSION: i64 = 13;
 /// panel) and [`AnalysisDb::count_findings_in_scope`] (the live progress
 /// counter) both build on it. Two hand-written copies of this predicate is
 /// exactly how the panel and the progress bar drifted apart (#59).
+/// The severity tier the default view hides. ONE definition: the page query,
+/// its matching count, and the live progress counter must all agree about what
+/// a reviewer will see, and separately-derived predicates are exactly what
+/// drifted in #59.
+const LOW_SEVERITY_EXPR: &str = "f.severity < 2";
+
 /// Whether a finding has been dismissed. Written once: the SELECT, the
 /// "hide dismissed" filter and the counts must agree, and three copies of a
 /// correlated EXISTS is how they would stop agreeing.
@@ -49,6 +55,11 @@ fn filtered_scope(q: &FindingQuery) -> String {
     let mut w = String::from(IN_SCOPE_PREDICATE);
     if !q.include_dismissed {
         w.push_str(&format!(" AND NOT {DISMISSED_EXPR}"));
+    }
+    // An explicit severity filter beats the floor: asking for "concerning"
+    // and getting nothing back would be a UI that argues with itself.
+    if !q.include_low && q.severity.is_none() {
+        w.push_str(&format!(" AND NOT ({LOW_SEVERITY_EXPR})"));
     }
     if q.exclude_stale {
         w.push_str(" AND NOT f.stale");
@@ -107,6 +118,16 @@ pub enum FindingSort {
 pub struct FindingQuery {
     /// Only this severity, or every severity when None.
     pub severity: Option<u8>,
+    /// Show severity-1 ("concerning") findings, which the default view hides.
+    ///
+    /// Measured on both tiers, EVERY false alarm the classifier produced on
+    /// ordinary conversation was severity 1, and no labelled positive in the
+    /// fixture set expects severity 1 — so this tier is where the noise lives
+    /// and none of the signal does
+    /// (docs/validation/safety-scan-validation.md). They are hidden, never
+    /// deleted: a reviewer who wants maximum sensitivity turns them back on,
+    /// and the count is always shown so the choice is visible.
+    pub include_low: bool,
     /// Dismissed findings are hidden unless the panel asks for them.
     pub include_dismissed: bool,
     pub sort: FindingSort,
@@ -123,11 +144,17 @@ pub struct FindingQuery {
 /// What the filter pills display, counted in one query.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FindingCounts {
-    /// Not dismissed — the panel's default view.
+    /// Not dismissed AND at or above the severity floor — exactly the default
+    /// view. These numbers are what the pills promise, so they must not count
+    /// rows the list then refuses to produce; `concerning` below is the
+    /// severity-1 tier the floor hides, and is what the "show them" affordance
+    /// is labelled with.
     pub live: i64,
     /// Not dismissed AND not stale — what the printable report includes, so its
     /// "N more not shown" line can be computed without fetching everything.
     pub live_fresh: i64,
+    /// Dismissed AND at or above the floor — what "Show dismissed" will
+    /// actually produce, for the same reason `live` is floored.
     pub dismissed: i64,
     /// Live, not-stale findings whose flagged text has never been revealed —
     /// the app's unread count. Dismissing implies reading (the control lives
@@ -1336,10 +1363,12 @@ impl AnalysisDb {
     ) -> Result<FindingCounts> {
         let sql = format!(
             "SELECT
-               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR}),
-               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT f.stale),
-               COUNT(*) FILTER (WHERE {DISMISSED_EXPR}),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT ({LOW_SEVERITY_EXPR})),
                COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT f.stale
+                                AND NOT ({LOW_SEVERITY_EXPR})),
+               COUNT(*) FILTER (WHERE {DISMISSED_EXPR} AND NOT ({LOW_SEVERITY_EXPR})),
+               COUNT(*) FILTER (WHERE NOT {DISMISSED_EXPR} AND NOT f.stale
+                                AND NOT ({LOW_SEVERITY_EXPR})
                                 AND NOT EXISTS(SELECT 1 FROM finding_verdicts v
                                                WHERE v.fingerprint = f.fingerprint
                                                  AND v.category = f.category
@@ -1380,9 +1409,13 @@ impl AnalysisDb {
     ) -> Result<usize> {
         Ok(self.conn.query_row(
             &format!(
+                // Same floor as the panel's default view: a live counter that
+                // counted severity-1 findings would promise a number the list
+                // then refuses to show.
                 "SELECT COUNT(*) FROM content_findings f
                  WHERE ({IN_SCOPE_PREDICATE})
                    AND f.stale = 0
+                   AND NOT ({LOW_SEVERITY_EXPR})
                    AND NOT {DISMISSED_EXPR}"
             ),
             params![sources, range_start, range_end],
@@ -1496,6 +1529,9 @@ impl AnalysisDb {
         let dismissed = if q.include_dismissed {
             0
         } else {
+            // Only `include_dismissed` flips — everything else, the severity
+            // floor included, must stay the caller's, or this number describes
+            // a different set of rows than the charts beside it.
             let shown_but_dismissed = FindingQuery {
                 include_dismissed: true,
                 ..q.clone()
@@ -2403,6 +2439,8 @@ mod tests {
         let q = FindingQuery {
             sort: FindingSort::Severity,
             desc: true,
+            // The seed spans every severity; paging must partition all of it.
+            include_low: true,
             ..Default::default()
         };
         let whole: Vec<String> = db
@@ -2427,6 +2465,68 @@ mod tests {
         assert_eq!(unique.len(), 97, "no row appears on two pages");
     }
 
+    /// The severity floor (#445). Measured on both tiers, every false alarm
+    /// the classifier produced on ordinary conversation was severity 1, and no
+    /// labelled positive expects severity 1 — so the default view hides that
+    /// tier. Hidden, never deleted: the count is always available and one flag
+    /// brings them back.
+    #[test]
+    fn the_default_view_hides_severity_one_but_still_counts_it() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let rows: Vec<NewFinding> = (1..=3)
+            .map(|sev| NewFinding {
+                severity: sev,
+                ..finding(&format!("s{sev}"), Category::ScamFraud)
+            })
+            .collect();
+        db.replace_findings(scan, &rows, 100).unwrap();
+
+        let page = |include_low| {
+            db.list_findings_in_scope_page(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    include_low,
+                    ..FindingQuery::default()
+                },
+                0,
+                100,
+            )
+            .unwrap()
+        };
+        let shown: Vec<u8> = page(false).iter().map(|f| f.severity).collect();
+        assert!(!shown.contains(&1), "severity 1 is hidden by default");
+        assert_eq!(shown.len(), 2);
+        assert_eq!(page(true).len(), 3, "and one flag brings it back");
+
+        let c = db.count_findings_breakdown("all", None, None).unwrap();
+        assert_eq!(c.live, 2, "the pill promises only what the list produces");
+        assert_eq!(c.concerning, 1, "but the hidden one is still counted");
+
+        // The live progress counter is a separate query; it must agree, or the
+        // ticker promises findings the panel then refuses to show (#59).
+        assert_eq!(db.count_findings_in_scope("all", None, None).unwrap(), 2);
+
+        // Asking for severity 1 explicitly beats the floor — a filter that
+        // returned nothing would be a UI arguing with itself.
+        let explicit = db
+            .list_findings_in_scope_page(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    severity: Some(1),
+                    ..FindingQuery::default()
+                },
+                0,
+                100,
+            )
+            .unwrap();
+        assert_eq!(explicit.len(), 1);
+    }
+
     #[test]
     fn the_pills_cannot_promise_rows_the_list_will_not_produce() {
         // Counts and rows come from the same predicate. When they were derived
@@ -2438,8 +2538,12 @@ mod tests {
         db.set_dismissed("fp00001", Category::ScamFraud, true, 1)
             .unwrap();
         let counts = db.count_findings_breakdown("all", None, None).unwrap();
-        assert_eq!(counts.dismissed, 2);
-        assert_eq!(counts.live, 58);
+        // One of the two dismissed rows is severity 1, below the floor, so the
+        // pill promises the one the list will actually produce.
+        assert_eq!(counts.dismissed, 1);
+        // `live` is the DEFAULT view, which hides severity 1; the two together
+        // are every undismissed finding in the seed.
+        assert_eq!(counts.live + counts.concerning, 58);
 
         let page = |severity, include_dismissed| {
             db.list_findings_in_scope_page(
@@ -2835,6 +2939,9 @@ mod tests {
                     let q = FindingQuery {
                         severity: None,
                         include_dismissed: true,
+                        // This test is about rank/order, not the default
+                        // view's severity floor — it wants every row.
+                        include_low: true,
                         sort,
                         desc,
                         group_by_thread: group,
@@ -2888,14 +2995,21 @@ mod tests {
             105,
         )
         .unwrap();
+        // The row is severity 1, which the default view hides, so this test
+        // asks for it explicitly before checking how a FILTER affects rank.
+        let seen_all = FindingQuery {
+            include_low: true,
+            ..FindingQuery::default()
+        };
         let id = db
-            .list_findings_in_scope_page("all", None, None, &FindingQuery::default(), 0, 10)
+            .list_findings_in_scope_page("all", None, None, &seen_all, 0, 10)
             .unwrap()[0]
             .id;
 
         // Filtering to a severity it does not have removes it from the order.
         let q = FindingQuery {
             severity: Some(3),
+            include_low: true,
             ..FindingQuery::default()
         };
         assert_eq!(db.finding_rank("all", None, None, &q, id).unwrap(), None);
@@ -3361,7 +3475,12 @@ mod tests {
         // narrative at most 100. A chart built from either would describe a
         // subset while looking like it described the scan.
         let db = seeded_findings(600);
-        let q = FindingQuery::default();
+        // Every severity, so the cap is what limits the page rather than the
+        // default view's floor — capping is what this test is about.
+        let q = FindingQuery {
+            include_low: true,
+            ..FindingQuery::default()
+        };
         let page = db
             .list_findings_in_scope_page("all", None, None, &q, 0, 500)
             .unwrap();
@@ -3553,8 +3672,19 @@ mod tests {
             )
             .unwrap();
 
+        // Every severity band is the point of this assertion, so the chart is
+        // asked for all of them rather than the default view's top two.
         let a = db
-            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
+            .finding_analytics(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    include_low: true,
+                    ..FindingQuery::default()
+                },
+                NOW,
+            )
             .unwrap();
         let cat = &a.by_category[0];
         // c0/c3 are severity 1, c1/c4 severity 2, c2/c5 severity 3 — one
@@ -3606,8 +3736,19 @@ mod tests {
         db.set_dismissed("x0", Category::SelfHarm, true, 2).unwrap();
         db.set_dismissed("x2", Category::SelfHarm, true, 2).unwrap();
 
+        // This case is explicitly about a severity-1 dismissal versus a
+        // severity-3 one, so it asks for every severity.
         let all = db
-            .finding_analytics("all", None, None, &FindingQuery::default(), NOW)
+            .finding_analytics(
+                "all",
+                None,
+                None,
+                &FindingQuery {
+                    include_low: true,
+                    ..FindingQuery::default()
+                },
+                NOW,
+            )
             .unwrap();
         assert_eq!((all.charted, all.dismissed), (4, 2));
 
@@ -3638,6 +3779,9 @@ mod tests {
                 None,
                 &FindingQuery {
                     include_dismissed: true,
+                    // Same "every severity" basis as the `all` case above, so
+                    // the 6 here is the same 6.
+                    include_low: true,
                     ..Default::default()
                 },
                 NOW,
@@ -3694,6 +3838,7 @@ mod tests {
             },
             FindingQuery {
                 include_dismissed: true,
+                include_low: false,
                 ..Default::default()
             },
             FindingQuery {

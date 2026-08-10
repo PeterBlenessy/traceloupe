@@ -828,6 +828,13 @@ export interface ContentFindingPage {
   /** Only this severity, or every severity when undefined. */
   severity?: 1 | 2 | 3;
   includeDismissed: boolean;
+  /** Show severity-1 ("concerning") findings, which the default view hides.
+   *
+   *  Every false alarm the classifier produced on ordinary conversation was
+   *  severity 1, and no labelled positive expects severity 1 — so that tier is
+   *  where the noise lives and none of the signal does. Hidden, never deleted:
+   *  the count is always shown so the choice is visible. */
+  includeLow: boolean;
   sortBy: "severity" | "date";
   desc: boolean;
   /** Order by conversation, so grouped mode can build headings from a window. */
@@ -1517,6 +1524,7 @@ export interface TraceLoupeClient {
     filter?: {
       severity?: 1 | 2 | 3;
       includeDismissed?: boolean;
+      includeLow?: boolean;
       excludeStale?: boolean;
     },
   ): Promise<ContentFindingCounts>;
@@ -1529,6 +1537,7 @@ export interface TraceLoupeClient {
     filter?: {
       severity?: 1 | 2 | 3;
       includeDismissed?: boolean;
+      includeLow?: boolean;
       excludeStale?: boolean;
     },
   ): Promise<FindingAnalytics>;
@@ -1903,6 +1912,7 @@ const tauriClient: TraceLoupeClient = {
       scanId,
       severity: page.severity,
       includeDismissed: page.includeDismissed,
+      includeLow: page.includeLow,
       sortBy: page.sortBy,
       desc: page.desc,
       groupByThread: page.groupByThread,
@@ -2223,6 +2233,7 @@ const tauriClient: TraceLoupeClient = {
       scanId: scanId ?? null,
       severity: page.severity ?? null,
       includeDismissed: page.includeDismissed,
+      includeLow: page.includeLow,
       sortBy: page.sortBy,
       desc: page.desc,
       groupByThread: page.groupByThread,
@@ -2235,6 +2246,7 @@ const tauriClient: TraceLoupeClient = {
       scanId: scanId ?? null,
       severity: filter?.severity ?? null,
       includeDismissed: filter?.includeDismissed ?? false,
+      includeLow: filter?.includeLow ?? false,
       excludeStale: filter?.excludeStale ?? false,
     }),
   contentFindingAnalytics: (scanId, filter) =>
@@ -2242,6 +2254,7 @@ const tauriClient: TraceLoupeClient = {
       scanId: scanId ?? null,
       severity: filter?.severity ?? null,
       includeDismissed: filter?.includeDismissed ?? false,
+      includeLow: filter?.includeLow ?? false,
       excludeStale: filter?.excludeStale ?? false,
     }),
   contentFindingSnippet: (sourceKind, sourceId) =>
@@ -6924,7 +6937,11 @@ const mockClient: TraceLoupeClient = {
     // The mock applies the same filters and order as SQLite, so the browser
     // harness exercises the real paging path rather than a shortcut.
     const all = mockFindingsForScan(scanId);
+    // Mirror the backend's floor, or mock parity stops meaning anything.
     let rows = all.filter((f) => page.includeDismissed || !f.dismissed);
+    if (!page.includeLow && page.severity === undefined) {
+      rows = rows.filter((f) => f.severity >= 2);
+    }
     if (page.excludeStale) rows = rows.filter((f) => !f.stale);
     if (page.severity) rows = rows.filter((f) => f.severity === page.severity);
     const dir = page.desc ? -1 : 1;
