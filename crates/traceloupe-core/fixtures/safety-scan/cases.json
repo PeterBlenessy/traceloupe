@@ -243,6 +243,66 @@
         { "sender": "them", "text": "🔫" }
       ],
       "expect": [{ "category": "threat-violence", "minSeverity": 3 }]
+    },
+    {
+      "id": "sv-threat-explicit",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "tror du att du bara kan ignorera mig" },
+        { "sender": "me", "text": "sluta skicka meddelanden till mig" },
+        { "sender": "them", "text": "jag vet var du bor och jag ska få dig att ångra det här" }
+      ],
+      "expect": [{ "category": "threat-violence", "minSeverity": 3 }]
+    },
+    {
+      "id": "sv-coercive-monitoring",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "du träffar dem inte igen utan att fråga mig först" },
+        { "sender": "them", "text": "skicka din position till mig nu direkt" },
+        { "sender": "me", "text": "jag är ju bara hos min syster" },
+        { "sender": "them", "text": "jag vill ha lösenordet till din telefon, ikväll" }
+      ],
+      "expect": [{ "category": "coercive-control", "minSeverity": 2 }]
+    },
+    {
+      "id": "sv-self-harm-intent",
+      "kind": "positive",
+      "messages": [
+        { "sender": "me", "text": "jag orkar inte längre" },
+        { "sender": "me", "text": "jag vill bara försvinna för alltid, jag har tabletterna redo" }
+      ],
+      "expect": [{ "category": "self-harm", "minSeverity": 3 }]
+    },
+    {
+      "id": "sv-grooming-secrecy",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "hur gammal är du egentligen" },
+        { "sender": "me", "text": "jag fyller fjorton i mars" },
+        { "sender": "them", "text": "det här är vår hemlighet, berätta inte för dina föräldrar" },
+        { "sender": "them", "text": "radera de här meddelandena när du har läst dem" }
+      ],
+      "expect": [{ "category": "grooming-exploitation", "minSeverity": 3 }]
+    },
+    {
+      "id": "sv-neg-song-lyrics",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "den där låten har fastnat i huvudet" },
+        { "sender": "me", "text": "”jag skulle döda för dig, jag skulle dö för dig” haha klassisk rad" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "sv-neg-banter",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "din fullkomliga idiot, du glömde biljetterna igen" },
+        { "sender": "me", "text": "håll tyst, du skulle glömma ditt eget huvud" },
+        { "sender": "them", "text": "haha sant, vi ses klockan åtta" }
+      ],
+      "expect": []
     }
   ]
 }

@@ -193,6 +193,54 @@ E4B despite being smaller — it flags more, so it writes more — and it means 
 noise problem and the speed problem are partly the same problem. Reducing false
 alarms shortens scans.
 
+### Languages
+
+Until 2026-08-10 every fixture was English, so every number above described
+English performance only. That was a gap in the validation, not a footnote — a
+backup is written in whoever's language.
+
+Six Swedish cases were added as **matched translations** of existing English
+ones, so any difference is the language rather than the content. E4B, same run:
+
+| | result |
+|---|---|
+| `sv-threat-explicit` | detected |
+| `sv-coercive-monitoring` | detected |
+| `sv-self-harm-intent` | detected |
+| `sv-grooming-secrecy` | detected |
+| `sv-neg-song-lyrics` | **false alarm** |
+| `sv-neg-banter` | **false alarm** |
+
+**Detection survives translation.** All four Swedish positives were caught,
+including the two categories that depend on reading intent rather than
+vocabulary (coercive control, grooming). Whatever is wrong with this classifier,
+it is not that it only understands English.
+
+**So does the over-flagging.** Both Swedish hard negatives were flagged, the same
+two kinds that fail in English — quoted lyrics and affectionate insults. Two
+cases is far too few to claim Swedish is *worse*, but there is no sign of it
+being better, and the defect is clearly not language-specific.
+
+Adding them moved the overall hard-negative clean rate from 0.60 to **0.50**,
+which is the honest number now that the fixture set is not monolingual.
+
+### Configuration ruled out
+
+Two hypotheses about the classifier being misconfigured were tested and both are
+dead:
+
+- **The system prompt does reach the model.** A probe with a system message
+  ("every reply must begin with ARRR") came back in character, so llama-server
+  applies Gemma's template correctly even though that template has no native
+  system role.
+- **`--jinja` changes nothing.** Running the whole eval with the GGUF's own Jinja
+  template rather than llama.cpp's built-in one produced **byte-identical**
+  results — every cell, every false alarm. Not worth passing.
+
+Temperature is already 0 (`client.rs`), which is why every run is reproducible.
+The over-flagging is the model's behaviour under correct configuration, not a
+setup mistake.
+
 #### Read these with the caveats
 
 - **Small fixture set.** 15 positives across 9 categories, so most categories
