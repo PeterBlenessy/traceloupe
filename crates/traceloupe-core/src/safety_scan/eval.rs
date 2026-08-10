@@ -180,23 +180,37 @@ mod tests {
     #[test]
     fn fixtures_parse_and_are_substantial() {
         let f = load_fixtures();
-        assert!(f.cases.len() >= 15, "want a meaningful fixture set");
+        assert!(f.cases.len() >= 60, "want a meaningful fixture set");
         let positives = f.cases.iter().filter(|c| c.kind == "positive").count();
         let negatives = f.cases.iter().filter(|c| c.kind == "negative").count();
         assert!(positives >= 10, "want >=10 positive cases");
-        assert!(negatives >= 5, "want >=5 hard negatives");
+        // Hard negatives are what the classifier actually fails, so they are
+        // not a token few: they carry the clean rate the release gate turns on.
+        assert!(negatives >= 20, "want >=20 hard negatives");
     }
 
+    /// Not "at least one" — at least [`MIN_PER_CATEGORY`]. With one example a
+    /// category's precision and recall can only be 0.00 or 1.00, so a single
+    /// case swings the whole cell and the table reads far more precisely than
+    /// it measures. That is how "harassment recall is 0.00" got reported before
+    /// anyone could tell a model property from one unlucky sentence.
     #[test]
-    fn every_category_has_at_least_one_positive() {
+    fn every_category_has_enough_positives_to_mean_something() {
+        const MIN_PER_CATEGORY: usize = 5;
         let f = load_fixtures();
-        let covered: BTreeSet<Category> = f
-            .cases
-            .iter()
-            .flat_map(|c| c.expected_categories())
-            .collect();
+        let mut per: BTreeMap<Category, usize> = BTreeMap::new();
+        for c in &f.cases {
+            for cat in c.expected_categories() {
+                *per.entry(cat).or_default() += 1;
+            }
+        }
         for cat in Category::ALL {
-            assert!(covered.contains(&cat), "no fixture covers {}", cat.as_str());
+            let n = per.get(&cat).copied().unwrap_or(0);
+            assert!(
+                n >= MIN_PER_CATEGORY,
+                "{} has {n} positives, want at least {MIN_PER_CATEGORY}",
+                cat.as_str()
+            );
         }
     }
 

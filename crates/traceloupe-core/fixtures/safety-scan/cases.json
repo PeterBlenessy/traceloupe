@@ -303,6 +303,388 @@
         { "sender": "them", "text": "haha sant, vi ses klockan åtta" }
       ],
       "expect": []
+    },
+    {
+      "id": "harass-pile-on",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "everyone in the group thinks youre a joke by the way" },
+        { "sender": "them", "text": "we made a whole album of your photos, want to see" },
+        { "sender": "me", "text": "why are you doing this" },
+        { "sender": "them", "text": "because watching you cry is the funniest thing all week" }
+      ],
+      "expect": [{ "category": "harassment-bullying", "minSeverity": 2 }]
+    },
+    {
+      "id": "harass-appearance",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "did you look in a mirror before you left the house" },
+        { "sender": "them", "text": "genuinely asking, does your family not tell you" },
+        { "sender": "me", "text": "that is really unkind" },
+        { "sender": "them", "text": "unkind would be saying it to your face, this is a favour" }
+      ],
+      "expect": [{ "category": "harassment-bullying", "minSeverity": 2 }]
+    },
+    {
+      "id": "harass-workplace",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "you got that job because they needed a diversity hire" },
+        { "sender": "them", "text": "everyone in the office says it, i am just the honest one" },
+        { "sender": "me", "text": "please stop messaging me about work" },
+        { "sender": "them", "text": "i will message you whenever i feel like it" }
+      ],
+      "expect": [{ "category": "harassment-bullying", "minSeverity": 2 }]
+    },
+    {
+      "id": "harass-after-block",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "blocked me on one number so here is another" },
+        { "sender": "them", "text": "you cannot actually get away from me, i hope you understand that" },
+        { "sender": "them", "text": "i will make a new one every time" }
+      ],
+      "expect": [{ "category": "harassment-bullying", "minSeverity": 3 }]
+    },
+    {
+      "id": "hate-religion",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "they should not be allowed to build those places here" },
+        { "sender": "them", "text": "every single one of them thinks the same way, they are not like us" },
+        { "sender": "me", "text": "you are talking about my neighbours" }
+      ],
+      "expect": [{ "category": "hate-identity", "minSeverity": 2 }]
+    },
+    {
+      "id": "hate-disability",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "why do they even keep people like that alive" },
+        { "sender": "them", "text": "it is a waste of a bed and everyone knows it" }
+      ],
+      "expect": [{ "category": "hate-identity", "minSeverity": 2 }]
+    },
+    {
+      "id": "hate-orientation",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "saw you two holding hands in town" },
+        { "sender": "them", "text": "people like you get what is coming, this is not that kind of place" }
+      ],
+      "expect": [{ "category": "hate-identity", "minSeverity": 3 }]
+    },
+    {
+      "id": "hate-nationality",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "the whole lot of them should be put on a boat" },
+        { "sender": "them", "text": "they come here and take everything, they are animals" }
+      ],
+      "expect": [{ "category": "hate-identity", "minSeverity": 2 }]
+    },
+    {
+      "id": "sexual-persistent-request",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "send me one, nobody will see it" },
+        { "sender": "me", "text": "i said no already" },
+        { "sender": "them", "text": "you sent one to him though didnt you" },
+        { "sender": "them", "text": "just one and i will stop asking" }
+      ],
+      "expect": [{ "category": "sexual-content", "minSeverity": 2 }]
+    },
+    {
+      "id": "sexual-explicit-describe",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "tell me exactly what you would do to me" },
+        { "sender": "me", "text": "i am at work" },
+        { "sender": "them", "text": "so type it quietly" }
+      ],
+      "expect": [{ "category": "sexual-content", "minSeverity": 2 }]
+    },
+    {
+      "id": "sexual-unwanted-image",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "did you get the photo" },
+        { "sender": "me", "text": "i did not ask for that, do not send those" },
+        { "sender": "them", "text": "you liked it though, admit it" }
+      ],
+      "expect": [{ "category": "sexual-content", "minSeverity": 2 }]
+    },
+    {
+      "id": "sexual-workplace",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "you should wear that dress to the office more often" },
+        { "sender": "them", "text": "half the floor was staring, i had to look away myself" },
+        { "sender": "me", "text": "that is not appropriate from a manager" }
+      ],
+      "expect": [{ "category": "sexual-content", "minSeverity": 2 }]
+    },
+    {
+      "id": "drugs-supply-ask",
+      "kind": "positive",
+      "messages": [
+        { "sender": "me", "text": "can you sort me out for the weekend" },
+        { "sender": "them", "text": "how much do you want, i can do a half or a full" },
+        { "sender": "me", "text": "full, same as last time" }
+      ],
+      "expect": [{ "category": "drugs-illegal", "minSeverity": 2 }]
+    },
+    {
+      "id": "drugs-dealing-arrange",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "got the new batch in, much stronger than the last" },
+        { "sender": "them", "text": "50 a gram, cash only, do not text this to anyone" },
+        { "sender": "me", "text": "put two aside for me" }
+      ],
+      "expect": [{ "category": "drugs-illegal", "minSeverity": 2 }]
+    },
+    {
+      "id": "drugs-to-minor",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "dont tell your mum but i can get you something for the party" },
+        { "sender": "them", "text": "youre nearly fifteen, thats old enough" }
+      ],
+      "expect": [{ "category": "drugs-illegal", "minSeverity": 3 }]
+    },
+    {
+      "id": "drugs-prescription-resale",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "i have spare oxy from my back surgery" },
+        { "sender": "them", "text": "20 each if you want them, no questions" }
+      ],
+      "expect": [{ "category": "drugs-illegal", "minSeverity": 2 }]
+    },
+    {
+      "id": "scam-authority",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "this is the tax office, there is a warrant out in your name" },
+        { "sender": "them", "text": "it can be settled today if you pay by gift card" },
+        { "sender": "me", "text": "that does not sound right" },
+        { "sender": "them", "text": "if you hang up the police will attend within the hour" }
+      ],
+      "expect": [{ "category": "scam-fraud", "minSeverity": 2 }]
+    },
+    {
+      "id": "scam-delivery",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "your parcel could not be delivered, small fee outstanding" },
+        { "sender": "them", "text": "confirm your card details at this link to release it" }
+      ],
+      "expect": [{ "category": "scam-fraud", "minSeverity": 2 }]
+    },
+    {
+      "id": "scam-invoice",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "our bank details have changed, please use the account below" },
+        { "sender": "them", "text": "send the payment today, the old account is closed" }
+      ],
+      "expect": [{ "category": "scam-fraud", "minSeverity": 2 }]
+    },
+    {
+      "id": "coercive-isolation",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "why did it take you an hour to reply" },
+        { "sender": "me", "text": "i was having lunch with anna" },
+        { "sender": "them", "text": "you see her more than me, i do not think you should go again" },
+        { "sender": "them", "text": "i am not telling you what to do, i am saying what will happen if you do" }
+      ],
+      "expect": [{ "category": "coercive-control", "minSeverity": 2 }]
+    },
+    {
+      "id": "coercive-appearance",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "change before you go out, i do not want you wearing that" },
+        { "sender": "me", "text": "it is just dinner with work" },
+        { "sender": "them", "text": "then you do not need to look like that for it" }
+      ],
+      "expect": [{ "category": "coercive-control", "minSeverity": 2 }]
+    },
+    {
+      "id": "grooming-gifts",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "bought you the headphones you wanted" },
+        { "sender": "me", "text": "my mum will ask where they came from" },
+        { "sender": "them", "text": "say you saved up, it can be just ours" },
+        { "sender": "them", "text": "i like that we have things nobody else knows about" }
+      ],
+      "expect": [{ "category": "grooming-exploitation", "minSeverity": 3 }]
+    },
+    {
+      "id": "grooming-isolate-minor",
+      "kind": "positive",
+      "messages": [
+        { "sender": "them", "text": "your parents would never understand what we have" },
+        { "sender": "me", "text": "im 13" },
+        { "sender": "them", "text": "age is just a number, youre more grown up than they realise" },
+        { "sender": "them", "text": "meet me saturday, dont tell anyone where youre going" }
+      ],
+      "expect": [{ "category": "grooming-exploitation", "minSeverity": 3 }]
+    },
+    {
+      "id": "self-harm-plan",
+      "kind": "positive",
+      "messages": [
+        { "sender": "me", "text": "i have written the letters already" },
+        { "sender": "me", "text": "saturday when the house is empty, it is decided" }
+      ],
+      "expect": [{ "category": "self-harm", "minSeverity": 3 }]
+    },
+    {
+      "id": "self-harm-cutting",
+      "kind": "positive",
+      "messages": [
+        { "sender": "me", "text": "i did it again last night, worse this time" },
+        { "sender": "me", "text": "do not tell anyone, i just needed to feel something" }
+      ],
+      "expect": [{ "category": "self-harm", "minSeverity": 2 }]
+    },
+    {
+      "id": "neg-parent-curfew",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "be home by eleven please, and text me when you leave" },
+        { "sender": "me", "text": "everyone else stays out later" },
+        { "sender": "them", "text": "you can stay later when youre sixteen, thats the rule" },
+        { "sender": "me", "text": "fine, ill text you" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-couple-checkin",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "landed safely, taxi to the hotel now" },
+        { "sender": "them", "text": "thanks for letting me know, i worry when you fly" },
+        { "sender": "me", "text": "i know you do, ill send my location when i get there" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-jealousy-resolved",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "ill be honest, i felt weird when you mentioned him" },
+        { "sender": "me", "text": "hes a colleague, nothing else" },
+        { "sender": "them", "text": "i know, thats my thing to deal with, not yours" },
+        { "sender": "me", "text": "thanks for saying it out loud instead of sulking" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-recovery-support",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "two weeks clean today" },
+        { "sender": "me", "text": "thats huge, im proud of you" },
+        { "sender": "them", "text": "the urge was bad on tuesday but i called the line instead" },
+        { "sender": "me", "text": "thats exactly what you should have done" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-victim-account",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "he used to say hed find me wherever i went" },
+        { "sender": "them", "text": "that must have been terrifying" },
+        { "sender": "me", "text": "the restraining order helped, i can breathe now" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-true-crime",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "finished that documentary about the case" },
+        { "sender": "them", "text": "the bit where he threatened the witness was chilling" },
+        { "sender": "me", "text": "twenty years for what he did, feels light" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-fiction-draft",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "draft of chapter nine, the villains speech" },
+        { "sender": "me", "text": "\"i know where your family sleeps\" — too much?" },
+        { "sender": "them", "text": "no thats the point of him, keep it" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-sports-trash",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "were going to absolutely destroy you on saturday" },
+        { "sender": "me", "text": "you said that last year and lost 4-0" },
+        { "sender": "them", "text": "ill buy the beers if we lose again" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-doctor-meds",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "the consultant doubled the dose to 40mg" },
+        { "sender": "them", "text": "any side effects yet" },
+        { "sender": "me", "text": "tired mostly, blood test again in a month" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-slang-praise",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "that new track is absolutely sick" },
+        { "sender": "me", "text": "the drop is insane, killed me" },
+        { "sender": "them", "text": "on repeat all week" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "neg-security-advice",
+      "kind": "negative",
+      "messages": [
+        { "sender": "me", "text": "the bank called about a suspicious transfer" },
+        { "sender": "them", "text": "never give card details over the phone, call the number on the card" },
+        { "sender": "me", "text": "thats what i did, it was a scam attempt" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "sv-neg-parent-curfew",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "hemma senast elva, och skicka ett meddelande när du går" },
+        { "sender": "me", "text": "alla andra får vara ute längre" },
+        { "sender": "them", "text": "du får stanna längre när du fyller sexton, det är regeln" }
+      ],
+      "expect": []
+    },
+    {
+      "id": "sv-neg-recovery-support",
+      "kind": "negative",
+      "messages": [
+        { "sender": "them", "text": "två veckor nu" },
+        { "sender": "me", "text": "vad stolt jag är över dig" },
+        { "sender": "them", "text": "det var jobbigt i tisdags men jag ringde stödlinjen istället" }
+      ],
+      "expect": []
     }
   ]
 }

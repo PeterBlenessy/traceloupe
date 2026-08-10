@@ -56,8 +56,14 @@ Before shipping a prompt or model change:
 ### Baselines
 
 Recorded on **2026-08-10**, Apple M3 / 24 GB / macOS 26.5.2, llama.cpp `b10075`,
-Q4_K_M weights, one run per tier. This is the first time either tier has been
-measured; every earlier claim about classification quality was an assumption.
+Q4_K_M weights. This is the first time either tier has been measured; every
+earlier claim about classification quality was an assumption.
+
+> **The tables below are from the 31-case fixture set.** They are kept because
+> they are what the shipped decisions were made on, but they are superseded by
+> the 69-case numbers further down: with 1–3 examples per category, a cell could
+> only ever read 0.00, 0.50 or 1.00, and the hard negatives were too few to
+> contain the cases the classifier actually fails.
 
 **Gemma 4 E4B**
 
@@ -111,6 +117,53 @@ precision. Measured, the tiers have the opposite strengths:
 
 On a two-tier machine this predicts near-zero harassment findings, which no
 amount of re-checking can recover.
+
+### Baseline on the widened fixture set
+
+The set was rebuilt to **69 cases — 5 positives per category and 25 hard
+negatives** — because four categories previously rested on a single example.
+E4B, same machine and date:
+
+| category | precision | recall |
+|---|---|---|
+| threat-violence | 0.44 | 0.80 |
+| harassment-bullying | 0.44 | 0.80 |
+| sexual-content | 0.80 | 0.80 |
+| grooming-exploitation | 1.00 | 0.80 |
+| self-harm | 0.71 | 1.00 |
+| hate-identity | 1.00 | 1.00 |
+| coercive-control | 0.42 | 1.00 |
+| scam-fraud | 0.83 | 1.00 |
+| drugs-illegal | 1.00 | 1.00 |
+
+Hard-negative clean rate **0.40** — 15 false alarms of 25.
+
+#### The wider set is worse, and that is the point
+
+The clean rate did not fall because the model changed. It fell because the
+fixture set finally contains the cases it fails. Every one of these near-miss
+negatives was written from the category definitions, not from observed failures,
+and every one was flagged:
+
+| flagged | what it actually is |
+|---|---|
+| `neg-parent-curfew` | a parent asking a child home by eleven |
+| `neg-couple-checkin` | someone texting that they landed safely |
+| `neg-jealousy-resolved` | a partner naming their own jealousy and owning it |
+| `neg-victim-account` | a survivor describing what was done to them |
+| `neg-fiction-draft` | a novelist quoting their villain |
+| `neg-sports-trash` | "we're going to destroy you on Saturday" |
+| `neg-security-advice` | someone explaining how to avoid a scam |
+
+The pattern is consistent: the classifier reads **the words of harm** rather than
+**the situation of harm**. A parent's curfew and a controlling partner's curfew
+use the same sentence; recounting abuse and committing it quote the same threat.
+Recall is largely intact (0.80–1.00 across categories), so the model is not
+blind — it is indiscriminate.
+
+Precision is worst exactly where the categories are defined by relationship
+rather than vocabulary: coercive-control 0.42, threat-violence 0.44,
+harassment-bullying 0.44.
 
 ### Throughput
 
