@@ -55,11 +55,131 @@ Before shipping a prompt or model change:
 
 ### Baselines
 
-_(fill in as runs happen — commit the table with the prompt/model change)_
+Recorded on **2026-08-10**, Apple M3 / 24 GB / macOS 26.5.2, llama.cpp `b10075`,
+Q4_K_M weights, one run per tier. This is the first time either tier has been
+measured; every earlier claim about classification quality was an assumption.
 
-| date | model | notes |
-|------|-------|-------|
-| —    | —     | not yet run on real hardware |
+**Gemma 4 E4B**
+
+| category | precision | recall | f1 |
+|---|---|---|---|
+| threat-violence | 0.60 | 0.75 | 0.67 |
+| harassment-bullying | 0.50 | 1.00 | 0.67 |
+| sexual-content | 0.50 | 1.00 | 0.67 |
+| grooming-exploitation | 1.00 | 0.50 | 0.67 |
+| self-harm | 0.67 | 1.00 | 0.80 |
+| hate-identity | 1.00 | 1.00 | 1.00 |
+| coercive-control | 1.00 | 1.00 | 1.00 |
+| scam-fraud | 1.00 | 1.00 | 1.00 |
+| drugs-illegal | 1.00 | 1.00 | 1.00 |
+
+Hard-negative clean rate **0.60** — 4 false alarms of 10: `neg-song-lyrics`,
+`neg-quoted-abuse`, `neg-banter`, `neg-clinical`.
+
+**Gemma 4 E2B**
+
+| category | precision | recall | f1 |
+|---|---|---|---|
+| threat-violence | 0.60 | 0.75 | 0.67 |
+| harassment-bullying | 0.00 | 0.00 | 0.00 |
+| sexual-content | 1.00 | 1.00 | 1.00 |
+| grooming-exploitation | 1.00 | 0.50 | 0.67 |
+| self-harm | 1.00 | 1.00 | 1.00 |
+| hate-identity | 1.00 | 1.00 | 1.00 |
+| coercive-control | 0.50 | 0.50 | 0.50 |
+| scam-fraud | 1.00 | 0.50 | 0.67 |
+| drugs-illegal | 1.00 | 1.00 | 1.00 |
+
+Hard-negative clean rate **0.90** — 1 false alarm of 10: `neg-banter`.
+
+#### What these numbers say
+
+**The release gate does not currently pass.** The checklist below requires a
+hard-negative clean rate ≥ 0.9. E4B scores 0.60, and every one of its false
+alarms is a case the system prompt explicitly warns about — lyrics, quoted
+abuse, banter, clinical discussion. The prompt names them and the model flags
+them anyway.
+
+**The cascade may have its tiers the wrong way round.** The sweep tier's job is
+recall, because anything it misses is never re-checked; the strong tier supplies
+precision. Measured, the tiers have the opposite strengths:
+
+- E2B (the sweep) has recall holes — **0.00 on harassment-bullying**, 0.50 on
+  coercive-control, scam-fraud and grooming-exploitation. A harassment finding
+  that E2B never flags is one E4B never sees.
+- E4B (the re-check) has the precision problem, not E2B.
+
+On a two-tier machine this predicts near-zero harassment findings, which no
+amount of re-checking can recover.
+
+### Throughput
+
+`measure_scan_throughput` (same file, also `#[ignore]`) times FULL-SIZE chunks —
+25 messages, the real `WINDOW` — through the production client, prompt and
+grammar. The eval above uses 2–4 message cases, so its timings say nothing about
+a scan. Three runs per tier, `parallel=1`, 8 chunks after one uncounted warm-up,
+on an otherwise idle machine.
+
+| | E4B | E2B |
+|---|---|---|
+| per chunk (3 runs) | **7.5–8.9s** | **10.3–12.0s** |
+| 100k messages (~5000 chunks) | **~11 hours** | **~15 hours** |
+| findings on 200 generated messages | **6** (every run) | **10** (every run) | <!-- not-a-backup-count -->
+| chunks failing to classify | 0 of 8 | **1 of 8** (every run) |
+
+No backup is involved: the messages are generated in the test — ordinary
+conversation about dinner, traffic and wine. A scan's cost is prefill over chunk
+text of a given size, and synthetic text of that size measures it without
+touching anyone's data.
+
+#### Three things this contradicts
+
+**A scan takes about eleven hours.** Not minutes. Every speed proposal in the
+tracker should be argued against this number.
+
+**"E2B is ~2× faster" is backwards.** The model catalog tells users E2B is
+"Smaller and ~2× faster". Measured, it is consistently ~30% *slower* than E4B.
+E2B is a nested sub-model of E4B rather than an independent smaller one, and
+per-chunk time is dominated by how much the model generates, not by parameter
+count — E2B flags more, so it writes more.
+
+**The cascade's premise does not hold.** Sweeping with E2B and re-checking with
+E4B is only worth its second model load and second pass if the sweep is
+substantially cheaper. It is slower, it has the recall holes, and it fails to
+produce valid output on one chunk in eight. A two-tier scan currently costs more
+wall clock than E4B alone and finds less.
+
+#### The false-alarm rate is the headline
+
+Six findings across the generated small talk is a **3% false-alarm rate on
+ordinary text**, and E2B's ten is 5%. Extrapolated to a large backup that is
+thousands of findings nobody should have to read. It is deterministic — the same
+count every run — so it is the model's steady behaviour, not variance.
+
+It also matches the shape the engine already assumes: `ScanProgress` carries a
+`preexisting` count precisely because a real scan's finding total is large enough
+that a reader cannot tell this run's work from what was already there. A
+few percent of over-flagging is what produces totals of that size.
+
+#### Read these with the caveats
+
+- **Small fixture set.** 15 positives across 9 categories, so most categories
+  rest on one or two cases; 0.00 can mean "missed the only case". Directional,
+  not precise.
+- **The clean rate is flattered.** Three of the ten hard negatives are the emoji
+  cases, which are unflaggable by construction (`is_contentless` refuses them
+  before any verdict). On the seven *semantic* negatives the real rates are
+  E4B 3/7 ≈ 0.43 and E2B 6/7 ≈ 0.86.
+- **Three runs per tier, and the pipeline is deterministic** — every eval cell,
+  every false alarm and every mundane-text finding count was identical across
+  runs. That rules out sampling variance. It does NOT add statistical power over
+  the fixture distribution: repeating a deterministic pipeline three times tells
+  you the same thing three times. Widening the fixture set is what would.
+- **Throughput is 8 chunks on one M3.** The ~11-hour figure and the E4B/E2B
+  ordering both held across three runs, but a different machine or a longer run
+  could move them. An earlier set of timings was discarded entirely because a
+  second benchmark was running concurrently — model load went 15.7s → 50.9s and
+  per-chunk doubled. Run these alone.
 
 ## Public datasets
 
