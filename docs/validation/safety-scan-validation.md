@@ -165,6 +165,36 @@ Precision is worst exactly where the categories are defined by relationship
 rather than vocabulary: coercive-control 0.42, threat-violence 0.44,
 harassment-bullying 0.44.
 
+### Prompt work: measured, and it is not the fix
+
+The classifier reads the words of harm rather than the situation of harm, so the
+prompt was rewritten to attack exactly that: every category gained an explicit
+`NOT:` clause naming the confusions measured above, and a standing rule to ask
+who is speaking to whom before flagging.
+
+| | before | after |
+|---|---|---|
+| hard-negative clean rate | 0.40 | **0.44** |
+| threat-violence precision | 0.44 | 0.50 |
+| harassment-bullying precision | 0.44 | 0.57 |
+| sexual-content precision | 0.80 | 1.00 |
+| grooming-exploitation recall | 0.80 | 1.00 |
+
+Strictly better — no category lost recall — and nowhere near enough. The release
+gate wants 0.9.
+
+**The decisive part is what did not change.** The prompt now says, in the
+coercive-control definition itself, that a parent setting a curfew is NOT
+coercive control. The model still flags `neg-parent-curfew`. It still flags
+`neg-victim-account`, `neg-fiction-draft` and `neg-quoted-abuse`, each of which
+is named as an exclusion in its own category.
+
+Telling this model what not to flag does not stop it flagging that thing. Prompt
+engineering has now been tried at the strongest form available — per-category
+exclusions plus a situational rule — and it moved the clean rate by one case out
+of twenty-five. Further prompt iteration is not where the remaining precision
+is.
+
 ### Throughput
 
 `measure_scan_throughput` (same file, also `#[ignore]`) times FULL-SIZE chunks —
