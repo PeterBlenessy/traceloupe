@@ -302,11 +302,18 @@ const DISMISSED_EXPR: &str = "EXISTS(SELECT 1 FROM finding_verdicts v
                 WHERE v.fingerprint = f.fingerprint AND v.category = f.category
                   AND v.verdict = 'dismissed')";
 
-const IN_SCOPE_PREDICATE: &str = "(?1 = 'all'
+const IN_SCOPE_PREDICATE: &str = "(
+     -- One conversation. EQUALITY, not LIKE: a thread identifier is a phone
+     -- number or an email and may contain SQL wildcards ('_' in an address
+     -- matches any character), so pattern-matching it would silently pull in
+     -- other people's conversations.
+     (?1 LIKE 'thread:%' AND f.source_kind = 'message'
+      AND f.thread_identifier = substr(?1, 8))
+     OR (?1 NOT LIKE 'thread:%' AND (?1 = 'all'
      OR ((',' || ?1 || ',') LIKE '%,notes,%' AND f.source_kind = 'note')
      OR ((',' || ?1 || ',') LIKE '%,messages,%' AND f.source_kind = 'message')
      OR (f.source_kind = 'message' AND f.service IS NOT NULL
-         AND (',' || ?1 || ',') LIKE ('%,' || f.service || ',%')))
+         AND (',' || ?1 || ',') LIKE ('%,' || f.service || ',%')))))
  AND (?2 IS NULL OR f.occurred_at IS NULL OR f.occurred_at >= ?2)
  AND (?3 IS NULL OR f.occurred_at IS NULL OR f.occurred_at <= ?3)";
 
@@ -2463,6 +2470,121 @@ mod tests {
         assert_eq!(paged, whole, "pages must reproduce the full order exactly");
         let unique: std::collections::HashSet<_> = paged.iter().collect();
         assert_eq!(unique.len(), 97, "no row appears on two pages");
+    }
+
+    /// A conversation-scoped scan owns ONLY its conversation's findings.
+    ///
+    /// The panel, the pills, the charts and the live counter all resolve a
+    /// scan's scope from its `sources` string, so if that string matched more
+    /// than the scan covered, a scan of one thread would report other people's
+    /// findings as its own.
+    #[test]
+    fn a_conversation_scope_matches_only_that_conversation() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db
+            .begin_scan("m", (None, None), "thread:+15550001", 1)
+            .unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                NewFinding {
+                    thread_identifier: Some("+15550001".into()),
+                    service: Some("iMessage".into()),
+                    ..finding("mine", Category::ScamFraud)
+                },
+                NewFinding {
+                    thread_identifier: Some("+15550002".into()),
+                    service: Some("iMessage".into()),
+                    ..finding("theirs", Category::ScamFraud)
+                },
+            ],
+            100,
+        )
+        .unwrap();
+
+        let rows = db
+            .list_findings_in_scope("thread:+15550001", None, None)
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].fingerprint, "mine");
+        assert_eq!(
+            db.count_findings_in_scope("thread:+15550001", None, None)
+                .unwrap(),
+            1,
+            "the live counter agrees with the list"
+        );
+        // And a whole-backup scope still sees both.
+        assert_eq!(
+            db.list_findings_in_scope("all", None, None).unwrap().len(),
+            2
+        );
+    }
+
+    /// A thread identifier is a phone number or an email, and an email may
+    /// contain `_`, which LIKE treats as "any character". Matching the scope by
+    /// pattern would quietly pull in a different person's conversation.
+    #[test]
+    fn a_thread_scope_does_not_wildcard_match_a_similar_identifier() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db
+            .begin_scan("m", (None, None), "thread:a_b@x.com", 1)
+            .unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                NewFinding {
+                    thread_identifier: Some("a_b@x.com".into()),
+                    ..finding("exact", Category::ScamFraud)
+                },
+                NewFinding {
+                    thread_identifier: Some("aXb@x.com".into()),
+                    ..finding("wildcard-victim", Category::ScamFraud)
+                },
+            ],
+            100,
+        )
+        .unwrap();
+        let rows = db
+            .list_findings_in_scope("thread:a_b@x.com", None, None)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "only the exact identifier");
+        assert_eq!(rows[0].fingerprint, "exact");
+    }
+
+    /// The `NOT LIKE 'thread:%'` guard on the other arms is load-bearing, not
+    /// belt-and-braces: an identifier containing a comma makes the wrapped slug
+    /// contain `,notes,`, and without the guard a conversation scan would adopt
+    /// every note in the backup. TikTok identifiers already carry colons, so
+    /// "identifiers are simple" is not a safe assumption.
+    #[test]
+    fn a_conversation_scope_never_adopts_notes_via_its_identifier() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let odd = "a,notes,b";
+        let scan = db
+            .begin_scan("m", (None, None), &format!("thread:{odd}"), 1)
+            .unwrap();
+        db.replace_findings(
+            scan,
+            &[
+                NewFinding {
+                    source_kind: SourceKind::Note,
+                    thread_identifier: None,
+                    service: None,
+                    ..finding("a-note", Category::SelfHarm)
+                },
+                NewFinding {
+                    thread_identifier: Some(odd.into()),
+                    ..finding("the-thread", Category::ScamFraud)
+                },
+            ],
+            100,
+        )
+        .unwrap();
+        let rows = db
+            .list_findings_in_scope(&format!("thread:{odd}"), None, None)
+            .unwrap();
+        assert_eq!(rows.len(), 1, "the note is not part of a conversation");
+        assert_eq!(rows[0].fingerprint, "the-thread");
     }
 
     /// The severity floor (#445). Measured on both tiers, every false alarm

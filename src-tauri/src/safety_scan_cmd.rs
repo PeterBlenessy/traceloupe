@@ -515,11 +515,21 @@ pub async fn run_safety_scan(
     // "notes" — the multi-select Content filter.
     let scan_sources = match sources.as_deref() {
         None | Some("all") | Some("") => ScanSources::default(),
+        // One conversation. Everything after the prefix is the thread
+        // identifier verbatim — it may contain colons (TikTok) or commas, so it
+        // is never split.
+        Some(t) if t.starts_with("thread:") => ScanSources {
+            thread: Some(t["thread:".len()..].to_string()),
+            notes: false,
+            message_services: None,
+        },
         Some("messages") => ScanSources {
+            thread: None,
             notes: false,
             message_services: None,
         },
         Some("notes") => ScanSources {
+            thread: None,
             notes: true,
             message_services: Some(Vec::new()),
         },
@@ -537,6 +547,7 @@ pub async fn run_safety_scan(
                 .map(|t| t.to_string())
                 .collect();
             ScanSources {
+                thread: None,
                 notes,
                 message_services: if all_messages { None } else { Some(services) },
             }
