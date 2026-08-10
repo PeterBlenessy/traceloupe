@@ -434,4 +434,197 @@ mod tests {
         // A release gate could assert per-category recall/precision floors
         // here; left as a print so a human reviews the numbers first.
     }
+
+    /// The other half of a baseline (#407): how fast a scan actually goes.
+    ///
+    /// The eval above measures quality over 2–4 message cases; a real chunk is
+    /// [`WINDOW`] messages, so its numbers say nothing about throughput. This
+    /// times FULL-SIZE chunks through the same client, prompt and grammar the
+    /// engine uses, and reports chunks per minute — the unit every speed
+    /// proposal in #397 is argued in.
+    ///
+    /// No backup is involved, real or fixture: the messages are generated here.
+    /// A scan's cost is dominated by prefill over chunk text of a given size,
+    /// and synthetic text of that size measures it without touching anyone's
+    /// data.
+    ///
+    ///   TRACELOUPE_EVAL_MODEL=/path/model.gguf \
+    ///   TRACELOUPE_LLAMA_SERVER=/path/llama-server \
+    ///   TRACELOUPE_BENCH_CHUNKS=8 TRACELOUPE_BENCH_PARALLEL=1 \
+    ///   cargo test -p traceloupe-core measure_scan_throughput -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a local GGUF + llama-server (set TRACELOUPE_EVAL_MODEL)"]
+    fn measure_scan_throughput() {
+        use crate::safety_scan::chunker::{Chunk, ChunkItem, WINDOW};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::{engine, prompt};
+        use std::path::PathBuf;
+        use std::time::{Duration, Instant};
+
+        let Ok(model) = std::env::var("TRACELOUPE_EVAL_MODEL") else {
+            eprintln!("set TRACELOUPE_EVAL_MODEL to measure throughput");
+            return;
+        };
+        let chunks_to_run: usize = std::env::var("TRACELOUPE_BENCH_CHUNKS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        let parallel: u32 = std::env::var("TRACELOUPE_BENCH_PARALLEL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+
+        // Ordinary conversation, deliberately unremarkable: a sweep's cost is
+        // paid on chunks that produce nothing, and that is what we are timing.
+        const LINES: &[&str] = &[
+            "are you still coming over later or did something come up",
+            "yeah should be there around seven, traffic depending",
+            "no rush, dinner is not until eight anyway",
+            "did you remember to pick up the thing for your mum",
+            "i did, it is in the car so i do not forget it again",
+            "ha, like last time. she still brings that up you know",
+            "i know, i know. i will never live it down",
+            "anyway how did the meeting go this morning",
+            "long. three hours for something that was an email",
+            "that sounds about right for them honestly",
+            "at least it is done. i can actually get work done now",
+            "want me to bring anything, wine or something",
+            "wine would be lovely if you are passing the shop",
+            "will do. red or white, i can never remember",
+            "red please, the one we had at christmas if they have it",
+            "no idea what that was but i will ask someone",
+            "just get whatever, honestly it does not matter",
+            "famous last words, you will judge me at the table",
+            "i would never. out loud, anyway",
+            "see you at seven then. text me if you are late",
+            "always do. do not start without me this time",
+            "no promises, you know how the kids get when hungry",
+            "fair enough. feed them, save me a plate",
+            "deal. see you soon",
+            "see you soon",
+        ];
+
+        let binary = crate::safety_scan::server::resolve_binary()
+            .expect("set TRACELOUPE_LLAMA_SERVER or bundle a sidecar");
+        let port = crate::safety_scan::server::pick_port().unwrap();
+        let mut server = crate::safety_scan::server::LlamaServer::spawn(
+            &crate::safety_scan::server::ServerConfig {
+                binary,
+                model_path: PathBuf::from(&model),
+                port,
+                // Matches production: total context is divided across slots.
+                ctx_size: 8192 * parallel,
+                parallel,
+                api_key: None,
+                gpu_layers: -1,
+                sandbox: true,
+                scratch_dir: std::env::temp_dir().join("traceloupe-bench-scratch"),
+            },
+            None,
+        )
+        .expect("spawn llama-server");
+        let load_started = Instant::now();
+        server
+            .wait_healthy(Duration::from_secs(300))
+            .expect("model load");
+        let load_secs = load_started.elapsed().as_secs_f64();
+        let client = LlmClient::new(server.base_url(), "bench", Duration::from_secs(300));
+
+        let chunk_of = |n: usize| Chunk {
+            key: format!("bench-{n}"),
+            fingerprint: format!("bench-{n}"),
+            kind: crate::analysis::SourceKind::Message,
+            thread_identifier: Some("+15550000000".into()),
+            label: None,
+            service: Some("iMessage".into()),
+            items: (0..WINDOW)
+                .map(|i| ChunkItem {
+                    source_id: (n * WINDOW + i) as i64,
+                    sender: if i % 2 == 0 {
+                        "them".into()
+                    } else {
+                        "me".into()
+                    },
+                    occurred_at: Some(1_700_000_000 + i as i64),
+                    // Vary per chunk so no two prompts are identical — an
+                    // identical prompt would be served from the prefix cache
+                    // and report a speed no real scan ever sees.
+                    text: format!("{} ({n})", LINES[i % LINES.len()]),
+                    fingerprint: format!("bench-{n}-{i}"),
+                })
+                .collect(),
+        };
+
+        // One warm-up, uncounted: the first call pays for graph setup and Metal
+        // shader compilation, which a 5000-chunk scan pays once and would be
+        // pure distortion spread over eight.
+        let warm = chunk_of(999);
+        let _ = client.chat_json(
+            prompt::SYSTEM_PROMPT,
+            &prompt::render_chunk(&warm),
+            &prompt::verdicts_grammar(warm.items.len()),
+            1200,
+        );
+
+        let mut prompt_chars = 0usize;
+        let started = Instant::now();
+        let mut failures = 0usize;
+        // Every one of these chunks is mundane conversation. A verdict on any
+        // of them is a false alarm, and counting them here measures the thing
+        // the user actually complains about, in the most direct form there is.
+        let mut findings = 0usize;
+        for n in 0..chunks_to_run {
+            let chunk = chunk_of(n);
+            let user = prompt::render_chunk(&chunk);
+            prompt_chars += prompt::SYSTEM_PROMPT.len() + user.len();
+            match client.chat_json(
+                prompt::SYSTEM_PROMPT,
+                &user,
+                &prompt::verdicts_grammar(chunk.items.len()),
+                1200,
+            ) {
+                Ok(out) => {
+                    findings += engine::verdicts_to_findings_for_eval(&chunk, &out).len();
+                }
+                Err(e) => {
+                    eprintln!("chunk {n}: {e}");
+                    failures += 1;
+                }
+            }
+        }
+        let elapsed = started.elapsed().as_secs_f64();
+        server.shutdown();
+
+        let per_chunk = elapsed / chunks_to_run as f64;
+        println!("\n=== Safety Scan throughput ===");
+        println!("model             {model}");
+        println!("model load        {load_secs:.1}s");
+        println!("chunks            {chunks_to_run} x {WINDOW} messages, parallel={parallel}");
+        println!("failures          {failures}");
+        println!("elapsed           {elapsed:.1}s");
+        println!("per chunk         {per_chunk:.2}s");
+        println!("throughput        {:.1} chunks/min", 60.0 / per_chunk);
+        println!(
+            "prompt size       ~{} chars/chunk",
+            prompt_chars / chunks_to_run
+        );
+        println!(
+            "false alarms      {findings} on {} mundane messages ({:.1} per chunk)",
+            chunks_to_run * WINDOW,
+            findings as f64 / chunks_to_run as f64
+        );
+        // What this means for a real backup, stated so nobody has to redo the
+        // arithmetic: stride is WINDOW - OVERLAP.
+        for messages in [10_000usize, 100_000] {
+            let chunks = messages / (WINDOW - crate::safety_scan::chunker::OVERLAP);
+            println!(
+                "{messages:>7} messages  ~{chunks} chunks  ~{:.0} min",
+                chunks as f64 * per_chunk / 60.0
+            );
+        }
+        assert!(
+            failures * 4 <= chunks_to_run,
+            "{failures} of {chunks_to_run} chunks failed — too many for the timing to mean anything"
+        );
+    }
 }
