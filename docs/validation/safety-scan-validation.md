@@ -118,6 +118,81 @@ precision. Measured, the tiers have the opposite strengths:
 On a two-tier machine this predicts near-zero harassment findings, which no
 amount of re-checking can recover.
 
+### The harness was measuring the wrong product (2026-08-11)
+
+A review of the harness before running public corpora found four defects, all of
+which distorted every number recorded above.
+
+1. **Severity was ignored.** `score_against` compared category sets, so a
+   verdict of "concerning" satisfied a fixture demanding "serious or imminent".
+2. **The shipped severity floor was not applied.** The app hides severity 1 by
+   default; the eval counted those as detections. Recall described a product
+   nobody runs — and, in the other direction, so did the clean rate.
+3. **Structurally-clean negatives inflated the clean rate.** The emoji cases
+   cannot be failed by any classifier, and were in the divisor.
+4. **The input shape was wrong.** Fixtures are 2-4 message cases; production
+   sends 25-message chunks.
+
+The scorer now applies the floor, compares severity to `minSeverity`, excludes
+structural negatives, and can run at production chunk shape
+(`TRACELOUPE_EVAL_CHUNKED=1`).
+
+#### Correcting the record, in both directions
+
+| | old scorer | corrected |
+|---|---|---|
+| hard-negative clean rate | 0.44 | **0.87** |
+| coercive-control precision | 0.42 | 0.62 |
+| threat-violence precision | 0.44 | 0.67 |
+
+**The 0.44 clean rate was never the shipped product.** Most false alarms are
+severity 1, and the floor already removes them. Every "the classifier flags a
+parent's curfew" claim was measured with the floor switched off.
+
+The corrected run also surfaces what the old one could not:
+
+- **2 real findings are found and then hidden** by the floor — `scam-delivery`
+  and `grooming-gifts`. That is the floor's true cost, and it was invisible.
+- **3 severity miscalibrations**: grooming a minor, a threat over sexuality, and
+  supplying drugs to a minor were all rated 2 where the fixtures demand 3.
+
+### At production chunk shape, recall collapses
+
+The same fixtures, the same model, the same prompt — each case bedded into
+ordinary conversation to the real `WINDOW` of 25 messages:
+
+| category | short cases | 25-message chunks |
+|---|---|---|
+| threat-violence | 0.80 | **0.00** |
+| sexual-content | 0.80 | **0.00** |
+| self-harm | 1.00 | **0.00** |
+| hate-identity | 1.00 | **0.00** |
+| scam-fraud | 0.80 | **0.00** |
+| drugs-illegal | 1.00 | **0.00** |
+| grooming-exploitation | 0.80 | 0.60 |
+| coercive-control | 1.00 | 0.60 |
+| harassment-bullying | 0.80 | 0.20 |
+
+**Overall recall falls from roughly 0.85 to roughly 0.16.** The clean rate rises
+to 1.00 only because almost nothing is flagged at all.
+
+Verified directly rather than inferred: *"i know where you live and im going to
+make you regret this"* is detected as a 3-message case and returns an **empty
+verdict list** at index 12 of a 25-message conversation. Grooming and coercive
+control still register, so this is not an empty-output bug — it is dilution.
+
+#### What this means
+
+Every quality figure recorded before today was measured on an input shape the
+app never sends. On the shape it does send, the scan misses roughly five findings
+in six.
+
+That makes `WINDOW` the most important tunable in the system — ahead of the
+prompt, the model, and any confirmer or prefilter, all of which were tuned
+against the wrong distribution. The obvious experiment is a window sweep:
+recall against chunk size, traded off against the extra wall clock of more
+chunks and the loss of the cross-message context the pattern categories need.
+
 ### Baseline on the widened fixture set
 
 The set was rebuilt to **69 cases — 5 positives per category and 25 hard

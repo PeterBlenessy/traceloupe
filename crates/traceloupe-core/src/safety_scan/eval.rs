@@ -54,7 +54,45 @@ impl Case {
             .filter_map(|e| Category::parse(&e.category))
             .collect()
     }
+
+    /// The severity each expected category must reach, so a "concerning"
+    /// verdict cannot satisfy a fixture that demands "serious or imminent".
+    pub fn min_severity(&self, cat: Category) -> u8 {
+        self.expect
+            .iter()
+            .filter(|e| Category::parse(&e.category) == Some(cat))
+            .map(|e| e.min_severity)
+            .max()
+            .unwrap_or(1)
+    }
+
+    /// A negative that no classifier can fail: every message is refused before
+    /// a verdict survives validation. Counting these in the clean rate flatters
+    /// it, because they cannot go wrong.
+    pub fn is_structurally_clean(&self) -> bool {
+        self.expect.is_empty()
+            && self
+                .messages
+                .iter()
+                .all(|m| crate::safety_scan::trivial::is_contentless(&m.text))
+    }
 }
+
+/// One verdict as the ENGINE produces it: a category, a severity, and the item
+/// it was attached to. Scoring on the category alone hid two things the app
+/// depends on — the severity floor that decides whether a reviewer ever sees
+/// the finding, and which message it points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verdict {
+    pub category: Category,
+    pub severity: u8,
+    /// Index of the message the verdict was attached to, when known.
+    pub item: Option<usize>,
+}
+
+/// The severity below which the app hides a finding by default (#450). The
+/// eval applies it, or it reports detections no reviewer will ever see.
+pub const DEFAULT_FLOOR: u8 = 2;
 
 pub fn load_fixtures() -> Fixtures {
     serde_json::from_str(CASES_JSON).expect("cases.json is valid")
@@ -101,8 +139,19 @@ pub struct ScoreReport {
     /// Hard-negative cases that were (wrongly) flagged with any category.
     pub false_alarms: Vec<String>,
     pub cases_scored: usize,
-    /// Count of hard-negative (expect-nothing) cases — the clean-rate divisor.
+    /// SEMANTIC hard negatives only — the ones a classifier could get wrong.
+    /// Structurally-clean cases (all-emoji, refused before any verdict) are
+    /// excluded, because including cases that cannot fail inflates the rate.
     pub negatives_scored: usize,
+    /// Structurally-clean negatives, counted apart so the exclusion is visible.
+    pub structural_negatives: usize,
+    /// Detections that the app's severity floor HIDES: the right category at a
+    /// severity the default view does not show. The eval used to count these as
+    /// successes, so its recall described a product nobody uses.
+    pub hidden_by_floor: Vec<String>,
+    /// Right category, severity below what the fixture demands — a
+    /// miscalibration rather than a miss, and worth seeing separately.
+    pub under_severity: Vec<String>,
 }
 
 impl ScoreReport {
@@ -128,13 +177,29 @@ impl ScoreReport {
             ));
         }
         out.push_str(&format!(
-            "\nhard-negative clean rate: {:.2} ({} false alarms of {} negatives)\n",
+            "\nhard-negative clean rate: {:.2} ({} false alarms of {} SEMANTIC negatives; \
+             {} structurally-clean cases excluded)\n",
             self.negative_clean_rate(),
             self.false_alarms.len(),
-            self.negatives_scored
+            self.negatives_scored,
+            self.structural_negatives
         ));
         if !self.false_alarms.is_empty() {
             out.push_str(&format!("false alarms: {}\n", self.false_alarms.join(", ")));
+        }
+        if !self.hidden_by_floor.is_empty() {
+            out.push_str(&format!(
+                "found but HIDDEN by the severity floor ({}): {}\n",
+                self.hidden_by_floor.len(),
+                self.hidden_by_floor.join(", ")
+            ));
+        }
+        if !self.under_severity.is_empty() {
+            out.push_str(&format!(
+                "under-severity ({}): {}\n",
+                self.under_severity.len(),
+                self.under_severity.join(", ")
+            ));
         }
         out
     }
@@ -145,15 +210,54 @@ impl ScoreReport {
 /// the classifier — the live test and the golden test share it.
 pub fn score_against(
     fixtures: &Fixtures,
-    mut classify: impl FnMut(&Case) -> BTreeSet<Category>,
+    classify: impl FnMut(&Case) -> BTreeSet<Category>,
+) -> ScoreReport {
+    // Category-only classifiers (the golden tests) come in through here; they
+    // assert nothing about severity, so every verdict is given the floor.
+    let mut c = classify;
+    score_verdicts(fixtures, |case| {
+        c(case)
+            .into_iter()
+            .map(|category| Verdict {
+                category,
+                severity: DEFAULT_FLOOR,
+                item: None,
+            })
+            .collect()
+    })
+}
+
+/// Score a classifier over every fixture, on what the APP would show.
+///
+/// Three things this does that scoring bare categories did not:
+///
+/// - **The severity floor is applied.** A verdict below [`DEFAULT_FLOOR`] is
+///   not a detection, because the default view hides it. Those cases are
+///   reported in `hidden_by_floor` rather than silently counted as successes.
+/// - **Severity is compared to the fixture's `minSeverity`.** "Concerning" does
+///   not satisfy a case that demands "serious or imminent"; that lands in
+///   `under_severity`.
+/// - **Structurally-clean negatives are excluded from the clean rate**, since a
+///   case that cannot be failed does not measure anything.
+pub fn score_verdicts(
+    fixtures: &Fixtures,
+    mut classify: impl FnMut(&Case) -> Vec<Verdict>,
 ) -> ScoreReport {
     let mut report = ScoreReport::default();
     for case in &fixtures.cases {
         let expected = case.expected_categories();
-        let predicted = classify(case);
+        let all = classify(case);
+        // What a reviewer would actually be shown.
+        let shown: BTreeSet<Category> = all
+            .iter()
+            .filter(|v| v.severity >= DEFAULT_FLOOR)
+            .map(|v| v.category)
+            .collect();
+        let any: BTreeSet<Category> = all.iter().map(|v| v.category).collect();
+
         for cat in Category::ALL {
             let e = expected.contains(&cat);
-            let p = predicted.contains(&cat);
+            let p = shown.contains(&cat);
             let s = report.per_category.entry(cat).or_default();
             match (e, p) {
                 (true, true) => s.tp += 1,
@@ -161,11 +265,40 @@ pub fn score_against(
                 (true, false) => s.fn_ += 1,
                 (false, false) => {}
             }
+            if e && !p && any.contains(&cat) {
+                // Found, then hidden. Distinct from never finding it, and the
+                // distinction decides whether the floor or the model is at
+                // fault.
+                report
+                    .hidden_by_floor
+                    .push(format!("{}:{}", case.id, cat.as_str()));
+            }
+            if e && p {
+                let want = case.min_severity(cat);
+                let got = all
+                    .iter()
+                    .filter(|v| v.category == cat)
+                    .map(|v| v.severity)
+                    .max()
+                    .unwrap_or(0);
+                if got < want {
+                    report.under_severity.push(format!(
+                        "{}:{} ({got} < {want})",
+                        case.id,
+                        cat.as_str()
+                    ));
+                }
+            }
         }
+
         if expected.is_empty() {
-            report.negatives_scored += 1;
-            if !predicted.is_empty() {
-                report.false_alarms.push(case.id.clone());
+            if case.is_structurally_clean() {
+                report.structural_negatives += 1;
+            } else {
+                report.negatives_scored += 1;
+                if !shown.is_empty() {
+                    report.false_alarms.push(case.id.clone());
+                }
             }
         }
         report.cases_scored += 1;
@@ -314,6 +447,78 @@ mod tests {
         }
     }
 
+    /// A classifier that finds everything but calls it all "concerning" scores
+    /// ZERO, because the app hides that tier. The old scorer gave it full
+    /// marks — it counted detections no reviewer would ever be shown.
+    #[test]
+    fn detections_below_the_floor_are_not_detections() {
+        let f = load_fixtures();
+        let report = score_verdicts(&f, |c| {
+            c.expected_categories()
+                .into_iter()
+                .map(|category| Verdict {
+                    category,
+                    severity: 1,
+                    item: None,
+                })
+                .collect()
+        });
+        for (cat, s) in &report.per_category {
+            assert_eq!(s.recall(), 0.0, "{} counted a hidden finding", cat.as_str());
+        }
+        assert!(
+            !report.hidden_by_floor.is_empty(),
+            "and it says WHICH were found then hidden"
+        );
+    }
+
+    /// "Concerning" must not satisfy a fixture demanding "serious or imminent".
+    #[test]
+    fn a_severity_below_the_fixture_is_reported_as_miscalibrated() {
+        let f = load_fixtures();
+        let report = score_verdicts(&f, |c| {
+            c.expected_categories()
+                .into_iter()
+                .map(|category| Verdict {
+                    category,
+                    severity: 2,
+                    item: None,
+                })
+                .collect()
+        });
+        let want3 = f
+            .cases
+            .iter()
+            .filter(|c| c.expect.iter().any(|e| e.min_severity == 3))
+            .count();
+        assert!(want3 > 0, "fixtures must contain severity-3 expectations");
+        assert_eq!(
+            report.under_severity.len(),
+            want3,
+            "every severity-3 case flagged at 2 is reported"
+        );
+    }
+
+    /// The clean rate must not count cases that cannot fail. The emoji
+    /// negatives are refused before any verdict exists, so including them
+    /// inflates the number the release gate turns on.
+    #[test]
+    fn structurally_clean_negatives_are_excluded_from_the_clean_rate() {
+        let f = load_fixtures();
+        let report = score_verdicts(&f, |_| Vec::new());
+        assert!(
+            report.structural_negatives >= 2,
+            "the emoji negatives are structural, found {}",
+            report.structural_negatives
+        );
+        let semantic = f
+            .cases
+            .iter()
+            .filter(|c| c.expect.is_empty() && !c.is_structurally_clean())
+            .count();
+        assert_eq!(report.negatives_scored, semantic);
+    }
+
     /// The golden path with NO model: a perfect classifier (labels → itself)
     /// scores 1.0 everywhere and raises no false alarm. This guards `score_against`
     /// and proves the fixtures are internally consistent.
@@ -401,23 +606,77 @@ mod tests {
             .expect("model load");
         let client = LlmClient::new(server.base_url(), "eval", Duration::from_secs(300));
 
+        // Production sends WINDOW-message chunks; a fixture case is 2-4
+        // messages. Scoring only the short shape measures an input the app
+        // never produces — the same dilution that turned a prefilter's 52%
+        // into 15%. TRACELOUPE_EVAL_CHUNKED=1 buries each case in ordinary
+        // conversation to the real window size and scores that instead.
+        let chunked = std::env::var("TRACELOUPE_EVAL_CHUNKED").is_ok();
+        const BED: &[&str] = &[
+            "are you still coming over later",
+            "yeah should be there around seven",
+            "no rush, dinner is not until eight",
+            "did you pick up the thing for your mum",
+            "it is in the car so i do not forget",
+            "how did the meeting go this morning",
+            "long, three hours for something that was an email",
+            "that sounds about right honestly",
+            "at least it is done now",
+            "want me to bring wine",
+            "red or white, i never remember",
+            "just get whatever, it does not matter",
+            "the train was delayed again",
+            "did you see the score last night",
+            "only the highlights, was working late",
+            "i will send you the clip",
+            "how is your sister after the move",
+            "settling in, the flat is smaller than she hoped",
+            "at least it is closer to work",
+            "booked the tickets for saturday",
+            "cannot wait honestly",
+            "finished that book you lent me",
+            "what did you make of the ending",
+            "started running again this morning",
+            "that is more than i manage",
+        ];
+
         let fixtures = load_fixtures();
-        let report = score_against(&fixtures, |case| {
+        let report = score_verdicts(&fixtures, |case| {
             // Build a single chunk from the case's messages, classify it, and
             // collapse verdicts to the set of categories seen.
-            let items: Vec<ChunkItem> = case
-                .messages
+            // The case's own messages, optionally bedded into ordinary
+            // conversation so the model sees a production-shaped chunk.
+            let texts: Vec<(String, String)> = if chunked {
+                let mut v: Vec<(String, String)> = Vec::new();
+                for (i, t) in BED.iter().take(10).enumerate() {
+                    v.push((if i % 2 == 0 { "them" } else { "me" }.into(), (*t).into()));
+                }
+                for m in &case.messages {
+                    v.push((m.sender.clone(), m.text.clone()));
+                }
+                for (i, t) in BED.iter().skip(10).enumerate() {
+                    v.push((if i % 2 == 0 { "them" } else { "me" }.into(), (*t).into()));
+                }
+                v.truncate(crate::safety_scan::chunker::WINDOW);
+                v
+            } else {
+                case.messages
+                    .iter()
+                    .map(|m| (m.sender.clone(), m.text.clone()))
+                    .collect()
+            };
+            let items: Vec<ChunkItem> = texts
                 .iter()
                 .enumerate()
-                .map(|(i, m)| ChunkItem {
+                .map(|(i, (sender, text))| ChunkItem {
                     source_id: i as i64,
-                    sender: if m.sender == "me" {
+                    sender: if sender == "me" {
                         "me".into()
                     } else {
                         "them".into()
                     },
                     occurred_at: Some(1000 + i as i64),
-                    text: m.text.clone(),
+                    text: text.clone(),
                     fingerprint: format!("{}:{i}", case.id),
                 })
                 .collect();
@@ -433,18 +692,33 @@ mod tests {
             let user = prompt::render_chunk(&chunk);
             let grammar = prompt::verdicts_grammar(chunk.items.len());
             match client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, 1200) {
+                // Severity and item index come through now: the floor decides
+                // what a reviewer sees, and the item decides where the app
+                // deep-links to.
                 Ok(output) => engine::verdicts_to_findings_for_eval(&chunk, &output)
                     .into_iter()
-                    .map(|f| f.category)
+                    .map(|f| Verdict {
+                        category: f.category,
+                        severity: f.severity,
+                        item: f.source_id.map(|i| i as usize),
+                    })
                     .collect(),
                 Err(e) => {
                     eprintln!("{}: {e}", case.id);
-                    BTreeSet::new()
+                    Vec::new()
                 }
             }
         });
         server.shutdown();
-        println!("\n=== Safety Scan live eval ===\n{}", report.table());
+        println!(
+            "\n=== Safety Scan live eval ({}) ===\n{}",
+            if chunked {
+                "production 25-message chunks"
+            } else {
+                "short fixture cases"
+            },
+            report.table()
+        );
         // A release gate could assert per-category recall/precision floors
         // here; left as a print so a human reviews the numbers first.
     }
