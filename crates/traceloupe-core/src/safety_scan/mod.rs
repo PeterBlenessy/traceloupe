@@ -17,4 +17,5 @@ pub mod reaper;
 pub mod relink;
 pub mod server;
 pub mod summary;
+pub mod triage;
 pub mod trivial;
