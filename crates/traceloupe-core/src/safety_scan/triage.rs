@@ -113,6 +113,86 @@ pub fn census_score(message: &[f32], prototypes: &[Vec<f32>]) -> f32 {
         .fold(0.0f32, f32::max)
 }
 
+/// EmbeddingGemma's task prefix. Prepended to every text before embedding —
+/// measured to matter (recall at a fixed drop rate moved 0.67 → 0.80 with it),
+/// because the model is trained with these prefixes and raw text is
+/// off-distribution.
+pub const EMBED_PREFIX: &str = "task: classification | query: ";
+
+/// A message to score in the census.
+#[derive(Debug, Clone)]
+pub struct CensusInput {
+    pub source_id: i64,
+    pub thread_identifier: String,
+    pub sender: String,
+    pub occurred_at: Option<i64>,
+    pub text: String,
+}
+
+/// A scored message, ready to persist.
+#[derive(Debug, Clone)]
+pub struct ScoredMessage {
+    pub source_id: i64,
+    pub thread_identifier: String,
+    pub sender: String,
+    pub occurred_at: Option<i64>,
+    pub score: f32,
+}
+
+/// Build one prototype vector per category from labelled example texts.
+///
+/// `examples` is (category, text) pairs — in production, the fixture positives
+/// filtered to the SELECTED categories, so a scam-only view ranks by scam
+/// prototypes alone. Each text is embedded (through `embed`, prefixed here so
+/// callers cannot forget it) and the per-category mean is the prototype.
+///
+/// A category with no usable examples is simply absent from the result rather
+/// than contributing a zero vector that would score everything as mildly
+/// suspicious.
+pub fn build_prototypes<E>(
+    examples: &[(String, String)],
+    mut embed: E,
+) -> crate::Result<Vec<Vec<f32>>>
+where
+    E: FnMut(&str) -> crate::Result<Vec<f32>>,
+{
+    use std::collections::BTreeMap;
+    let mut by_cat: BTreeMap<&str, Vec<Vec<f32>>> = BTreeMap::new();
+    for (cat, text) in examples {
+        let v = embed(&format!("{EMBED_PREFIX}{text}"))?;
+        by_cat.entry(cat.as_str()).or_default().push(v);
+    }
+    Ok(by_cat.values().filter_map(|vs| centroid(vs)).collect())
+}
+
+/// Score every message against the prototypes: the census, phase one.
+///
+/// Returns each message's max similarity to any prototype. `embed` is called
+/// once per message (the prefix is applied here). With no prototypes every
+/// score is 0 — the caller must treat that as "cannot triage" and fall back to
+/// scanning everything, never as "nothing is suspicious".
+pub fn census_messages<E>(
+    messages: &[CensusInput],
+    prototypes: &[Vec<f32>],
+    mut embed: E,
+) -> crate::Result<Vec<ScoredMessage>>
+where
+    E: FnMut(&str) -> crate::Result<Vec<f32>>,
+{
+    let mut out = Vec::with_capacity(messages.len());
+    for m in messages {
+        let v = embed(&format!("{EMBED_PREFIX}{}", m.text))?;
+        out.push(ScoredMessage {
+            source_id: m.source_id,
+            thread_identifier: m.thread_identifier.clone(),
+            sender: m.sender.clone(),
+            occurred_at: m.occurred_at,
+            score: census_score(&v, prototypes),
+        });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +229,101 @@ mod tests {
             None,
             "ragged rejected"
         );
+    }
+
+    // A deterministic fake embedder: maps a keyword to a one-hot axis, so tests
+    // can reason about similarity without a model. "threat"->x, "scam"->y,
+    // anything else->z (orthogonal to both).
+    fn fake_embed(text: &str) -> crate::Result<Vec<f32>> {
+        let t = text.to_lowercase();
+        Ok(if t.contains("threat") || t.contains("kill") {
+            vec![1.0, 0.0, 0.0]
+        } else if t.contains("scam") || t.contains("gift card") {
+            vec![0.0, 1.0, 0.0]
+        } else {
+            vec![0.0, 0.0, 1.0]
+        })
+    }
+
+    #[test]
+    fn prototypes_are_per_category_and_selection_scopes_them() {
+        // Two threat examples, two scam — the SELECTED categories.
+        let ex = vec![
+            ("threat-violence".to_string(), "i will kill you".to_string()),
+            ("threat-violence".to_string(), "a threat here".to_string()),
+            (
+                "scam-fraud".to_string(),
+                "send a gift card scam".to_string(),
+            ),
+        ];
+        let protos = build_prototypes(&ex, fake_embed).unwrap();
+        assert_eq!(protos.len(), 2, "one prototype per category");
+
+        // A scam message scores high against this set…
+        let scam = census_score(&fake_embed("gift card please").unwrap(), &protos);
+        assert!(scam > 0.9);
+
+        // …but if the reviewer selected ONLY scam, the threat prototype is gone,
+        // and a threat message no longer ranks — the scan does not read for a
+        // category nobody asked about (#460).
+        let scam_only: Vec<_> = ex
+            .iter()
+            .filter(|(c, _)| c == "scam-fraud")
+            .cloned()
+            .collect();
+        let scam_protos = build_prototypes(&scam_only, fake_embed).unwrap();
+        assert_eq!(scam_protos.len(), 1);
+        let threat = census_score(&fake_embed("kill you").unwrap(), &scam_protos);
+        assert!(
+            threat.abs() < 1e-6,
+            "a threat is invisible to a scam-only census"
+        );
+    }
+
+    #[test]
+    fn census_scores_a_backup_and_ranks_harm_above_chatter() {
+        let protos = build_prototypes(
+            &[("threat-violence".to_string(), "i will kill you".to_string())],
+            fake_embed,
+        )
+        .unwrap();
+        let msgs = vec![
+            CensusInput {
+                source_id: 1,
+                thread_identifier: "t".into(),
+                sender: "a".into(),
+                occurred_at: Some(1),
+                text: "i will kill you".into(),
+            },
+            CensusInput {
+                source_id: 2,
+                thread_identifier: "t".into(),
+                sender: "a".into(),
+                occurred_at: Some(2),
+                text: "grab milk please".into(),
+            },
+        ];
+        let scored = census_messages(&msgs, &protos, fake_embed).unwrap();
+        assert!(scored[0].score > scored[1].score);
+        assert!(scored[0].score > 0.9 && scored[1].score < 0.1);
+        // Metadata is carried through untouched — the census row needs it.
+        assert_eq!(scored[0].source_id, 1);
+        assert_eq!(scored[0].sender, "a");
+    }
+
+    /// No prototypes must score 0, never a spurious hit — the caller treats
+    /// this as "cannot triage, scan everything", not "all clean".
+    #[test]
+    fn an_empty_prototype_set_scores_zero() {
+        let msgs = vec![CensusInput {
+            source_id: 1,
+            thread_identifier: "t".into(),
+            sender: "a".into(),
+            occurred_at: None,
+            text: "i will kill you".into(),
+        }];
+        let scored = census_messages(&msgs, &[], fake_embed).unwrap();
+        assert_eq!(scored[0].score, 0.0);
     }
 
     #[test]
