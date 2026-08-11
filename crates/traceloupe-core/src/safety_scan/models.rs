@@ -32,6 +32,17 @@ pub struct ModelSpec {
     /// Context size the sidecar is started with. Chunk prompts are ~2-3k
     /// tokens; 8k leaves headroom without the RAM cost of the full 128k.
     pub ctx_size: u32,
+    /// What this model is FOR. Classifiers produce verdicts; the embedder
+    /// produces vectors for the triage census (#459) and is served with
+    /// `--embedding`. Kept on the spec so `recommended()` and the picker never
+    /// offer an embedder as a scan model, or vice versa.
+    pub role: ModelRole,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRole {
+    Classifier,
+    Embedder,
 }
 
 impl ModelSpec {
@@ -66,7 +77,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 /// per-chunk cost tracks how much the model generates, not parameter count —
 /// E2B flags more, so it writes more. Do not restore a speed claim here without
 /// a measurement behind it.
-pub const CATALOG: [ModelSpec; 2] = [
+pub const CATALOG: [ModelSpec; 3] = [
     ModelSpec {
         id: "gemma-4-E4B-it-Q4_K_M",
         display_name: "Gemma 4 E4B",
@@ -78,6 +89,7 @@ pub const CATALOG: [ModelSpec; 2] = [
         size_bytes: 4_977_171_584,
         ram_floor_bytes: 12 * GIB,
         ctx_size: 8192,
+        role: ModelRole::Classifier,
     },
     ModelSpec {
         id: "gemma-4-E2B-it-Q4_K_M",
@@ -90,6 +102,20 @@ pub const CATALOG: [ModelSpec; 2] = [
         size_bytes: 3_106_738_272,
         ram_floor_bytes: 6 * GIB,
         ctx_size: 8192,
+        role: ModelRole::Classifier,
+    },
+    ModelSpec {
+        id: "embeddinggemma-300M-Q8_0",
+        display_name: "Fast pre-scan",
+        note: "A small model that finds where to look before the scan reads in \
+               depth. Optional, and downloaded separately.",
+        repo: "ggml-org/embeddinggemma-300M-GGUF",
+        filename: "embeddinggemma-300M-Q8_0.gguf",
+        sha256: "b5ce9d77a3fc4b3b39ccb5643c36777911cc4eb46a66962eadfa3f5f60490d63",
+        size_bytes: 333_590_944,
+        ram_floor_bytes: 2 * GIB,
+        ctx_size: 2048,
+        role: ModelRole::Embedder,
     },
 ];
 
@@ -115,12 +141,24 @@ pub fn total_ram_bytes() -> u64 {
 /// The tier to propose: E4B when the machine clears its RAM floor (or RAM is
 /// unknown — the user asked for E4B by default), else E2B. The user may still
 /// override; the UI warns.
+/// The recommended CLASSIFIER for scanning. The embedder is never a scan model,
+/// so `recommended` filters by role rather than indexing the array — which also
+/// stops a future catalog reorder from silently returning the embedder.
 pub fn recommended(total_ram: u64) -> &'static ModelSpec {
-    if total_ram == 0 || total_ram >= CATALOG[0].ram_floor_bytes {
-        &CATALOG[0]
+    let classifiers: Vec<&ModelSpec> = CATALOG
+        .iter()
+        .filter(|s| s.role == ModelRole::Classifier)
+        .collect();
+    if total_ram == 0 || total_ram >= classifiers[0].ram_floor_bytes {
+        classifiers[0]
     } else {
-        &CATALOG[1]
+        classifiers.last().unwrap()
     }
+}
+
+/// The embedder, if the catalog has one — the triage census model.
+pub fn embedder() -> Option<&'static ModelSpec> {
+    CATALOG.iter().find(|s| s.role == ModelRole::Embedder)
 }
 
 /// Download `spec` into `models_dir` with streaming sha256 verification —
@@ -275,19 +313,40 @@ mod tests {
             size_bytes: payload.len() as u64,
             ram_floor_bytes: 0,
             ctx_size: 4096,
+            role: ModelRole::Classifier,
         }
     }
 
     #[test]
     fn catalog_is_sane() {
-        assert_eq!(CATALOG.len(), 2);
         for spec in &CATALOG {
             assert_eq!(spec.sha256.len(), 64, "{}: sha must be 64 hex", spec.id);
             assert!(spec.sha256.chars().all(|c| c.is_ascii_hexdigit()));
-            assert!(spec.size_bytes > GIB);
+            // The embedder is ~318 MB; only classifiers are multi-GB.
+            let floor = match spec.role {
+                ModelRole::Classifier => GIB,
+                ModelRole::Embedder => 100 * 1024 * 1024,
+            };
+            assert!(spec.size_bytes > floor, "{}: implausibly small", spec.id);
             assert!(spec.url().starts_with("https://huggingface.co/"));
         }
-        assert_ne!(CATALOG[0].sha256, CATALOG[1].sha256);
+        // Every checksum distinct — a copy-paste that duplicated one would make
+        // two entries download the same file.
+        let shas: std::collections::BTreeSet<_> = CATALOG.iter().map(|s| s.sha256).collect();
+        assert_eq!(shas.len(), CATALOG.len(), "duplicate checksum in catalog");
+        // Exactly one embedder, and it is what `embedder()` returns.
+        assert_eq!(
+            CATALOG
+                .iter()
+                .filter(|s| s.role == ModelRole::Embedder)
+                .count(),
+            1
+        );
+        assert_eq!(embedder().unwrap().role, ModelRole::Embedder);
+        // `recommended` never returns the embedder, at any RAM.
+        for ram in [0, 4 * GIB, 8 * GIB, 32 * GIB] {
+            assert_eq!(recommended(ram).role, ModelRole::Classifier);
+        }
         assert!(spec_by_id("gemma-4-E4B-it-Q4_K_M").is_some());
         assert!(spec_by_id("nope").is_none());
     }

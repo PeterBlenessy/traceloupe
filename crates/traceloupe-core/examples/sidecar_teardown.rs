@@ -43,6 +43,7 @@ fn main() {
         parallel: 1,
         api_key: None,
         gpu_layers: -1,
+        embedding: false,
         // The sandbox is orthogonal to teardown and needs a scratch dir we do
         // not have here; the lifetime behaviour under test is identical.
         sandbox: false,
