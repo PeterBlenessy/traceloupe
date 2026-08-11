@@ -648,6 +648,19 @@ pub struct TriageCell {
     pub trajectory: f64,
 }
 
+/// One message the triage worklist has selected for focused classification,
+/// with the cell evidence that ranked it.
+#[derive(Debug, Clone)]
+pub struct WorkItem {
+    pub source_id: i64,
+    pub thread_identifier: String,
+    pub sender: String,
+    pub score: f64,
+    /// Hot-message count of this message's (thread, sender) cell — why it ranks
+    /// where it does.
+    pub cell_hot: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct FindingRow {
     pub id: i64,
@@ -1257,6 +1270,62 @@ impl AnalysisDb {
     /// the sort, because a single number cannot rank two different kinds of
     /// evidence; the caller decides how to weigh a high count against a rising
     /// trajectory.
+    /// The deep-scan worklist: which messages get the expensive focused
+    /// classifier, in what order, within a budget.
+    ///
+    /// This is what turns "~40 h to focus-scan everything" into a bounded run.
+    /// Only messages at or above `threshold` are candidates — the census has
+    /// already decided the rest are not worth a classifier call. Among those,
+    /// ordering is by the containing cell's evidence first (a hot message in a
+    /// dense (conversation, sender) cell before an equally-hot one that stands
+    /// alone), then by the message's own score. `budget` caps how many are
+    /// returned; None runs the lot.
+    ///
+    /// The order is the point: spend a fixed classifier budget on the most
+    /// concentrated harm, which in heavy-tailed data is where it lives. A
+    /// caller that exhausts the budget knows exactly what was NOT scanned (the
+    /// tail below the cut) and can report it honestly rather than as "clean".
+    pub fn triage_worklist(&self, threshold: f64, budget: Option<usize>) -> Result<Vec<WorkItem>> {
+        // Cell rank = count of hot messages in the (thread, sender) cell. A
+        // correlated subquery gives each candidate its cell's hot-count, so the
+        // ORDER BY can put dense cells first without a join to triage_cells.
+        let sql = "
+            SELECT c.source_id, c.thread_identifier, c.sender, c.score,
+                   (SELECT COUNT(*) FROM census h
+                    WHERE h.thread_identifier = c.thread_identifier
+                      AND h.sender = c.sender
+                      AND h.score >= ?1) AS cell_hot
+            FROM census c
+            WHERE c.score >= ?1
+            ORDER BY cell_hot DESC, c.score DESC, c.source_id ASC";
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![threshold], |r| {
+            Ok(WorkItem {
+                source_id: r.get(0)?,
+                thread_identifier: r.get(1)?,
+                sender: r.get(2)?,
+                score: r.get(3)?,
+                cell_hot: r.get(4)?,
+            })
+        })?;
+        let mut out: Vec<WorkItem> = rows.filter_map(|r| r.ok()).collect();
+        if let Some(b) = budget {
+            out.truncate(b);
+        }
+        Ok(out)
+    }
+
+    /// How many messages the census holds above `threshold` — the full deep-scan
+    /// demand, so a caller can report "scanned N of M candidates" when a budget
+    /// cuts the worklist short, and say what the cut leaves unread.
+    pub fn triage_candidate_count(&self, threshold: f64) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM census WHERE score >= ?1",
+            params![threshold],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    }
+
     pub fn triage_cells(&self, threshold: f64) -> Result<Vec<TriageCell>> {
         let mut stmt = self.conn.prepare(
             "SELECT thread_identifier, sender,
@@ -2675,6 +2744,57 @@ mod tests {
             occurred_at: Some(at),
             score,
         }
+    }
+
+    /// The worklist spends a budget on the densest harm first, and reports
+    /// exactly what the budget left unscanned.
+    #[test]
+    fn triage_worklist_ranks_dense_cells_first_and_honours_budget() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let mut rows = Vec::new();
+        // A dense cell: 4 hot messages.
+        for i in 0..4 {
+            rows.push(census(10 + i, "dense", "y", 1000 + i, 0.80));
+        }
+        // A lone hot message in a sparse cell, HIGHER individual score.
+        rows.push(census(20, "sparse", "z", 1000, 0.95));
+        // Cold chatter, never a candidate.
+        for i in 0..5 {
+            rows.push(census(30 + i, "cold", "w", 1000 + i, 0.20));
+        }
+        db.record_census(&rows, 1).unwrap();
+
+        // Full candidate demand excludes the cold five.
+        assert_eq!(db.triage_candidate_count(0.65).unwrap(), 5);
+
+        let full = db.triage_worklist(0.65, None).unwrap();
+        assert_eq!(full.len(), 5, "cold messages are not candidates");
+        // The dense cell's messages come first, even though the sparse one
+        // scores higher individually — density outranks a lone spike.
+        assert!(full[..4].iter().all(|w| w.thread_identifier == "dense"));
+        assert_eq!(full[4].thread_identifier, "sparse");
+
+        // A budget of 3 keeps the top of that order and drops the rest.
+        let capped = db.triage_worklist(0.65, Some(3)).unwrap();
+        assert_eq!(capped.len(), 3);
+        assert!(capped.iter().all(|w| w.thread_identifier == "dense"));
+        // The caller can see 3 of 5 were scanned — the other 2 are the honest
+        // "not deep-scanned" tail.
+        assert_eq!(db.triage_candidate_count(0.65).unwrap() - capped.len(), 2);
+    }
+
+    /// The threshold is the census dial: raising it shrinks the candidate set,
+    /// so a Precise mode does less deep-scan work than a Thorough one.
+    #[test]
+    fn a_higher_threshold_yields_fewer_candidates() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let rows: Vec<_> = (0..10)
+            .map(|i| census(i, "t", "s", 1000 + i, 0.50 + 0.03 * i as f64))
+            .collect();
+        db.record_census(&rows, 1).unwrap();
+        let low = db.triage_worklist(0.55, None).unwrap().len();
+        let high = db.triage_worklist(0.70, None).unwrap().len();
+        assert!(high < low, "a higher census threshold scans fewer messages");
     }
 
     /// The heavy-tail insight: a cell with MANY hot messages ranks above one
