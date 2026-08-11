@@ -390,14 +390,17 @@ models against a real analysis store. The whole algorithm is merged.
 The **algorithm is complete and tested**; what remains is plumbing and
 validation. Checklist mirrors #459.
 
-- [ ] **Validate the pipeline reproduces the lab result FIRST.** The proven
+- [x] **Validate the pipeline reproduces the lab result FIRST.** The proven
       end-to-end harness is committed at `tools/validate-triage-pipeline.py`;
       setup and the one run command are in
       `docs/validation/triage-validation-setup.md`. It confirms the architecture
       still reaches ~0.94/0.95 on real Jigsaw threats before any engine wiring is
-      built on it. Then a Rust `#[ignore]` integration test proves the merged
-      `run_triage` matches the Python reference (belongs with the wiring below,
-      as it needs the same client plumbing).
+      built on it. **Done 2026-08-12: reproduced digit for digit — 0.94/0.95 at
+      threshold 0.52, census ceiling 0.96, baseline 0.30/0.89; full sweep in
+      `docs/validation/safety-scan-validation.md` ("Triage pipeline" section).**
+      Still open from this step: the Rust `#[ignore]` integration test proving
+      the merged `run_triage` matches the Python reference (belongs with the
+      wiring below, as it needs the same client plumbing).
 - [ ] **Wire the orchestrator into the engine** (`run_triage_scan` command). The
       two-model **sidecar lifecycle** is the one non-trivial piece: spawn the
       embedder, census, swap to the classifier using the healthy-swap pattern from
