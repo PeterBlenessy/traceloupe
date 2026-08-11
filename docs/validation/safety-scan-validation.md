@@ -437,3 +437,49 @@ To run one, export it to the same shape as `cases.json` (each row a case with
 CI: licences vary and the files are large. Coercive-control, scam-fraud, and
 contextual self-harm have no clean public analogue — the in-repo fixtures are
 their only coverage, which is exactly why the fixture set exists.
+
+## Triage pipeline — end-to-end validation runs
+
+The proven oracle is `tools/validate-triage-pipeline.py`; setup and the run
+command are in `triage-validation-setup.md`. Pass criteria: end-to-end recall
+within ~0.05 of 0.94 at precision ≥ 0.90, at census threshold 0.52
+(`docs/safety-scan-journey.md` §6.1/§8).
+
+### 2026-08-12 — the lab result reproduces (journey §8, step 1)
+
+Apple M3 / 24 GB / macOS 26.5.2, llama.cpp `b10075`. Models: Gemma 4 E4B
+Q4_K_M (classifier), EmbeddingGemma-300M Q8_0 (census), Llama Guard 3 8B
+Q4_K_M (confirmer). GBNF grammars freshly dumped from this checkout
+(`29ff51b`, `dump_grammars`); threats and clean bed from the Jigsaw set per the
+setup doc; 160 seeded chunks (80 with a real threat), prototypes from held-out
+threats.
+
+| threshold | census ceiling | focused (recall / precision) | +Guard = end to end | batch baseline |
+|---|---|---|---|---|
+| 0.64 | 0.88 | 0.90 / 0.99 | **0.82 / 1.00** | 0.30 / 0.89 |
+| 0.58 | 0.91 | 0.99 / 0.91 | **0.85 / 0.97** | 0.30 / 0.89 |
+| 0.52 | **0.96** | 1.20 / 0.74 | **0.94 / 0.95** | 0.30 / 0.89 |
+
+**PASS — every headline number matches §6.1 digit for digit**: baseline
+0.30/0.89, census ceiling 0.96, end-to-end 0.94/0.95 at 0.52. The dial is
+monotonic exactly as documented — lowering the threshold raises the ceiling
+(0.88 → 0.91 → 0.96) and end-to-end recall (0.82 → 0.85 → 0.94), trading
+Guard-stage precision (1.00 → 0.97 → 0.95) and deep-scan work (census keeps
+71 → 81 → 110 of 160 chunks).
+
+Reading notes:
+
+- **Focused-stage "recall 1.20" is not a bug**: findings are (chunk, message)
+  pairs, so at loose thresholds a real chunk can yield more than one finding
+  and the intermediate recall over-counts. Guard trims the duplicates and false
+  alarms (129 → 79 findings at 0.52); the end-to-end row is the real number.
+- **Stage attribution behaves as designed**: at 0.64 the census ceiling is the
+  binding loss (0.88, a miss there is permanent); at 0.52 the ceiling lifts to
+  0.96 and Guard supplies the precision.
+- **This validates threat-violence only** (Jigsaw `threat` labels). The three
+  relationship categories still have no external ground truth — journey §10.12.
+- Wall clock ~50 min for the sweep on an otherwise idle machine: batch baseline
+  ~13 min (computed once; it is threshold-independent because the chunks are
+  seeded), then census+focused+Guard per threshold ~10–18 min, slower at looser
+  thresholds. The 0.64 run was resumed from the stage checkpoint file after an
+  interruption — the checkpoint/resume path works.
