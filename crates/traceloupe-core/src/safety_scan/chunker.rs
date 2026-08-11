@@ -20,13 +20,50 @@ use crate::analysis::SourceKind;
 use crate::cache::CacheDb;
 use crate::Result;
 
-/// Messages per window. ~25 keeps enough conversational context for the
-/// pattern categories (grooming, coercive-control) while staying far under the
-/// model's context budget.
-pub const WINDOW: usize = 25;
+/// Messages per window. **Measured, not chosen.**
+///
+/// This was 25 on the reasoning that more context helps the pattern categories.
+/// Swept against the fixtures at production shape, that reasoning is wrong in
+/// the most expensive possible way (docs/validation/safety-scan-validation.md):
+///
+/// ```text
+/// window   mean recall   hard-negative clean rate
+///    3        0.89              0.87
+///    5        0.96              0.91   <- passes the release gate
+///    8        0.69              0.91
+///   12        0.11              1.00
+///   18        0.00              1.00
+///   25        0.05              1.00   <- what shipped
+/// ```
+///
+/// At 25 a death threat sitting among two dozen ordinary messages is not
+/// flagged at all; the same sentence in a 5-message window is. The 1.00 clean
+/// rates at the large sizes are vacuous — nothing is flagged, so nothing is
+/// wrongly flagged.
+///
+/// The cost is real and was measured too: five times as many requests, each
+/// only half as expensive (the system prompt is fixed overhead per call), so
+/// about 2.6x the wall clock. A scan that finds nothing faster is not cheaper.
+/// Prompt-prefix caching is what would buy that back (#409).
+pub const WINDOW: usize = 5;
 /// Messages repeated from the previous window so boundary-spanning patterns
 /// appear intact in at least one window.
-pub const OVERLAP: usize = 5;
+///
+/// Reduced from 5 with the window: the overlap must stay below it, and every
+/// extra overlapped message multiplies the request count at this size. There is
+/// no measurement behind 1 specifically — the fixtures never test a pattern
+/// straddling a boundary — so it is the cheapest value that keeps any overlap
+/// at all, and it should be revisited with a fixture that does.
+pub const OVERLAP: usize = 1;
+
+/// `stride` below is `WINDOW - OVERLAP`, and the windowing loop advances by it.
+/// At zero the loop never advances and never reaches the end, so it spins
+/// forever pushing identical chunks until memory runs out. A const assertion
+/// makes that a build failure rather than a hang in someone's scan.
+const _: () = assert!(
+    WINDOW > OVERLAP,
+    "WINDOW must exceed OVERLAP or chunking never advances"
+);
 
 /// Per-item input cap in chars (~1k tokens). One pasted wall of text must not
 /// blow the whole window past the context budget — the item is truncated with
@@ -650,7 +687,15 @@ pub fn chunk_all(cache: &CacheDb, range: TimeRange, sources: &ScanSources) -> Re
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    /// Windows a thread of `n` messages produces, from the constants.
+    pub(crate) fn expected_chunks(n: usize) -> usize {
+        if n <= WINDOW {
+            return 1;
+        }
+        let stride = WINDOW - OVERLAP;
+        1 + (n - WINDOW).div_ceil(stride)
+    }
 
     #[test]
     fn chunk_fingerprint_tracks_text_while_item_identity_tracks_content() {
@@ -780,10 +825,12 @@ mod tests {
         let keys_a: Vec<_> = a.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         let keys_b: Vec<_> = b.iter().map(|c| (&c.key, &c.fingerprint)).collect();
         assert_eq!(keys_a, keys_b);
-        // 60 msgs, window 25, stride 20 → windows at 0, 20, 40 (last covers to 60).
-        assert_eq!(a.len(), 3);
-        assert_eq!(a[0].items.len(), 25);
-        assert_eq!(a[2].items.len(), 20);
+        // Derived from WINDOW/OVERLAP rather than written out: these numbers
+        // are a function of the constants, and hard-coding them made a window
+        // change look like a chunking bug.
+        assert_eq!(a.len(), expected_chunks(60));
+        assert_eq!(a[0].items.len(), WINDOW);
+        assert!(a.last().unwrap().items.len() <= WINDOW);
     }
 
     #[test]

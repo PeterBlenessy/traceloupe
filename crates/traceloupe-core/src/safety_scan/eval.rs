@@ -612,6 +612,12 @@ mod tests {
         // into 15%. TRACELOUPE_EVAL_CHUNKED=1 buries each case in ordinary
         // conversation to the real window size and scores that instead.
         let chunked = std::env::var("TRACELOUPE_EVAL_CHUNKED").is_ok();
+        // WINDOW is a choice, not a constant of nature. Sweeping it is the
+        // point: if a smaller window detects more, the app should change.
+        let window: usize = std::env::var("TRACELOUPE_EVAL_WINDOW")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(crate::safety_scan::chunker::WINDOW);
         const BED: &[&str] = &[
             "are you still coming over later",
             "yeah should be there around seven",
@@ -647,17 +653,25 @@ mod tests {
             // The case's own messages, optionally bedded into ordinary
             // conversation so the model sees a production-shaped chunk.
             let texts: Vec<(String, String)> = if chunked {
+                // Bed the case in ordinary conversation, centred, to `window`
+                // messages. Centring matters: a case at the very start or end
+                // of the window is a different test from one surrounded.
+                let room = window.saturating_sub(case.messages.len());
+                let before = room / 2;
                 let mut v: Vec<(String, String)> = Vec::new();
-                for (i, t) in BED.iter().take(10).enumerate() {
+                for (i, t) in BED.iter().take(before).enumerate() {
                     v.push((if i % 2 == 0 { "them" } else { "me" }.into(), (*t).into()));
                 }
                 for m in &case.messages {
                     v.push((m.sender.clone(), m.text.clone()));
                 }
-                for (i, t) in BED.iter().skip(10).enumerate() {
+                for (i, t) in BED.iter().skip(before).enumerate() {
+                    if v.len() >= window {
+                        break;
+                    }
                     v.push((if i % 2 == 0 { "them" } else { "me" }.into(), (*t).into()));
                 }
-                v.truncate(crate::safety_scan::chunker::WINDOW);
+                v.truncate(window.max(case.messages.len()));
                 v
             } else {
                 case.messages
@@ -743,7 +757,15 @@ mod tests {
     #[test]
     #[ignore = "requires a local GGUF + llama-server (set TRACELOUPE_EVAL_MODEL)"]
     fn measure_scan_throughput() {
-        use crate::safety_scan::chunker::{Chunk, ChunkItem, WINDOW};
+        use crate::safety_scan::chunker::{Chunk, ChunkItem};
+        // Sweepable: the window is a configuration choice, and its cost has to
+        // be measured at the size we might actually ship.
+        let window: usize = std::env::var("TRACELOUPE_BENCH_WINDOW")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(crate::safety_scan::chunker::WINDOW);
+        #[allow(non_snake_case)]
+        let WINDOW = window;
         use crate::safety_scan::client::LlmClient;
         use crate::safety_scan::{engine, prompt};
         use std::path::PathBuf;

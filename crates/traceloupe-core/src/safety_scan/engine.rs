@@ -1071,13 +1071,14 @@ mod tests {
             |_| {},
         )
         .unwrap();
+        let want = crate::safety_scan::chunker::tests::expected_chunks(60);
         assert_eq!(outcome.status, ScanStatus::Completed);
-        assert_eq!(outcome.chunks_total, 3);
-        assert_eq!(outcome.classified, 3);
+        assert_eq!(outcome.chunks_total, want);
+        assert_eq!(outcome.classified, want);
         assert_eq!(outcome.skipped, 0);
         assert_eq!(
             hits.load(Ordering::SeqCst),
-            3,
+            want,
             "each chunk hits the model once"
         );
         // Every chunk checkpointed: a re-run reuses all three.
@@ -1094,7 +1095,7 @@ mod tests {
             |_| {},
         )
         .unwrap();
-        assert_eq!(outcome2.reused, 3);
+        assert_eq!(outcome2.reused, want);
         assert_eq!(outcome2.classified, 0);
     }
 
@@ -1301,7 +1302,10 @@ mod tests {
     fn second_run_reuses_everything_with_zero_model_calls() {
         let content = serde_json::json!({ "verdicts": [] });
         let (base, hits) = mock_server(vec![envelope(&content)]);
-        let cache = small_cache(30); // 2 windows
+        // Sized from the constants to yield exactly two windows.
+        let two_windows =
+            crate::safety_scan::chunker::WINDOW * 2 - crate::safety_scan::chunker::OVERLAP;
+        let cache = small_cache(two_windows as i64);
         let mut analysis = AnalysisDb::open_in_memory().unwrap();
         let first = run_scan(
             &cache,
@@ -1316,7 +1320,7 @@ mod tests {
             |_| {},
         )
         .unwrap();
-        assert_eq!(first.classified, 2);
+        assert_eq!(first.classified, 2, "the fixture is sized for two windows");
         let calls_after_first = hits.load(Ordering::SeqCst);
         let second = run_scan(
             &cache,
@@ -1424,9 +1428,16 @@ mod tests {
 
     #[test]
     fn overlap_double_flag_counts_as_one_finding() {
-        // 30 messages → windows [0..25] and [20..30]. Message 22 appears in
-        // both (offset 22 and offset 2). Flag it from BOTH windows; the
-        // outcome must count one finding, not two.
+        // Exactly two windows, derived so this survives a WINDOW change: with
+        // n = WINDOW + stride the thread yields [0..WINDOW] and [stride..n].
+        // The message at index WINDOW-1 sits in both — last in the first
+        // window, at offset WINDOW-1-stride in the second. Flag it from BOTH;
+        // the outcome must count one finding, not two.
+        use crate::safety_scan::chunker::{OVERLAP, WINDOW};
+        let stride = WINDOW - OVERLAP;
+        let n = WINDOW + stride;
+        let shared_first = (WINDOW - 1) as u64;
+        let shared_second = (WINDOW - 1 - stride) as u64;
         let v = |idx: u64| {
             envelope(&serde_json::json!({
                 "verdicts": [
@@ -1434,8 +1445,8 @@ mod tests {
                 ]
             }))
         };
-        let (base, _hits) = mock_server(vec![v(22), v(2)]);
-        let cache = small_cache(30);
+        let (base, _hits) = mock_server(vec![v(shared_first), v(shared_second)]);
+        let cache = small_cache(n as i64);
         let mut analysis = AnalysisDb::open_in_memory().unwrap();
         let outcome = run_scan(
             &cache,
@@ -1552,7 +1563,10 @@ mod tests {
     fn progress_is_reported_per_chunk() {
         let content = serde_json::json!({ "verdicts": [] });
         let (base, _hits) = mock_server(vec![envelope(&content)]);
-        let cache = small_cache(30); // 2 windows
+        // Sized from the constants to yield exactly two windows.
+        let two_windows =
+            crate::safety_scan::chunker::WINDOW * 2 - crate::safety_scan::chunker::OVERLAP;
+        let cache = small_cache(two_windows as i64);
         let mut analysis = AnalysisDb::open_in_memory().unwrap();
         let mut seen = Vec::new();
         run_scan(
