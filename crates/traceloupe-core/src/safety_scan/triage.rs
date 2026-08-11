@@ -193,6 +193,37 @@ where
     Ok(out)
 }
 
+/// A message plus its neighbours, the unit focused classification judges: the
+/// window is context, one item is under review.
+#[derive(Debug, Clone)]
+pub struct FocusWindow {
+    /// The window's messages in order, oldest first.
+    pub items: Vec<CensusInput>,
+    /// Index within `items` of the message actually being judged.
+    pub focus: usize,
+}
+
+/// Build the context window for the message at `focus_idx` in a thread's
+/// ordered `messages`.
+///
+/// Focused classification needs the harmful message SEEN IN CONTEXT — a threat
+/// reads differently after "stop messaging me" than after a joke. The window is
+/// `radius` messages either side, clamped at the thread's ends, so a message
+/// near the start or end simply has a shorter, off-centre window rather than
+/// being padded with unrelated content.
+///
+/// `focus` in the returned window is the judged message's new index, which
+/// shifts when the start is clamped — the caller judges THAT index, so it must
+/// be right or the verdict clamp (engine) rejects a correct finding.
+pub fn context_window(messages: &[CensusInput], focus_idx: usize, radius: usize) -> FocusWindow {
+    let start = focus_idx.saturating_sub(radius);
+    let end = (focus_idx + radius + 1).min(messages.len());
+    FocusWindow {
+        items: messages[start..end].to_vec(),
+        focus: focus_idx - start,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +344,57 @@ mod tests {
 
     /// No prototypes must score 0, never a spurious hit — the caller treats
     /// this as "cannot triage, scan everything", not "all clean".
+    fn msgs(n: usize) -> Vec<CensusInput> {
+        (0..n)
+            .map(|i| CensusInput {
+                source_id: i as i64,
+                thread_identifier: "t".into(),
+                sender: "s".into(),
+                occurred_at: Some(1000 + i as i64),
+                text: format!("m{i}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_centred_window_puts_the_focus_in_the_middle() {
+        let w = context_window(&msgs(10), 5, 2);
+        assert_eq!(w.items.len(), 5, "radius 2 each side");
+        assert_eq!(
+            w.items[w.focus].source_id, 5,
+            "focus points at the judged msg"
+        );
+        assert_eq!(w.focus, 2, "centred");
+    }
+
+    #[test]
+    fn a_window_at_the_start_is_shorter_and_off_centre_not_padded() {
+        let w = context_window(&msgs(10), 0, 2);
+        assert_eq!(w.items.len(), 3, "no messages before index 0");
+        assert_eq!(w.focus, 0);
+        assert_eq!(w.items[w.focus].source_id, 0);
+    }
+
+    #[test]
+    fn a_window_at_the_end_clamps() {
+        let m = msgs(10);
+        let w = context_window(&m, 9, 3);
+        assert_eq!(w.items.last().unwrap().source_id, 9);
+        assert_eq!(w.items[w.focus].source_id, 9, "focus still the judged msg");
+        // Never runs past the end.
+        assert!(w.items.len() <= 4);
+    }
+
+    #[test]
+    fn the_focus_index_survives_a_clamped_start() {
+        // radius 4 but focus at 1: start clamps to 0, so focus shifts to 1.
+        let w = context_window(&msgs(10), 1, 4);
+        assert_eq!(
+            w.items[w.focus].source_id, 1,
+            "the clamp must not misplace focus"
+        );
+    }
+
     #[test]
     fn an_empty_prototype_set_scores_zero() {
         let msgs = vec![CensusInput {
