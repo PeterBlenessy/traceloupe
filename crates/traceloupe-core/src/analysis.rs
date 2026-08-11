@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -431,6 +431,26 @@ CREATE TABLE IF NOT EXISTS suppressions (
     UNIQUE(scope, value, category, sender)
 );
 
+-- Triage census (#459): one cheap embedding score per message, so the scan can
+-- rank where to spend the expensive classifier. `sender` is copied in because
+-- the unit of inference is (conversation, sender), not the conversation — a
+-- group chat with one abuser and nine ordinary people averages to nothing but
+-- stratifies to a clear signal.
+--
+-- `score` is the max cosine similarity to any selected-category prototype:
+-- higher = more like known harm. It is advisory, never a finding.
+CREATE TABLE IF NOT EXISTS census (
+    source_id         INTEGER NOT NULL,      -- messages.id
+    thread_identifier TEXT NOT NULL,
+    sender            TEXT NOT NULL,         -- '' when unknown
+    occurred_at       INTEGER,
+    score             REAL NOT NULL,
+    embedded_at       INTEGER NOT NULL,
+    PRIMARY KEY (source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_census_cell
+    ON census(thread_identifier, sender);
+
 -- Per-Chunk classification progress. One row per chunk_key (latest state);
 -- resume skips chunks whose status is 'done' with an unchanged fingerprint,
 -- which also gives incremental re-scan for free.
@@ -600,6 +620,32 @@ pub struct SuppressionRow {
     pub reason: Option<String>,
     /// Live count of findings this rule is dismissing right now.
     pub hits: i64,
+}
+
+/// One message's census score to insert.
+#[derive(Debug, Clone)]
+pub struct CensusRow {
+    pub source_id: i64,
+    pub thread_identifier: String,
+    pub sender: String,
+    pub occurred_at: Option<i64>,
+    pub score: f64,
+}
+
+/// A ranked triage cell: one (conversation, sender) pair and its evidence.
+#[derive(Debug, Clone)]
+pub struct TriageCell {
+    pub thread_identifier: String,
+    pub sender: String,
+    pub total: i64,
+    /// Messages at or above the hot threshold — the primary rank key.
+    pub hot: i64,
+    pub mean: f64,
+    pub peak: f64,
+    pub first_at: Option<i64>,
+    pub last_at: Option<i64>,
+    /// Score slope per day; positive = escalating over time.
+    pub trajectory: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -984,6 +1030,22 @@ impl AnalysisDb {
                     [],
                 )?;
             }
+            // v14: the triage census (#459). A cheap per-message score store,
+            // created empty; a scan populates it. No backfill — old backups
+            // simply have no census until their next scan.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS census (
+                     source_id         INTEGER NOT NULL,
+                     thread_identifier TEXT NOT NULL,
+                     sender            TEXT NOT NULL,
+                     occurred_at       INTEGER,
+                     score             REAL NOT NULL,
+                     embedded_at       INTEGER NOT NULL,
+                     PRIMARY KEY (source_id)
+                 );
+                 CREATE INDEX IF NOT EXISTS idx_census_cell
+                     ON census(thread_identifier, sender);",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1136,6 +1198,133 @@ impl AnalysisDb {
     }
 
     // ---- chunk progress / resume ----
+
+    // ---- triage census (#459) ----
+
+    /// One scored message from the cheap embedding pass.
+    ///
+    /// Bulk-insert these with [`Self::record_census`]. The score is advisory —
+    /// it decides where the expensive classifier looks, never what a finding is.
+    ///
+    /// A cell is (thread_identifier, sender). Scanning re-embeds only messages
+    /// whose id is not already present, so a resumed or repeated census is
+    /// incremental for free.
+    pub fn record_census(&mut self, rows: &[CensusRow], at: i64) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO census
+                     (source_id, thread_identifier, sender, occurred_at, score, embedded_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(source_id) DO UPDATE SET
+                     score = excluded.score, embedded_at = excluded.embedded_at",
+            )?;
+            for r in rows {
+                stmt.execute(params![
+                    r.source_id,
+                    r.thread_identifier,
+                    r.sender,
+                    r.occurred_at,
+                    r.score,
+                    at
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Message ids that already have a census score, so a scan embeds only the
+    /// rest. Small backups return everything; the query is indexed on the PK.
+    pub fn census_scored_ids(&self) -> Result<std::collections::HashSet<i64>> {
+        let mut stmt = self.conn.prepare("SELECT source_id FROM census")?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    }
+
+    /// The triage worklist: (conversation, sender) cells ranked by evidence,
+    /// most suspicious first.
+    ///
+    /// Ranking is by COUNT of hot messages, not by the single maximum — one
+    /// stray high score is noise, a sender with many is signal, and this is the
+    /// heavy-tail insight that makes triage beat a uniform sweep. `hot` counts
+    /// messages at or above `threshold`; ties break on the mean so a denser
+    /// cell sorts first.
+    ///
+    /// `trajectory` is the slope of score over time within the cell (per day),
+    /// so a slow-burn pattern that never spikes but steadily climbs — grooming,
+    /// coercive control — still surfaces. It is advisory context, not part of
+    /// the sort, because a single number cannot rank two different kinds of
+    /// evidence; the caller decides how to weigh a high count against a rising
+    /// trajectory.
+    pub fn triage_cells(&self, threshold: f64) -> Result<Vec<TriageCell>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT thread_identifier, sender,
+                    COUNT(*)                              AS total,
+                    SUM(CASE WHEN score >= ?1 THEN 1 ELSE 0 END) AS hot,
+                    AVG(score)                            AS mean,
+                    MAX(score)                            AS peak,
+                    MIN(occurred_at)                      AS first_at,
+                    MAX(occurred_at)                      AS last_at
+             FROM census
+             GROUP BY thread_identifier, sender
+             ORDER BY hot DESC, mean DESC",
+        )?;
+        let mut cells: Vec<TriageCell> = stmt
+            .query_map(params![threshold], |r| {
+                Ok(TriageCell {
+                    thread_identifier: r.get(0)?,
+                    sender: r.get(1)?,
+                    total: r.get(2)?,
+                    hot: r.get(3)?,
+                    mean: r.get(4)?,
+                    peak: r.get(5)?,
+                    first_at: r.get(6)?,
+                    last_at: r.get(7)?,
+                    trajectory: 0.0,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        // Trajectory needs the per-message points, computed per cell rather than
+        // in SQL because a least-squares slope over (day, score) is clearer here
+        // and the point count per cell is small.
+        for c in &mut cells {
+            c.trajectory = self.cell_trajectory(&c.thread_identifier, &c.sender)?;
+        }
+        Ok(cells)
+    }
+
+    /// Least-squares slope of score against day-offset within one cell, per day.
+    /// Zero when there is one point or no time spread — no trend to report.
+    fn cell_trajectory(&self, thread: &str, sender: &str) -> Result<f64> {
+        let mut stmt = self.conn.prepare(
+            "SELECT occurred_at, score FROM census
+             WHERE thread_identifier = ?1 AND sender = ?2 AND occurred_at IS NOT NULL
+             ORDER BY occurred_at",
+        )?;
+        let pts: Vec<(i64, f64)> = stmt
+            .query_map(params![thread, sender], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+        if pts.len() < 2 {
+            return Ok(0.0);
+        }
+        let day = 86_400.0;
+        let base = pts[0].0 as f64;
+        let xs: Vec<f64> = pts.iter().map(|(t, _)| (*t as f64 - base) / day).collect();
+        let ys: Vec<f64> = pts.iter().map(|(_, s)| *s).collect();
+        let n = xs.len() as f64;
+        let mean_x = xs.iter().sum::<f64>() / n;
+        let mean_y = ys.iter().sum::<f64>() / n;
+        let mut num = 0.0;
+        let mut den = 0.0;
+        for (x, y) in xs.iter().zip(&ys) {
+            num += (x - mean_x) * (y - mean_y);
+            den += (x - mean_x) * (x - mean_x);
+        }
+        Ok(if den == 0.0 { 0.0 } else { num / den })
+    }
 
     /// Record a chunk as classified (or skipped). Upserts on chunk_key so the
     /// latest fingerprint wins. `flagged` marks that this (sweep) chunk
@@ -2478,6 +2667,144 @@ mod tests {
     /// scan's scope from its `sources` string, so if that string matched more
     /// than the scan covered, a scan of one thread would report other people's
     /// findings as its own.
+    fn census(id: i64, thread: &str, sender: &str, at: i64, score: f64) -> CensusRow {
+        CensusRow {
+            source_id: id,
+            thread_identifier: thread.into(),
+            sender: sender.into(),
+            occurred_at: Some(at),
+            score,
+        }
+    }
+
+    /// The heavy-tail insight: a cell with MANY hot messages ranks above one
+    /// with a single higher spike. One stray high score is noise; density is
+    /// signal, and ranking by count is what makes triage beat a uniform sweep.
+    #[test]
+    fn triage_ranks_by_density_not_by_the_single_peak() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let mut rows = vec![
+            // "spiker": one very high score among clean ones.
+            census(1, "spiker", "x", 1000, 0.95),
+        ];
+        for i in 0..5 {
+            rows.push(census(10 + i, "spiker", "x", 1000 + i, 0.30));
+        }
+        // "dense": four moderately-hot messages, lower peak.
+        for i in 0..4 {
+            rows.push(census(20 + i, "dense", "y", 1000 + i, 0.72));
+        }
+        db.record_census(&rows, 1).unwrap();
+
+        let cells = db.triage_cells(0.65).unwrap();
+        assert_eq!(
+            cells[0].thread_identifier, "dense",
+            "density outranks a lone spike"
+        );
+        assert!(
+            cells[0].peak < cells[1].peak,
+            "even though its peak is lower"
+        );
+        assert_eq!(cells[0].hot, 4);
+        assert_eq!(cells[1].hot, 1);
+    }
+
+    /// The group-chat case from Peter: one abuser among many ordinary
+    /// participants. The unit of ranking is (conversation, sender), so the
+    /// abuser's cell is separable even though the thread average is mild.
+    #[test]
+    fn one_hot_sender_in_a_crowd_is_ranked_separately() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let mut rows = Vec::new();
+        // Nine ordinary senders, one message each, all cold.
+        for i in 0..9 {
+            rows.push(census(
+                100 + i,
+                "groupchat",
+                &format!("ordinary{i}"),
+                1000 + i,
+                0.25,
+            ));
+        }
+        // One abuser, several hot.
+        for i in 0..4 {
+            rows.push(census(200 + i, "groupchat", "abuser", 1000 + i, 0.80));
+        }
+        db.record_census(&rows, 1).unwrap();
+
+        let cells = db.triage_cells(0.65).unwrap();
+        assert_eq!(cells[0].sender, "abuser");
+        assert_eq!(cells[0].thread_identifier, "groupchat");
+        assert_eq!(cells[0].hot, 4);
+        // Every other cell in the same thread is a separate, cold row.
+        assert!(cells[1..].iter().all(|c| c.hot == 0));
+        assert!(
+            cells
+                .iter()
+                .filter(|c| c.thread_identifier == "groupchat")
+                .count()
+                >= 10,
+            "the thread is split per sender, not pooled"
+        );
+    }
+
+    /// A slow burn that never spikes but climbs steadily has a positive
+    /// trajectory — the escalation signal the pattern categories need.
+    #[test]
+    fn a_rising_cell_has_positive_trajectory() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let day = 86_400;
+        let mut rows = Vec::new();
+        for i in 0..10i64 {
+            // 0.30 climbing to ~0.55 over ten days, never crossing 0.65.
+            rows.push(census(
+                i,
+                "burn",
+                "s",
+                1000 + i * day,
+                0.30 + 0.025 * i as f64,
+            ));
+        }
+        // A flat cell for contrast.
+        for i in 0..10i64 {
+            rows.push(census(100 + i, "flat", "s", 1000 + i * day, 0.40));
+        }
+        db.record_census(&rows, 1).unwrap();
+
+        let cells = db.triage_cells(0.65).unwrap();
+        let burn = cells
+            .iter()
+            .find(|c| c.thread_identifier == "burn")
+            .unwrap();
+        let flat = cells
+            .iter()
+            .find(|c| c.thread_identifier == "flat")
+            .unwrap();
+        assert_eq!(burn.hot, 0, "it never crosses the threshold");
+        assert!(
+            burn.trajectory > 0.01,
+            "but it is clearly rising: {}",
+            burn.trajectory
+        );
+        assert!(flat.trajectory.abs() < 1e-6, "the flat cell is flat");
+    }
+
+    /// The census is incremental: a re-scan embeds only new messages.
+    #[test]
+    fn census_reports_which_ids_are_already_scored() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        db.record_census(
+            &[
+                census(1, "t", "s", 1000, 0.5),
+                census(2, "t", "s", 1001, 0.6),
+            ],
+            1,
+        )
+        .unwrap();
+        let seen = db.census_scored_ids().unwrap();
+        assert!(seen.contains(&1) && seen.contains(&2) && !seen.contains(&3));
+    }
+
     #[test]
     fn a_conversation_scope_matches_only_that_conversation() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
