@@ -8,6 +8,12 @@ import {
 } from "@/components/safety-flag-badge";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   ArrowDownToLine,
   ArrowDownWideNarrow,
   ArrowLeft,
@@ -26,6 +32,7 @@ import {
   Sparkles,
   Trash2,
   Users,
+  ShieldQuestion,
 } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -563,6 +570,8 @@ function Conversations({
   unsafeOnly: boolean;
   onUnsafeOnly: (v: boolean) => void;
 }) {
+  // Its own navigate: the context-menu action routes to Safety Scan.
+  const navigate = useNavigate();
   // #268 was exactly this: sms.db decrypted truncated, would not open, and
   // this view read as "No messages in this backup." for months. It is the
   // reason module_status exists (#288).
@@ -914,15 +923,37 @@ function Conversations({
                   className="px-2 py-0.5"
                   aria-current={selected?.id === t.id || undefined}
                 >
-                  <ThreadRow
-                    thread={t}
-                    resolve={resolve}
-                    showContactNames={showContactNames}
-                    showAvatars={showAvatars}
-                    active={selected?.id === t.id}
-                    flagSeverity={marks.data?.threads[t.id]}
-                    onClick={() => onSelect(t.id)}
-                  />
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild>
+                      <div>
+                        <ThreadRow
+                          thread={t}
+                          resolve={resolve}
+                          showContactNames={showContactNames}
+                          showAvatars={showAvatars}
+                          active={selected?.id === t.id}
+                          flagSeverity={marks.data?.threads[t.id]}
+                          onClick={() => onSelect(t.id)}
+                        />
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      {/* Scanning one conversation takes minutes where a whole
+                          backup takes hours, and this is where the reviewer
+                          already is when they get suspicious. */}
+                      <ContextMenuItem
+                        disabled={!t.identifier}
+                        onSelect={() =>
+                          navigate({
+                            to: "/safety-scan",
+                            search: { thread: t.identifier! },
+                          })
+                        }
+                      >
+                        <ShieldQuestion /> Scan this conversation
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 </div>
               )}
             />

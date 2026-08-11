@@ -119,9 +119,20 @@ const routes = [
     // `?finding=<id>` returns to a specific finding — the round trip out to a
     // conversation and back. Without it the return could only ever land on the
     // top of the list, which is not "back" (#224).
-    validateSearch: (search: Record<string, unknown>): { finding?: number } => {
+    //
+    // `?thread=<identifier>` arrives from "Scan this conversation" in Chats:
+    // the reviewer is already reading the conversation they are worried about,
+    // so the scan scope is set for them rather than found again in a picker.
+    validateSearch: (
+      search: Record<string, unknown>,
+    ): { finding?: number; thread?: string } => {
       const f = Number(search.finding);
-      return Number.isFinite(f) && f > 0 ? { finding: f } : {};
+      const out: { finding?: number; thread?: string } = {};
+      if (Number.isFinite(f) && f > 0) out.finding = f;
+      if (typeof search.thread === "string" && search.thread) {
+        out.thread = search.thread;
+      }
+      return out;
     },
     component: SafetyScanView,
   }),
