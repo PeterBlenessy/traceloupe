@@ -824,6 +824,33 @@ mod tests {
     ///   TRACELOUPE_LLAMA_SERVER=/path/llama-server \
     ///   TRACELOUPE_BENCH_CHUNKS=8 TRACELOUPE_BENCH_PARALLEL=1 \
     ///   cargo test -p traceloupe-core measure_scan_throughput -- --ignored --nocapture
+    /// Dump the PRODUCTION verdict grammars to `$TRACELOUPE_GRAMMAR_OUT`
+    /// (default /tmp/grammars.json) as `{ "<n>": "<gbnf>", ... }` for item
+    /// counts 1..=30. The external triage validation harness
+    /// (`tools/validate-triage-pipeline.py`) sends these verbatim so it can
+    /// never drift into reimplementing GBNF — a mistake that produced false
+    /// "recall 0.00" results three times during the rebuild (see
+    /// docs/safety-scan-journey.md §10.6).
+    #[test]
+    #[ignore = "writes the grammar file the validation harness needs"]
+    fn dump_grammars() {
+        let out = std::env::var("TRACELOUPE_GRAMMAR_OUT")
+            .unwrap_or_else(|_| "/tmp/grammars.json".to_string());
+        let mut s = String::from("{");
+        for n in 1..=30usize {
+            if n > 1 {
+                s.push(',');
+            }
+            s.push_str(&format!(
+                "\"{n}\":{}",
+                serde_json::to_string(&crate::safety_scan::prompt::verdicts_grammar(n)).unwrap()
+            ));
+        }
+        s.push('}');
+        std::fs::write(&out, s).unwrap();
+        eprintln!("wrote grammars to {out}");
+    }
+
     #[test]
     #[ignore = "requires a local GGUF + llama-server (set TRACELOUPE_EVAL_MODEL)"]
     fn measure_scan_throughput() {
