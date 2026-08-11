@@ -57,6 +57,14 @@ impl ScanMode {
         }
     }
 
+    /// Context radius for focused classification: messages either side of the
+    /// judged one. The end-to-end validation used a 5-message window (#458), so
+    /// radius 2 reproduces it. Not per-mode — context need is a property of the
+    /// classifier, not the recall/precision posture.
+    pub fn default_radius() -> usize {
+        2
+    }
+
     pub fn parse(s: &str) -> Option<ScanMode> {
         match s {
             "thorough" => Some(ScanMode::Thorough),
