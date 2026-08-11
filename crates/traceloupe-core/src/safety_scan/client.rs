@@ -88,6 +88,60 @@ impl LlmClient {
         self.post_chat(&body)
     }
 
+    /// Embed one text via `/embedding`, returning its vector. Same privacy
+    /// rules as chat: loopback only, nothing logged. Used by the triage census
+    /// (#459) to score every message cheaply before any deep classification.
+    ///
+    /// EmbeddingGemma is trained with task prefixes; the caller passes the
+    /// already-prefixed text, because the prefix that matters
+    /// ("task: classification | query: ") is a property of what the census is
+    /// doing, not of the transport.
+    pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
+        let url = format!("{}/embedding", self.base_url);
+        let mut req = self
+            .agent
+            .post(&url)
+            .set("Content-Type", "application/json");
+        if let Some(key) = &self.api_key {
+            req = req.set("Authorization", &format!("Bearer {key}"));
+        }
+        let resp = req
+            .send_string(&json!({ "content": text }).to_string())
+            .map_err(|e| match e {
+                ureq::Error::Status(code, _) => {
+                    Error::Inference(format!("llama-server returned HTTP {code}"))
+                }
+                ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
+            })?;
+        let text = resp
+            .into_string()
+            .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))?;
+        let v: Value = serde_json::from_str(&text)
+            .map_err(|_| Error::Inference("embedding response is not JSON".into()))?;
+        // llama-server returns either `{embedding: [...]}` or, with some builds,
+        // `[{embedding: [[...]]}]`. Accept both rather than pin one server.
+        let arr = v
+            .get("embedding")
+            .or_else(|| v.get(0).and_then(|x| x.get("embedding")))
+            .ok_or_else(|| Error::Inference("no embedding in response".into()))?;
+        // The nested form wraps the vector one level deeper.
+        let flat = if arr.get(0).map(|x| x.is_array()).unwrap_or(false) {
+            arr.get(0).unwrap()
+        } else {
+            arr
+        };
+        let out: Vec<f32> = flat
+            .as_array()
+            .ok_or_else(|| Error::Inference("embedding is not an array".into()))?
+            .iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect();
+        if out.is_empty() {
+            return Err(Error::Inference("empty embedding".into()));
+        }
+        Ok(out)
+    }
+
     fn post_chat(&self, body: &Value) -> Result<String> {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let mut req = self

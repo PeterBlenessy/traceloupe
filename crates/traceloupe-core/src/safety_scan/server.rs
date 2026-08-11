@@ -240,6 +240,10 @@ pub struct ServerConfig {
     pub api_key: Option<String>,
     /// `-1` = offload everything to the GPU (Apple Silicon default).
     pub gpu_layers: i32,
+    /// Serve `/embedding` instead of chat: `--embedding --pooling mean`. The
+    /// triage census (#459) needs a vector per message, and the same sandboxed
+    /// sidecar serves it — no second binary, no new isolation story.
+    pub embedding: bool,
     /// Wrap the process in the Seatbelt profile (macOS only; on other
     /// platforms this flag is ignored — Safety Scan is macOS-first).
     pub sandbox: bool,
@@ -332,6 +336,11 @@ impl LlamaServer {
         if cfg.parallel > 1 {
             server_args.push("--parallel".into());
             server_args.push(cfg.parallel.to_string().into());
+        }
+        if cfg.embedding {
+            server_args.push("--embedding".into());
+            server_args.push("--pooling".into());
+            server_args.push("mean".into());
         }
         if let Some(key) = &cfg.api_key {
             // Loopback-only + per-run + only gates model access (not data), so
@@ -567,6 +576,7 @@ mod tests {
             parallel: 1,
             api_key: None,
             gpu_layers: -1,
+            embedding: false,
             sandbox: false,
             scratch_dir: std::env::temp_dir().join("traceloupe-scratch-test"),
         }

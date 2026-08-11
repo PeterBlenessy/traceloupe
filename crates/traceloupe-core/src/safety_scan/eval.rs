@@ -595,6 +595,7 @@ mod tests {
                 parallel: 1,
                 api_key: None,
                 gpu_layers: -1,
+                embedding: false,
                 sandbox: true,
                 scratch_dir: std::env::temp_dir().join("traceloupe-eval-scratch"),
             },
@@ -737,6 +738,75 @@ mod tests {
         // here; left as a print so a human reviews the numbers first.
     }
 
+    /// The triage census path, end to end: the sandboxed sidecar serves
+    /// embeddings, and `embed()` returns a vector that puts a threat nearer a
+    /// threat than a grocery run. Ignored like the other live tests.
+    ///
+    ///   TRACELOUPE_EMBED_MODEL=~/.../embeddinggemma-300M-Q8_0.gguf \
+    ///   TRACELOUPE_LLAMA_SERVER=~/.../llama-server \
+    ///   cargo test -p traceloupe-core embed_discriminates -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires the embedding GGUF (set TRACELOUPE_EMBED_MODEL)"]
+    fn embed_discriminates() {
+        use crate::safety_scan::client::LlmClient;
+        use std::path::PathBuf;
+        use std::time::Duration;
+        let Ok(model) = std::env::var("TRACELOUPE_EMBED_MODEL") else {
+            eprintln!("set TRACELOUPE_EMBED_MODEL");
+            return;
+        };
+        let binary = crate::safety_scan::server::resolve_binary().expect("sidecar");
+        let port = crate::safety_scan::server::pick_port().unwrap();
+        let mut server = crate::safety_scan::server::LlamaServer::spawn(
+            &crate::safety_scan::server::ServerConfig {
+                binary,
+                model_path: PathBuf::from(model),
+                port,
+                ctx_size: 2048,
+                parallel: 1,
+                api_key: None,
+                gpu_layers: -1,
+                sandbox: true,
+                embedding: true,
+                scratch_dir: std::env::temp_dir().join("traceloupe-embed-scratch"),
+            },
+            None,
+        )
+        .expect("spawn");
+        server.wait_healthy(Duration::from_secs(120)).expect("load");
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(60));
+        let pfx = "task: classification | query: ";
+        let threat = c
+            .embed(&format!(
+                "{pfx}i know where you live and im going to make you regret this"
+            ))
+            .unwrap();
+        let threat2 = c
+            .embed(&format!(
+                "{pfx}you will pay for what you did, i will find you"
+            ))
+            .unwrap();
+        let grocery = c
+            .embed(&format!("{pfx}can you grab milk on the way home"))
+            .unwrap();
+        server.shutdown();
+
+        let cos = |a: &[f32], b: &[f32]| {
+            let d: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+            let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+            let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+            d / (na * nb)
+        };
+        let same = cos(&threat, &threat2);
+        let diff = cos(&threat, &grocery);
+        println!("threat~threat {same:.3}  threat~grocery {diff:.3}");
+        assert_eq!(threat.len(), 768, "EmbeddingGemma is 768-dim");
+        assert!(
+            same > diff + 0.05,
+            "two threats must be nearer than a threat and a grocery run"
+        );
+    }
+
     /// The other half of a baseline (#407): how fast a scan actually goes.
     ///
     /// The eval above measures quality over 2–4 message cases; a real chunk is
@@ -861,6 +931,7 @@ mod tests {
                 parallel,
                 api_key: None,
                 gpu_layers: -1,
+                embedding: false,
                 sandbox: true,
                 scratch_dir: std::env::temp_dir().join("traceloupe-bench-scratch"),
             },
