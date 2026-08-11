@@ -197,8 +197,14 @@ export function SafetyScanView() {
   const effectiveSelected = selectedSources ?? sourceTokens;
   const includesNotes = effectiveSelected.includes("notes");
   const includesMessages = effectiveSelected.some((s) => s !== "notes");
-  const sourcesArg =
-    effectiveSelected.length === sourceTokens.length && sourceTokens.length > 0
+  // "Scan this conversation" from Chats arrives as ?thread=<identifier> and
+  // sets the scope outright: the reviewer already chose, in the place where
+  // they were reading. A conversation scan is minutes where a whole backup is
+  // hours, which is the point of the entry point existing.
+  const scanThread = (useSearch({ strict: false }) as { thread?: string }).thread;
+  const sourcesArg = scanThread
+    ? `thread:${scanThread}`
+    : effectiveSelected.length === sourceTokens.length && sourceTokens.length > 0
       ? "all"
       : effectiveSelected.join(",");
   // The [min, max] message timestamps → a chip per year the backup covers,
@@ -2300,7 +2306,10 @@ function FindingsList({
   // Returning from a conversation opened via a finding (#224). The panel is
   // virtualized, so the finding has to be resolved to a row INDEX under whatever
   // filters are active now — which may differ from when the user left.
-  const returnTo = useSearch({ strict: false }) as { finding?: number };
+  const returnTo = useSearch({ strict: false }) as {
+    finding?: number;
+    thread?: string;
+  };
   const page = useMemo(
     () => ({
       severity:
