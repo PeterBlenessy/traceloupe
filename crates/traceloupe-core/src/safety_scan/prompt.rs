@@ -79,6 +79,27 @@ pub fn render_chunk(chunk: &Chunk) -> String {
     out
 }
 
+/// Render a chunk for FOCUSED classification: the whole window as context, but a
+/// verdict asked for ONE item only.
+///
+/// Measured, this is the difference between a scan that works and one that does
+/// not (docs/validation/safety-scan-validation.md). Asking a batch verdict on
+/// all 25 messages at once drowns a single harmful line among two dozen ordinary
+/// ones: recall on a real threat falls from 0.78 in isolation to 0.20 in a
+/// batch. Giving the same window as context and asking about one item recovers
+/// it — 0.93. It costs one call per message rather than one per window, which is
+/// why the triage census (#459) decides WHICH messages get this treatment.
+///
+/// `focus` is the index within the chunk to judge. The others remain, numbered,
+/// so a pattern that only makes sense across messages is still visible.
+pub fn render_focused(chunk: &Chunk, focus: usize) -> String {
+    let mut out = render_chunk(chunk);
+    out.push_str(&format!(
+        "\nJudge ONLY item [{focus}]. The other items are context for          understanding it, not themselves under review. Output a verdict for          item [{focus}] only, or no verdicts if it is not a finding."
+    ));
+    out
+}
+
 /// A raw GBNF grammar (llama-server `grammar` field) constraining the verdicts
 /// output. We hand-write GBNF rather than pass a JSON schema via `response_format`
 /// because of two behaviours verified empirically against the pinned server
@@ -131,9 +152,40 @@ ws ::= [ \t\n]{0,4}"##;
 
 #[cfg(test)]
 mod tests {
+
+    fn tiny_chunk() -> Chunk {
+        Chunk {
+            key: "k".into(),
+            fingerprint: "f".into(),
+            kind: crate::analysis::SourceKind::Message,
+            thread_identifier: Some("t".into()),
+            label: None,
+            service: Some("iMessage".into()),
+            items: (0..3)
+                .map(|i| ChunkItem {
+                    source_id: i,
+                    sender: "them".into(),
+                    occurred_at: Some(1000 + i),
+                    text: format!("message {i}"),
+                    fingerprint: format!("fp{i}"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn focused_render_keeps_context_but_names_one_item() {
+        let out = super::render_focused(&tiny_chunk(), 1);
+        // Every item is still present as context…
+        assert!(out.contains("[0]") && out.contains("[1]") && out.contains("[2]"));
+        // …but the instruction singles out exactly one.
+        assert!(out.contains("Judge ONLY item [1]"));
+        assert!(!out.contains("Judge ONLY item [0]"));
+    }
+
     use super::*;
     use crate::analysis::SourceKind;
-    use crate::safety_scan::chunker::ChunkItem;
+    use crate::safety_scan::chunker::{Chunk, ChunkItem};
 
     #[test]
     fn render_numbers_items_and_labels_sender() {

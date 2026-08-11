@@ -139,6 +139,21 @@ pub(crate) fn verdicts_to_findings_for_eval(chunk: &Chunk, output: &Value) -> Ve
 /// that don't exist in the chunk are rejected (hallucinated ids must never
 /// become findings), and so are verdicts over items with no standalone content.
 fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
+    verdicts_to_findings_impl(chunk, output, None)
+}
+
+/// Focused-mode validation: the model was asked to judge ONE item, so any
+/// verdict pointing elsewhere is discarded. Without this a focused call that
+/// hallucinated a verdict on a context message would attach a finding to a
+/// message nobody asked about — and deep-links, badges and the sender all point
+/// at the wrong place. The clamp is the safety property that makes focused mode
+/// trustworthy, not just more sensitive.
+#[cfg(test)]
+fn verdicts_to_findings_focused(chunk: &Chunk, output: &Value, focus: usize) -> Verdicts {
+    verdicts_to_findings_impl(chunk, output, Some(focus))
+}
+
+fn verdicts_to_findings_impl(chunk: &Chunk, output: &Value, focus: Option<usize>) -> Verdicts {
     let mut out = Verdicts::default();
     let Some(verdicts) = output["verdicts"].as_array() else {
         return out;
@@ -153,6 +168,14 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
             out.rejected += 1;
             continue;
         };
+        if let Some(f) = focus {
+            if index as usize != f {
+                // A verdict on a context message: the model was asked about one
+                // item only. Not counted as rejected — it is the model
+                // volunteering, not malforming.
+                continue;
+            }
+        }
         let Some(item) = chunk.items.get(index as usize) else {
             out.rejected += 1;
             continue;
@@ -845,6 +868,50 @@ mod tests {
                 .unwrap();
         }
         cache
+    }
+
+    /// Focused mode clamps to the judged item: a verdict the model volunteers
+    /// on a context message must NOT become a finding on that message.
+    #[test]
+    fn a_focused_verdict_only_attaches_to_the_focused_item() {
+        let cache = CacheDb::open_in_memory().unwrap();
+        cache
+            .conn()
+            .execute(
+                "INSERT INTO threads (identifier, service, last_message_at) VALUES ('t','SMS',9)",
+                [],
+            )
+            .unwrap();
+        for (i, body) in ["hello there", "i will kill you", "ok see you"]
+            .iter()
+            .enumerate()
+        {
+            cache
+                .conn()
+                .execute(
+                    "INSERT INTO messages (thread_id, sender, is_from_me, body, sent_at, kind)
+                     VALUES (1,'them',0,?1,?2,'text')",
+                    rusqlite::params![body, 1000 + i as i64],
+                )
+                .unwrap();
+        }
+        let chunks = chunker::chunk_all(
+            &cache,
+            TimeRange::default(),
+            &chunker::ScanSources::default(),
+        )
+        .unwrap();
+        let chunk = &chunks[0];
+        // Model flags BOTH the focused threat (index 1) and a context message
+        // (index 0). Only the focused one may survive.
+        let output = serde_json::json!({"verdicts": [
+            {"index": 0, "category": "harassment-bullying", "severity": 2, "rationale": "x"},
+            {"index": 1, "category": "threat-violence", "severity": 3, "rationale": "threat"},
+        ]});
+        let v = verdicts_to_findings_focused(chunk, &output, 1);
+        assert_eq!(v.findings.len(), 1, "only the focused verdict survives");
+        assert_eq!(v.findings[0].category, Category::ThreatViolence);
+        assert_eq!(v.findings[0].source_id, Some(chunk.items[1].source_id));
     }
 
     /// #402: the chunker always resolved the sender; the finding used to drop
