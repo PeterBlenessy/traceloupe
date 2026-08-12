@@ -23,6 +23,7 @@
  *   tooltip   every icon-only button explains itself
  *   native-tooltip  no `title=` / SVG `<title>` — the app has its own Tooltip
  *   locale    nothing formats in the webview's default locale   (#161: Region ≠ language)
+ *   plural    no count printed twice around plural()            (#479: "3 3 findings")
  *   coverage  every checked state actually measured something     (a blank page used to pass)
  *   spacing   gaps and padding stay on the 2px grid
  *
@@ -213,6 +214,33 @@ const localePass = () => {
   }
 };
 
+/**
+ * `plural()` already prints the count.
+ *
+ * `plural(n, "finding")` is "3 findings" — count included (src/lib/format.ts).
+ * Writing `{formatCount(n)} {plural(n, "finding")}` therefore renders "3 3
+ * findings", which shipped into a PR's headline coverage line and was invisible
+ * to every other check: it typechecks, it is locale-correct, and no geometry
+ * moves. Read the helper, not its name.
+ */
+const DOUBLE_COUNT =
+  /\bformatCount\(\s*([\w.$[\]]+)\s*\)[\s\S]{0,60}?\bplural\(\s*\1\s*[,)]/g;
+
+const pluralPass = () => {
+  for (const file of [...walk("src"), ...walk("src", ".ts")]) {
+    if (file.endsWith("lib/format.ts")) continue; // where plural lives
+    const src = readFileSync(file, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    for (const m of src.matchAll(DOUBLE_COUNT)) {
+      const line = src.slice(0, m.index).split("\n").length;
+      fail("plural", "source",
+        `${file}:${line} prints the count twice — \`plural()\` already includes it,` +
+        ` so drop the neighbouring \`formatCount()\``);
+    }
+  }
+};
+
 const staticPass = () => {
   for (const file of walk("src")) {
     let src = readFileSync(file, "utf8")
@@ -242,6 +270,19 @@ const staticPass = () => {
 {
   const before = failures.length;
   const probe = "<Button className=\"h-9 text-emerald-500\">x</Button>";
+  // Both halves: it fires on the same expression counted twice, and stays
+  // quiet on the legitimate "N of M" shape (different expressions), because a
+  // rule that cries wolf on correct code gets ignored.
+  const doubleProbe = '{formatCount(n.findings)} {plural(n.findings, "finding")}';
+  const doubleOk = '{formatCount(n.done)} of {plural(n.total, "place")}';
+  if ([...doubleOk.matchAll(DOUBLE_COUNT)].length) {
+    console.error("design lint SELF-TEST failed: the plural matcher fired on the legitimate " + doubleOk);
+    process.exit(2);
+  }
+  if (![...doubleProbe.matchAll(DOUBLE_COUNT)].length) {
+    console.error("design lint SELF-TEST failed: the plural matcher did not fire on " + doubleProbe);
+    process.exit(2);
+  }
   if (![..."n.toLocaleString()".matchAll(LOCALE_BLIND)].length) {
     console.error("design lint SELF-TEST failed: the locale matcher did not fire on n.toLocaleString()");
     process.exit(2);
@@ -256,6 +297,7 @@ const staticPass = () => {
 }
 staticPass();
 localePass();
+pluralPass();
 
 const browser = await chromium.launch();
 const ctx = await browser.newContext({

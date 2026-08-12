@@ -33,6 +33,20 @@ type SafetyScanContextValue = {
     /** Resume this scan row instead of creating a new one. */
     resumeScanId?: number | null;
   }) => Promise<void>;
+  /** Start a triage scan (census → focused deep-scan → confirm). Same stream
+   *  and one-at-a-time gate as startScan; no resume (the census is
+   *  incremental, so a new scan loses nothing). */
+  startTriageScan: (opts: {
+    modelId?: string | null;
+    mode?: "thorough" | "balanced" | "precise" | null;
+    rangeStart?: number | null;
+    rangeEnd?: number | null;
+    sources?: string | null;
+  }) => Promise<void>;
+  /** The last completed triage scan's coverage numbers — the honest "N of M
+   *  candidates deep-scanned" line. The triageDone event is terminal (it
+   *  clears `scan`), so it is captured here; cleared when a new scan starts. */
+  lastTriageDone: Extract<SafetyScanEvent, { phase: "triageDone" }> | null;
   cancelScan: () => void;
   startDownload: (modelId: string) => Promise<void>;
   cancelDownload: () => void;
@@ -62,6 +76,10 @@ function toastScanError(message: string) {
 export function SafetyScanProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   const [scan, setScan] = useState<SafetyScanEvent | null>(null);
+  const [lastTriageDone, setLastTriageDone] = useState<Extract<
+    SafetyScanEvent,
+    { phase: "triageDone" }
+  > | null>(null);
   const [download, setDownload] = useState<SafetyModelProgressEvent | null>(null);
   const [downloadingModelId, setDownloadingModelId] = useState<string | null>(
     null,
@@ -167,17 +185,27 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
         // load later.
         qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
       }
-      if (p.phase === "classifying") {
-        // Backstop history refresh once classifying starts, and refresh the
-        // findings whenever the live count moves so they stream in.
+      if (p.phase === "classifying" || p.phase === "censusing") {
+        // Backstop history refresh once real work starts (the triage census
+        // is that phase for a triage scan).
         if (!runLive.current.historyRefreshed) {
           runLive.current.historyRefreshed = true;
           qc.invalidateQueries({ queryKey: ["safetyScan", "history"] });
         }
+      }
+      if (p.phase === "classifying" || p.phase === "deepScanning") {
+        // Refresh the findings whenever the live count moves so they stream
+        // in. (deepScanning's count is provisional — pre-confirmation — which
+        // is fine: the terminal invalidate below settles it.)
         if (p.findings !== runLive.current.findings) {
           runLive.current.findings = p.findings;
           qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
         }
+      }
+      if (p.phase === "triageDone") {
+        // Terminal for `scan`, so the coverage numbers are captured here — the
+        // run card renders them after the progress UI clears.
+        setLastTriageDone(p);
       }
       if (p.phase === "done" || p.phase === "triageDone") {
       // New findings and a new report exist; let every consumer refetch.
@@ -195,6 +223,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     resumeScanId?: number | null;
   }) => {
     setScan({ phase: "loading" });
+    setLastTriageDone(null);
     runLive.current = { historyRefreshed: false, findings: 0 };
     await subscribeScan();
     try {
@@ -207,6 +236,28 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     } catch {
       // The listener owns the error toast (and survives a refresh); only clear
       // the running state here.
+      setScan(null);
+    }
+  };
+
+  const startTriageScan = async (opts: {
+    modelId?: string | null;
+    mode?: "thorough" | "balanced" | "precise" | null;
+    rangeStart?: number | null;
+    rangeEnd?: number | null;
+    sources?: string | null;
+  }) => {
+    setScan({ phase: "loading" });
+    setLastTriageDone(null);
+    runLive.current = { historyRefreshed: false, findings: 0 };
+    await subscribeScan();
+    try {
+      await client.runTriageScan({
+        ...opts,
+        modelId: opts.modelId ?? preferredModelId,
+      });
+    } catch {
+      // The listener owns the error toast; only clear the running state.
       setScan(null);
     }
   };
@@ -254,6 +305,8 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
         preferredModelId,
         setPreferredModelId,
         startScan,
+        startTriageScan,
+        lastTriageDone,
         cancelScan,
         startDownload,
         cancelDownload,

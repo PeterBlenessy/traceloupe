@@ -476,7 +476,13 @@ validation. Checklist mirrors #459.
       let this ride implicitly on "the UI will exercise it".
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
       (#456 per-conversation exists; add whole-backup census + the coverage
-      report).
+      report). **Partially done (#479): the four-way mode control (Full read +
+      the three triage postures, each tooltipped in product language, helper
+      models gated with why-tooltips), triage invocation, live census/deep-scan/
+      confirm phases, and the run-card coverage line. Still open: the
+      whole-backup budget surface, and persisting the coverage numbers on the
+      scan row so the report document can carry the line durably (today it
+      lives only in the terminal event).**
 - [ ] **Coverage reporting** — surface "N of M candidates deep-scanned; the rest
       are not read" (rule-of-three), so a scoped scan never implies "clean" for
       what it did not read.

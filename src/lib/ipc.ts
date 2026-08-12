@@ -1536,6 +1536,21 @@ export interface TraceLoupeClient {
      *  starting a new one; its stored scope is authoritative. */
     resumeScanId?: number | null;
   }): Promise<void>;
+  /** Start a TRIAGE scan (census → focused deep-scan → confirm). Same
+   *  progress stream and one-at-a-time gate as `runSafetyScan`. The backend
+   *  refuses balanced/precise when the Finding checker model is missing, and
+   *  notes-only scopes (triage reads messages). No resume: the census is
+   *  incremental, so a new scan loses nothing. */
+  runTriageScan(opts: {
+    modelId?: string | null;
+    /** Scan posture; null lets the backend pick the best available mode. */
+    mode?: "thorough" | "balanced" | "precise" | null;
+    rangeStart?: number | null;
+    rangeEnd?: number | null;
+    sources?: string | null;
+    /** Deep-scan at most this many candidates; null reads them all. */
+    budget?: number | null;
+  }): Promise<void>;
   cancelSafetyScan(): Promise<void>;
   onSafetyScanProgress(cb: (p: SafetyScanEvent) => void): Promise<UnlistenFn>;
   onSafetyModelProgress(
@@ -2250,6 +2265,15 @@ const tauriClient: TraceLoupeClient = {
       rangeEnd: opts.rangeEnd ?? null,
       sources: opts.sources ?? null,
       resumeScanId: opts.resumeScanId ?? null,
+    }),
+  runTriageScan: (opts) =>
+    invoke("run_triage_scan", {
+      modelId: opts.modelId ?? null,
+      mode: opts.mode ?? null,
+      rangeStart: opts.rangeStart ?? null,
+      rangeEnd: opts.rangeEnd ?? null,
+      sources: opts.sources ?? null,
+      budget: opts.budget ?? null,
     }),
   cancelSafetyScan: () => invoke("cancel_safety_scan"),
   onSafetyScanProgress: (cb) =>
@@ -6941,6 +6965,30 @@ const mockClient: TraceLoupeClient = {
         recommended: false,
         role: "classifier" as const,
       },
+      // The helper tiers, mirroring the real catalog (models.rs) — the mode
+      // picker's gating states are only measurable in the browser mock if
+      // these rows exist. Embedder installed alongside the classifier so the
+      // triage postures are exercisable; confirmer uninstalled so the
+      // Balanced/Precise disabled-with-why state is on screen for the design
+      // lint.
+      {
+        id: "embeddinggemma-300M-Q8_0",
+        displayName: "Fast pre-scan",
+        note: "A small model that finds where to look before the scan reads in depth. Optional, and downloaded separately.",
+        sizeBytes: 333_590_944,
+        installed: mockSafetyModelInstalled,
+        recommended: false,
+        role: "embedder" as const,
+      },
+      {
+        id: "llama-guard-3-8b-Q4_K_M",
+        displayName: "Finding checker",
+        note: "A second model that double-checks findings before they are shown, for the modes that trade a little recall for fewer false alarms. Optional, and downloaded separately.",
+        sizeBytes: 4_920_736_064,
+        installed: false,
+        recommended: false,
+        role: "confirmer" as const,
+      },
     ],
     readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,
   }),
@@ -6961,6 +7009,9 @@ const mockClient: TraceLoupeClient = {
   },
   cancelSafetyScanModelDownload: async () => {},
   runSafetyScan: async () => {
+    if (!mockActive) throw new Error("no backup is open");
+  },
+  runTriageScan: async () => {
     if (!mockActive) throw new Error("no backup is open");
   },
   cancelSafetyScan: async () => {},
