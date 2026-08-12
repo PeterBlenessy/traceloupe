@@ -119,13 +119,13 @@ fn now() -> i64 {
 /// `contentless` is the model behaving normally over an item that was never
 /// classifiable.
 #[derive(Debug, Default)]
-struct Verdicts {
-    findings: Vec<NewFinding>,
+pub(crate) struct Verdicts {
+    pub(crate) findings: Vec<NewFinding>,
     /// Malformed verdicts, or ones naming an item the chunk doesn't contain.
-    rejected: usize,
+    pub(crate) rejected: usize,
     /// Verdicts refused because the item cannot support a finding on its own
     /// (see [`trivial::is_contentless`]).
-    contentless: usize,
+    pub(crate) contentless: usize,
 }
 
 /// Eval-only view of the verdict validator (T10 live eval): returns just the
@@ -148,8 +148,15 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
 /// message nobody asked about — and deep-links, badges and the sender all point
 /// at the wrong place. The clamp is the safety property that makes focused mode
 /// trustworthy, not just more sensitive.
-#[cfg(test)]
-fn verdicts_to_findings_focused(chunk: &Chunk, output: &Value, focus: usize) -> Verdicts {
+///
+/// This is the validation the triage deep-scan runs on every classify call
+/// (`triage_scan::classify_focused`), so the wired pipeline and the tests share
+/// one parsing/clamping path.
+pub(crate) fn verdicts_to_findings_focused(
+    chunk: &Chunk,
+    output: &Value,
+    focus: usize,
+) -> Verdicts {
     verdicts_to_findings_impl(chunk, output, Some(focus))
 }
 

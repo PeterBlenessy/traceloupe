@@ -411,13 +411,25 @@ pub fn html_to_text(html: &str) -> String {
     lines.join("\n")
 }
 
-/// Build every message chunk in scan order: threads by most recent activity
-/// first, windows chronological within each thread.
-pub fn chunk_messages(
+/// One thread's readable messages in chronological order — the collection loop
+/// shared by the batch chunker and the triage census, so their scope semantics
+/// (range, service selection, emptiness, the media marker, fingerprints) cannot
+/// drift apart.
+pub struct ThreadMessages {
+    pub identifier: String,
+    pub display_name: Option<String>,
+    pub service: Option<String>,
+    pub items: Vec<ChunkItem>,
+}
+
+/// Collect every in-scope thread's messages, threads by most recent activity
+/// first, messages chronological within each. Threads with nothing readable in
+/// range are omitted.
+pub fn collect_thread_messages(
     cache: &CacheDb,
     range: TimeRange,
     sources: &ScanSources,
-) -> Result<Vec<Chunk>> {
+) -> Result<Vec<ThreadMessages>> {
     let conn = cache.conn();
     let mut threads = Vec::new();
     {
@@ -439,7 +451,7 @@ pub fn chunk_messages(
 
     let where_range = range.sql_between("sent_at");
     let range_params = range.params();
-    let mut chunks = Vec::new();
+    let mut out = Vec::new();
     for (thread_id, identifier, display_name, service) in threads {
         // One conversation, when the scan asked for one.
         if let Some(want) = &sources.thread {
@@ -522,7 +534,31 @@ pub fn chunk_messages(
         if items.is_empty() {
             continue;
         }
+        out.push(ThreadMessages {
+            identifier,
+            display_name,
+            service,
+            items,
+        });
+    }
+    Ok(out)
+}
 
+/// Build every message chunk in scan order: threads by most recent activity
+/// first, windows chronological within each thread.
+pub fn chunk_messages(
+    cache: &CacheDb,
+    range: TimeRange,
+    sources: &ScanSources,
+) -> Result<Vec<Chunk>> {
+    let mut chunks = Vec::new();
+    for thread in collect_thread_messages(cache, range, sources)? {
+        let ThreadMessages {
+            identifier,
+            display_name,
+            service,
+            items,
+        } = thread;
         // Fixed stride from the start of the thread: appends only create new
         // tail windows; earlier windows keep their key AND fingerprint.
         let stride = WINDOW - OVERLAP;
@@ -551,6 +587,34 @@ pub fn chunk_messages(
         }
     }
     Ok(chunks)
+}
+
+/// The triage census's view of the same scope: every in-scope message grouped
+/// by thread, oldest first — the shape `run_triage` needs for context windows.
+/// Same collection loop as [`chunk_messages`], so what the batch scan would
+/// read and what the census scores are always the same set of messages.
+pub fn census_threads(
+    cache: &CacheDb,
+    range: TimeRange,
+    sources: &ScanSources,
+) -> Result<Vec<Vec<crate::safety_scan::triage::CensusInput>>> {
+    Ok(collect_thread_messages(cache, range, sources)?
+        .into_iter()
+        .map(|t| {
+            t.items
+                .into_iter()
+                .map(|i| crate::safety_scan::triage::CensusInput {
+                    source_id: i.source_id,
+                    thread_identifier: t.identifier.clone(),
+                    sender: i.sender,
+                    occurred_at: i.occurred_at,
+                    text: i.text,
+                    fingerprint: i.fingerprint,
+                    service: t.service.clone(),
+                })
+                .collect()
+        })
+        .collect())
 }
 
 /// Build one chunk per (unlocked, non-empty) note. Locked notes are withheld —
@@ -831,6 +895,86 @@ pub(crate) mod tests {
         assert_eq!(a.len(), expected_chunks(60));
         assert_eq!(a[0].items.len(), WINDOW);
         assert!(a.last().unwrap().items.len() <= WINDOW);
+    }
+
+    #[test]
+    fn census_threads_reads_exactly_what_the_batch_chunker_reads() {
+        // One shared collection loop: the set of (thread, message) the census
+        // scores must equal the set the batch chunker windows — same range,
+        // same service selection, same emptiness rules — or triage coverage
+        // claims describe a different scan than the batch path would run.
+        let cache = cache_with(&[
+            ("chatA", 1000, "hello there", false),
+            ("chatA", 1001, "i will kill you", false),
+            ("chatB", 2000, "totally fine", true),
+        ]);
+        let threads =
+            census_threads(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+
+        let mut census_ids: Vec<i64> = threads.iter().flatten().map(|m| m.source_id).collect();
+        let mut chunk_ids: Vec<i64> = chunks
+            .iter()
+            .flat_map(|c| c.items.iter().map(|i| i.source_id))
+            .collect();
+        census_ids.sort_unstable();
+        chunk_ids.sort_unstable();
+        chunk_ids.dedup(); // overlapping windows repeat items; the census must not
+        assert_eq!(census_ids, chunk_ids);
+
+        // Grouped by thread, oldest first within each.
+        assert_eq!(threads.len(), 2);
+        let chat_a = threads
+            .iter()
+            .find(|t| t[0].thread_identifier == "chatA")
+            .unwrap();
+        assert_eq!(chat_a.len(), 2);
+        assert!(chat_a[0].occurred_at <= chat_a[1].occurred_at);
+
+        // Identity and service carry through: the finding a deep-scan writes is
+        // keyed on the SAME fingerprint the batch scan would use.
+        let threat = chat_a.iter().find(|m| m.text.contains("kill")).unwrap();
+        assert_eq!(
+            threat.fingerprint,
+            message_fingerprint("chatA", Some(1001), "them", "i will kill you")
+        );
+        assert_eq!(threat.service.as_deref(), Some("SMS"));
+        assert_eq!(threat.sender, "them");
+    }
+
+    #[test]
+    fn census_threads_honours_scope() {
+        let cache = cache_with(&[
+            ("chatA", 1000, "in range", false),
+            ("chatA", 5000, "out of range", false),
+            ("chatB", 1500, "other thread", false),
+        ]);
+        // Range cuts the late message.
+        let ranged = census_threads(
+            &cache,
+            TimeRange {
+                start: None,
+                end: Some(2000),
+            },
+            &ScanSources::default(),
+        )
+        .unwrap();
+        let texts: Vec<&str> = ranged.iter().flatten().map(|m| m.text.as_str()).collect();
+        assert!(texts.contains(&"in range") && !texts.contains(&"out of range"));
+
+        // A single-conversation scope reads only that thread.
+        let one = census_threads(
+            &cache,
+            TimeRange::default(),
+            &ScanSources {
+                thread: Some("chatB".into()),
+                notes: false,
+                message_services: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0][0].text, "other thread");
     }
 
     #[test]

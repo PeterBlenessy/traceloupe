@@ -1193,7 +1193,7 @@ function ScanRail({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    disabled={running}
+                    disabled={running || s.isTriage}
                     className={cn(
                       "group/rerun text-muted-foreground hover:text-foreground",
                       // The warning is the one thing that should catch the eye
@@ -1244,8 +1244,10 @@ function ScanRail({
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  {endedBadly(s, s.id === liveId) ??
-                    "Run this scan again over the same content"}
+                  {s.isTriage
+                    ? "A triage scan can't be re-run from history yet — start a new triage scan; its census is kept"
+                    : (endedBadly(s, s.id === liveId) ??
+                      "Run this scan again over the same content")}
                 </TooltipContent>
               </Tooltip>
               <Tooltip>

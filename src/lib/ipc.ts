@@ -976,6 +976,31 @@ export type SafetyScanEvent =
       reused: number;
       skipped: number;
     }
+  // Triage scan phases (census → focused deep-scan → confirmation). Same
+  // stream and snapshot as the batch phases: one scan of either kind at a time.
+  | { phase: "censusing"; done: number; total: number }
+  | {
+      phase: "deepScanning";
+      done: number;
+      total: number;
+      /** Provisional findings so far (pre-confirmation). */
+      findings: number;
+    }
+  | { phase: "confirming"; done: number; total: number }
+  | {
+      phase: "triageDone";
+      scanId: number;
+      status: string;
+      findings: number;
+      censused: number;
+      candidates: number;
+      deepScanned: number;
+      /** Candidates the budget left unread — reported, never called clean. */
+      unscanned: number;
+      unconfirmed: number;
+      /** Worklist items whose focused call failed after a retry (skipped). */
+      failed: number;
+    }
   | { phase: "error"; message: string };
 
 /** A Content Finding: one probabilistic model verdict on a message or note. */
@@ -1083,6 +1108,9 @@ export interface SafetyScanHistoryItem {
    *  badge. Null for every other status: cancelled and interrupted explain
    *  themselves. */
   error: string | null;
+  /** True for triage-pipeline rows — the batch engine can't resume them, so
+   *  the history card must not offer Re-run/Resume. */
+  isTriage: boolean;
 }
 
 /** Top live-finding severity per flagged thread/note, for inline badges. */
@@ -7239,6 +7267,7 @@ const mockClient: TraceLoupeClient = {
             // same fixture, and two hand-kept copies are how they would drift.
             ...mockScanTotals(),
             error: null,
+            isTriage: false,
           },
           {
             id: 2,
@@ -7254,6 +7283,7 @@ const mockClient: TraceLoupeClient = {
             harmful: 0,
             concerning: 0,
             error: "model server exited before the first chunk",
+            isTriage: false,
           },
           {
             id: 1,
@@ -7272,6 +7302,7 @@ const mockClient: TraceLoupeClient = {
             harmful: 1,
             concerning: 0,
             error: null,
+            isTriage: false,
           },
           // A clean completed scan and a scan with a 4-digit count: the two row
           // states that stress the card's layout hardest (an empty-looking right
@@ -7292,6 +7323,7 @@ const mockClient: TraceLoupeClient = {
             harmful: 0,
             concerning: 0,
             error: null,
+            isTriage: false,
           },
           {
             id: 5,
@@ -7307,6 +7339,7 @@ const mockClient: TraceLoupeClient = {
             harmful: 307,
             concerning: 965,
             error: null,
+            isTriage: false,
           },
           ].filter((s) => !mockDeletedScanIds.has(s.id)),
           (s, i) => ({ ...s, id: 100000 + i }),

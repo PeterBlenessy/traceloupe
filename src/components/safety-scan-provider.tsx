@@ -42,7 +42,7 @@ const SafetyScanContext = createContext<SafetyScanContextValue | null>(null);
 
 /** Terminal events clear the "running" state. */
 function scanIsTerminal(e: SafetyScanEvent) {
-  return e.phase === "done" || e.phase === "error";
+  return e.phase === "done" || e.phase === "triageDone" || e.phase === "error";
 }
 
 /** A short, dismissable error toast. The full technical string (which can
@@ -179,7 +179,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
           qc.invalidateQueries({ queryKey: ["safetyScan", "findings"] });
         }
       }
-      if (p.phase === "done") {
+      if (p.phase === "done" || p.phase === "triageDone") {
       // New findings and a new report exist; let every consumer refetch.
       qc.invalidateQueries({ queryKey: ["safetyScan"] });
       }

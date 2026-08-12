@@ -807,6 +807,224 @@ mod tests {
         );
     }
 
+    /// The wired Rust triage pipeline against the recorded reference run.
+    ///
+    /// The Python oracle (`tools/validate-triage-pipeline.py`) produced the
+    /// validated numbers (docs/validation/safety-scan-validation.md,
+    /// 2026-08-12). This drives the MERGED `run_triage` — the production
+    /// census/rank/window/classify path, real sidecars, real prompt and
+    /// grammar — over the oracle's exact seeded corpus, and asserts the
+    /// stage-level numbers land where the oracle's did (chunk-level, at the
+    /// Thorough threshold 0.52, no confirmation stage):
+    ///
+    ///   census ceiling 0.9625 · focused recall 0.9625 · precision 0.74
+    ///
+    /// Corpus first (Jigsaw text stays in /tmp — CC-BY-SA, never vendored):
+    ///   TRIAGE_DUMP_CHUNKS=/tmp/triage-chunks.json TRIAGE_GEMMA=- TRIAGE_EMBED=- \
+    ///   TRIAGE_JIGSAW=/tmp/public-sets/jigsaw.csv TRIAGE_GRAMMARS=/tmp/grammars.json \
+    ///     python3 tools/validate-triage-pipeline.py
+    /// Then (~15 min: ~800 embeddings + ~110 focused calls):
+    ///   TRIAGE_CHUNKS=/tmp/triage-chunks.json \
+    ///   TRACELOUPE_EMBED_MODEL=/tmp/models/embeddinggemma-300M-Q8_0.gguf \
+    ///   TRACELOUPE_EVAL_MODEL=~/.../gemma-4-E4B-it-Q4_K_M.gguf \
+    ///   cargo test -p traceloupe-core triage_pipeline_matches_reference -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires the corpus dump + both GGUFs (set TRIAGE_CHUNKS, TRACELOUPE_EVAL_MODEL, TRACELOUPE_EMBED_MODEL)"]
+    fn triage_pipeline_matches_reference() {
+        use crate::analysis::AnalysisDb;
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
+        use crate::safety_scan::triage::{self, CensusInput, FocusWindow, ScanMode};
+        use crate::safety_scan::triage_scan::{self, TriageProgress};
+        use crate::sidecar::CancelToken;
+        use std::cell::RefCell;
+        use std::collections::BTreeSet;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (Ok(chunks_path), Ok(embed_model), Ok(class_model)) = (
+            std::env::var("TRIAGE_CHUNKS"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+            std::env::var("TRACELOUPE_EVAL_MODEL"),
+        ) else {
+            eprintln!("set TRIAGE_CHUNKS, TRACELOUPE_EMBED_MODEL and TRACELOUPE_EVAL_MODEL");
+            return;
+        };
+
+        #[derive(Deserialize)]
+        struct DumpChunk {
+            msgs: Vec<String>,
+            real: bool,
+        }
+        #[derive(Deserialize)]
+        struct Dump {
+            prototypes: Vec<String>,
+            chunks: Vec<DumpChunk>,
+        }
+        let dump: Dump =
+            serde_json::from_str(&std::fs::read_to_string(&chunks_path).expect("dump readable"))
+                .expect("dump parses");
+        let n_real = dump.chunks.iter().filter(|c| c.real).count();
+        assert!(n_real > 0, "the dump has labelled threats");
+
+        // One thread per oracle chunk, senders exactly as the oracle rendered
+        // them ('them' for even indexes, 'me' for odd). source_id encodes
+        // (chunk, index) so findings map back to chunks for scoring.
+        let threads: Vec<Vec<CensusInput>> = dump
+            .chunks
+            .iter()
+            .enumerate()
+            .map(|(ci, c)| {
+                c.msgs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, text)| CensusInput {
+                        source_id: (ci * 100 + i) as i64,
+                        thread_identifier: format!("c{ci}"),
+                        sender: if i % 2 == 1 {
+                            "me".into()
+                        } else {
+                            "them".into()
+                        },
+                        occurred_at: None,
+                        text: text.clone(),
+                        fingerprint: format!("parity:{ci}:{i}"),
+                        service: None,
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let binary = resolve_binary().expect("sidecar binary");
+        let spawn = |model: &str, embedding: bool, ctx_size: u32| -> LlamaServer {
+            let mut s = LlamaServer::spawn(
+                &ServerConfig {
+                    binary: binary.clone(),
+                    model_path: PathBuf::from(model),
+                    port: pick_port().unwrap(),
+                    ctx_size,
+                    parallel: 1,
+                    api_key: None,
+                    gpu_layers: -1,
+                    sandbox: true,
+                    embedding,
+                    scratch_dir: std::env::temp_dir().join("traceloupe-parity-scratch"),
+                },
+                None,
+            )
+            .expect("spawn");
+            s.wait_healthy(Duration::from_secs(180)).expect("healthy");
+            s
+        };
+
+        // Phase A: the embedder — prototypes from the oracle's HELD-OUT threat
+        // texts (single category, same centroid math either way).
+        let server = spawn(&embed_model, true, 2048);
+        let ec = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        let examples: Vec<(String, String)> = dump
+            .prototypes
+            .iter()
+            .map(|t| ("threat-violence".to_string(), t.clone()))
+            .collect();
+        let prototypes = triage::build_prototypes(&examples, |t| ec.embed(t)).expect("prototypes");
+
+        // The same lazy embedder→classifier swap the command performs: the
+        // phase boundary in run_triage guarantees no embed call after the
+        // first classify call.
+        let slot = RefCell::new((server, ec, false));
+        let embed = |t: &str| slot.borrow().1.embed(t);
+        let classify = |w: &FocusWindow| {
+            {
+                let mut s = slot.borrow_mut();
+                if !s.2 {
+                    s.0.shutdown();
+                    let srv = spawn(&class_model, false, 8192);
+                    let c = LlmClient::new(srv.base_url(), "eval", Duration::from_secs(300));
+                    *s = (srv, c, true);
+                }
+            }
+            triage_scan::classify_focused(&slot.borrow().1, w)
+        };
+
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("parity", (None, None), "all", 1).unwrap();
+        let outcome = triage_scan::run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &prototypes,
+            ScanMode::Thorough, // threshold 0.52, no confirmation — oracle stages 1+2
+            None,
+            1,
+            embed,
+            classify,
+            |_: &FocusWindow, _| Ok(true),
+            &CancelToken::new(),
+            |p: TriageProgress| {
+                if let TriageProgress::DeepScan { done, total, .. } = p {
+                    if done % 20 == 0 {
+                        eprintln!("deep-scan {done}/{total}");
+                    }
+                }
+            },
+        )
+        .expect("run_triage");
+        slot.borrow_mut().0.shutdown();
+
+        // Chunk-level scoring, same as the reference numbers were computed.
+        let kept: BTreeSet<usize> = db
+            .conn()
+            .prepare("SELECT DISTINCT thread_identifier FROM census WHERE score >= 0.52")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(|r| r.unwrap()[1..].parse::<usize>().unwrap())
+            .collect();
+        let kept_real = kept.iter().filter(|c| dump.chunks[**c].real).count();
+        let ceiling = kept_real as f64 / n_real as f64;
+
+        let findings = db.list_findings(Some(scan)).unwrap();
+        let flagged: BTreeSet<usize> = findings
+            .iter()
+            .filter_map(|f| f.source_id)
+            .map(|id| (id / 100) as usize)
+            .collect();
+        let tp = flagged.iter().filter(|c| dump.chunks[**c].real).count();
+        let recall = tp as f64 / n_real as f64;
+        let precision = if flagged.is_empty() {
+            0.0
+        } else {
+            tp as f64 / flagged.len() as f64
+        };
+
+        println!(
+            "wired pipeline @0.52: census ceiling {ceiling:.3} (ref 0.962) · \
+             chunk recall {recall:.3} (ref 0.962) · precision {precision:.3} (ref 0.740) · \
+             censused {} candidates {} deep-scanned {} findings {}",
+            outcome.censused, outcome.candidates, outcome.deep_scanned, outcome.findings
+        );
+
+        // A model that produces nothing is a harness bug until proven
+        // otherwise (journey §10.6): zero findings fails loudly rather than
+        // being scored as a precision of convenience.
+        assert!(
+            !findings.is_empty(),
+            "no findings at all — suspect the harness (grammar/prompt), not the model"
+        );
+        assert!(
+            (ceiling - 0.9625).abs() <= 0.04,
+            "census ceiling {ceiling:.3} drifted from the reference 0.9625"
+        );
+        assert!(
+            recall >= 0.90,
+            "chunk-level focused recall {recall:.3} below the reference band (ref 0.9625)"
+        );
+        assert!(
+            (0.64..=0.86).contains(&precision),
+            "chunk-level focused precision {precision:.3} outside the reference band (ref 0.740)"
+        );
+    }
+
     /// The other half of a baseline (#407): how fast a scan actually goes.
     ///
     /// The eval above measures quality over 2–4 message cases; a real chunk is

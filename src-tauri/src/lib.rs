@@ -5290,6 +5290,7 @@ pub fn run() {
             safety_scan_cmd::get_safety_scan_download_status,
             safety_scan_cmd::cancel_safety_scan_model_download,
             safety_scan_cmd::run_safety_scan,
+            safety_scan_cmd::run_triage_scan,
             safety_scan_cmd::cancel_safety_scan,
             safety_scan_cmd::list_content_findings,
             safety_scan_cmd::content_finding_rank,
