@@ -603,3 +603,83 @@ caches, multi-slot prefix sharing) is small against that and not currently
 worth its complexity; the journey's prompt-caching item is closed with this
 measurement. (#409 itself stays open for its other half — flash attention —
 which is unmeasured.)
+
+### 2026-08-12 — the first run against a real device, and what it cost
+
+The public iOS 17 research image (Joshua Hickman / Digital Corpora, the corpus
+this repo validates parsers against) imported through the production native
+path in **4 s** — 29 threads, 576 messages in scope — and was then censused and
+deep-scanned with live sidecars (`triage_on_a_public_research_image`, Thorough,
+deep-scan budget 40). Two things came out of it, and the second matters more
+than the first.
+
+**Two shipped defects that no corpus here could have caught (#485).** The census
+died on HTTP 500 within seconds. `llama-server` cannot split a pooled embedding
+across physical batches and refuses above one — default 512 tokens — so the
+first long message in a real conversation aborted the whole scan. Raising the
+sidecar's batches to its context fixed that and exposed the second layer: the
+binding limit is really the 2048-token **context**, and characters are a poor
+proxy for tokens. Measured on the pinned build:
+
+| input | 4,000 chars |
+|---|---|
+| ordinary prose | embeds |
+| dense ASCII (URLs, hashes, base64, code) | **HTTP 500 between 2,000 and 3,000 chars** |
+
+Dense text tokenises roughly 3× denser than prose — but review pushed on
+whether chars bound tokens at all, and measuring said no. The tokenizer falls
+back to one token per BYTE outside its vocab:
+
+| 1,500 chars of… | bytes | result |
+|---|---|---|
+| ASCII | 1,530 | embeds |
+| Japanese | 4,530 | embeds (vocab covers it) |
+| emoji + ZWJ | 5,446 | embeds (vocab covers it) |
+| Linear B / hieroglyphs | 6,030 | **HTTP 500** — and fails from 700 chars up |
+
+So a CHAR cap is safe for the scripts a person is likely to type and unsafe for
+the ones they are not, which is the wrong way round when the cost is a dead
+scan. The cap is therefore **1,500 bytes** on a char boundary, which holds at
+the fallback's worst case. Well-covered scripts pay for it (~500 Japanese chars,
+~375 emoji), accepted deliberately: the census scores a RANKING signal from the
+opening of a message and the focused stage still reads all of it.
+
+Two guard corrections came out of the same pass. The first version probed
+*prose* at the cap — which passes at 4,000 chars even when the cap is wrong, so
+it proved nothing; it now probes byte-fallback text at the cap, and both raising
+the cap and removing the batch flags fail it. And the census no longer dies when
+the embedder refuses a message at all: it skips it, counts it as `unscorable`,
+and reports it, because tokenisation has now surprised this pipeline twice and
+the blast radius of the third time should be one message rather than a scan.
+
+**The census selects 55% of a real backup — which inverts the architecture's
+premise.**
+
+| | this image | Jigsaw corpus (the tuning set) |
+|---|---|---|
+| messages in scope | 576 | 800 |
+| candidates at threshold 0.52 | **318 (55.2%)** | 146 (18.3%) |
+| census throughput | 64 msg/s (100k ≈ 26 min) | — |
+| focused classification | ~6.5 s/call | ~7 s/call |
+
+Triage is supposed to census cheaply and spend depth on a small ranked subset.
+At 55% selectivity it does not: extrapolating this rate to a 100k-message
+backup gives ~55,000 focused calls ≈ **100 hours**, against the shipped batch
+scan's measured ~11 hours. As currently tuned, triage on a real backup would be
+roughly **nine times slower than the thing it replaces** — while the census
+itself is cheap and fast exactly as designed (26 min for 100k).
+
+The likely mechanism, and it is testable: the 0.52 threshold was calibrated
+against a corpus scored with **one** prototype (threat-violence), while
+production scores against **nine** and takes the max. More prototypes means
+more chances to clear the bar, so the same threshold is systematically looser in
+production than where it was measured. This is the §7 lesson again — a number
+measured on one distribution and applied to another — and it is the same shape
+as the WINDOW=25 error: the pipeline was right, the calibration was for a
+different input.
+
+Caveats: one device, 576 messages, no ground truth in this image, and the <!-- not-a-backup-count: public DFIR research image, not anyone's own backup -->
+deep-scan was budgeted at 40 of 318 candidates, so nothing here says anything
+about recall or precision on real data. What it does establish is the SHAPE —
+volume, selectivity, throughput — which is what the cost argument rests on.
+Follow-up: #486.

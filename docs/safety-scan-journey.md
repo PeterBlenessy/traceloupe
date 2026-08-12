@@ -509,6 +509,38 @@ validation. Checklist mirrors #459.
 
 ---
 
+### 8.1 The first real device, and the finding that reopens the cost argument
+
+Everything through §8 was measured on Jigsaw chunks or hand-written fixtures.
+The first run against a real device — the public iOS 17 research image the repo
+already validates parsers against — changed two things (2026-08-12, full
+numbers in the validation doc).
+
+**It found two shipped defects in under a minute (#485).** The census died on
+HTTP 500: llama-server cannot split a pooled embedding across physical batches
+and refuses above one (default 512 tokens), so the first long message in a real
+conversation aborted the entire scan. Fixing that exposed a second layer — the
+real limit is the 2048-token context, and characters are a poor proxy: prose
+embeds at 4,000 chars while dense ASCII (URLs, hashes, base64) fails between
+2,000 and 3,000, tokenising ~3× denser. Neither could be caught here: the
+Jigsaw harness filters to 20–300 characters and the fixtures are one-liners.
+**A corpus chosen for labels is not a corpus that exercises the plumbing.**
+
+**And it inverted the cost argument (#486).** The census selected **55% of the
+backup's messages** as candidates, against 18% on the corpus where the 0.52
+threshold was tuned. Extrapolated to 100k messages that is ~55,000 focused
+calls ≈ 100 hours, versus the shipped batch scan's ~11 — as tuned, triage would
+be nine times slower than the thing it replaces. The census itself behaved
+exactly as designed (64 msg/s; 26 minutes for 100k). What failed is
+selectivity, which is the entire premise.
+
+The likely mechanism is the §7 lesson landing a third time: 0.52 was calibrated
+against a corpus scored with **one** prototype, while production scores against
+**nine** and takes the max, so the same number is systematically looser in the
+product than where it was measured. WINDOW=25 was this. The prefilter was this.
+A threshold is not a property of an algorithm — it is a property of an
+algorithm *on a distribution*, and it does not travel.
+
 ## 9. Appendix — key numbers in one place
 
 | measurement | value | source |

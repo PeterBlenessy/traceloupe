@@ -1087,6 +1087,241 @@ mod tests {
         slot.borrow_mut().0.shutdown();
     }
 
+    /// A long message must embed, not kill the scan (#485).
+    ///
+    /// llama-server cannot split a pooled embedding across physical batches and
+    /// answers HTTP 500 above one — default 512 tokens. The census feeds it
+    /// whole messages, so before the sidecar was started with its batches sized
+    /// to the context, the first long message in a real conversation aborted
+    /// the entire triage run mid-census. This drives the PRODUCTION spawn path,
+    /// so it fails if those flags are ever dropped.
+    ///
+    ///   TRACELOUPE_EMBED_MODEL=/tmp/models/embeddinggemma-300M-Q8_0.gguf \
+    ///   cargo test -p traceloupe-core a_long_message_still_embeds -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires the embedding GGUF (set TRACELOUPE_EMBED_MODEL)"]
+    fn a_long_message_still_embeds() {
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::triage::{EMBED_MAX_BYTES, EMBED_PREFIX};
+        use std::time::Duration;
+
+        let Ok(model) = std::env::var("TRACELOUPE_EMBED_MODEL") else {
+            eprintln!("set TRACELOUPE_EMBED_MODEL");
+            return;
+        };
+        let mut server = spawn_live_server(&model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(120));
+
+        // DENSE text at the cap, not prose: measured, prose embeds fine at
+        // 4,000 chars while dense ASCII fails between 2,000 and 3,000, so a
+        // prose probe would pass even with the cap set wrongly and prove
+        // nothing. This is the worst case the census can actually be handed.
+        let dense = "aB3$x9-Zq7#Lm2/Kp5!Wn8&Rt4".repeat(EMBED_MAX_BYTES / 26 + 1);
+        let text: String = dense.chars().take(EMBED_MAX_BYTES).collect();
+        let v = c.embed(&format!("{EMBED_PREFIX}{text}"));
+        server.shutdown();
+        let v = v.unwrap_or_else(|e| {
+            panic!(
+                "a {}-char message failed to embed ({e}) — the sidecar's physical batch is \
+                 too small again, and one long message will kill a whole scan (#485)",
+                text.chars().count()
+            )
+        });
+        assert_eq!(v.len(), 768, "EmbeddingGemma is 768-dim");
+    }
+
+    /// The pipeline against a REAL device's data: import a public DFIR research
+    /// image (Joshua Hickman / Digital Corpora — published for unrestricted
+    /// research use, and the corpus this repo validates parsers against), then
+    /// census and deep-scan its actual message history.
+    ///
+    /// Every other measurement so far ran on either the Jigsaw corpus (5-message
+    /// synthetic chunks) or a 15-message fixture. This is the first time the
+    /// triage pipeline meets a device's real conversation volume and shape, so
+    /// it answers two questions nothing else can: how the census threshold
+    /// behaves on real chatter, and what a whole-backup scan actually costs.
+    ///
+    /// The owner's own backup is off-limits (AGENTS.md); this test takes a path
+    /// and is meant for the public images under
+    /// `scripts/fetch-test-image.sh --list`.
+    ///
+    ///   TRIAGE_REAL_BACKUP=/path/to/unpacked/<udid> \
+    ///   TRIAGE_REAL_PASSWORD=MyPassword123 \
+    ///   TRACELOUPE_EMBED_MODEL=/tmp/models/embeddinggemma-300M-Q8_0.gguf \
+    ///   TRACELOUPE_EVAL_MODEL=~/.../gemma-4-E4B-it-Q4_K_M.gguf \
+    ///   cargo test -p traceloupe-core triage_on_a_public_research_image -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a public DFIR image + both GGUFs (set TRIAGE_REAL_BACKUP)"]
+    fn triage_on_a_public_research_image() {
+        use crate::analysis::{AnalysisDb, Category};
+        use crate::cache::CacheDb;
+        use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::triage::{self, FocusWindow, ScanMode};
+        use crate::safety_scan::triage_scan::{self, FocusVerdict, TriageProgress};
+        use crate::sidecar::CancelToken;
+        use std::cell::RefCell;
+        use std::time::{Duration, Instant};
+
+        let (Ok(backup), Ok(embed_model), Ok(class_model)) = (
+            std::env::var("TRIAGE_REAL_BACKUP"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+            std::env::var("TRACELOUPE_EVAL_MODEL"),
+        ) else {
+            eprintln!("set TRIAGE_REAL_BACKUP, TRACELOUPE_EMBED_MODEL, TRACELOUPE_EVAL_MODEL");
+            return;
+        };
+        let password = std::env::var("TRIAGE_REAL_PASSWORD").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+
+        // --- import, exactly as the app does (native parsers, no iLEAPP) ---
+        let t0 = Instant::now();
+        let outcome = crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the public image");
+        let import_s = t0.elapsed().as_secs_f64();
+        let cache = CacheDb::open(&cache_path).unwrap();
+        let threads =
+            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let total: usize = threads.iter().map(|t| t.len()).sum();
+        let _ = &outcome.cache_path;
+        println!(
+            "imported in {import_s:.0}s — {} threads, {total} messages in scope",
+            threads.len()
+        );
+        assert!(total > 0, "the image has readable messages");
+
+        // --- census + deep-scan with live sidecars ---
+        let server = spawn_live_server(&embed_model, true, 2048);
+        let ec = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        let prototypes =
+            triage::build_prototypes(&triage_scan::prototype_examples(&Category::ALL), |t| {
+                ec.embed(t)
+            })
+            .expect("prototypes");
+
+        let slot = RefCell::new((server, ec, false));
+        // DIAGNOSTIC: report the shape of anything the embedder rejects, so a
+        // failure names its cause instead of a bare HTTP code.
+        let embed = |t: &str| {
+            let r = slot.borrow().1.embed(t);
+            if r.is_err() {
+                let chars = t.chars().count();
+                let bytes = t.len();
+                let ascii = t.chars().filter(|c| c.is_ascii()).count();
+                eprintln!(
+                    "EMBED FAILED: chars={chars} bytes={bytes} ascii={ascii}                      ({}% non-ascii, {:.2} bytes/char)",
+                    100 - (100 * ascii / chars.max(1)),
+                    bytes as f64 / chars.max(1) as f64
+                );
+            }
+            r
+        };
+        let classify = |w: &FocusWindow| {
+            {
+                let mut s = slot.borrow_mut();
+                if !s.2 {
+                    s.0.shutdown();
+                    let srv = spawn_live_server(&class_model, false, 8192);
+                    let c = LlmClient::new(srv.base_url(), "eval", Duration::from_secs(300));
+                    *s = (srv, c, true);
+                }
+            }
+            let r = triage_scan::classify_focused(&slot.borrow().1, w);
+            if r.is_err() {
+                let total: usize = w.items.iter().map(|i| i.text.chars().count()).sum();
+                eprintln!(
+                    "CLASSIFY FAILED: window of {} items, {total} chars",
+                    w.items.len()
+                );
+            }
+            r
+        };
+
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db
+            .begin_scan("real-image", (None, None), "messages", 1)
+            .unwrap();
+        let census_start = Instant::now();
+        let mut census_done_at = None;
+        let t1 = Instant::now();
+        let out = triage_scan::run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &prototypes,
+            ScanMode::Thorough,
+            // A budget keeps this a bounded measurement rather than an
+            // overnight run; the unscanned tail is the point of the coverage
+            // line and is reported below.
+            Some(
+                std::env::var("TRIAGE_REAL_BUDGET")
+                    .ok()
+                    .and_then(|b| b.parse().ok())
+                    .unwrap_or(40),
+            ),
+            1,
+            embed,
+            classify,
+            |_: &FocusWindow, _: &FocusVerdict| Ok(true),
+            &CancelToken::new(),
+            |p: TriageProgress| match p {
+                TriageProgress::Census { done, total } => {
+                    if done > 0 && done == total {
+                        census_done_at = Some(census_start.elapsed().as_secs_f64());
+                    }
+                    if done % 2000 == 0 && done > 0 {
+                        println!("  census {done}/{total}");
+                    }
+                }
+                TriageProgress::DeepScan { done, total, .. } => {
+                    if done % 10 == 0 && done > 0 {
+                        println!("  deep-scan {done}/{total}");
+                    }
+                }
+                TriageProgress::Confirm { .. } => {}
+            },
+        )
+        .expect("run_triage on real data");
+        let scan_s = t1.elapsed().as_secs_f64();
+        slot.borrow_mut().0.shutdown();
+
+        let census_s = census_done_at.unwrap_or(scan_s);
+        println!(
+            "REAL IMAGE: censused {} in {:.0}s ({:.0} msg/s) · candidates {} ({:.2}% of scope) \
+             · deep-scanned {} · findings {} · unscanned {} · total {:.0}s",
+            out.censused,
+            census_s,
+            out.censused as f64 / census_s.max(0.001),
+            out.candidates,
+            100.0 * out.candidates as f64 / out.censused.max(1) as f64,
+            out.deep_scanned,
+            out.findings,
+            out.unscanned(),
+            scan_s
+        );
+        // No quality assertion: this image's messages carry no ground truth, so
+        // the value here is the SHAPE — volume, selectivity, throughput — not a
+        // recall number. What must hold is that the pipeline ran end to end on
+        // real data and the census actually discriminated.
+        assert_eq!(out.censused, total, "every in-scope message was scored");
+        assert!(
+            out.candidates < out.censused,
+            "the census must select a SUBSET — flagging everything would mean no triage at all"
+        );
+    }
+
     /// #409's premise, measured: focused mode re-sends the system prompt per
     /// message — but the pinned llama-server (b10075) defaults `cache_prompt`
     /// to true, so sequential focused calls on one slot should reuse the
