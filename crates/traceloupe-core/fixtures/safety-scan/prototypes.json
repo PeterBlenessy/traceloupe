@@ -1,0 +1,719 @@
+{
+  "_comment": [
+    "The census's prototype corpus (#491). Written FOR the census, not borrowed",
+    "from the eval fixtures: cases.json is the ground truth the pipeline is",
+    "measured against, and using it to build the centroids made every",
+    "measurement train-on-test unless held out by hand.",
+    "",
+    "Weighted deliberately. Categories defined by a RELATIONSHIP (coercive",
+    "control, grooming, harassment) get the most examples and the longest",
+    "conversations, because the pattern only exists across messages and those",
+    "were the weakest at the shipped cut: 0.53 / 0.59 / 0.60 census recall.",
+    "sexual-content gets FEWER and tighter examples: its centroid was the",
+    "loosest in the catalogue, keeping 43% of an ordinary phone's messages,",
+    "because examples about affection sit where ordinary chatter lives.",
+    "",
+    "These are embedded to form a centroid per category. They are not shown to",
+    "anyone, never sent to a model as a prompt, and are not eval data."
+  ],
+  "examples": [
+    {
+      "category": "coercive-control",
+      "id": "cc-location-demand",
+      "messages": [
+        "where are you",
+        "why is your location off",
+        "turn it back on now",
+        "i shouldnt have to ask twice"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-phone-access",
+      "messages": [
+        "unlock your phone",
+        "if theres nothing to hide theres no problem",
+        "why did you clear the messages"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-isolation-friends",
+      "messages": [
+        "i dont want you seeing her anymore",
+        "she puts ideas in your head",
+        "its me or them, decide"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-isolation-family",
+      "messages": [
+        "your mother is turning you against me",
+        "stop calling her every day",
+        "we dont need them"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-money",
+      "messages": [
+        "i'll handle the money from now on",
+        "send me a photo of the receipt",
+        "you dont need your own account"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-money-allowance",
+      "messages": [
+        "transfer what's left to me",
+        "you spent 40 on what",
+        "ill give you what you need when you need it"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-threat-leaving",
+      "messages": [
+        "if you walk out that door dont come back",
+        "you know what happens if you leave",
+        "nobody else would put up with you"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-reasonable-tone",
+      "messages": [
+        "im not controlling you, im protecting you",
+        "i just need to know where you are, thats all",
+        "other couples share everything"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-check-ins",
+      "messages": [
+        "who were you with between six and seven",
+        "why was there a 20 minute gap",
+        "account for your afternoon"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-clothes",
+      "messages": [
+        "youre not wearing that out",
+        "who are you dressing up for",
+        "change it"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-work-monitoring",
+      "messages": [
+        "who was that man in your work photo",
+        "why is he messaging you",
+        "screenshot the whole thread"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-gaslight",
+      "messages": [
+        "that never happened, youre remembering it wrong",
+        "youre being paranoid again",
+        "everyone thinks youre unstable"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-punish-silence",
+      "messages": [
+        "im not talking to you until you apologise",
+        "you know what you did",
+        "dont bother texting"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-passwords",
+      "messages": [
+        "i want your instagram password",
+        "and your email",
+        "couples dont keep secrets"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-secrecy",
+      "messages": [
+        "dont tell your mum we talk",
+        "this is just between us",
+        "she wouldnt understand our friendship"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-special",
+      "messages": [
+        "youre so much more mature than kids your age",
+        "i can talk to you about things i cant tell adults"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-gifts",
+      "messages": [
+        "i sent you something, dont mention it at home",
+        "did you like it",
+        "i can get you more"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-move-platform",
+      "messages": [
+        "lets talk somewhere your parents cant see",
+        "download this app, it deletes messages"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-meet",
+      "messages": [
+        "can you get out on saturday",
+        "tell them youre at your friends",
+        "ill pick you up round the corner"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-isolate",
+      "messages": [
+        "your parents dont really get you",
+        "they'd stop this if they knew",
+        "im the only one on your side"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-photo-request",
+      "messages": [
+        "send me a picture, just for me",
+        "delete it after so no one sees",
+        "dont be shy, i wont show anyone"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-sextortion",
+      "messages": [
+        "i still have the photo you sent",
+        "do what i say or your friends see it",
+        "dont test me"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-age-probe",
+      "messages": [
+        "how old are you really",
+        "when are your parents out",
+        "are you home alone"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-normalise",
+      "messages": [
+        "its normal, everyone your age does this",
+        "dont make it weird",
+        "youd tell me if you were uncomfortable right"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-guilt",
+      "messages": [
+        "after everything ive done for you",
+        "i thought you cared about me",
+        "dont make me regret trusting you"
+      ]
+    },
+    {
+      "category": "grooming-exploitation",
+      "id": "gr-money-lure",
+      "messages": [
+        "i can send you money for it",
+        "nobody needs to know where it came from"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-pile-on",
+      "messages": [
+        "nobody wants you here",
+        "everyone talks about you when you leave",
+        "just delete your account"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-degrade",
+      "messages": [
+        "youre worthless and everyone knows it",
+        "you were a mistake",
+        "look at yourself"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-sustained",
+      "messages": [
+        "still ignoring me",
+        "answer me",
+        "i can do this all day",
+        "youll get tired before i do"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-humiliate",
+      "messages": [
+        "wait til everyone sees this",
+        "ill send it to the whole group",
+        "hope it was worth it"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-appearance",
+      "messages": [
+        "you actually went out looking like that",
+        "disgusting",
+        "put a bag on"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-work",
+      "messages": [
+        "everyone knows you only got it because of who you know",
+        "youre a joke in the office",
+        "quit already"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-exclusion",
+      "messages": [
+        "we made a group without you",
+        "take the hint",
+        "stop trying to sit with us"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-repeat-contact",
+      "messages": [
+        "new number since you blocked me",
+        "you cant get rid of me that easily",
+        "answer"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-mock-grief",
+      "messages": [
+        "crying again",
+        "so dramatic",
+        "nobody cares about your problems"
+      ]
+    },
+    {
+      "category": "harassment-bullying",
+      "id": "hb-threat-reputation",
+      "messages": [
+        "ill make sure everyone knows what you are",
+        "your family will love hearing this"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-explicit-request",
+      "messages": [
+        "send me nudes",
+        "full body, nothing on"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-explicit-act",
+      "messages": [
+        "describing what i want to do to you in bed tonight in detail"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-unsolicited",
+      "messages": [
+        "sent you a picture of my dick",
+        "open it"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-minor-context",
+      "messages": [
+        "she said shes 15 and sent me photos"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-coerced",
+      "messages": [
+        "send one or i stop talking to you",
+        "everyone else does it"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-explicit-desc",
+      "messages": [
+        "cant stop thinking about you naked, what youd taste like"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-transaction",
+      "messages": [
+        "200 for the hour, what do you want me to wear"
+      ]
+    },
+    {
+      "category": "sexual-content",
+      "id": "sx-graphic-ask",
+      "messages": [
+        "tell me exactly what you'd do to me, dont leave anything out"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-explicit",
+      "messages": [
+        "im going to kill you"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-location",
+      "messages": [
+        "i drove past your house tonight",
+        "ill be outside when you finish work"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-weapon",
+      "messages": [
+        "i have a knife with your name on it"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-family",
+      "messages": [
+        "itd be a shame if something happened to your kids"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-beating",
+      "messages": [
+        "ill put you in hospital",
+        "see if you talk then"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-stalking",
+      "messages": [
+        "saw you at the shop today",
+        "nice coat",
+        "you didnt see me"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-conditional",
+      "messages": [
+        "if you go to the police youre dead"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-escalating",
+      "messages": [
+        "youre going to regret this",
+        "im not joking anymore",
+        "watch what happens"
+      ]
+    },
+    {
+      "category": "threat-violence",
+      "id": "tv-property",
+      "messages": [
+        "ill burn your car with you in it"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-intent",
+      "messages": [
+        "i cant keep doing this any longer",
+        "ive made up my mind"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-plan",
+      "messages": [
+        "i have the pills counted out",
+        "tonight after everyone sleeps"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-goodbye",
+      "messages": [
+        "thanks for everything, sorry for being a burden",
+        "dont blame yourself"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-cutting",
+      "messages": [
+        "i cut again last night",
+        "deeper this time"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-worthless",
+      "messages": [
+        "everyone would be better off without me",
+        "im just taking up space"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-ed-encourage",
+      "messages": [
+        "dont eat today either",
+        "the hunger means its working"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-method-ask",
+      "messages": [
+        "how many would it take",
+        "asking for no reason"
+      ]
+    },
+    {
+      "category": "self-harm",
+      "id": "sh-hopeless",
+      "messages": [
+        "theres no point anymore",
+        "nothing changes, it never will"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-race",
+      "messages": [
+        "this town was better before they started arriving",
+        "send the lot of them back on a boat"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-religion",
+      "messages": [
+        "all of them are terrorists",
+        "they should be banned from here"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-sexuality",
+      "messages": [
+        "youre disgusting and unnatural",
+        "people like you shouldnt be near kids"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-trans",
+      "messages": [
+        "youll never be a real woman",
+        "its a mental illness"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-disability",
+      "messages": [
+        "should have been aborted",
+        "youre a drain on everyone"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-gender",
+      "messages": [
+        "women are too stupid for this job",
+        "get back in the kitchen"
+      ]
+    },
+    {
+      "category": "hate-identity",
+      "id": "hi-dehumanise",
+      "messages": [
+        "theyre animals, not people",
+        "cull the lot of them"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-bank",
+      "messages": [
+        "this is your bank, your account is compromised",
+        "confirm your PIN to secure it"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-giftcard",
+      "messages": [
+        "buy 500 in gift cards and send me the codes",
+        "ill pay you back tomorrow"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-romance",
+      "messages": [
+        "i love you but im stuck at customs",
+        "i need 2000 to get home to you"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-crypto",
+      "messages": [
+        "guaranteed 40% returns weekly",
+        "send the eth to this wallet, spots are limited"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-impersonate",
+      "messages": [
+        "hi mum this is my new number",
+        "my phone broke, can you send money to this account"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-delivery",
+      "messages": [
+        "your parcel is held, pay the 2.99 customs fee here"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-invoice",
+      "messages": [
+        "update the payment details for this invoice to the account below"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-prize",
+      "messages": [
+        "youve won, just pay the release fee to claim it"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-authority",
+      "messages": [
+        "this is the enforcement office, proceedings have been raised against your name",
+        "it can be settled today or officers attend this afternoon"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-verify-link",
+      "messages": [
+        "ACTION REQUIRED: unusual sign-in detected, your access will be suspended",
+        "verify your identity at this secure link within 24 hours"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-deal",
+      "messages": [
+        "got the usual, 60 for the bag",
+        "meet at the same spot"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-supply",
+      "messages": [
+        "can you sort me an ounce by friday",
+        "cash on collection"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-weapon",
+      "messages": [
+        "know anyone selling a clean piece, no paperwork"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-stolen",
+      "messages": [
+        "got a laptop cheap, dont ask where from"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-plan",
+      "messages": [
+        "the van's unlocked at 3, in and out before the shift change"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-minor",
+      "messages": [
+        "dont sell to him at school, do it round the back"
+      ]
+    },
+    {
+      "category": "drugs-illegal",
+      "id": "dr-launder",
+      "messages": [
+        "run it through the shop takings so it looks clean"
+      ]
+    }
+  ]
+}

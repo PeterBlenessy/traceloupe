@@ -1462,24 +1462,18 @@ mod tests {
     }
 
     /// Derive the census thresholds from a recall-vs-cost curve on a REAL
-    /// message distribution, with HELD-OUT prototypes (#489).
+    /// message distribution (#489, #491).
     ///
-    /// The first version of this measurement was train-on-test: the planted
-    /// positives were the fixture positives, and the prototypes are built from
-    /// those same fixtures, so every planted message was scored against a
-    /// centroid containing its own text. It reported recall 1.000 at 0.52
-    /// where the held-out oracle measured a 0.96 ceiling — the tell was in the
-    /// table and I missed it. Journey §7 already names this trap twice.
+    /// The prototypes come from the census's own corpus and the ground truth
+    /// from the eval fixtures, which are disjoint by construction (guarded in
+    /// `triage_scan`). That disjointness is what makes this honest: an earlier
+    /// version built centroids from the very fixtures it scored and reported
+    /// recall 1.000 at 0.52 where the held-out oracle measured 0.96. With two
+    /// corpora there is nothing to hold out — the ground truth was never in
+    /// the centroids.
     ///
-    /// So prototypes here are LEAVE-ONE-OUT: a case is scored against a
-    /// centroid built from every OTHER case of its category. That matches what
-    /// production faces, where a real harmful message is always unseen
-    /// relative to the fixtures the centroids come from. Each case is embedded
-    /// once and the centroids are rebuilt per hold-out — fixture-scale work,
-    /// so clarity beats caching a running sum.
-    ///
-    /// The bed is the public image's own conversation — ordinary chatter is
-    /// what the census must reject — so the distribution is a phone's.
+    /// The bed is the public image's own conversation, because ordinary
+    /// chatter is exactly what the census must reject.
     ///
     ///   TRIAGE_REAL_BACKUP=… TRIAGE_REAL_PASSWORD=… \
     ///   TRACELOUPE_EMBED_MODEL=… \
@@ -1491,7 +1485,8 @@ mod tests {
         use crate::cache::CacheDb;
         use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
         use crate::safety_scan::client::LlmClient;
-        use crate::safety_scan::triage::{cap_for_embedding, census_score, centroid, EMBED_PREFIX};
+        use crate::safety_scan::triage::{self, cap_for_embedding, census_score, EMBED_PREFIX};
+        use crate::safety_scan::triage_scan;
         use crate::sidecar::CancelToken;
         use std::time::Duration;
 
@@ -1533,56 +1528,47 @@ mod tests {
 
         let mut server = spawn_live_server(&embed_model, true, 2048);
         let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
-        // The PRODUCTION cap, not an ad-hoc one: both sides of the cosine must
-        // be capped by the same rule or the curve is not the one production
-        // rides.
         let embed_one = |t: &str| c.embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(t)));
 
-        // Per case: its category, its prototype vector (the joined case text,
-        // exactly as prototype_examples builds it), and its messages.
-        struct Case {
-            /// Stable fixture id. A case can carry SEVERAL categories, and it
-            /// must be held out of every one of them — `census_score` is a max
-            /// over prototypes, so leaving it in a sibling category's centroid
-            /// leaks it straight back in.
-            id: String,
-            cats: Vec<Category>,
-            proto: Vec<f32>,
-            msgs: Vec<Vec<f32>>,
-        }
+        // THE PRODUCTION PATH: same corpus, same builder, same centroids the
+        // shipped census scores against. A measurement that builds its own
+        // prototypes measures its own prototypes.
+        let prototypes =
+            triage::build_prototypes(&triage_scan::prototype_examples(&Category::ALL), |t| {
+                c.embed(t)
+            })
+            .expect("prototypes");
+        assert_eq!(
+            prototypes.len(),
+            Category::ALL.len(),
+            "one centroid per category"
+        );
+
+        // Ground truth: the eval fixtures' positives, per category.
         let fixtures = load_fixtures();
-        let mut cases: Vec<Case> = Vec::new();
+        let positives: Vec<_> = fixtures
+            .cases
+            .iter()
+            .filter(|c| c.kind == "positive")
+            .collect();
+        assert!(
+            !positives.is_empty(),
+            "fixture positives are the ground truth — without them the recall column is 0/0"
+        );
+        let mut planted: Vec<(Vec<Category>, Vec<f32>)> = Vec::new();
         let mut embed_failures = 0usize;
-        for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
-            let joined = case
-                .messages
-                .iter()
-                .map(|m| m.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
-            // ONCE per case, not once per category: a multi-category case was
-            // being embedded twice and its messages counted twice in the
-            // denominator.
-            let Ok(proto) = embed_one(&joined) else {
-                embed_failures += 1;
-                continue;
-            };
-            let mut msgs = Vec::new();
+        for case in positives {
+            // ONCE per message, with its categories fanned out over the stored
+            // vector. Embedding per (case × category) counted multi-category
+            // cases twice in the denominator the thresholds are read off.
+            let cats: Vec<Category> = case.expected_categories().into_iter().collect();
             for m in &case.messages {
                 match embed_one(&m.text) {
-                    Ok(v) => msgs.push(v),
+                    Ok(v) => planted.push((cats.clone(), v)),
                     Err(_) => embed_failures += 1,
                 }
             }
-            cases.push(Case {
-                id: case.id.clone(),
-                cats: case.expected_categories().into_iter().collect(),
-                proto,
-                msgs,
-            });
         }
-        assert!(!cases.is_empty(), "fixture positives are the ground truth");
-
         let mut bed_vecs = Vec::new();
         for t in &bed {
             match embed_one(t) {
@@ -1591,117 +1577,62 @@ mod tests {
             }
         }
         server.shutdown();
-        // Failures are NOT quietly dropped from the denominators: production
-        // counts them as `unscorable` — never scored, never candidates, a
-        // permanent miss — so a run with many of them is not a clean sample to
-        // read thresholds off.
         assert_eq!(
             embed_failures, 0,
             "{embed_failures} embeddings failed — the curve would be computed from a \
              truncated sample and would look plausible anyway"
         );
 
-        // Leave-one-out centroids, by arithmetic rather than re-embedding.
-        let all_cats: Vec<Category> = Category::ALL.to_vec();
-        let centroid_of = |cat: Category, skip_id: Option<&str>| -> Option<Vec<f32>> {
-            let v: Vec<Vec<f32>> = cases
-                .iter()
-                .filter(|c| c.cats.contains(&cat) && Some(c.id.as_str()) != skip_id)
-                .map(|c| c.proto.clone())
-                .collect();
-            centroid(&v)
-        };
-        // Scoring a case: it is excluded from EVERY category's centroid, not
-        // just its own. The score is a max over prototypes, so a sibling
-        // category holding the same case would leak it back in.
-        let held_out_protos = |skip_id: &str| -> Vec<Vec<f32>> {
-            all_cats
-                .iter()
-                .filter_map(|c| centroid_of(*c, Some(skip_id)))
-                .collect()
-        };
-        let production_protos: Vec<Vec<f32>> = all_cats
-            .iter()
-            .filter_map(|c| centroid_of(*c, None))
-            .collect();
-
-        const BATCH_HOURS_PER_100K: f64 = 11.0;
+        const FULL_READ_HOURS_PER_100K: f64 = 11.0;
         const FOCUSED_SECS: f64 = 6.5;
-        let planted_total: usize = cases.iter().map(|c| c.msgs.len()).sum();
         println!(
-            "\n=== census recall vs cost, HELD-OUT prototypes ===\n\
-             bed {} real messages · {planted_total} planted positive messages \
-             across {} cases\n",
+            "\n=== census recall vs cost (production prototypes, disjoint ground truth) ===\n\
+             bed {} real messages · {} planted positive messages\n",
             bed_vecs.len(),
-            cases.len()
+            planted.len()
         );
-        println!("threshold   recall(held-out)   recall(train-on-test)   selectivity   100k cost");
-        for th in [0.46f32, 0.49, 0.52, 0.55, 0.58, 0.61, 0.64, 0.67] {
-            let mut kept_lo = 0usize;
-            let mut kept_tt = 0usize;
-            for case in cases.iter() {
-                let lo = held_out_protos(&case.id);
-                // A category emptied by the hold-out would silently shrink the
-                // prototype set and understate held-out recall.
-                assert_eq!(
-                    lo.len(),
-                    production_protos.len(),
-                    "holding out {} emptied a category's centroid — the two columns would \
-                     no longer be comparable",
-                    case.id
-                );
-                for v in &case.msgs {
-                    if census_score(v, &lo) >= th {
-                        kept_lo += 1;
-                    }
-                    if census_score(v, &production_protos) >= th {
-                        kept_tt += 1;
-                    }
-                }
-            }
-            let recall_lo = kept_lo as f64 / planted_total as f64;
-            let recall_tt = kept_tt as f64 / planted_total as f64;
+        println!("threshold   recall   selectivity   100k cost");
+        for th in [0.46f32, 0.49, 0.52, 0.55, 0.58, 0.61, 0.64, 0.67, 0.70] {
+            let kept = planted
+                .iter()
+                .filter(|(_, v)| census_score(v, &prototypes) >= th)
+                .count();
+            let recall = kept as f64 / planted.len() as f64;
             let kept_bed = bed_vecs
                 .iter()
-                .filter(|v| census_score(v, &production_protos) >= th)
+                .filter(|v| census_score(v, &prototypes) >= th)
                 .count();
             let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
             let hours = (100_000.0 * sel / 100.0) * FOCUSED_SECS / 3600.0;
+            println!("  {th:.2}      {recall:.3}      {sel:>5.1}%      {hours:>5.1} h");
+        }
+        println!(
+            "\n(full read for reference: 0.30 recall, ~{FULL_READ_HOURS_PER_100K} h per 100k — \
+             measured on Jigsaw fixtures, so the comparison is indicative, not like for like)"
+        );
+        println!("\nper-category recall at the shipped cuts:");
+        println!("category                  0.64   0.67   0.70");
+        for cat in Category::ALL {
+            let of_cat: Vec<_> = planted.iter().filter(|(cs, _)| cs.contains(&cat)).collect();
+            if of_cat.is_empty() {
+                continue;
+            }
+            let r = |th: f32| {
+                of_cat
+                    .iter()
+                    .filter(|(_, v)| census_score(v, &prototypes) >= th)
+                    .count() as f64
+                    / of_cat.len() as f64
+            };
             println!(
-                "  {th:.2}          {recall_lo:.3}                {recall_tt:.3}            \
-                 {sel:>5.1}%      {hours:>5.1} h"
+                "  {:<24} {:.2}   {:.2}   {:.2}",
+                cat.as_str(),
+                r(0.64),
+                r(0.67),
+                r(0.70)
             );
         }
-        println!(
-            "\n(full read for reference: 0.30 recall, ~{BATCH_HOURS_PER_100K} h per 100k — \
-             measured on Jigsaw fixtures, NOT on this distribution, so the multipliers are \
-             indicative, not like for like)"
-        );
-        println!(
-            "(held-out is PESSIMISTIC vs production: each centroid here is built from one \
-             fewer case than production's, so production scores against slightly better \
-             prototypes than this column shows)"
-        );
-        // The mechanism this measurement exists to respect: holding a case out
-        // of its own centroid cannot make it easier to find.
-        let mut lo_total = 0usize;
-        let mut tt_total = 0usize;
-        for case in cases.iter() {
-            let lo = held_out_protos(&case.id);
-            for v in &case.msgs {
-                if census_score(v, &lo) >= 0.55 {
-                    lo_total += 1;
-                }
-                if census_score(v, &production_protos) >= 0.55 {
-                    tt_total += 1;
-                }
-            }
-        }
-        assert!(
-            lo_total <= tt_total,
-            "held-out recall ({lo_total}) exceeded train-on-test ({tt_total}) — the \
-             leave-one-out is not actually holding anything out"
-        );
+        assert!(!bed_vecs.is_empty() && !planted.is_empty());
     }
 
     /// #409's premise, measured: focused mode re-sends the system prompt per

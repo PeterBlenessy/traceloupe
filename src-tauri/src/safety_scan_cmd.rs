@@ -1576,6 +1576,22 @@ pub async fn run_triage_scan(
         }
 
         let mut analysis = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+        // Census scores persist across scans and are skipped when present, so
+        // they are only comparable to a threshold on the scale that produced
+        // them. If the prototype corpus or the embedder changed since they
+        // were written, drop them rather than filter old-scale scores at a new
+        // cut (#491).
+        let fingerprint = triage_scan::census_scale_fingerprint(embedder.id);
+        if analysis
+            .ensure_census_scale(&fingerprint)
+            .map_err(|e| e.to_string())?
+        {
+            crate::logging::info(
+                &app2,
+                "Triage scan: prototype corpus or embedder changed — previous census scores \
+                 cleared and will be recomputed",
+            );
+        }
 
         // One resident sidecar, swapped embedder→classifier on the first
         // focused call (i.e. after the census — run_triage's phases guarantee

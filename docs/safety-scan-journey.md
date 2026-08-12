@@ -506,11 +506,29 @@ validation. Checklist mirrors #459.
       thresholds one actually picks; re-run leave-one-out, and reading the column each
       mode actually runs (Balanced and Precise always confirm): Thorough 1.7x
       the full read's recall for ~2x the time, Balanced 1.1x at half the time,
-      Precise 0.9x at a tenth.3x the full read's recall in half the time, Thorough 1.8x for ~2x the
-      time, Precise parity recall in a tenth. **The lab's 0.94 does not survive
+      Precise 0.9x at a tenth. **The lab's 0.94 does not survive
       either correction**, and no threshold beats the full read on both axes —
       the curve is dominated by prototype quality, which is now the binding
       constraint (§8.3).
+- [x] **A prototype corpus of the census's own** (#491). The centroids were
+      built from the five eval fixtures per category — thin, uneven, and a
+      structural train/test coupling that cost three retracted measurements.
+      Now 85 purpose-written examples, weighted toward the relationship
+      categories, with a guard that the two corpora never share text; the
+      leave-one-out apparatus is gone because the ground truth was never in the
+      centroids. Cuts retuned to 0.64/0.67/0.70. **The gain is modest** (+0.055
+      recall at the ~5 h operating point). Two lessons from the review pass.
+      The first disjointness guard compared whole lines for *equality* and
+      passed while three prototype lines sat as substrings inside fixture
+      positives — it now matches word runs, because the check that replaces a
+      safety net has to be stronger than the net. And the recorded explanation
+      for scam-fraud's 0.25 ("my examples read like templates, the fixtures
+      read like conversations") was **wrong**: rewriting to conversational made
+      it 0.17, while keeping the terse register and adding the two fixture
+      modes the corpus never covered made it 0.33 at identical selectivity.
+      Coverage of modes beats register — and an untested causal claim in a
+      results doc is a liability, not a finding (§10.14). Examples help; the
+      embedding space is still the ceiling.
 - [ ] **Wider / better corpus for the three unlabelled categories**
       (coercive-control, grooming, relationship-harassment). The only route is to
       **generate** labelled conversations; the same corpus is the training set for
@@ -990,3 +1008,50 @@ stage-level checkpoints so that *any* death — supervisor, OS, power — is a
 lossless resume. The oracle's checkpoint/resume design absorbed both kills
 without losing a stage, which is the same property the shipped census now has
 (a cancelled census keeps its scored prefix in 256-row batches).
+
+### 10.14 A guard that replaces a safety net, and a diagnosis that was wrong (2026-08-13)
+
+Two failures from the review of #491, both worth a paper's methods section.
+
+**A weaker check replaced a stronger one, silently.** Splitting the census's
+prototypes out of the eval fixtures removed the need for leave-one-out: with
+disjoint corpora there is nothing to hold out. The disjointness was asserted by
+a test comparing whole lines for equality — and it passed while three prototype
+lines sat *inside* fixture positives as substrings. "i know where you live" is
+not equal to "i know where you live and im going to make you regret this", so
+the guard saw nothing, while the centroid contained the ground truth it was
+scored against. The same train-on-test contamination that had already cost
+three retracted measurements, reintroduced by the very change that was supposed
+to end it structurally, and hidden by the check that justified deleting the old
+protection.
+
+The rule this earns: **when a structural fix lets you delete a safety net, the
+guard that replaces it must be stronger than the net, and must be shown to fail
+before it is trusted.** Mutation-proving it costs one minute — reintroduce the
+overlap, watch it fail, revert. That step is what turned this up. The guard now
+compares word sequences (equality at any length, or a shared run of four or
+more words), which catches substring containment without flagging a fixture
+that merely shares a common word.
+
+**A confident diagnosis, recorded as if it were a result.** The first
+measurement pass noted scam-fraud recalling 0.25 against hate-identity's 0.82
+and explained it: "my scam examples read like phishing templates and the
+fixtures' scams read like conversations; that is a corpus bug." Plausible,
+specific, and never tested — it went into the results document beside numbers
+that *were* measured.
+
+It was backwards. The fixtures are the terse, imperative ones. Rewriting the
+corpus to be conversational dropped scam recall to 0.17 and to zero at both
+tighter cuts. Keeping the terse register and adding the two fixture modes the
+corpus had never covered — an authority-threat and a verify-at-a-link — raised
+it to 0.33 at identical selectivity, and lifted overall recall 0.595 → 0.603.
+Coverage of *modes* beat matching a *register* — which is also the safer
+direction, since writing examples in the fixtures' voice is exactly how the
+train-on-test leak comes back.
+
+Two rules. **An untested causal claim does not belong in a results document
+without being marked as a hypothesis** — the next reader (or the next session)
+will act on it, as this one did, and it cost two full measurement cycles. And
+**state the sample size next to the improvement**: scam-fraud has about twelve
+ground-truth messages, so 0.25 → 0.33 is one message. Right direction,
+uncallable magnitude.
