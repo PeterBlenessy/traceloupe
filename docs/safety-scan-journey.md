@@ -541,6 +541,30 @@ product than where it was measured. WINDOW=25 was this. The prefilter was this.
 A threshold is not a property of an algorithm — it is a property of an
 algorithm *on a distribution*, and it does not travel.
 
+### 8.2 Two causes, and the cheaper lever (#486)
+
+Measuring the selectivity collapse split it in half. Scoring against nine
+prototypes rather than one moves the keep rate from 32.5% to 55.2% — the
+suspected cause, confirmed. But the SAME single prototype that kept 18.3% of
+the tuning corpus keeps 32.5% of a real phone, so the distribution accounts for
+the other half. Either explanation alone would have looked complete, and fixing
+either alone would not have worked.
+
+The dial still functions: 0.64 keeps 3.1% and would make a 100k-message scan
+~5.6 h against the batch scan's ~11 h. Every SHIPPED threshold (0.52/0.55/0.58)
+currently costs more than the scan it replaces. What raising it costs in recall
+on real data is unknown — this image has no labels, and on Jigsaw 0.64 dropped
+the census ceiling from 0.96 to 0.88.
+
+The more interesting result is that the prototypes are uneven by a factor of
+four. `sexual-content` alone flags 43.2% of an ordinary phone's messages;
+`scam-fraud` and `hate-identity` flag ~11%. A centroid built from a handful of
+fixture positives can sit in a region ordinary chatter also occupies, and when
+the score is a MAX over nine such centroids, the loosest one sets the cost for
+the whole scan. That is a prototype-quality lever, and unlike the threshold it
+does not trade recall — which makes the "wider/better corpus" item below the
+critical path for cost, not only for the three unlabelled categories.
+
 ## 9. Appendix — key numbers in one place
 
 | measurement | value | source |

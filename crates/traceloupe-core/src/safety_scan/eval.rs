@@ -1322,6 +1322,142 @@ mod tests {
         );
     }
 
+    /// Why does the census keep 55% of a real backup when the threshold was
+    /// tuned to keep 18%? (#486)
+    ///
+    /// The suspicion: 0.52 was calibrated against a corpus scored with ONE
+    /// prototype, while production builds NINE — one per Forensic 9 category —
+    /// and `census_score` takes the MAX over them. More prototypes means more
+    /// chances to clear the same bar.
+    ///
+    /// Embeddings do not depend on the prototype set, so this embeds each
+    /// message ONCE and then scores it against every prototype subset offline:
+    /// the whole selectivity curve for the price of one census pass. It prints
+    /// a table and asserts only the mechanism, not a target — choosing
+    /// thresholds is a product decision, and this is the evidence for it.
+    ///
+    ///   TRIAGE_REAL_BACKUP=/path/to/unpacked/<udid> TRIAGE_REAL_PASSWORD=… \
+    ///   TRACELOUPE_EMBED_MODEL=/tmp/models/embeddinggemma-300M-Q8_0.gguf \
+    ///   cargo test -p traceloupe-core census_selectivity_by_prototype_count -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a public DFIR image + the embedding GGUF"]
+    fn census_selectivity_by_prototype_count() {
+        use crate::analysis::Category;
+        use crate::cache::CacheDb;
+        use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::triage::{self, census_score, EMBED_PREFIX};
+        use crate::safety_scan::triage_scan;
+        use crate::sidecar::CancelToken;
+        use std::time::Duration;
+
+        let (Ok(backup), Ok(embed_model)) = (
+            std::env::var("TRIAGE_REAL_BACKUP"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+        ) else {
+            eprintln!("set TRIAGE_REAL_BACKUP and TRACELOUPE_EMBED_MODEL");
+            return;
+        };
+        let password = std::env::var("TRIAGE_REAL_PASSWORD").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the public image");
+        let cache = CacheDb::open(&cache_path).unwrap();
+        let threads =
+            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let msgs: Vec<_> = threads.into_iter().flatten().collect();
+
+        let mut server = spawn_live_server(&embed_model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+
+        // One prototype per category, kept SEPARATE so subsets can be scored.
+        let per_category: Vec<(Category, Vec<f32>)> = Category::ALL
+            .iter()
+            .filter_map(|cat| {
+                let ex = triage_scan::prototype_examples(&[*cat]);
+                triage::build_prototypes(&ex, |t| c.embed(t))
+                    .ok()
+                    .and_then(|p| p.into_iter().next())
+                    .map(|v| (*cat, v))
+            })
+            .collect();
+        assert_eq!(
+            per_category.len(),
+            Category::ALL.len(),
+            "a prototype per category"
+        );
+
+        // Embed every message once; scoring against subsets is then free.
+        let vectors: Vec<Vec<f32>> = msgs
+            .iter()
+            .filter_map(|m| {
+                let capped: String = m.text.chars().take(400).collect();
+                c.embed(&format!("{EMBED_PREFIX}{capped}")).ok()
+            })
+            .collect();
+        server.shutdown();
+        let n = vectors.len();
+        assert!(n > 0, "the image has embeddable messages");
+
+        let keep_rate = |protos: &[Vec<f32>], th: f32| -> f64 {
+            let kept = vectors
+                .iter()
+                .filter(|v| census_score(v, protos) >= th)
+                .count();
+            100.0 * kept as f64 / n as f64
+        };
+
+        println!("\n=== census selectivity on a real device ({n} messages) ===");
+        println!("prototypes                       0.52     0.55     0.58     0.64");
+        for k in [1usize, 3, 5, 9] {
+            let subset: Vec<Vec<f32>> = per_category
+                .iter()
+                .take(k)
+                .map(|(_, v)| v.clone())
+                .collect();
+            println!(
+                "{:>2} categories                    {:>5.1}%   {:>5.1}%   {:>5.1}%   {:>5.1}%",
+                k,
+                keep_rate(&subset, 0.52),
+                keep_rate(&subset, 0.55),
+                keep_rate(&subset, 0.58),
+                keep_rate(&subset, 0.64),
+            );
+        }
+        println!("\nper-category keep rate at 0.52 (which prototypes are loose):");
+        for (cat, v) in &per_category {
+            println!(
+                "  {:<24} {:>5.1}%",
+                cat.as_str(),
+                keep_rate(std::slice::from_ref(v), 0.52)
+            );
+        }
+        // What thresholds SHOULD be is a product call; what must be true is the
+        // mechanism — scoring against more prototypes cannot select less.
+        let one: Vec<Vec<f32>> = per_category
+            .iter()
+            .take(1)
+            .map(|(_, v)| v.clone())
+            .collect();
+        let all: Vec<Vec<f32>> = per_category.iter().map(|(_, v)| v.clone()).collect();
+        assert!(
+            keep_rate(&all, 0.52) >= keep_rate(&one, 0.52),
+            "max-over-prototypes is monotonic in the prototype set"
+        );
+    }
+
     /// #409's premise, measured: focused mode re-sends the system prompt per
     /// message — but the pinned llama-server (b10075) defaults `cache_prompt`
     /// to true, so sequential focused calls on one slot should reuse the

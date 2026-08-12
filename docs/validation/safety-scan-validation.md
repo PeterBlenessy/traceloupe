@@ -683,3 +683,63 @@ deep-scan was budgeted at 40 of 318 candidates, so nothing here says anything
 about recall or precision on real data. What it does establish is the SHAPE —
 volume, selectivity, throughput — which is what the cost argument rests on.
 Follow-up: #486.
+
+### 2026-08-12 — why the census keeps 55%: two causes, not one (#486)
+
+Embeddings do not depend on the prototype set, so every message of the public
+iOS 17 image was embedded once and then scored against each prototype subset
+offline (`census_selectivity_by_prototype_count`). Keep rate, 576 messages: <!-- not-a-backup-count: public DFIR research image -->
+
+| prototypes | 0.52 | 0.55 | 0.58 | 0.64 |
+|---|---|---|---|---|
+| 1 category | 32.5% | 17.7% | 11.1% | 1.2% |
+| 3 categories | 47.6% | 31.4% | 17.7% | 3.1% |
+| 5 categories | 51.7% | 35.1% | 18.8% | 3.1% |
+| **9 categories (production)** | **55.2%** | 38.5% | 20.5% | 3.1% |
+
+**The suspected cause is real but only half the story.** Scoring against nine
+prototypes instead of one moves the keep rate 32.5% → 55.2% at the shipped
+threshold. But the same single prototype that kept 18.3% of the Jigsaw corpus
+keeps 32.5% here, so the gap decomposes roughly evenly:
+
+- **+14 points** because real conversation is not the tuning distribution;
+- **+23 points** because production takes the max over nine prototypes.
+
+Fixing one without the other would not have been enough, and either alone would
+have looked like the whole answer.
+
+**The threshold dial still works — it is just set in the wrong place for this
+input.** Cost of a 100k-message backup at ~6.5 s per focused call, against the
+batch scan's measured ~11 h:
+
+| threshold | candidates | focused calls | wall clock |
+|---|---|---|---|
+| 0.52 (Thorough) | 55.2% | 55,200 | ~100 h |
+| 0.55 (Balanced) | 38.5% | 38,500 | ~70 h |
+| 0.58 (Precise) | 20.5% | 20,500 | ~37 h |
+| **0.64** | **3.1%** | **3,100** | **~5.6 h** |
+
+**Every shipped mode is currently more expensive than the batch scan it
+replaces**; only around 0.64 does triage become the cheaper option it was
+designed to be. What that costs in recall on real data is NOT known — this
+image has no ground truth, and on Jigsaw 0.64 dropped the census ceiling from
+0.96 to 0.88. Recalibration therefore needs a labelled real-shaped corpus,
+which is the same missing asset as the three unlabelled categories.
+
+**The prototypes are wildly uneven**, which is a cheaper lever than the
+threshold. Keep rate at 0.52 for each category alone:
+
+| category | keeps | | category | keeps |
+|---|---|---|---|---|
+| sexual-content | **43.2%** | | coercive-control | 26.2% |
+| threat-violence | 32.5% | | drugs-illegal | 25.5% |
+| grooming-exploitation | 31.1% | | self-harm | 14.4% |
+| harassment-bullying | 29.9% | | hate-identity | 11.5% |
+| | | | scam-fraud | 11.3% |
+
+One prototype — sexual-content — flags 43% of an ordinary phone's messages by
+itself, nearly four times what scam-fraud or hate-identity flag. That is a
+prototype-quality problem, not a threshold problem: a centroid built from a few
+fixture positives sits in a region of the space that ordinary chatter also
+occupies. Improving or splitting the loosest prototypes would buy selectivity
+without trading recall the way raising the threshold does.
