@@ -626,12 +626,31 @@ proxy for tokens. Measured on the pinned build:
 | ordinary prose | embeds |
 | dense ASCII (URLs, hashes, base64, code) | **HTTP 500 between 2,000 and 3,000 chars** |
 
-Dense text tokenises roughly 3× denser than prose, and a message is whatever a
-person pasted into a chat — so the census cap is now 1,500 chars, chosen to
-hold at the theoretical worst of one token per char rather than at the average.
-The first version of the guard used prose at the cap, which passes even when
-the cap is wrong; it now probes dense text, and removing the batch flags fails
-it.
+Dense text tokenises roughly 3× denser than prose — but review pushed on
+whether chars bound tokens at all, and measuring said no. The tokenizer falls
+back to one token per BYTE outside its vocab:
+
+| 1,500 chars of… | bytes | result |
+|---|---|---|
+| ASCII | 1,530 | embeds |
+| Japanese | 4,530 | embeds (vocab covers it) |
+| emoji + ZWJ | 5,446 | embeds (vocab covers it) |
+| Linear B / hieroglyphs | 6,030 | **HTTP 500** — and fails from 700 chars up |
+
+So a CHAR cap is safe for the scripts a person is likely to type and unsafe for
+the ones they are not, which is the wrong way round when the cost is a dead
+scan. The cap is therefore **1,500 bytes** on a char boundary, which holds at
+the fallback's worst case. Well-covered scripts pay for it (~500 Japanese chars,
+~375 emoji), accepted deliberately: the census scores a RANKING signal from the
+opening of a message and the focused stage still reads all of it.
+
+Two guard corrections came out of the same pass. The first version probed
+*prose* at the cap — which passes at 4,000 chars even when the cap is wrong, so
+it proved nothing; it now probes byte-fallback text at the cap, and both raising
+the cap and removing the batch flags fail it. And the census no longer dies when
+the embedder refuses a message at all: it skips it, counts it as `unscorable`,
+and reports it, because tokenisation has now surprised this pipeline twice and
+the blast radius of the third time should be one message rather than a scan.
 
 **The census selects 55% of a real backup — which inverts the architecture's
 premise.**

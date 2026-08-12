@@ -1102,7 +1102,7 @@ mod tests {
     #[ignore = "requires the embedding GGUF (set TRACELOUPE_EMBED_MODEL)"]
     fn a_long_message_still_embeds() {
         use crate::safety_scan::client::LlmClient;
-        use crate::safety_scan::triage::{EMBED_MAX_CHARS, EMBED_PREFIX};
+        use crate::safety_scan::triage::{EMBED_MAX_BYTES, EMBED_PREFIX};
         use std::time::Duration;
 
         let Ok(model) = std::env::var("TRACELOUPE_EMBED_MODEL") else {
@@ -1116,8 +1116,8 @@ mod tests {
         // 4,000 chars while dense ASCII fails between 2,000 and 3,000, so a
         // prose probe would pass even with the cap set wrongly and prove
         // nothing. This is the worst case the census can actually be handed.
-        let dense = "aB3$x9-Zq7#Lm2/Kp5!Wn8&Rt4".repeat(EMBED_MAX_CHARS / 26 + 1);
-        let text: String = dense.chars().take(EMBED_MAX_CHARS).collect();
+        let dense = "aB3$x9-Zq7#Lm2/Kp5!Wn8&Rt4".repeat(EMBED_MAX_BYTES / 26 + 1);
+        let text: String = dense.chars().take(EMBED_MAX_BYTES).collect();
         let v = c.embed(&format!("{EMBED_PREFIX}{text}"));
         server.shutdown();
         let v = v.unwrap_or_else(|e| {

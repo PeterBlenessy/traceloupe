@@ -62,6 +62,10 @@ pub struct TriageOutcome {
     /// audited, and the scan continued. ALL of them failing fails the scan
     /// (the §10.6 harness-bug signature).
     pub deep_scan_failed: usize,
+    /// Messages the embedder could not score even after capping. Never
+    /// candidates, so never deep-scanned — coverage the scan does not have,
+    /// reported rather than hidden.
+    pub unscorable: usize,
     /// Provisional findings whose CONFIRMATION call failed even after a retry
     /// — dropped (the mode promised a second opinion) and audited. ALL of them
     /// failing fails the scan, same as `deep_scan_failed`.
@@ -274,7 +278,9 @@ where
             }
             Err(e) => return Err(e),
         };
+        out.unscorable += scored.unscorable;
         let rows: Vec<CensusRow> = scored
+            .scored
             .iter()
             .map(|s| CensusRow {
                 source_id: s.source_id,
@@ -494,14 +500,15 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
             out.contentless,
             out.deep_scan_failed,
             out.unconfirmed,
-            out.confirm_failed
+            out.confirm_failed,
+            out.unscorable
         ),
     );
     Ok(out)

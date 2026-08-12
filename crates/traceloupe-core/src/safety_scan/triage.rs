@@ -127,33 +127,48 @@ pub fn census_score(message: &[f32], prototypes: &[Vec<f32>]) -> f32 {
 /// off-distribution.
 pub const EMBED_PREFIX: &str = "task: classification | query: ";
 
-/// Longest message text the census embeds, in chars.
+/// Longest message text the census embeds, in BYTES.
 ///
-/// The embedder's real limit is its 2048-token CONTEXT, and chars are a poor
-/// proxy for tokens: measured against the pinned build (b10075,
-/// EmbeddingGemma, batches sized to the context), ordinary prose embeds fine at
-/// 4,000 chars, while dense ASCII — URLs, hashes, base64, code — fails
-/// somewhere between 2,000 and 3,000, because it tokenises roughly three times
-/// denser. A message from a real device is whatever a person pasted into a
-/// chat, so the cap has to hold for the DENSEST case, not the average one.
+/// The embedder's real limit is its 2048-token context, and neither chars nor
+/// bytes are tokens — but bytes bound the worst case and chars do not. The
+/// tokenizer falls back to one token per BYTE for anything outside its vocab,
+/// so a script it does not cover costs 4 tokens per char. Measured against the
+/// pinned build (b10075, EmbeddingGemma, batches sized to the context):
 ///
-/// 1,500 chars is safe even at the theoretical worst of one token per char
-/// (dense scripts), leaving room for the task prefix inside 2048. Beyond that
-/// the server answers HTTP 500 and the scan dies mid-census (#485) — the cost
-/// of being wrong here is a failed scan, not a slightly worse score.
+/// ```text
+/// 1,500 chars  ASCII                     1,530 bytes   ok
+/// 1,500 chars  Japanese                  4,530 bytes   ok      (vocab covers it)
+/// 1,500 chars  emoji + ZWJ sequences     5,446 bytes   ok      (vocab covers it)
+///   700 chars  Linear B / hieroglyphs    2,830 bytes   HTTP 500 (byte fallback)
+///   400 chars  Linear B / hieroglyphs    1,630 bytes   ok
+/// ```
 ///
-/// Truncating costs little: the census produces a RANKING signal, and the
-/// opening of a message is what decides whether it looks like harm. The focused
-/// stage still reads the whole text.
-pub const EMBED_MAX_CHARS: usize = 1_500;
+/// So a char cap is safe for the scripts a person is likely to type and unsafe
+/// for the ones they are not, which is exactly the wrong way round for a
+/// failure whose cost is a DEAD SCAN (#485). 1,500 bytes holds even at the
+/// fallback's one-token-per-byte worst case, leaving room for the task prefix
+/// inside 2048.
+///
+/// The price is paid by scripts the vocab covers WELL: 1,500 bytes is ~1,500
+/// Latin chars but only ~500 Japanese or ~375 emoji. That is accepted
+/// deliberately — the census produces a RANKING signal from the opening of a
+/// message, the focused stage still reads the whole text, and the alternative
+/// is tokenising every message over the wire (a round trip per message, on a
+/// pass whose entire value is being cheap).
+pub const EMBED_MAX_BYTES: usize = 1_500;
 
-/// Cap `text` for embedding on a char boundary (never a byte split, which would
-/// panic on multi-byte scripts — most of the world's messages).
+/// Cap `text` at [`EMBED_MAX_BYTES`], always on a char boundary — slicing
+/// mid-glyph panics, and the scripts most likely to hit this cap are precisely
+/// the multi-byte ones.
 fn cap_for_embedding(text: &str) -> &str {
-    match text.char_indices().nth(EMBED_MAX_CHARS) {
-        Some((cut, _)) => &text[..cut],
-        None => text,
+    if text.len() <= EMBED_MAX_BYTES {
+        return text;
     }
+    let mut cut = EMBED_MAX_BYTES;
+    while cut > 0 && !text.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    &text[..cut]
 }
 
 /// A message to score in the census.
@@ -172,6 +187,17 @@ pub struct CensusInput {
     /// The thread's service (iMessage/SMS/TikTok…), carried onto findings so a
     /// service-scoped scan can count and list its own.
     pub service: Option<String>,
+}
+
+/// What one census pass produced: the messages it scored, and how many it
+/// could not. The second number is not an error count to swallow — it is
+/// coverage the scan does not have.
+#[derive(Debug, Clone, Default)]
+pub struct Census {
+    pub scored: Vec<ScoredMessage>,
+    /// Messages the embedder refused even after capping. Never scored, so
+    /// never candidates — reported rather than hidden.
+    pub unscorable: usize,
 }
 
 /// A scored message, ready to persist.
@@ -220,14 +246,26 @@ pub fn census_messages<E>(
     messages: &[CensusInput],
     prototypes: &[Vec<f32>],
     mut embed: E,
-) -> crate::Result<Vec<ScoredMessage>>
+) -> crate::Result<Census>
 where
     E: FnMut(&str) -> crate::Result<Vec<f32>>,
 {
-    let mut out = Vec::with_capacity(messages.len());
+    let mut out = Census::default();
     for m in messages {
-        let v = embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(&m.text)))?;
-        out.push(ScoredMessage {
+        // A message the embedder refuses is SKIPPED, not fatal. The cap makes
+        // that rare, but tokenisation has surprised this pipeline twice
+        // already (#485) and the cost of being wrong again should be one
+        // unscored message, not a dead scan at hour three. Skipped messages
+        // are counted so the coverage report can say they were never scored —
+        // an unscored message is a hole, and a hole must be visible.
+        let v = match embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(&m.text))) {
+            Ok(v) => v,
+            Err(_) => {
+                out.unscorable += 1;
+                continue;
+            }
+        };
+        out.scored.push(ScoredMessage {
             source_id: m.source_id,
             thread_identifier: m.thread_identifier.clone(),
             sender: m.sender.clone(),
@@ -383,7 +421,7 @@ mod tests {
                 service: None,
             },
         ];
-        let scored = census_messages(&msgs, &protos, fake_embed).unwrap();
+        let scored = census_messages(&msgs, &protos, fake_embed).unwrap().scored;
         assert!(scored[0].score > scored[1].score);
         assert!(scored[0].score > 0.9 && scored[1].score < 0.1);
         // Metadata is carried through untouched — the census row needs it.
@@ -453,7 +491,7 @@ mod tests {
     /// by construction.
     #[test]
     fn the_census_caps_what_it_sends_to_the_embedder() {
-        let long = "a".repeat(EMBED_MAX_CHARS * 3);
+        let long = "a".repeat(EMBED_MAX_BYTES * 3);
         let msgs = vec![CensusInput {
             source_id: 1,
             thread_identifier: "t".into(),
@@ -465,13 +503,13 @@ mod tests {
         }];
         let seen = std::cell::RefCell::new(Vec::<usize>::new());
         let probe = |t: &str| {
-            seen.borrow_mut().push(t.chars().count());
+            seen.borrow_mut().push(t.len());
             fake_embed(t)
         };
         census_messages(&msgs, &[], probe).unwrap();
         let sent = seen.borrow()[0];
         assert!(
-            sent <= EMBED_PREFIX.chars().count() + EMBED_MAX_CHARS,
+            sent <= EMBED_PREFIX.chars().count() + EMBED_MAX_BYTES,
             "sent {sent} chars — the cap is what keeps a long message from killing the scan"
         );
 
@@ -480,22 +518,72 @@ mod tests {
         let ex = vec![("threat-violence".to_string(), long)];
         seen.borrow_mut().clear();
         build_prototypes(&ex, probe).unwrap();
-        assert!(seen.borrow()[0] <= EMBED_PREFIX.chars().count() + EMBED_MAX_CHARS);
+        assert!(seen.borrow()[0] <= EMBED_PREFIX.chars().count() + EMBED_MAX_BYTES);
     }
 
-    /// The cap counts CHARS, not bytes: slicing a multi-byte script mid-glyph
-    /// panics, and most of the world's messages are multi-byte.
+    /// The cap bounds BYTES (what the tokenizer's fallback charges per token)
+    /// and must never split a char — the scripts most likely to hit it are the
+    /// multi-byte ones, where a byte slice would panic.
     #[test]
-    fn the_embedding_cap_never_splits_a_character() {
-        let text = "日本語のメッセージ".repeat(EMBED_MAX_CHARS);
-        let capped = cap_for_embedding(&text);
-        assert_eq!(capped.chars().count(), EMBED_MAX_CHARS);
-        assert!(
-            text.starts_with(capped),
-            "the cap is a prefix, not a re-encode"
-        );
-        // Short text is returned whole.
+    fn the_embedding_cap_bounds_bytes_without_splitting_a_character() {
+        for text in [
+            "日本語のメッセージです".repeat(500), // 3 bytes/char
+            "👨‍👩‍👧‍👦🏳️‍🌈".repeat(500),                   // 4-byte + ZWJ
+            "𐀀𐀁𐀂𐀃".repeat(500),                   // byte-fallback territory
+            "a".repeat(5_000),                    // 1 byte/char
+        ] {
+            let capped = cap_for_embedding(&text);
+            assert!(
+                capped.len() <= EMBED_MAX_BYTES,
+                "capped to {} bytes, over the {EMBED_MAX_BYTES} the embedder can take",
+                capped.len()
+            );
+            assert!(
+                text.starts_with(capped),
+                "the cap is a prefix, not a re-encode"
+            );
+            // Reachable only because the slice landed on a char boundary — a
+            // mid-glyph cut would have panicked above.
+            assert!(capped.chars().count() > 0);
+        }
+        // Short text is returned whole, whatever its script.
         assert_eq!(cap_for_embedding("hej"), "hej");
+        assert_eq!(cap_for_embedding("日本"), "日本");
+    }
+
+    /// A message the embedder refuses must cost ONE message, not the scan
+    /// (#485): tokenisation has surprised this pipeline twice, so the blast
+    /// radius has to be bounded even when the cap is not enough.
+    #[test]
+    fn an_unembeddable_message_is_skipped_not_fatal() {
+        let msgs: Vec<CensusInput> = ["fine", "POISON", "also fine"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| CensusInput {
+                source_id: i as i64,
+                thread_identifier: "t".into(),
+                sender: "a".into(),
+                occurred_at: None,
+                text: (*t).into(),
+                fingerprint: format!("fp{i}"),
+                service: None,
+            })
+            .collect();
+        let refusing = |t: &str| {
+            if t.contains("POISON") {
+                Err(crate::Error::Inference(
+                    "llama-server returned HTTP 500".into(),
+                ))
+            } else {
+                fake_embed(t)
+            }
+        };
+        let census = census_messages(&msgs, &[], refusing).expect("one bad message is not fatal");
+        assert_eq!(census.scored.len(), 2, "the others are still scored");
+        assert_eq!(
+            census.unscorable, 1,
+            "and the hole is COUNTED — an unscored message is coverage the scan does not have"
+        );
     }
 
     #[test]
@@ -509,7 +597,7 @@ mod tests {
             fingerprint: "fp".into(),
             service: None,
         }];
-        let scored = census_messages(&msgs, &[], fake_embed).unwrap();
+        let scored = census_messages(&msgs, &[], fake_embed).unwrap().scored;
         assert_eq!(scored[0].score, 0.0);
     }
 
