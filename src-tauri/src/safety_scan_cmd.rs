@@ -106,6 +106,10 @@ pub struct ModelInfo {
     /// models; the others are downloadable helpers and must never be offered
     /// by the scan-model picker.
     pub role: String,
+    /// Below this much total RAM the model is not usable here. Sent so the UI
+    /// gates on the SAME number the backend admits on — a hardcoded copy in
+    /// the view drifts the moment a catalog entry changes.
+    pub ram_floor_bytes: u64,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -137,6 +141,7 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
                 models::ModelRole::Embedder => "embedder".into(),
                 models::ModelRole::Confirmer => "confirmer".into(),
             },
+            ram_floor_bytes: s.ram_floor_bytes,
         })
         .collect();
     // "Ready to scan" means a CLASSIFIER is installed — the embedder and the
@@ -1296,7 +1301,14 @@ fn plan_triage_scan(
     // missing.
     let mode = match mode {
         None => {
+            // "Can run here" means installed AND loadable: on a Mac below the
+            // confirmer's RAM floor with the model downloaded (Settings offers
+            // that download with no RAM gate), an installed-only test picked
+            // Balanced and the admission check below then refused the scan
+            // outright — the default request failing instead of falling back,
+            // which is exactly what this branch exists to prevent.
             let confirmer_ready = models::confirmer()
+                .filter(|s| total_ram == 0 || total_ram >= s.ram_floor_bytes)
                 .and_then(|s| s.installed_at(dir))
                 .is_some();
             if confirmer_ready {
@@ -2727,6 +2739,17 @@ mod tests {
             "confirmer present ⇒ the product default"
         );
         assert!(plan.confirmer.is_some());
+
+        // Installed but NOT loadable: a default scan must fall back, not fail.
+        // The confirmer is downloadable with no RAM gate, so this is a real
+        // machine, and "best posture this machine can run" has to mean it.
+        let floor = models::confirmer().unwrap().ram_floor_bytes;
+        // Classifier pinned: below the floor, RAM-based resolution would pick
+        // the E2B tier and report ITS absence, masking the branch under test.
+        let plan = plan_triage_scan(dir.path(), floor - 1, None, Some(CLASSIFIER), None)
+            .expect("an unstated mode must never be refused for the confirmer's sake");
+        assert_eq!(plan.mode, ScanMode::Thorough);
+        assert!(plan.confirmer.is_none());
     }
 
     /// An EXPLICIT confirm-mode gets an honest refusal rather than a silent

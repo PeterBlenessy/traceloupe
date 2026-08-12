@@ -461,10 +461,13 @@ export function SafetyScanView() {
   // enabled, and get an error toast instead of a scan. Mirrors the admission
   // check in run_triage_scan.
   const confirmerSpec = ms.models.find((m) => m.role === "confirmer");
-  const CONFIRMER_RAM_FLOOR = 12 * 1024 ** 3;
+  // The floor comes from the model spec, not a copy: the backend admits on
+  // ram_floor_bytes, and a literal here would drift the moment the catalog
+  // entry changes.
   const confirmerInstalled =
     !!confirmerSpec?.installed &&
-    (ms.totalRamBytes === 0 || ms.totalRamBytes >= CONFIRMER_RAM_FLOOR);
+    (ms.totalRamBytes === 0 ||
+      ms.totalRamBytes >= confirmerSpec.ramFloorBytes);
   const confirmerNeedsRam =
     !!confirmerSpec?.installed && !confirmerInstalled;
   // A notes-only scope cannot triage (the pipeline reads messages); fall back

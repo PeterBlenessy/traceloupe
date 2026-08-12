@@ -795,6 +795,9 @@ export interface SafetyModelInfo {
   /** "classifier" | "embedder" | "confirmer" — only classifiers are scan
    *  models; the others are downloadable helpers the picker must not offer. */
   role: "classifier" | "embedder" | "confirmer";
+  /** Below this much total RAM the model is not usable on this Mac — the same
+   *  number the backend admits on, so a UI gate cannot drift from it. */
+  ramFloorBytes: number;
 }
 
 export interface SafetyModelStatus {
@@ -6969,6 +6972,7 @@ const mockClient: TraceLoupeClient = {
         installed: mockSafetyModelInstalled,
         recommended: true,
         role: "classifier" as const,
+        ramFloorBytes: 12 * 1024 ** 3,
       },
       {
         id: "gemma-4-E2B-it-Q4_K_M",
@@ -6978,6 +6982,7 @@ const mockClient: TraceLoupeClient = {
         installed: false,
         recommended: false,
         role: "classifier" as const,
+        ramFloorBytes: 6 * 1024 ** 3,
       },
       // The helper tiers, mirroring the real catalog (models.rs) — the mode
       // picker's gating states are only measurable in the browser mock if
@@ -6993,6 +6998,7 @@ const mockClient: TraceLoupeClient = {
         installed: mockSafetyModelInstalled,
         recommended: false,
         role: "embedder" as const,
+        ramFloorBytes: 2 * 1024 ** 3,
       },
       {
         id: "llama-guard-3-8b-Q4_K_M",
@@ -7002,6 +7008,7 @@ const mockClient: TraceLoupeClient = {
         installed: false,
         recommended: false,
         role: "confirmer" as const,
+        ramFloorBytes: 12 * 1024 ** 3,
       },
     ],
     readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,
