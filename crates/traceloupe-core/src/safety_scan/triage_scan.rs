@@ -15,7 +15,7 @@ use crate::analysis::{AnalysisDb, Category, CensusRow, NewFinding, SourceKind};
 use crate::safety_scan::chunker::{Chunk, ChunkItem};
 use crate::safety_scan::client::LlmClient;
 use crate::safety_scan::triage::{self, CensusInput, FocusWindow, ScanMode};
-use crate::safety_scan::{engine, eval, prompt};
+use crate::safety_scan::{engine, prompt};
 use crate::sidecar::CancelToken;
 use crate::Result;
 
@@ -111,33 +111,43 @@ const CENSUS_RECORD_BATCH: usize = 256;
 /// what the validated reference pipeline used for its focused stage.
 const FOCUSED_MAX_TOKENS: u32 = 600;
 
-/// The (category, text) examples the census prototypes are built from, drawn
-/// from the committed fixture positives and filtered to the SELECTED
-/// categories (`triage::build_prototypes` turns them into per-category
-/// centroids). A multi-message case is joined into one example: the pattern
-/// categories (grooming, coercive control) are defined across messages, and
-/// the prototype should carry that shape.
+/// The census's prototype corpus, as (category, text) pairs, filtered to the
+/// SELECTED categories (`triage::build_prototypes` turns them into per-category
+/// centroids).
+///
+/// Written for the census rather than borrowed from the eval fixtures (#491).
+/// Two reasons. The fixtures are the ground truth the pipeline is MEASURED
+/// against, so building centroids from them made every measurement
+/// train-on-test unless held out by hand — a trap this project fell into three
+/// times. And five short hand-written cases per category cannot describe a
+/// pattern that only exists across messages, which is why the categories
+/// defined by a relationship recalled worst (coercive-control 0.53, grooming
+/// 0.59, harassment 0.60) while vocabulary-defined ones did fine (#489).
+///
+/// A multi-message example is joined into one text: the pattern categories are
+/// defined across messages, and the centroid should carry that shape.
 ///
 /// An empty result means "cannot triage" — the caller must refuse to scan
 /// rather than census against nothing (every score would be 0 and the scan
 /// would report a clean-looking silence).
 pub fn prototype_examples(categories: &[Category]) -> Vec<(String, String)> {
-    let fixtures = eval::load_fixtures();
-    let mut out = Vec::new();
-    for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
-        let text = case
-            .messages
-            .iter()
-            .map(|m| m.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        for cat in case.expected_categories() {
-            if categories.contains(&cat) {
-                out.push((cat.as_str().to_string(), text.clone()));
-            }
-        }
+    const CORPUS: &str = include_str!("../../fixtures/safety-scan/prototypes.json");
+    #[derive(serde::Deserialize)]
+    struct Corpus {
+        examples: Vec<Example>,
     }
-    out
+    #[derive(serde::Deserialize)]
+    struct Example {
+        category: String,
+        messages: Vec<String>,
+    }
+    let corpus: Corpus = serde_json::from_str(CORPUS).expect("prototypes.json is valid");
+    corpus
+        .examples
+        .into_iter()
+        .filter(|e| Category::parse(&e.category).is_some_and(|c| categories.contains(&c)))
+        .map(|e| (e.category, e.messages.join("\n")))
+        .collect()
 }
 
 /// A [`FocusWindow`] rendered as the [`Chunk`] the production prompt and
@@ -719,6 +729,69 @@ mod tests {
             3,
             "and three are reported unscanned, not clean"
         );
+    }
+
+    /// The prototype corpus and the eval fixtures must not share text. They
+    /// serve opposite roles — one builds the centroids, the other is the
+    /// ground truth those centroids are measured against — and any overlap
+    /// makes the measurement train-on-test, which has already cost this
+    /// project three retracted results (#491).
+    #[test]
+    fn the_prototype_corpus_does_not_overlap_the_eval_fixtures() {
+        let protos: std::collections::HashSet<String> = prototype_examples(&Category::ALL)
+            .into_iter()
+            .flat_map(|(_, text)| {
+                text.lines()
+                    .map(|l| l.trim().to_lowercase())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|l| !l.is_empty())
+            .collect();
+        let fixtures = crate::safety_scan::eval::load_fixtures();
+        for case in &fixtures.cases {
+            for m in &case.messages {
+                let line = m.text.trim().to_lowercase();
+                assert!(
+                    !protos.contains(&line),
+                    "fixture {} shares a message with the prototype corpus: {:?} — the \
+                     centroids would contain the ground truth they are scored against",
+                    case.id,
+                    m.text
+                );
+            }
+        }
+    }
+
+    /// The corpus is weighted on purpose: the relationship-defined categories
+    /// recalled worst at the shipped cut and need the most examples, while
+    /// sexual-content was the loosest centroid in the catalogue and needs
+    /// fewer, tighter ones. A future edit that flattens this should have to
+    /// think about it.
+    #[test]
+    fn the_prototype_corpus_is_weighted_toward_the_weak_categories() {
+        use std::collections::HashMap;
+        let mut per_cat: HashMap<String, usize> = HashMap::new();
+        for (cat, _) in prototype_examples(&Category::ALL) {
+            *per_cat.entry(cat).or_default() += 1;
+        }
+        for cat in Category::ALL {
+            let n = per_cat.get(cat.as_str()).copied().unwrap_or(0);
+            assert!(
+                n >= 5,
+                "{} has only {n} prototype examples — every category needs enough to \
+                 form a centroid that is not one person's phrasing",
+                cat.as_str()
+            );
+        }
+        // The pattern categories carry the most support.
+        for weak in ["coercive-control", "grooming-exploitation"] {
+            assert!(
+                per_cat[weak] > per_cat["sexual-content"],
+                "{weak} should have more examples than sexual-content: it recalls worst \
+                 and its pattern spans messages, while sexual-content's centroid is the \
+                 one that over-keeps ordinary chatter"
+            );
+        }
     }
 
     #[test]

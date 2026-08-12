@@ -810,3 +810,59 @@ indicative rather than like-for-like (nothing in this run re-measured the full
 read on this distribution); and the held-out column is PESSIMISTIC relative to
 production, because each centroid here is built from one fewer case than the
 one production scores against.
+
+### 2026-08-13 — the census gets its own prototype corpus (#491)
+
+Every centroid was built from the five hand-written positives per category in
+`cases.json` — which is also the eval ground truth. Two problems in one: the
+centroids were thin and uneven (`sexual-content` alone kept 43% of an ordinary
+phone), and using the eval set to build them made every measurement
+train-on-test unless held out by hand, a trap this project fell into three
+times.
+
+So the census now has `fixtures/safety-scan/prototypes.json`: 83 examples,
+weighted deliberately — most and longest for the relationship-defined
+categories (coercive-control 14, grooming 12, harassment 10), fewest and
+tightest for `sexual-content` (8), whose centroid was the one over-keeping
+ordinary chatter. A test asserts the two corpora share no text, so the coupling
+cannot come back. **With disjoint corpora the leave-one-out apparatus is gone**
+— there is nothing to hold out, because the ground truth was never in the
+centroids.
+
+Measured through the production path (same bed, same ground truth):
+
+| threshold | recall | selectivity | cost /100k |
+|---|---|---|---|
+| 0.58 | 0.906 | 43.8% | 79 h |
+| 0.61 | 0.789 | 25.7% | 46 h |
+| **0.64** | **0.578** | 11.5% | 20.7 h — Thorough |
+| **0.67** | **0.445** | 2.6% | 4.7 h — Balanced |
+| **0.70** | **0.281** | 0.9% | 1.6 h — Precise |
+
+The richer centroids score everything higher, so the same postures sit **one
+notch up the scale**. At matched cost the corpus is a modest win, not a step
+change:
+
+| operating point | old prototypes | new corpus |
+|---|---|---|
+| ~20 h | 0.563 | **0.578** (+0.015) |
+| ~5 h | 0.397 @ 5.6 h | **0.445 @ 4.7 h** (+0.048, and cheaper) |
+| ~1.5 h | 0.333 | 0.281 (−0.052) |
+
+**Shipped: 0.64 / 0.67 / 0.70.** Thorough now delivers ~1.8× the full read's
+recall at 1.9× its time; Balanced ~1.2× at 0.4×; Precise ~0.8× at 0.15×.
+
+Two honest notes. The old column carried a leave-one-out penalty (centroids
+built from one fewer case than production used) while the new one is exact, so
+part of that gap is measurement, not improvement — the matched-cost rows are
+the defensible comparison, and they say "modestly better", not "fixed". And
+**per-category the spread did not narrow the way it should have**: at the new
+Balanced cut, `scam-fraud` recalls 0.25 and `drugs-illegal` 0.42 against
+`self-harm` 0.80 and `hate-identity` 0.73. My scam examples read like phishing
+templates and the fixtures' scams read like conversations; that is a corpus
+bug, and the next iteration should fix it rather than move a threshold.
+
+The larger conclusion stands and is now better supported: examples help, but
+they are not the step change. The ceiling is the embedding space's ability to
+separate harm from ordinary conversation, which is what a fine-tune would
+address.

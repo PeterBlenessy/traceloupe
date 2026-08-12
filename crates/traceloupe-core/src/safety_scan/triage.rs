@@ -9,8 +9,8 @@
 //! The lab measured recall 0.94 at precision 0.95 on 5-message Jigsaw chunks.
 //! That number does NOT describe the product: it was taken on a corpus unlike a
 //! phone, and against prototypes that were not held out. Re-measured on a real
-//! device with leave-one-out prototypes, the shipped postures deliver roughly
-//! 1.7x / 1.1x / 0.9x the full read's recall at 1.9x / 0.5x / 0.1x its time —
+//! device against a disjoint corpus, the shipped postures deliver roughly
+//! 1.8x / 1.2x / 0.8x the full read's recall at 1.9x / 0.4x / 0.15x its time —
 //! see `census_threshold` below and
 //! docs/validation/safety-scan-validation.md. The census threshold is a
 //! monotonic dial on that; the modes are the points we expose.
@@ -49,12 +49,19 @@ impl ScanMode {
     ///
     /// ```text
     /// threshold  census  ~e2e  +confirm  cost/100k
-    ///   0.52      0.921   0.86   0.75     100 h
-    ///   0.58      0.722   0.67   0.59      37 h
-    ///   0.61      0.563   0.52   0.46      20 h     Thorough
-    ///   0.64      0.397   0.37   0.32       5.6 h   Balanced
-    ///   0.67      0.333   0.31   0.27       1.3 h   Precise
+    ///   0.55      0.961   0.89   0.79     108 h
+    ///   0.58      0.906   0.84   0.74      79 h
+    ///   0.61      0.789   0.73   0.65      46 h
+    ///   0.64      0.578   0.54   0.47      20.7 h   Thorough
+    ///   0.67      0.445   0.41   0.36       4.7 h   Balanced
+    ///   0.70      0.281   0.26   0.23       1.6 h   Precise
     /// ```
+    ///
+    /// (Re-measured after the census got its own prototype corpus, #491. The
+    /// richer centroids score everything higher, so the same postures sit one
+    /// notch up the scale; at MATCHED cost they are modestly better — +0.05
+    /// recall at ~5 h, +0.02 at ~20 h, and slightly worse at the cheapest
+    /// end.)
     ///
     /// What each posture honestly buys, reading the column it ACTUALLY runs —
     /// Thorough has no confirmation stage, Balanced and Precise always confirm,
@@ -62,9 +69,9 @@ impl ScanMode {
     ///
     /// ```text
     ///           cut    recall it delivers   vs full read (0.30 / 11 h)
-    /// Thorough  0.61   0.52 (no confirm)      1.7x recall, 1.9x time
-    /// Balanced  0.64   0.32 (+confirm)        1.1x recall, 0.5x time
-    /// Precise   0.67   0.27 (+confirm)        0.9x recall, 0.1x time
+    /// Thorough  0.64   0.54 (no confirm)      1.8x recall, 1.9x time
+    /// Balanced  0.67   0.36 (+confirm)        1.2x recall, 0.4x time
+    /// Precise   0.70   0.23 (+confirm)        0.8x recall, 0.15x time
     /// ```
     ///
     /// So only **Thorough** buys materially more harm found, and it costs
@@ -75,20 +82,20 @@ impl ScanMode {
     ///
     /// Two things this makes plain. Triage's quality advantage is far smaller
     /// than the lab's 0.94 suggested (that was 5-message Jigsaw chunks scored
-    /// against non-held-out prototypes), and no threshold is clearly better
-    /// than the full read on BOTH axes. The curve is dominated by prototype
-    /// quality — centroids from a handful of hand-written fixtures — so
-    /// improving them, not moving this number, is where the next win is
-    /// (#489). Retune this once they change.
+    /// against non-held-out prototypes), and only Thorough is clearly better
+    /// than the full read on recall. Giving the census a proper corpus (#491)
+    /// moved the curve modestly — +0.05 recall at the ~5 h operating point —
+    /// so examples help, but they are not the step change; the embedding
+    /// space's ability to separate harm from chatter is the real ceiling.
     ///
     /// Caveats: one device; the positives are the fixtures, whose phrasing may
     /// be blunter than real harm; and the 0.30/11 h baseline is a Jigsaw
     /// measurement, so the multipliers are indicative, not like-for-like.
     pub fn census_threshold(self) -> f32 {
         match self {
-            ScanMode::Thorough => 0.61,
-            ScanMode::Balanced => 0.64,
-            ScanMode::Precise => 0.67,
+            ScanMode::Thorough => 0.64,
+            ScanMode::Balanced => 0.67,
+            ScanMode::Precise => 0.70,
         }
     }
 

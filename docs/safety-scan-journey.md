@@ -511,6 +511,16 @@ validation. Checklist mirrors #459.
       either correction**, and no threshold beats the full read on both axes —
       the curve is dominated by prototype quality, which is now the binding
       constraint (§8.3).
+- [~] **A prototype corpus of the census's own** (#491). The centroids were
+      built from the five eval fixtures per category — thin, uneven, and a
+      structural train/test coupling that cost three retracted measurements.
+      Now 83 purpose-written examples, weighted toward the relationship
+      categories, with a guard that the two corpora never share text; the
+      leave-one-out apparatus is gone because the ground truth was never in the
+      centroids. Cuts retuned to 0.64/0.67/0.70. **The gain is modest** (+0.05
+      recall at the ~5 h operating point), and per-category the spread did NOT
+      narrow — scam-fraud fell to 0.25, a corpus bug to fix next. Examples
+      help; the embedding space is the ceiling.
 - [ ] **Wider / better corpus for the three unlabelled categories**
       (coercive-control, grooming, relationship-harassment). The only route is to
       **generate** labelled conversations; the same corpus is the training set for
