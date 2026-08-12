@@ -7347,7 +7347,10 @@ const mockClient: TraceLoupeClient = {
             // same fixture, and two hand-kept copies are how they would drift.
             ...mockScanTotals(),
             error: null,
-            isTriage: false,
+            // The row whose report carries triage coverage, so the browser mock
+            // shows the coverage line on a TRIAGE scan rather than on a batch
+            // one (which would model the very state this must avoid).
+            isTriage: true,
           },
           {
             id: 2,

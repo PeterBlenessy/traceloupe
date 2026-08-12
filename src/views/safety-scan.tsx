@@ -1719,7 +1719,11 @@ function SafetyReportDocument({
           report would let a budgeted or stopped scan's silence read as a clean
           bill of health. Absent for batch scans (which read everything) and
           for triage scans recorded before the coverage columns existed. */}
-      {report?.scan?.coverage && (
+      {/* Gated on isTriage as well as the numbers: a batch scan reads
+          everything, so a coverage claim on one would be meaningless even if a
+          row somehow carried it. Two independent conditions for a sentence
+          this load-bearing. */}
+      {scan.isTriage && report?.scan?.coverage && (
         <TriageCoverageLine
           coverage={report.scan.coverage}
           cancelled={scan.status === "cancelled"}
