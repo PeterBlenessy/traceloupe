@@ -341,6 +341,18 @@ impl LlamaServer {
             server_args.push("--embedding".into());
             server_args.push("--pooling".into());
             server_args.push("mean".into());
+            server_args.push("--batch-size".into());
+            server_args.push(cfg.ctx_size.to_string().into());
+            server_args.push("--ubatch-size".into());
+            server_args.push(cfg.ctx_size.to_string().into());
+            // An embedding request must fit in ONE physical batch: llama-server
+            // cannot split a pooled embedding across ubatches, and answers
+            // HTTP 500 ("input is too large to process; increase the physical
+            // batch size") above it. The default n_ubatch is 512 tokens, which
+            // no fixture ever exceeded and real conversation does — one pasted
+            // email killed an entire triage scan mid-census (#485). Sizing both
+            // batches to the context means anything that FITS the context
+            // embeds, which is the only rule a caller can reason about.
         }
         if let Some(key) = &cfg.api_key {
             // Loopback-only + per-run + only gates model access (not data), so

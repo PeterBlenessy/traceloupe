@@ -127,6 +127,35 @@ pub fn census_score(message: &[f32], prototypes: &[Vec<f32>]) -> f32 {
 /// off-distribution.
 pub const EMBED_PREFIX: &str = "task: classification | query: ";
 
+/// Longest message text the census embeds, in chars.
+///
+/// The embedder's real limit is its 2048-token CONTEXT, and chars are a poor
+/// proxy for tokens: measured against the pinned build (b10075,
+/// EmbeddingGemma, batches sized to the context), ordinary prose embeds fine at
+/// 4,000 chars, while dense ASCII — URLs, hashes, base64, code — fails
+/// somewhere between 2,000 and 3,000, because it tokenises roughly three times
+/// denser. A message from a real device is whatever a person pasted into a
+/// chat, so the cap has to hold for the DENSEST case, not the average one.
+///
+/// 1,500 chars is safe even at the theoretical worst of one token per char
+/// (dense scripts), leaving room for the task prefix inside 2048. Beyond that
+/// the server answers HTTP 500 and the scan dies mid-census (#485) — the cost
+/// of being wrong here is a failed scan, not a slightly worse score.
+///
+/// Truncating costs little: the census produces a RANKING signal, and the
+/// opening of a message is what decides whether it looks like harm. The focused
+/// stage still reads the whole text.
+pub const EMBED_MAX_CHARS: usize = 1_500;
+
+/// Cap `text` for embedding on a char boundary (never a byte split, which would
+/// panic on multi-byte scripts — most of the world's messages).
+fn cap_for_embedding(text: &str) -> &str {
+    match text.char_indices().nth(EMBED_MAX_CHARS) {
+        Some((cut, _)) => &text[..cut],
+        None => text,
+    }
+}
+
 /// A message to score in the census.
 #[derive(Debug, Clone)]
 pub struct CensusInput {
@@ -175,7 +204,7 @@ where
     use std::collections::BTreeMap;
     let mut by_cat: BTreeMap<&str, Vec<Vec<f32>>> = BTreeMap::new();
     for (cat, text) in examples {
-        let v = embed(&format!("{EMBED_PREFIX}{text}"))?;
+        let v = embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(text)))?;
         by_cat.entry(cat.as_str()).or_default().push(v);
     }
     Ok(by_cat.values().filter_map(|vs| centroid(vs)).collect())
@@ -197,7 +226,7 @@ where
 {
     let mut out = Vec::with_capacity(messages.len());
     for m in messages {
-        let v = embed(&format!("{EMBED_PREFIX}{}", m.text))?;
+        let v = embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(&m.text)))?;
         out.push(ScoredMessage {
             source_id: m.source_id,
             thread_identifier: m.thread_identifier.clone(),
@@ -415,6 +444,58 @@ mod tests {
             w.items[w.focus].source_id, 1,
             "the clamp must not misplace focus"
         );
+    }
+
+    /// The census must never hand the embedder more than it can take in one
+    /// physical batch: above that the server answers HTTP 500 and the whole
+    /// scan dies mid-census (#485). Found only when the pipeline first met a
+    /// real device's messages — every fixture and the Jigsaw corpus are short
+    /// by construction.
+    #[test]
+    fn the_census_caps_what_it_sends_to_the_embedder() {
+        let long = "a".repeat(EMBED_MAX_CHARS * 3);
+        let msgs = vec![CensusInput {
+            source_id: 1,
+            thread_identifier: "t".into(),
+            sender: "a".into(),
+            occurred_at: None,
+            text: long.clone(),
+            fingerprint: "fp".into(),
+            service: None,
+        }];
+        let seen = std::cell::RefCell::new(Vec::<usize>::new());
+        let probe = |t: &str| {
+            seen.borrow_mut().push(t.chars().count());
+            fake_embed(t)
+        };
+        census_messages(&msgs, &[], probe).unwrap();
+        let sent = seen.borrow()[0];
+        assert!(
+            sent <= EMBED_PREFIX.chars().count() + EMBED_MAX_CHARS,
+            "sent {sent} chars — the cap is what keeps a long message from killing the scan"
+        );
+
+        // Prototypes come from fixtures and are short today, but they run
+        // through the same embedder and get the same cap.
+        let ex = vec![("threat-violence".to_string(), long)];
+        seen.borrow_mut().clear();
+        build_prototypes(&ex, probe).unwrap();
+        assert!(seen.borrow()[0] <= EMBED_PREFIX.chars().count() + EMBED_MAX_CHARS);
+    }
+
+    /// The cap counts CHARS, not bytes: slicing a multi-byte script mid-glyph
+    /// panics, and most of the world's messages are multi-byte.
+    #[test]
+    fn the_embedding_cap_never_splits_a_character() {
+        let text = "日本語のメッセージ".repeat(EMBED_MAX_CHARS);
+        let capped = cap_for_embedding(&text);
+        assert_eq!(capped.chars().count(), EMBED_MAX_CHARS);
+        assert!(
+            text.starts_with(capped),
+            "the cap is a prefix, not a re-encode"
+        );
+        // Short text is returned whole.
+        assert_eq!(cap_for_embedding("hej"), "hej");
     }
 
     #[test]
