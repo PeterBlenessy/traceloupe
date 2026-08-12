@@ -41,7 +41,7 @@ import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { badgeGroup, multiBadgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
-import { dateFormat, formatDateTimeYear, formatDuration, formatListTime, formatTimelineTime } from "@/lib/format";
+import { dateFormat, formatCount, formatDateTimeYear, formatDuration, formatListTime, formatTimelineTime } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { useContactResolver } from "@/lib/use-contact-resolver";
@@ -144,7 +144,14 @@ function formatScanRange(start: number | null, end: number | null): string {
 
 export function SafetyScanView() {
   const qc = useQueryClient();
-  const { scan, startScan, cancelScan, preferredModelId } = useSafetyScan();
+  const {
+    scan,
+    startScan,
+    startTriageScan,
+    lastTriageDone,
+    cancelScan,
+    preferredModelId,
+  } = useSafetyScan();
   // Same time filter as the rest of the app: the shared FilterControl popover
   // with a `timeGroup` — every period shown (24h/7d/30d + a chip per year the
   // backup spans), empty windows disabled via counts rather than hidden.
@@ -171,6 +178,12 @@ export function SafetyScanView() {
     "safety-scan:experimental-ack",
     false,
   );
+  // Scan mode — a POSTURE, never numbers (journey §6.3): "full" is the shipped
+  // batch scan (every message read in depth); the other three run the triage
+  // pipeline (a fast pre-scan decides where the deep read spends its time).
+  const [scanMode, setScanMode] = usePersistedState<
+    "full" | "thorough" | "balanced" | "precise"
+  >("safety-scan:mode", "full");
 
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
@@ -405,6 +418,27 @@ export function SafetyScanView() {
     preferredModelId && installedClassifierIds.includes(preferredModelId)
       ? preferredModelId
       : ms.readyModelId;
+  // The triage tiers' install state gates the mode picker: every triage
+  // posture needs the Fast pre-scan (embedder); Balanced/Precise also need
+  // the Finding checker (confirmer). Disabled options carry a why-tooltip.
+  const embedderInstalled = ms.models.some(
+    (m) => m.role === "embedder" && m.installed,
+  );
+  const confirmerInstalled = ms.models.some(
+    (m) => m.role === "confirmer" && m.installed,
+  );
+  // A notes-only scope cannot triage (the pipeline reads messages); fall back
+  // gracefully rather than letting the backend refuse.
+  const notesOnly = !scanThread && includesNotes && !includesMessages;
+  const modeRunnable = (m: "full" | "thorough" | "balanced" | "precise") =>
+    m === "full" ||
+    (embedderInstalled &&
+      !notesOnly &&
+      (m === "thorough" || confirmerInstalled));
+  // A persisted posture whose model was removed (or a scope that turned
+  // notes-only) must not silently scan differently than the control shows:
+  // the picker falls back to Full read visually AND functionally.
+  const effectiveMode = modeRunnable(scanMode) ? scanMode : "full";
   // Resume a non-completed scan from its history card: reopen THAT row (so the
   // view stays pinned to it) and continue it from where it stopped. Only Start
   // ever creates a new scan.
@@ -528,6 +562,104 @@ export function SafetyScanView() {
                     ]}
                   />
                 </div>
+                {/* Mode: a posture, never numbers (journey §6.3). "Full read"
+                    is the shipped batch scan; the triage postures census
+                    cheaply first and spend the deep read where the evidence
+                    points. Options whose helper model is missing stay visible
+                    but disabled, with the tooltip saying what to download. */}
+                <div
+                  className={cn(
+                    "flex items-center gap-2",
+                    running && "pointer-events-none opacity-60",
+                  )}
+                >
+                  <Label className="text-xs text-muted-foreground">Mode</Label>
+                  <ToggleGroup
+                    type="single"
+                    variant="outline"
+                    size="island"
+                    value={effectiveMode}
+                    onValueChange={(v) => {
+                      if (v) setScanMode(v as typeof scanMode);
+                    }}
+                  >
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <ToggleGroupItem value="full" aria-label="Full read">
+                          Full read
+                        </ToggleGroupItem>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        Read every message in depth, oldest conversations last —
+                        thorough but slow on a large backup
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <ToggleGroupItem
+                            value="thorough"
+                            aria-label="Thorough triage"
+                            disabled={!modeRunnable("thorough")}
+                          >
+                            Thorough
+                          </ToggleGroupItem>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {!embedderInstalled
+                          ? "Needs the Fast pre-scan model — download it in Settings → Safety"
+                          : notesOnly
+                            ? "Triage reads messages; include a message source, or use Full read for notes"
+                            : "A fast pre-scan finds where to look, then the AI reads those places in depth — catches as much as possible and lets you dismiss the extras"}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <ToggleGroupItem
+                            value="balanced"
+                            aria-label="Balanced triage"
+                            disabled={!modeRunnable("balanced")}
+                          >
+                            Balanced
+                          </ToggleGroupItem>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {!embedderInstalled
+                          ? "Needs the Fast pre-scan model — download it in Settings → Safety"
+                          : notesOnly
+                            ? "Triage reads messages; include a message source, or use Full read for notes"
+                            : !confirmerInstalled
+                              ? "Needs the Finding checker model — download it in Settings → Safety"
+                              : "Like Thorough, and a second model double-checks each finding before it is shown"}
+                      </TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <ToggleGroupItem
+                            value="precise"
+                            aria-label="Precise triage"
+                            disabled={!modeRunnable("precise")}
+                          >
+                            Precise
+                          </ToggleGroupItem>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {!embedderInstalled
+                          ? "Needs the Fast pre-scan model — download it in Settings → Safety"
+                          : notesOnly
+                            ? "Triage reads messages; include a message source, or use Full read for notes"
+                            : !confirmerInstalled
+                              ? "Needs the Finding checker model — download it in Settings → Safety"
+                              : "The fewest false alarms — the double-check is strictest, and may trim a borderline real finding"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </ToggleGroup>
+                </div>
                 {running ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -564,28 +696,42 @@ export function SafetyScanView() {
                     <TooltipTrigger asChild>
                       <Button
                         disabled={effectiveSelected.length === 0}
-                        onClick={() =>
-                          void startScan({
+                        onClick={() => {
+                          const common = {
                             modelId: effectiveModelId,
                             rangeStart: range.lo,
                             // timeGroup's hi is exclusive; the scan range end is
                             // inclusive, so step back one second.
                             rangeEnd: range.hi != null ? range.hi - 1 : null,
                             sources: sourcesArg,
-                          })
-                        }
+                          };
+                          if (effectiveMode === "full") {
+                            void startScan(common);
+                          } else {
+                            void startTriageScan({
+                              ...common,
+                              mode: effectiveMode,
+                            });
+                          }
+                        }}
                       >
                         <Play className="size-4" /> Start Safety Scan
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>
-                      Scan the selected period and content with the local AI —
-                      already-scanned content is skipped
+                      {effectiveMode === "full"
+                        ? "Scan the selected period and content with the local AI — already-scanned content is skipped"
+                        : includesNotes
+                          ? "Pre-scan the selected period's messages, then read the places that stood out in depth — notes are not part of a triage scan; use Full read to include them"
+                          : "Pre-scan the selected period and content, then read the places that stood out in depth — already-scored messages are skipped"}
                     </TooltipContent>
                   </Tooltip>
                 )}
               </div>
               {running && scan && <ScanProgress scanEvent={scan} />}
+              {!running && lastTriageDone && (
+                <TriageCoverageLine done={lastTriageDone} />
+              )}
             </CardContent>
           </Card>
         )}
@@ -783,9 +929,19 @@ function ScanProgress({
       ? "Loading the model…"
       : scanEvent.phase === "summarizing"
         ? "Writing the scan report…"
-        : "Scanning…";
+        : scanEvent.phase === "censusing"
+          ? "Pre-scanning to find where to look…"
+          : scanEvent.phase === "deepScanning"
+            ? "Reading the messages that stood out…"
+            : scanEvent.phase === "confirming"
+              ? "Double-checking the findings…"
+              : "Scanning…";
   const pct =
-    scanEvent.phase === "classifying" && scanEvent.total > 0
+    (scanEvent.phase === "classifying" ||
+      scanEvent.phase === "censusing" ||
+      scanEvent.phase === "deepScanning" ||
+      scanEvent.phase === "confirming") &&
+    scanEvent.total > 0
       ? (scanEvent.done / scanEvent.total) * 100
       : null;
   return (
@@ -801,6 +957,15 @@ function ScanProgress({
         value={pct ?? undefined}
         className={pct == null ? "[&>*]:animate-pulse" : undefined}
       />
+      {scanEvent.phase === "deepScanning" && scanEvent.total > 0 && (
+        <div className="text-xs text-muted-foreground">
+          {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
+          {scanEvent.findings} possible finding
+          {scanEvent.findings === 1 ? "" : "s"} so far
+          {/* "possible": these are pre-confirmation in Balanced/Precise. */} —
+          you can leave this page; the scan keeps running.
+        </div>
+      )}
       {scanEvent.phase === "classifying" && scanEvent.total > 0 && (
         <div className="text-xs text-muted-foreground">
           {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
@@ -829,6 +994,47 @@ function ScanProgress({
       <div className="text-xs text-muted-foreground/80">
         Your Mac stays awake while the scan runs (the display can still sleep).
       </div>
+    </div>
+  );
+}
+
+/** The honest coverage line after a triage scan (rule-of-three, journey §8):
+ *  a budget or a stop can leave candidates unread, and the report must say so
+ *  rather than let silence read as "clean". Rendered from the terminal
+ *  triageDone event the provider captures (the numbers are not yet persisted
+ *  on the scan row — the live event is their only source). */
+function TriageCoverageLine({
+  done,
+}: {
+  done: Extract<
+    NonNullable<ReturnType<typeof useSafetyScan>["scan"]>,
+    { phase: "triageDone" }
+  >;
+}) {
+  const cancelled = done.status === "cancelled";
+  return (
+    <div className="text-xs text-muted-foreground">
+      {cancelled ? "Scan stopped. " : "Scan finished. "}
+      {formatCount(done.censused)} message
+      {done.censused === 1 ? "" : "s"} pre-scanned;{" "}
+      {formatCount(done.deepScanned)} of {formatCount(done.candidates)}{" "}
+      flagged place{done.candidates === 1 ? "" : "s"} read in depth
+      {done.findings > 0 && (
+        <>
+          {" "}
+          — {formatCount(done.findings)} finding
+          {done.findings === 1 ? "" : "s"}
+        </>
+      )}
+      .
+      {done.unscanned > 0 && (
+        <>
+          {" "}
+          The {formatCount(done.unscanned)} unread place
+          {done.unscanned === 1 ? " was" : "s were"} not checked — this scan
+          says nothing about {done.unscanned === 1 ? "it" : "them"}.
+        </>
+      )}
     </div>
   );
 }
