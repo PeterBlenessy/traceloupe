@@ -497,6 +497,13 @@ validation. Checklist mirrors #459.
       a scan stopped during the census gets its own honest branch ("nothing was
       read") rather than "0 of 0". Remaining nuance if ever wanted: the
       rule-of-three phrasing for what the census itself did not reach.**
+- [x] **Re-derive the census thresholds on a real distribution** (#489). The
+      Jigsaw-fitted 0.52/0.55/0.58 kept 55%/38%/20% of a real phone's messages —
+      100/70/37 h per 100k against the batch scan's 11. Shipped **0.61/0.64/0.67**,
+      measured on the public image with fixture positives planted for ground
+      truth: every posture still beats the batch scan's 0.30 recall, Balanced at
+      2x the recall for half the time. The lab's 0.94 does not survive a real
+      distribution; the honest headline is 2x at half the time.
 - [ ] **Wider / better corpus for the three unlabelled categories**
       (coercive-control, grooming, relationship-harassment). The only route is to
       **generate** labelled conversations; the same corpus is the training set for

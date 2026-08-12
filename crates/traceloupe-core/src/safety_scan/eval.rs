@@ -1458,6 +1458,183 @@ mod tests {
         );
     }
 
+    /// Derive the census thresholds from a recall-vs-cost curve on a REAL
+    /// message distribution (#489).
+    ///
+    /// The thresholds in `ScanMode` were fitted to the Jigsaw corpus, which is
+    /// nothing like a phone, and on real data every one of them costs more
+    /// than the batch scan they were meant to undercut (#486). The missing
+    /// asset was a labelled corpus with a real distribution, so this builds
+    /// one: the public image's own conversation is the BED — ordinary chatter
+    /// is exactly what the census must reject — and the committed fixture
+    /// positives are planted at known positions, giving exact ground truth
+    /// over a realistic background.
+    ///
+    /// The cost ceiling is derived, not chosen: triage exists to be cheaper
+    /// than reading everything, the batch scan measures ~11 h per 100k
+    /// messages, and a focused call is ~6.5 s — so the census may pass at most
+    /// ~6% of messages. The threshold is then whatever keeps the most recall
+    /// under that ceiling.
+    ///
+    ///   TRIAGE_REAL_BACKUP=… TRIAGE_REAL_PASSWORD=… \
+    ///   TRACELOUPE_EMBED_MODEL=… \
+    ///   cargo test -p traceloupe-core census_recall_vs_cost -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a public DFIR image + the embedding GGUF"]
+    fn census_recall_vs_cost() {
+        use crate::analysis::Category;
+        use crate::cache::CacheDb;
+        use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::triage::{self, census_score, EMBED_PREFIX};
+        use crate::safety_scan::triage_scan;
+        use crate::sidecar::CancelToken;
+        use std::time::Duration;
+
+        let (Ok(backup), Ok(embed_model)) = (
+            std::env::var("TRIAGE_REAL_BACKUP"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+        ) else {
+            eprintln!("set TRIAGE_REAL_BACKUP and TRACELOUPE_EMBED_MODEL");
+            return;
+        };
+        let password = std::env::var("TRIAGE_REAL_PASSWORD").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the public image");
+        let cache = CacheDb::open(&cache_path).unwrap();
+        let bed: Vec<String> =
+            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default())
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .map(|m| m.text)
+                .collect();
+        assert!(
+            bed.len() > 100,
+            "the image supplies a real conversational bed"
+        );
+
+        // Ground truth: every message of every fixture POSITIVE, tagged with
+        // its category. These are what a census miss loses permanently.
+        let fixtures = load_fixtures();
+        let mut planted: Vec<(Category, String)> = Vec::new();
+        for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
+            for cat in case.expected_categories() {
+                for m in &case.messages {
+                    planted.push((cat, m.text.clone()));
+                }
+            }
+        }
+        assert!(
+            !planted.is_empty(),
+            "fixture positives are the ground truth"
+        );
+
+        let mut server = spawn_live_server(&embed_model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        let embed_one = |t: &str| {
+            let capped: String = t.chars().take(400).collect();
+            c.embed(&format!("{EMBED_PREFIX}{capped}"))
+        };
+
+        let prototypes =
+            triage::build_prototypes(&triage_scan::prototype_examples(&Category::ALL), |t| {
+                c.embed(t)
+            })
+            .expect("prototypes");
+
+        let bed_vecs: Vec<Vec<f32>> = bed.iter().filter_map(|t| embed_one(t).ok()).collect();
+        let planted_vecs: Vec<(Category, Vec<f32>)> = planted
+            .iter()
+            .filter_map(|(cat, t)| embed_one(t).ok().map(|v| (*cat, v)))
+            .collect();
+        server.shutdown();
+
+        // Derived, not chosen: the batch scan is ~11 h per 100k messages and a
+        // focused call ~6.5 s, so triage may pass at most this share of
+        // messages and still be the cheaper way to scan.
+        const BATCH_HOURS_PER_100K: f64 = 11.0;
+        const FOCUSED_SECS: f64 = 6.5;
+        let cost_ceiling_pct = 100.0 * (BATCH_HOURS_PER_100K * 3600.0 / FOCUSED_SECS) / 100_000.0;
+
+        println!(
+            "\n=== census recall vs cost on a real distribution ===\n\
+             bed {} real messages · {} planted positives · cost ceiling {:.1}% \
+             (batch scan ~{BATCH_HOURS_PER_100K} h/100k at {FOCUSED_SECS} s/call)\n",
+            bed_vecs.len(),
+            planted_vecs.len(),
+            cost_ceiling_pct
+        );
+        println!("threshold   recall   selectivity   100k cost   under ceiling");
+        let mut best: Option<(f32, f64)> = None;
+        for th in [0.52f32, 0.55, 0.58, 0.61, 0.64, 0.67, 0.70] {
+            let kept_planted = planted_vecs
+                .iter()
+                .filter(|(_, v)| census_score(v, &prototypes) >= th)
+                .count();
+            let recall = kept_planted as f64 / planted_vecs.len() as f64;
+            let kept_bed = bed_vecs
+                .iter()
+                .filter(|v| census_score(v, &prototypes) >= th)
+                .count();
+            let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
+            let hours = (100_000.0 * sel / 100.0) * FOCUSED_SECS / 3600.0;
+            let ok = sel <= cost_ceiling_pct;
+            println!(
+                "  {th:.2}      {:.3}     {sel:>5.1}%       {hours:>5.1} h      {}",
+                recall,
+                if ok { "yes" } else { "NO" }
+            );
+            if ok && best.map(|(_, r)| recall > r).unwrap_or(true) {
+                best = Some((th, recall));
+            }
+        }
+        match best {
+            Some((th, recall)) => {
+                println!("\nbest under the ceiling: threshold {th:.2} at recall {recall:.3}")
+            }
+            None => {
+                println!("\nNO threshold satisfies the cost ceiling — the prototypes must improve")
+            }
+        }
+        // Per-category recall at the winning threshold: an average hides a
+        // category that has gone blind, and a blind category is a permanent
+        // miss for everything in it.
+        if let Some((th, _)) = best {
+            println!("\nper-category recall at {th:.2}:");
+            for cat in Category::ALL {
+                let of_cat: Vec<_> = planted_vecs.iter().filter(|(c, _)| *c == cat).collect();
+                if of_cat.is_empty() {
+                    continue;
+                }
+                let kept = of_cat
+                    .iter()
+                    .filter(|(_, v)| census_score(v, &prototypes) >= th)
+                    .count();
+                println!(
+                    "  {:<24} {:.2}  ({kept}/{})",
+                    cat.as_str(),
+                    kept as f64 / of_cat.len() as f64,
+                    of_cat.len()
+                );
+            }
+        }
+        assert!(!bed_vecs.is_empty() && !planted_vecs.is_empty());
+    }
+
     /// #409's premise, measured: focused mode re-sends the system prompt per
     /// message — but the pinned llama-server (b10075) defaults `cache_prompt`
     /// to true, so sequential focused calls on one slot should reuse the
