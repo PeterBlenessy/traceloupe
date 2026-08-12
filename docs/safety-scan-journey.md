@@ -382,6 +382,26 @@ models against a real analysis store. The whole algorithm is merged.
 - **Held-out prototypes / leave-one-out honesty.** The prefilter looked good twice
   on artifacts (single-example centroids, reused filler). The trustworthy numbers
   came only after held-out prototypes and a diverse corpus.
+- **Reproduce before building on a result.** The 0.94/0.95 was re-run from a
+  clean session before any engine code was written on it (§10.13), and it
+  reproduced digit for digit — which is what made the later parity deltas
+  interpretable: when the wired Rust pipeline read 0.726 precision against the
+  oracle's 0.740, the only uncontrolled variable left was the prompt's window
+  rendering, not the pipeline.
+- **Checkpoint everything; assume the supervisor can die.** Two multi-hour
+  validation runs were killed mid-flight by the agent harness itself — not the
+  OS, not the model (§10.13). Because every stage checkpoints, both kills were
+  lossless resumes. A run whose supervisor can kill it needs (a) stage-level
+  checkpoints, (b) detachment from the supervisor's process tree, (c) a log
+  file as the progress channel. The same discipline later paid off inside the
+  product: cancelling a triage census keeps its scored prefix.
+- **Adversarial review as a stage, not a courtesy.** A high-effort review of the
+  finished wiring found ten real defects the implementation session had reasoned
+  past (§10.13) — including both documented command defaults being guaranteed
+  refusals, and Stop surfacing as a failure on its dominant path. None changed
+  the headline metrics (the post-fix parity re-run was identical), which is
+  itself a finding: correctness defects concentrate on the edge paths that
+  quality metrics never exercise.
 
 ---
 
@@ -405,24 +425,29 @@ validation. Checklist mirrors #459.
       embedder, census, swap to the classifier using the healthy-swap pattern from
       the removed cascade (`safety_scan_cmd.rs`), never holding two multi-GB models
       at once. Read messages from cache grouped by thread; feed `run_triage`.
-      **Done 2026-08-12 (#472): `run_triage_scan` with the embedder→classifier
-      healthy-swap, census reader sharing the batch chunker's scope loop,
-      progress/cancel/re-attach, and durable finding fingerprints. Confirmation
-      was refactored into a batched phase (matching the oracle) so the swap
-      lifecycle needs one resident model. Balanced/Precise refuse to run until
-      the confirmer tier ships — the mode must not silently skip the stage it
-      promises. Follow-up: the Guard confirmer tier (catalog entry + prompt +
-      second swap).**
+      **Done 2026-08-12 (#472, PR #473): `run_triage_scan` with the
+      embedder→classifier healthy-swap, census reader sharing the batch
+      chunker's scope loop, progress/cancel/re-attach, and durable finding
+      fingerprints. Confirmation was refactored into a batched phase (matching
+      the oracle) so the swap lifecycle needs one resident model.
+      Balanced/Precise refuse to run until the confirmer tier ships — the mode
+      must not silently skip the stage it promises. Hardened the same day by a
+      ten-finding adversarial review (§10.13): Stop-as-cancel on in-flight
+      requests, scope-filtered budget, census identity across re-imports
+      (schema v15), working defaults, no cross-pipeline resume, camelCase wire
+      contract, per-item retry, watcher Drop-guard. Follow-up: the Guard
+      confirmer tier (#474).**
 - [ ] **Re-measure the *wired* pipeline** against the lab result (0.94/0.95). The
       e2e Python harness is the oracle; the shipped feature must reproduce it.
       **Stage-level parity is proven (2026-08-12): `triage_pipeline_matches_reference`
       (`eval.rs`) drives the merged `run_triage` with live sidecars over the
-      oracle's exact corpus — census identical (146/146 messages kept, ceiling
-      0.963 vs 0.9625), focused recall identical (0.963), precision 0.726 vs <!-- not-a-backup-count: Jigsaw corpus figures -->
-
-      0.740 (within band). Still open: the confirmation stage (0.94/0.95 end to
-      end) once the Guard tier lands, and a run through the `run_triage_scan`
-      command path itself against a fixture cache.**
+      oracle's exact corpus — census identical (146/146 messages kept, ceiling <!-- not-a-backup-count: Jigsaw corpus figures -->
+      0.963 vs 0.9625), focused recall identical (0.963), precision 0.726 vs
+      0.740 (within band; the delta is the window rendering, §10.13), and the
+      re-run after the review hardening was identical. Still open: the
+      confirmation stage (0.94/0.95 end to end) once the Guard tier (#474)
+      lands, and a run through the `run_triage_scan` command path itself
+      against a fixture cache.**
 - [ ] **Prompt-prefix caching** (#409) — focused mode re-sends the system prompt
       per message; this is now the highest-value performance work.
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
@@ -737,3 +762,120 @@ A partial list, as examples of the method:
   straddling a chunk boundary.
 - **Prototype quality.** Centroids are built from the fixture positives; a richer,
   more diverse prototype set would likely raise the census ceiling further.
+
+### 10.13 The reproduction, wiring and hardening session (2026-08-12)
+
+One session took §8 from "algorithm merged, nothing validated end to end" to
+"reproduced, wired, parity-proven, review-hardened, merged" (#470/PR #471,
+#472/PR #473, follow-up #474). Recorded here because the *method* of the
+session — not just its results — is paper material.
+
+**Phase A — reproduce the lab result before building on it.** The committed
+oracle was run at census thresholds 0.64/0.58/0.52 on the reference machine
+(Apple M3 / 24 GB / macOS 26.5.2, llama.cpp b10075). Protocol details that
+mattered:
+
+- The GBNF grammars were re-dumped from the session's own checkout rather than
+  trusting the `/tmp/grammars.json` a previous session left behind —
+  provenance over convenience, the §10.6 lesson applied preemptively.
+- The batch baseline is threshold-independent (the corpus is seeded), so it was
+  computed once and re-seeded into the per-threshold stage caches — a ~13 min
+  stage paid once instead of three times.
+- Result: **digit-for-digit reproduction.** Baseline 0.30/0.89; at 0.52 census
+  ceiling 0.96, end-to-end 0.94/0.95; the dial monotonic (0.82 → 0.85 → 0.94
+  recall as the ceiling rose 0.88 → 0.91 → 0.96). Full tables in
+  docs/validation/safety-scan-validation.md.
+- One artefact worth naming: the focused stage prints recall 1.20 at 0.52
+  because findings are (chunk, message) pairs and a real chunk can yield
+  several; chunk-level (deduplicated) it is 0.9625/0.740 — the reference the
+  Rust parity test asserts against. An intermediate metric that can exceed 1.0
+  is a metric that will be misread; the validation doc now carries the
+  chunk-level reading next to it.
+
+**Phase B — wire it, matching the oracle's structure.** The one structural
+change made while wiring `run_triage` into a real command: confirmation moved
+from an interleaved per-verdict call to a **batched phase after the whole
+worklist is classified**. Two independent reasons converged on the same shape —
+it is what the validated oracle does, and it is the only shape that lets a
+single resident model serve the classifier→confirmer swap (they are multi-GB
+each). When the honest structure and the operationally-necessary structure
+agree, that is usually the right structure.
+
+**Phase C — parity of the wired pipeline, on the oracle's exact corpus.** The
+oracle gained an additive `TRIAGE_DUMP_CHUNKS` mode (dump the seeded corpus,
+run no model); a Rust `#[ignore]` test drives the merged `run_triage` with live
+sidecars over that dump. Findings:
+
+- **The census reproduced the oracle message-for-message**: 146 of 146 kept
+  messages identical, despite Python scoring in f64 and Rust in f32 — cosine
+  similarity against a 0.52 cut simply never lands close enough to the
+  threshold for the precision difference to flip a keep. <!-- not-a-backup-count: Jigsaw corpus figures -->
+- Chunk-level focused recall was identical (0.963); precision read 0.726
+  against the oracle's 0.740 — inside the band, and the residual is attributable:
+  the production window rendering differs from the oracle's (thread labels,
+  timestamp fields), so the classifier sees a slightly different prompt. The
+  pipeline is the same; the prompt shape is the remaining uncontrolled variable
+  for §8's final end-to-end re-measurement.
+- ~10 min wall clock per parity pass (~800 embeddings + 146 focused calls).
+
+**Phase D — the adversarial review, and what it says about metrics.** A
+high-effort review of the finished wiring surfaced **ten confirmed defects**,
+all fixed and guarded the same day. The catalogue, compressed:
+
+1. Stop surfaced as a red *failure* on its dominant path (the cancel-watcher
+   kills the server under an in-flight request; the resulting connection error
+   propagated). Fixed: every model error is re-read as a cancel when the token
+   is set, in all three phases, with completed work persisted.
+2. Both documented command defaults were guaranteed refusals (mode=None →
+   Balanced → refused for lacking a confirmer; scope=None → notes:true →
+   refused as notes). A command whose defaults cannot run is a UI trap laid for
+   the future mode picker.
+3. The worklist/budget/coverage numbers came from the *global* census table —
+   a scoped scan after a wider one would spend its budget on out-of-scope rows
+   and report other threads' rows in its own coverage.
+4. Census skip/resume was keyed on cache row ids, which this same PR documented
+   as unstable across re-imports. Fixed with schema v15: census rows carry the
+   message fingerprint; the skip key is (id, fingerprint).
+5. The history rail's Resume re-opened triage rows through the *batch* engine —
+   two pipelines, one table, no discriminator. Fixed via the audit-stamp
+   discriminator + a disabled control that says why.
+6. The wire contract was silently snake_case (`rename_all` renames serde
+   variants, not struct-variant fields) while the TS types declared camelCase —
+   verified empirically by the review, latent only because no consumer read the
+   fields yet.
+7. No retry and all-or-nothing persistence in the deep-scan (one hiccup on item
+   109/110 discarded 108 verdicts); 8. the rejected/contentless counts were
+   dropped, erasing the §10.6 silent-zero diagnosability; 9. `censused`
+   over-reported on cancel; 10. the cancel-watcher thread leaked on error paths
+   in *both* scan commands — able to `kill -9` an OS-reused pid later.
+
+The paper-relevant observation: **the post-fix parity re-run was numerically
+identical** (0.963/0.963/0.726). Ten real correctness defects, zero movement in
+the quality metrics — because quality benchmarks exercise the happy path, and
+correctness defects live on the edges (cancellation, resume, scoping, defaults,
+error handling). A pipeline can measure 0.94 recall and still fail its user on
+the first Stop click. Both kinds of validation are necessary; neither implies
+the other.
+
+**A mutation-testing vignette.** One review fix (the worklist re-checking
+fingerprints) was mutation-tested — and the mutation *survived*: the test
+still passed with the check deleted, because the census upsert refreshes every
+in-scope id before phase 2, making the worklist check unreachable today. The
+check was kept as documented defense-in-depth, and the test was re-pointed at
+the reachable protection (the (id, fingerprint) skip key), where its mutation
+then failed as required. A guard you cannot make fail is indistinguishable from
+a guard that passes — including when the reason it cannot fail is that the
+system is safer than you thought.
+
+**Operational note — the supervisor is part of the experiment.** Two long
+validation runs were killed mid-flight by the *agent harness* supervising the
+session (its background-task lifecycle), not by macOS (memory was at 66% free;
+no jetsam events) and not by the model. The false lesson would have been §10.6
+("the model produced nothing"); the actual diagnosis took checking system logs
+before touching the pipeline. The working recipe, used for every long run
+since: detach the run from the supervisor's process tree (`nohup` + `disown`),
+write progress to a log file, watch the log with a monitor, and rely on
+stage-level checkpoints so that *any* death — supervisor, OS, power — is a
+lossless resume. The oracle's checkpoint/resume design absorbed both kills
+without losing a stage, which is the same property the shipped census now has
+(a cancelled census keeps its scored prefix in 256-row batches).
