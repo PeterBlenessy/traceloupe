@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 14;
+const SCHEMA_VERSION: i64 = 15;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -446,6 +446,11 @@ CREATE TABLE IF NOT EXISTS census (
     occurred_at       INTEGER,
     score             REAL NOT NULL,
     embedded_at       INTEGER NOT NULL,
+    -- The message's durable identity (chunker::message_fingerprint). Row ids
+    -- are cache-local and change on re-import while this store survives it, so
+    -- a census row is only trusted for a message whose fingerprint still
+    -- matches; '' (pre-v15 rows) never matches and is re-embedded.
+    fingerprint       TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (source_id)
 );
 CREATE INDEX IF NOT EXISTS idx_census_cell
@@ -630,6 +635,9 @@ pub struct CensusRow {
     pub sender: String,
     pub occurred_at: Option<i64>,
     pub score: f64,
+    /// The message's durable identity — what makes the row survivable across
+    /// re-imports (the id alone is not; see the census schema comment).
+    pub fingerprint: String,
 }
 
 /// A ranked triage cell: one (conversation, sender) pair and its evidence.
@@ -659,6 +667,11 @@ pub struct WorkItem {
     /// Hot-message count of this message's (thread, sender) cell — why it ranks
     /// where it does.
     pub cell_hot: i64,
+    /// The scored message's identity when it was embedded. The deep-scan only
+    /// acts on this item if the message the id resolves to STILL has this
+    /// fingerprint — otherwise the row predates a re-import and points at
+    /// whatever message inherited the id.
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1059,6 +1072,21 @@ impl AnalysisDb {
                  CREATE INDEX IF NOT EXISTS idx_census_cell
                      ON census(thread_identifier, sender);",
             )?;
+            // v15: census rows carry the message fingerprint. analysis.db
+            // survives re-import but cache row ids do not, so a census row is
+            // only trusted when the fingerprint still matches the message the
+            // id resolves to. Old rows keep '' and are simply re-embedded.
+            let has_census_fp = conn
+                .prepare("PRAGMA table_info(census)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .any(|c| c == "fingerprint");
+            if !has_census_fp {
+                conn.execute(
+                    "ALTER TABLE census ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''",
+                    [],
+                )?;
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1227,10 +1255,11 @@ impl AnalysisDb {
         {
             let mut stmt = tx.prepare(
                 "INSERT INTO census
-                     (source_id, thread_identifier, sender, occurred_at, score, embedded_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                     (source_id, thread_identifier, sender, occurred_at, score, embedded_at, fingerprint)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
                  ON CONFLICT(source_id) DO UPDATE SET
-                     score = excluded.score, embedded_at = excluded.embedded_at",
+                     score = excluded.score, embedded_at = excluded.embedded_at,
+                     fingerprint = excluded.fingerprint",
             )?;
             for r in rows {
                 stmt.execute(params![
@@ -1239,7 +1268,8 @@ impl AnalysisDb {
                     r.sender,
                     r.occurred_at,
                     r.score,
-                    at
+                    at,
+                    r.fingerprint
                 ])?;
             }
         }
@@ -1247,11 +1277,16 @@ impl AnalysisDb {
         Ok(())
     }
 
-    /// Message ids that already have a census score, so a scan embeds only the
-    /// rest. Small backups return everything; the query is indexed on the PK.
-    pub fn census_scored_ids(&self) -> Result<std::collections::HashSet<i64>> {
-        let mut stmt = self.conn.prepare("SELECT source_id FROM census")?;
-        let rows = stmt.query_map([], |r| r.get::<_, i64>(0))?;
+    /// (id, fingerprint) pairs that already have a census score, so a scan
+    /// embeds only the rest. The fingerprint is part of the key on purpose: a
+    /// re-import reshuffles row ids under this surviving store, and skipping on
+    /// the id alone would leave a NEW message unscored because an unrelated old
+    /// row happens to share its id. Pre-v15 rows ('' fingerprint) never match.
+    pub fn census_scored(&self) -> Result<std::collections::HashSet<(i64, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source_id, fingerprint FROM census")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         Ok(rows.filter_map(|r| r.ok()).collect())
     }
 
@@ -1294,7 +1329,8 @@ impl AnalysisDb {
                    (SELECT COUNT(*) FROM census h
                     WHERE h.thread_identifier = c.thread_identifier
                       AND h.sender = c.sender
-                      AND h.score >= ?1) AS cell_hot
+                      AND h.score >= ?1) AS cell_hot,
+                   c.fingerprint
             FROM census c
             WHERE c.score >= ?1
             ORDER BY cell_hot DESC, c.score DESC, c.source_id ASC";
@@ -1306,6 +1342,7 @@ impl AnalysisDb {
                 sender: r.get(2)?,
                 score: r.get(3)?,
                 cell_hot: r.get(4)?,
+                fingerprint: r.get(5)?,
             })
         })?;
         let mut out: Vec<WorkItem> = rows.filter_map(|r| r.ok()).collect();
@@ -2637,6 +2674,19 @@ impl AnalysisDb {
 
     /// Append a content-free audit event. Callers must never pass source text
     /// in `detail` — ranges, counts, and model names only.
+    /// Whether a scan row was produced by the TRIAGE pipeline. The scans table
+    /// has no kind column; the triage command stamps a `triage_mode` audit row
+    /// at start, and that stamp is the discriminator. Callers use it to refuse
+    /// resuming a triage row through the batch engine (different pipeline,
+    /// different semantics, same table).
+    pub fn scan_is_triage(&self, scan_id: i64) -> Result<bool> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM audit_log WHERE scan_id = ?1 AND event = 'triage_mode'",
+            params![scan_id],
+            |r| r.get::<_, i64>(0),
+        )? > 0)
+    }
+
     pub fn audit(&self, scan_id: i64, at: i64, event: &str, detail: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO audit_log (scan_id, at, event, detail) VALUES (?1, ?2, ?3, ?4)",
@@ -2743,6 +2793,7 @@ mod tests {
             sender: sender.into(),
             occurred_at: Some(at),
             score,
+            fingerprint: format!("fp{id}"),
         }
     }
 
@@ -2921,8 +2972,12 @@ mod tests {
             1,
         )
         .unwrap();
-        let seen = db.census_scored_ids().unwrap();
-        assert!(seen.contains(&1) && seen.contains(&2) && !seen.contains(&3));
+        let seen = db.census_scored().unwrap();
+        let ids: std::collections::HashSet<i64> = seen.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&1) && ids.contains(&2) && !ids.contains(&3));
+        // The fingerprint rides the pair: a row only matches its own identity.
+        assert!(seen.contains(&(1, "fp1".to_string())));
+        assert!(!seen.contains(&(1, "fp-other".to_string())));
     }
 
     #[test]

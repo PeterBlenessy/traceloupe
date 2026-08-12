@@ -58,10 +58,31 @@ pub struct TriageOutcome {
     pub findings: usize,
     /// Findings the confirmation stage removed (0 when the mode has it off).
     pub unconfirmed: usize,
+    /// Worklist items whose focused call failed even after a retry — skipped,
+    /// audited, and the scan continued. ALL of them failing fails the scan
+    /// (the §10.6 harness-bug signature).
+    pub deep_scan_failed: usize,
+    /// Verdicts the validation rejected (malformed, or naming an item outside
+    /// the window). Diagnosability: a zero-finding scan with high `rejected`
+    /// is a harness bug, not a clean backup.
+    pub rejected: usize,
+    /// Verdicts refused because the judged item has no standalone content.
+    pub contentless: usize,
     /// True when a cancel stopped the scan early. Whatever was completed is
     /// persisted (census rows, confirmed findings); the caller marks the scan
     /// row cancelled rather than done.
     pub cancelled: bool,
+}
+
+/// What one focused classify call produced: the verdicts the validation kept,
+/// plus what it threw away. The rejection counts ride along for §10.6
+/// diagnosability — a scan that finds nothing because every verdict was
+/// malformed must be distinguishable from a genuinely clean scan.
+#[derive(Debug, Clone, Default)]
+pub struct FocusOutcome {
+    pub verdicts: Vec<FocusVerdict>,
+    pub rejected: usize,
+    pub contentless: usize,
 }
 
 impl TriageOutcome {
@@ -144,13 +165,16 @@ fn window_chunk(window: &FocusWindow) -> Chunk {
 /// `run_triage` — kept here so no caller can accidentally re-implement the
 /// prompt or grammar (the mistake that produced three false "recall 0.00"
 /// results; journey §10.6).
-pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Vec<FocusVerdict>> {
+pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<FocusOutcome> {
     let chunk = window_chunk(window);
     let user = prompt::render_focused(&chunk, window.focus);
     let grammar = prompt::verdicts_grammar(chunk.items.len());
     let out = client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, FOCUSED_MAX_TOKENS)?;
-    Ok(
-        engine::verdicts_to_findings_focused(&chunk, &out, window.focus)
+    let verdicts = engine::verdicts_to_findings_focused(&chunk, &out, window.focus);
+    Ok(FocusOutcome {
+        rejected: verdicts.rejected,
+        contentless: verdicts.contentless,
+        verdicts: verdicts
             .findings
             .into_iter()
             .map(|f| FocusVerdict {
@@ -159,7 +183,7 @@ pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Vec<
                 rationale: f.rationale,
             })
             .collect(),
-    )
+    })
 }
 
 /// Run a triage scan.
@@ -179,10 +203,14 @@ pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Vec<
 /// reference pipeline (tools/validate-triage-pipeline.py), which confirms as a
 /// separate stage.
 ///
-/// `cancel` is checked between units of work; on cancel the outcome comes back
-/// with `cancelled: true` and everything completed so far persisted. A finding
-/// whose confirmation was cancelled before it ran is NOT written — the mode
-/// promised a confirmed result, and a resume re-classifies the worklist.
+/// `cancel` is checked between units of work AND on every model error — the
+/// command layer's cancel-watcher kills the server to abort an in-flight
+/// request, so the dominant Stop path surfaces as a connection error, and that
+/// error must read as "you stopped it", never as a failed scan. On cancel the
+/// outcome comes back `cancelled: true` with everything completed so far
+/// persisted. A finding whose confirmation was cancelled before it ran is NOT
+/// written — the mode promised a confirmed result, and a resume re-classifies
+/// the worklist.
 #[allow(clippy::too_many_arguments)]
 pub fn run_triage<E, C, F, P>(
     analysis: &mut AnalysisDb,
@@ -200,21 +228,28 @@ pub fn run_triage<E, C, F, P>(
 ) -> Result<TriageOutcome>
 where
     E: FnMut(&str) -> Result<Vec<f32>>,
-    C: FnMut(&FocusWindow) -> Result<Vec<FocusVerdict>>,
+    C: FnMut(&FocusWindow) -> Result<FocusOutcome>,
     F: FnMut(&FocusWindow, &FocusVerdict) -> Result<bool>,
     P: FnMut(TriageProgress),
 {
     let mut out = TriageOutcome::default();
 
     // --- phase 1: census every message ---
+    // The skip key is (id, fingerprint), not the id: this store survives
+    // re-import while cache row ids do not, so an id match alone could be a
+    // different message wearing a recycled id.
     let flat: Vec<&CensusInput> = threads.iter().flatten().collect();
-    let already = analysis.census_scored_ids()?;
+    let already = analysis.census_scored()?;
     let todo: Vec<CensusInput> = flat
         .iter()
-        .filter(|m| !already.contains(&m.source_id))
+        .filter(|m| !already.contains(&(m.source_id, m.fingerprint.clone())))
         .map(|m| (*m).clone())
         .collect();
-    out.censused = flat.len();
+    // "Censused" counts messages with a score: what was already scored in
+    // scope, plus what this run scores — never the whole scope up front, or a
+    // cancelled census would claim coverage it does not have.
+    let in_scope_already = flat.len() - todo.len();
+    out.censused = in_scope_already;
     progress(TriageProgress::Census {
         done: 0,
         total: todo.len(),
@@ -225,7 +260,16 @@ where
             out.cancelled = true;
             return Ok(out);
         }
-        let scored = triage::census_messages(batch, prototypes, &mut embed)?;
+        let scored = match triage::census_messages(batch, prototypes, &mut embed) {
+            Ok(s) => s,
+            // The Stop path: the watcher killed the server under an in-flight
+            // embed. The already-recorded prefix stands; report cancelled.
+            Err(_) if cancel.is_cancelled() => {
+                out.cancelled = true;
+                return Ok(out);
+            }
+            Err(e) => return Err(e),
+        };
         let rows: Vec<CensusRow> = scored
             .iter()
             .map(|s| CensusRow {
@@ -234,20 +278,21 @@ where
                 sender: s.sender.clone(),
                 occurred_at: s.occurred_at,
                 score: s.score as f64,
+                fingerprint: batch
+                    .iter()
+                    .find(|m| m.source_id == s.source_id)
+                    .map(|m| m.fingerprint.clone())
+                    .unwrap_or_default(),
             })
             .collect();
         analysis.record_census(&rows, now)?;
         census_done += batch.len();
+        out.censused = in_scope_already + census_done;
         progress(TriageProgress::Census {
             done: census_done,
             total: todo.len(),
         });
     }
-
-    // --- phase 2: rank + budget ---
-    let threshold = mode.census_threshold() as f64;
-    out.candidates = analysis.triage_candidate_count(threshold)?;
-    let worklist = analysis.triage_worklist(threshold, budget)?;
 
     // Locate a message by id: its thread and index within it, for the window.
     // Built once — a scan touches many work items.
@@ -259,6 +304,31 @@ where
         }
     }
 
+    // --- phase 2: rank + budget ---
+    // The census table is global (it survives across scans and scopes), so the
+    // ranked list is filtered to THIS scan's scope — and to rows whose
+    // fingerprint still matches the message their id resolves to — BEFORE the
+    // budget is applied. Otherwise a scoped scan after a wider one spends its
+    // budget on out-of-scope rows and reports other threads' messages in its
+    // coverage numbers. (The fingerprint half is defense-in-depth: the census
+    // upsert above already refreshed every in-scope id, so a stale row only
+    // reaches this filter through a future path that skips phase 1.)
+    let threshold = mode.census_threshold() as f64;
+    let worklist: Vec<_> = analysis
+        .triage_worklist(threshold, None)?
+        .into_iter()
+        .filter(|item| {
+            locate
+                .get(&item.source_id)
+                .is_some_and(|&(ti, mi)| threads[ti][mi].fingerprint == item.fingerprint)
+        })
+        .collect();
+    out.candidates = worklist.len();
+    let worklist: Vec<_> = match budget {
+        Some(b) => worklist.into_iter().take(b).collect(),
+        None => worklist,
+    };
+
     // --- phase 3: focused deep-scan the worklist ---
     // Verdicts are provisional here; confirmation (when the mode has it) is the
     // next phase, over the collected results, so the two model tiers never need
@@ -269,24 +339,61 @@ where
         total: worklist.len(),
         findings: 0,
     });
-    for (done, item) in worklist.iter().enumerate() {
+    'deep: for (done, item) in worklist.iter().enumerate() {
         if cancel.is_cancelled() {
             out.cancelled = true;
             break;
         }
+        // The filter above proved membership; a miss here cannot happen, but
+        // stay defensive rather than panicking mid-scan.
         let Some(&(ti, mi)) = locate.get(&item.source_id) else {
-            continue; // a census row whose message is no longer in scope
+            continue;
         };
         out.deep_scanned += 1;
         let window = triage::context_window(&threads[ti], mi, ScanMode::default_radius());
-        for v in classify(&window)? {
-            provisional.push((window.clone(), v));
+        // One retry per item, then skip it and continue — a transient server
+        // hiccup on item 109 of 110 must not discard 108 completed verdicts
+        // (the batch engine has the same per-chunk forgiveness).
+        let mut focus_out = None;
+        for attempt in 0..2 {
+            match classify(&window) {
+                Ok(o) => {
+                    focus_out = Some(o);
+                    break;
+                }
+                Err(_) if cancel.is_cancelled() => {
+                    out.cancelled = true;
+                    break 'deep;
+                }
+                Err(e) if attempt == 1 => {
+                    out.deep_scan_failed += 1;
+                    let _ = analysis.audit(scan_id, now, "triage_item_failed", &format!("{e}"));
+                }
+                Err(_) => {}
+            }
+        }
+        if let Some(o) = focus_out {
+            out.rejected += o.rejected;
+            out.contentless += o.contentless;
+            for v in o.verdicts {
+                provisional.push((window.clone(), v));
+            }
         }
         progress(TriageProgress::DeepScan {
             done: done + 1,
             total: worklist.len(),
             findings: provisional.len(),
         });
+    }
+    // Every attempted item failing is not "a clean backup" — it is the §10.6
+    // signature of a harness bug (wrong grammar, dead server), and it must
+    // fail the scan loudly rather than complete with zero findings.
+    if !out.cancelled && out.deep_scanned > 0 && out.deep_scan_failed == out.deep_scanned {
+        return Err(crate::Error::Inference(
+            "every focused classification failed — suspect the harness (server/grammar), \
+             not a clean backup"
+                .into(),
+        ));
     }
 
     // --- phase 4: confirm the provisional findings (mode-dependent) ---
@@ -307,7 +414,16 @@ where
                 out.cancelled = true;
                 break;
             }
-            let kept = confirm(&window, &v)?;
+            let kept = match confirm(&window, &v) {
+                Ok(k) => k,
+                // Stop under an in-flight confirm call: the vetted findings so
+                // far are written; this one and the rest are dropped unvetted.
+                Err(_) if cancel.is_cancelled() => {
+                    out.cancelled = true;
+                    break;
+                }
+                Err(e) => return Err(e),
+            };
             progress(TriageProgress::Confirm {
                 done: done + 1,
                 total: to_confirm,
@@ -334,6 +450,23 @@ where
     }
     analysis.replace_findings(scan_id, &findings, now)?;
     out.findings = findings.len();
+    // The per-scan diagnosability record (mirrors the batch engine's per-chunk
+    // audit): with this, a silent-zero scan is distinguishable from a clean
+    // one straight from the audit trail.
+    let _ = analysis.audit(
+        scan_id,
+        now,
+        "triage_deep_scan",
+        &format!(
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={}",
+            out.deep_scanned,
+            out.findings,
+            out.rejected,
+            out.contentless,
+            out.deep_scan_failed,
+            out.unconfirmed
+        ),
+    );
     Ok(out)
 }
 
@@ -341,6 +474,15 @@ where
 mod tests {
     use super::*;
     use crate::sidecar::CancelToken;
+
+    /// Wrap plain verdicts as a clean FocusOutcome (tests don't exercise the
+    /// rejected/contentless counters unless they say so).
+    fn fo(verdicts: Vec<FocusVerdict>) -> FocusOutcome {
+        FocusOutcome {
+            verdicts,
+            ..Default::default()
+        }
+    }
 
     // Fake embedder: "threat"/"kill" -> x-axis, else z-axis (orthogonal).
     fn embed(t: &str) -> Result<Vec<f32>> {
@@ -379,9 +521,9 @@ mod tests {
             (3, "a", "see you later"),
         ])];
         // classify flags the focused item iff it is the threat.
-        let classify = |w: &FocusWindow| -> Result<Vec<FocusVerdict>> {
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
             let judged = &w.items[w.focus];
-            Ok(if judged.text.contains("kill") {
+            Ok(fo(if judged.text.contains("kill") {
                 vec![FocusVerdict {
                     category: Category::ThreatViolence,
                     severity: 3,
@@ -389,7 +531,7 @@ mod tests {
                 }]
             } else {
                 vec![]
-            })
+            }))
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
         let out = run_triage(
@@ -433,11 +575,11 @@ mod tests {
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
         let threads = vec![thread(&[(1, "a", "i will kill you")])];
         let classify = |_: &FocusWindow| {
-            Ok(vec![FocusVerdict {
+            Ok(fo(vec![FocusVerdict {
                 category: Category::ThreatViolence,
                 severity: 3,
                 rationale: "x".into(),
-            }])
+            }]))
         };
         // A confirmer that vetoes EVERYTHING.
         let veto = |_: &FocusWindow, _: &FocusVerdict| Ok(false);
@@ -495,11 +637,11 @@ mod tests {
             (5, "a", "kill 5"),
         ])];
         let classify = |_: &FocusWindow| {
-            Ok(vec![FocusVerdict {
+            Ok(fo(vec![FocusVerdict {
                 category: Category::ThreatViolence,
                 severity: 3,
                 rationale: "x".into(),
-            }])
+            }]))
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
         let out = run_triage(
@@ -580,14 +722,14 @@ mod tests {
             thread(&[(2, "a", "kill him too")]),
         ];
         let order = std::cell::RefCell::new(Vec::<&'static str>::new());
-        let classify = |w: &FocusWindow| -> Result<Vec<FocusVerdict>> {
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
             order.borrow_mut().push("classify");
             let _ = w;
-            Ok(vec![FocusVerdict {
+            Ok(fo(vec![FocusVerdict {
                 category: Category::ThreatViolence,
                 severity: 3,
                 rationale: "x".into(),
-            }])
+            }]))
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| {
             order.borrow_mut().push("confirm");
@@ -636,7 +778,7 @@ mod tests {
                 }
             }
         };
-        let classify = |_: &FocusWindow| -> Result<Vec<FocusVerdict>> {
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
             panic!("a cancelled census must never reach classification")
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
@@ -657,9 +799,13 @@ mod tests {
         .unwrap();
         assert!(out.cancelled);
         assert_eq!(
-            db.census_scored_ids().unwrap().len(),
+            db.census_scored().unwrap().len(),
             256,
             "the completed batch is persisted; the rest resumes next run"
+        );
+        assert_eq!(
+            out.censused, 256,
+            "coverage reports what was actually scored, not the whole scope"
         );
     }
 
@@ -674,16 +820,16 @@ mod tests {
         let cancel = CancelToken::new();
         let cancel2 = cancel.clone();
         let calls = std::cell::Cell::new(0usize);
-        let classify = move |_: &FocusWindow| -> Result<Vec<FocusVerdict>> {
+        let classify = move |_: &FocusWindow| -> Result<FocusOutcome> {
             calls.set(calls.get() + 1);
             if calls.get() == 1 {
                 cancel2.cancel();
             }
-            Ok(vec![FocusVerdict {
+            Ok(fo(vec![FocusVerdict {
                 category: Category::ThreatViolence,
                 severity: 3,
                 rationale: "x".into(),
-            }])
+            }]))
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
         let out = run_triage(
@@ -717,12 +863,12 @@ mod tests {
         ];
         let cancel = CancelToken::new();
         let cancel2 = cancel.clone();
-        let classify = |_: &FocusWindow| -> Result<Vec<FocusVerdict>> {
-            Ok(vec![FocusVerdict {
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            Ok(fo(vec![FocusVerdict {
                 category: Category::ThreatViolence,
                 severity: 3,
                 rationale: "x".into(),
-            }])
+            }]))
         };
         let confirms = std::cell::Cell::new(0usize);
         let confirm = move |_: &FocusWindow, _: &FocusVerdict| {
@@ -762,12 +908,12 @@ mod tests {
         t[0].fingerprint = "msg:durable-identity".into();
         t[0].service = Some("iMessage".into());
         let threads = vec![t];
-        let classify = |_: &FocusWindow| -> Result<Vec<FocusVerdict>> {
-            Ok(vec![FocusVerdict {
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            Ok(fo(vec![FocusVerdict {
                 category: Category::ThreatViolence,
                 severity: 3,
                 rationale: "x".into(),
-            }])
+            }]))
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
         run_triage(
@@ -803,6 +949,248 @@ mod tests {
         assert_eq!(svc.as_deref(), Some("iMessage"));
     }
 
+    /// The census table is global and survives across scans; a scoped scan
+    /// must not spend its budget on (or count) another scope's rows.
+    #[test]
+    fn a_scoped_scan_ignores_out_of_scope_census_rows() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        // A prior, wider scan censused another thread's hot messages.
+        db.record_census(
+            &[
+                CensusRow {
+                    source_id: 900,
+                    thread_identifier: "other-thread".into(),
+                    sender: "x".into(),
+                    occurred_at: Some(1),
+                    score: 0.99,
+                    fingerprint: "fp-other-900".into(),
+                },
+                CensusRow {
+                    source_id: 901,
+                    thread_identifier: "other-thread".into(),
+                    sender: "x".into(),
+                    occurred_at: Some(2),
+                    score: 0.98,
+                    fingerprint: "fp-other-901".into(),
+                },
+            ],
+            5,
+        )
+        .unwrap();
+        let scan = db.begin_scan("m", (None, None), "t", 1).unwrap();
+        // This scan's scope: one thread with one threat.
+        let threads = vec![thread(&[(1, "a", "i will kill you")])];
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
+            assert!(
+                w.items[w.focus].text.contains("kill"),
+                "an out-of-scope census row reached the classifier"
+            );
+            Ok(fo(vec![FocusVerdict {
+                category: Category::ThreatViolence,
+                severity: 3,
+                rationale: "x".into(),
+            }]))
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
+        // Budget 1: if the (higher-scoring) out-of-scope rows were counted,
+        // they would eat the whole budget and the real threat would be
+        // reported as an unscanned tail.
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Thorough,
+            Some(1),
+            10,
+            embed,
+            classify,
+            confirm,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.candidates, 1, "candidates count THIS scope only");
+        assert_eq!(out.deep_scanned, 1);
+        assert_eq!(out.findings, 1);
+        assert_eq!(out.unscanned(), 0, "nothing in scope was left unscanned");
+    }
+
+    /// The census store outlives re-imports; row ids do not. A stored row whose
+    /// fingerprint no longer matches the message its id resolves to must be
+    /// re-embedded (not skipped) and must never be deep-scanned as-is.
+    #[test]
+    fn a_stale_census_row_is_rescored_not_trusted() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        // Pre-import: id 1 was some hot OTHER message.
+        db.record_census(
+            &[CensusRow {
+                source_id: 1,
+                thread_identifier: "t".into(),
+                sender: "a".into(),
+                occurred_at: Some(1),
+                score: 0.99,
+                fingerprint: "fp-before-reimport".into(),
+            }],
+            5,
+        )
+        .unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        // Post-import: id 1 now belongs to harmless chatter.
+        let threads = vec![thread(&[(1, "a", "grab milk")])];
+        let mut embeds = 0usize;
+        let counting_embed = |t: &str| {
+            embeds += 1;
+            embed(t)
+        };
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            panic!("a stale census row was deep-scanned against the wrong message")
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Thorough,
+            None,
+            10,
+            counting_embed,
+            classify,
+            confirm,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            embeds, 1,
+            "the reshuffled message is re-embedded, not skipped"
+        );
+        assert_eq!(out.findings, 0);
+    }
+
+    /// The dominant Stop path: the cancel-watcher kills the server under an
+    /// in-flight call, which surfaces as an Err from classify. That must read
+    /// as a clean cancel — with completed findings written — never a failure.
+    #[test]
+    fn a_kill_under_an_in_flight_classify_reads_as_cancelled() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            thread(&[(1, "a", "i will kill you")]),
+            thread(&[(2, "a", "kill him too")]),
+        ];
+        let cancel = CancelToken::new();
+        let cancel2 = cancel.clone();
+        let calls = std::cell::Cell::new(0usize);
+        let classify = move |_: &FocusWindow| -> Result<FocusOutcome> {
+            calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                Ok(fo(vec![FocusVerdict {
+                    category: Category::ThreatViolence,
+                    severity: 3,
+                    rationale: "x".into(),
+                }]))
+            } else {
+                // Stop lands mid-request: the token flips AND the request dies.
+                cancel2.cancel();
+                Err(crate::Error::Inference("connection reset".into()))
+            }
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Thorough,
+            None,
+            10,
+            embed,
+            classify,
+            confirm,
+            &cancel,
+            |_| {},
+        )
+        .expect("a Stop is a cancel, not a scan failure");
+        assert!(out.cancelled);
+        assert_eq!(out.findings, 1, "the completed finding survives the Stop");
+    }
+
+    /// A transient failure on one item is retried, then skipped — it must not
+    /// discard everything the deep-scan already produced.
+    #[test]
+    fn one_failing_item_is_skipped_not_fatal() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            thread(&[(1, "a", "i will kill you")]),
+            thread(&[(2, "a", "kill him too")]),
+        ];
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
+            if w.items[w.focus].source_id == 2 {
+                Err(crate::Error::Inference("hiccup".into()))
+            } else {
+                Ok(fo(vec![FocusVerdict {
+                    category: Category::ThreatViolence,
+                    severity: 3,
+                    rationale: "x".into(),
+                }]))
+            }
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Thorough,
+            None,
+            10,
+            embed,
+            classify,
+            confirm,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert!(!out.cancelled);
+        assert_eq!(out.deep_scan_failed, 1);
+        assert_eq!(out.findings, 1, "the healthy item's finding is kept");
+    }
+
+    /// EVERY item failing is the §10.6 harness-bug signature and must fail the
+    /// scan loudly — zero findings from a dead harness must never look clean.
+    #[test]
+    fn all_items_failing_fails_the_scan() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![thread(&[(1, "a", "i will kill you")])];
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            Err(crate::Error::Inference("dead".into()))
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
+        let err = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Thorough,
+            None,
+            10,
+            embed,
+            classify,
+            confirm,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("harness"),
+            "the error must point at the harness, got: {err}"
+        );
+    }
+
     #[test]
     fn a_second_run_reuses_the_census() {
         let mut db = AnalysisDb::open_in_memory().unwrap();
@@ -813,7 +1201,7 @@ mod tests {
             embed_calls += 1;
             embed(t)
         };
-        let classify = |_: &FocusWindow| Ok(vec![]);
+        let classify = |_: &FocusWindow| Ok(fo(vec![]));
         let confirm = |_: &FocusWindow, _: &FocusVerdict| Ok(true);
         run_triage(
             &mut db,

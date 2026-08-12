@@ -449,7 +449,14 @@ pub fn subscribe_safety_model_progress(channel: Channel<ModelProgressEvent>) {
 }
 
 #[derive(Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase", tag = "phase")]
+// rename_all renames the VARIANTS only; rename_all_fields is what makes the
+// struct-variant fields (scan_id, deep_scanned, …) camelCase on the wire, which
+// is what the TS SafetyScanEvent union declares.
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "phase"
+)]
 pub enum ScanEvent {
     Loading,
     Classifying {
@@ -500,6 +507,8 @@ pub enum ScanEvent {
         /// Candidates the budget left unread — reported, never called clean.
         unscanned: usize,
         unconfirmed: usize,
+        /// Worklist items whose focused call failed after a retry (skipped).
+        failed: usize,
     },
     Error {
         message: String,
@@ -589,6 +598,17 @@ pub async fn run_safety_scan(
                 .scan_by_id(id)
                 .map_err(|e| e.to_string())?
                 .ok_or("scan to resume no longer exists")?;
+            // A triage row must not resume through the BATCH engine — it is a
+            // different pipeline over the same table, and "resuming" it here
+            // would replace its findings with an hours-long chunk scan. The
+            // census is incremental, so starting a new triage scan loses
+            // nothing.
+            if db.scan_is_triage(id).map_err(|e| e.to_string())? {
+                return Err(
+                    "this was a triage scan — start a new triage scan instead (its census is kept)"
+                        .into(),
+                );
+            }
             (row.range_start, row.range_end, Some(row.sources))
         }
         None => (range_start, range_end, sources),
@@ -792,31 +812,36 @@ pub async fn run_safety_scan(
         // the retired (possibly OS-reused) sweep pid (verification Finding C).
         let current_pid = Arc::new(std::sync::atomic::AtomicU32::new(llama.pid()));
         let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watcher = {
-            let cancel = cancel.clone();
-            let done = watch_done.clone();
-            let app = app2.clone();
-            let current_pid = current_pid.clone();
-            std::thread::spawn(move || {
-                while !done.load(std::sync::atomic::Ordering::SeqCst) {
-                    if cancel.is_cancelled() {
-                        crate::logging::info(
-                            &app,
-                            "Safety Scan: cancel requested — stopping the model server",
-                        );
-                        let _ = std::process::Command::new("/bin/kill")
-                            .arg("-9")
-                            .arg(
-                                current_pid
-                                    .load(std::sync::atomic::Ordering::SeqCst)
-                                    .to_string(),
-                            )
-                            .status();
-                        break;
+        // Guarded: any `?` return below must stop this thread too, or it
+        // outlives the scan holding a pid the OS may reuse.
+        let mut watcher = WatcherGuard {
+            done: watch_done.clone(),
+            handle: Some({
+                let cancel = cancel.clone();
+                let done = watch_done.clone();
+                let app = app2.clone();
+                let current_pid = current_pid.clone();
+                std::thread::spawn(move || {
+                    while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                        if cancel.is_cancelled() {
+                            crate::logging::info(
+                                &app,
+                                "Safety Scan: cancel requested — stopping the model server",
+                            );
+                            let _ = std::process::Command::new("/bin/kill")
+                                .arg("-9")
+                                .arg(
+                                    current_pid
+                                        .load(std::sync::atomic::Ordering::SeqCst)
+                                        .to_string(),
+                                )
+                                .status();
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(120));
                     }
-                    std::thread::sleep(Duration::from_millis(120));
-                }
-            })
+                })
+            }),
         };
 
         let llm = client::LlmClient::new(
@@ -983,8 +1008,7 @@ pub async fn run_safety_scan(
         }
         // Stop the watcher (it may already have fired on cancel) before we take
         // the server down ourselves.
-        watch_done.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _ = watcher.join();
+        watcher.stop();
         llama.shutdown();
         // Wipe scratch now (a crashed run's residue is cleared at the next
         // run's start-of-run wipe; this keeps the happy path tidy).
@@ -1052,6 +1076,31 @@ pub fn cancel_safety_scan(cancel_state: State<'_, SafetyScanCancel>) -> Result<(
         c.cancel();
     }
     Ok(())
+}
+
+/// Stops the cancel-watcher thread on EVERY exit path out of a scan. The
+/// watcher polls a shared pid atomic and `kill -9`s it when the user cancels;
+/// a watcher leaked past its scan is a thread that can later kill an OS-reused
+/// pid. The success path calls `stop()` at the right moment (before the server
+/// teardown); Drop is the backstop for every `?` return and panic.
+struct WatcherGuard {
+    done: Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl WatcherGuard {
+    fn stop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl Drop for WatcherGuard {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 // ---------- triage scan (#472) ----------
@@ -1219,7 +1268,12 @@ pub async fn run_triage_scan(
     let analysis_db_path = analysis_path(&cache_path)?;
 
     let mode = match mode.as_deref() {
-        None => ScanMode::default(),
+        // The product default is Balanced, but Balanced needs the confirmer
+        // tier, which is not in the catalog yet — so the unstated default is
+        // the best mode that can actually run. Restore ScanMode::default()
+        // here when the confirmer ships; an EXPLICIT balanced/precise request
+        // still gets the honest refusal below rather than a silent downgrade.
+        None => ScanMode::Thorough,
         Some(s) => ScanMode::parse(s).ok_or("unknown scan mode")?,
     };
     // Balanced/Precise promise a second-model confirmation of every finding
@@ -1234,10 +1288,21 @@ pub async fn run_triage_scan(
         ));
     }
 
-    let scan_sources = parse_scan_sources(sources.as_deref());
-    if scan_sources.notes {
-        return Err("the triage scan reads messages; include notes via a standard scan".into());
+    let mut scan_sources = parse_scan_sources(sources.as_deref());
+    // The triage pipeline reads messages. A notes-ONLY scope has nothing for
+    // it and is refused; the catch-all default ("all") simply has its notes
+    // half excluded — the standard scan covers notes, and erroring on the
+    // default scope would make the command unusable as documented.
+    let notes_only = scan_sources.notes
+        && scan_sources.thread.is_none()
+        && scan_sources
+            .message_services
+            .as_ref()
+            .is_some_and(|s| s.is_empty());
+    if notes_only {
+        return Err("the triage scan reads messages; scan notes with a standard scan".into());
     }
+    scan_sources.notes = false;
     let sources_slug = scan_sources.slug();
     let dir = models_dir(&app)?;
     let classifier = match model_id.as_deref() {
@@ -1337,31 +1402,36 @@ pub async fn run_triage_scan(
         // in-flight request is only interruptible by killing the server.
         let current_pid = Arc::new(std::sync::atomic::AtomicU32::new(llama.pid()));
         let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let watcher = {
-            let cancel = cancel.clone();
-            let done = watch_done.clone();
-            let app = app2.clone();
-            let current_pid = current_pid.clone();
-            std::thread::spawn(move || {
-                while !done.load(std::sync::atomic::Ordering::SeqCst) {
-                    if cancel.is_cancelled() {
-                        crate::logging::info(
-                            &app,
-                            "Triage scan: cancel requested — stopping the model server",
-                        );
-                        let _ = std::process::Command::new("/bin/kill")
-                            .arg("-9")
-                            .arg(
-                                current_pid
-                                    .load(std::sync::atomic::Ordering::SeqCst)
-                                    .to_string(),
-                            )
-                            .status();
-                        break;
+        // Guarded: every `?` return below must stop this thread too, or it
+        // outlives the scan holding a pid the OS may reuse.
+        let mut watcher = WatcherGuard {
+            done: watch_done.clone(),
+            handle: Some({
+                let cancel = cancel.clone();
+                let done = watch_done.clone();
+                let app = app2.clone();
+                let current_pid = current_pid.clone();
+                std::thread::spawn(move || {
+                    while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                        if cancel.is_cancelled() {
+                            crate::logging::info(
+                                &app,
+                                "Triage scan: cancel requested — stopping the model server",
+                            );
+                            let _ = std::process::Command::new("/bin/kill")
+                                .arg("-9")
+                                .arg(
+                                    current_pid
+                                        .load(std::sync::atomic::Ordering::SeqCst)
+                                        .to_string(),
+                                )
+                                .status();
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(120));
                     }
-                    std::thread::sleep(Duration::from_millis(120));
-                }
-            })
+                })
+            }),
         };
 
         let embed_client = client::LlmClient::new(
@@ -1468,8 +1538,7 @@ pub async fn run_triage_scan(
             .finish_scan(scan_row_id, status, now())
             .map_err(|e| e.to_string())?;
 
-        watch_done.store(true, std::sync::atomic::Ordering::SeqCst);
-        let _ = watcher.join();
+        watcher.stop();
         sidecar.borrow_mut().llama.shutdown();
         let _ = std::fs::remove_dir_all(&scratch_dir);
 
@@ -1500,6 +1569,7 @@ pub async fn run_triage_scan(
                 deep_scanned: outcome.deep_scanned,
                 unscanned: outcome.unscanned(),
                 unconfirmed: outcome.unconfirmed,
+                failed: outcome.deep_scan_failed,
             },
         );
         Ok(())
@@ -2164,6 +2234,10 @@ pub struct ScanHistoryItem {
     /// `None` for every other status: cancelled and interrupted explain
     /// themselves.
     pub error: Option<String>,
+    /// True for triage-pipeline rows. The batch engine cannot resume them, so
+    /// the history card must not offer Resume (the census is incremental — a
+    /// new triage scan loses nothing).
+    pub is_triage: bool,
 }
 
 /// Remove a past scan and everything scoped to it (findings, progress,
@@ -2191,6 +2265,7 @@ pub fn list_safety_scans(active: State<'_, ActiveBackup>) -> Result<Vec<ScanHist
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|s| ScanHistoryItem {
+            is_triage: db.scan_is_triage(s.id).unwrap_or(false),
             id: s.id,
             model: s.model,
             range_start: s.range_start,
