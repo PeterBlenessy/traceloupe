@@ -151,25 +151,25 @@ const MODE_OPTIONS = [
     value: "full" as const,
     label: "Full read",
     description:
-      "Read every message in depth — thorough, but slow on a large backup",
+      "Read every message in depth. Slow on a large backup, and it reads in wide windows, which is why the pre-scan modes can find more than it does.",
   },
   {
     value: "thorough" as const,
     label: "Thorough",
     description:
-      "A fast pre-scan finds where to look, then the AI reads those places in depth — catches as much as possible and lets you dismiss the extras",
+      "Reads the most places in depth, so it finds the most — but it can take LONGER than a full read on a large backup. Measured, it is the slowest option here.",
   },
   {
     value: "balanced" as const,
     label: "Balanced",
     description:
-      "Like Thorough, and a second model double-checks each finding before it is shown",
+      "Finds more than a full read in about half the time, and a second model double-checks each finding before it is shown",
   },
   {
     value: "precise" as const,
     label: "Precise",
     description:
-      "The fewest false alarms — the double-check is strictest, and may trim a borderline real finding",
+      "By far the fastest, with the fewest false alarms — it finds about as much as a full read, not more, and may trim a borderline real finding",
   },
 ];
 

@@ -499,11 +499,16 @@ validation. Checklist mirrors #459.
       rule-of-three phrasing for what the census itself did not reach.**
 - [x] **Re-derive the census thresholds on a real distribution** (#489). The
       Jigsaw-fitted 0.52/0.55/0.58 kept 55%/38%/20% of a real phone's messages —
-      100/70/37 h per 100k against the batch scan's 11. Shipped **0.61/0.64/0.67**,
-      measured on the public image with fixture positives planted for ground
-      truth: every posture still beats the batch scan's 0.30 recall, Balanced at
-      2x the recall for half the time. The lab's 0.94 does not survive a real
-      distribution; the honest headline is 2x at half the time.
+      100/70/37 h per 100k against the full read's 11. Shipped
+      **0.61/0.64/0.67**. The first attempt at this measurement was
+      TRAIN-ON-TEST (planted fixtures scored against centroids built from those
+      same fixtures) and overstated recall by up to 0.25, most at the
+      thresholds one actually picks; re-run leave-one-out, Balanced delivers
+      1.3x the full read's recall in half the time, Thorough 1.8x for ~2x the
+      time, Precise parity recall in a tenth. **The lab's 0.94 does not survive
+      either correction**, and no threshold beats the full read on both axes —
+      the curve is dominated by prototype quality, which is now the binding
+      constraint (§8.3).
 - [ ] **Wider / better corpus for the three unlabelled categories**
       (coercive-control, grooming, relationship-harassment). The only route is to
       **generate** labelled conversations; the same corpus is the training set for

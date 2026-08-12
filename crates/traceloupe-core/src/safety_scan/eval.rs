@@ -1459,22 +1459,23 @@ mod tests {
     }
 
     /// Derive the census thresholds from a recall-vs-cost curve on a REAL
-    /// message distribution (#489).
+    /// message distribution, with HELD-OUT prototypes (#489).
     ///
-    /// The thresholds in `ScanMode` were fitted to the Jigsaw corpus, which is
-    /// nothing like a phone, and on real data every one of them costs more
-    /// than the batch scan they were meant to undercut (#486). The missing
-    /// asset was a labelled corpus with a real distribution, so this builds
-    /// one: the public image's own conversation is the BED — ordinary chatter
-    /// is exactly what the census must reject — and the committed fixture
-    /// positives are planted at known positions, giving exact ground truth
-    /// over a realistic background.
+    /// The first version of this measurement was train-on-test: the planted
+    /// positives were the fixture positives, and the prototypes are built from
+    /// those same fixtures, so every planted message was scored against a
+    /// centroid containing its own text. It reported recall 1.000 at 0.52
+    /// where the held-out oracle measured a 0.96 ceiling — the tell was in the
+    /// table and I missed it. Journey §7 already names this trap twice.
     ///
-    /// The cost ceiling is derived, not chosen: triage exists to be cheaper
-    /// than reading everything, the batch scan measures ~11 h per 100k
-    /// messages, and a focused call is ~6.5 s — so the census may pass at most
-    /// ~6% of messages. The threshold is then whatever keeps the most recall
-    /// under that ceiling.
+    /// So prototypes here are LEAVE-ONE-OUT: a case is scored against a
+    /// centroid built from every OTHER case of its category. That matches what
+    /// production faces, where a real harmful message is always unseen
+    /// relative to the fixtures the centroids come from. Cheap to do exactly:
+    /// embed each case once, then subtract it from its category's sum.
+    ///
+    /// The bed is the public image's own conversation — ordinary chatter is
+    /// what the census must reject — so the distribution is a phone's.
     ///
     ///   TRIAGE_REAL_BACKUP=… TRIAGE_REAL_PASSWORD=… \
     ///   TRACELOUPE_EMBED_MODEL=… \
@@ -1486,8 +1487,7 @@ mod tests {
         use crate::cache::CacheDb;
         use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
         use crate::safety_scan::client::LlmClient;
-        use crate::safety_scan::triage::{self, census_score, EMBED_PREFIX};
-        use crate::safety_scan::triage_scan;
+        use crate::safety_scan::triage::{cap_for_embedding, census_score, centroid, EMBED_PREFIX};
         use crate::sidecar::CancelToken;
         use std::time::Duration;
 
@@ -1527,112 +1527,166 @@ mod tests {
             "the image supplies a real conversational bed"
         );
 
-        // Ground truth: every message of every fixture POSITIVE, tagged with
-        // its category. These are what a census miss loses permanently.
+        let mut server = spawn_live_server(&embed_model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        // The PRODUCTION cap, not an ad-hoc one: both sides of the cosine must
+        // be capped by the same rule or the curve is not the one production
+        // rides.
+        let embed_one = |t: &str| c.embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(t)));
+
+        // Per case: its category, its prototype vector (the joined case text,
+        // exactly as prototype_examples builds it), and its messages.
+        struct Case {
+            cat: Category,
+            proto: Vec<f32>,
+            msgs: Vec<Vec<f32>>,
+        }
         let fixtures = load_fixtures();
-        let mut planted: Vec<(Category, String)> = Vec::new();
+        let mut cases: Vec<Case> = Vec::new();
+        let mut embed_failures = 0usize;
         for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
+            let joined = case
+                .messages
+                .iter()
+                .map(|m| m.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             for cat in case.expected_categories() {
+                let Ok(proto) = embed_one(&joined) else {
+                    embed_failures += 1;
+                    continue;
+                };
+                let mut msgs = Vec::new();
                 for m in &case.messages {
-                    planted.push((cat, m.text.clone()));
+                    match embed_one(&m.text) {
+                        Ok(v) => msgs.push(v),
+                        Err(_) => embed_failures += 1,
+                    }
+                }
+                cases.push(Case { cat, proto, msgs });
+            }
+        }
+        assert!(!cases.is_empty(), "fixture positives are the ground truth");
+
+        let mut bed_vecs = Vec::new();
+        for t in &bed {
+            match embed_one(t) {
+                Ok(v) => bed_vecs.push(v),
+                Err(_) => embed_failures += 1,
+            }
+        }
+        server.shutdown();
+        // Failures are NOT quietly dropped from the denominators: production
+        // counts them as `unscorable` — never scored, never candidates, a
+        // permanent miss — so a run with many of them is not a clean sample to
+        // read thresholds off.
+        assert_eq!(
+            embed_failures, 0,
+            "{embed_failures} embeddings failed — the curve would be computed from a \
+             truncated sample and would look plausible anyway"
+        );
+
+        // Leave-one-out centroids, by arithmetic rather than re-embedding.
+        let full_centroid = |cat: Category| -> Option<Vec<f32>> {
+            let v: Vec<Vec<f32>> = cases
+                .iter()
+                .filter(|c| c.cat == cat)
+                .map(|c| c.proto.clone())
+                .collect();
+            centroid(&v)
+        };
+        let centroid_without = |cat: Category, skip: usize| -> Option<Vec<f32>> {
+            let v: Vec<Vec<f32>> = cases
+                .iter()
+                .enumerate()
+                .filter(|(i, c)| c.cat == cat && *i != skip)
+                .map(|(_, c)| c.proto.clone())
+                .collect();
+            centroid(&v)
+        };
+        let all_cats: Vec<Category> = Category::ALL.to_vec();
+
+        // Scoring a case: its OWN category's centroid excludes it; the rest
+        // are whole — exactly the set production would score an unseen message
+        // against.
+        let held_out_protos = |skip: usize, cat: Category| -> Vec<Vec<f32>> {
+            all_cats
+                .iter()
+                .filter_map(|c| {
+                    if *c == cat {
+                        centroid_without(*c, skip)
+                    } else {
+                        full_centroid(*c)
+                    }
+                })
+                .collect()
+        };
+        let production_protos: Vec<Vec<f32>> =
+            all_cats.iter().filter_map(|c| full_centroid(*c)).collect();
+
+        const BATCH_HOURS_PER_100K: f64 = 11.0;
+        const FOCUSED_SECS: f64 = 6.5;
+        let planted_total: usize = cases.iter().map(|c| c.msgs.len()).sum();
+        println!(
+            "\n=== census recall vs cost, HELD-OUT prototypes ===\n\
+             bed {} real messages · {planted_total} planted positive messages \
+             across {} cases\n",
+            bed_vecs.len(),
+            cases.len()
+        );
+        println!("threshold   recall(held-out)   recall(train-on-test)   selectivity   100k cost");
+        for th in [0.46f32, 0.49, 0.52, 0.55, 0.58, 0.61, 0.64, 0.67] {
+            let mut kept_lo = 0usize;
+            let mut kept_tt = 0usize;
+            for (i, case) in cases.iter().enumerate() {
+                let lo = held_out_protos(i, case.cat);
+                for v in &case.msgs {
+                    if census_score(v, &lo) >= th {
+                        kept_lo += 1;
+                    }
+                    if census_score(v, &production_protos) >= th {
+                        kept_tt += 1;
+                    }
+                }
+            }
+            let recall_lo = kept_lo as f64 / planted_total as f64;
+            let recall_tt = kept_tt as f64 / planted_total as f64;
+            let kept_bed = bed_vecs
+                .iter()
+                .filter(|v| census_score(v, &production_protos) >= th)
+                .count();
+            let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
+            let hours = (100_000.0 * sel / 100.0) * FOCUSED_SECS / 3600.0;
+            println!(
+                "  {th:.2}          {recall_lo:.3}                {recall_tt:.3}            \
+                 {sel:>5.1}%      {hours:>5.1} h"
+            );
+        }
+        println!(
+            "\n(batch scan for reference: 0.30 recall, ~{BATCH_HOURS_PER_100K} h per 100k — \
+             measured on Jigsaw fixtures, NOT on this distribution, so the columns are not \
+             like for like)"
+        );
+        // The mechanism this measurement exists to respect: holding a case out
+        // of its own centroid cannot make it easier to find.
+        let mut lo_total = 0usize;
+        let mut tt_total = 0usize;
+        for (i, case) in cases.iter().enumerate() {
+            let lo = held_out_protos(i, case.cat);
+            for v in &case.msgs {
+                if census_score(v, &lo) >= 0.55 {
+                    lo_total += 1;
+                }
+                if census_score(v, &production_protos) >= 0.55 {
+                    tt_total += 1;
                 }
             }
         }
         assert!(
-            !planted.is_empty(),
-            "fixture positives are the ground truth"
+            lo_total <= tt_total,
+            "held-out recall ({lo_total}) exceeded train-on-test ({tt_total}) — the \
+             leave-one-out is not actually holding anything out"
         );
-
-        let mut server = spawn_live_server(&embed_model, true, 2048);
-        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
-        let embed_one = |t: &str| {
-            let capped: String = t.chars().take(400).collect();
-            c.embed(&format!("{EMBED_PREFIX}{capped}"))
-        };
-
-        let prototypes =
-            triage::build_prototypes(&triage_scan::prototype_examples(&Category::ALL), |t| {
-                c.embed(t)
-            })
-            .expect("prototypes");
-
-        let bed_vecs: Vec<Vec<f32>> = bed.iter().filter_map(|t| embed_one(t).ok()).collect();
-        let planted_vecs: Vec<(Category, Vec<f32>)> = planted
-            .iter()
-            .filter_map(|(cat, t)| embed_one(t).ok().map(|v| (*cat, v)))
-            .collect();
-        server.shutdown();
-
-        // Derived, not chosen: the batch scan is ~11 h per 100k messages and a
-        // focused call ~6.5 s, so triage may pass at most this share of
-        // messages and still be the cheaper way to scan.
-        const BATCH_HOURS_PER_100K: f64 = 11.0;
-        const FOCUSED_SECS: f64 = 6.5;
-        let cost_ceiling_pct = 100.0 * (BATCH_HOURS_PER_100K * 3600.0 / FOCUSED_SECS) / 100_000.0;
-
-        println!(
-            "\n=== census recall vs cost on a real distribution ===\n\
-             bed {} real messages · {} planted positives · cost ceiling {:.1}% \
-             (batch scan ~{BATCH_HOURS_PER_100K} h/100k at {FOCUSED_SECS} s/call)\n",
-            bed_vecs.len(),
-            planted_vecs.len(),
-            cost_ceiling_pct
-        );
-        println!("threshold   recall   selectivity   100k cost   under ceiling");
-        let mut best: Option<(f32, f64)> = None;
-        for th in [0.52f32, 0.55, 0.58, 0.61, 0.64, 0.67, 0.70] {
-            let kept_planted = planted_vecs
-                .iter()
-                .filter(|(_, v)| census_score(v, &prototypes) >= th)
-                .count();
-            let recall = kept_planted as f64 / planted_vecs.len() as f64;
-            let kept_bed = bed_vecs
-                .iter()
-                .filter(|v| census_score(v, &prototypes) >= th)
-                .count();
-            let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
-            let hours = (100_000.0 * sel / 100.0) * FOCUSED_SECS / 3600.0;
-            let ok = sel <= cost_ceiling_pct;
-            println!(
-                "  {th:.2}      {:.3}     {sel:>5.1}%       {hours:>5.1} h      {}",
-                recall,
-                if ok { "yes" } else { "NO" }
-            );
-            if ok && best.map(|(_, r)| recall > r).unwrap_or(true) {
-                best = Some((th, recall));
-            }
-        }
-        match best {
-            Some((th, recall)) => {
-                println!("\nbest under the ceiling: threshold {th:.2} at recall {recall:.3}")
-            }
-            None => {
-                println!("\nNO threshold satisfies the cost ceiling — the prototypes must improve")
-            }
-        }
-        // Per-category recall at the winning threshold: an average hides a
-        // category that has gone blind, and a blind category is a permanent
-        // miss for everything in it.
-        if let Some((th, _)) = best {
-            println!("\nper-category recall at {th:.2}:");
-            for cat in Category::ALL {
-                let of_cat: Vec<_> = planted_vecs.iter().filter(|(c, _)| *c == cat).collect();
-                if of_cat.is_empty() {
-                    continue;
-                }
-                let kept = of_cat
-                    .iter()
-                    .filter(|(_, v)| census_score(v, &prototypes) >= th)
-                    .count();
-                println!(
-                    "  {:<24} {:.2}  ({kept}/{})",
-                    cat.as_str(),
-                    kept as f64 / of_cat.len() as f64,
-                    of_cat.len()
-                );
-            }
-        }
-        assert!(!bed_vecs.is_empty() && !planted_vecs.is_empty());
     }
 
     /// #409's premise, measured: focused mode re-sends the system prompt per
@@ -1868,6 +1922,24 @@ mod tests {
             ensure(1);
             triage_scan::classify_focused(&slot.borrow().1, w)
         };
+
+        // This test compares against numbers the oracle recorded at SPECIFIC
+        // thresholds. If the shipped modes are retuned (#489), reading the enum
+        // below would silently compare a retuned run against 0.52 bands and
+        // read as a pipeline regression. Fail loudly, and say what to do.
+        assert_eq!(
+            ScanMode::Thorough.census_threshold(),
+            0.52,
+            "the oracle's stage-1/2 numbers were recorded at 0.52 but Thorough has been \
+             retuned — re-record the bands (or drive this test at 0.52 explicitly) rather \
+             than letting a constant change read as a regression"
+        );
+        assert_eq!(
+            ScanMode::Precise.census_threshold(),
+            0.58,
+            "the oracle's confirm-stage numbers were recorded at 0.58 but Precise has been \
+             retuned — re-record the bands"
+        );
 
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("parity", (None, None), "all", 1).unwrap();

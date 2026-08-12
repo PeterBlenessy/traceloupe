@@ -746,52 +746,53 @@ without trading recall the way raising the threshold does.
 
 ### 2026-08-12 — the census thresholds, re-derived on a real distribution (#489)
 
-The 0.52/0.55/0.58 sweep points came from the Jigsaw corpus. On a phone they
-keep 55%/38%/20% of all messages — 100 h / 70 h / 37 h of focused
-classification per 100k, against the batch scan's measured ~11 h. A mode nobody
-can finish is not a posture.
+**The first attempt at this was train-on-test and its numbers are void.** The
+planted positives were the fixture positives, and the prototypes are built from
+those same fixtures, so every planted message was scored against a centroid
+containing its own text. It reported recall 1.000 at 0.52 where the held-out
+oracle measured a 0.96 ceiling — the tell was in the table. Journey §7 names
+this trap twice; this was the third time.
 
-So the curve was re-measured where it matters: the public iOS 17 image's own
-conversation as the BED (ordinary chatter is exactly what the census must
-reject), with all 128 messages of the committed fixture positives planted for <!-- not-a-backup-count: fixture positives planted into a public research image -->
-exact ground truth. End-to-end is estimated as the census ceiling × the focused
-stage's measured 0.93 recovery.
+Re-measured with LEAVE-ONE-OUT prototypes (each case scored against centroids
+built from every other case of its category, which is what production faces —
+a real harmful message is always unseen relative to the fixtures). Bed: the
+public iOS 17 image's own conversation. Positives: all 128 messages of the <!-- not-a-backup-count: fixture positives planted into a public research image -->
+committed fixtures.
 
-| threshold | census recall | ~end-to-end | cost /100k | vs the batch scan (0.30, 11 h) |
-|---|---|---|---|---|
-| 0.52 | 1.000 | 0.93 | 100 h | 3.1× recall, 9.1× time |
-| 0.55 | 0.969 | 0.90 | 70 h | 3.0× recall, 6.3× time |
-| 0.58 | 0.930 | 0.86 | 37 h | 2.9× recall, 3.4× time |
-| **0.61** | 0.805 | 0.75 | 20 h | **2.5× recall, 1.9× time** — Thorough |
-| **0.64** | 0.656 | 0.61 | 5.6 h | **2.0× recall, 0.5× time** — Balanced |
-| **0.67** | 0.508 | 0.47 | 1.3 h | **1.6× recall, 0.1× time** — Precise |
-| 0.70 | 0.352 | 0.33 | ~0 h | 1.1× recall |
+| threshold | census recall (held-out) | (train-on-test) | ~e2e | +confirm | cost /100k |
+|---|---|---|---|---|---|
+| 0.52 | 0.922 | 1.000 | 0.86 | 0.75 | 100 h |
+| 0.55 | 0.852 | 0.969 | 0.79 | 0.70 | 70 h |
+| 0.58 | 0.727 | 0.930 | 0.68 | 0.59 | 37 h |
+| **0.61** | **0.570** | 0.805 | 0.53 | 0.47 | 20 h |
+| **0.64** | **0.406** | 0.656 | 0.38 | 0.33 | 5.6 h |
+| **0.67** | **0.336** | 0.508 | 0.31 | 0.27 | 1.3 h |
 
-**Shipped: 0.61 / 0.64 / 0.67.** Every posture beats the scan it replaces on
-recall — which is the reason triage exists — and the ladder is what each costs
-to get there. Balanced doubles the recall at half the time and is the sensible
-default; Thorough buys the most recall for roughly twice the batch scan's time;
-Precise is near-instant and still better than reading everything.
+**The bias grew with the threshold** — up to 0.25 at 0.64 — which is exactly
+where thresholds get chosen, so the first attempt was wrong in the most
+expensive possible place. Had it shipped, Balanced would have promised 0.66
+census recall and delivered 0.41.
 
-This is a real loss against the lab's 0.94: that number was measured on 5-message
-Jigsaw chunks, and it does not survive a real distribution. The honest headline
-is **2× the recall at half the time**, not 3×.
+**Shipped: 0.61 / 0.64 / 0.67** (Thorough / Balanced / Precise). Against the
+full read's 0.30 recall and ~11 h per 100k:
 
-Per-category census recall at 0.64 — and this is the more actionable result:
+- **Thorough** — ~1.8× the recall for ~1.9× the time. The only mode that buys
+  substantially more than a full read, and it is the slowest option in the app.
+- **Balanced** — ~1.3× the recall in **half** the time. Better and faster; the
+  default.
+- **Precise** — the full read's recall in a **tenth** of the time, with
+  confirmation trimming false alarms further. A speed and precision play, not a
+  recall one.
 
-| category | recall | | category | recall |
-|---|---|---|---|---|
-| hate-identity | 0.91 | | scam-fraud | 0.67 |
-| self-harm | 0.80 | | harassment-bullying | 0.60 |
-| drugs-illegal | 0.75 | | grooming-exploitation | 0.59 |
-| threat-violence | 0.62 | | **coercive-control** | **0.53** |
-| sexual-content | 0.62 | | | |
+**Two conclusions that matter more than the constants.** Triage's quality
+advantage is far smaller than the lab's 0.94 implied — that figure came from
+5-message Jigsaw chunks scored against non-held-out prototypes, and neither
+condition holds in the product. And **no threshold is clearly better than the
+full read on both axes**: the curve is dominated by prototype quality, so
+moving this number cannot buy what better centroids would. Retune after the
+prototypes change, not before.
 
-The categories defined by vocabulary do well; the ones defined by a
-relationship — coercive control, grooming, harassment — do worst, and they are
-the ones a reviewer most needs. Same asymmetry the classifier shows (§3.2), now
-visible one stage earlier. A census miss is permanent, so this is the ceiling on
-everything downstream, and it is a PROTOTYPE problem: centroids built from a
-handful of hand-written examples cannot represent a pattern that only exists
-across messages. That is the corpus work, and it is now on the critical path
-for quality as well as cost.
+Caveats: one device; fixture phrasing may be blunter than real harm; and the
+0.30 / 11 h baseline is a Jigsaw measurement, so every multiplier here is
+indicative rather than like-for-like — nothing in this run re-measured the full
+read on this distribution.

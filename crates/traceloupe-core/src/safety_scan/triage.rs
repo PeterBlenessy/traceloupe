@@ -33,36 +33,42 @@ impl ScanMode {
     /// scanned. Lower keeps more, raising the recall ceiling at the cost of
     /// more focused-classification work.
     ///
-    /// **Re-derived on a real message distribution (#489).** The original
-    /// 0.52/0.55/0.58 were fitted to the Jigsaw corpus and did not survive
-    /// contact with a phone: measured on the public iOS 17 image (real
-    /// conversation as the bed, fixture positives planted for ground truth),
-    /// they kept 55%/38%/20% of all messages, which is 100 h / 70 h / 37 h of
-    /// focused classification per 100k messages. The batch scan they replace
-    /// takes ~11 h. A mode nobody can finish is not a posture, it is a bug.
+    /// **Re-derived on a real distribution with HELD-OUT prototypes (#489).**
+    /// The original 0.52/0.55/0.58 came from the Jigsaw corpus; on a phone
+    /// they keep 55%/38%/20% of all messages — 100 h / 70 h / 37 h of focused
+    /// classification per 100k, against ~11 h for the full read. A mode nobody
+    /// can finish is not a posture.
     ///
-    /// The curve, with end-to-end estimated as census ceiling × the focused
-    /// stage's measured 0.93 recovery, against the batch scan's 0.30 / 11 h:
+    /// Measured on the public iOS 17 image (its own conversation as the bed,
+    /// fixture positives planted, each scored against centroids built WITHOUT
+    /// it — the first attempt scored them against centroids containing their
+    /// own text and inflated recall by up to 0.25):
     ///
     /// ```text
-    /// threshold  census  ~e2e   cost/100k    vs the batch scan
-    ///   0.58      0.930   0.86    37 h       2.9x recall, 3.4x time
-    ///   0.61      0.805   0.75    20 h       2.5x recall, 1.9x time   Thorough
-    ///   0.64      0.656   0.61     5.6 h     2.0x recall, 0.5x time   Balanced
-    ///   0.67      0.508   0.47     1.3 h     1.6x recall, 0.1x time   Precise
+    /// threshold  census  ~e2e  +confirm  cost/100k   vs the full read (0.30, 11 h)
+    ///   0.58      0.727   0.68   0.59      37 h      2.3x recall, 3.4x time
+    ///   0.61      0.570   0.53   0.47      20 h      1.8x recall, 1.9x time  Thorough
+    ///   0.64      0.406   0.38   0.33       5.6 h    1.3x recall, 0.5x time  Balanced
+    ///   0.67      0.336   0.31   0.27       1.3 h    1.0x recall, 0.1x time  Precise
     /// ```
     ///
-    /// Every posture now beats the scan it replaces on RECALL — which is why
-    /// triage exists — and the ladder is what each costs to get there:
-    /// Thorough buys the most recall and accepts roughly twice the batch
-    /// scan's time; Balanced doubles the recall at half the time; Precise is
-    /// near-instant and still better than scanning everything.
+    /// What each posture honestly buys: **Thorough** trades roughly twice the
+    /// full read's time for ~1.8x its recall; **Balanced** is better AND
+    /// faster (the default); **Precise** matches the full read's recall in a
+    /// tenth of the time and, with confirmation, well below its false-alarm
+    /// rate — a speed and precision play, not a recall one.
     ///
-    /// Caveats, because these numbers will be quoted: one device, and the
-    /// positives are the hand-written fixtures, whose phrasing may be blunter
-    /// than real harm. Per-category recall at 0.64 is uneven — hate-identity
-    /// 0.91 but coercive-control 0.53 — and the pattern categories being the
-    /// weakest is a PROTOTYPE problem (#489), not a threshold one.
+    /// Two things this makes plain. Triage's quality advantage is far smaller
+    /// than the lab's 0.94 suggested (that was 5-message Jigsaw chunks scored
+    /// against non-held-out prototypes), and no threshold is clearly better
+    /// than the full read on BOTH axes. The curve is dominated by prototype
+    /// quality — centroids from a handful of hand-written fixtures — so
+    /// improving them, not moving this number, is where the next win is
+    /// (#489). Retune this once they change.
+    ///
+    /// Caveats: one device; the positives are the fixtures, whose phrasing may
+    /// be blunter than real harm; and the 0.30/11 h baseline is a Jigsaw
+    /// measurement, so the multipliers are indicative, not like-for-like.
     pub fn census_threshold(self) -> f32 {
         match self {
             ScanMode::Thorough => 0.61,
@@ -190,7 +196,7 @@ pub const EMBED_MAX_BYTES: usize = 1_500;
 /// Cap `text` at [`EMBED_MAX_BYTES`], always on a char boundary — slicing
 /// mid-glyph panics, and the scripts most likely to hit this cap are precisely
 /// the multi-byte ones.
-fn cap_for_embedding(text: &str) -> &str {
+pub(crate) fn cap_for_embedding(text: &str) -> &str {
     if text.len() <= EMBED_MAX_BYTES {
         return text;
     }
