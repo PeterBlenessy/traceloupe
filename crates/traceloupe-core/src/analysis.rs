@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -465,6 +465,15 @@ CREATE TABLE IF NOT EXISTS census (
 );
 CREATE INDEX IF NOT EXISTS idx_census_cell
     ON census(thread_identifier, sender);
+
+-- What produced the census scores (v17): the prototype corpus + embedding
+-- model, fingerprinted. A score is only comparable to a threshold on the scale
+-- that produced it, and census rows outlive scans, so changing either must
+-- invalidate the cache rather than silently mix scales.
+CREATE TABLE IF NOT EXISTS census_scale (
+    id          INTEGER PRIMARY KEY CHECK (id = 1),
+    fingerprint TEXT NOT NULL
+);
 
 -- Per-Chunk classification progress. One row per chunk_key (latest state);
 -- resume skips chunks whose status is 'done' with an unchanged fingerprint,
@@ -1130,6 +1139,17 @@ impl AnalysisDb {
                     conn.execute(&format!("ALTER TABLE scans ADD COLUMN {col} INTEGER"), [])?;
                 }
             }
+            // v17: census scores are only meaningful on the scale that
+            // produced them (prototype corpus + embedding model). Record that
+            // scale so a change can invalidate the cache, and clear whatever
+            // is there now — it was written on an unknown one.
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS census_scale (
+                     id          INTEGER PRIMARY KEY CHECK (id = 1),
+                     fingerprint TEXT NOT NULL
+                 );
+                 DELETE FROM census;",
+            )?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1356,6 +1376,33 @@ impl AnalysisDb {
     /// re-import reshuffles row ids under this surviving store, and skipping on
     /// the id alone would leave a NEW message unscored because an unrelated old
     /// row happens to share its id. Pre-v15 rows ('' fingerprint) never match.
+    /// Drop every census score if the scale that produced them has changed
+    /// (prototype corpus or embedding model). Returns true when it cleared.
+    ///
+    /// Scores persist across scans and are skipped when present, so a stale
+    /// one is not merely old — it is on a different scale from the threshold
+    /// it will be compared against, which silently changes what a scan reads.
+    pub fn ensure_census_scale(&self, fingerprint: &str) -> Result<bool> {
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT fingerprint FROM census_scale WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if stored.as_deref() == Some(fingerprint) {
+            return Ok(false);
+        }
+        self.conn.execute("DELETE FROM census", [])?;
+        self.conn.execute(
+            "INSERT INTO census_scale (id, fingerprint) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET fingerprint = excluded.fingerprint",
+            params![fingerprint],
+        )?;
+        Ok(true)
+    }
+
     pub fn census_scored(&self) -> Result<std::collections::HashSet<(i64, String)>> {
         let mut stmt = self
             .conn
@@ -2940,6 +2987,55 @@ mod tests {
         );
         // latest_scan reads the same row through a different query.
         assert_eq!(db.latest_scan().unwrap().unwrap().coverage, Some(c));
+    }
+
+    /// Census scores outlive scans and are skipped when present, so they must
+    /// be dropped when the thing that produced them changes. Otherwise an
+    /// upgraded app filters old-scale scores at a new threshold and silently
+    /// reads a fraction of what it should (#491).
+    #[test]
+    fn changing_the_census_scale_clears_the_scores() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        db.record_census(
+            &[CensusRow {
+                source_id: 1,
+                thread_identifier: "t".into(),
+                sender: "a".into(),
+                occurred_at: Some(1),
+                score: 0.71,
+                fingerprint: "fp1".into(),
+            }],
+            5,
+        )
+        .unwrap();
+        assert_eq!(db.census_scored().unwrap().len(), 1);
+
+        // First sight of a scale: the rows were written on an unknown one.
+        assert!(db.ensure_census_scale("corpus-v1+embedder").unwrap());
+        assert!(
+            db.census_scored().unwrap().is_empty(),
+            "scores of unknown provenance are not comparable to any threshold"
+        );
+
+        db.record_census(
+            &[CensusRow {
+                source_id: 1,
+                thread_identifier: "t".into(),
+                sender: "a".into(),
+                occurred_at: Some(1),
+                score: 0.71,
+                fingerprint: "fp1".into(),
+            }],
+            6,
+        )
+        .unwrap();
+        // Same scale: kept, so a re-scan stays incremental.
+        assert!(!db.ensure_census_scale("corpus-v1+embedder").unwrap());
+        assert_eq!(db.census_scored().unwrap().len(), 1);
+
+        // Corpus edited (or embedder swapped): the scale moved, so the cache goes.
+        assert!(db.ensure_census_scale("corpus-v2+embedder").unwrap());
+        assert!(db.census_scored().unwrap().is_empty());
     }
 
     /// A re-run must not inherit the previous run's coverage. `begin_scan`

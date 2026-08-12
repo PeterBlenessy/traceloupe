@@ -130,6 +130,24 @@ const FOCUSED_MAX_TOKENS: u32 = 600;
 /// An empty result means "cannot triage" — the caller must refuse to scan
 /// rather than census against nothing (every score would be 0 and the scan
 /// would report a clean-looking silence).
+/// Identifies WHAT produced a census score: the prototype corpus and the
+/// embedding model. Census rows persist in `analysis.db` across scans and
+/// re-imports and are skipped when already present, so a score is only
+/// comparable to a threshold if the thing that produced it has not changed.
+/// Editing the corpus shifts the whole score scale — richer centroids score
+/// everything higher — and without this, an upgraded app would filter
+/// old-scale scores at a new cut and silently deep-scan a fraction of what it
+/// should (#491).
+pub fn census_scale_fingerprint(embed_model_id: &str) -> String {
+    use sha2::{Digest, Sha256};
+    const CORPUS: &str = include_str!("../../fixtures/safety-scan/prototypes.json");
+    let mut h = Sha256::new();
+    h.update(CORPUS.as_bytes());
+    h.update(b"\0");
+    h.update(embed_model_id.as_bytes());
+    hex::encode(&h.finalize()[..16])
+}
+
 pub fn prototype_examples(categories: &[Category]) -> Vec<(String, String)> {
     const CORPUS: &str = include_str!("../../fixtures/safety-scan/prototypes.json");
     #[derive(serde::Deserialize)]
@@ -145,7 +163,15 @@ pub fn prototype_examples(categories: &[Category]) -> Vec<(String, String)> {
     corpus
         .examples
         .into_iter()
-        .filter(|e| Category::parse(&e.category).is_some_and(|c| categories.contains(&c)))
+        .filter(|e| {
+            // A typo'd slug would otherwise shrink that category's centroid in
+            // silence. The file is compiled in, so this is a test failure, not
+            // something a user can trigger.
+            let cat = Category::parse(&e.category).unwrap_or_else(|| {
+                panic!("prototypes.json has an unknown category {:?}", e.category)
+            });
+            categories.contains(&cat)
+        })
         .map(|e| (e.category, e.messages.join("\n")))
         .collect()
 }
@@ -738,26 +764,58 @@ mod tests {
     /// project three retracted results (#491).
     #[test]
     fn the_prototype_corpus_does_not_overlap_the_eval_fixtures() {
-        let protos: std::collections::HashSet<String> = prototype_examples(&Category::ALL)
+        // CONTAINMENT, not equality. The first version compared whole lines
+        // and passed while three real overlaps sat in the corpus — a prototype
+        // line was a SUBSTRING of a fixture positive ("i know where you live"
+        // inside "i know where you live and im going to make you regret
+        // this"). Same contamination, invisible to an equality check, and the
+        // leave-one-out safety net had been removed on the strength of it.
+        fn words(s: &str) -> Vec<String> {
+            s.to_lowercase()
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+                .collect::<String>()
+                .split_whitespace()
+                .map(str::to_string)
+                .collect()
+        }
+        /// A shared phrase, not a shared word. Matching on raw substrings
+        /// flagged the fixture "thanks ❤️" against a prototype containing the
+        /// word "thanks" — so compare word sequences, and require the shared
+        /// run to be long enough to be text someone copied rather than
+        /// vocabulary two sentences happen to share. Equality still fails at
+        /// any length.
+        const MIN_SHARED_WORDS: usize = 4;
+        fn leaks(a: &[String], b: &[String]) -> bool {
+            if a == b {
+                return true;
+            }
+            let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+            short.len() >= MIN_SHARED_WORDS && long.windows(short.len()).any(|w| w == short)
+        }
+        let protos: Vec<Vec<String>> = prototype_examples(&Category::ALL)
             .into_iter()
-            .flat_map(|(_, text)| {
-                text.lines()
-                    .map(|l| l.trim().to_lowercase())
-                    .collect::<Vec<_>>()
-            })
+            .flat_map(|(_, text)| text.lines().map(words).collect::<Vec<_>>())
             .filter(|l| !l.is_empty())
             .collect();
         let fixtures = crate::safety_scan::eval::load_fixtures();
         for case in &fixtures.cases {
             for m in &case.messages {
-                let line = m.text.trim().to_lowercase();
-                assert!(
-                    !protos.contains(&line),
-                    "fixture {} shares a message with the prototype corpus: {:?} — the \
-                     centroids would contain the ground truth they are scored against",
-                    case.id,
-                    m.text
-                );
+                let f = words(&m.text);
+                if f.is_empty() {
+                    continue;
+                }
+                for p in &protos {
+                    assert!(
+                        !leaks(&f, p),
+                        "fixture {} overlaps the prototype corpus:\n  fixture:   {:?}\n  \
+                         prototype: {:?}\nThe centroids would contain the ground truth they \
+                         are scored against — rewrite the prototype line.",
+                        case.id,
+                        m.text,
+                        p.join(" ")
+                    );
+                }
             }
         }
     }

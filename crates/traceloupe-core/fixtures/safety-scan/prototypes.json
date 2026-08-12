@@ -94,9 +94,9 @@
       "category": "coercive-control",
       "id": "cc-check-ins",
       "messages": [
-        "text me when you get there",
-        "text me when you leave",
-        "why was there a 20 minute gap"
+        "who were you with between six and seven",
+        "why was there a 20 minute gap",
+        "account for your afternoon"
       ]
     },
     {
@@ -409,8 +409,8 @@
       "category": "threat-violence",
       "id": "tv-location",
       "messages": [
-        "i know where you live",
-        "ill be waiting outside"
+        "i drove past your house tonight",
+        "ill be outside when you finish work"
       ]
     },
     {
@@ -535,8 +535,8 @@
       "category": "hate-identity",
       "id": "hi-race",
       "messages": [
-        "people like you shouldnt be in this country",
-        "go back where you came from"
+        "this town was better before they started arriving",
+        "send the lot of them back on a boat"
       ]
     },
     {

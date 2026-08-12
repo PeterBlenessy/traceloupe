@@ -1546,15 +1546,26 @@ mod tests {
 
         // Ground truth: the eval fixtures' positives, per category.
         let fixtures = load_fixtures();
-        let mut planted: Vec<(Category, Vec<f32>)> = Vec::new();
+        let positives: Vec<_> = fixtures
+            .cases
+            .iter()
+            .filter(|c| c.kind == "positive")
+            .collect();
+        assert!(
+            !positives.is_empty(),
+            "fixture positives are the ground truth — without them the recall column is 0/0"
+        );
+        let mut planted: Vec<(Vec<Category>, Vec<f32>)> = Vec::new();
         let mut embed_failures = 0usize;
-        for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
-            for cat in case.expected_categories() {
-                for m in &case.messages {
-                    match embed_one(&m.text) {
-                        Ok(v) => planted.push((cat, v)),
-                        Err(_) => embed_failures += 1,
-                    }
+        for case in positives {
+            // ONCE per message, with its categories fanned out over the stored
+            // vector. Embedding per (case × category) counted multi-category
+            // cases twice in the denominator the thresholds are read off.
+            let cats: Vec<Category> = case.expected_categories().into_iter().collect();
+            for m in &case.messages {
+                match embed_one(&m.text) {
+                    Ok(v) => planted.push((cats.clone(), v)),
+                    Err(_) => embed_failures += 1,
                 }
             }
         }
@@ -1600,9 +1611,9 @@ mod tests {
              measured on Jigsaw fixtures, so the comparison is indicative, not like for like)"
         );
         println!("\nper-category recall at the shipped cuts:");
-        println!("category                  0.61   0.64   0.67");
+        println!("category                  0.64   0.67   0.70");
         for cat in Category::ALL {
-            let of_cat: Vec<_> = planted.iter().filter(|(c, _)| *c == cat).collect();
+            let of_cat: Vec<_> = planted.iter().filter(|(cs, _)| cs.contains(&cat)).collect();
             if of_cat.is_empty() {
                 continue;
             }
@@ -1616,9 +1627,9 @@ mod tests {
             println!(
                 "  {:<24} {:.2}   {:.2}   {:.2}",
                 cat.as_str(),
-                r(0.61),
                 r(0.64),
-                r(0.67)
+                r(0.67),
+                r(0.70)
             );
         }
         assert!(!bed_vecs.is_empty() && !planted.is_empty());
