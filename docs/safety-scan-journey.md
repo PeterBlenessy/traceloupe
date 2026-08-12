@@ -466,14 +466,20 @@ validation. Checklist mirrors #459.
       restores the full cost every call). Closed on the measurement; the
       residual upside (persistent/cross-slot caches) is not worth its
       complexity today. #409 stays open for its flash-attention half.**
-- [ ] **Exercise the `run_triage_scan` command glue end to end** — the ~390-line
-      Tauri command (mode-default fallback, notes-only refusal, confirmer RAM
-      admission, the `ensure` healthy-swaps, WatcherGuard, stranded-row repair)
-      is validated today by unit-style tests and the shared batch-command
-      patterns, not by a run through the command itself. The natural vehicle is
-      the UI milestone below (a real click drives the whole path); if the UI
-      slips, drive the command headless from a fixture cache instead. Do not
-      let this ride implicitly on "the UI will exercise it".
+- [~] **Exercise the `run_triage_scan` command glue end to end** — the ~390-line
+      Tauri command was validated only by inspection and by the batch-command
+      patterns it copies. **Partly done (#483): its DECISION logic — mode
+      default, scope handling, model roles, the confirmer's RAM floor and the
+      missing-model refusals — is now a pure `plan_triage_scan` function with a
+      test per branch (two mutation-proven), so the branches most likely to be
+      wrong and least likely to be noticed are covered without Tauri, a backup
+      or a model. Still uncovered: the command's runtime half — the sidecar
+      spawn, the embedder→classifier→confirmer swaps, WatcherGuard and the
+      stranded-row repair — which is exercised equivalently at core level by
+      `triage_from_a_fixture_cache` but not through the command itself. The
+      honest way to close the rest is a real run in the app against an
+      IMPORTED FIXTURE backup (never the user's), which the UI now makes
+      possible.**
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
       (#456 per-conversation exists; add whole-backup census + the coverage
       report). **Partially done (#479): the four-way mode control (Full read +

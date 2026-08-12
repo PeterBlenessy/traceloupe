@@ -106,6 +106,10 @@ pub struct ModelInfo {
     /// models; the others are downloadable helpers and must never be offered
     /// by the scan-model picker.
     pub role: String,
+    /// Below this much total RAM the model is not usable here. Sent so the UI
+    /// gates on the SAME number the backend admits on — a hardcoded copy in
+    /// the view drifts the moment a catalog entry changes.
+    pub ram_floor_bytes: u64,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -137,6 +141,7 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
                 models::ModelRole::Embedder => "embedder".into(),
                 models::ModelRole::Confirmer => "confirmer".into(),
             },
+            ram_floor_bytes: s.ram_floor_bytes,
         })
         .collect();
     // "Ready to scan" means a CLASSIFIER is installed — the embedder and the
@@ -1257,6 +1262,136 @@ impl TriageSidecar {
     }
 }
 
+use traceloupe_core::safety_scan::triage::ScanMode;
+
+/// Everything a triage scan decides BEFORE it touches a model or a database:
+/// which posture to run, what scope that means, and which model files back it.
+///
+/// Split out of the command because these are the branches most likely to be
+/// wrong and least likely to be noticed — a mode that silently downgrades, a
+/// scope that scans notes the pipeline cannot read, a confirmer offered on a
+/// Mac that cannot load it. As a pure function of (models dir, RAM, request)
+/// they are testable without Tauri, a backup, or a model (#483).
+#[derive(Debug)]
+struct TriagePlan {
+    mode: ScanMode,
+    scan_sources: ScanSources,
+    sources_slug: String,
+    classifier: &'static models::ModelSpec,
+    classifier_path: PathBuf,
+    embedder: &'static models::ModelSpec,
+    embedder_path: PathBuf,
+    confirmer: Option<(&'static models::ModelSpec, PathBuf)>,
+}
+
+fn plan_triage_scan(
+    dir: &Path,
+    total_ram: u64,
+    mode: Option<&str>,
+    model_id: Option<&str>,
+    sources: Option<&str>,
+) -> Result<TriagePlan, String> {
+    // An UNSTATED mode means "the product default, if it can run here": the
+    // default is Balanced, but Balanced needs the optional confirmer model —
+    // and a fresh install (classifier + embedder only) would otherwise refuse
+    // a scan the status endpoint says it is ready for. Falling back to
+    // Thorough is not a silent downgrade of anything the caller asked for,
+    // because the caller asked for nothing; an EXPLICIT balanced/precise
+    // request still gets the honest refusal below when the confirmer is
+    // missing.
+    let mode = match mode {
+        None => {
+            // "Can run here" means installed AND loadable: on a Mac below the
+            // confirmer's RAM floor with the model downloaded (Settings offers
+            // that download with no RAM gate), an installed-only test picked
+            // Balanced and the admission check below then refused the scan
+            // outright — the default request failing instead of falling back,
+            // which is exactly what this branch exists to prevent.
+            let confirmer_ready = models::confirmer()
+                .filter(|s| total_ram == 0 || total_ram >= s.ram_floor_bytes)
+                .and_then(|s| s.installed_at(dir))
+                .is_some();
+            if confirmer_ready {
+                ScanMode::default()
+            } else {
+                ScanMode::Thorough
+            }
+        }
+        Some(s) => ScanMode::parse(s).ok_or("unknown scan mode")?,
+    };
+
+    let mut scan_sources = parse_scan_sources(sources);
+    // The triage pipeline reads messages. A notes-ONLY scope has nothing for
+    // it and is refused; the catch-all default ("all") simply has its notes
+    // half excluded — the standard scan covers notes, and erroring on the
+    // default scope would make the command unusable as documented.
+    let notes_only = scan_sources.notes
+        && scan_sources.thread.is_none()
+        && scan_sources
+            .message_services
+            .as_ref()
+            .is_some_and(|s| s.is_empty());
+    if notes_only {
+        return Err("the triage scan reads messages; scan notes with a standard scan".into());
+    }
+    scan_sources.notes = false;
+    let sources_slug = scan_sources.slug();
+
+    let classifier = match model_id {
+        Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
+        None => models::recommended(total_ram),
+    };
+    if classifier.role != models::ModelRole::Classifier {
+        return Err("that model is a scan helper, not a classifier — pick a scan model".into());
+    }
+    let classifier_path = classifier
+        .installed_at(dir)
+        .ok_or("model not installed — download it first")?;
+    let embedder = models::embedder().ok_or("the model catalog has no census embedder")?;
+    let embedder_path = embedder.installed_at(dir).ok_or(
+        "the Fast pre-scan model is not installed — download it from the Safety Scan settings",
+    )?;
+    // Balanced/Precise promise a second-model confirmation of every finding —
+    // that is the mode's whole meaning (it trims recall to buy precision), so
+    // a missing confirmer is a clear refusal BEFORE the scan row exists, never
+    // a silently skipped stage.
+    let confirmer = match mode.confirm() {
+        true => {
+            let spec = models::confirmer().ok_or("the model catalog has no confirmer")?;
+            // Admission check NOW, not at the classifier→confirmer swap: that
+            // swap happens after the census and the whole focused pass, and an
+            // 8B model failing to load there forfeits hours of work a start-up
+            // refusal would have saved.
+            if total_ram > 0 && total_ram < spec.ram_floor_bytes {
+                return Err(format!(
+                    "the {} mode needs the Finding checker model, which wants more memory \
+                     than this Mac has — run a thorough scan instead",
+                    mode.as_str()
+                ));
+            }
+            let path = spec.installed_at(dir).ok_or(format!(
+                "the {} mode double-checks findings with the Finding checker model, which is \
+                 not installed — download it from the Safety Scan settings, or run a thorough \
+                 scan instead",
+                mode.as_str()
+            ))?;
+            Some((spec, path))
+        }
+        false => None,
+    };
+
+    Ok(TriagePlan {
+        mode,
+        scan_sources,
+        sources_slug,
+        classifier,
+        classifier_path,
+        embedder,
+        embedder_path,
+        confirmer,
+    })
+}
+
 #[tauri::command]
 // A Tauri command: each param maps to a field of the JS invoke() call.
 #[allow(clippy::too_many_arguments)]
@@ -1278,7 +1413,7 @@ pub async fn run_triage_scan(
     budget: Option<usize>,
 ) -> Result<(), String> {
     use traceloupe_core::safety_scan::chunker;
-    use traceloupe_core::safety_scan::triage::{self, FocusWindow, ScanMode};
+    use traceloupe_core::safety_scan::triage::{self, FocusWindow};
     use traceloupe_core::safety_scan::triage_scan::{self, FocusVerdict, TriageProgress};
 
     let _guard = gate
@@ -1289,88 +1424,24 @@ pub async fn run_triage_scan(
     let cache_path = active.path()?;
     let analysis_db_path = analysis_path(&cache_path)?;
 
-    // An UNSTATED mode means "the product default, if it can run here": the
-    // default is Balanced, but Balanced needs the optional confirmer model —
-    // and a fresh install (classifier + embedder only) would otherwise refuse
-    // a scan the status endpoint says it is ready for. Falling back to
-    // Thorough is not a silent downgrade of anything the caller asked for,
-    // because the caller asked for nothing; an EXPLICIT balanced/precise
-    // request still gets the honest refusal below when the confirmer is
-    // missing.
     let dir = models_dir(&app)?;
-    let mode = match mode.as_deref() {
-        None => {
-            let confirmer_ready = models::confirmer()
-                .and_then(|s| s.installed_at(&dir))
-                .is_some();
-            if confirmer_ready {
-                ScanMode::default()
-            } else {
-                ScanMode::Thorough
-            }
-        }
-        Some(s) => ScanMode::parse(s).ok_or("unknown scan mode")?,
-    };
-
-    let mut scan_sources = parse_scan_sources(sources.as_deref());
-    // The triage pipeline reads messages. A notes-ONLY scope has nothing for
-    // it and is refused; the catch-all default ("all") simply has its notes
-    // half excluded — the standard scan covers notes, and erroring on the
-    // default scope would make the command unusable as documented.
-    let notes_only = scan_sources.notes
-        && scan_sources.thread.is_none()
-        && scan_sources
-            .message_services
-            .as_ref()
-            .is_some_and(|s| s.is_empty());
-    if notes_only {
-        return Err("the triage scan reads messages; scan notes with a standard scan".into());
-    }
-    scan_sources.notes = false;
-    let sources_slug = scan_sources.slug();
-    let classifier = match model_id.as_deref() {
-        Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
-        None => models::recommended(models::total_ram_bytes()),
-    };
-    if classifier.role != models::ModelRole::Classifier {
-        return Err("that model is a scan helper, not a classifier — pick a scan model".into());
-    }
-    let classifier_path = classifier
-        .installed_at(&dir)
-        .ok_or("model not installed — download it first")?;
-    let embedder = models::embedder().ok_or("the model catalog has no census embedder")?;
-    let embedder_path = embedder.installed_at(&dir).ok_or(
-        "the Fast pre-scan model is not installed — download it from the Safety Scan settings",
+    let plan = plan_triage_scan(
+        &dir,
+        models::total_ram_bytes(),
+        mode.as_deref(),
+        model_id.as_deref(),
+        sources.as_deref(),
     )?;
-    // Balanced/Precise promise a second-model confirmation of every finding —
-    // that is the mode's whole meaning (it trims recall to buy precision), so
-    // a missing confirmer is a clear refusal BEFORE the scan row exists, never
-    // a silently skipped stage.
-    let confirmer = match mode.confirm() {
-        true => {
-            let spec = models::confirmer().ok_or("the model catalog has no confirmer")?;
-            // Admission check NOW, not at the classifier→confirmer swap: that
-            // swap happens after the census and the whole focused pass, and an
-            // 8B model failing to load there forfeits hours of work a start-up
-            // refusal would have saved.
-            let ram = models::total_ram_bytes();
-            if ram > 0 && ram < spec.ram_floor_bytes {
-                return Err(format!(
-                    "the {} mode needs the Finding checker model, which wants more memory \
-                     than this Mac has — run a thorough scan instead",
-                    mode.as_str()
-                ));
-            }
-            let path = spec.installed_at(&dir).ok_or(format!(
-                "the {} mode double-checks findings with the Finding checker model, which is \
-                 not installed — download it from the Safety Scan settings, or run a thorough \
-                 scan instead",
-                mode.as_str()
-            ))?;
-            Some((spec, path))
-        }
-        false => None,
-    };
+    let TriagePlan {
+        mode,
+        scan_sources,
+        sources_slug,
+        classifier,
+        classifier_path,
+        embedder,
+        embedder_path,
+        confirmer,
+    } = plan;
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
 
     // Flip the scan row to 'running' before the slow model load, exactly like
@@ -2630,6 +2701,162 @@ pub fn content_finding_analytics(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A models dir holding empty files named for the given catalog ids, sized
+    /// so `installed_at` accepts them — enough to exercise every "is it
+    /// installed" branch without a byte of model weights.
+    fn models_dir_with(ids: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ids {
+            let spec = models::spec_by_id(id).expect("catalog id");
+            let f = std::fs::File::create(dir.path().join(spec.filename)).unwrap();
+            f.set_len(spec.size_bytes).unwrap();
+        }
+        dir
+    }
+
+    const CLASSIFIER: &str = "gemma-4-E4B-it-Q4_K_M";
+    const EMBEDDER: &str = "embeddinggemma-300M-Q8_0";
+    const CONFIRMER: &str = "llama-guard-3-8b-Q4_K_M";
+    const PLENTY_OF_RAM: u64 = 32 * 1024 * 1024 * 1024;
+
+    /// An unstated mode must run the best posture this machine can actually
+    /// run — Balanced when the confirmer is installed, Thorough when it is not.
+    /// Returning Balanced regardless would refuse every default scan on a
+    /// fresh install, while the model status says the app is ready.
+    #[test]
+    fn an_unstated_mode_picks_the_best_available_posture() {
+        let dir = models_dir_with(&[CLASSIFIER, EMBEDDER]);
+        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None).unwrap();
+        assert_eq!(plan.mode, ScanMode::Thorough, "no confirmer ⇒ Thorough");
+        assert!(plan.confirmer.is_none());
+
+        let dir = models_dir_with(&[CLASSIFIER, EMBEDDER, CONFIRMER]);
+        let plan = plan_triage_scan(dir.path(), PLENTY_OF_RAM, None, None, None).unwrap();
+        assert_eq!(
+            plan.mode,
+            ScanMode::default(),
+            "confirmer present ⇒ the product default"
+        );
+        assert!(plan.confirmer.is_some());
+
+        // Installed but NOT loadable: a default scan must fall back, not fail.
+        // The confirmer is downloadable with no RAM gate, so this is a real
+        // machine, and "best posture this machine can run" has to mean it.
+        let floor = models::confirmer().unwrap().ram_floor_bytes;
+        // Classifier pinned: below the floor, RAM-based resolution would pick
+        // the E2B tier and report ITS absence, masking the branch under test.
+        let plan = plan_triage_scan(dir.path(), floor - 1, None, Some(CLASSIFIER), None)
+            .expect("an unstated mode must never be refused for the confirmer's sake");
+        assert_eq!(plan.mode, ScanMode::Thorough);
+        assert!(plan.confirmer.is_none());
+    }
+
+    /// An EXPLICIT confirm-mode gets an honest refusal rather than a silent
+    /// downgrade: the mode's whole meaning is the second opinion.
+    #[test]
+    fn an_explicit_confirm_mode_is_refused_without_the_confirmer() {
+        let dir = models_dir_with(&[CLASSIFIER, EMBEDDER]);
+        for mode in ["balanced", "precise"] {
+            let err =
+                plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some(mode), None, None).unwrap_err();
+            assert!(
+                err.contains("Finding checker") && err.contains("not installed"),
+                "{mode}: must name the model and say it is missing, got: {err}"
+            );
+            assert!(err.contains(mode), "{mode}: the refusal names the mode");
+        }
+    }
+
+    /// The confirmer's RAM floor is checked at PLAN time — refusing after the
+    /// census and the whole focused pass would forfeit hours of work.
+    #[test]
+    fn a_confirm_mode_is_refused_below_the_confirmer_ram_floor() {
+        let dir = models_dir_with(&[CLASSIFIER, EMBEDDER, CONFIRMER]);
+        let floor = models::confirmer().unwrap().ram_floor_bytes;
+        // The classifier is PINNED so this isolates the confirmer's floor:
+        // left to RAM, a low-memory machine resolves to the E2B tier first and
+        // reports that model's absence instead (correct precedence — a scan
+        // needs a classifier at all — but not the branch under test).
+        let plan =
+            |ram: u64| plan_triage_scan(dir.path(), ram, Some("balanced"), Some(CLASSIFIER), None);
+        let err = plan(floor - 1).unwrap_err();
+        assert!(err.contains("memory"), "got: {err}");
+        // Unknown RAM (0) must not refuse — the check is a floor, not a guess.
+        assert!(plan(0).is_ok(), "unknown RAM is not a refusal");
+        assert!(plan(floor).is_ok(), "exactly the floor is enough");
+    }
+
+    /// Triage reads messages. A notes-ONLY scope is refused; the catch-all
+    /// default simply drops its notes half (erroring there would make the
+    /// documented default unusable), and the stored slug reflects that.
+    #[test]
+    fn scope_handling_refuses_notes_only_and_strips_notes_elsewhere() {
+        let dir = models_dir_with(&[CLASSIFIER, EMBEDDER]);
+        let plan = |sources: Option<&str>| {
+            plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some("thorough"), None, sources)
+        };
+        let err = plan(Some("notes")).unwrap_err();
+        assert!(err.contains("reads messages"), "got: {err}");
+
+        for sources in [None, Some("all")] {
+            let p = plan(sources).unwrap();
+            assert!(!p.scan_sources.notes, "the default scope drops notes");
+            assert!(
+                !p.sources_slug.contains("notes"),
+                "the stored slug matches what will be scanned, got: {}",
+                p.sources_slug
+            );
+        }
+        // A single conversation survives untouched.
+        let p = plan(Some("thread:iMessage;-;+15551234")).unwrap();
+        assert_eq!(
+            p.scan_sources.thread.as_deref(),
+            Some("iMessage;-;+15551234")
+        );
+    }
+
+    /// A helper model is not a scan model: picking one must be refused rather
+    /// than spawned as a classifier.
+    #[test]
+    fn a_helper_model_is_refused_as_the_scan_model() {
+        let dir = models_dir_with(&[CLASSIFIER, EMBEDDER, CONFIRMER]);
+        for helper in [EMBEDDER, CONFIRMER] {
+            let err = plan_triage_scan(
+                dir.path(),
+                PLENTY_OF_RAM,
+                Some("thorough"),
+                Some(helper),
+                None,
+            )
+            .unwrap_err();
+            assert!(err.contains("not a classifier"), "{helper}: got: {err}");
+        }
+        assert!(plan_triage_scan(
+            dir.path(),
+            PLENTY_OF_RAM,
+            Some("thorough"),
+            Some("no-such-model"),
+            None
+        )
+        .unwrap_err()
+        .contains("unknown model id"));
+    }
+
+    /// Every triage posture needs the embedder — the census IS the pipeline's
+    /// first stage — and the refusal must say which model to download.
+    #[test]
+    fn a_missing_embedder_is_refused_by_name() {
+        let dir = models_dir_with(&[CLASSIFIER]);
+        let err =
+            plan_triage_scan(dir.path(), PLENTY_OF_RAM, Some("thorough"), None, None).unwrap_err();
+        assert!(err.contains("Fast pre-scan"), "got: {err}");
+        // …and the classifier's own absence is reported as its own problem.
+        let empty = tempfile::tempdir().unwrap();
+        let err = plan_triage_scan(empty.path(), PLENTY_OF_RAM, Some("thorough"), None, None)
+            .unwrap_err();
+        assert!(err.contains("model not installed"), "got: {err}");
+    }
 
     /// The TS `SafetyScanEvent` union declares camelCase fields; serde's
     /// `rename_all` renames only the VARIANTS, and the fields were snake_case
