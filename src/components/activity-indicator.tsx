@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useImport } from "@/components/import-provider";
 import { useSafetyScan } from "@/components/safety-scan-provider";
+import type { SafetyScanEvent } from "@/lib/ipc";
 import { useSecurityScan } from "@/components/security-scan-provider";
 import { useReimport } from "@/components/reimport-provider";
 import { useBoundedList } from "@/lib/bounded-list";
@@ -50,6 +51,45 @@ export type Activity = {
 };
 
 /** Everything currently running, in a stable order. */
+
+/** The phases that carry a done/total pair — the batch scan's classify pass
+ *  and all three triage phases. One list so the toolbar's label and its
+ *  progress bar can never disagree about which phases are measurable. */
+function scanProgressPhase(
+  scan: SafetyScanEvent,
+): scan is Extract<
+  SafetyScanEvent,
+  { phase: "classifying" | "censusing" | "deepScanning" | "confirming" }
+> {
+  return (
+    scan.phase === "classifying" ||
+    scan.phase === "censusing" ||
+    scan.phase === "deepScanning" ||
+    scan.phase === "confirming"
+  );
+}
+
+function scanPercent(scan: SafetyScanEvent): number | null {
+  return scanProgressPhase(scan) && scan.total > 0
+    ? (scan.done / scan.total) * 100
+    : null;
+}
+
+/** Toolbar detail for a measurable phase: what it is doing, plus how far. */
+function scanPhaseDetail(scan: SafetyScanEvent): string | null {
+  if (!scanProgressPhase(scan) || scan.total <= 0) return null;
+  const pct = Math.round((scan.done / scan.total) * 100);
+  const what =
+    scan.phase === "censusing"
+      ? "Pre-scanning"
+      : scan.phase === "deepScanning"
+        ? "Reading in depth"
+        : scan.phase === "confirming"
+          ? "Double-checking"
+          : "Scanning";
+  return `${what} · ${pct}%`;
+}
+
 function useActivities(): Activity[] {
   const { scan, download, downloadingModelId } = useSafetyScan();
   const { active: importing } = useImport();
@@ -63,20 +103,17 @@ function useActivities(): Activity[] {
         ? "Loading model…"
         : scan.phase === "summarizing"
           ? "Writing report…"
-          : scan.phase === "classifying" && scan.total > 0
-            ? // Percentage, matching what the Safety Scan view itself shows —
-              // the chunk count is an internal unit and means nothing to a
-              // reader glancing at the toolbar.
-              `Scanning · ${Math.round((scan.done / scan.total) * 100)}%`
-            : "Scanning…";
+          : // Percentage, matching what the Safety Scan view itself shows —
+            // the chunk/message count is an internal unit and means nothing to
+            // a reader glancing at the toolbar. The triage phases carry the
+            // same done/total shape, and each names what it is doing: a scan
+            // that sat on "Scanning…" for a whole census looked stalled.
+            scanPhaseDetail(scan) ?? "Scanning…";
     out.push({
       key: "safety-scan",
       title: "Safety Scan",
       detail,
-      percent:
-        scan.phase === "classifying" && scan.total > 0
-          ? (scan.done / scan.total) * 100
-          : null,
+      percent: scanPercent(scan),
       to: "/safety-scan",
     });
   }

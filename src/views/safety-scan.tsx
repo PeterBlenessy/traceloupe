@@ -41,7 +41,7 @@ import { LazyVirtualList } from "@/components/lazy-virtual-list";
 import { badgeGroup, multiBadgeGroup, timeGroup } from "@/components/filter-groups";
 import { SortControl, sortItems, type SortState } from "@/components/sort-control";
 import { useSafetyScan } from "@/components/safety-scan-provider";
-import { dateFormat, formatCount, formatDateTimeYear, formatDuration, formatListTime, formatTimelineTime } from "@/lib/format";
+import { dateFormat, formatCount, formatDateTimeYear, formatDuration, formatListTime, formatTimelineTime, plural } from "@/lib/format";
 import { serviceSlug } from "@/lib/apps";
 import { BrandIcon, hasBrandIcon } from "@/lib/brand-icon";
 import { useContactResolver } from "@/lib/use-contact-resolver";
@@ -960,8 +960,8 @@ function ScanProgress({
       {scanEvent.phase === "deepScanning" && scanEvent.total > 0 && (
         <div className="text-xs text-muted-foreground">
           {Math.round((scanEvent.done / scanEvent.total) * 100)}% ·{" "}
-          {scanEvent.findings} possible finding
-          {scanEvent.findings === 1 ? "" : "s"} so far
+          {scanEvent.findings} possible{" "}
+          {plural(scanEvent.findings, "finding")} so far
           {/* "possible": these are pre-confirmation in Balanced/Precise. */} —
           you can leave this page; the scan keeps running.
         </div>
@@ -1015,24 +1015,24 @@ function TriageCoverageLine({
   return (
     <div className="text-xs text-muted-foreground">
       {cancelled ? "Scan stopped. " : "Scan finished. "}
-      {formatCount(done.censused)} message
-      {done.censused === 1 ? "" : "s"} pre-scanned;{" "}
+      {formatCount(done.censused)} {plural(done.censused, "message")}{" "}
+      pre-scanned;{" "}
       {formatCount(done.deepScanned)} of {formatCount(done.candidates)}{" "}
-      flagged place{done.candidates === 1 ? "" : "s"} read in depth
+      flagged {plural(done.candidates, "place")} read in depth
       {done.findings > 0 && (
         <>
           {" "}
-          — {formatCount(done.findings)} finding
-          {done.findings === 1 ? "" : "s"}
+          — {formatCount(done.findings)} {plural(done.findings, "finding")}
         </>
       )}
       .
       {done.unscanned > 0 && (
         <>
           {" "}
-          The {formatCount(done.unscanned)} unread place
-          {done.unscanned === 1 ? " was" : "s were"} not checked — this scan
-          says nothing about {done.unscanned === 1 ? "it" : "them"}.
+          The {formatCount(done.unscanned)} unread{" "}
+          {plural(done.unscanned, "place")}{" "}
+          {done.unscanned === 1 ? "was" : "were"} not checked — this scan says
+          nothing about {done.unscanned === 1 ? "it" : "them"}.
         </>
       )}
     </div>
