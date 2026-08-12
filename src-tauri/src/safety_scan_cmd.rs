@@ -1652,6 +1652,7 @@ pub async fn run_triage_scan(
             &threads,
             &prototypes,
             mode,
+            mode.census_threshold(),
             budget,
             now(),
             embed,

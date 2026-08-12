@@ -743,3 +743,70 @@ prototype-quality problem, not a threshold problem: a centroid built from a few
 fixture positives sits in a region of the space that ordinary chatter also
 occupies. Improving or splitting the loosest prototypes would buy selectivity
 without trading recall the way raising the threshold does.
+
+### 2026-08-12 — the census thresholds, re-derived on a real distribution (#489)
+
+**The first attempt at this was train-on-test and its numbers are void.** The
+planted positives were the fixture positives, and the prototypes are built from
+those same fixtures, so every planted message was scored against a centroid
+containing its own text. It reported recall 1.000 at 0.52 where the held-out
+oracle measured a 0.96 ceiling — the tell was in the table. Journey §7 names
+this trap twice; this was the third time.
+
+Re-measured with LEAVE-ONE-OUT prototypes (each case scored against centroids
+built from every other case of its category, which is what production faces —
+a real harmful message is always unseen relative to the fixtures). Bed: the
+public iOS 17 image's own conversation. Positives: all 128 messages of the <!-- not-a-backup-count: fixture positives planted into a public research image -->
+committed fixtures.
+
+| threshold | census recall (held-out) | (train-on-test) | ~e2e | +confirm | cost /100k |
+|---|---|---|---|---|---|
+| 0.52 | 0.921 | 1.000 | 0.86 | 0.75 | 100 h |
+| 0.55 | 0.849 | 0.968 | 0.79 | 0.70 | 70 h |
+| 0.58 | 0.722 | 0.929 | 0.67 | 0.59 | 37 h |
+| **0.61** | **0.563** | 0.802 | 0.52 | 0.46 | 20 h |
+| **0.64** | **0.397** | 0.659 | 0.37 | 0.32 | 5.6 h |
+| **0.67** | **0.333** | 0.508 | 0.31 | 0.27 | 1.3 h |
+
+**The bias grew with the threshold** — up to 0.26 at 0.64 — which is exactly
+where thresholds get chosen, so the first attempt was wrong in the most
+expensive possible place. Had it shipped, Balanced would have promised 0.66
+census recall and delivered 0.40.
+
+**Shipped: 0.61 / 0.64 / 0.67** (Thorough / Balanced / Precise). Against the
+full read's 0.30 recall and ~11 h per 100k:
+
+Read the column each mode ACTUALLY runs — Thorough has no confirmation stage,
+Balanced and Precise always confirm, and confirmation trims recall to buy
+precision:
+
+| mode | cut | recall it delivers | vs the full read |
+|---|---|---|---|
+| Thorough | 0.61 | 0.52 (no confirm) | **1.7× recall, 1.9× time** |
+| Balanced | 0.64 | 0.32 (+confirm) | **1.1× recall, 0.5× time** |
+| Precise | 0.67 | 0.27 (+confirm) | **0.9× recall, 0.1× time** |
+
+- **Thorough** is the only posture that finds materially more than a full read,
+  and it costs roughly twice as long — the slowest option in the app.
+- **Balanced** is a wash on recall at half the time, with fewer false alarms.
+- **Precise** finds slightly LESS than a full read, very fast and much cleaner.
+  Its name is honest: it is a precision play, not a recall one.
+
+An earlier version of this section quoted Balanced at 1.3× and Precise at
+parity by reading the no-confirmation column for modes that always confirm.
+They do not run that column.
+
+**Two conclusions that matter more than the constants.** Triage's quality
+advantage is far smaller than the lab's 0.94 implied — that figure came from
+5-message Jigsaw chunks scored against non-held-out prototypes, and neither
+condition holds in the product. And **no threshold is clearly better than the
+full read on both axes**: the curve is dominated by prototype quality, so
+moving this number cannot buy what better centroids would. Retune after the
+prototypes change, not before.
+
+Caveats: one device; fixture phrasing may be blunter than real harm; the
+0.30 / 11 h baseline is a Jigsaw measurement, so every multiplier here is
+indicative rather than like-for-like (nothing in this run re-measured the full
+read on this distribution); and the held-out column is PESSIMISTIC relative to
+production, because each centroid here is built from one fewer case than the
+one production scores against.

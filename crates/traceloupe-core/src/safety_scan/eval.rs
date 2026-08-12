@@ -959,6 +959,7 @@ mod tests {
             &threads,
             &prototypes,
             ScanMode::Thorough,
+            ScanMode::Thorough.census_threshold(),
             None,
             1,
             embed,
@@ -1057,6 +1058,7 @@ mod tests {
                 &threads,
                 &prototypes,
                 ScanMode::Precise,
+                ScanMode::Precise.census_threshold(),
                 None,
                 2,
                 |_: &str| -> crate::Result<Vec<f32>> {
@@ -1262,6 +1264,7 @@ mod tests {
             &threads,
             &prototypes,
             ScanMode::Thorough,
+            ScanMode::Thorough.census_threshold(),
             // A budget keeps this a bounded measurement rather than an
             // overnight run; the unscanned tail is the point of the coverage
             // line and is reported below.
@@ -1458,6 +1461,249 @@ mod tests {
         );
     }
 
+    /// Derive the census thresholds from a recall-vs-cost curve on a REAL
+    /// message distribution, with HELD-OUT prototypes (#489).
+    ///
+    /// The first version of this measurement was train-on-test: the planted
+    /// positives were the fixture positives, and the prototypes are built from
+    /// those same fixtures, so every planted message was scored against a
+    /// centroid containing its own text. It reported recall 1.000 at 0.52
+    /// where the held-out oracle measured a 0.96 ceiling — the tell was in the
+    /// table and I missed it. Journey §7 already names this trap twice.
+    ///
+    /// So prototypes here are LEAVE-ONE-OUT: a case is scored against a
+    /// centroid built from every OTHER case of its category. That matches what
+    /// production faces, where a real harmful message is always unseen
+    /// relative to the fixtures the centroids come from. Each case is embedded
+    /// once and the centroids are rebuilt per hold-out — fixture-scale work,
+    /// so clarity beats caching a running sum.
+    ///
+    /// The bed is the public image's own conversation — ordinary chatter is
+    /// what the census must reject — so the distribution is a phone's.
+    ///
+    ///   TRIAGE_REAL_BACKUP=… TRIAGE_REAL_PASSWORD=… \
+    ///   TRACELOUPE_EMBED_MODEL=… \
+    ///   cargo test -p traceloupe-core census_recall_vs_cost -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a public DFIR image + the embedding GGUF"]
+    fn census_recall_vs_cost() {
+        use crate::analysis::Category;
+        use crate::cache::CacheDb;
+        use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::triage::{cap_for_embedding, census_score, centroid, EMBED_PREFIX};
+        use crate::sidecar::CancelToken;
+        use std::time::Duration;
+
+        let (Ok(backup), Ok(embed_model)) = (
+            std::env::var("TRIAGE_REAL_BACKUP"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+        ) else {
+            eprintln!("set TRIAGE_REAL_BACKUP and TRACELOUPE_EMBED_MODEL");
+            return;
+        };
+        let password = std::env::var("TRIAGE_REAL_PASSWORD").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the public image");
+        let cache = CacheDb::open(&cache_path).unwrap();
+        let bed: Vec<String> =
+            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default())
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .map(|m| m.text)
+                .collect();
+        assert!(
+            bed.len() > 100,
+            "the image supplies a real conversational bed"
+        );
+
+        let mut server = spawn_live_server(&embed_model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        // The PRODUCTION cap, not an ad-hoc one: both sides of the cosine must
+        // be capped by the same rule or the curve is not the one production
+        // rides.
+        let embed_one = |t: &str| c.embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(t)));
+
+        // Per case: its category, its prototype vector (the joined case text,
+        // exactly as prototype_examples builds it), and its messages.
+        struct Case {
+            /// Stable fixture id. A case can carry SEVERAL categories, and it
+            /// must be held out of every one of them — `census_score` is a max
+            /// over prototypes, so leaving it in a sibling category's centroid
+            /// leaks it straight back in.
+            id: String,
+            cats: Vec<Category>,
+            proto: Vec<f32>,
+            msgs: Vec<Vec<f32>>,
+        }
+        let fixtures = load_fixtures();
+        let mut cases: Vec<Case> = Vec::new();
+        let mut embed_failures = 0usize;
+        for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
+            let joined = case
+                .messages
+                .iter()
+                .map(|m| m.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            // ONCE per case, not once per category: a multi-category case was
+            // being embedded twice and its messages counted twice in the
+            // denominator.
+            let Ok(proto) = embed_one(&joined) else {
+                embed_failures += 1;
+                continue;
+            };
+            let mut msgs = Vec::new();
+            for m in &case.messages {
+                match embed_one(&m.text) {
+                    Ok(v) => msgs.push(v),
+                    Err(_) => embed_failures += 1,
+                }
+            }
+            cases.push(Case {
+                id: case.id.clone(),
+                cats: case.expected_categories().into_iter().collect(),
+                proto,
+                msgs,
+            });
+        }
+        assert!(!cases.is_empty(), "fixture positives are the ground truth");
+
+        let mut bed_vecs = Vec::new();
+        for t in &bed {
+            match embed_one(t) {
+                Ok(v) => bed_vecs.push(v),
+                Err(_) => embed_failures += 1,
+            }
+        }
+        server.shutdown();
+        // Failures are NOT quietly dropped from the denominators: production
+        // counts them as `unscorable` — never scored, never candidates, a
+        // permanent miss — so a run with many of them is not a clean sample to
+        // read thresholds off.
+        assert_eq!(
+            embed_failures, 0,
+            "{embed_failures} embeddings failed — the curve would be computed from a \
+             truncated sample and would look plausible anyway"
+        );
+
+        // Leave-one-out centroids, by arithmetic rather than re-embedding.
+        let all_cats: Vec<Category> = Category::ALL.to_vec();
+        let centroid_of = |cat: Category, skip_id: Option<&str>| -> Option<Vec<f32>> {
+            let v: Vec<Vec<f32>> = cases
+                .iter()
+                .filter(|c| c.cats.contains(&cat) && Some(c.id.as_str()) != skip_id)
+                .map(|c| c.proto.clone())
+                .collect();
+            centroid(&v)
+        };
+        // Scoring a case: it is excluded from EVERY category's centroid, not
+        // just its own. The score is a max over prototypes, so a sibling
+        // category holding the same case would leak it back in.
+        let held_out_protos = |skip_id: &str| -> Vec<Vec<f32>> {
+            all_cats
+                .iter()
+                .filter_map(|c| centroid_of(*c, Some(skip_id)))
+                .collect()
+        };
+        let production_protos: Vec<Vec<f32>> = all_cats
+            .iter()
+            .filter_map(|c| centroid_of(*c, None))
+            .collect();
+
+        const BATCH_HOURS_PER_100K: f64 = 11.0;
+        const FOCUSED_SECS: f64 = 6.5;
+        let planted_total: usize = cases.iter().map(|c| c.msgs.len()).sum();
+        println!(
+            "\n=== census recall vs cost, HELD-OUT prototypes ===\n\
+             bed {} real messages · {planted_total} planted positive messages \
+             across {} cases\n",
+            bed_vecs.len(),
+            cases.len()
+        );
+        println!("threshold   recall(held-out)   recall(train-on-test)   selectivity   100k cost");
+        for th in [0.46f32, 0.49, 0.52, 0.55, 0.58, 0.61, 0.64, 0.67] {
+            let mut kept_lo = 0usize;
+            let mut kept_tt = 0usize;
+            for case in cases.iter() {
+                let lo = held_out_protos(&case.id);
+                // A category emptied by the hold-out would silently shrink the
+                // prototype set and understate held-out recall.
+                assert_eq!(
+                    lo.len(),
+                    production_protos.len(),
+                    "holding out {} emptied a category's centroid — the two columns would \
+                     no longer be comparable",
+                    case.id
+                );
+                for v in &case.msgs {
+                    if census_score(v, &lo) >= th {
+                        kept_lo += 1;
+                    }
+                    if census_score(v, &production_protos) >= th {
+                        kept_tt += 1;
+                    }
+                }
+            }
+            let recall_lo = kept_lo as f64 / planted_total as f64;
+            let recall_tt = kept_tt as f64 / planted_total as f64;
+            let kept_bed = bed_vecs
+                .iter()
+                .filter(|v| census_score(v, &production_protos) >= th)
+                .count();
+            let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
+            let hours = (100_000.0 * sel / 100.0) * FOCUSED_SECS / 3600.0;
+            println!(
+                "  {th:.2}          {recall_lo:.3}                {recall_tt:.3}            \
+                 {sel:>5.1}%      {hours:>5.1} h"
+            );
+        }
+        println!(
+            "\n(full read for reference: 0.30 recall, ~{BATCH_HOURS_PER_100K} h per 100k — \
+             measured on Jigsaw fixtures, NOT on this distribution, so the multipliers are \
+             indicative, not like for like)"
+        );
+        println!(
+            "(held-out is PESSIMISTIC vs production: each centroid here is built from one \
+             fewer case than production's, so production scores against slightly better \
+             prototypes than this column shows)"
+        );
+        // The mechanism this measurement exists to respect: holding a case out
+        // of its own centroid cannot make it easier to find.
+        let mut lo_total = 0usize;
+        let mut tt_total = 0usize;
+        for case in cases.iter() {
+            let lo = held_out_protos(&case.id);
+            for v in &case.msgs {
+                if census_score(v, &lo) >= 0.55 {
+                    lo_total += 1;
+                }
+                if census_score(v, &production_protos) >= 0.55 {
+                    tt_total += 1;
+                }
+            }
+        }
+        assert!(
+            lo_total <= tt_total,
+            "held-out recall ({lo_total}) exceeded train-on-test ({tt_total}) — the \
+             leave-one-out is not actually holding anything out"
+        );
+    }
+
     /// #409's premise, measured: focused mode re-sends the system prompt per
     /// message — but the pinned llama-server (b10075) defaults `cache_prompt`
     /// to true, so sequential focused calls on one slot should reuse the
@@ -1562,6 +1808,15 @@ mod tests {
         }
         server.shutdown();
     }
+
+    /// The census cuts the ORACLE's numbers were recorded at. Pinned here
+    /// rather than read off `ScanMode`, because the shipped postures are tuned
+    /// to a real distribution (#489) while these bands come from the Jigsaw
+    /// corpus: reading the enum made a constant change look like a pipeline
+    /// regression, and asserting the enum matched them made the test
+    /// impossible to pass at all.
+    const ORACLE_CENSUS_CUT: f32 = 0.52;
+    const ORACLE_CONFIRM_CUT: f32 = 0.58;
 
     /// The wired Rust triage pipeline against the recorded reference run.
     ///
@@ -1699,7 +1954,11 @@ mod tests {
             scan,
             &threads,
             &prototypes,
-            ScanMode::Thorough, // threshold 0.52, no confirmation — oracle stages 1+2
+            // No confirmation stage — the oracle's stages 1+2. The mode is
+            // only consulted for confirm(); the CUT is pinned to 0.52 below,
+            // because that is where the oracle's numbers were recorded.
+            ScanMode::Thorough,
+            ORACLE_CENSUS_CUT,
             None,
             1,
             embed,
@@ -1805,6 +2064,7 @@ mod tests {
                 &threads,
                 &prototypes,
                 ScanMode::Precise,
+                ORACLE_CONFIRM_CUT, // the oracle's confirm sweep point, not the shipped mode's
                 None,
                 2,
                 |_: &str| -> crate::Result<Vec<f32>> {
