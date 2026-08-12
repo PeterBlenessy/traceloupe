@@ -417,7 +417,10 @@ pub fn cancel_safety_scan_model_download(
 /// UI show a scan that already finished.
 fn emit_scan(app: &AppHandle, event: ScanEvent) {
     if let Some(state) = app.try_state::<SafetyScanStatus>() {
-        let terminal = matches!(event, ScanEvent::Done { .. } | ScanEvent::Error { .. });
+        let terminal = matches!(
+            event,
+            ScanEvent::Done { .. } | ScanEvent::TriageDone { .. } | ScanEvent::Error { .. }
+        );
         let mut g = state.0.lock().unwrap_or_else(|e| e.into_inner());
         *g = if terminal { None } else { Some(event.clone()) };
     }
@@ -466,9 +469,83 @@ pub enum ScanEvent {
         reused: usize,
         skipped: usize,
     },
+    // --- triage scan phases (#472). Same stream, same snapshot: one scan of
+    // either kind runs at a time, and the re-attach path must see whichever it
+    // is. ---
+    /// The embedding census: `done` of `total` messages scored this run.
+    Censusing { done: usize, total: usize },
+    /// Focused deep-scan of the ranked worklist.
+    DeepScanning {
+        done: usize,
+        total: usize,
+        /// Provisional findings so far (pre-confirmation).
+        findings: usize,
+    },
+    /// Confirmation of provisional findings (confirm-on modes only).
+    Confirming { done: usize, total: usize },
+    /// Terminal event of a triage scan, with the honest coverage numbers.
+    TriageDone {
+        scan_id: i64,
+        status: String,
+        findings: usize,
+        censused: usize,
+        candidates: usize,
+        deep_scanned: usize,
+        /// Candidates the budget left unread — reported, never called clean.
+        unscanned: usize,
+        unconfirmed: usize,
+    },
     Error {
         message: String,
     },
+}
+
+/// Parse the UI's `sources` string. It is "all", the legacy
+/// "messages"/"notes", a `thread:<identifier>` single-conversation scope, or a
+/// comma-joined set of the picked message services (e.g. "iMessage,TikTok")
+/// plus optionally "notes" — the multi-select Content filter. Shared by the
+/// batch and triage scan commands so a scope means the same thing to both.
+fn parse_scan_sources(sources: Option<&str>) -> ScanSources {
+    match sources {
+        None | Some("all") | Some("") => ScanSources::default(),
+        // One conversation. Everything after the prefix is the thread
+        // identifier verbatim — it may contain colons (TikTok) or commas, so it
+        // is never split.
+        Some(t) if t.starts_with("thread:") => ScanSources {
+            thread: Some(t["thread:".len()..].to_string()),
+            notes: false,
+            message_services: None,
+        },
+        Some("messages") => ScanSources {
+            thread: None,
+            notes: false,
+            message_services: None,
+        },
+        Some("notes") => ScanSources {
+            thread: None,
+            notes: true,
+            message_services: Some(Vec::new()),
+        },
+        Some(list) => {
+            let tokens: Vec<&str> = list
+                .split(',')
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .collect();
+            let notes = tokens.contains(&"notes");
+            let all_messages = tokens.contains(&"messages");
+            let services: Vec<String> = tokens
+                .iter()
+                .filter(|t| **t != "notes" && **t != "messages")
+                .map(|t| t.to_string())
+                .collect();
+            ScanSources {
+                thread: None,
+                notes,
+                message_services: if all_messages { None } else { Some(services) },
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -511,49 +588,7 @@ pub async fn run_safety_scan(
         None => (range_start, range_end, sources),
     };
 
-    // `sources` is "all", the legacy "messages"/"notes", or a comma-joined set
-    // of the picked message services (e.g. "iMessage,TikTok") plus optionally
-    // "notes" — the multi-select Content filter.
-    let scan_sources = match sources.as_deref() {
-        None | Some("all") | Some("") => ScanSources::default(),
-        // One conversation. Everything after the prefix is the thread
-        // identifier verbatim — it may contain colons (TikTok) or commas, so it
-        // is never split.
-        Some(t) if t.starts_with("thread:") => ScanSources {
-            thread: Some(t["thread:".len()..].to_string()),
-            notes: false,
-            message_services: None,
-        },
-        Some("messages") => ScanSources {
-            thread: None,
-            notes: false,
-            message_services: None,
-        },
-        Some("notes") => ScanSources {
-            thread: None,
-            notes: true,
-            message_services: Some(Vec::new()),
-        },
-        Some(list) => {
-            let tokens: Vec<&str> = list
-                .split(',')
-                .map(str::trim)
-                .filter(|t| !t.is_empty())
-                .collect();
-            let notes = tokens.contains(&"notes");
-            let all_messages = tokens.contains(&"messages");
-            let services: Vec<String> = tokens
-                .iter()
-                .filter(|t| **t != "notes" && **t != "messages")
-                .map(|t| t.to_string())
-                .collect();
-            ScanSources {
-                thread: None,
-                notes,
-                message_services: if all_messages { None } else { Some(services) },
-            }
-        }
-    };
+    let scan_sources = parse_scan_sources(sources.as_deref());
     // Canonicalise what we store on the row so the scope predicates match it.
     let sources_slug = scan_sources.slug();
     let dir = models_dir(&app)?;
@@ -1011,6 +1046,490 @@ pub fn cancel_safety_scan(cancel_state: State<'_, SafetyScanCancel>) -> Result<(
         c.cancel();
     }
     Ok(())
+}
+
+// ---------- triage scan (#472) ----------
+
+/// Spawn a sandboxed llama-server and wait for `/health`, forwarding its output
+/// to the app log. The startup poll honours cancellation and fails fast when
+/// the child dies (e.g. an OOM-kill during load) instead of spinning to the
+/// deadline. Shared by the triage scan's initial (embedder) spawn and every
+/// healthy-swap after it.
+#[allow(clippy::too_many_arguments)]
+fn spawn_server_healthy(
+    app: &AppHandle,
+    binary: &Path,
+    model_path: &Path,
+    ctx_size: u32,
+    embedding: bool,
+    api_key: &Option<String>,
+    scratch_dir: &Path,
+    cancel: &CancelToken,
+) -> Result<server::LlamaServer, String> {
+    let port = server::pick_port().map_err(|e| e.to_string())?;
+    let (log_tx, log_rx) = std::sync::mpsc::channel::<String>();
+    let app_log = app.clone();
+    std::thread::spawn(move || {
+        while let Ok(line) = log_rx.recv() {
+            crate::logging::debug(&app_log, format!("[llama-server] {line}"));
+        }
+    });
+    let mut llama = server::LlamaServer::spawn(
+        &server::ServerConfig {
+            binary: binary.to_path_buf(),
+            model_path: model_path.to_path_buf(),
+            port,
+            ctx_size,
+            // The triage pipeline is sequential by design (one focused call at
+            // a time), so extra server slots would only cost KV memory.
+            parallel: 1,
+            api_key: api_key.clone(),
+            gpu_layers: -1,
+            embedding,
+            sandbox: true,
+            scratch_dir: scratch_dir.to_path_buf(),
+        },
+        Some(log_tx),
+    )
+    .map_err(|e| e.to_string())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(180);
+    loop {
+        match llama.wait_healthy(Duration::from_secs(2)) {
+            Ok(()) => return Ok(llama),
+            Err(e) => {
+                if cancel.is_cancelled() {
+                    return Err("cancelled".into());
+                }
+                if llama.has_exited() || std::time::Instant::now() >= deadline {
+                    return Err(e.to_string());
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
+    }
+}
+
+/// The triage scan's one resident sidecar and the client bound to it. The
+/// pipeline needs two models — the embedder for the census, the classifier for
+/// the deep-scan — but never at once (they are multi-GB each), so the slot
+/// healthy-swaps: the replacement is spawned on a new port and confirmed
+/// healthy BEFORE the incumbent is shut down, exactly like the cascade's
+/// sweep→strong swap this is derived from. On a failed swap the incumbent
+/// stays up and the scan fails with the census already persisted.
+struct TriageSidecar {
+    llama: server::LlamaServer,
+    client: client::LlmClient,
+    role: models::ModelRole,
+    // Swap ingredients.
+    app: AppHandle,
+    binary: PathBuf,
+    scratch_dir: PathBuf,
+    api_key: Option<String>,
+    cancel: CancelToken,
+    /// The single cancel-watcher kills whatever pid is stored here; a swap must
+    /// repoint it AFTER the old server is down (see the cascade notes).
+    current_pid: Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl TriageSidecar {
+    /// Ensure the CLASSIFIER is the resident model, swapping the embedder out
+    /// on the first call and doing nothing on every later one.
+    fn ensure_classifier(
+        &mut self,
+        spec: &models::ModelSpec,
+        model_path: &Path,
+    ) -> traceloupe_core::Result<()> {
+        use traceloupe_core::Error;
+        if self.role == models::ModelRole::Classifier {
+            return Ok(());
+        }
+        crate::logging::info(
+            &self.app,
+            format!("Triage scan: census done — swapping to {}", spec.id),
+        );
+        let mut next = spawn_server_healthy(
+            &self.app,
+            &self.binary,
+            model_path,
+            spec.ctx_size,
+            false,
+            &self.api_key,
+            &self.scratch_dir,
+            &self.cancel,
+        )
+        .map_err(Error::Inference)?;
+        // The classifier is healthy: NOW retire the embedder, then repoint the
+        // watcher — after the shutdown, so a cancel in this window still hits a
+        // live server rather than the gap.
+        let next_pid = next.pid();
+        self.llama.shutdown();
+        std::mem::swap(&mut self.llama, &mut next);
+        self.current_pid
+            .store(next_pid, std::sync::atomic::Ordering::SeqCst);
+        if self.cancel.is_cancelled() {
+            // A cancel that landed during the swap may have killed the retired
+            // pid; make sure the new server dies too.
+            self.llama.shutdown();
+            return Err(Error::Inference("cancelled".into()));
+        }
+        self.client = client::LlmClient::new(
+            self.llama.base_url(),
+            spec.id,
+            Duration::from_secs(300),
+        )
+        .with_api_key(self.api_key.clone());
+        self.role = models::ModelRole::Classifier;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+// A Tauri command: each param maps to a field of the JS invoke() call.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_triage_scan(
+    app: AppHandle,
+    active: State<'_, ActiveBackup>,
+    gate: State<'_, SafetyScanGate>,
+    cancel_state: State<'_, SafetyScanCancel>,
+    // The CLASSIFIER tier; None picks the RAM-recommended one. The embedder is
+    // not a choice — the catalog has exactly one census model.
+    model_id: Option<String>,
+    // "thorough" | "balanced" | "precise"; None = the product default.
+    mode: Option<String>,
+    range_start: Option<i64>,
+    range_end: Option<i64>,
+    sources: Option<String>,
+    // Deep-scan budget: at most this many worklist items are classified; the
+    // rest are reported unscanned. None = every candidate.
+    budget: Option<usize>,
+) -> Result<(), String> {
+    use traceloupe_core::safety_scan::chunker;
+    use traceloupe_core::safety_scan::triage::{self, FocusWindow, ScanMode};
+    use traceloupe_core::safety_scan::triage_scan::{self, FocusVerdict, TriageProgress};
+
+    let _guard = gate
+        .0
+        .try_lock()
+        .map_err(|_| "a Safety Scan is already running")?;
+
+    let cache_path = active.path()?;
+    let analysis_db_path = analysis_path(&cache_path)?;
+
+    let mode = match mode.as_deref() {
+        None => ScanMode::default(),
+        Some(s) => ScanMode::parse(s).ok_or("unknown scan mode")?,
+    };
+    // Balanced/Precise promise a second-model confirmation of every finding
+    // (that is the mode's whole meaning — it trims recall to buy precision).
+    // The confirmer tier is not in the catalog yet, and silently skipping the
+    // stage would ship a mode that does not do what it says.
+    if mode.confirm() {
+        return Err(format!(
+            "the {} mode confirms findings with a second model, which is not installed yet — \
+             run a thorough scan instead",
+            mode.as_str()
+        ));
+    }
+
+    let scan_sources = parse_scan_sources(sources.as_deref());
+    if scan_sources.notes {
+        return Err("the triage scan reads messages; include notes via a standard scan".into());
+    }
+    let sources_slug = scan_sources.slug();
+    let dir = models_dir(&app)?;
+    let classifier = match model_id.as_deref() {
+        Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
+        None => models::recommended(models::total_ram_bytes()),
+    };
+    let classifier_path = classifier
+        .installed_at(&dir)
+        .ok_or("model not installed — download it first")?;
+    let embedder = models::embedder().ok_or("the model catalog has no census embedder")?;
+    let embedder_path = embedder.installed_at(&dir).ok_or(
+        "the Fast pre-scan model is not installed — download it from the Safety Scan settings",
+    )?;
+    let binary = server::resolve_binary().map_err(|e| e.to_string())?;
+
+    // Flip the scan row to 'running' before the slow model load, exactly like
+    // the batch scan, so history reflects the click immediately. The mode rides
+    // the audit log — the scans table has no mode column, and the audit trail
+    // is its provenance record.
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    };
+    let scan_row_id = {
+        let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+        let id = db
+            .begin_scan(classifier.id, (range_start, range_end), &sources_slug, now())
+            .map_err(|e| e.to_string())?;
+        let _ = db.audit(id, now(), "triage_mode", mode.as_str());
+        id
+    };
+    let analysis_db_path_repair = analysis_db_path.clone();
+
+    let scratch_dir = models_dir(&app)?.join("sidecar-scratch");
+    let cancel = CancelToken::new();
+    *cancel_state.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(cancel.clone());
+    let api_key = server::generate_api_key();
+
+    let app2 = app.clone();
+    let join = tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
+        emit_scan(&app2, ScanEvent::Loading);
+        let _keep_awake = crate::power::KeepAwake::prevent_idle_sleep("TraceLoupe Safety Scan");
+        crate::logging::info(
+            &app2,
+            format!(
+                "Triage scan: starting (mode={}, classifier={}, embedder={}, sandbox=on)",
+                mode.as_str(),
+                classifier.id,
+                embedder.id
+            ),
+        );
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+
+        // Read the scope BEFORE loading any model: an empty scope should fail
+        // in milliseconds, not after a 30 s model load.
+        let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+        let range = TimeRange {
+            start: range_start,
+            end: range_end,
+        };
+        let threads = chunker::census_threads(&cache, range, &scan_sources)
+            .map_err(|e| e.to_string())?;
+        if threads.iter().all(|t| t.is_empty()) {
+            return Err("nothing to scan in this scope".into());
+        }
+
+        // Census prototypes come from the committed fixture positives, all
+        // categories — categories are a saved VIEW over findings, not a scan
+        // parameter (journey §6.3).
+        let examples = triage_scan::prototype_examples(&Category::ALL);
+        if examples.is_empty() {
+            return Err("no prototype examples — the census cannot rank anything".into());
+        }
+
+        // Phase 0: the embedder sidecar.
+        let llama = spawn_server_healthy(
+            &app2,
+            &binary,
+            &embedder_path,
+            embedder.ctx_size,
+            true,
+            &api_key,
+            &scratch_dir,
+            &cancel,
+        )?;
+        crate::logging::info(&app2, "Triage scan: embedder healthy — census starting");
+
+        // The single cancel-watcher, pointed at whichever server is current
+        // (the swap updates the atomic). Same rationale as the batch scan: an
+        // in-flight request is only interruptible by killing the server.
+        let current_pid = Arc::new(std::sync::atomic::AtomicU32::new(llama.pid()));
+        let watch_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let cancel = cancel.clone();
+            let done = watch_done.clone();
+            let app = app2.clone();
+            let current_pid = current_pid.clone();
+            std::thread::spawn(move || {
+                while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                    if cancel.is_cancelled() {
+                        crate::logging::info(
+                            &app,
+                            "Triage scan: cancel requested — stopping the model server",
+                        );
+                        let _ = std::process::Command::new("/bin/kill")
+                            .arg("-9")
+                            .arg(
+                                current_pid
+                                    .load(std::sync::atomic::Ordering::SeqCst)
+                                    .to_string(),
+                            )
+                            .status();
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(120));
+                }
+            })
+        };
+
+        let embed_client = client::LlmClient::new(
+            llama.base_url(),
+            embedder.id,
+            Duration::from_secs(300),
+        )
+        .with_api_key(api_key.clone());
+
+        let prototypes =
+            triage::build_prototypes(&examples, |t| embed_client.embed(t)).map_err(|e| {
+                format!("building census prototypes: {e}")
+            })?;
+        if prototypes.is_empty() {
+            return Err("could not build census prototypes".into());
+        }
+
+        let mut analysis = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
+
+        // One resident sidecar, swapped embedder→classifier on the first
+        // focused call (i.e. after the census — run_triage's phases guarantee
+        // the ordering). RefCell because the embed and classify closures both
+        // reach the slot; run_triage calls them strictly sequentially.
+        let sidecar = std::cell::RefCell::new(TriageSidecar {
+            llama,
+            client: embed_client,
+            role: models::ModelRole::Embedder,
+            app: app2.clone(),
+            binary: binary.clone(),
+            scratch_dir: scratch_dir.clone(),
+            api_key: api_key.clone(),
+            cancel: cancel.clone(),
+            current_pid: current_pid.clone(),
+        });
+
+        let embed = |t: &str| sidecar.borrow().client.embed(t);
+        let classify = |w: &FocusWindow| {
+            let mut s = sidecar.borrow_mut();
+            s.ensure_classifier(classifier, &classifier_path)?;
+            triage_scan::classify_focused(&s.client, w)
+        };
+        // Unreachable while confirm-on modes are refused above; if that gate is
+        // ever bypassed this fails the scan instead of silently passing
+        // findings through unconfirmed.
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> traceloupe_core::Result<bool> {
+            Err(traceloupe_core::Error::Inference(
+                "no confirmer model is installed".into(),
+            ))
+        };
+
+        let mut last_emit = std::time::Instant::now();
+        let progress = |p: TriageProgress| {
+            let (event, boundary) = match p {
+                TriageProgress::Census { done, total } => (
+                    ScanEvent::Censusing { done, total },
+                    done == 0 || done == total,
+                ),
+                TriageProgress::DeepScan {
+                    done,
+                    total,
+                    findings,
+                } => (
+                    ScanEvent::DeepScanning {
+                        done,
+                        total,
+                        findings,
+                    },
+                    done == 0 || done == total,
+                ),
+                TriageProgress::Confirm { done, total } => (
+                    ScanEvent::Confirming { done, total },
+                    done == 0 || done == total,
+                ),
+            };
+            // Always emit phase boundaries; throttle the mid-phase stream.
+            if boundary || last_emit.elapsed() >= Duration::from_millis(150) {
+                last_emit = std::time::Instant::now();
+                emit_scan(&app2, event);
+            }
+        };
+
+        let outcome = triage_scan::run_triage(
+            &mut analysis,
+            scan_row_id,
+            &threads,
+            &prototypes,
+            mode,
+            budget,
+            now(),
+            embed,
+            classify,
+            confirm,
+            &cancel,
+            progress,
+        )
+        .map_err(|e| e.to_string())?;
+
+        let status = if outcome.cancelled {
+            traceloupe_core::analysis::ScanStatus::Cancelled
+        } else {
+            traceloupe_core::analysis::ScanStatus::Completed
+        };
+        analysis
+            .finish_scan(scan_row_id, status, now())
+            .map_err(|e| e.to_string())?;
+
+        watch_done.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = watcher.join();
+        sidecar.borrow_mut().llama.shutdown();
+        let _ = std::fs::remove_dir_all(&scratch_dir);
+
+        crate::logging::info(
+            &app2,
+            format!(
+                "Triage scan: {} — censused {}, candidates {}, deep-scanned {}, findings {}, unscanned {}",
+                if outcome.cancelled { "cancelled" } else { "done" },
+                outcome.censused,
+                outcome.candidates,
+                outcome.deep_scanned,
+                outcome.findings,
+                outcome.unscanned()
+            ),
+        );
+        emit_scan(
+            &app2,
+            ScanEvent::TriageDone {
+                scan_id: scan_row_id,
+                status: if outcome.cancelled {
+                    "cancelled".into()
+                } else {
+                    "completed".into()
+                },
+                findings: outcome.findings,
+                censused: outcome.censused,
+                candidates: outcome.candidates,
+                deep_scanned: outcome.deep_scanned,
+                unscanned: outcome.unscanned(),
+                unconfirmed: outcome.unconfirmed,
+            },
+        );
+        Ok(())
+    })
+    .await;
+
+    // Same error surface as the batch scan: repair the row and emit on both a
+    // normal Err and a panicked task, so the UI never waits on a scan that
+    // silently died.
+    let repair_on_error = || {
+        if let Ok(db) = AnalysisDb::open(&analysis_db_path_repair) {
+            let _ = db.repair_stranded_scans();
+        }
+    };
+    let result = match join {
+        Ok(r) => r,
+        Err(e) => {
+            repair_on_error();
+            let msg = format!("scan task failed: {e}");
+            emit_scan(
+                &app,
+                ScanEvent::Error {
+                    message: msg.clone(),
+                },
+            );
+            return Err(msg);
+        }
+    };
+    if let Err(msg) = &result {
+        repair_on_error();
+        emit_scan(
+            &app,
+            ScanEvent::Error {
+                message: msg.clone(),
+            },
+        );
+    }
+    result
 }
 
 // ---------- queries ----------

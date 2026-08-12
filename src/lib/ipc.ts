@@ -976,6 +976,29 @@ export type SafetyScanEvent =
       reused: number;
       skipped: number;
     }
+  // Triage scan phases (census → focused deep-scan → confirmation). Same
+  // stream and snapshot as the batch phases: one scan of either kind at a time.
+  | { phase: "censusing"; done: number; total: number }
+  | {
+      phase: "deepScanning";
+      done: number;
+      total: number;
+      /** Provisional findings so far (pre-confirmation). */
+      findings: number;
+    }
+  | { phase: "confirming"; done: number; total: number }
+  | {
+      phase: "triageDone";
+      scanId: number;
+      status: string;
+      findings: number;
+      censused: number;
+      candidates: number;
+      deepScanned: number;
+      /** Candidates the budget left unread — reported, never called clean. */
+      unscanned: number;
+      unconfirmed: number;
+    }
   | { phase: "error"; message: string };
 
 /** A Content Finding: one probabilistic model verdict on a message or note. */

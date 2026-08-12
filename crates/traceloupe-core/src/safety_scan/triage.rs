@@ -135,6 +135,14 @@ pub struct CensusInput {
     pub sender: String,
     pub occurred_at: Option<i64>,
     pub text: String,
+    /// The message's durable identity (`chunker::message_fingerprint`).
+    /// Findings are keyed on this; cache row ids change on re-import, so a
+    /// finding keyed on `source_id` would lose its dismissal at the next
+    /// import.
+    pub fingerprint: String,
+    /// The thread's service (iMessage/SMS/TikTok…), carried onto findings so a
+    /// service-scoped scan can count and list its own.
+    pub service: Option<String>,
 }
 
 /// A scored message, ready to persist.
@@ -333,6 +341,8 @@ mod tests {
                 sender: "a".into(),
                 occurred_at: Some(1),
                 text: "i will kill you".into(),
+                fingerprint: "fp".into(),
+                service: None,
             },
             CensusInput {
                 source_id: 2,
@@ -340,6 +350,8 @@ mod tests {
                 sender: "a".into(),
                 occurred_at: Some(2),
                 text: "grab milk please".into(),
+                fingerprint: "fp".into(),
+                service: None,
             },
         ];
         let scored = census_messages(&msgs, &protos, fake_embed).unwrap();
@@ -360,6 +372,8 @@ mod tests {
                 sender: "s".into(),
                 occurred_at: Some(1000 + i as i64),
                 text: format!("m{i}"),
+                fingerprint: "fp".into(),
+                service: None,
             })
             .collect()
     }
@@ -411,6 +425,8 @@ mod tests {
             sender: "a".into(),
             occurred_at: None,
             text: "i will kill you".into(),
+            fingerprint: "fp".into(),
+            service: None,
         }];
         let scored = census_messages(&msgs, &[], fake_embed).unwrap();
         assert_eq!(scored[0].score, 0.0);
