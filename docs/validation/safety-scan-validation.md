@@ -833,11 +833,19 @@ Measured through the production path (same bed, same ground truth):
 
 | threshold | recall | selectivity | cost /100k |
 |---|---|---|---|
-| 0.58 | 0.906 | 43.8% | 79 h |
-| 0.61 | 0.789 | 25.7% | 46 h |
-| **0.64** | **0.578** | 11.5% | 20.7 h — Thorough |
-| **0.67** | **0.445** | 2.6% | 4.7 h — Balanced |
-| **0.70** | **0.281** | 0.9% | 1.6 h — Precise |
+| 0.58 | 0.913 | 42.9% | 77.4 h |
+| 0.61 | 0.778 | 25.9% | 46.7 h |
+| **0.64** | **0.603** | 11.5% | 20.7 h — Thorough |
+| **0.67** | **0.452** | 2.6% | 4.7 h — Balanced |
+| **0.70** | **0.286** | 0.9% | 1.6 h — Precise |
+
+(Re-measured 2026-08-13 after the review of #491, on 85 examples. Two
+corrections moved these from the numbers first recorded: the ground-truth loop
+had embedded once per *case × category*, so multi-category cases were counted
+twice in the denominator — it is 126 planted messages, not 128 — and the
+`scam-fraud` corpus was extended, below. The shipped cuts did not move: the
+selectivity column is unchanged to the tenth of a percent, so the cost
+argument that chose 0.64/0.67/0.70 is untouched.)
 
 The richer centroids score everything higher, so the same postures sit **one
 notch up the scale**. At matched cost the corpus is a modest win, not a step
@@ -845,9 +853,9 @@ change:
 
 | operating point | old prototypes | new corpus |
 |---|---|---|
-| ~20 h | 0.563 | **0.578** (+0.015) |
-| ~5 h | 0.397 @ 5.6 h | **0.445 @ 4.7 h** (+0.048, and cheaper) |
-| ~1.5 h | 0.333 | 0.281 (−0.052) |
+| ~20 h | 0.563 | **0.603** (+0.040) |
+| ~5 h | 0.397 @ 5.6 h | **0.452 @ 4.7 h** (+0.055, and cheaper) |
+| ~1.5 h | 0.333 | 0.286 (−0.047) |
 
 **Shipped: 0.64 / 0.67 / 0.70.** Thorough now delivers ~1.8× the full read's
 recall at 1.9× its time; Balanced ~1.2× at 0.4×; Precise ~0.8× at 0.15×.
@@ -861,6 +869,43 @@ Balanced cut, `scam-fraud` recalls 0.25 and `drugs-illegal` 0.42 against
 `self-harm` 0.80 and `hate-identity` 0.73. My scam examples read like phishing
 templates and the fixtures' scams read like conversations; that is a corpus
 bug, and the next iteration should fix it rather than move a threshold.
+
+#### The scam diagnosis was wrong, and measuring it said so
+
+That last paragraph contained a confident, untested causal claim: the scam
+examples read like phishing templates while the fixtures' scams read like
+conversations. Acting on it, all eight `scam-fraud` examples were rewritten
+into longer conversational registers ("my darling the airline is holding my
+luggage and every card i have is blocked out here").
+
+**It made things worse.** Scam recall fell 0.25 → 0.17 at the Balanced-adjacent
+cut and to 0.00 at both tighter ones. The diagnosis had the direction
+backwards: the fixtures are the terse, imperative ones — `URGENT: your bank
+account is locked. verify now at secure-bank-verify.link`, `this is the tax
+office, there is a warrant out in your name` — and the rewrite walked the
+centroid away from them.
+
+The third variant kept the original terse register and instead added the two
+fixture *modes* the corpus never covered at all: an authority-threat
+("proceedings have been raised against your name … or officers attend this
+afternoon") and a verify-at-a-link. That is what worked:
+
+| scam-fraud corpus | @0.64 | @0.67 | @0.70 | overall @0.64 |
+|---|---|---|---|---|
+| original 8, terse | 0.25 | 0.08 | 0.08 | 0.595 |
+| rewritten 10, conversational | 0.17 | 0.00 | 0.00 | 0.587 |
+| **terse 8 + 2 uncovered modes** | **0.33** | **0.17** | 0.00 | **0.603** |
+
+Selectivity was identical across all three (11.5% / 2.6% / 0.9%), so the win is
+free — it buys recall without keeping one extra message of an ordinary phone.
+
+Two things this earns. **Coverage of modes beats register**: what the centroid
+was missing was a kind of scam, not a way of speaking, and adding examples in a
+register borrowed from the fixtures is also the shape most likely to leak
+train-on-test. And **the honest scale of the result** — `scam-fraud` has about
+twelve ground-truth messages, so 0.25 → 0.33 is one additional message
+recovered. It is the right direction on a sample far too small to call it more
+than that; the category needs a real corpus before its number means anything.
 
 The larger conclusion stands and is now better supported: examples help, but
 they are not the step change. The ceiling is the embedding space's ability to

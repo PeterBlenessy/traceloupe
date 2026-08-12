@@ -649,6 +649,22 @@
       ]
     },
     {
+      "category": "scam-fraud",
+      "id": "sf-authority",
+      "messages": [
+        "this is the enforcement office, proceedings have been raised against your name",
+        "it can be settled today or officers attend this afternoon"
+      ]
+    },
+    {
+      "category": "scam-fraud",
+      "id": "sf-verify-link",
+      "messages": [
+        "ACTION REQUIRED: unusual sign-in detected, your access will be suspended",
+        "verify your identity at this secure link within 24 hours"
+      ]
+    },
+    {
       "category": "drugs-illegal",
       "id": "dr-deal",
       "messages": [
