@@ -57,6 +57,7 @@ import {
   type SafetyScanHistoryItem,
   type SafetyScanReport,
   type TimeRange,
+  type TriageCoverage,
 } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { useListNavigation } from "@/lib/use-keyboard-nav";
@@ -745,7 +746,19 @@ export function SafetyScanView() {
                 lastTriageDone &&
                 (history.data ?? []).some(
                   (s) => s.id === lastTriageDone.scanId,
-                ) && <TriageCoverageLine done={lastTriageDone} />}
+                ) && (
+                  <TriageCoverageLine
+                    coverage={{
+                      censused: lastTriageDone.censused,
+                      candidates: lastTriageDone.candidates,
+                      deepScanned: lastTriageDone.deepScanned,
+                      unscanned: lastTriageDone.unscanned,
+                      unconfirmed: lastTriageDone.unconfirmed,
+                    }}
+                    findings={lastTriageDone.findings}
+                    cancelled={lastTriageDone.status === "cancelled"}
+                  />
+                )}
             </CardContent>
           </Card>
         )}
@@ -1011,46 +1024,55 @@ function ScanProgress({
   );
 }
 
-/** The honest coverage line after a triage scan (rule-of-three, journey §8):
- *  a budget or a stop can leave candidates unread, and the report must say so
- *  rather than let silence read as "clean". Rendered from the terminal
- *  triageDone event the provider captures (the numbers are not yet persisted
- *  on the scan row — the live event is their only source). */
+/** The honest coverage line for a triage scan (rule-of-three, journey §8): it
+ *  reads a ranked SUBSET in depth, so a budget or a Stop can leave candidates
+ *  unread — and silence about them must never read as "clean".
+ *
+ *  ONE component for both surfaces: the run card renders it live from the
+ *  terminal event, the report renders it later from the stored columns. Two
+ *  copies of this wording would drift, and the whole point is that the promise
+ *  is identical wherever it appears. */
 function TriageCoverageLine({
-  done,
+  coverage,
+  findings,
+  cancelled,
+  className,
 }: {
-  done: Extract<
-    NonNullable<ReturnType<typeof useSafetyScan>["scan"]>,
-    { phase: "triageDone" }
-  >;
+  coverage: TriageCoverage;
+  /** Findings written; omitted in the report, which states them above. */
+  findings?: number;
+  cancelled: boolean;
+  className?: string;
 }) {
-  const cancelled = done.status === "cancelled";
   // A scan stopped DURING the census never ranked anything, so candidates and
   // deep_scanned are both 0 — "0 of 0 read in depth" with no caveat would be
   // the exact silence-reads-as-clean failure this line exists to prevent.
-  const stoppedBeforeRanking = cancelled && done.candidates === 0;
+  const stoppedBeforeRanking = cancelled && coverage.candidates === 0;
   return (
-    <div className="text-xs text-muted-foreground">
+    <div className={cn("text-xs text-muted-foreground", className)}>
       {cancelled ? "Scan stopped. " : "Scan finished. "}
       {stoppedBeforeRanking ? (
         <>
-          It stopped while pre-scanning, before deciding where to read in
-          depth: {plural(done.censused, "message")} were scored and nothing
-          was read. This scan says nothing about any of your messages — the
-          scoring is kept, so starting again resumes from here.
+          It stopped while pre-scanning, before deciding where to read in depth:{" "}
+          {plural(coverage.censused, "message")} were scored and nothing was
+          read. This scan says nothing about any of your messages — the scoring
+          is kept, so starting again resumes from here.
         </>
       ) : (
         <>
-          {plural(done.censused, "message")} pre-scanned;{" "}
-          {formatCount(done.deepScanned)} of{" "}
-          {plural(done.candidates, "flagged place")} read in depth
-          {done.findings > 0 && <> — {plural(done.findings, "finding")}</>}.
-          {done.unscanned > 0 && (
+          {plural(coverage.censused, "message")} pre-scanned;{" "}
+          {formatCount(coverage.deepScanned)} of{" "}
+          {plural(coverage.candidates, "flagged place")} read in depth
+          {findings != null && findings > 0 && (
+            <> — {plural(findings, "finding")}</>
+          )}
+          .
+          {coverage.unscanned > 0 && (
             <>
               {" "}
-              The {plural(done.unscanned, "unread place")}{" "}
-              {done.unscanned === 1 ? "was" : "were"} not checked — this scan
-              says nothing about {done.unscanned === 1 ? "it" : "them"}.
+              The {plural(coverage.unscanned, "unread place")}{" "}
+              {coverage.unscanned === 1 ? "was" : "were"} not checked — this
+              scan says nothing about {coverage.unscanned === 1 ? "it" : "them"}.
             </>
           )}
         </>
@@ -1691,6 +1713,19 @@ function SafetyReportDocument({
           </div>
         ))}
       </section>
+
+      {/* What the scan actually read. A triage scan reads a ranked subset in
+          depth, so the totals above are only half the story: without this the
+          report would let a budgeted or stopped scan's silence read as a clean
+          bill of health. Absent for batch scans (which read everything) and
+          for triage scans recorded before the coverage columns existed. */}
+      {report?.scan?.coverage && (
+        <TriageCoverageLine
+          coverage={report.scan.coverage}
+          cancelled={scan.status === "cancelled"}
+          className="-mt-2"
+        />
+      )}
 
       {/* Narrative */}
       <section className="space-y-2">

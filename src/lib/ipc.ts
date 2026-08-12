@@ -1070,6 +1070,20 @@ export interface SafetyScanStatus {
   finishedAt: number | null;
   chunksTotal: number;
   chunksDone: number;
+  /** What a triage scan read and left unread; null for batch scans and for
+   *  triage scans recorded before the coverage columns existed. */
+  coverage: TriageCoverage | null;
+}
+
+/** A triage scan's coverage: it reads a ranked SUBSET in depth, so the report
+ *  must say how much it read and how much it did not. `unscanned` is derived in
+ *  the backend so the UI cannot compute it differently. */
+export interface TriageCoverage {
+  censused: number;
+  candidates: number;
+  deepScanned: number;
+  unscanned: number;
+  unconfirmed: number;
 }
 
 export interface SafetyScanReport {
@@ -7296,6 +7310,16 @@ const mockClient: TraceLoupeClient = {
             finishedAt: Math.floor(Date.now() / 1000),
             chunksTotal: 42,
             chunksDone: 42,
+            // A triage-shaped mock: the coverage line (and its "not read"
+            // caveat) is only measurable in the browser if a scan carries
+            // coverage with a real unread tail.
+            coverage: {
+              censused: 12_480,
+              candidates: 210,
+              deepScanned: 180,
+              unscanned: 30,
+              unconfirmed: 12,
+            },
           },
           report:
             "Two conversations produced findings. The most serious is an escalating pattern of monitoring demands in “Alex” (coercive-control, severity 2), alongside one severity-2 scam attempt in “+1 555 0100”. Review “Alex” first.",
