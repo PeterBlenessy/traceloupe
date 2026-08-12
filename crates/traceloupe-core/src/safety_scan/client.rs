@@ -58,19 +58,39 @@ impl LlmClient {
         grammar: &str,
         max_tokens: u32,
     ) -> Result<Value> {
-        let body = json!({
+        let body = self.chat_json_body(system, user, grammar, max_tokens);
+        let content = self.post_chat(&body)?;
+        serde_json::from_str(&content)
+            .map_err(|_| Error::Inference("completion content is not valid JSON".into()))
+    }
+
+    /// The exact request body [`Self::chat_json`] sends — shared with the
+    /// prompt-cache measurement harness so a benchmark can never drift into
+    /// measuring a request production does not make.
+    ///
+    /// `cache_prompt` is sent EXPLICITLY rather than trusting the server
+    /// default: sequential focused calls share the ~1000-token system-prompt
+    /// prefix, and the measured saving (~86% of prompt eval; see the
+    /// validation doc) must be a property of the request, not of whatever a
+    /// future llama-server build defaults to.
+    pub(crate) fn chat_json_body(
+        &self,
+        system: &str,
+        user: &str,
+        grammar: &str,
+        max_tokens: u32,
+    ) -> Value {
+        json!({
             "model": self.model,
             "temperature": 0,
             "max_tokens": max_tokens,
             "grammar": grammar,
+            "cache_prompt": true,
             "messages": [
                 { "role": "system", "content": system },
                 { "role": "user", "content": user },
             ],
-        });
-        let content = self.post_chat(&body)?;
-        serde_json::from_str(&content)
-            .map_err(|_| Error::Inference("completion content is not valid JSON".into()))
+        })
     }
 
     /// One free-text call (the T6 summary passes) — same privacy rules, no
@@ -129,7 +149,7 @@ impl LlmClient {
     /// conversation instead of judging it, journey §10.6 incident 1). The
     /// caller supplies the fully-rendered prompt; same privacy rules as chat.
     pub fn complete(&self, prompt: &str, n_predict: u32) -> Result<String> {
-        let body = json!({ "prompt": prompt, "temperature": 0, "n_predict": n_predict });
+        let body = json!({ "prompt": prompt, "temperature": 0, "n_predict": n_predict, "cache_prompt": true });
         let text = self.post_json("/completion", &body)?;
         let v: Value = serde_json::from_str(&text)
             .map_err(|_| Error::Inference("completion response is not JSON".into()))?;

@@ -310,6 +310,44 @@ pub fn score_verdicts(
 mod tests {
     use super::*;
 
+    /// One spawn for every live `#[ignore]` test: the sandboxed server, the
+    /// health wait, and a per-process scratch dir (a FIXED name in the shared
+    /// temp root can already belong to another uid, and per-test names defeat
+    /// the Metal shader cache). ServerConfig changes land here once instead of
+    /// in hand-copied literals per test.
+    ///
+    /// Run live tests ONE AT A TIME (`cargo test <name> -- --ignored`): a bare
+    /// `-- --ignored` loads several multi-GB models concurrently — an OOM risk
+    /// on the 24 GB reference machine, and timings measured under GPU
+    /// contention are not comparable to the recorded numbers.
+    fn spawn_live_server(
+        model: &str,
+        embedding: bool,
+        ctx_size: u32,
+    ) -> crate::safety_scan::server::LlamaServer {
+        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
+        let mut s = LlamaServer::spawn(
+            &ServerConfig {
+                binary: resolve_binary().expect("sidecar binary"),
+                model_path: std::path::PathBuf::from(model),
+                port: pick_port().unwrap(),
+                ctx_size,
+                parallel: 1,
+                api_key: None,
+                gpu_layers: -1,
+                sandbox: true,
+                embedding,
+                scratch_dir: std::env::temp_dir()
+                    .join(format!("traceloupe-eval-scratch-{}", std::process::id())),
+            },
+            None,
+        )
+        .expect("spawn");
+        s.wait_healthy(std::time::Duration::from_secs(180))
+            .expect("healthy");
+        s
+    }
+
     #[test]
     fn fixtures_parse_and_are_substantial() {
         let f = load_fixtures();
@@ -826,12 +864,10 @@ mod tests {
         use crate::analysis::{AnalysisDb, Category};
         use crate::safety_scan::chunker::{self, message_fingerprint, ScanSources, TimeRange};
         use crate::safety_scan::client::LlmClient;
-        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
         use crate::safety_scan::triage::{self, FocusWindow, ScanMode};
         use crate::safety_scan::triage_scan::{self, FocusVerdict};
         use crate::sidecar::CancelToken;
         use std::cell::RefCell;
-        use std::path::PathBuf;
         use std::time::Duration;
 
         let (Ok(embed_model), Ok(class_model)) = (
@@ -877,32 +913,19 @@ mod tests {
         // The production reader over the real store: fingerprints, senders and
         // services come from the cache rows, exactly as run_triage_scan reads
         // them.
-        let threads =
-            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        // Mirror the production command's scope handling exactly: it forces
+        // notes off before computing the slug it stores on the scan row, so
+        // this fixture certifies the same recorded scope the triage path
+        // actually produces.
+        let scan_sources = ScanSources {
+            notes: false,
+            ..Default::default()
+        };
+        let threads = chunker::census_threads(&cache, TimeRange::default(), &scan_sources).unwrap();
         let total: usize = threads.iter().map(|t| t.len()).sum();
         assert_eq!(total, 15, "the reader sees every seeded message");
 
-        let binary = resolve_binary().expect("sidecar binary");
-        let spawn = |model: &str, embedding: bool, ctx_size: u32| -> LlamaServer {
-            let mut s = LlamaServer::spawn(
-                &ServerConfig {
-                    binary: binary.clone(),
-                    model_path: PathBuf::from(model),
-                    port: pick_port().unwrap(),
-                    ctx_size,
-                    parallel: 1,
-                    api_key: None,
-                    gpu_layers: -1,
-                    sandbox: true,
-                    embedding,
-                    scratch_dir: std::env::temp_dir().join("traceloupe-fixture-e2e-scratch"),
-                },
-                None,
-            )
-            .expect("spawn");
-            s.wait_healthy(Duration::from_secs(180)).expect("healthy");
-            s
-        };
+        let spawn = spawn_live_server;
 
         // Prototypes exactly as the command builds them: fixture positives,
         // all categories.
@@ -928,7 +951,7 @@ mod tests {
 
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan = db
-            .begin_scan("fixture-e2e", (None, None), "all", 1)
+            .begin_scan("fixture-e2e", (None, None), &scan_sources.slug(), 1)
             .unwrap();
         let out = triage_scan::run_triage(
             &mut db,
@@ -945,7 +968,10 @@ mod tests {
             |_| {},
         )
         .expect("run_triage");
-        slot.borrow_mut().0.shutdown();
+        // NOT shut down yet: the optional confirm phase below reuses the
+        // resident classifier — tearing it down here made every classify call
+        // in run 2 fail, which the §10.6 all-failed guard turned into a loud
+        // error (working as designed; the teardown moved, not the guard).
 
         println!(
             "fixture e2e: censused {} candidates {} deep-scanned {} findings {} unscanned {}",
@@ -965,7 +991,11 @@ mod tests {
         let threat_fp = message_fingerprint("hostile", Some(2_020), "them", THREAT);
         let hit = findings
             .iter()
-            .find(|f| f.fingerprint == threat_fp)
+            // Fingerprint AND category: one message can yield verdicts in
+            // several categories (sharing the fingerprint), and list_findings
+            // orders by severity — fingerprint alone could return a sibling
+            // category and fail a run that actually succeeded.
+            .find(|f| f.fingerprint == threat_fp && f.category == Category::ThreatViolence)
             .unwrap_or_else(|| {
                 panic!(
                     "the planted threat was not found; findings: {:?}",
@@ -975,7 +1005,6 @@ mod tests {
                         .collect::<Vec<_>>()
                 )
             });
-        assert_eq!(hit.category, Category::ThreatViolence);
         assert_eq!(hit.thread_identifier.as_deref(), Some("hostile"));
         assert_eq!(hit.sender.as_deref(), Some("them"));
         let svc: Option<String> = db
@@ -991,6 +1020,71 @@ mod tests {
             Some("SMS"),
             "service flows from the thread row"
         );
+
+        // ---- optional: the CONFIRM phase from the same store ----
+        // Set TRIAGE_GUARD_MODEL to also run a Precise-mode scan whose
+        // confirm closure is the real guard::confirm_focused — store-to-
+        // findings coverage of phase 4 (second swap, veto accounting), which
+        // Thorough skips by design. The census is incremental: nothing is
+        // re-embedded.
+        if let Ok(guard_model) = std::env::var("TRIAGE_GUARD_MODEL") {
+            let scan2 = db
+                .begin_scan("fixture-e2e-precise", (None, None), &scan_sources.slug(), 2)
+                .unwrap();
+            let classify2 = |w: &FocusWindow| {
+                // The classifier is already resident from the Thorough run.
+                triage_scan::classify_focused(&slot.borrow().1, w)
+            };
+            let confirm2 = |w: &FocusWindow, _: &FocusVerdict| {
+                {
+                    let mut sl = slot.borrow_mut();
+                    if sl.2 {
+                        // Still the classifier: swap to Guard on the first
+                        // confirm (run_triage's phase batching guarantees the
+                        // classify phase is over). The bool doubles as the
+                        // "swap once" latch.
+                        sl.0.shutdown();
+                        let srv = spawn(&guard_model, false, 16384);
+                        let c = LlmClient::new(srv.base_url(), "guard", Duration::from_secs(300));
+                        *sl = (srv, c, false);
+                    }
+                }
+                crate::safety_scan::guard::confirm_focused(&slot.borrow().1, w)
+            };
+            let out2 = triage_scan::run_triage(
+                &mut db,
+                scan2,
+                &threads,
+                &prototypes,
+                ScanMode::Precise,
+                None,
+                2,
+                |_: &str| -> crate::Result<Vec<f32>> {
+                    panic!("the incremental census must leave zero embed work")
+                },
+                classify2,
+                confirm2,
+                &CancelToken::new(),
+                |_| {},
+            )
+            .expect("run_triage precise");
+            println!(
+                "fixture e2e confirm: findings {} unconfirmed {} confirm_failed {}",
+                out2.findings, out2.unconfirmed, out2.confirm_failed
+            );
+            assert_eq!(
+                out2.confirm_failed, 0,
+                "the confirmer answered every finding"
+            );
+            let confirmed = db.list_findings(Some(scan2)).unwrap();
+            assert!(
+                confirmed
+                    .iter()
+                    .any(|f| f.fingerprint == threat_fp && f.category == Category::ThreatViolence),
+                "the planted threat must survive Guard confirmation from the store"
+            );
+        }
+        slot.borrow_mut().0.shutdown();
     }
 
     /// #409's premise, measured: focused mode re-sends the system prompt per
@@ -1009,35 +1103,15 @@ mod tests {
     fn measure_focused_prompt_cache() {
         use crate::analysis::SourceKind;
         use crate::safety_scan::chunker::{Chunk, ChunkItem};
+        use crate::safety_scan::client::LlmClient;
         use crate::safety_scan::prompt;
-        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
-        use std::path::PathBuf;
         use std::time::Duration;
 
         let Ok(class_model) = std::env::var("TRACELOUPE_EVAL_MODEL") else {
             eprintln!("set TRACELOUPE_EVAL_MODEL");
             return;
         };
-        let binary = resolve_binary().expect("sidecar binary");
-        let mut server = LlamaServer::spawn(
-            &ServerConfig {
-                binary,
-                model_path: PathBuf::from(class_model),
-                port: pick_port().unwrap(),
-                ctx_size: 8192,
-                parallel: 1,
-                api_key: None,
-                gpu_layers: -1,
-                sandbox: true,
-                embedding: false,
-                scratch_dir: std::env::temp_dir().join("traceloupe-promptcache-scratch"),
-            },
-            None,
-        )
-        .expect("spawn");
-        server
-            .wait_healthy(Duration::from_secs(180))
-            .expect("healthy");
+        let mut server = spawn_live_server(&class_model, false, 8192);
 
         // Six distinct focused windows: same system prompt (the shared
         // prefix), different conversations (the divergent tail).
@@ -1067,20 +1141,21 @@ mod tests {
         let agent = ureq::AgentBuilder::new()
             .timeout_read(Duration::from_secs(300))
             .build();
-        // The request the production client sends (same prompt fns, same
-        // grammar), plus the one knob under measurement.
+        // The EXACT production request body (LlmClient::chat_json_body — the
+        // same prompt fns, grammar, token budget and explicit cache_prompt the
+        // scan sends), so this harness can never drift into measuring a
+        // request production does not make. Only the counterfactual arm
+        // mutates the body, and only to flip the knob under measurement.
+        let client = LlmClient::new(server.base_url(), "eval", Duration::from_secs(300));
         let call = |seed: usize, cache: bool| -> (u64, f64) {
             let chunk = window(seed);
-            let body = serde_json::json!({
-                "temperature": 0,
-                "max_tokens": 600,
-                "grammar": prompt::verdicts_grammar(chunk.items.len()),
-                "cache_prompt": cache,
-                "messages": [
-                    { "role": "system", "content": prompt::SYSTEM_PROMPT },
-                    { "role": "user", "content": prompt::render_focused(&chunk, 2) },
-                ],
-            });
+            let mut body = client.chat_json_body(
+                prompt::SYSTEM_PROMPT,
+                &prompt::render_focused(&chunk, 2),
+                &prompt::verdicts_grammar(chunk.items.len()),
+                600,
+            );
+            body["cache_prompt"] = serde_json::Value::Bool(cache);
             let resp: serde_json::Value = serde_json::from_str(
                 &agent
                     .post(&format!("{}/v1/chat/completions", server.base_url()))
@@ -1091,19 +1166,25 @@ mod tests {
                     .expect("read"),
             )
             .expect("json");
-            let t = &resp["timings"];
+            // Loud, not lenient: this harness's only output IS these two
+            // numbers, and a server build that drops/moves the (non-standard)
+            // timings block would otherwise print zeros that read as a perfect
+            // cache hit.
+            let t = resp
+                .get("timings")
+                .expect("timings block in llama-server response");
             (
-                t["prompt_n"].as_u64().unwrap_or(0),
-                t["prompt_ms"].as_f64().unwrap_or(0.0),
+                t["prompt_n"].as_u64().expect("timings.prompt_n"),
+                t["prompt_ms"].as_f64().expect("timings.prompt_ms"),
             )
         };
 
-        println!("cache_prompt=true (the b10075 default):");
+        println!("cache_prompt=true (what production sends):");
         for seed in 0..6 {
             let (n, ms) = call(seed, true);
             println!("  call {seed}: prompt_n={n} prompt_ms={ms:.0}");
         }
-        println!("cache_prompt=false:");
+        println!("cache_prompt=false (the counterfactual):");
         for seed in 6..12 {
             let (n, ms) = call(seed, false);
             println!("  call {seed}: prompt_n={n} prompt_ms={ms:.0}");
@@ -1142,13 +1223,11 @@ mod tests {
     fn triage_pipeline_matches_reference() {
         use crate::analysis::AnalysisDb;
         use crate::safety_scan::client::LlmClient;
-        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
         use crate::safety_scan::triage::{self, CensusInput, FocusWindow, ScanMode};
         use crate::safety_scan::triage_scan::{self, TriageProgress};
         use crate::sidecar::CancelToken;
         use std::cell::RefCell;
         use std::collections::BTreeSet;
-        use std::path::PathBuf;
         use std::time::Duration;
 
         let (Ok(chunks_path), Ok(embed_model), Ok(class_model)) = (
@@ -1204,27 +1283,7 @@ mod tests {
             })
             .collect();
 
-        let binary = resolve_binary().expect("sidecar binary");
-        let spawn = |model: &str, embedding: bool, ctx_size: u32| -> LlamaServer {
-            let mut s = LlamaServer::spawn(
-                &ServerConfig {
-                    binary: binary.clone(),
-                    model_path: PathBuf::from(model),
-                    port: pick_port().unwrap(),
-                    ctx_size,
-                    parallel: 1,
-                    api_key: None,
-                    gpu_layers: -1,
-                    sandbox: true,
-                    embedding,
-                    scratch_dir: std::env::temp_dir().join("traceloupe-parity-scratch"),
-                },
-                None,
-            )
-            .expect("spawn");
-            s.wait_healthy(Duration::from_secs(180)).expect("healthy");
-            s
-        };
+        let spawn = spawn_live_server;
 
         // Phase A: the embedder — prototypes from the oracle's HELD-OUT threat
         // texts (single category, same centroid math either way).

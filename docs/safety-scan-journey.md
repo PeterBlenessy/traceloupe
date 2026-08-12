@@ -454,16 +454,26 @@ validation. Checklist mirrors #459.
       is proven from a REAL message store (#477): a fixture cache → the
       production `census_threads` reader → live sidecars finds the planted
       dilution-canary threat with its durable fingerprint/sender/service
-      intact. The Tauri command glue mirrors the proven batch command and gets
-      its end-to-end exercise when the UI lands.**
-- [x] **Prompt-prefix caching** (#409) — focused mode re-sends the system prompt
-      per message; this is now the highest-value performance work. **Measured
+      intact (Thorough; the same test optionally runs the Guard confirm phase
+      from the store via TRIAGE_GUARD_MODEL). The command glue itself has its
+      own open item below.**
+- [x] **Prompt-prefix caching** (#409) — the standing assumption was that
+      focused mode re-sends the system prompt per message and this was the
+      highest-value performance work. **Measured
       2026-08-12 (#477): already effective with zero code — the pinned
       llama-server's default `cache_prompt` amortizes ~86% of the focused
       prompt (cold 1009 tokens / 4.4 s → warm 139 / ~0.8 s; disabling it
       restores the full cost every call). Closed on the measurement; the
       residual upside (persistent/cross-slot caches) is not worth its
       complexity today. #409 stays open for its flash-attention half.**
+- [ ] **Exercise the `run_triage_scan` command glue end to end** — the ~390-line
+      Tauri command (mode-default fallback, notes-only refusal, confirmer RAM
+      admission, the `ensure` healthy-swaps, WatcherGuard, stranded-row repair)
+      is validated today by unit-style tests and the shared batch-command
+      patterns, not by a run through the command itself. The natural vehicle is
+      the UI milestone below (a real click drives the whole path); if the UI
+      slips, drive the command headless from a fixture cache instead. Do not
+      let this ride implicitly on "the UI will exercise it".
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
       (#456 per-conversation exists; add whole-backup census + the coverage
       report).

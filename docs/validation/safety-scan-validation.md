@@ -563,11 +563,19 @@ generated conversations, one planted threat — the exact sentence the dilution
 work proved a batch scan misses at production shape. Result: every message
 censused, every candidate deep-scanned (no budget, `unscanned 0`), the planted
 threat found with its **durable `message_fingerprint`, sender and service
-carried straight from the cache row** — the contract dismissals and deep-links
-depend on. What the corpus-parity test could not prove — that the store and
-the pipeline agree — is now proven. (The Tauri command glue itself — gate,
-events, watcher — mirrors the proven batch command structure and gets its
-end-to-end exercise when the UI lands.) One observation for the prototype
+carried straight from the cache row** — the contract dismissals and finding
+identity depend on. What the corpus-parity test could not prove — that the
+store and the pipeline agree — is now proven. With `TRIAGE_GUARD_MODEL` set,
+the same test then runs a Precise-mode scan over the (incremental, zero
+re-embed) census: of the Thorough run's 3 findings, **Guard vetoed 2 and kept
+exactly the planted threat** (`confirm_failed 0`) — the precision stage doing
+its job from the real store, phase-4 swap included. (The Tauri command glue
+itself — gate, events, watcher — has its own open §8 item; it must not ride
+implicitly on the UI milestone.) One incident worth keeping: the first run of
+the extended test tore the classifier down before the confirm phase, and the
+§10.6 all-failed guard turned that into a loud harness error instead of a
+clean-looking zero — the guard catching exactly the class of mistake it was
+built for, in its own test. One observation for the prototype
 work: on a 15-message mundane corpus, 10 messages cleared the 0.52 census
 cut — the fixture-positive prototypes are permissive on small mundane sets,
 which costs deep-scan work, not correctness (precision comes from the focused
@@ -575,17 +583,23 @@ stage). The generated-corpus §8 item is where that ceiling gets tightened.
 
 **`measure_focused_prompt_cache`** answers #409 with numbers instead of the
 standing assumption ("focused mode re-sends the system prompt per message —
-the highest-value performance work"):
+the highest-value performance work"). After review, the harness sends the
+EXACT production request body (`LlmClient::chat_json_body`) and production now
+sends `cache_prompt: true` explicitly — the saving is a property of the
+request, not of a server default a future llama.cpp bump could flip. Re-run
+through that body, the numbers reproduce:
 
 | | prompt tokens evaluated | prompt eval time |
 |---|---|---|
-| first call (cold) | 1009 | 4.4 s |
-| later calls, `cache_prompt` default (b10075: on) | **139** | **~0.8 s** |
-| later calls, `cache_prompt: false` | 1009–1015 | ~4.9 s |
+| first call (cold) | 1009 | ~4.1–4.4 s |
+| later calls, `cache_prompt: true` (what production sends) | **139** | **~0.7–0.8 s** |
+| later calls, `cache_prompt: false` (counterfactual) | 1009–1015 | ~4.3–5.1 s |
 
-**#409 is already effective**: the pinned llama-server's default prompt cache
-amortizes ~86% of the focused prompt (the shared system-prompt prefix) across
-sequential calls on the one slot the triage pipeline uses — roughly 4 s saved
-per focused call, with zero code. The remaining upside (persistent cross-run
+**The prompt cache amortizes ~86% of the focused prompt** (the shared
+system-prompt prefix) across sequential calls on the one slot the triage
+pipeline uses — roughly 4 s saved per focused call — and production requests
+it explicitly, so the behaviour survives server-default changes. The remaining upside (persistent cross-run
 caches, multi-slot prefix sharing) is small against that and not currently
-worth its complexity; the issue is closed with this measurement.
+worth its complexity; the journey's prompt-caching item is closed with this
+measurement. (#409 itself stays open for its other half — flash attention —
+which is unmeasured.)
