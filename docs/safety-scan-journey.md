@@ -480,12 +480,17 @@ validation. Checklist mirrors #459.
       the three triage postures, each tooltipped in product language, helper
       models gated with why-tooltips), triage invocation, live census/deep-scan/
       confirm phases, and the run-card coverage line. Still open: the
-      whole-backup budget surface, and persisting the coverage numbers on the
-      scan row so the report document can carry the line durably (today it
-      lives only in the terminal event).**
-- [ ] **Coverage reporting** — surface "N of M candidates deep-scanned; the rest
+      whole-backup budget surface. Coverage is now durable (#481): the scan
+      row stores censused/candidates/deep-scanned/unconfirmed (schema v16), and
+      ONE component renders the line for both the live run card and the stored
+      report, so the promise cannot drift between them.**
+- [x] **Coverage reporting** — surface "N of M candidates deep-scanned; the rest
       are not read" (rule-of-three), so a scoped scan never implies "clean" for
-      what it did not read.
+      what it did not read. **Done (#479/#481): the line appears live in the run
+      card and durably in the scan report, from coverage stored on the scan row;
+      a scan stopped during the census gets its own honest branch ("nothing was
+      read") rather than "0 of 0". Remaining nuance if ever wanted: the
+      rule-of-three phrasing for what the census itself did not reach.**
 - [ ] **Wider / better corpus for the three unlabelled categories**
       (coercive-control, grooming, relationship-harassment). The only route is to
       **generate** labelled conversations; the same corpus is the training set for

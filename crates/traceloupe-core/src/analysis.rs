@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -340,7 +340,17 @@ CREATE TABLE IF NOT EXISTS scans (
     -- carries one: cancelled and interrupted explain themselves. Without it the
     -- history could say a scan failed and nothing more, which is what the user
     -- could already see.
-    error        TEXT
+    error        TEXT,
+    -- Triage coverage (v16), NULL for batch scans and for triage scans made
+    -- before this column existed. A triage scan reads a RANKED SUBSET in
+    -- depth, so the honest report has to say how much it read and how much it
+    -- did not — otherwise a budget or a Stop leaves silence that reads as
+    -- "clean". These are the TriageOutcome counters, stored because the live
+    -- event that carried them is gone the moment the scan ends.
+    censused     INTEGER,
+    candidates   INTEGER,
+    deep_scanned INTEGER,
+    unconfirmed  INTEGER
 );
 
 -- A Content Finding: one model verdict attached to one message or note.
@@ -699,6 +709,24 @@ pub struct FindingRow {
     pub created_at: i64,
 }
 
+/// What a triage scan read, and what it left unread — the honest coverage a
+/// ranked-subset scan owes its reader. `unscanned` is derived rather than
+/// stored, so the two can never disagree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TriageCoverage {
+    pub censused: usize,
+    pub candidates: usize,
+    pub deep_scanned: usize,
+    pub unconfirmed: usize,
+}
+
+impl TriageCoverage {
+    /// Candidates a budget or a stop left unread.
+    pub fn unscanned(&self) -> usize {
+        self.candidates.saturating_sub(self.deep_scanned)
+    }
+}
+
 /// One row of the `scans` table (see SCHEMA_V1 for column semantics).
 #[derive(Debug, Clone)]
 pub struct ScanRow {
@@ -715,6 +743,8 @@ pub struct ScanRow {
     pub finished_at: Option<i64>,
     pub chunks_total: i64,
     pub chunks_done: i64,
+    /// Triage coverage; `None` for batch scans and pre-v16 rows.
+    pub coverage: Option<TriageCoverage>,
 }
 
 /// A scan for the history list: the fields a user cares about (period, when,
@@ -1087,6 +1117,19 @@ impl AnalysisDb {
                     [],
                 )?;
             }
+            // v16: triage coverage on the scan row. Additive and nullable —
+            // batch scans have none, and pre-v16 triage scans keep NULL (the
+            // UI shows no coverage line rather than inventing one).
+            let scan_cols: Vec<String> = conn
+                .prepare("PRAGMA table_info(scans)")?
+                .query_map([], |r| r.get::<_, String>(1))?
+                .filter_map(|c| c.ok())
+                .collect();
+            for col in ["censused", "candidates", "deep_scanned", "unconfirmed"] {
+                if !scan_cols.iter().any(|c| c == col) {
+                    conn.execute(&format!("ALTER TABLE scans ADD COLUMN {col} INTEGER"), [])?;
+                }
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1141,10 +1184,17 @@ impl AnalysisDb {
             // row that is running again, and a stale `error` would keep the
             // warning badge on a scan that is currently fine.
             self.conn.execute(
+                // Coverage goes too. It describes what the PREVIOUS run read,
+                // and leaving it would let a re-run — or a Full read scan over
+                // the same scope, which never records coverage — inherit a
+                // claim that places were left unread. That is the exact
+                // inversion the coverage line exists to prevent.
                 "UPDATE scans
                     SET model = ?2, status = 'running', started_at = ?3,
                         finished_at = NULL, error = NULL,
-                        chunks_total = 0, chunks_done = 0
+                        chunks_total = 0, chunks_done = 0,
+                        censused = NULL, candidates = NULL,
+                        deep_scanned = NULL, unconfirmed = NULL
                   WHERE id = ?1",
                 params![id, model, started_at],
             )?;
@@ -1174,7 +1224,11 @@ impl AnalysisDb {
         // provenance. Resume continues the same scan, so its recorded tier
         // stands.
         let n = self.conn.execute(
-            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0
+            // Coverage is cleared for the same reason as in begin_scan: it
+            // describes a finished read, and the resumed run re-records it.
+            "UPDATE scans SET status = 'running', finished_at = NULL, chunks_done = 0,
+                              censused = NULL, candidates = NULL,
+                              deep_scanned = NULL, unconfirmed = NULL
              WHERE id = ?1 AND status != 'completed'",
             params![scan_id],
         )?;
@@ -1234,6 +1288,26 @@ impl AnalysisDb {
         self.conn.execute(
             "UPDATE scans SET status = ?2, finished_at = ?3, error = ?4 WHERE id = ?1",
             params![scan_id, status.as_str(), finished_at, error],
+        )?;
+        Ok(())
+    }
+
+    /// Store a triage scan's coverage on its row, so the report can state what
+    /// was and was not read long after the live event is gone. Called at the
+    /// end of a triage scan INCLUDING a cancelled one — a partial scan is
+    /// exactly when the numbers matter most.
+    pub fn record_triage_coverage(&self, scan_id: i64, c: TriageCoverage) -> Result<()> {
+        self.conn.execute(
+            "UPDATE scans SET censused = ?2, candidates = ?3, deep_scanned = ?4,
+                              unconfirmed = ?5
+             WHERE id = ?1",
+            params![
+                scan_id,
+                c.censused as i64,
+                c.candidates as i64,
+                c.deep_scanned as i64,
+                c.unconfirmed as i64
+            ],
         )?;
         Ok(())
     }
@@ -2405,7 +2479,8 @@ impl AnalysisDb {
             .conn
             .query_row(
                 "SELECT id, model, range_start, range_end, sources, status, started_at,
-                        finished_at, chunks_total, chunks_done, error
+                        finished_at, chunks_total, chunks_done, error,
+                        censused, candidates, deep_scanned, unconfirmed
                  FROM scans ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -2421,6 +2496,22 @@ impl AnalysisDb {
                         chunks_total: r.get(8)?,
                         chunks_done: r.get(9)?,
                         error: r.get(10)?,
+                        // All four are written together, so `censused` alone
+                        // decides whether the row carries coverage. Every
+                        // column is read with `?`: a read error here must
+                        // propagate, not degrade into zeros — "0 of 0 read in
+                        // depth" suppresses the not-checked caveat entirely,
+                        // which is the one failure this line exists to
+                        // prevent.
+                        coverage: match r.get::<_, Option<i64>>(11)? {
+                            None => None,
+                            Some(censused) => Some(TriageCoverage {
+                                censused: censused as usize,
+                                candidates: r.get::<_, Option<i64>>(12)?.unwrap_or(0) as usize,
+                                deep_scanned: r.get::<_, Option<i64>>(13)?.unwrap_or(0) as usize,
+                                unconfirmed: r.get::<_, Option<i64>>(14)?.unwrap_or(0) as usize,
+                            }),
+                        },
                     })
                 },
             )
@@ -2433,7 +2524,8 @@ impl AnalysisDb {
             .conn
             .query_row(
                 "SELECT id, model, range_start, range_end, sources, status, started_at,
-                        finished_at, chunks_total, chunks_done, error
+                        finished_at, chunks_total, chunks_done, error,
+                        censused, candidates, deep_scanned, unconfirmed
                  FROM scans WHERE id = ?1",
                 params![id],
                 |r| {
@@ -2449,6 +2541,22 @@ impl AnalysisDb {
                         chunks_total: r.get(8)?,
                         chunks_done: r.get(9)?,
                         error: r.get(10)?,
+                        // All four are written together, so `censused` alone
+                        // decides whether the row carries coverage. Every
+                        // column is read with `?`: a read error here must
+                        // propagate, not degrade into zeros — "0 of 0 read in
+                        // depth" suppresses the not-checked caveat entirely,
+                        // which is the one failure this line exists to
+                        // prevent.
+                        coverage: match r.get::<_, Option<i64>>(11)? {
+                            None => None,
+                            Some(censused) => Some(TriageCoverage {
+                                censused: censused as usize,
+                                candidates: r.get::<_, Option<i64>>(12)?.unwrap_or(0) as usize,
+                                deep_scanned: r.get::<_, Option<i64>>(13)?.unwrap_or(0) as usize,
+                                unconfirmed: r.get::<_, Option<i64>>(14)?.unwrap_or(0) as usize,
+                            }),
+                        },
                     })
                 },
             )
@@ -2799,6 +2907,143 @@ mod tests {
 
     /// The worklist spends a budget on the densest harm first, and reports
     /// exactly what the budget left unscanned.
+    /// The coverage a triage scan owes its reader must survive the scan: the
+    /// live event that carries it is gone the moment the run ends, and a
+    /// report opened tomorrow still has to say what was NOT read.
+    #[test]
+    fn triage_coverage_survives_the_scan() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "messages", 1).unwrap();
+        // A batch scan (or a triage scan that never recorded) has none — the
+        // UI must be able to tell "no coverage" from "zero coverage".
+        assert!(db.scan_by_id(scan).unwrap().unwrap().coverage.is_none());
+
+        db.record_triage_coverage(
+            scan,
+            TriageCoverage {
+                censused: 8_000,
+                candidates: 120,
+                deep_scanned: 40,
+                unconfirmed: 3,
+            },
+        )
+        .unwrap();
+        let c = db.scan_by_id(scan).unwrap().unwrap().coverage.unwrap();
+        assert_eq!(c.censused, 8_000);
+        assert_eq!(c.candidates, 120);
+        assert_eq!(c.deep_scanned, 40);
+        assert_eq!(c.unconfirmed, 3);
+        assert_eq!(
+            c.unscanned(),
+            80,
+            "the unread tail is derived, so it can never contradict the pair"
+        );
+        // latest_scan reads the same row through a different query.
+        assert_eq!(db.latest_scan().unwrap().unwrap().coverage, Some(c));
+    }
+
+    /// A re-run must not inherit the previous run's coverage. `begin_scan`
+    /// reuses the row for a scope, so without clearing, a Full read scan (which
+    /// records no coverage at all) would render the earlier triage run's "the
+    /// rest were not checked" — claiming a scan that read EVERYTHING left
+    /// places unread, the exact inversion this line exists to prevent.
+    #[test]
+    fn a_re_run_does_not_inherit_the_previous_coverage() {
+        let db = AnalysisDb::open_in_memory().unwrap();
+        let id = db.begin_scan("m", (None, None), "messages", 1).unwrap();
+        db.record_triage_coverage(
+            id,
+            TriageCoverage {
+                censused: 12_480,
+                candidates: 210,
+                deep_scanned: 180,
+                unconfirmed: 12,
+            },
+        )
+        .unwrap();
+        assert!(db.scan_by_id(id).unwrap().unwrap().coverage.is_some());
+
+        // The same scope again — the SAME row (that is the #171 design).
+        let again = db.begin_scan("m", (None, None), "messages", 2).unwrap();
+        assert_eq!(again, id, "same scope reuses the row");
+        assert!(
+            db.scan_by_id(id).unwrap().unwrap().coverage.is_none(),
+            "a re-run starts with no coverage claim"
+        );
+
+        // And a resume clears it too: the resumed run re-records what it read.
+        db.record_triage_coverage(
+            id,
+            TriageCoverage {
+                censused: 1,
+                candidates: 1,
+                deep_scanned: 1,
+                unconfirmed: 0,
+            },
+        )
+        .unwrap();
+        db.finish_scan(id, ScanStatus::Cancelled, 3).unwrap();
+        db.resume_scan(id, "m").unwrap();
+        assert!(
+            db.scan_by_id(id).unwrap().unwrap().coverage.is_none(),
+            "a resumed run starts with no coverage claim"
+        );
+    }
+
+    /// A pre-v16 store must migrate without losing its scans, and its old rows
+    /// simply have no coverage (never a fabricated zero).
+    #[test]
+    fn a_pre_coverage_store_migrates_and_reports_no_coverage() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("analysis.db");
+        {
+            // A REAL store, rewound to the v15 shape: the scans table rebuilt
+            // without the coverage columns (SQLite cannot DROP COLUMN from
+            // this table — its DDL carries comments), everything else intact,
+            // so the migration runs the same path a real upgrade does.
+            let db = AnalysisDb::open(&path).unwrap();
+            db.begin_scan("gemma", (None, None), "all", 1).unwrap();
+            let conn = db.conn();
+            conn.execute_batch(
+                "CREATE TABLE scans_v15 AS
+                     SELECT id, model, range_start, range_end, sources, status,
+                            started_at, finished_at, chunks_total, chunks_done, error
+                     FROM scans;
+                 DROP TABLE scans;
+                 ALTER TABLE scans_v15 RENAME TO scans;",
+            )
+            .unwrap();
+            conn.pragma_update(None, "user_version", 15i64).unwrap();
+        }
+        let db = AnalysisDb::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), SCHEMA_VERSION);
+        let row = db.scan_by_id(1).unwrap().expect("the old scan survives");
+        assert!(
+            row.coverage.is_none(),
+            "an old row has no coverage — not a zero one"
+        );
+        // And the migrated store can store coverage from here on.
+        db.record_triage_coverage(
+            1,
+            TriageCoverage {
+                censused: 10,
+                candidates: 4,
+                deep_scanned: 1,
+                unconfirmed: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.scan_by_id(1)
+                .unwrap()
+                .unwrap()
+                .coverage
+                .unwrap()
+                .unscanned(),
+            3
+        );
+    }
+
     #[test]
     fn triage_worklist_ranks_dense_cells_first_and_honours_budget() {
         let mut db = AnalysisDb::open_in_memory().unwrap();

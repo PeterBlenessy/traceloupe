@@ -1591,6 +1591,20 @@ pub async fn run_triage_scan(
         )
         .map_err(|e| e.to_string())?;
 
+        // Durable coverage BEFORE the status flip: the live event that carries
+        // these numbers dies with the scan, and a report opened tomorrow still
+        // has to say how much was read and how much was not.
+        analysis
+            .record_triage_coverage(
+                scan_row_id,
+                traceloupe_core::analysis::TriageCoverage {
+                    censused: outcome.censused,
+                    candidates: outcome.candidates,
+                    deep_scanned: outcome.deep_scanned,
+                    unconfirmed: outcome.unconfirmed,
+                },
+            )
+            .map_err(|e| e.to_string())?;
         let status = if outcome.cancelled {
             traceloupe_core::analysis::ScanStatus::Cancelled
         } else {
@@ -2264,6 +2278,9 @@ pub struct ScanStatusDto {
     pub finished_at: Option<i64>,
     pub chunks_total: i64,
     pub chunks_done: i64,
+    /// What a triage scan read and left unread; `None` for batch scans and
+    /// for triage scans recorded before the coverage columns existed.
+    pub coverage: Option<TriageCoverageDto>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -2300,6 +2317,31 @@ pub struct ScanHistoryItem {
     /// the history card must not offer Resume (the census is incremental — a
     /// new triage scan loses nothing).
     pub is_triage: bool,
+}
+
+/// A triage scan's coverage, for the report's honest "what was not read" line.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageCoverageDto {
+    pub censused: u64,
+    pub candidates: u64,
+    pub deep_scanned: u64,
+    /// Candidates a budget or a stop left unread — derived in core so the UI
+    /// cannot compute it differently.
+    pub unscanned: u64,
+    pub unconfirmed: u64,
+}
+
+impl From<traceloupe_core::analysis::TriageCoverage> for TriageCoverageDto {
+    fn from(c: traceloupe_core::analysis::TriageCoverage) -> Self {
+        Self {
+            censused: c.censused as u64,
+            candidates: c.candidates as u64,
+            deep_scanned: c.deep_scanned as u64,
+            unscanned: c.unscanned() as u64,
+            unconfirmed: c.unconfirmed as u64,
+        }
+    }
 }
 
 /// Remove a past scan and everything scoped to it (findings, progress,
@@ -2391,6 +2433,7 @@ pub fn get_safety_scan_report(
             finished_at: scan.finished_at,
             chunks_total: scan.chunks_total,
             chunks_done: scan.chunks_done,
+            coverage: scan.coverage.map(Into::into),
         }),
         report,
         thread_summaries: threads,
