@@ -509,6 +509,44 @@ the wired prompt's window rendering (`Conversation: c<n>` labels vs the
 oracle's constant label), not a pipeline defect. ~10 min wall clock (~800
 embeddings + 146 focused calls, one M3).
 
-What this does not yet cover: the Guard confirmation stage (no confirmer tier
-in the catalog yet), so the end-to-end 0.94/0.95 with confirmation remains
-oracle-only; Thorough mode needs no confirmer and is fully reproduced.
+~~What this does not yet cover: the Guard confirmation stage (no confirmer tier
+in the catalog yet).~~ Covered the same day — next section.
+
+### 2026-08-12 — the wired confirmation stage (Guard tier, #474)
+
+Same machine and corpus. With Llama Guard 3 8B in the catalog as the confirmer
+(`guard.rs`: the hand-rolled `/completion` prompt with the **Forensic 9
+replacing** Guard's default categories — strategy B, journey §10.5), the parity
+test's second scan runs Precise mode (threshold 0.58, confirmation on — the
+sweep point the oracle also measured) over the incremental census, swapping
+classifier→confirmer at the phase boundary. Chunk-level, scored from the
+confirm decision stream:
+
+| | wired Rust (9-category block) | oracle reference (threat-only block) |
+|---|---|---|
+| provisional findings vetoed | 26 of 90 | 17 of 87 |
+| confirmed recall | **0.762** | 0.8125 |
+| confirmed precision | **0.968** | 0.9701 |
+
+**PASS (bands: recall ≥ 0.74, precision ≥ 0.90), with an honest delta**: the
+production nine-category block vetoes more than the oracle's single
+threat-category block — ~0.05 recall traded at essentially identical
+precision. That is the expected direction (nine categories give Guard more
+ways to judge a threat as fitting none of them well) and it is the real
+behaviour of the shipped Balanced/Precise modes on threat-style content, not a
+regression to hide: the reference was measured with a category block the
+product deliberately does not use (a threat-only block would be category
+narrowing, measured harmful in journey §5.5).
+
+Two measurement notes for future runs:
+
+- **Score confirmation from the decision stream, not the findings table.**
+  `begin_scan` reuses the scan row for an identical scope, so querying run 2's
+  findings by scan id silently merged run 1's — the first attempt printed the
+  Thorough numbers for the confirm stage (the giveaway: 64 findings cannot
+  flag 77 chunks). <!-- not-a-backup-count: Jigsaw corpus figures -->
+- The shipped mode grid has no (0.52 + confirm) point, so the oracle's
+  headline 0.94/0.95 config is bracketed by, not equal to, a named mode:
+  Thorough ≈ 0.96 recall / 0.73 precision (wired), Precise ≈ 0.76 / 0.97
+  (wired). If a mode matching the headline is ever wanted, it is one enum row —
+  but it should be measured as its own sweep point first.

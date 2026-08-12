@@ -792,6 +792,9 @@ export interface SafetyModelInfo {
   sizeBytes: number;
   installed: boolean;
   recommended: boolean;
+  /** "classifier" | "embedder" | "confirmer" — only classifiers are scan
+   *  models; the others are downloadable helpers the picker must not offer. */
+  role: "classifier" | "embedder" | "confirmer";
 }
 
 export interface SafetyModelStatus {
@@ -998,7 +1001,7 @@ export type SafetyScanEvent =
       /** Candidates the budget left unread — reported, never called clean. */
       unscanned: number;
       unconfirmed: number;
-      /** Worklist items whose focused call failed after a retry (skipped). */
+      /** Model calls that failed after a retry: skipped items + dropped confirmations. */
       failed: number;
     }
   | { phase: "error"; message: string };
@@ -6927,6 +6930,7 @@ const mockClient: TraceLoupeClient = {
         sizeBytes: 4_977_171_584,
         installed: mockSafetyModelInstalled,
         recommended: true,
+        role: "classifier" as const,
       },
       {
         id: "gemma-4-E2B-it-Q4_K_M",
@@ -6935,6 +6939,7 @@ const mockClient: TraceLoupeClient = {
         sizeBytes: 3_106_738_272,
         installed: false,
         recommended: false,
+        role: "classifier" as const,
       },
     ],
     readyModelId: mockSafetyModelInstalled ? "gemma-4-E4B-it-Q4_K_M" : null,

@@ -828,6 +828,11 @@ mod tests {
     ///   TRACELOUPE_EMBED_MODEL=/tmp/models/embeddinggemma-300M-Q8_0.gguf \
     ///   TRACELOUPE_EVAL_MODEL=~/.../gemma-4-E4B-it-Q4_K_M.gguf \
     ///   cargo test -p traceloupe-core triage_pipeline_matches_reference -- --ignored --nocapture
+    ///
+    /// Optionally set TRIAGE_GUARD_MODEL=/path/Llama-Guard-3-8B.Q4_K_M.gguf to
+    /// also run the CONFIRMATION stage as a second, Precise-mode scan (adds
+    /// ~10 min) and assert it against the oracle's recorded guard-stage
+    /// reference at 0.58.
     #[test]
     #[ignore = "requires the corpus dump + both GGUFs (set TRIAGE_CHUNKS, TRACELOUPE_EVAL_MODEL, TRACELOUPE_EMBED_MODEL)"]
     fn triage_pipeline_matches_reference() {
@@ -928,21 +933,28 @@ mod tests {
             .collect();
         let prototypes = triage::build_prototypes(&examples, |t| ec.embed(t)).expect("prototypes");
 
-        // The same lazy embedder→classifier swap the command performs: the
-        // phase boundary in run_triage guarantees no embed call after the
-        // first classify call.
-        let slot = RefCell::new((server, ec, false));
+        // The same lazy phase-boundary swaps the command performs: embedder →
+        // classifier on the first focused call, classifier → confirmer on the
+        // first confirmation. Role: 0 = embedder, 1 = classifier, 2 = confirmer.
+        let guard_model = std::env::var("TRIAGE_GUARD_MODEL").ok();
+        let slot = RefCell::new((server, ec, 0u8));
+        let ensure = |role: u8| {
+            let mut s = slot.borrow_mut();
+            if s.2 != role {
+                s.0.shutdown();
+                let (model, ctx): (&str, u32) = if role == 2 {
+                    (guard_model.as_deref().expect("guard model env"), 16384)
+                } else {
+                    (&class_model, 8192)
+                };
+                let srv = spawn(model, false, ctx);
+                let c = LlmClient::new(srv.base_url(), "eval", Duration::from_secs(300));
+                *s = (srv, c, role);
+            }
+        };
         let embed = |t: &str| slot.borrow().1.embed(t);
         let classify = |w: &FocusWindow| {
-            {
-                let mut s = slot.borrow_mut();
-                if !s.2 {
-                    s.0.shutdown();
-                    let srv = spawn(&class_model, false, 8192);
-                    let c = LlmClient::new(srv.base_url(), "eval", Duration::from_secs(300));
-                    *s = (srv, c, true);
-                }
-            }
+            ensure(1);
             triage_scan::classify_focused(&slot.borrow().1, w)
         };
 
@@ -969,7 +981,6 @@ mod tests {
             },
         )
         .expect("run_triage");
-        slot.borrow_mut().0.shutdown();
 
         // Chunk-level scoring, same as the reference numbers were computed.
         let kept: BTreeSet<usize> = db
@@ -1023,6 +1034,96 @@ mod tests {
             (0.64..=0.86).contains(&precision),
             "chunk-level focused precision {precision:.3} outside the reference band (ref 0.740)"
         );
+
+        // ---- optional: the CONFIRMATION stage (set TRIAGE_GUARD_MODEL) ----
+        // Precise (threshold 0.58, confirm on) matches an oracle sweep point
+        // exactly; its recorded guard-stage reference, chunk-level:
+        // recall 0.8125, precision 0.9701 (from the 2026-08-12 sweep's stage
+        // cache). The census is incremental, so this second run re-embeds
+        // nothing and needs no embedder — prototypes are reused from phase A.
+        if guard_model.is_some() {
+            // begin_scan REUSES the row for an identical scope, so a DB query
+            // by scan id would return run 1's findings merged in. The
+            // confirmation stage is scored from the confirm closure's own
+            // kept-set instead — the decision stream itself, immune to
+            // scan-row and replace-findings semantics.
+            let scan2 = db
+                .begin_scan("parity-precise", (None, None), "messages", 2)
+                .unwrap();
+            let kept_chunks = RefCell::new(BTreeSet::<usize>::new());
+            let classify2 = |w: &FocusWindow| {
+                ensure(1);
+                triage_scan::classify_focused(&slot.borrow().1, w)
+            };
+            let confirm2 = |w: &FocusWindow, _: &triage_scan::FocusVerdict| {
+                ensure(2);
+                let keep = crate::safety_scan::guard::confirm_focused(&slot.borrow().1, w)?;
+                if keep {
+                    kept_chunks
+                        .borrow_mut()
+                        .insert((w.items[w.focus].source_id / 100) as usize);
+                }
+                Ok(keep)
+            };
+            let out2 = triage_scan::run_triage(
+                &mut db,
+                scan2,
+                &threads,
+                &prototypes,
+                ScanMode::Precise,
+                None,
+                2,
+                |_: &str| -> crate::Result<Vec<f32>> {
+                    // Run 2 reuses run 1's census (same db, same corpus, same
+                    // fingerprints) and every post-phase-A server is spawned
+                    // WITHOUT --embedding — so an embed call here means the
+                    // incremental-census invariant broke. Fail loudly at the
+                    // cause instead of as an opaque mid-run HTTP error.
+                    panic!("run 2 must not embed — the incremental census should have zero work")
+                },
+                classify2,
+                confirm2,
+                &CancelToken::new(),
+                |p: TriageProgress| match p {
+                    TriageProgress::Census { total, .. } => {
+                        assert_eq!(total, 0, "run 2 re-embedded — census not incremental");
+                    }
+                    TriageProgress::Confirm { done, total } => {
+                        if done % 20 == 0 {
+                            eprintln!("confirm {done}/{total}");
+                        }
+                    }
+                    TriageProgress::DeepScan { .. } => {}
+                },
+            )
+            .expect("run_triage precise");
+            let _ = scan2;
+            let cflag = kept_chunks.borrow().clone();
+            let ctp = cflag.iter().filter(|c| dump.chunks[**c].real).count();
+            let crec = ctp as f64 / n_real as f64;
+            let cprec = if cflag.is_empty() {
+                0.0
+            } else {
+                ctp as f64 / cflag.len() as f64
+            };
+            println!(
+                "wired pipeline @0.58+confirm: chunk recall {crec:.3} (ref 0.813) · precision {cprec:.3} (ref 0.970) · findings {} unconfirmed {}",
+                out2.findings, out2.unconfirmed
+            );
+            assert!(
+                out2.unconfirmed > 0 || out2.findings == 0,
+                "the confirmer vetoed nothing at all — suspect the harness (a Guard driven through a chat template answers nothing useful)"
+            );
+            assert!(
+                crec >= 0.74,
+                "confirmed chunk-level recall {crec:.3} below the reference band (ref 0.8125)"
+            );
+            assert!(
+                cprec >= 0.90,
+                "confirmed chunk-level precision {cprec:.3} below the reference band (ref 0.9701)"
+            );
+        }
+        slot.borrow_mut().0.shutdown();
     }
 
     /// The other half of a baseline (#407): how fast a scan actually goes.

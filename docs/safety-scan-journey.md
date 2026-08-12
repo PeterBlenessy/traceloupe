@@ -444,10 +444,15 @@ validation. Checklist mirrors #459.
       oracle's exact corpus — census identical (146/146 messages kept, ceiling <!-- not-a-backup-count: Jigsaw corpus figures -->
       0.963 vs 0.9625), focused recall identical (0.963), precision 0.726 vs
       0.740 (within band; the delta is the window rendering, §10.13), and the
-      re-run after the review hardening was identical. Still open: the
-      confirmation stage (0.94/0.95 end to end) once the Guard tier (#474)
-      lands, and a run through the `run_triage_scan` command path itself
-      against a fixture cache.**
+      re-run after the review hardening was identical. The confirmation stage
+      is now measured too (#474, same day): at the Precise sweep point the
+      wired nine-category Guard block confirms at chunk-level 0.762/0.968
+      against the oracle's threat-only-block 0.8125/0.9701 — within band, with
+      the ~0.05 recall delta attributed to the category-block difference and
+      recorded in the validation doc (the product deliberately does not ship a
+      threat-only block; that would be the §5.5 narrowing). Still open: a run
+      through the `run_triage_scan` command path itself against a fixture
+      cache.**
 - [ ] **Prompt-prefix caching** (#409) — focused mode re-sends the system prompt
       per message; this is now the highest-value performance work.
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes

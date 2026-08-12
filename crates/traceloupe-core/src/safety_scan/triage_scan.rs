@@ -62,6 +62,10 @@ pub struct TriageOutcome {
     /// audited, and the scan continued. ALL of them failing fails the scan
     /// (the §10.6 harness-bug signature).
     pub deep_scan_failed: usize,
+    /// Provisional findings whose CONFIRMATION call failed even after a retry
+    /// — dropped (the mode promised a second opinion) and audited. ALL of them
+    /// failing fails the scan, same as `deep_scan_failed`.
+    pub confirm_failed: usize,
     /// Verdicts the validation rejected (malformed, or naming an item outside
     /// the window). Diagnosability: a zero-finding scan with high `rejected`
     /// is a harness bug, not a clean backup.
@@ -405,7 +409,7 @@ where
             total: to_confirm,
         });
     }
-    for (done, (window, v)) in provisional.into_iter().enumerate() {
+    'confirm: for (done, (window, v)) in provisional.into_iter().enumerate() {
         if mode.confirm() {
             if out.cancelled || cancel.is_cancelled() {
                 // Unconfirmed-on-cancel findings are dropped, not written: the
@@ -414,23 +418,45 @@ where
                 out.cancelled = true;
                 break;
             }
-            let kept = match confirm(&window, &v) {
-                Ok(k) => k,
-                // Stop under an in-flight confirm call: the vetted findings so
-                // far are written; this one and the rest are dropped unvetted.
-                Err(_) if cancel.is_cancelled() => {
-                    out.cancelled = true;
-                    break;
+            // One retry then drop-and-audit, exactly like a classify error: a
+            // transient hiccup on confirmation 89 of 90 must not abort the run
+            // and discard every already-vetted finding (replace_findings only
+            // runs after this loop). A dropped finding is NOT written — the
+            // mode promised a second opinion — and all-of-them failing fails
+            // the scan loudly below.
+            let mut kept = None;
+            for attempt in 0..2 {
+                match confirm(&window, &v) {
+                    Ok(k) => {
+                        kept = Some(k);
+                        break;
+                    }
+                    // Stop under an in-flight confirm call: the vetted
+                    // findings so far are written; this one and the rest are
+                    // dropped unvetted.
+                    Err(_) if cancel.is_cancelled() => {
+                        out.cancelled = true;
+                        break 'confirm;
+                    }
+                    Err(e) if attempt == 1 => {
+                        out.confirm_failed += 1;
+                        let _ =
+                            analysis.audit(scan_id, now, "triage_confirm_failed", &format!("{e}"));
+                    }
+                    Err(_) => {}
                 }
-                Err(e) => return Err(e),
-            };
+            }
             progress(TriageProgress::Confirm {
                 done: done + 1,
                 total: to_confirm,
             });
-            if !kept {
-                out.unconfirmed += 1;
-                continue;
+            match kept {
+                Some(true) => {}
+                Some(false) => {
+                    out.unconfirmed += 1;
+                    continue;
+                }
+                None => continue, // failed after retry; audited above
             }
         }
         let judged = &window.items[window.focus];
@@ -448,6 +474,16 @@ where
             content_key: crate::safety_scan::content_key::content_key(&judged.text),
         });
     }
+    // Every confirmation failing is the same §10.6 signature as every classify
+    // failing: a dead or mis-driven confirmer, not a backup with no confirmable
+    // findings — surface it instead of writing zero findings that read clean.
+    if !out.cancelled && to_confirm > 0 && out.confirm_failed == to_confirm {
+        return Err(crate::Error::Inference(
+            "every confirmation failed — suspect the harness (confirmer server/template), \
+             not the findings"
+                .into(),
+        ));
+    }
     analysis.replace_findings(scan_id, &findings, now)?;
     out.findings = findings.len();
     // The per-scan diagnosability record (mirrors the batch engine's per-chunk
@@ -458,13 +494,14 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
             out.contentless,
             out.deep_scan_failed,
-            out.unconfirmed
+            out.unconfirmed,
+            out.confirm_failed
         ),
     );
     Ok(out)
@@ -1188,6 +1225,90 @@ mod tests {
         assert!(
             err.to_string().contains("harness"),
             "the error must point at the harness, got: {err}"
+        );
+    }
+
+    /// One transiently-failing confirmation is retried then dropped — it must
+    /// not abort the run and discard every already-vetted finding.
+    #[test]
+    fn one_failing_confirmation_is_dropped_not_fatal() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            thread(&[(1, "a", "i will kill you")]),
+            thread(&[(2, "a", "kill him too")]),
+        ];
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            Ok(fo(vec![FocusVerdict {
+                category: Category::ThreatViolence,
+                severity: 3,
+                rationale: "x".into(),
+            }]))
+        };
+        let confirm = |w: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            if w.items[w.focus].source_id == 2 {
+                Err(crate::Error::Inference("hiccup".into()))
+            } else {
+                Ok(true)
+            }
+        };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Precise,
+            None,
+            10,
+            embed,
+            classify,
+            confirm,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.confirm_failed, 1);
+        assert_eq!(
+            out.findings, 1,
+            "the vetted finding is written; the failed one is dropped, not fatal"
+        );
+        assert_eq!(out.unconfirmed, 0, "a failure is not a veto");
+    }
+
+    /// Every confirmation failing is the §10.6 harness-bug signature.
+    #[test]
+    fn all_confirmations_failing_fails_the_scan() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![thread(&[(1, "a", "i will kill you")])];
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            Ok(fo(vec![FocusVerdict {
+                category: Category::ThreatViolence,
+                severity: 3,
+                rationale: "x".into(),
+            }]))
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            Err(crate::Error::Inference("dead confirmer".into()))
+        };
+        let err = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &threat_proto(),
+            ScanMode::Precise,
+            None,
+            10,
+            embed,
+            classify,
+            confirm,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("harness"),
+            "must point at the harness, got: {err}"
         );
     }
 

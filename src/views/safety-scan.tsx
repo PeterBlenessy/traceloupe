@@ -393,10 +393,16 @@ export function SafetyScanView() {
   const ms = modelStatus.data;
   const running = scan !== null;
   // Which model this scan will use: the user's Settings pick when it's still
-  // installed, otherwise the recommended installed tier the backend reports.
-  const installedIds = ms.models.filter((m) => m.installed).map((m) => m.id);
+  // an installed CLASSIFIER, otherwise the recommended installed tier the
+  // backend reports. The role filter matters: a persisted preference could
+  // name a helper model (older builds' settings offered any installed model),
+  // and without it the fallback never fires and the backend refuses the scan.
+  // Mirrors safety-model-settings.tsx's installedClassifiers.
+  const installedClassifierIds = ms.models
+    .filter((m) => m.installed && m.role === "classifier")
+    .map((m) => m.id);
   const effectiveModelId =
-    preferredModelId && installedIds.includes(preferredModelId)
+    preferredModelId && installedClassifierIds.includes(preferredModelId)
       ? preferredModelId
       : ms.readyModelId;
   // Resume a non-completed scan from its history card: reopen THAT row (so the
