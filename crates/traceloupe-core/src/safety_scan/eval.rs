@@ -807,6 +807,310 @@ mod tests {
         );
     }
 
+    /// The whole triage data path from a REAL cache store: a seeded fixture
+    /// `CacheDb` → `census_threads` (the production reader, with its
+    /// fingerprints, senders and services) → prototypes from the committed
+    /// fixture positives → `run_triage` with live sidecars. This is the half
+    /// of journey §8's re-measure item the corpus-parity test cannot cover —
+    /// it proves the message store and the pipeline agree end to end, not just
+    /// that the pipeline works on hand-built inputs.
+    ///
+    /// Synthetic messages only; no backup, real or otherwise, is involved.
+    ///
+    ///   TRACELOUPE_EMBED_MODEL=/tmp/models/embeddinggemma-300M-Q8_0.gguf \
+    ///   TRACELOUPE_EVAL_MODEL=~/.../gemma-4-E4B-it-Q4_K_M.gguf \
+    ///   cargo test -p traceloupe-core triage_from_a_fixture_cache -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires both GGUFs (set TRACELOUPE_EVAL_MODEL, TRACELOUPE_EMBED_MODEL)"]
+    fn triage_from_a_fixture_cache() {
+        use crate::analysis::{AnalysisDb, Category};
+        use crate::safety_scan::chunker::{self, message_fingerprint, ScanSources, TimeRange};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
+        use crate::safety_scan::triage::{self, FocusWindow, ScanMode};
+        use crate::safety_scan::triage_scan::{self, FocusVerdict};
+        use crate::sidecar::CancelToken;
+        use std::cell::RefCell;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let (Ok(embed_model), Ok(class_model)) = (
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+            std::env::var("TRACELOUPE_EVAL_MODEL"),
+        ) else {
+            eprintln!("set TRACELOUPE_EMBED_MODEL and TRACELOUPE_EVAL_MODEL");
+            return;
+        };
+
+        // Three conversations of generated chatter with one planted threat —
+        // the sentence the dilution work proved a batch scan misses at
+        // production shape (validation doc), which makes it the right canary.
+        const THREAT: &str = "i know where you live and im going to make you regret this";
+        let cache = chunker::tests::cache_with(&[
+            (
+                "family-chat",
+                1_000,
+                "can you grab milk on the way home",
+                false,
+            ),
+            ("family-chat", 1_010, "sure, anything else", true),
+            (
+                "family-chat",
+                1_020,
+                "maybe bread if the good one is in",
+                false,
+            ),
+            ("family-chat", 1_030, "will do", true),
+            ("family-chat", 1_040, "trains are delayed again", false),
+            ("family-chat", 1_050, "classic. see you around seven", true),
+            ("hostile", 2_000, "you were at the game last night", false),
+            ("hostile", 2_010, "yeah great match", true),
+            ("hostile", 2_020, THREAT, false),
+            ("hostile", 2_030, "what are you talking about", true),
+            ("hostile", 2_040, "you know exactly what you did", false),
+            ("work", 3_000, "standup moved to ten tomorrow", false),
+            ("work", 3_010, "thanks, i'll update the invite", true),
+            ("work", 3_020, "deploy went out clean", false),
+            ("work", 3_030, "great, closing the ticket", true),
+        ]);
+
+        // The production reader over the real store: fingerprints, senders and
+        // services come from the cache rows, exactly as run_triage_scan reads
+        // them.
+        let threads =
+            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let total: usize = threads.iter().map(|t| t.len()).sum();
+        assert_eq!(total, 15, "the reader sees every seeded message");
+
+        let binary = resolve_binary().expect("sidecar binary");
+        let spawn = |model: &str, embedding: bool, ctx_size: u32| -> LlamaServer {
+            let mut s = LlamaServer::spawn(
+                &ServerConfig {
+                    binary: binary.clone(),
+                    model_path: PathBuf::from(model),
+                    port: pick_port().unwrap(),
+                    ctx_size,
+                    parallel: 1,
+                    api_key: None,
+                    gpu_layers: -1,
+                    sandbox: true,
+                    embedding,
+                    scratch_dir: std::env::temp_dir().join("traceloupe-fixture-e2e-scratch"),
+                },
+                None,
+            )
+            .expect("spawn");
+            s.wait_healthy(Duration::from_secs(180)).expect("healthy");
+            s
+        };
+
+        // Prototypes exactly as the command builds them: fixture positives,
+        // all categories.
+        let server = spawn(&embed_model, true, 2048);
+        let ec = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        let examples = triage_scan::prototype_examples(&Category::ALL);
+        let prototypes = triage::build_prototypes(&examples, |t| ec.embed(t)).expect("prototypes");
+
+        let slot = RefCell::new((server, ec, false));
+        let embed = |t: &str| slot.borrow().1.embed(t);
+        let classify = |w: &FocusWindow| {
+            {
+                let mut s = slot.borrow_mut();
+                if !s.2 {
+                    s.0.shutdown();
+                    let srv = spawn(&class_model, false, 8192);
+                    let c = LlmClient::new(srv.base_url(), "eval", Duration::from_secs(300));
+                    *s = (srv, c, true);
+                }
+            }
+            triage_scan::classify_focused(&slot.borrow().1, w)
+        };
+
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db
+            .begin_scan("fixture-e2e", (None, None), "all", 1)
+            .unwrap();
+        let out = triage_scan::run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &prototypes,
+            ScanMode::Thorough,
+            None,
+            1,
+            embed,
+            classify,
+            |_: &FocusWindow, _: &FocusVerdict| Ok(true),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("run_triage");
+        slot.borrow_mut().0.shutdown();
+
+        println!(
+            "fixture e2e: censused {} candidates {} deep-scanned {} findings {} unscanned {}",
+            out.censused,
+            out.candidates,
+            out.deep_scanned,
+            out.findings,
+            out.unscanned()
+        );
+        assert_eq!(out.censused, 15);
+        assert_eq!(out.unscanned(), 0, "no budget — every candidate read");
+
+        // The planted threat is found, and its finding carries the DURABLE
+        // identity and metadata straight from the cache row — the contract
+        // dismissals and deep-links depend on.
+        let findings = db.list_findings(Some(scan)).unwrap();
+        let threat_fp = message_fingerprint("hostile", Some(2_020), "them", THREAT);
+        let hit = findings
+            .iter()
+            .find(|f| f.fingerprint == threat_fp)
+            .unwrap_or_else(|| {
+                panic!(
+                    "the planted threat was not found; findings: {:?}",
+                    findings
+                        .iter()
+                        .map(|f| (&f.thread_identifier, &f.category))
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert_eq!(hit.category, Category::ThreatViolence);
+        assert_eq!(hit.thread_identifier.as_deref(), Some("hostile"));
+        assert_eq!(hit.sender.as_deref(), Some("them"));
+        let svc: Option<String> = db
+            .conn()
+            .query_row(
+                "SELECT service FROM content_findings WHERE id = ?1",
+                [hit.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            svc.as_deref(),
+            Some("SMS"),
+            "service flows from the thread row"
+        );
+    }
+
+    /// #409's premise, measured: focused mode re-sends the system prompt per
+    /// message — but the pinned llama-server (b10075) defaults `cache_prompt`
+    /// to true, so sequential focused calls on one slot should reuse the
+    /// shared system-prompt prefix and only pay for the divergent tail. This
+    /// prints per-call prompt-eval counts and times with the default cache and
+    /// with `cache_prompt: false`, so #409 can be closed (or re-scoped) from a
+    /// measurement rather than an assumption. A measurement harness, like
+    /// `measure_scan_throughput`: it prints, it does not assert thresholds.
+    ///
+    ///   TRACELOUPE_EVAL_MODEL=~/.../gemma-4-E4B-it-Q4_K_M.gguf \
+    ///   cargo test -p traceloupe-core measure_focused_prompt_cache -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires the classifier GGUF (set TRACELOUPE_EVAL_MODEL)"]
+    fn measure_focused_prompt_cache() {
+        use crate::analysis::SourceKind;
+        use crate::safety_scan::chunker::{Chunk, ChunkItem};
+        use crate::safety_scan::prompt;
+        use crate::safety_scan::server::{pick_port, resolve_binary, LlamaServer, ServerConfig};
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let Ok(class_model) = std::env::var("TRACELOUPE_EVAL_MODEL") else {
+            eprintln!("set TRACELOUPE_EVAL_MODEL");
+            return;
+        };
+        let binary = resolve_binary().expect("sidecar binary");
+        let mut server = LlamaServer::spawn(
+            &ServerConfig {
+                binary,
+                model_path: PathBuf::from(class_model),
+                port: pick_port().unwrap(),
+                ctx_size: 8192,
+                parallel: 1,
+                api_key: None,
+                gpu_layers: -1,
+                sandbox: true,
+                embedding: false,
+                scratch_dir: std::env::temp_dir().join("traceloupe-promptcache-scratch"),
+            },
+            None,
+        )
+        .expect("spawn");
+        server
+            .wait_healthy(Duration::from_secs(180))
+            .expect("healthy");
+
+        // Six distinct focused windows: same system prompt (the shared
+        // prefix), different conversations (the divergent tail).
+        let window = |seed: usize| -> Chunk {
+            let items = (0..5)
+                .map(|i| ChunkItem {
+                    source_id: (seed * 10 + i) as i64,
+                    sender: if i % 2 == 0 { "them" } else { "me" }.into(),
+                    occurred_at: None,
+                    text: format!(
+                        "message {i} of conversation {seed} about the plans for saturday"
+                    ),
+                    fingerprint: format!("fp{seed}:{i}"),
+                })
+                .collect();
+            Chunk {
+                key: format!("bench:{seed}"),
+                fingerprint: String::new(),
+                kind: SourceKind::Message,
+                thread_identifier: Some(format!("bench-{seed}")),
+                label: None,
+                service: None,
+                items,
+            }
+        };
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout_read(Duration::from_secs(300))
+            .build();
+        // The request the production client sends (same prompt fns, same
+        // grammar), plus the one knob under measurement.
+        let call = |seed: usize, cache: bool| -> (u64, f64) {
+            let chunk = window(seed);
+            let body = serde_json::json!({
+                "temperature": 0,
+                "max_tokens": 600,
+                "grammar": prompt::verdicts_grammar(chunk.items.len()),
+                "cache_prompt": cache,
+                "messages": [
+                    { "role": "system", "content": prompt::SYSTEM_PROMPT },
+                    { "role": "user", "content": prompt::render_focused(&chunk, 2) },
+                ],
+            });
+            let resp: serde_json::Value = serde_json::from_str(
+                &agent
+                    .post(&format!("{}/v1/chat/completions", server.base_url()))
+                    .set("Content-Type", "application/json")
+                    .send_string(&body.to_string())
+                    .expect("request")
+                    .into_string()
+                    .expect("read"),
+            )
+            .expect("json");
+            let t = &resp["timings"];
+            (
+                t["prompt_n"].as_u64().unwrap_or(0),
+                t["prompt_ms"].as_f64().unwrap_or(0.0),
+            )
+        };
+
+        println!("cache_prompt=true (the b10075 default):");
+        for seed in 0..6 {
+            let (n, ms) = call(seed, true);
+            println!("  call {seed}: prompt_n={n} prompt_ms={ms:.0}");
+        }
+        println!("cache_prompt=false:");
+        for seed in 6..12 {
+            let (n, ms) = call(seed, false);
+            println!("  call {seed}: prompt_n={n} prompt_ms={ms:.0}");
+        }
+        server.shutdown();
+    }
+
     /// The wired Rust triage pipeline against the recorded reference run.
     ///
     /// The Python oracle (`tools/validate-triage-pipeline.py`) produced the

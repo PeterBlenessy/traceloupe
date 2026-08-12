@@ -843,7 +843,9 @@ pub(crate) mod tests {
     use super::*;
     use rusqlite::params;
 
-    fn cache_with(messages: &[(&str, i64, &str, bool)]) -> CacheDb {
+    /// Seed an in-memory cache with (thread_identifier, sent_at, body,
+    /// is_from_me) rows — shared with the eval tests' fixture-cache e2e run.
+    pub(crate) fn cache_with(messages: &[(&str, i64, &str, bool)]) -> CacheDb {
         // (thread_identifier, sent_at, body, is_from_me)
         let cache = CacheDb::open_in_memory().unwrap();
         let conn = cache.conn();

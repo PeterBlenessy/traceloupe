@@ -550,3 +550,42 @@ Two measurement notes for future runs:
   Thorough ≈ 0.96 recall / 0.73 precision (wired), Precise ≈ 0.76 / 0.97
   (wired). If a mode matching the headline is ever wanted, it is one enum row —
   but it should be measured as its own sweep point first.
+
+### 2026-08-12 — the fixture-cache end-to-end run, and #409 measured
+
+Same machine and models. Two `#[ignore]` tests close the remaining §8
+re-measure sliver:
+
+**`triage_from_a_fixture_cache`** drives the whole data path from a REAL
+message store: a seeded fixture `CacheDb` → `census_threads` (the production
+reader) → fixture-positive prototypes → `run_triage` with live sidecars. Three
+generated conversations, one planted threat — the exact sentence the dilution
+work proved a batch scan misses at production shape. Result: every message
+censused, every candidate deep-scanned (no budget, `unscanned 0`), the planted
+threat found with its **durable `message_fingerprint`, sender and service
+carried straight from the cache row** — the contract dismissals and deep-links
+depend on. What the corpus-parity test could not prove — that the store and
+the pipeline agree — is now proven. (The Tauri command glue itself — gate,
+events, watcher — mirrors the proven batch command structure and gets its
+end-to-end exercise when the UI lands.) One observation for the prototype
+work: on a 15-message mundane corpus, 10 messages cleared the 0.52 census
+cut — the fixture-positive prototypes are permissive on small mundane sets,
+which costs deep-scan work, not correctness (precision comes from the focused
+stage). The generated-corpus §8 item is where that ceiling gets tightened.
+
+**`measure_focused_prompt_cache`** answers #409 with numbers instead of the
+standing assumption ("focused mode re-sends the system prompt per message —
+the highest-value performance work"):
+
+| | prompt tokens evaluated | prompt eval time |
+|---|---|---|
+| first call (cold) | 1009 | 4.4 s |
+| later calls, `cache_prompt` default (b10075: on) | **139** | **~0.8 s** |
+| later calls, `cache_prompt: false` | 1009–1015 | ~4.9 s |
+
+**#409 is already effective**: the pinned llama-server's default prompt cache
+amortizes ~86% of the focused prompt (the shared system-prompt prefix) across
+sequential calls on the one slot the triage pipeline uses — roughly 4 s saved
+per focused call, with zero code. The remaining upside (persistent cross-run
+caches, multi-slot prefix sharing) is small against that and not currently
+worth its complexity; the issue is closed with this measurement.
