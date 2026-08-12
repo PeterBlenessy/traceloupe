@@ -437,7 +437,7 @@ validation. Checklist mirrors #459.
       (schema v15), working defaults, no cross-pipeline resume, camelCase wire
       contract, per-item retry, watcher Drop-guard. Follow-up: the Guard
       confirmer tier (#474).**
-- [ ] **Re-measure the *wired* pipeline** against the lab result (0.94/0.95). The
+- [x] **Re-measure the *wired* pipeline** against the lab result (0.94/0.95). The
       e2e Python harness is the oracle; the shipped feature must reproduce it.
       **Stage-level parity is proven (2026-08-12): `triage_pipeline_matches_reference`
       (`eval.rs`) drives the merged `run_triage` with live sidecars over the
@@ -450,11 +450,30 @@ validation. Checklist mirrors #459.
       against the oracle's threat-only-block 0.8125/0.9701 — within band, with
       the ~0.05 recall delta attributed to the category-block difference and
       recorded in the validation doc (the product deliberately does not ship a
-      threat-only block; that would be the §5.5 narrowing). Still open: a run
-      through the `run_triage_scan` command path itself against a fixture
-      cache.**
-- [ ] **Prompt-prefix caching** (#409) — focused mode re-sends the system prompt
-      per message; this is now the highest-value performance work.
+      threat-only block; that would be the §5.5 narrowing). And the data path
+      is proven from a REAL message store (#477): a fixture cache → the
+      production `census_threads` reader → live sidecars finds the planted
+      dilution-canary threat with its durable fingerprint/sender/service
+      intact (Thorough; the same test optionally runs the Guard confirm phase
+      from the store via TRIAGE_GUARD_MODEL). The command glue itself has its
+      own open item below.**
+- [x] **Prompt-prefix caching** (#409) — the standing assumption was that
+      focused mode re-sends the system prompt per message and this was the
+      highest-value performance work. **Measured
+      2026-08-12 (#477): already effective with zero code — the pinned
+      llama-server's default `cache_prompt` amortizes ~86% of the focused
+      prompt (cold 1009 tokens / 4.4 s → warm 139 / ~0.8 s; disabling it
+      restores the full cost every call). Closed on the measurement; the
+      residual upside (persistent/cross-slot caches) is not worth its
+      complexity today. #409 stays open for its flash-attention half.**
+- [ ] **Exercise the `run_triage_scan` command glue end to end** — the ~390-line
+      Tauri command (mode-default fallback, notes-only refusal, confirmer RAM
+      admission, the `ensure` healthy-swaps, WatcherGuard, stranded-row repair)
+      is validated today by unit-style tests and the shared batch-command
+      patterns, not by a run through the command itself. The natural vehicle is
+      the UI milestone below (a real click drives the whole path); if the UI
+      slips, drive the command headless from a fixture cache instead. Do not
+      let this ride implicitly on "the UI will exercise it".
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
       (#456 per-conversation exists; add whole-backup census + the coverage
       report).
