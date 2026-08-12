@@ -2586,6 +2586,8 @@ mod tests {
             reused: 0,
             skipped: 0,
         };
-        assert!(serde_json::to_string(&done).unwrap().contains(r#""scanId":1"#));
+        assert!(serde_json::to_string(&done)
+            .unwrap()
+            .contains(r#""scanId":1"#));
     }
 }

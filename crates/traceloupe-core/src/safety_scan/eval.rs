@@ -1042,14 +1042,28 @@ mod tests {
         // cache). The census is incremental, so this second run re-embeds
         // nothing and needs no embedder — prototypes are reused from phase A.
         if guard_model.is_some() {
-            let scan2 = db.begin_scan("parity-precise", (None, None), "all", 2).unwrap();
+            // begin_scan REUSES the row for an identical scope, so a DB query
+            // by scan id would return run 1's findings merged in. The
+            // confirmation stage is scored from the confirm closure's own
+            // kept-set instead — the decision stream itself, immune to
+            // scan-row and replace-findings semantics.
+            let scan2 = db
+                .begin_scan("parity-precise", (None, None), "messages", 2)
+                .unwrap();
+            let kept_chunks = RefCell::new(BTreeSet::<usize>::new());
             let classify2 = |w: &FocusWindow| {
                 ensure(1);
                 triage_scan::classify_focused(&slot.borrow().1, w)
             };
             let confirm2 = |w: &FocusWindow, _: &triage_scan::FocusVerdict| {
                 ensure(2);
-                crate::safety_scan::guard::confirm_focused(&slot.borrow().1, w)
+                let keep = crate::safety_scan::guard::confirm_focused(&slot.borrow().1, w)?;
+                if keep {
+                    kept_chunks
+                        .borrow_mut()
+                        .insert((w.items[w.focus].source_id / 100) as usize);
+                }
+                Ok(keep)
             };
             let out2 = triage_scan::run_triage(
                 &mut db,
@@ -1072,12 +1086,8 @@ mod tests {
                 },
             )
             .expect("run_triage precise");
-            let confirmed = db.list_findings(Some(scan2)).unwrap();
-            let cflag: BTreeSet<usize> = confirmed
-                .iter()
-                .filter_map(|f| f.source_id)
-                .map(|id| (id / 100) as usize)
-                .collect();
+            let _ = scan2;
+            let cflag = kept_chunks.borrow().clone();
             let ctp = cflag.iter().filter(|c| dump.chunks[**c].real).count();
             let crec = ctp as f64 / n_real as f64;
             let cprec = if cflag.is_empty() {

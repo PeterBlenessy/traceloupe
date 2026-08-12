@@ -93,13 +93,7 @@ pub fn render_confirm_prompt(window: &FocusWindow) -> String {
         .items
         .iter()
         .enumerate()
-        .map(|(i, m)| {
-            format!(
-                "{}: {}",
-                if i % 2 == 0 { "User" } else { "Agent" },
-                m.text
-            )
-        })
+        .map(|(i, m)| format!("{}: {}", if i % 2 == 0 { "User" } else { "Agent" }, m.text))
         .collect();
     turns.push(format!("Agent: {}", window.items[window.focus].text));
     format!(
@@ -198,7 +192,10 @@ mod tests {
         for i in 1..=9 {
             assert!(p.contains(&format!("S{i}: ")), "S{i} missing");
         }
-        assert!(!p.contains("S10:"), "exactly nine categories — replace, not extend (§10.5)");
+        assert!(
+            !p.contains("S10:"),
+            "exactly nine categories — replace, not extend (§10.5)"
+        );
     }
 
     #[test]
