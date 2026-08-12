@@ -97,25 +97,7 @@ impl LlmClient {
     /// ("task: classification | query: ") is a property of what the census is
     /// doing, not of the transport.
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let url = format!("{}/embedding", self.base_url);
-        let mut req = self
-            .agent
-            .post(&url)
-            .set("Content-Type", "application/json");
-        if let Some(key) = &self.api_key {
-            req = req.set("Authorization", &format!("Bearer {key}"));
-        }
-        let resp = req
-            .send_string(&json!({ "content": text }).to_string())
-            .map_err(|e| match e {
-                ureq::Error::Status(code, _) => {
-                    Error::Inference(format!("llama-server returned HTTP {code}"))
-                }
-                ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
-            })?;
-        let text = resp
-            .into_string()
-            .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))?;
+        let text = self.post_json("/embedding", &json!({ "content": text }))?;
         let v: Value = serde_json::from_str(&text)
             .map_err(|_| Error::Inference("embedding response is not JSON".into()))?;
         // llama-server returns either `{embedding: [...]}` or, with some builds,
@@ -147,24 +129,8 @@ impl LlmClient {
     /// conversation instead of judging it, journey §10.6 incident 1). The
     /// caller supplies the fully-rendered prompt; same privacy rules as chat.
     pub fn complete(&self, prompt: &str, n_predict: u32) -> Result<String> {
-        let url = format!("{}/completion", self.base_url);
-        let mut req = self
-            .agent
-            .post(&url)
-            .set("Content-Type", "application/json");
-        if let Some(key) = &self.api_key {
-            req = req.set("Authorization", &format!("Bearer {key}"));
-        }
         let body = json!({ "prompt": prompt, "temperature": 0, "n_predict": n_predict });
-        let resp = req.send_string(&body.to_string()).map_err(|e| match e {
-            ureq::Error::Status(code, _) => {
-                Error::Inference(format!("llama-server returned HTTP {code}"))
-            }
-            ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
-        })?;
-        let text = resp
-            .into_string()
-            .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))?;
+        let text = self.post_json("/completion", &body)?;
         let v: Value = serde_json::from_str(&text)
             .map_err(|_| Error::Inference("completion response is not JSON".into()))?;
         v["content"]
@@ -174,7 +140,23 @@ impl LlmClient {
     }
 
     fn post_chat(&self, body: &Value) -> Result<String> {
-        let url = format!("{}/v1/chat/completions", self.base_url);
+        let text = self.post_json("/v1/chat/completions", body)?;
+        let envelope: Value = serde_json::from_str(&text)
+            .map_err(|_| Error::Inference("response envelope is not JSON".into()))?;
+        let content = envelope["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| Error::Inference("no message content in response".into()))?;
+        Ok(content.to_string())
+    }
+
+    /// The one POST every endpoint goes through: loopback URL, JSON body,
+    /// bearer auth, and the PRIVACY-PRESERVING error mapping — errors carry
+    /// status codes and error kinds, never the request or response body, which
+    /// on these endpoints can echo prompt content (ADR 0002). Keeping this in
+    /// one place is what keeps the rule from silently eroding in one of three
+    /// hand-copied variants.
+    fn post_json(&self, path: &str, body: &Value) -> Result<String> {
+        let url = format!("{}{path}", self.base_url);
         let mut req = self
             .agent
             .post(&url)
@@ -183,22 +165,13 @@ impl LlmClient {
             req = req.set("Authorization", &format!("Bearer {key}"));
         }
         let resp = req.send_string(&body.to_string()).map_err(|e| match e {
-            // Never include the response body: on this endpoint it can
-            // echo prompt content.
             ureq::Error::Status(code, _) => {
                 Error::Inference(format!("llama-server returned HTTP {code}"))
             }
             ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
         })?;
-        let text = resp
-            .into_string()
-            .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))?;
-        let envelope: Value = serde_json::from_str(&text)
-            .map_err(|_| Error::Inference("response envelope is not JSON".into()))?;
-        let content = envelope["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| Error::Inference("no message content in response".into()))?;
-        Ok(content.to_string())
+        resp.into_string()
+            .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))
     }
 
     /// Liveness probe against llama-server's /health.

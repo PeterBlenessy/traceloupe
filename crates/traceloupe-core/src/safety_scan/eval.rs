@@ -1073,16 +1073,27 @@ mod tests {
                 ScanMode::Precise,
                 None,
                 2,
-                |t: &str| slot.borrow().1.embed(t),
+                |_: &str| -> crate::Result<Vec<f32>> {
+                    // Run 2 reuses run 1's census (same db, same corpus, same
+                    // fingerprints) and every post-phase-A server is spawned
+                    // WITHOUT --embedding — so an embed call here means the
+                    // incremental-census invariant broke. Fail loudly at the
+                    // cause instead of as an opaque mid-run HTTP error.
+                    panic!("run 2 must not embed — the incremental census should have zero work")
+                },
                 classify2,
                 confirm2,
                 &CancelToken::new(),
-                |p: TriageProgress| {
-                    if let TriageProgress::Confirm { done, total } = p {
+                |p: TriageProgress| match p {
+                    TriageProgress::Census { total, .. } => {
+                        assert_eq!(total, 0, "run 2 re-embedded — census not incremental");
+                    }
+                    TriageProgress::Confirm { done, total } => {
                         if done % 20 == 0 {
                             eprintln!("confirm {done}/{total}");
                         }
                     }
+                    TriageProgress::DeepScan { .. } => {}
                 },
             )
             .expect("run_triage precise");
@@ -1096,12 +1107,12 @@ mod tests {
                 ctp as f64 / cflag.len() as f64
             };
             println!(
-                "wired pipeline @0.58+confirm: chunk recall {crec:.3} (ref 0.813) ·                  precision {cprec:.3} (ref 0.970) · findings {} unconfirmed {}",
+                "wired pipeline @0.58+confirm: chunk recall {crec:.3} (ref 0.813) · precision {cprec:.3} (ref 0.970) · findings {} unconfirmed {}",
                 out2.findings, out2.unconfirmed
             );
             assert!(
                 out2.unconfirmed > 0 || out2.findings == 0,
-                "the confirmer vetoed nothing at all — suspect the harness                  (a Guard driven through a chat template answers nothing useful)"
+                "the confirmer vetoed nothing at all — suspect the harness (a Guard driven through a chat template answers nothing useful)"
             );
             assert!(
                 crec >= 0.74,

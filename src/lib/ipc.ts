@@ -1001,7 +1001,7 @@ export type SafetyScanEvent =
       /** Candidates the budget left unread — reported, never called clean. */
       unscanned: number;
       unconfirmed: number;
-      /** Worklist items whose focused call failed after a retry (skipped). */
+      /** Model calls that failed after a retry: skipped items + dropped confirmations. */
       failed: number;
     }
   | { phase: "error"; message: string };

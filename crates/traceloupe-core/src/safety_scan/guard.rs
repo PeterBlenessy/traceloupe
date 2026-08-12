@@ -129,13 +129,15 @@ pub fn confirm_focused(client: &LlmClient, window: &FocusWindow) -> Result<bool>
 /// it rather than guess (a reply that parses as neither must never silently
 /// drop a real finding OR silently confirm a false one).
 pub fn parse_confirm_reply(reply: &str) -> Option<bool> {
+    // The first TOKEN must be exactly the verdict word. A prefix match reads a
+    // narrated reply like "safety assessment: …" as a silent "safe" — and the
+    // prompt itself contains the phrase "safety assessment", so an echoing
+    // model would produce exactly that shape (review finding on #476).
     let first = reply.trim().lines().next()?.trim().to_ascii_lowercase();
-    if first.starts_with("unsafe") {
-        Some(true)
-    } else if first.starts_with("safe") {
-        Some(false)
-    } else {
-        None
+    match first.split_whitespace().next() {
+        Some("unsafe") => Some(true),
+        Some("safe") => Some(false),
+        _ => None,
     }
 }
 
@@ -198,6 +200,42 @@ mod tests {
         );
     }
 
+    /// The confirmer's category block hand-mirrors the classifier taxonomy in
+    /// prompt.rs (the wording differs deliberately — Guard wants Should
+    /// not/Can), so drift is a real risk: a taxonomy edit that reaches only
+    /// one file leaves the confirmer vetoing under a stale policy. This pins
+    /// the structural invariants and the load-bearing exclusions — the hard
+    /// negatives the pipeline measurably failed on before they were written
+    /// into the taxonomy.
+    #[test]
+    fn guard_block_stays_in_step_with_the_taxonomy() {
+        use crate::analysis::Category;
+        assert_eq!(
+            CATEGORIES.len(),
+            Category::ALL.len(),
+            "a category was added or removed in ONE of guard.rs/prompt.rs — update both, \
+             re-run the T10 eval AND revalidate the confirmer veto rate"
+        );
+        let block = render_confirm_prompt(&window());
+        // The exclusions that exist because the classifier measurably flagged
+        // them (parent's curfew, sports trash talk, recovery, scam warnings,
+        // survivor accounts): the confirmer must carry them or it re-confirms
+        // exactly the false alarms the taxonomy names.
+        for phrase in [
+            "curfew",
+            "sport",
+            "recovery",
+            "warn someone about a scam",
+            "survived",
+            "quote a threat that was made to the speaker",
+        ] {
+            assert!(
+                block.to_ascii_lowercase().contains(phrase),
+                "load-bearing exclusion missing from the guard block: {phrase:?}"
+            );
+        }
+    }
+
     #[test]
     fn replies_parse_as_keep_drop_or_neither() {
         assert_eq!(parse_confirm_reply("unsafe\nS1"), Some(true));
@@ -208,5 +246,12 @@ mod tests {
         // must surface as an error, not parse as either verdict.
         assert_eq!(parse_confirm_reply("...usual spot at 9safe"), None);
         assert_eq!(parse_confirm_reply(""), None);
+        // The prefix trap: the PROMPT contains "safety assessment", so an
+        // echoing model plausibly opens with it — and "safety" must never
+        // prefix-match as a "safe" verdict that silently drops the finding.
+        assert_eq!(parse_confirm_reply("safety assessment: unsafe"), None);
+        assert_eq!(parse_confirm_reply("unsafely worded"), None);
+        // A verdict word followed by same-line detail still parses.
+        assert_eq!(parse_confirm_reply("unsafe S1, S7"), Some(true));
     }
 }

@@ -519,7 +519,8 @@ pub enum ScanEvent {
         /// Candidates the budget left unread — reported, never called clean.
         unscanned: usize,
         unconfirmed: usize,
-        /// Worklist items whose focused call failed after a retry (skipped).
+        /// Model calls that failed even after a retry: skipped worklist items
+        /// plus dropped confirmations.
         failed: usize,
     },
     Error {
@@ -1189,7 +1190,10 @@ fn spawn_server_healthy(
 struct TriageSidecar {
     llama: server::LlamaServer,
     client: client::LlmClient,
-    role: models::ModelRole,
+    /// Catalog id of the resident model — the no-op key for `ensure`. The id,
+    /// not the role: two specs can share a role, and swapping "to" one of them
+    /// must not be satisfied by the other.
+    current_id: &'static str,
     // Swap ingredients.
     app: AppHandle,
     binary: PathBuf,
@@ -1213,7 +1217,7 @@ impl TriageSidecar {
         model_path: &Path,
     ) -> traceloupe_core::Result<()> {
         use traceloupe_core::Error;
-        if self.role == spec.role {
+        if self.current_id == spec.id {
             return Ok(());
         }
         crate::logging::info(
@@ -1248,7 +1252,7 @@ impl TriageSidecar {
         self.client =
             client::LlmClient::new(self.llama.base_url(), spec.id, Duration::from_secs(300))
                 .with_api_key(self.api_key.clone());
-        self.role = spec.role;
+        self.current_id = spec.id;
         Ok(())
     }
 }
@@ -1285,8 +1289,26 @@ pub async fn run_triage_scan(
     let cache_path = active.path()?;
     let analysis_db_path = analysis_path(&cache_path)?;
 
+    // An UNSTATED mode means "the product default, if it can run here": the
+    // default is Balanced, but Balanced needs the optional confirmer model —
+    // and a fresh install (classifier + embedder only) would otherwise refuse
+    // a scan the status endpoint says it is ready for. Falling back to
+    // Thorough is not a silent downgrade of anything the caller asked for,
+    // because the caller asked for nothing; an EXPLICIT balanced/precise
+    // request still gets the honest refusal below when the confirmer is
+    // missing.
+    let dir = models_dir(&app)?;
     let mode = match mode.as_deref() {
-        None => ScanMode::default(),
+        None => {
+            let confirmer_ready = models::confirmer()
+                .and_then(|s| s.installed_at(&dir))
+                .is_some();
+            if confirmer_ready {
+                ScanMode::default()
+            } else {
+                ScanMode::Thorough
+            }
+        }
         Some(s) => ScanMode::parse(s).ok_or("unknown scan mode")?,
     };
 
@@ -1306,7 +1328,6 @@ pub async fn run_triage_scan(
     }
     scan_sources.notes = false;
     let sources_slug = scan_sources.slug();
-    let dir = models_dir(&app)?;
     let classifier = match model_id.as_deref() {
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
         None => models::recommended(models::total_ram_bytes()),
@@ -1328,6 +1349,18 @@ pub async fn run_triage_scan(
     let confirmer = match mode.confirm() {
         true => {
             let spec = models::confirmer().ok_or("the model catalog has no confirmer")?;
+            // Admission check NOW, not at the classifier→confirmer swap: that
+            // swap happens after the census and the whole focused pass, and an
+            // 8B model failing to load there forfeits hours of work a start-up
+            // refusal would have saved.
+            let ram = models::total_ram_bytes();
+            if ram > 0 && ram < spec.ram_floor_bytes {
+                return Err(format!(
+                    "the {} mode needs the Finding checker model, which wants more memory \
+                     than this Mac has — run a thorough scan instead",
+                    mode.as_str()
+                ));
+            }
             let path = spec.installed_at(&dir).ok_or(format!(
                 "the {} mode double-checks findings with the Finding checker model, which is \
                  not installed — download it from the Safety Scan settings, or run a thorough \
@@ -1480,7 +1513,7 @@ pub async fn run_triage_scan(
         let sidecar = std::cell::RefCell::new(TriageSidecar {
             llama,
             client: embed_client,
-            role: models::ModelRole::Embedder,
+            current_id: embedder.id,
             app: app2.clone(),
             binary: binary.clone(),
             scratch_dir: scratch_dir.clone(),
@@ -1598,7 +1631,7 @@ pub async fn run_triage_scan(
                 deep_scanned: outcome.deep_scanned,
                 unscanned: outcome.unscanned(),
                 unconfirmed: outcome.unconfirmed,
-                failed: outcome.deep_scan_failed,
+                failed: outcome.deep_scan_failed + outcome.confirm_failed,
             },
         );
         Ok(())
