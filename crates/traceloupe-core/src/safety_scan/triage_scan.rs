@@ -149,15 +149,17 @@ pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Vec<
     let user = prompt::render_focused(&chunk, window.focus);
     let grammar = prompt::verdicts_grammar(chunk.items.len());
     let out = client.chat_json(prompt::SYSTEM_PROMPT, &user, &grammar, FOCUSED_MAX_TOKENS)?;
-    Ok(engine::verdicts_to_findings_focused(&chunk, &out, window.focus)
-        .findings
-        .into_iter()
-        .map(|f| FocusVerdict {
-            category: f.category,
-            severity: f.severity,
-            rationale: f.rationale,
-        })
-        .collect())
+    Ok(
+        engine::verdicts_to_findings_focused(&chunk, &out, window.focus)
+            .findings
+            .into_iter()
+            .map(|f| FocusVerdict {
+                category: f.category,
+                severity: f.severity,
+                rationale: f.rationale,
+            })
+            .collect(),
+    )
 }
 
 /// Run a triage scan.
@@ -547,7 +549,11 @@ mod tests {
 
     #[test]
     fn window_chunk_carries_identity_and_context_shape() {
-        let mut t = thread(&[(1, "a", "hello"), (2, "b", "i will kill you"), (3, "a", "bye")]);
+        let mut t = thread(&[
+            (1, "a", "hello"),
+            (2, "b", "i will kill you"),
+            (3, "a", "bye"),
+        ]);
         t[1].service = Some("SMS".into());
         let w = triage::context_window(&t, 1, 2);
         let chunk = window_chunk(&w);

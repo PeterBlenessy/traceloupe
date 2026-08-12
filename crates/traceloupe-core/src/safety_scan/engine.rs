@@ -152,7 +152,11 @@ fn verdicts_to_findings(chunk: &Chunk, output: &Value) -> Verdicts {
 /// This is the validation the triage deep-scan runs on every classify call
 /// (`triage_scan::classify_focused`), so the wired pipeline and the tests share
 /// one parsing/clamping path.
-pub(crate) fn verdicts_to_findings_focused(chunk: &Chunk, output: &Value, focus: usize) -> Verdicts {
+pub(crate) fn verdicts_to_findings_focused(
+    chunk: &Chunk,
+    output: &Value,
+    focus: usize,
+) -> Verdicts {
     verdicts_to_findings_impl(chunk, output, Some(focus))
 }
 

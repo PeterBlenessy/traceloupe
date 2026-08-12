@@ -910,14 +910,9 @@ pub(crate) mod tests {
         ]);
         let threads =
             census_threads(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
-        let chunks =
-            chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
+        let chunks = chunk_messages(&cache, TimeRange::default(), &ScanSources::default()).unwrap();
 
-        let mut census_ids: Vec<i64> = threads
-            .iter()
-            .flatten()
-            .map(|m| m.source_id)
-            .collect();
+        let mut census_ids: Vec<i64> = threads.iter().flatten().map(|m| m.source_id).collect();
         let mut chunk_ids: Vec<i64> = chunks
             .iter()
             .flat_map(|c| c.items.iter().map(|i| i.source_id))
@@ -964,11 +959,7 @@ pub(crate) mod tests {
             &ScanSources::default(),
         )
         .unwrap();
-        let texts: Vec<&str> = ranged
-            .iter()
-            .flatten()
-            .map(|m| m.text.as_str())
-            .collect();
+        let texts: Vec<&str> = ranged.iter().flatten().map(|m| m.text.as_str()).collect();
         assert!(texts.contains(&"in range") && !texts.contains(&"out of range"));
 
         // A single-conversation scope reads only that thread.

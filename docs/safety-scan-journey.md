@@ -398,16 +398,31 @@ validation. Checklist mirrors #459.
       built on it. **Done 2026-08-12: reproduced digit for digit — 0.94/0.95 at
       threshold 0.52, census ceiling 0.96, baseline 0.30/0.89; full sweep in
       `docs/validation/safety-scan-validation.md` ("Triage pipeline" section).**
-      Still open from this step: the Rust `#[ignore]` integration test proving
-      the merged `run_triage` matches the Python reference (belongs with the
-      wiring below, as it needs the same client plumbing).
-- [ ] **Wire the orchestrator into the engine** (`run_triage_scan` command). The
+      The Rust `#[ignore]` parity test now exists and passes — see the wiring
+      step below.
+- [x] **Wire the orchestrator into the engine** (`run_triage_scan` command). The
       two-model **sidecar lifecycle** is the one non-trivial piece: spawn the
       embedder, census, swap to the classifier using the healthy-swap pattern from
       the removed cascade (`safety_scan_cmd.rs`), never holding two multi-GB models
       at once. Read messages from cache grouped by thread; feed `run_triage`.
+      **Done 2026-08-12 (#472): `run_triage_scan` with the embedder→classifier
+      healthy-swap, census reader sharing the batch chunker's scope loop,
+      progress/cancel/re-attach, and durable finding fingerprints. Confirmation
+      was refactored into a batched phase (matching the oracle) so the swap
+      lifecycle needs one resident model. Balanced/Precise refuse to run until
+      the confirmer tier ships — the mode must not silently skip the stage it
+      promises. Follow-up: the Guard confirmer tier (catalog entry + prompt +
+      second swap).**
 - [ ] **Re-measure the *wired* pipeline** against the lab result (0.94/0.95). The
       e2e Python harness is the oracle; the shipped feature must reproduce it.
+      **Stage-level parity is proven (2026-08-12): `triage_pipeline_matches_reference`
+      (`eval.rs`) drives the merged `run_triage` with live sidecars over the
+      oracle's exact corpus — census identical (146/146 messages kept, ceiling
+      0.963 vs 0.9625), focused recall identical (0.963), precision 0.726 vs <!-- not-a-backup-count: Jigsaw corpus figures -->
+
+      0.740 (within band). Still open: the confirmation stage (0.94/0.95 end to
+      end) once the Guard tier lands, and a run through the `run_triage_scan`
+      command path itself against a fixture cache.**
 - [ ] **Prompt-prefix caching** (#409) — focused mode re-sends the system prompt
       per message; this is now the highest-value performance work.
 - [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes

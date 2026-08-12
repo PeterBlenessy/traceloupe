@@ -473,6 +473,8 @@ Reading notes:
   pairs, so at loose thresholds a real chunk can yield more than one finding
   and the intermediate recall over-counts. Guard trims the duplicates and false
   alarms (129 → 79 findings at 0.52); the end-to-end row is the real number.
+  Chunk-level (deduplicated), the focused stage at 0.52 reads: recall 0.9625,
+  precision 0.740 — the reference the Rust parity test below asserts against.
 - **Stage attribution behaves as designed**: at 0.64 the census ceiling is the
   binding loss (0.88, a miss there is permanent); at 0.52 the ceiling lifts to
   0.96 and Guard supplies the precision.
@@ -483,3 +485,30 @@ Reading notes:
   seeded), then census+focused+Guard per threshold ~10–18 min, slower at looser
   thresholds. The 0.64 run was resumed from the stage checkpoint file after an
   interruption — the checkpoint/resume path works.
+
+### 2026-08-12 — the wired Rust pipeline matches the oracle (stage-level)
+
+Same day, same machine and models. The merged `run_triage` — the production
+census/rank/window/classify path with real sidecars, the embedder→classifier
+healthy-swap, the production prompt and grammar — was driven over the oracle's
+exact seeded corpus by the `#[ignore]` test
+`triage_pipeline_matches_reference` (`eval.rs`; corpus dumped by the oracle's
+`TRIAGE_DUMP_CHUNKS` mode). Thorough mode (threshold 0.52, no confirmation —
+oracle stages 1+2), chunk-level scoring:
+
+| | wired Rust | oracle reference |
+|---|---|---|
+| census keeps (messages) | **146** | 146 — identical set size |
+| census ceiling | **0.963** | 0.9625 |
+| focused recall | **0.963** | 0.9625 |
+| focused precision | **0.726** | 0.740 |
+
+**PASS.** The census reproduces the oracle message-for-message; recall is
+identical; precision sits 0.014 inside the tolerance band — the residual is
+the wired prompt's window rendering (`Conversation: c<n>` labels vs the
+oracle's constant label), not a pipeline defect. ~10 min wall clock (~800
+embeddings + 146 focused calls, one M3).
+
+What this does not yet cover: the Guard confirmation stage (no confirmer tier
+in the catalog yet), so the end-to-end 0.94/0.95 with confirmation remains
+oracle-only; Thorough mode needs no confirmer and is fully reproduced.

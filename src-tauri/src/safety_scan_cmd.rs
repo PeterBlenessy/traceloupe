@@ -473,7 +473,10 @@ pub enum ScanEvent {
     // either kind runs at a time, and the re-attach path must see whichever it
     // is. ---
     /// The embedding census: `done` of `total` messages scored this run.
-    Censusing { done: usize, total: usize },
+    Censusing {
+        done: usize,
+        total: usize,
+    },
     /// Focused deep-scan of the ranked worklist.
     DeepScanning {
         done: usize,
@@ -482,7 +485,10 @@ pub enum ScanEvent {
         findings: usize,
     },
     /// Confirmation of provisional findings (confirm-on modes only).
-    Confirming { done: usize, total: usize },
+    Confirming {
+        done: usize,
+        total: usize,
+    },
     /// Terminal event of a triage scan, with the honest coverage numbers.
     TriageDone {
         scan_id: i64,
@@ -1172,12 +1178,9 @@ impl TriageSidecar {
             self.llama.shutdown();
             return Err(Error::Inference("cancelled".into()));
         }
-        self.client = client::LlmClient::new(
-            self.llama.base_url(),
-            spec.id,
-            Duration::from_secs(300),
-        )
-        .with_api_key(self.api_key.clone());
+        self.client =
+            client::LlmClient::new(self.llama.base_url(), spec.id, Duration::from_secs(300))
+                .with_api_key(self.api_key.clone());
         self.role = models::ModelRole::Classifier;
         Ok(())
     }
@@ -1263,7 +1266,12 @@ pub async fn run_triage_scan(
     let scan_row_id = {
         let db = AnalysisDb::open(&analysis_db_path).map_err(|e| e.to_string())?;
         let id = db
-            .begin_scan(classifier.id, (range_start, range_end), &sources_slug, now())
+            .begin_scan(
+                classifier.id,
+                (range_start, range_end),
+                &sources_slug,
+                now(),
+            )
             .map_err(|e| e.to_string())?;
         let _ = db.audit(id, now(), "triage_mode", mode.as_str());
         id

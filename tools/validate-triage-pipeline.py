@@ -86,6 +86,16 @@ for t in threats[:N]:
 for _ in range(N):
     chunks.append({"msgs":random.sample(clean,5),"at":None,"real":False})
 
+# Parity-dump mode: write the seeded corpus (chunks + held-out prototype texts)
+# for the Rust `triage_pipeline_matches_reference` test, then stop — no model
+# runs. The dump contains Jigsaw text (CC-BY-SA): keep it in /tmp, never vendor
+# it into the repo.
+if os.environ.get("TRIAGE_DUMP_CHUNKS"):
+    out = os.environ["TRIAGE_DUMP_CHUNKS"]
+    json.dump({"prototypes": threats[N:N+30], "chunks": chunks}, open(out, "w"))
+    print(f"wrote {len(chunks)} chunks + 30 prototype texts to {out}")
+    sys.exit(0)
+
 def serve(m,extra=(),ctx="8192"):
     if not os.path.exists(m): sys.exit(f"MISSING: {m}")
     p=subprocess.Popen([SERVER,"--model",m,"--host","127.0.0.1","--port",str(PORT),
