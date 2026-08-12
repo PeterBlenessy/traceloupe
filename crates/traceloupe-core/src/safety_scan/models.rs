@@ -43,6 +43,9 @@ pub struct ModelSpec {
 pub enum ModelRole {
     Classifier,
     Embedder,
+    /// The triage confirmation tier (Balanced/Precise): a second, independent
+    /// model that vets each provisional finding. Never a scan model.
+    Confirmer,
 }
 
 impl ModelSpec {
@@ -77,7 +80,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 /// per-chunk cost tracks how much the model generates, not parameter count —
 /// E2B flags more, so it writes more. Do not restore a speed claim here without
 /// a measurement behind it.
-pub const CATALOG: [ModelSpec; 3] = [
+pub const CATALOG: [ModelSpec; 4] = [
     ModelSpec {
         id: "gemma-4-E4B-it-Q4_K_M",
         display_name: "Gemma 4 E4B",
@@ -116,6 +119,22 @@ pub const CATALOG: [ModelSpec; 3] = [
         ram_floor_bytes: 2 * GIB,
         ctx_size: 2048,
         role: ModelRole::Embedder,
+    },
+    ModelSpec {
+        id: "llama-guard-3-8b-Q4_K_M",
+        display_name: "Finding checker",
+        note: "A second model that double-checks findings before they are \
+               shown, for the modes that trade a little recall for fewer \
+               false alarms. Optional, and downloaded separately.",
+        repo: "mradermacher/Llama-Guard-3-8B-GGUF",
+        filename: "Llama-Guard-3-8B.Q4_K_M.gguf",
+        sha256: "464ccd085798cf450ef04ef1070e17bdefec72c3022c04784ab356b4e1b842db",
+        size_bytes: 4_920_736_064,
+        ram_floor_bytes: 12 * GIB,
+        // Guard reads one window and writes two lines; the validated oracle
+        // stage ran it at 16k, which is generous headroom, not a requirement.
+        ctx_size: 16384,
+        role: ModelRole::Confirmer,
     },
 ];
 
@@ -159,6 +178,13 @@ pub fn recommended(total_ram: u64) -> &'static ModelSpec {
 /// The embedder, if the catalog has one — the triage census model.
 pub fn embedder() -> Option<&'static ModelSpec> {
     CATALOG.iter().find(|s| s.role == ModelRole::Embedder)
+}
+
+/// The confirmer, if the catalog has one — the Balanced/Precise second
+/// opinion (journey §5.5: keeps 88% of real findings, removes 88% of false,
+/// measured over focused-mode findings).
+pub fn confirmer() -> Option<&'static ModelSpec> {
+    CATALOG.iter().find(|s| s.role == ModelRole::Confirmer)
 }
 
 /// Download `spec` into `models_dir` with streaming sha256 verification —
@@ -324,7 +350,7 @@ mod tests {
             assert!(spec.sha256.chars().all(|c| c.is_ascii_hexdigit()));
             // The embedder is ~318 MB; only classifiers are multi-GB.
             let floor = match spec.role {
-                ModelRole::Classifier => GIB,
+                ModelRole::Classifier | ModelRole::Confirmer => GIB,
                 ModelRole::Embedder => 100 * 1024 * 1024,
             };
             assert!(spec.size_bytes > floor, "{}: implausibly small", spec.id);

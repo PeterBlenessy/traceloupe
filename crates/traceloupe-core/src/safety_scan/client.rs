@@ -142,6 +142,37 @@ impl LlmClient {
         Ok(out)
     }
 
+    /// One raw `/completion` call — for models whose GGUF ships no chat
+    /// template (Llama Guard: the generic template made it CONTINUE the
+    /// conversation instead of judging it, journey §10.6 incident 1). The
+    /// caller supplies the fully-rendered prompt; same privacy rules as chat.
+    pub fn complete(&self, prompt: &str, n_predict: u32) -> Result<String> {
+        let url = format!("{}/completion", self.base_url);
+        let mut req = self
+            .agent
+            .post(&url)
+            .set("Content-Type", "application/json");
+        if let Some(key) = &self.api_key {
+            req = req.set("Authorization", &format!("Bearer {key}"));
+        }
+        let body = json!({ "prompt": prompt, "temperature": 0, "n_predict": n_predict });
+        let resp = req.send_string(&body.to_string()).map_err(|e| match e {
+            ureq::Error::Status(code, _) => {
+                Error::Inference(format!("llama-server returned HTTP {code}"))
+            }
+            ureq::Error::Transport(t) => Error::Inference(format!("transport: {}", t.kind())),
+        })?;
+        let text = resp
+            .into_string()
+            .map_err(|e| Error::Inference(format!("reading response: {}", e.kind())))?;
+        let v: Value = serde_json::from_str(&text)
+            .map_err(|_| Error::Inference("completion response is not JSON".into()))?;
+        v["content"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::Inference("no content in completion response".into()))
+    }
+
     fn post_chat(&self, body: &Value) -> Result<String> {
         let url = format!("{}/v1/chat/completions", self.base_url);
         let mut req = self

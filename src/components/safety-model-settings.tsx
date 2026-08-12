@@ -51,10 +51,15 @@ export function SafetyModelSettings() {
   });
 
   // The model that a scan will actually use: the user's pick when it's still
-  // installed, otherwise the RAM-recommended tier the backend reports.
-  const installed = modelStatus.data?.models.filter((m) => m.installed) ?? [];
+  // installed, otherwise the RAM-recommended tier the backend reports. Only
+  // CLASSIFIERS are scan models — the embedder and confirmer are downloadable
+  // helpers and never appear in the picker.
+  const installedClassifiers =
+    modelStatus.data?.models.filter(
+      (m) => m.installed && m.role === "classifier",
+    ) ?? [];
   const effectiveModelId =
-    preferredModelId && installed.some((m) => m.id === preferredModelId)
+    preferredModelId && installedClassifiers.some((m) => m.id === preferredModelId)
       ? preferredModelId
       : (modelStatus.data?.readyModelId ?? null);
 
@@ -82,7 +87,7 @@ export function SafetyModelSettings() {
     );
   }
   const ms = modelStatus.data;
-  const canPick = installed.length >= 2;
+  const canPick = installedClassifiers.length >= 2;
 
   return (
     <div className="flex flex-col gap-4">
@@ -94,7 +99,7 @@ export function SafetyModelSettings() {
       {/* The cascade is off (#446): measured, E2B was slower than E4B AND
           missed more, so pairing them cost time and findings. Say which model
           scans rather than implying the pair is better than either. */}
-      {installed.length >= 2 ? (
+      {installedClassifiers.length >= 2 ? (
         <div className="rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">
             Both models installed — one scans at a time.
@@ -116,20 +121,21 @@ export function SafetyModelSettings() {
       >
         {ms.models.map((m) => {
           const isDownloading = downloadingModelId === m.id && download !== null;
-          const isActive = canPick && m.id === effectiveModelId;
+          const isClassifier = m.role === "classifier";
+          const isActive = canPick && isClassifier && m.id === effectiveModelId;
           return (
             <label
               key={m.id}
               htmlFor={`safety-model-${m.id}`}
               className={cn(
                 "block rounded-md border p-3",
-                canPick && m.installed && "cursor-pointer",
+                canPick && isClassifier && m.installed && "cursor-pointer",
                 isActive && "border-primary/60 bg-primary/5",
               )}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-start gap-3">
-                  {canPick && m.installed && (
+                  {canPick && isClassifier && m.installed && (
                     <RadioGroupItem
                       id={`safety-model-${m.id}`}
                       value={m.id}
@@ -139,11 +145,15 @@ export function SafetyModelSettings() {
                   <div>
                     <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
                       {m.displayName}
-                      {m.recommended ? (
-                        <Badge variant="secondary">Recommended for this Mac</Badge>
-                      ) : (
-                        <Badge variant="outline">Fallback</Badge>
-                      )}
+                      {/* Tier badges are a classifier concept; helper rows
+                          (embedder, confirmer) explain themselves in their
+                          note instead of claiming to be a fallback scanner. */}
+                      {isClassifier &&
+                        (m.recommended ? (
+                          <Badge variant="secondary">Recommended for this Mac</Badge>
+                        ) : (
+                          <Badge variant="outline">Fallback</Badge>
+                        ))}
                       {isActive && (
                         <Badge className="bg-primary/15 text-primary border-transparent">
                           Used for scanning
@@ -169,7 +179,9 @@ export function SafetyModelSettings() {
                     <Ban className="size-4" /> Cancel
                   </Button>
                 ) : m.installed ? (
-                  !canPick && <Badge variant="outline">Installed</Badge>
+                  (!canPick || !isClassifier) && (
+                    <Badge variant="outline">Installed</Badge>
+                  )
                 ) : (
                   <Button
                     variant={m.recommended ? "default" : "outline"}

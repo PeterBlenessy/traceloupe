@@ -102,6 +102,10 @@ pub struct ModelInfo {
     pub size_bytes: u64,
     pub installed: bool,
     pub recommended: bool,
+    /// "classifier" | "embedder" | "confirmer" — only classifiers are scan
+    /// models; the others are downloadable helpers and must never be offered
+    /// by the scan-model picker.
+    pub role: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -128,13 +132,21 @@ pub fn get_safety_scan_model_status(app: AppHandle) -> Result<ModelStatus, Strin
             size_bytes: s.size_bytes,
             installed: s.installed_at(&dir).is_some(),
             recommended: s.id == rec.id,
+            role: match s.role {
+                models::ModelRole::Classifier => "classifier".into(),
+                models::ModelRole::Embedder => "embedder".into(),
+                models::ModelRole::Confirmer => "confirmer".into(),
+            },
         })
         .collect();
-    let ready = infos
+    // "Ready to scan" means a CLASSIFIER is installed — the embedder and the
+    // confirmer are helpers, and reporting one of them as the ready model
+    // would greenlight a scan that cannot classify.
+    let ready = models::CATALOG
         .iter()
-        .filter(|m| m.installed)
-        .max_by_key(|m| m.recommended)
-        .map(|m| m.id.clone());
+        .filter(|s| s.role == models::ModelRole::Classifier && s.installed_at(&dir).is_some())
+        .max_by_key(|s| s.id == rec.id)
+        .map(|s| s.id.to_string());
     Ok(ModelStatus {
         total_ram_bytes: ram,
         models: infos,
@@ -622,6 +634,9 @@ pub async fn run_safety_scan(
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
         None => models::recommended(models::total_ram_bytes()),
     };
+    if spec.role != models::ModelRole::Classifier {
+        return Err("that model is a scan helper, not a classifier — pick a scan model".into());
+    }
     let model_path = spec
         .installed_at(&dir)
         .ok_or("model not installed — download it first")?;
@@ -1187,20 +1202,23 @@ struct TriageSidecar {
 }
 
 impl TriageSidecar {
-    /// Ensure the CLASSIFIER is the resident model, swapping the embedder out
-    /// on the first call and doing nothing on every later one.
-    fn ensure_classifier(
+    /// Ensure `spec` is the resident model, healthy-swapping whatever holds
+    /// the slot now and doing nothing when it already does. Called at
+    /// run_triage's phase boundaries: embedder→classifier on the first focused
+    /// call, classifier→confirmer on the first confirmation — one resident
+    /// multi-GB model at any moment, ever.
+    fn ensure(
         &mut self,
-        spec: &models::ModelSpec,
+        spec: &'static models::ModelSpec,
         model_path: &Path,
     ) -> traceloupe_core::Result<()> {
         use traceloupe_core::Error;
-        if self.role == models::ModelRole::Classifier {
+        if self.role == spec.role {
             return Ok(());
         }
         crate::logging::info(
             &self.app,
-            format!("Triage scan: census done — swapping to {}", spec.id),
+            format!("Triage scan: phase boundary — swapping to {}", spec.id),
         );
         let mut next = spawn_server_healthy(
             &self.app,
@@ -1213,9 +1231,9 @@ impl TriageSidecar {
             &self.cancel,
         )
         .map_err(Error::Inference)?;
-        // The classifier is healthy: NOW retire the embedder, then repoint the
-        // watcher — after the shutdown, so a cancel in this window still hits a
-        // live server rather than the gap.
+        // The replacement is healthy: NOW retire the incumbent, then repoint
+        // the watcher — after the shutdown, so a cancel in this window still
+        // hits a live server rather than the gap.
         let next_pid = next.pid();
         self.llama.shutdown();
         std::mem::swap(&mut self.llama, &mut next);
@@ -1230,7 +1248,7 @@ impl TriageSidecar {
         self.client =
             client::LlmClient::new(self.llama.base_url(), spec.id, Duration::from_secs(300))
                 .with_api_key(self.api_key.clone());
-        self.role = models::ModelRole::Classifier;
+        self.role = spec.role;
         Ok(())
     }
 }
@@ -1268,25 +1286,9 @@ pub async fn run_triage_scan(
     let analysis_db_path = analysis_path(&cache_path)?;
 
     let mode = match mode.as_deref() {
-        // The product default is Balanced, but Balanced needs the confirmer
-        // tier, which is not in the catalog yet — so the unstated default is
-        // the best mode that can actually run. Restore ScanMode::default()
-        // here when the confirmer ships; an EXPLICIT balanced/precise request
-        // still gets the honest refusal below rather than a silent downgrade.
-        None => ScanMode::Thorough,
+        None => ScanMode::default(),
         Some(s) => ScanMode::parse(s).ok_or("unknown scan mode")?,
     };
-    // Balanced/Precise promise a second-model confirmation of every finding
-    // (that is the mode's whole meaning — it trims recall to buy precision).
-    // The confirmer tier is not in the catalog yet, and silently skipping the
-    // stage would ship a mode that does not do what it says.
-    if mode.confirm() {
-        return Err(format!(
-            "the {} mode confirms findings with a second model, which is not installed yet — \
-             run a thorough scan instead",
-            mode.as_str()
-        ));
-    }
 
     let mut scan_sources = parse_scan_sources(sources.as_deref());
     // The triage pipeline reads messages. A notes-ONLY scope has nothing for
@@ -1309,6 +1311,9 @@ pub async fn run_triage_scan(
         Some(id) => models::spec_by_id(id).ok_or("unknown model id")?,
         None => models::recommended(models::total_ram_bytes()),
     };
+    if classifier.role != models::ModelRole::Classifier {
+        return Err("that model is a scan helper, not a classifier — pick a scan model".into());
+    }
     let classifier_path = classifier
         .installed_at(&dir)
         .ok_or("model not installed — download it first")?;
@@ -1316,6 +1321,23 @@ pub async fn run_triage_scan(
     let embedder_path = embedder.installed_at(&dir).ok_or(
         "the Fast pre-scan model is not installed — download it from the Safety Scan settings",
     )?;
+    // Balanced/Precise promise a second-model confirmation of every finding —
+    // that is the mode's whole meaning (it trims recall to buy precision), so
+    // a missing confirmer is a clear refusal BEFORE the scan row exists, never
+    // a silently skipped stage.
+    let confirmer = match mode.confirm() {
+        true => {
+            let spec = models::confirmer().ok_or("the model catalog has no confirmer")?;
+            let path = spec.installed_at(&dir).ok_or(format!(
+                "the {} mode double-checks findings with the Finding checker model, which is \
+                 not installed — download it from the Safety Scan settings, or run a thorough \
+                 scan instead",
+                mode.as_str()
+            ))?;
+            Some((spec, path))
+        }
+        false => None,
+    };
     let binary = server::resolve_binary().map_err(|e| e.to_string())?;
 
     // Flip the scan row to 'running' before the slow model load, exactly like
@@ -1470,16 +1492,23 @@ pub async fn run_triage_scan(
         let embed = |t: &str| sidecar.borrow().client.embed(t);
         let classify = |w: &FocusWindow| {
             let mut s = sidecar.borrow_mut();
-            s.ensure_classifier(classifier, &classifier_path)?;
+            s.ensure(classifier, &classifier_path)?;
             triage_scan::classify_focused(&s.client, w)
         };
-        // Unreachable while confirm-on modes are refused above; if that gate is
-        // ever bypassed this fails the scan instead of silently passing
-        // findings through unconfirmed.
-        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> traceloupe_core::Result<bool> {
-            Err(traceloupe_core::Error::Inference(
-                "no confirmer model is installed".into(),
-            ))
+        // The Balanced/Precise second opinion: swap classifier→confirmer on
+        // the first call (run_triage batches confirmation as its own phase, so
+        // the classifier is done by then). `confirmer` is Some exactly when
+        // mode.confirm() — the resolve above refused otherwise — so the None
+        // arm is a belt against a future gate bypass, not a reachable path.
+        let confirm = |w: &FocusWindow, _: &FocusVerdict| -> traceloupe_core::Result<bool> {
+            let Some((spec, path)) = &confirmer else {
+                return Err(traceloupe_core::Error::Inference(
+                    "no confirmer model is installed".into(),
+                ));
+            };
+            let mut s = sidecar.borrow_mut();
+            s.ensure(spec, path)?;
+            traceloupe_core::safety_scan::guard::confirm_focused(&s.client, w)
         };
 
         let mut last_emit = std::time::Instant::now();
@@ -2520,4 +2549,43 @@ pub fn content_finding_analytics(
         undated: a.undated,
         dismissed: a.dismissed,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The TS `SafetyScanEvent` union declares camelCase fields; serde's
+    /// `rename_all` renames only the VARIANTS, and the fields were snake_case
+    /// on the wire until `rename_all_fields` was added — a latent contract
+    /// break the PR #473 review had to verify empirically. This locks it.
+    #[test]
+    fn scan_events_serialize_camel_case_fields() {
+        let e = ScanEvent::TriageDone {
+            scan_id: 7,
+            status: "completed".into(),
+            findings: 1,
+            censused: 2,
+            candidates: 3,
+            deep_scanned: 4,
+            unscanned: 0,
+            unconfirmed: 0,
+            failed: 0,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""phase":"triageDone""#), "{json}");
+        assert!(json.contains(r#""scanId":7"#), "{json}");
+        assert!(json.contains(r#""deepScanned":4"#), "{json}");
+        assert!(!json.contains("scan_id"), "snake_case leaked: {json}");
+
+        let done = ScanEvent::Done {
+            scan_id: 1,
+            status: "s".into(),
+            findings: 0,
+            classified: 0,
+            reused: 0,
+            skipped: 0,
+        };
+        assert!(serde_json::to_string(&done).unwrap().contains(r#""scanId":1"#));
+    }
 }
