@@ -502,9 +502,11 @@ validation. Checklist mirrors #459.
       100/70/37 h per 100k against the full read's 11. Shipped
       **0.61/0.64/0.67**. The first attempt at this measurement was
       TRAIN-ON-TEST (planted fixtures scored against centroids built from those
-      same fixtures) and overstated recall by up to 0.25, most at the
-      thresholds one actually picks; re-run leave-one-out, Balanced delivers
-      1.3x the full read's recall in half the time, Thorough 1.8x for ~2x the
+      same fixtures) and overstated recall by up to 0.26, most at the
+      thresholds one actually picks; re-run leave-one-out, and reading the column each
+      mode actually runs (Balanced and Precise always confirm): Thorough 1.7x
+      the full read's recall for ~2x the time, Balanced 1.1x at half the time,
+      Precise 0.9x at a tenth.3x the full read's recall in half the time, Thorough 1.8x for ~2x the
       time, Precise parity recall in a tenth. **The lab's 0.94 does not survive
       either correction**, and no threshold beats the full read on both axes —
       the curve is dominated by prototype quality, which is now the binding

@@ -163,13 +163,13 @@ const MODE_OPTIONS = [
     value: "balanced" as const,
     label: "Balanced",
     description:
-      "Finds more than a full read in about half the time, and a second model double-checks each finding before it is shown",
+      "About as much as a full read in roughly half the time, with a second model double-checking each finding so fewer false alarms reach you",
   },
   {
     value: "precise" as const,
     label: "Precise",
     description:
-      "By far the fastest, with the fewest false alarms — it finds about as much as a full read, not more, and may trim a borderline real finding",
+      "By far the fastest and the cleanest — it finds slightly less than a full read, trading a little recall for far fewer false alarms",
   },
 ];
 

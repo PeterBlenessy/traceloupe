@@ -6,11 +6,14 @@
 //! math the census scores with, and the named modes that trade recall against
 //! precision and time.
 //!
-//! End-to-end on realistic chunks with held-out prototypes
-//! (docs/validation/safety-scan-validation.md), the pipeline reaches recall 0.94
-//! at precision 0.95, against the shipped batch scan's 0.30 / 0.89. The census
-//! threshold is a monotonic dial on that; the modes below are the points on it
-//! we expose.
+//! The lab measured recall 0.94 at precision 0.95 on 5-message Jigsaw chunks.
+//! That number does NOT describe the product: it was taken on a corpus unlike a
+//! phone, and against prototypes that were not held out. Re-measured on a real
+//! device with leave-one-out prototypes, the shipped postures deliver roughly
+//! 1.7x / 1.1x / 0.9x the full read's recall at 1.9x / 0.5x / 0.1x its time —
+//! see `census_threshold` below and
+//! docs/validation/safety-scan-validation.md. The census threshold is a
+//! monotonic dial on that; the modes are the points we expose.
 
 /// How aggressively a scan trades recall for precision and time. The UI shows
 /// the NAME and a plain description, never the underlying numbers — accuracy
@@ -45,18 +48,30 @@ impl ScanMode {
     /// own text and inflated recall by up to 0.25):
     ///
     /// ```text
-    /// threshold  census  ~e2e  +confirm  cost/100k   vs the full read (0.30, 11 h)
-    ///   0.58      0.727   0.68   0.59      37 h      2.3x recall, 3.4x time
-    ///   0.61      0.570   0.53   0.47      20 h      1.8x recall, 1.9x time  Thorough
-    ///   0.64      0.406   0.38   0.33       5.6 h    1.3x recall, 0.5x time  Balanced
-    ///   0.67      0.336   0.31   0.27       1.3 h    1.0x recall, 0.1x time  Precise
+    /// threshold  census  ~e2e  +confirm  cost/100k
+    ///   0.52      0.921   0.86   0.75     100 h
+    ///   0.58      0.722   0.67   0.59      37 h
+    ///   0.61      0.563   0.52   0.46      20 h     Thorough
+    ///   0.64      0.397   0.37   0.32       5.6 h   Balanced
+    ///   0.67      0.333   0.31   0.27       1.3 h   Precise
     /// ```
     ///
-    /// What each posture honestly buys: **Thorough** trades roughly twice the
-    /// full read's time for ~1.8x its recall; **Balanced** is better AND
-    /// faster (the default); **Precise** matches the full read's recall in a
-    /// tenth of the time and, with confirmation, well below its false-alarm
-    /// rate — a speed and precision play, not a recall one.
+    /// What each posture honestly buys, reading the column it ACTUALLY runs —
+    /// Thorough has no confirmation stage, Balanced and Precise always confirm,
+    /// and confirmation trims recall to buy precision:
+    ///
+    /// ```text
+    ///           cut    recall it delivers   vs full read (0.30 / 11 h)
+    /// Thorough  0.61   0.52 (no confirm)      1.7x recall, 1.9x time
+    /// Balanced  0.64   0.32 (+confirm)        1.1x recall, 0.5x time
+    /// Precise   0.67   0.27 (+confirm)        0.9x recall, 0.1x time
+    /// ```
+    ///
+    /// So only **Thorough** buys materially more harm found, and it costs
+    /// roughly twice a full read. **Balanced** is a wash on recall at half the
+    /// time. **Precise** finds slightly LESS than a full read, very fast and
+    /// with far fewer false alarms — a speed-and-precision play, and its name
+    /// is honest about that.
     ///
     /// Two things this makes plain. Triage's quality advantage is far smaller
     /// than the lab's 0.94 suggested (that was 5-message Jigsaw chunks scored

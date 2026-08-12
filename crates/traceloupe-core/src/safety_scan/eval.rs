@@ -959,6 +959,7 @@ mod tests {
             &threads,
             &prototypes,
             ScanMode::Thorough,
+            ScanMode::Thorough.census_threshold(),
             None,
             1,
             embed,
@@ -1057,6 +1058,7 @@ mod tests {
                 &threads,
                 &prototypes,
                 ScanMode::Precise,
+                ScanMode::Precise.census_threshold(),
                 None,
                 2,
                 |_: &str| -> crate::Result<Vec<f32>> {
@@ -1262,6 +1264,7 @@ mod tests {
             &threads,
             &prototypes,
             ScanMode::Thorough,
+            ScanMode::Thorough.census_threshold(),
             // A budget keeps this a bounded measurement rather than an
             // overnight run; the unscanned tail is the point of the coverage
             // line and is reported below.
@@ -1471,8 +1474,9 @@ mod tests {
     /// So prototypes here are LEAVE-ONE-OUT: a case is scored against a
     /// centroid built from every OTHER case of its category. That matches what
     /// production faces, where a real harmful message is always unseen
-    /// relative to the fixtures the centroids come from. Cheap to do exactly:
-    /// embed each case once, then subtract it from its category's sum.
+    /// relative to the fixtures the centroids come from. Each case is embedded
+    /// once and the centroids are rebuilt per hold-out — fixture-scale work,
+    /// so clarity beats caching a running sum.
     ///
     /// The bed is the public image's own conversation — ordinary chatter is
     /// what the census must reject — so the distribution is a phone's.
@@ -1537,7 +1541,12 @@ mod tests {
         // Per case: its category, its prototype vector (the joined case text,
         // exactly as prototype_examples builds it), and its messages.
         struct Case {
-            cat: Category,
+            /// Stable fixture id. A case can carry SEVERAL categories, and it
+            /// must be held out of every one of them — `census_score` is a max
+            /// over prototypes, so leaving it in a sibling category's centroid
+            /// leaks it straight back in.
+            id: String,
+            cats: Vec<Category>,
             proto: Vec<f32>,
             msgs: Vec<Vec<f32>>,
         }
@@ -1551,20 +1560,26 @@ mod tests {
                 .map(|m| m.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            for cat in case.expected_categories() {
-                let Ok(proto) = embed_one(&joined) else {
-                    embed_failures += 1;
-                    continue;
-                };
-                let mut msgs = Vec::new();
-                for m in &case.messages {
-                    match embed_one(&m.text) {
-                        Ok(v) => msgs.push(v),
-                        Err(_) => embed_failures += 1,
-                    }
+            // ONCE per case, not once per category: a multi-category case was
+            // being embedded twice and its messages counted twice in the
+            // denominator.
+            let Ok(proto) = embed_one(&joined) else {
+                embed_failures += 1;
+                continue;
+            };
+            let mut msgs = Vec::new();
+            for m in &case.messages {
+                match embed_one(&m.text) {
+                    Ok(v) => msgs.push(v),
+                    Err(_) => embed_failures += 1,
                 }
-                cases.push(Case { cat, proto, msgs });
             }
+            cases.push(Case {
+                id: case.id.clone(),
+                cats: case.expected_categories().into_iter().collect(),
+                proto,
+                msgs,
+            });
         }
         assert!(!cases.is_empty(), "fixture positives are the ground truth");
 
@@ -1587,42 +1602,28 @@ mod tests {
         );
 
         // Leave-one-out centroids, by arithmetic rather than re-embedding.
-        let full_centroid = |cat: Category| -> Option<Vec<f32>> {
+        let all_cats: Vec<Category> = Category::ALL.to_vec();
+        let centroid_of = |cat: Category, skip_id: Option<&str>| -> Option<Vec<f32>> {
             let v: Vec<Vec<f32>> = cases
                 .iter()
-                .filter(|c| c.cat == cat)
+                .filter(|c| c.cats.contains(&cat) && Some(c.id.as_str()) != skip_id)
                 .map(|c| c.proto.clone())
                 .collect();
             centroid(&v)
         };
-        let centroid_without = |cat: Category, skip: usize| -> Option<Vec<f32>> {
-            let v: Vec<Vec<f32>> = cases
-                .iter()
-                .enumerate()
-                .filter(|(i, c)| c.cat == cat && *i != skip)
-                .map(|(_, c)| c.proto.clone())
-                .collect();
-            centroid(&v)
-        };
-        let all_cats: Vec<Category> = Category::ALL.to_vec();
-
-        // Scoring a case: its OWN category's centroid excludes it; the rest
-        // are whole — exactly the set production would score an unseen message
-        // against.
-        let held_out_protos = |skip: usize, cat: Category| -> Vec<Vec<f32>> {
+        // Scoring a case: it is excluded from EVERY category's centroid, not
+        // just its own. The score is a max over prototypes, so a sibling
+        // category holding the same case would leak it back in.
+        let held_out_protos = |skip_id: &str| -> Vec<Vec<f32>> {
             all_cats
                 .iter()
-                .filter_map(|c| {
-                    if *c == cat {
-                        centroid_without(*c, skip)
-                    } else {
-                        full_centroid(*c)
-                    }
-                })
+                .filter_map(|c| centroid_of(*c, Some(skip_id)))
                 .collect()
         };
-        let production_protos: Vec<Vec<f32>> =
-            all_cats.iter().filter_map(|c| full_centroid(*c)).collect();
+        let production_protos: Vec<Vec<f32>> = all_cats
+            .iter()
+            .filter_map(|c| centroid_of(*c, None))
+            .collect();
 
         const BATCH_HOURS_PER_100K: f64 = 11.0;
         const FOCUSED_SECS: f64 = 6.5;
@@ -1638,8 +1639,17 @@ mod tests {
         for th in [0.46f32, 0.49, 0.52, 0.55, 0.58, 0.61, 0.64, 0.67] {
             let mut kept_lo = 0usize;
             let mut kept_tt = 0usize;
-            for (i, case) in cases.iter().enumerate() {
-                let lo = held_out_protos(i, case.cat);
+            for case in cases.iter() {
+                let lo = held_out_protos(&case.id);
+                // A category emptied by the hold-out would silently shrink the
+                // prototype set and understate held-out recall.
+                assert_eq!(
+                    lo.len(),
+                    production_protos.len(),
+                    "holding out {} emptied a category's centroid — the two columns would \
+                     no longer be comparable",
+                    case.id
+                );
                 for v in &case.msgs {
                     if census_score(v, &lo) >= th {
                         kept_lo += 1;
@@ -1663,16 +1673,21 @@ mod tests {
             );
         }
         println!(
-            "\n(batch scan for reference: 0.30 recall, ~{BATCH_HOURS_PER_100K} h per 100k — \
-             measured on Jigsaw fixtures, NOT on this distribution, so the columns are not \
-             like for like)"
+            "\n(full read for reference: 0.30 recall, ~{BATCH_HOURS_PER_100K} h per 100k — \
+             measured on Jigsaw fixtures, NOT on this distribution, so the multipliers are \
+             indicative, not like for like)"
+        );
+        println!(
+            "(held-out is PESSIMISTIC vs production: each centroid here is built from one \
+             fewer case than production's, so production scores against slightly better \
+             prototypes than this column shows)"
         );
         // The mechanism this measurement exists to respect: holding a case out
         // of its own centroid cannot make it easier to find.
         let mut lo_total = 0usize;
         let mut tt_total = 0usize;
-        for (i, case) in cases.iter().enumerate() {
-            let lo = held_out_protos(i, case.cat);
+        for case in cases.iter() {
+            let lo = held_out_protos(&case.id);
             for v in &case.msgs {
                 if census_score(v, &lo) >= 0.55 {
                     lo_total += 1;
@@ -1793,6 +1808,15 @@ mod tests {
         }
         server.shutdown();
     }
+
+    /// The census cuts the ORACLE's numbers were recorded at. Pinned here
+    /// rather than read off `ScanMode`, because the shipped postures are tuned
+    /// to a real distribution (#489) while these bands come from the Jigsaw
+    /// corpus: reading the enum made a constant change look like a pipeline
+    /// regression, and asserting the enum matched them made the test
+    /// impossible to pass at all.
+    const ORACLE_CENSUS_CUT: f32 = 0.52;
+    const ORACLE_CONFIRM_CUT: f32 = 0.58;
 
     /// The wired Rust triage pipeline against the recorded reference run.
     ///
@@ -1923,24 +1947,6 @@ mod tests {
             triage_scan::classify_focused(&slot.borrow().1, w)
         };
 
-        // This test compares against numbers the oracle recorded at SPECIFIC
-        // thresholds. If the shipped modes are retuned (#489), reading the enum
-        // below would silently compare a retuned run against 0.52 bands and
-        // read as a pipeline regression. Fail loudly, and say what to do.
-        assert_eq!(
-            ScanMode::Thorough.census_threshold(),
-            0.52,
-            "the oracle's stage-1/2 numbers were recorded at 0.52 but Thorough has been \
-             retuned — re-record the bands (or drive this test at 0.52 explicitly) rather \
-             than letting a constant change read as a regression"
-        );
-        assert_eq!(
-            ScanMode::Precise.census_threshold(),
-            0.58,
-            "the oracle's confirm-stage numbers were recorded at 0.58 but Precise has been \
-             retuned — re-record the bands"
-        );
-
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("parity", (None, None), "all", 1).unwrap();
         let outcome = triage_scan::run_triage(
@@ -1948,7 +1954,11 @@ mod tests {
             scan,
             &threads,
             &prototypes,
-            ScanMode::Thorough, // threshold 0.52, no confirmation — oracle stages 1+2
+            // No confirmation stage — the oracle's stages 1+2. The mode is
+            // only consulted for confirm(); the CUT is pinned to 0.52 below,
+            // because that is where the oracle's numbers were recorded.
+            ScanMode::Thorough,
+            ORACLE_CENSUS_CUT,
             None,
             1,
             embed,
@@ -2054,6 +2064,7 @@ mod tests {
                 &threads,
                 &prototypes,
                 ScanMode::Precise,
+                ORACLE_CONFIRM_CUT, // the oracle's confirm sweep point, not the shipped mode's
                 None,
                 2,
                 |_: &str| -> crate::Result<Vec<f32>> {
