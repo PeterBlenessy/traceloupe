@@ -565,10 +565,24 @@ validation. Checklist mirrors #459.
       total detections), not an efficiency one, and it needs the generated
       corpus before anyone should decide it. See §10.15 for the harness bug this
       turned up.
-- [ ] **Wider / better corpus for the three unlabelled categories**
-      (coercive-control, grooming, relationship-harassment). The only route is to
-      **generate** labelled conversations; the same corpus is the training set for
-      a possible fine-tune.
+- [ ] **Wider / better corpus for the unlabelled categories** —
+      **two, not three** (`docs/research/safety-scan-corpus-prior-art.md`). This
+      item used to read "coercive-control, grooming, relationship-harassment,
+      and the only route is to generate", which contradicted §1 (which names
+      two) and the plan's T10 (which has always said to evaluate **PAN12** for
+      grooming). Grooming HAS a public corpus; whether it is usable is a licence
+      and distribution question, not a generation one, and its
+      positives-from-Perverted-Justice / negatives-from-IRC construction invites
+      exactly the source-artifact error this project has already made twice.
+      **Coercive-control** and **relationship-harassment** are the two with no
+      conversational corpus in any language — public harassment sets are
+      single tweets judged in isolation, which cannot express a pattern between
+      two known parties. Generation should start from the **48 coercive-control
+      behaviours** derived from 406k police narratives (Crime Science, 2024)
+      rather than from intuition: #492 established that covering missing *modes*
+      is what moves recall, and inventing the mode list unaided is how the scam
+      corpus came to be missing two. The same corpus is the training set for a
+      possible fine-tune.
 - [ ] **Fine-tune** (endgame). The failures are precisely-labelled training signal
       (a parent's curfew is not coercive control; a survivor's account is not a
       threat). A fine-tune on in-domain conversation would collapse the three-model
