@@ -665,6 +665,18 @@ validation. Checklist mirrors #459.
       running a fine-tune would waste the whole effort, and unlike a threshold
       it cannot be undone — a model that has seen the eval set cannot unsee it.
       Mutation-proven against the real #492 overlap.
+- [x] **Fine-tune feasibility, proven end to end** (2026-08-13,
+      `docs/research/finetune-feasibility.md`). Every link works on the M3:
+      MLX LoRA → fuse → GGUF → Q4_K_M → the SHIPPED llama-server, with the
+      taught behaviour surviving conversion and quantisation and general
+      capability intact. **Training peak memory 4.97 GB**, so 24 GB is not the
+      constraint and a much larger run is affordable; budget ~35 GB transient
+      disk. Two traps found and documented: mlx-lm's built-in `--export-gguf`
+      refuses `gemma4`, and llama.cpp b10075's converter breaks because
+      transformers 5.x silently drops `global_head_dim` during config
+      normalisation — while mlx-lm requires transformers 5 and the converter
+      pins transformers 4. This was done BEFORE generating a corpus precisely
+      because a corpus cannot fix a tooling wall.
 - [ ] **Fine-tune** — **the ONLY remaining lever for relationship-harassment**,
       not merely the endgame. Everything cheaper has now been measured and ruled
       out for that category: more prototypes buy cost (#503), more ground truth
