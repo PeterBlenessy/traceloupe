@@ -1937,6 +1937,45 @@ mod tests {
         // It also re-checks the CHECKED-IN record against what was just
         // measured, because the CI-side guard in `cost_model` can only be as
         // honest as those constants.
+        // A FINE sweep around the shipped cuts. The coarse grid above is the
+        // historical comparison and should not move; re-deriving a posture's
+        // cut needs resolution the coarse grid does not have — #501 shipped a
+        // corpus change that pushed Balanced from 2.6% to 3.6% keep-rate, and
+        // "somewhere between 0.67 and 0.70" is not a threshold.
+        //
+        // The reference points printed alongside are what each posture PROMISES
+        // the user, so a cut is chosen against the claim rather than by eye:
+        // Balanced says "about as much as a full read in roughly half the
+        // time", i.e. ~5.5 h per 100k.
+        println!(
+            "\nfine sweep for re-deriving a cut (target: Balanced ~5.5 h = half the full read):"
+        );
+        println!("  cut     recall  selectivity   h/100k");
+        {
+            let mut th = 0.640f32;
+            while th <= 0.7201 {
+                let recall = planted
+                    .iter()
+                    .filter(|(_, v)| census_score(v, &prototypes) >= th)
+                    .count() as f64
+                    / planted.len() as f64;
+                let sel = 100.0
+                    * bed_vecs
+                        .iter()
+                        .filter(|v| census_score(v, &prototypes) >= th)
+                        .count() as f64
+                    / bed_vecs.len() as f64;
+                let hours = hours_per_100k(sel);
+                let mark = if (hours - 5.5).abs() < 0.6 {
+                    "  <- ~half a full read"
+                } else {
+                    ""
+                };
+                println!("  {th:.3}   {recall:.3}   {sel:>5.1}%      {hours:>5.1}{mark}");
+                th += 0.005;
+            }
+        }
+
         println!("\nselectivity guard (measured now vs the checked-in record):");
         let mut drifted: Vec<String> = Vec::new();
         let mut over_ceiling: Vec<String> = Vec::new();
@@ -1949,7 +1988,7 @@ mod tests {
             let hours = hours_per_100k(sel);
             let ceiling = m.mode.cost_ceiling_hours_per_100k();
             println!(
-                "  {:<9} @{:.2}  {sel:>5.1}% ({:.1}% recorded)  {hours:>5.1} h / ceiling {ceiling:>5.1} h",
+                "  {:<9} @{:.3}  {sel:>5.1}% ({:.1}% recorded)  {hours:>5.1} h / ceiling {ceiling:>5.1} h",
                 m.mode.as_str(),
                 m.threshold,
                 m.selectivity_pct,
