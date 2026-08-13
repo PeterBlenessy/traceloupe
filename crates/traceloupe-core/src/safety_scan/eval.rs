@@ -1645,8 +1645,13 @@ mod tests {
                  not raise the ceiling.",
                 m.mode.as_str(),
             );
-            // A tenth of a percent on this bed is under one message; anything
-            // larger means the record no longer describes what ships.
+            // 0.1 pp sits deliberately between the two scales that matter: the
+            // recorded constants are rounded to one decimal, so they can differ
+            // from a true measurement by up to 0.05 pp for no reason at all,
+            // while one message of this 576-message bed is 0.174 pp. So this
+            // tolerates rounding and nothing else — a single message changing
+            // side trips it, which is the sensitivity we want from a record
+            // whose only job is to describe what ships.
             if (sel - m.selectivity_pct).abs() > 0.1 {
                 drifted.push(format!(
                     "{} @{:.2}: measured {sel:.1}%, recorded {:.1}%",
