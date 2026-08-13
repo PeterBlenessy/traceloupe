@@ -52,13 +52,15 @@ impl ScanMode {
     ///   0.55      0.960   0.89   0.79     106.9 h
     ///   0.58      0.913   0.84   0.74      77.4 h
     ///   0.61      0.778   0.73   0.65      46.7 h
-    ///   0.64      0.603   0.56   0.49      20.7 h   Thorough
-    ///   0.67      0.452   0.42   0.37       4.7 h   Balanced
-    ///   0.70      0.286   0.26   0.23       1.6 h   Precise
+    ///   0.64      0.617   0.58   0.50      20.4 h   Thorough
+    ///   0.675     0.422   0.39   0.34       5.0 h   Balanced
+    ///   0.70      0.273   0.25   0.22       1.6 h   Precise
     /// ```
     ///
     /// The `census` and `cost/100k` columns are measured (`census_recall_vs_cost`,
-    /// 2026-08-13, 85-example corpus). The `~e2e` and `+confirm` columns are the
+    /// 2026-08-13, 94-example corpus against 154 ground-truth positives — both
+    /// grew in #499/#501, so these do not compare directly with the numbers
+    /// recorded before that; the matched-cost rows in the validation doc do). The `~e2e` and `+confirm` columns are the
     /// oracle's measured stage-loss factors applied to that census column — the
     /// factors themselves have not been re-measured since #489, so treat those
     /// two as derived, not observed.
@@ -76,9 +78,9 @@ impl ScanMode {
     ///
     /// ```text
     ///           cut    recall it delivers   vs full read (0.30 / 11 h)
-    /// Thorough  0.64   0.56 (no confirm)      1.9x recall, 1.9x time
-    /// Balanced  0.67   0.37 (+confirm)        1.2x recall, 0.4x time
-    /// Precise   0.70   0.23 (+confirm)        0.8x recall, 0.15x time
+    /// Thorough  0.64   0.58 (no confirm)      1.9x recall, 1.9x time
+    /// Balanced  0.675  0.34 (+confirm)        1.1x recall, 0.45x time
+    /// Precise   0.70   0.22 (+confirm)        0.7x recall, 0.15x time
     /// ```
     ///
     /// So only **Thorough** buys materially more harm found, and it costs
@@ -101,7 +103,7 @@ impl ScanMode {
     pub fn census_threshold(self) -> f32 {
         match self {
             ScanMode::Thorough => 0.64,
-            ScanMode::Balanced => 0.67,
+            ScanMode::Balanced => 0.675,
             ScanMode::Precise => 0.70,
         }
     }

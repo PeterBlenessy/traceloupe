@@ -132,12 +132,12 @@ pub struct MeasuredSelectivity {
 /// prototype corpus, 2026-08-13 (#499). Re-run that harness and update these
 /// whenever the corpus, the embedder, or a threshold changes.
 ///
-/// Balanced moved 2.6% → 3.6% when coercive-control gained nine mode
-/// prototypes. That is a 40% cost rise (4.7 → 6.6 h per 100k) for +0.007
-/// overall recall — a poor trade in isolation, accepted because the same
-/// change makes Thorough and Precise strictly better and Balanced stays well
-/// inside its 11.0 h ceiling. Balanced's CUT is the thing that should move
-/// next: on this corpus 2.6% now sits nearer 0.68 than 0.67.
+/// Balanced's cut was re-derived to 0.675 after the coercive-control corpus
+/// widened (#501 left it at 0.67 costing 6.6 h, which is 0.6× the full read and
+/// not the "roughly half the time" the posture claims). At 0.675 it keeps 2.8%
+/// — 5.0 h, 0.45× — which is. The arbiter is the promise, not the measurement:
+/// a posture whose cut drifts until its name stops being true has been
+/// retuned into something else.
 pub const MEASURED_SELECTIVITY: [MeasuredSelectivity; 3] = [
     MeasuredSelectivity {
         mode: ScanMode::Thorough,
@@ -146,8 +146,8 @@ pub const MEASURED_SELECTIVITY: [MeasuredSelectivity; 3] = [
     },
     MeasuredSelectivity {
         mode: ScanMode::Balanced,
-        threshold: 0.67,
-        selectivity_pct: 3.6,
+        threshold: 0.675,
+        selectivity_pct: 2.8,
     },
     MeasuredSelectivity {
         mode: ScanMode::Precise,

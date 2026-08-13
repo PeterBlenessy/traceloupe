@@ -1085,3 +1085,36 @@ be evaluated ahead of the ground truth it is scored against.** Widening
 prototypes against a narrow eval set is measurable only as cost, and looks like
 evidence that the examples do not help. #492 found that covering missing modes
 moves recall; the precondition is that the mode exists on *both* sides.
+
+#### Re-deriving Balanced's cut: 0.67 → 0.675
+
+The corpus change above left Balanced costing 6.6 h per 100k. Its posture claims
+*"about as much as a full read in roughly half the time"* — the full read is
+~11 h, so "roughly half" is ~5.5 h, and 6.6 h is 0.6× rather than 0.5×. The cut
+had stopped matching the name.
+
+A fine sweep (0.005 steps, now a permanent part of the harness — "somewhere
+between 0.67 and 0.70" is not a threshold):
+
+| cut | recall | selectivity | h/100k |
+|---|---|---|---|
+| 0.665 | 0.494 | 4.2% | 7.5 |
+| 0.670 | 0.455 | 3.6% | 6.6 |
+| **0.675** | **0.422** | **2.8%** | **5.0** ← 0.45× the full read |
+| 0.680 | 0.390 | 1.7% | 3.1 |
+
+**Shipped 0.675.** The arbiter is the promise, not the measurement: a posture
+whose cut drifts until its name stops being true has been retuned into
+something else.
+
+**The honest cost.** At approximately matched cost in this region the widened
+corpus is slightly *worse* — 0.448 at 2.6% before it, 0.422 at 2.8% after —
+about −0.03, on the same 154-message ground truth. The same corpus makes
+Thorough better on **both** axes (0.591 @ 11.5% → 0.617 @ 11.3%) and Precise
+better at identical cost (0.253 → 0.273 @ 0.9%). So the nine coercive-control
+prototypes help at loose and tight cuts and hurt in the middle, which is worth
+knowing and is not what anyone predicted.
+
+Three postures, three different answers from one corpus change, is a reminder
+that "did the corpus help?" is not a well-formed question without an operating
+point attached.
