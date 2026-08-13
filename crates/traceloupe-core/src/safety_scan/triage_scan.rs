@@ -772,59 +772,21 @@ mod tests {
     /// project three retracted results (#491).
     #[test]
     fn the_prototype_corpus_does_not_overlap_the_eval_fixtures() {
-        // CONTAINMENT, not equality. The first version compared whole lines
-        // and passed while three real overlaps sat in the corpus — a prototype
-        // line was a SUBSTRING of a fixture positive ("i know where you live"
-        // inside "i know where you live and im going to make you regret
-        // this"). Same contamination, invisible to an equality check, and the
-        // leave-one-out safety net had been removed on the strength of it.
-        fn words(s: &str) -> Vec<String> {
-            s.to_lowercase()
-                .chars()
-                .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-                .collect::<String>()
-                .split_whitespace()
-                .map(str::to_string)
-                .collect()
-        }
-        /// A shared phrase, not a shared word. Matching on raw substrings
-        /// flagged the fixture "thanks ❤️" against a prototype containing the
-        /// word "thanks" — so compare word sequences, and require the shared
-        /// run to be long enough to be text someone copied rather than
-        /// vocabulary two sentences happen to share. Equality still fails at
-        /// any length.
-        const MIN_SHARED_WORDS: usize = 4;
-        fn leaks(a: &[String], b: &[String]) -> bool {
-            if a == b {
-                return true;
-            }
-            let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-            short.len() >= MIN_SHARED_WORDS && long.windows(short.len()).any(|w| w == short)
-        }
-        let protos: Vec<Vec<String>> = prototype_examples(&Category::ALL)
+        // The check itself lives in `eval::overlaps_sealed_fixtures`, because
+        // the prototype corpus is not the last thing that will learn from text
+        // and be scored against these fixtures — a fine-tune's training corpus
+        // has to pass the same bar, and a discipline only survives if re-using
+        // it is easier than re-deriving it.
+        let lines: Vec<String> = prototype_examples(&Category::ALL)
             .into_iter()
-            .flat_map(|(_, text)| text.lines().map(words).collect::<Vec<_>>())
-            .filter(|l| !l.is_empty())
+            .flat_map(|(_, text)| text.lines().map(str::to_string).collect::<Vec<_>>())
             .collect();
-        let fixtures = crate::safety_scan::eval::load_fixtures();
-        for case in &fixtures.cases {
-            for m in &case.messages {
-                let f = words(&m.text);
-                if f.is_empty() {
-                    continue;
-                }
-                for p in &protos {
-                    assert!(
-                        !leaks(&f, p),
-                        "fixture {} overlaps the prototype corpus:\n  fixture:   {:?}\n  \
-                         prototype: {:?}\nThe centroids would contain the ground truth they \
-                         are scored against — rewrite the prototype line.",
-                        case.id,
-                        m.text,
-                        p.join(" ")
-                    );
-                }
-            }
+        if let Some((fixture, proto)) = crate::safety_scan::eval::overlaps_sealed_fixtures(&lines) {
+            panic!(
+                "the prototype corpus overlaps the sealed eval set:\n  fixture:   {fixture:?}\n  \
+                 prototype: {proto:?}\nThe centroids would contain the ground truth they are \
+                 scored against — rewrite the prototype line."
+            );
         }
     }
 

@@ -653,6 +653,18 @@ validation. Checklist mirrors #459.
       not a threshold, and prompt guidance was ruled out for this exact class in
       #452 — it is our taxonomy meeting a model never trained on it.
       (threat-violence 4/5 is the control: harm in the words, harness sound.)
+- [x] **The train/eval discipline, settled BEFORE any corpus is generated.**
+      `fixtures/safety-scan/cases.json` is the **sealed evaluation set**:
+      nothing a model learns from — census prototypes, prompt examples, and
+      above all a fine-tune's training corpus — may contain its text. That rule
+      is now a reusable function (`eval::overlaps_sealed_fixtures`) rather than
+      a test welded to the prototype corpus, because the prototypes are not the
+      last thing that will learn from text and be scored against these
+      fixtures. Contamination has already cost this project three retractions
+      at small scale; discovering it after generating a training corpus and
+      running a fine-tune would waste the whole effort, and unlike a threshold
+      it cannot be undone — a model that has seen the eval set cannot unsee it.
+      Mutation-proven against the real #492 overlap.
 - [ ] **Fine-tune** — **the ONLY remaining lever for relationship-harassment**,
       not merely the endgame. Everything cheaper has now been measured and ruled
       out for that category: more prototypes buy cost (#503), more ground truth

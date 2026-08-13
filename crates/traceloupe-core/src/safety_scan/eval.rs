@@ -94,6 +94,66 @@ pub struct Verdict {
 /// eval applies it, or it reports detections no reviewer will ever see.
 pub const DEFAULT_FLOOR: u8 = 2;
 
+/// `cases.json` is the **sealed evaluation set**. Nothing a model learns from —
+/// census prototypes, prompt examples, and above all a fine-tune's training
+/// corpus — may contain its text, or every number measured against it is
+/// train-on-test.
+///
+/// This project has hit that contamination three times: leave-one-out was
+/// needed because the centroids were built from the eval fixtures (#489); the
+/// corpus split that removed the need for it was itself guarded by an
+/// equality check that passed while three prototype lines sat *inside* fixture
+/// positives (#492); and a measurement was retracted for it before that. The
+/// prototype corpus is checked with this function. **Any future training
+/// corpus must be checked with it too** — the discipline only survives if
+/// re-using it is easier than re-deriving it.
+///
+/// Returns the offending (fixture text, corpus line) pair, or `None` when the
+/// corpus is clean.
+pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, String)> {
+    /// A shared PHRASE, not a shared word. Matching raw substrings flagged the
+    /// fixture "thanks ❤️" against any corpus line containing "thanks", so
+    /// compare word sequences and require the shared run to be long enough to
+    /// be text someone copied rather than vocabulary two sentences happen to
+    /// share. Equality still fails at any length.
+    const MIN_SHARED_WORDS: usize = 4;
+    fn words(s: &str) -> Vec<String> {
+        s.to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect::<String>()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    }
+    fn leaks(a: &[String], b: &[String]) -> bool {
+        if a == b {
+            return true;
+        }
+        let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+        short.len() >= MIN_SHARED_WORDS && long.windows(short.len()).any(|w| w == short)
+    }
+    let corpus: Vec<(Vec<String>, &String)> = corpus_lines
+        .iter()
+        .map(|l| (words(l), l))
+        .filter(|(w, _)| !w.is_empty())
+        .collect();
+    for case in &load_fixtures().cases {
+        for m in &case.messages {
+            let f = words(&m.text);
+            if f.is_empty() {
+                continue;
+            }
+            for (c, raw) in &corpus {
+                if leaks(&f, c) {
+                    return Some((m.text.clone(), (*raw).clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn load_fixtures() -> Fixtures {
     serde_json::from_str(CASES_JSON).expect("cases.json is valid")
 }
