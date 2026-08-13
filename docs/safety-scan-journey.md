@@ -782,6 +782,18 @@ in the live harness against a fresh one, with the two cross-checked so neither
 can quietly validate a stale number (#493). It has since forced a constants
 update twice, correctly.
 
+**7. Claims drift from the numbers behind them, and only some of that is
+guardable.** Correcting the headline where it was *measured* did not correct it
+where it was *read*: the orchestrator's module doc still called a Jigsaw result
+"realistic data", and the Precise tooltip still told users it "finds slightly
+less than a full read" while delivering ~0.7× (#507). Two of the four drifts
+this campaign produced were mechanical — a doc table quoting a superseded cut or
+a superseded cost — and those are now a test (`the_documented_cuts_match_the_
+shipped_ones`, mutation-proven against both). The other two were qualitative,
+and no test was ever going to catch them. **The lesson is not "add a guard"; it
+is that a measurement has a blast radius wider than the document it lives in,
+and the wider half is review.**
+
 ### The method notes this campaign adds to §7
 
 - **Compare against buying the same thing more simply.** Three separate
