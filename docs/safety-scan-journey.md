@@ -510,6 +510,19 @@ validation. Checklist mirrors #459.
       either correction**, and no threshold beats the full read on both axes —
       the curve is dominated by prototype quality, which is now the binding
       constraint (§8.3).
+- [x] **A cost ceiling per posture, enforced** (#486). Selectivity is triage's
+      whole economic premise and it slipped twice with nothing failing — 55% of
+      a real phone at the Jigsaw cuts, then a re-derivation that was itself
+      wrong because production scores against nine prototypes, not one. Both
+      were caught by a person reading a table. `safety_scan::cost_model` now
+      gives each posture a ceiling derived from what its NAME promises (Thorough
+      3× the full read, Balanced 1×, Precise ⅓×) and fails when the measured
+      selectivity costs more: in CI against the recorded numbers, and in the
+      live harness against a fresh measurement, which also fails if the two
+      have drifted apart. Measured 20.7 / 4.7 / 1.6 h against ceilings of 33 /
+      11 / 3.7. **It bounds cost, not quality** — nothing here fails when recall
+      drops, and the per-category spread (scam-fraud 0.33 vs hate-identity 0.82
+      at one global cut) is the open half of #486.
 - [x] **A prototype corpus of the census's own** (#491). The centroids were
       built from the five eval fixtures per category — thin, uneven, and a
       structural train/test coupling that cost three retracted measurements.
