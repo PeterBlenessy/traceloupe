@@ -721,6 +721,86 @@ the whole scan. That is a prototype-quality lever, and unlike the threshold it
 does not trade recall — which makes the "wider/better corpus" item below the
 critical path for cost, not only for the three unlabelled categories.
 
+## 8.5 What the corpus campaign established (2026-08-12/13)
+
+Ten merged changes (#492–#505) tried, in order, every cheap lever for the
+categories that recall worst. Most of them failed, and the failures are the
+result. Condensed here because a reader should not have to reconstruct the arc
+from ten dated entries.
+
+**1. Examples are not the step change, and there are two independent proofs.**
+Giving the census its own 94-example corpus, disjoint from the eval fixtures,
+moved matched-cost recall by ~+0.05 at the operating points that matter (#492).
+Per-category thresholds — the obvious next lever — were a wash twice over: a
+*uniform* quantile-calibrated scheme (#495, six operating points, deltas
+straddling zero) and then a *targeted* one lowering only the worst category's
+bar (#505, one good row with non-monotone neighbours). Two different routes to
+the same answer: **no better than moving the one cut you already have.**
+
+**2. Ground truth is the binding constraint, and the ordering is not optional.**
+Nine coercive-control prototypes covering modes the corpus had never touched
+moved recall by *exactly zero* and cost 38% more (#500) — because the eval set
+contained none of those modes, so nothing written against them could register.
+Writing the ground truth first (17 → 45 messages) and re-testing **the same nine
+prototypes** turned them into a win: coercive-control 0.56 → 0.62 at Thorough,
+with Thorough and Precise both strictly better (#501). **A prototype corpus
+cannot be evaluated ahead of the ground truth it is scored against.**
+
+**3. Honest ground truth makes the numbers worse, and that is the point.**
+Writing the stalking half of harassment — the half with no public corpus —
+dropped measured harassment recall from 0.65/0.55/0.50 to 0.64/0.52/0.36
+(#503). Nothing regressed. The old number was flattering because every case in
+the eval set looked like an insult, and the product's real problem was not being
+measured at all.
+
+**4. The two "pattern" categories have different limits, and only one is
+expensive.** Measured at the focused stage's ceiling — whole conversation, no
+census gate, no budget (#504):
+
+- **Coercive-control 13/14.** The judge is nearly perfect; the census passes
+  0.62. Census recall is the binding constraint — but no clever gate buys it
+  back more cheaply than the threshold already does (#505), so the lever is
+  simply running a looser posture, which the product exposes.
+- **Relationship-harassment 3/8** on the new stalking cases *with perfect
+  context*. The model does not read *"im outside, buzz me up"* answered by
+  *"i asked you not to come here"* as harassment under any conditions available
+  to us.
+
+**5. So the fine-tune is not a general endgame — it is the only remaining lever
+for one specific category.** For relationship-harassment everything cheaper has
+now been measured and ruled out: more prototypes buy cost, more ground truth
+buys honesty rather than accuracy, richer context does not recover it, and
+prompt exclusions were ruled out in #452. That is a much narrower and much
+better-supported claim than "a fine-tune would help", and it is the strongest
+argument this project has for doing one.
+
+**6. The economics are now guarded rather than remembered.** Selectivity slipped
+twice without anything failing, both times caught by a person reading a table.
+Each posture now carries a cost ceiling derived from what its *name* promises
+(3× / 1× / ⅓× the full read), enforced in CI against a recorded measurement and
+in the live harness against a fresh one, with the two cross-checked so neither
+can quietly validate a stale number (#493). It has since forced a constants
+update twice, correctly.
+
+### The method notes this campaign adds to §7
+
+- **Compare against buying the same thing more simply.** Three separate
+  improvements in this campaign looked real until measured against an equally
+  expensive global cut. It is the single check that caught the most.
+- **Keep one number computed by two independent harnesses.** A double-prefixed
+  embedding shifted an entire curve one grid step while leaving it smooth and
+  plausible; the harness's own cross-check agreed with itself to 0.000000. Only
+  a second harness disagreeing exposed it (§10.15).
+- **A guard that replaces a safety net must be shown to fail.** The
+  disjointness test that justified deleting leave-one-out compared whole lines
+  for equality and passed while three prototype lines sat *inside* fixture
+  positives (§10.14).
+- **Mark hypotheses as hypotheses.** An untested causal claim written beside
+  measured numbers cost two full measurement cycles when the next session acted
+  on it (§10.14).
+
+---
+
 ## 9. Appendix — key numbers in one place
 
 | measurement | value | source |
@@ -733,7 +813,23 @@ critical path for cost, not only for the three unlabelled categories.
 | Per-message prefilter | 64% drop @ 0.95 recall | #408 |
 | Alternative models | Llama 3.1 ~0.00, Mistral ~1.00 clean 0.08, Gemma best | #445 |
 | Category narrowing | worse on every axis; 66% relabelled | #460 |
-| **Triage end-to-end** | **recall 0.94, precision 0.95** vs 0.30/0.89 | #459 |
+| Triage end-to-end, LAB conditions | recall 0.94, precision 0.95 vs 0.30/0.89 | #459 |
+| **Triage on a real distribution** | **see below — the 0.94 does not survive** | #489–#505 |
+
+**The 0.94 reproduces exactly and describes a corpus, not a phone.** It was
+measured on 5-message Jigsaw chunks against non-held-out prototypes. Against a
+public device's own conversation, with a disjoint prototype corpus and ground
+truth that includes the hard half of each category, the shipped postures are:
+
+| posture | cut | census recall | keeps | cost /100k | vs full read (0.30 / ~11 h) |
+|---|---|---|---|---|---|
+| Thorough | 0.640 | 0.618 | 11.3% | 20.4 h | ~1.9× recall, ~1.9× time |
+| Balanced | 0.675 | 0.421 | 2.8% | 5.0 h | ~1.1× recall, ~0.45× time |
+| Precise | 0.700 | ~0.27 | 0.9% | 1.6 h | ~0.7× recall, ~0.15× time |
+
+Triage is a **speed and precision** play with a modest recall edge at its
+thorough end — not the step change the lab number implied. Anyone quoting a
+single figure for this system should quote a row of that table instead.
 
 *All measurements: Apple M3 / 24 GB / macOS 26.5.2, llama.cpp b10075, Q4_K_M
 weights. Fixtures and public-corpus subsets are synthetic or licensed; no real
