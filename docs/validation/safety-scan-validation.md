@@ -1173,3 +1173,53 @@ stage reads, and ultimately the fine-tune. Adding prototypes buys cost.
 The ground truth is kept, because it is honest and because it makes this
 measurable at all. Selectivity is unchanged (a property of the bed), so the
 shipped cuts and `MEASURED_SELECTIVITY` stand.
+
+### 2026-08-13 — the two pattern categories have DIFFERENT limits
+
+#503 showed the census cannot separate relationship-harassment from ordinary
+conversation, because its messages *are* ordinary. That bounds the census. It
+says nothing about the pipeline, since the focused stage reads a conversational
+window and could recover exactly what the census misses.
+
+`focused_stage_on_pattern_categories` measures that stage's **ceiling**: every
+message of a fixture in the window, judged at the last message (the pattern is
+complete by then), no census gate and no budget. A miss here is a real limit,
+not a tuning problem.
+
+| category | hit / n | missed |
+|---|---|---|
+| coercive-control | **13 / 14** | `cc-gt-employment` |
+| harassment-bullying | **7 / 13** | `harass-after-block`, `rh-gt-waiting-at-work`, `rh-gt-turning-up`, `rh-gt-social-watching`, `rh-gt-third-party`, `rh-gt-multi-channel` |
+| threat-violence *(control)* | 4 / 5 | `sextortion` |
+
+Threat-violence is the control: its harm is in the words, so a sound harness
+should score it well, and it does.
+
+**These are two different problems wearing the same label.**
+
+**Coercive-control — the census is the bottleneck, and the pipeline is fine.**
+Given context, the classifier gets **13 of 14**. The census passes only 0.62 of
+it at Thorough. So nothing is wrong with the taxonomy or the model here; the
+harm is simply that the gate in front of a capable judge is too tight. The lever
+is ranking and gating — pass more of this category through — and that is a
+tuning problem with a known cost curve.
+
+**Relationship-harassment — the limit is deeper than the census.** With the
+whole conversation, perfect context and no gate, the focused stage still catches
+only **3 of the 8** new stalking cases. The model does not read *"im outside,
+buzz me up"* answered by *"i didnt invite you and i asked you not to come here"*
+as harassment. That is not a corpus gap and not a threshold: it is our taxonomy
+meeting a general-purpose model that was never trained on it, and prompt
+guidance has already been ruled out for exactly this class of failure (#452,
+journey §3.5 — the prompt already says a parent's curfew is not coercive
+control, and the model flags it anyway).
+
+**So the fine-tune is not the endgame for one category and a nice-to-have for
+the rest — it is the only remaining lever for relationship-harassment**, while
+coercive-control can be bought back with gating work today. Journey §8 is
+updated to say so.
+
+*Caveats: 8 new cases and 5 old ones is a small n, one model (E4B Q4_K_M), and
+judging the last message favours the pipeline — every fixture here ends on the
+harasser's line, so the focus choice is the most generous available. A larger
+corpus would sharpen the fraction; it is unlikely to move the split.*
