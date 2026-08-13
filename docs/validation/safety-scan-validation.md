@@ -911,3 +911,47 @@ The larger conclusion stands and is now better supported: examples help, but
 they are not the step change. The ceiling is the embedding space's ability to
 separate harm from ordinary conversation, which is what a fine-tune would
 address.
+
+### 2026-08-13 — a cost ceiling per posture, enforced (#486)
+
+Selectivity is the entire economic premise of triage, and it has now slipped
+twice without anything failing: the Jigsaw-fitted cuts kept 55% of a real phone
+(~100 h per 100k against the full read's ~11), and the first re-derivation was
+itself wrong because production scores against nine prototypes rather than one.
+Both were caught by a person reading a table. `safety_scan::cost_model` makes
+that a test instead.
+
+The cost model is one formula, shared by the CI guard and the measurement
+harness so they cannot drift: `hours_per_100k(selectivity) = 100_000 ×
+selectivity × 6.5 s`. It deliberately ignores census time (~26 min per 100k),
+which makes every number here a LOWER bound — a guard that under-estimates cost
+fails late, never early.
+
+Each posture gets a ceiling derived from what its name promises the user, not
+from what it happens to measure:
+
+| posture | ceiling | why | measured |
+|---|---|---|---|
+| Thorough | 33.0 h (3× full read) | openly trades time for recall, but a scan that runs for days is not a product | **20.7 h** |
+| Balanced | 11.0 h (1×) | the default; a default costing more than the scan it replaced is a regression however good its recall | **4.7 h** |
+| Precise | 3.7 h (⅓×) | chosen for speed | **1.6 h** |
+
+Two tests enforce it. In CI, the recorded selectivity of each posture is costed
+and checked against its ceiling, and the record's thresholds must equal the
+shipped `census_threshold()` — so moving a cut without re-measuring fails with
+an error naming the harness to re-run. In the live harness, the same ceilings
+are checked against a FRESH measurement, and the freshly measured selectivity
+is compared against the checked-in constants (tolerance 0.1 pp, under one
+message on this bed) so the CI guard can never be quietly checking a stale
+number.
+
+Verified against the public iOS 17 image: 11.5% / 2.6% / 0.9%, matching the
+record exactly. Mutation-proven both ways — restoring #486's 55.2% fails with
+"99.7 h per 100k against a ceiling of 11.0 h", and moving Balanced's cut to
+0.61 without re-measuring fails the coupling test.
+
+**What this does not cover.** The ceiling is a cost bound, not a quality one:
+nothing here fails when recall drops, and the per-category spread remains wide
+(`scam-fraud` 0.33 against `hate-identity` 0.82 at the same cut). A single
+max-over-prototypes score with one global threshold is what produces that
+spread — the remaining open question on #486.

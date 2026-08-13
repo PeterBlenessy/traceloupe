@@ -49,18 +49,25 @@ impl ScanMode {
     ///
     /// ```text
     /// threshold  census  ~e2e  +confirm  cost/100k
-    ///   0.55      0.961   0.89   0.79     108 h
-    ///   0.58      0.906   0.84   0.74      79 h
-    ///   0.61      0.789   0.73   0.65      46 h
-    ///   0.64      0.578   0.54   0.47      20.7 h   Thorough
-    ///   0.67      0.445   0.41   0.36       4.7 h   Balanced
-    ///   0.70      0.281   0.26   0.23       1.6 h   Precise
+    ///   0.55      0.960   0.89   0.79     106.9 h
+    ///   0.58      0.913   0.84   0.74      77.4 h
+    ///   0.61      0.778   0.73   0.65      46.7 h
+    ///   0.64      0.603   0.56   0.49      20.7 h   Thorough
+    ///   0.67      0.452   0.42   0.37       4.7 h   Balanced
+    ///   0.70      0.286   0.26   0.23       1.6 h   Precise
     /// ```
     ///
-    /// (Re-measured after the census got its own prototype corpus, #491. The
+    /// The `census` and `cost/100k` columns are measured (`census_recall_vs_cost`,
+    /// 2026-08-13, 85-example corpus). The `~e2e` and `+confirm` columns are the
+    /// oracle's measured stage-loss factors applied to that census column — the
+    /// factors themselves have not been re-measured since #489, so treat those
+    /// two as derived, not observed.
+    ///
+    /// (Re-measured after the census got its own prototype corpus, #491, and
+    /// again after that PR's review corrected a double-counted denominator. The
     /// richer centroids score everything higher, so the same postures sit one
-    /// notch up the scale; at MATCHED cost they are modestly better — +0.05
-    /// recall at ~5 h, +0.02 at ~20 h, and slightly worse at the cheapest
+    /// notch up the scale; at MATCHED cost they are modestly better — +0.055
+    /// recall at ~5 h, +0.040 at ~20 h, and slightly worse at the cheapest
     /// end.)
     ///
     /// What each posture honestly buys, reading the column it ACTUALLY runs —
@@ -69,8 +76,8 @@ impl ScanMode {
     ///
     /// ```text
     ///           cut    recall it delivers   vs full read (0.30 / 11 h)
-    /// Thorough  0.64   0.54 (no confirm)      1.8x recall, 1.9x time
-    /// Balanced  0.67   0.36 (+confirm)        1.2x recall, 0.4x time
+    /// Thorough  0.64   0.56 (no confirm)      1.9x recall, 1.9x time
+    /// Balanced  0.67   0.37 (+confirm)        1.2x recall, 0.4x time
     /// Precise   0.70   0.23 (+confirm)        0.8x recall, 0.15x time
     /// ```
     ///

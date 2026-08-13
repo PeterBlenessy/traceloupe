@@ -1583,8 +1583,9 @@ mod tests {
              truncated sample and would look plausible anyway"
         );
 
-        const FULL_READ_HOURS_PER_100K: f64 = 11.0;
-        const FOCUSED_SECS: f64 = 6.5;
+        use crate::safety_scan::cost_model::{
+            hours_per_100k, FULL_READ_HOURS_PER_100K, MEASURED_SELECTIVITY,
+        };
         println!(
             "\n=== census recall vs cost (production prototypes, disjoint ground truth) ===\n\
              bed {} real messages · {} planted positive messages\n",
@@ -1603,12 +1604,64 @@ mod tests {
                 .filter(|v| census_score(v, &prototypes) >= th)
                 .count();
             let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
-            let hours = (100_000.0 * sel / 100.0) * FOCUSED_SECS / 3600.0;
+            let hours = hours_per_100k(sel);
             println!("  {th:.2}      {recall:.3}      {sel:>5.1}%      {hours:>5.1} h");
         }
         println!(
             "\n(full read for reference: 0.30 recall, ~{FULL_READ_HOURS_PER_100K} h per 100k — \
              measured on Jigsaw fixtures, so the comparison is indicative, not like for like)"
+        );
+
+        // THE GUARD (#486). Printing the cost was never enough: the census kept
+        // 55% of a real phone for weeks, and the only reason anyone found out
+        // was a person reading this table. Now a posture that stops being
+        // affordable fails the run that measured it.
+        //
+        // It also re-checks the CHECKED-IN record against what was just
+        // measured, because the CI-side guard in `cost_model` can only be as
+        // honest as those constants.
+        println!("\nselectivity guard (measured now vs the checked-in record):");
+        let mut drifted: Vec<String> = Vec::new();
+        for m in &MEASURED_SELECTIVITY {
+            let kept_bed = bed_vecs
+                .iter()
+                .filter(|v| census_score(v, &prototypes) >= m.threshold)
+                .count();
+            let sel = 100.0 * kept_bed as f64 / bed_vecs.len() as f64;
+            let hours = hours_per_100k(sel);
+            let ceiling = m.mode.cost_ceiling_hours_per_100k();
+            println!(
+                "  {:<9} @{:.2}  {sel:>5.1}% ({:.1}% recorded)  {hours:>5.1} h / ceiling {ceiling:>5.1} h",
+                m.mode.as_str(),
+                m.threshold,
+                m.selectivity_pct,
+            );
+            assert!(
+                hours <= ceiling,
+                "{} keeps {sel:.1}% of this device — {hours:.1} h per 100k against a ceiling \
+                 of {ceiling:.1} h. Triage's whole premise is that the census is selective \
+                 enough to make depth affordable; at this rate the posture costs more than \
+                 the {FULL_READ_HOURS_PER_100K} h full read it replaces. Fix the census, do \
+                 not raise the ceiling.",
+                m.mode.as_str(),
+            );
+            // A tenth of a percent on this bed is under one message; anything
+            // larger means the record no longer describes what ships.
+            if (sel - m.selectivity_pct).abs() > 0.1 {
+                drifted.push(format!(
+                    "{} @{:.2}: measured {sel:.1}%, recorded {:.1}%",
+                    m.mode.as_str(),
+                    m.threshold,
+                    m.selectivity_pct
+                ));
+            }
+        }
+        assert!(
+            drifted.is_empty(),
+            "cost_model::MEASURED_SELECTIVITY no longer matches this device:\n  {}\n\
+             Update those constants — the CI-side cost guard is checking a stale number, \
+             which is exactly how a selectivity regression stays invisible.",
+            drifted.join("\n  ")
         );
         println!("\nper-category recall at the shipped cuts:");
         println!("category                  0.64   0.67   0.70");
