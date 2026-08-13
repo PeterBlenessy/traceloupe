@@ -1223,3 +1223,49 @@ updated to say so.
 judging the last message favours the pipeline — every fixture here ends on the
 harasser's line, so the focus choice is the most generous available. A larger
 corpus would sharpen the fraction; it is unlikely to move the split.*
+
+### 2026-08-13 — "coercive-control is buyable with gating" — measured, and mostly wrong
+
+#504 found that with full context the focused stage gets coercive-control 13/14
+while the census passes only 0.62 of it, and concluded the recall was "buyable
+today with gating work". That conclusion was reasonable and is **not** what the
+measurement says.
+
+The test: lower **only** coercive-control's bar, leave the other eight at the
+shipped cut, and compare against a **global** cut bought to the same cost. That
+last part is what decides it — lowering one category's bar also admits other
+categories' positives that happen to score on that centroid, so "overall recall
+went up" is not evidence the targeting worked.
+
+Balanced (others at 0.675; baseline overall 0.421, coercive-control 0.356, 5.0 h):
+
+| cc cut | overall | cc recall | h/100k | vs an equally expensive global cut |
+|---|---|---|---|---|
+| 0.660 | 0.449 | 0.422 | 6.0 | −0.011 overall, +0.022 cc |
+| **0.645** | 0.517 | 0.556 | 8.2 | **+0.017 overall, +0.133 cc** |
+| 0.630 | 0.556 | 0.622 | 14.1 | −0.017 overall, +0.022 cc |
+| 0.615 | 0.607 | 0.733 | 21.0 | −0.039 overall, +0.111 cc |
+
+**One good row does not make an effect.** 0.645 buys +0.133 coercive-control for
++0.017 overall at matched cost, which would be worth having — but its immediate
+neighbours give +0.022, and the sequence is not monotone. On 45 coercive-control
+ground-truth messages a 0.13 swing is about six messages. That is noise wearing
+the shape of a finding, and #492 already cost this project two measurement
+cycles for believing one.
+
+**So the targeted gate is not shipped.** It does not reliably beat simply buying
+the same cost globally, which refines rather than contradicts #495: a *uniform*
+per-category scheme was a wash, and now a *targeted, evidence-motivated* one is
+too. Two different routes to per-category thresholds, both landing on "no better
+than moving the one cut you already have".
+
+**What that leaves.** Coercive-control recall is bought by running a looser
+posture — which is a choice the product already exposes, and Thorough already
+is. The honest statement for #504's finding is narrower than what it claimed:
+the focused stage is capable enough that census recall is the binding
+constraint for this category, but there is no clever gate that buys it back
+more cheaply than the threshold already does.
+
+The sweep stays in the harness. It is the tool for asking this question, and the
+next person to have the same good idea should be able to re-run it in a minute
+rather than re-deriving it.

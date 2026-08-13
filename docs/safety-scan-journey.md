@@ -638,7 +638,15 @@ validation. Checklist mirrors #459.
       **Coercive-control 13/14**: given context the classifier is nearly
       perfect, and the census passes only 0.62 of it. Nothing is wrong with the
       model or the taxonomy here; the gate in front of a capable judge is too
-      tight, which is a tuning problem with a known cost curve.
+      tight, which is a tuning problem with a known cost curve. **But "buyable
+      with gating" was then measured and is mostly wrong**: a targeted gate that
+      lowers ONLY coercive-control's bar does not reliably beat a global cut
+      bought to the same cost (one good row, +0.133 cc for +0.017 overall, with
+      non-monotone neighbours at ~+0.02 — six messages of 45). Combined with
+      #495's uniform scheme, that is two independent routes to per-category
+      thresholds both landing on "no better than moving the one cut you already
+      have". Coercive-control recall is bought by running a looser posture, which
+      the product already exposes.
       **Relationship-harassment 3/8** on the new stalking cases even with
       perfect context. The model does not read "im outside, buzz me up" /
       "i asked you not to come here" as harassment at all. Not a corpus gap,

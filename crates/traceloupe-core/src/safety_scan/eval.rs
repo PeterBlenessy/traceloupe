@@ -1743,6 +1743,74 @@ mod tests {
             );
         }
 
+        // TARGETED: lower ONE category's bar, leave the other eight at the
+        // shipped cut.
+        //
+        // #495 rejected a UNIFORM per-category scheme — every category
+        // quantile-calibrated to keep an equal share of chatter — because at
+        // matched cost it was a wash. This is a different question, and one
+        // #495 had no way to ask: #504 measured that with full context the
+        // focused stage gets coercive-control 13/14, while the census passes
+        // only 0.62 of it. Recall the census drops HERE is recoverable value,
+        // because the judge behind the gate is nearly perfect. That is not true
+        // of a category whose judge would miss it anyway, which is why moving
+        // every cut at once averaged out to nothing.
+        let cc_ix = cats
+            .iter()
+            .position(|c| *c == Category::CoerciveControl)
+            .expect("coercive-control is in the catalogue");
+        let cc_positives: Vec<&Vec<f32>> = planted_scores
+            .iter()
+            .filter(|(cs, _)| cs.contains(&Category::CoerciveControl))
+            .map(|(_, s)| s)
+            .collect();
+        for (posture, shipped) in [("Thorough", 0.64f32), ("Balanced", 0.675)] {
+            let (base_r, base_sel) = curve(shipped);
+            let base_cc = cc_positives.iter().filter(|s| max_of(s) >= shipped).count() as f64
+                / cc_positives.len() as f64;
+            println!(
+                "\ntargeted coercive-control gate, {posture} (others stay at {shipped:.3}):\n  \
+                 baseline: overall {base_r:.3}, coercive-control {base_cc:.3}, {base_sel:.1}%, \
+                 {:.1} h",
+                hours_per_100k(base_sel)
+            );
+            println!("  cc cut   overall  cc recall  selectivity   h/100k   vs baseline");
+            for cc_cut in [
+                shipped,
+                shipped - 0.015,
+                shipped - 0.03,
+                shipped - 0.045,
+                shipped - 0.06,
+            ] {
+                let keeps = |s: &[f32]| {
+                    s.iter()
+                        .enumerate()
+                        .any(|(i, v)| *v >= if i == cc_ix { cc_cut } else { shipped })
+                };
+                let overall = planted_scores.iter().filter(|(_, s)| keeps(s)).count() as f64
+                    / planted_scores.len() as f64;
+                let cc = cc_positives.iter().filter(|s| keeps(s)).count() as f64
+                    / cc_positives.len() as f64;
+                let sel = 100.0 * bed_scores.iter().filter(|s| keeps(s)).count() as f64
+                    / bed_scores.len() as f64;
+                // The comparison that decides it: a GLOBAL cut bought to the
+                // same cost. Lowering one category's bar also admits other
+                // categories' positives that happen to score on that centroid,
+                // so "overall recall went up" is not evidence the targeting
+                // worked — only beating an equally expensive global cut is.
+                let (gt, gr, _) = global_at(sel);
+                let gcc = cc_positives.iter().filter(|s| max_of(s) >= gt).count() as f64
+                    / cc_positives.len() as f64;
+                println!(
+                    "  {cc_cut:.3}    {overall:.3}    {cc:.3}      {sel:>5.1}%      {:>5.1}   \
+                     global {gt:.3} -> {gr:.3}/{gcc:.3}  ({:+.3} overall, {:+.3} cc)",
+                    hours_per_100k(sel),
+                    overall - gr,
+                    cc - gcc,
+                );
+            }
+        }
+
         // Per-category recall at one representative operating point of each
         // scheme, so the SPREAD — the thing #486 is actually about — is visible.
         let q = 0.975f64;
