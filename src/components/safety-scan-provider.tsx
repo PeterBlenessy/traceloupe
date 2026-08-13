@@ -42,6 +42,9 @@ type SafetyScanContextValue = {
     rangeStart?: number | null;
     rangeEnd?: number | null;
     sources?: string | null;
+    /** Wall-clock cap on the deep scan, in hours; null reads every candidate.
+     *  Whatever it does not reach is reported unscanned, never "clean". */
+    budgetHours?: number | null;
   }) => Promise<void>;
   /** The last completed triage scan's coverage numbers — the honest "N of M
    *  candidates deep-scanned" line. The triageDone event is terminal (it

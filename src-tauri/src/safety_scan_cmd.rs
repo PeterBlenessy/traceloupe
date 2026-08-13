@@ -22,7 +22,7 @@ use traceloupe_core::analysis::{AnalysisDb, Category, ChartBucket, FindingQuery,
 use traceloupe_core::cache::CacheDb;
 use traceloupe_core::install::InstallProgress;
 use traceloupe_core::safety_scan::chunker::{ScanSources, TimeRange};
-use traceloupe_core::safety_scan::{client, engine, models, server, summary};
+use traceloupe_core::safety_scan::{client, cost_model, engine, models, server, summary};
 use traceloupe_core::sidecar::CancelToken;
 
 #[derive(Default)]
@@ -1392,6 +1392,80 @@ fn plan_triage_scan(
     })
 }
 
+/// One posture's expected cost for the scope the user has chosen.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageModeEstimateDto {
+    pub mode: String,
+    pub candidates: u64,
+    pub hours: f64,
+    /// The most this posture may cost per 100k messages — the UI uses it to
+    /// say when a scan is long *for what it is*, not merely long.
+    pub ceiling_hours_per_100k: f64,
+}
+
+/// What a triage scan of the current scope is expected to cost, for every
+/// posture at once.
+///
+/// All three are returned from one call because the expensive part is counting
+/// the messages in scope, and that count does not depend on the posture —
+/// switching modes in the UI must not re-read the cache.
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageEstimateDto {
+    /// Messages the census will read. Every one of them: the census is never
+    /// budgeted, only the deep scan is.
+    pub messages: u64,
+    pub modes: Vec<TriageModeEstimateDto>,
+}
+
+/// Estimate a triage scan before running it.
+///
+/// The count comes from the SAME scope resolution the scan uses
+/// (`parse_scan_sources`, notes excluded), because an estimate computed over a
+/// different set of messages than the scan reads is worse than none — it would
+/// under-promise on exactly the backups where the warning matters.
+#[tauri::command]
+pub async fn estimate_triage_scan(
+    active: State<'_, ActiveBackup>,
+    range_start: Option<i64>,
+    range_end: Option<i64>,
+    sources: Option<String>,
+) -> Result<TriageEstimateDto, String> {
+    let cache_path = active.path()?;
+
+    let mut scan_sources = parse_scan_sources(sources.as_deref());
+    scan_sources.notes = false;
+    let range = TimeRange {
+        start: range_start,
+        end: range_end,
+    };
+
+    let cache = CacheDb::open(&cache_path).map_err(|e| e.to_string())?;
+    let messages: usize =
+        traceloupe_core::safety_scan::chunker::census_threads(&cache, range, &scan_sources)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .map(|t| t.len())
+            .sum();
+
+    Ok(TriageEstimateDto {
+        messages: messages as u64,
+        modes: [ScanMode::Thorough, ScanMode::Balanced, ScanMode::Precise]
+            .into_iter()
+            .map(|mode| {
+                let est = mode.estimate(messages);
+                TriageModeEstimateDto {
+                    mode: mode.as_str().to_string(),
+                    candidates: est.candidates as u64,
+                    hours: est.hours,
+                    ceiling_hours_per_100k: mode.cost_ceiling_hours_per_100k(),
+                }
+            })
+            .collect(),
+    })
+}
+
 #[tauri::command]
 // A Tauri command: each param maps to a field of the JS invoke() call.
 #[allow(clippy::too_many_arguments)]
@@ -1408,9 +1482,12 @@ pub async fn run_triage_scan(
     range_start: Option<i64>,
     range_end: Option<i64>,
     sources: Option<String>,
-    // Deep-scan budget: at most this many worklist items are classified; the
-    // rest are reported unscanned. None = every candidate.
-    budget: Option<usize>,
+    // Wall-clock cap on the DEEP SCAN, in hours; None reads every candidate.
+    // Hours rather than a count of items because that is what the user chose
+    // in the UI, and converting here — with the same cost model that produced
+    // the estimate they saw — is what keeps the promise and the enforcement
+    // from drifting apart.
+    budget_hours: Option<f64>,
 ) -> Result<(), String> {
     use traceloupe_core::safety_scan::chunker;
     use traceloupe_core::safety_scan::triage::{self, FocusWindow};
@@ -1662,6 +1739,10 @@ pub async fn run_triage_scan(
             }
         };
 
+        // The cap the user chose, in the unit the engine takes. `items_in_hours`
+        // rounds DOWN and floors at one, so a tiny cap yields a very small scan
+        // rather than a zero-budget run that reads as broken.
+        let budget = budget_hours.map(cost_model::items_in_hours);
         let outcome = triage_scan::run_triage(
             &mut analysis,
             scan_row_id,
