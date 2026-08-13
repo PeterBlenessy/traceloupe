@@ -160,6 +160,14 @@ pub const MEASURED_SELECTIVITY: [MeasuredSelectivity; 3] = [
 mod tests {
     use super::*;
 
+    /// Every decimal number on a line, in order.
+    fn floats(line: &str) -> Vec<f64> {
+        line.split(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .filter(|t| t.contains('.') && !t.is_empty())
+            .filter_map(|t| t.parse::<f64>().ok())
+            .collect()
+    }
+
     /// The guard #486 asked for: no posture may cost more than its name
     /// promises. This is the cheap half — it runs in CI against the recorded
     /// measurement. The other half runs inside `census_recall_vs_cost`, which
@@ -208,6 +216,68 @@ mod tests {
                 "{} has no recorded selectivity, so its cost is unguarded",
                 mode.as_str()
             );
+        }
+    }
+
+    /// The prose must not drift from the numbers behind it.
+    ///
+    /// `census_threshold()` carries two doc tables that quote each posture's
+    /// cut and cost. Both have now gone stale twice — once when the corpus
+    /// moved the numbers (#492) and once when Balanced's cut moved to 0.675
+    /// (#502) — and both times a person caught it by reading. This project's
+    /// consistent lesson is that anything caught by careful reading eventually
+    /// is not, so it is checked here instead.
+    ///
+    /// Deliberately narrow. It verifies the two things that are machine-
+    /// checkable — the CUT each posture is documented with, and the COST — and
+    /// makes no attempt to police prose. The genuinely misleading claims found
+    /// in this campaign ("on realistic data", "finds slightly less than a full
+    /// read") were qualitative, and no test was ever going to catch them; that
+    /// remains a review problem.
+    #[test]
+    fn the_documented_cuts_match_the_shipped_ones() {
+        let src = include_str!("triage.rs");
+        for m in &MEASURED_SELECTIVITY {
+            let name = match m.mode {
+                ScanMode::Thorough => "Thorough",
+                ScanMode::Balanced => "Balanced",
+                ScanMode::Precise => "Precise",
+            };
+            // Doc-comment table rows only: a line that names the posture and
+            // carries at least two numbers. Prose mentioning a posture in a
+            // sentence has no business being parsed as a table row.
+            let rows: Vec<&str> = src
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with("///") && l.contains(name))
+                .filter(|l| floats(l).len() >= 2)
+                .collect();
+            assert!(
+                !rows.is_empty(),
+                "{name} has no documented row in triage.rs — the table this guards is gone, \
+                 so either restore it or delete this test rather than leaving it green"
+            );
+            let cut = m.mode.census_threshold();
+            for row in &rows {
+                let nums = floats(row);
+                assert!(
+                    nums.iter().any(|n| (n - cut as f64).abs() < 1e-6),
+                    "the documented row for {name} does not mention its shipped cut \
+                     {cut}:\n  {row}\nA table that quotes a threshold has to quote the \
+                     one that ships."
+                );
+            }
+            // The cost column, where a row states one: `… 20.4 h   Thorough`.
+            let want = hours_per_100k(m.selectivity_pct);
+            if let Some(row) = rows.iter().find(|r| r.contains(" h ")) {
+                let nums = floats(row);
+                assert!(
+                    nums.iter().any(|n| (n - want).abs() < 0.1),
+                    "the documented cost for {name} is not {want:.1} h per 100k, which is \
+                     what its recorded {:.1}% selectivity works out to:\n  {row}",
+                    m.selectivity_pct
+                );
+            }
         }
     }
 
