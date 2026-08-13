@@ -1089,6 +1089,24 @@ export interface TriageCoverage {
   unconfirmed: number;
 }
 
+/** One posture's expected cost for the chosen scope. */
+export interface TriageModeEstimate {
+  mode: "thorough" | "balanced" | "precise";
+  /** Messages the census is expected to hand the deep scan. */
+  candidates: number;
+  /** Expected hours of deep scanning. */
+  hours: number;
+  /** The most this posture may cost per 100k messages. */
+  ceilingHoursPer100k: number;
+}
+
+/** What a triage scan of the current scope should cost, per posture. */
+export interface TriageEstimate {
+  /** Messages the census will read — all of them; only the deep scan is capped. */
+  messages: number;
+  modes: TriageModeEstimate[];
+}
+
 export interface SafetyScanReport {
   scan: SafetyScanStatus | null;
   report: string | null;
@@ -1565,9 +1583,21 @@ export interface TraceLoupeClient {
     rangeStart?: number | null;
     rangeEnd?: number | null;
     sources?: string | null;
-    /** Deep-scan at most this many candidates; null reads them all. */
-    budget?: number | null;
+    /** Wall-clock cap on the deep scan, in hours; null reads every candidate.
+     *  The backend converts to a count of places with the same cost model that
+     *  produced the estimate, so what is shown and what is enforced agree. */
+    budgetHours?: number | null;
   }): Promise<void>;
+  /** Estimate a triage scan of the current scope BEFORE running it, for every
+   *  posture at once — the expensive part is counting the messages in scope and
+   *  that does not depend on the posture, so switching modes needs no round
+   *  trip. Derived from selectivity measured on one public device, so it is an
+   *  order of magnitude, not a promise. */
+  estimateTriageScan(opts: {
+    rangeStart?: number | null;
+    rangeEnd?: number | null;
+    sources?: string | null;
+  }): Promise<TriageEstimate>;
   cancelSafetyScan(): Promise<void>;
   onSafetyScanProgress(cb: (p: SafetyScanEvent) => void): Promise<UnlistenFn>;
   onSafetyModelProgress(
@@ -2290,7 +2320,13 @@ const tauriClient: TraceLoupeClient = {
       rangeStart: opts.rangeStart ?? null,
       rangeEnd: opts.rangeEnd ?? null,
       sources: opts.sources ?? null,
-      budget: opts.budget ?? null,
+      budgetHours: opts.budgetHours ?? null,
+    }),
+  estimateTriageScan: (opts) =>
+    invoke("estimate_triage_scan", {
+      rangeStart: opts.rangeStart ?? null,
+      rangeEnd: opts.rangeEnd ?? null,
+      sources: opts.sources ?? null,
     }),
   cancelSafetyScan: () => invoke("cancel_safety_scan"),
   onSafetyScanProgress: (cb) =>
@@ -7034,6 +7070,34 @@ const mockClient: TraceLoupeClient = {
   },
   runTriageScan: async () => {
     if (!mockActive) throw new Error("no backup is open");
+  },
+  estimateTriageScan: async () => {
+    if (!mockActive) throw new Error("no backup is open");
+    // Mirrors safety_scan::cost_model — the selectivity measured per posture
+    // and 6.5 s per deep read. Kept in step by hand because this is the browser
+    // harness; the Rust constants are the source of truth (a test there asserts
+    // the estimate and the cost ceiling use the same arithmetic).
+    const messages = Object.values(mockMessages).reduce(
+      (n, m) => n + m.length,
+      0,
+    );
+    const SELECTIVITY = [
+      { mode: "thorough" as const, pct: 11.5, ceiling: 33.0 },
+      { mode: "balanced" as const, pct: 2.6, ceiling: 11.0 },
+      { mode: "precise" as const, pct: 0.9, ceiling: 11.0 / 3.0 },
+    ];
+    return {
+      messages,
+      modes: SELECTIVITY.map((m) => {
+        const candidates = Math.round((messages * m.pct) / 100);
+        return {
+          mode: m.mode,
+          candidates,
+          hours: (candidates * 6.5) / 3600,
+          ceilingHoursPer100k: m.ceiling,
+        };
+      }),
+    };
   },
   cancelSafetyScan: async () => {},
   onSafetyScanProgress: async () => () => {},

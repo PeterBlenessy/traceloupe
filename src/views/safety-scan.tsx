@@ -146,6 +146,27 @@ function formatScanRange(start: number | null, end: number | null): string {
 /** The scan postures, in the order they appear. Copy is product language —
  *  a posture, never a number (journey §6.3: "the UI shows the NAME and a plain
  *  description, never the underlying numbers"). */
+/** An ESTIMATE reads as a rough magnitude, not a stopwatch: `formatDuration`
+ *  renders a clock ("20:42:00"), which claims a precision this number does not
+ *  have. Rounds to whole minutes under an hour and whole hours above. */
+function approxDuration(hours: number): string {
+  if (!Number.isFinite(hours) || hours <= 0) return "under a minute";
+  if (hours < 1 / 60) return "under a minute";
+  if (hours < 1) return plural(Math.round(hours * 60), "minute");
+  return plural(Math.round(hours), "hour");
+}
+
+/** Wall-clock caps for the deep-scan half. Hours, because that is the unit the
+ *  user feels; the backend takes a count of places to read, and the cost model
+ *  converts. "No cap" is the default and preserves the behaviour triage has
+ *  always had. */
+const CAP_OPTIONS: { value: string; label: string; hours: number | null }[] = [
+  { value: "none", label: "No cap", hours: null },
+  { value: "1", label: "1 h", hours: 1 },
+  { value: "4", label: "4 h", hours: 4 },
+  { value: "12", label: "12 h", hours: 12 },
+];
+
 const MODE_OPTIONS = [
   {
     value: "full" as const,
@@ -215,6 +236,13 @@ export function SafetyScanView() {
   const [scanMode, setScanMode] = usePersistedState<
     "full" | "thorough" | "balanced" | "precise"
   >("safety-scan:mode", "full");
+  // A wall-clock cap on the DEEP-SCAN half, in hours; null runs every
+  // candidate. Default null so the surface is informational first — capping by
+  // default would silently truncate scans that used to run to completion.
+  const [capHours, setCapHours] = usePersistedState<number | null>(
+    "safety-scan:cap-hours",
+    null,
+  );
 
   const { data: active } = useQuery({
     queryKey: ["hasActiveBackup"],
@@ -251,6 +279,19 @@ export function SafetyScanView() {
     : effectiveSelected.length === sourceTokens.length && sourceTokens.length > 0
       ? "all"
       : effectiveSelected.join(",");
+  // What this scope will cost, for every posture at once — the backend counts
+  // the messages in scope (the expensive half) and that count does not depend
+  // on the posture, so switching modes re-reads nothing.
+  const { data: estimate } = useQuery({
+    queryKey: ["triageEstimate", sourcesArg, range.lo, range.hi],
+    queryFn: () =>
+      client.estimateTriageScan({
+        rangeStart: range.lo,
+        rangeEnd: range.hi != null ? range.hi - 1 : null,
+        sources: sourcesArg,
+      }),
+    enabled: active === true && effectiveSelected.length > 0,
+  });
   // The [min, max] message timestamps → a chip per year the backup covers,
   // replacing the single cumulative "this year" preset (as the Messages timeline
   // does), while keeping the recency windows.
@@ -482,6 +523,24 @@ export function SafetyScanView() {
   // notes-only) must not silently scan differently than the control shows:
   // the picker falls back to Full read visually AND functionally.
   const effectiveMode = modeRunnable(scanMode) ? scanMode : "full";
+  // A plain const, not a useMemo: `effectiveMode` is computed after this
+  // component's early returns, so a hook here runs on some renders and not
+  // others — which is exactly the "rendered more hooks than during the previous
+  // render" crash. Finding one of three entries needs no memo anyway.
+  const modeEstimate =
+    effectiveMode === "full"
+      ? null
+      : (estimate?.modes.find((m) => m.mode === effectiveMode) ?? null);
+  // A cap longer than the scan itself is a control that does nothing, so only
+  // offer the ones that would actually cut this run short. When the scope
+  // shrinks under a cap the user already picked, that cap stops being offered
+  // — and it stops applying too, which is the same outcome it would have had.
+  const offeredCaps = CAP_OPTIONS.filter(
+    (o) => o.hours == null || (modeEstimate != null && o.hours < modeEstimate.hours),
+  );
+  const effectiveCap = offeredCaps.some((o) => o.hours === capHours)
+    ? capHours
+    : null;
   // Resume a non-completed scan from its history card: reopen THAT row (so the
   // view stays pinned to it) and continue it from where it stopped. Only Start
   // ever creates a new scan.
@@ -672,6 +731,76 @@ export function SafetyScanView() {
                     })}
                   </ToggleGroup>
                 </div>
+                {/* What this will cost, before it is started. A whole-backup
+                    triage run is HOURS — the engine takes a deep-scan budget
+                    but nothing ever set one, so the only way to find out used
+                    to be to start it and watch. The cap is offered, never
+                    imposed: defaulting it on would silently truncate scans
+                    that used to run to completion. */}
+                {effectiveMode !== "full" && modeEstimate && (
+                  <div
+                    className={cn(
+                      "flex items-center gap-2",
+                      running && "pointer-events-none opacity-60",
+                    )}
+                  >
+                    <Label className="text-xs text-muted-foreground">
+                      Estimate
+                    </Label>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="text-xs text-muted-foreground tabular-nums underline decoration-dotted underline-offset-2">
+                          ~{approxDuration(modeEstimate.hours)}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-80">
+                        The pre-scan reads all{" "}
+                        {plural(estimate?.messages ?? 0, "message")} and expects
+                        about {formatCount(modeEstimate.candidates)} to need a
+                        deep read. Estimated from one reference device, so treat
+                        it as an order of magnitude — a phone with more of the
+                        conversation this looks for will take longer.
+                      </TooltipContent>
+                    </Tooltip>
+                    {offeredCaps.length > 1 && (
+                      <>
+                        <Label className="text-xs text-muted-foreground">
+                          Stop after
+                        </Label>
+                        <ToggleGroup
+                          type="single"
+                          variant="outline"
+                          size="island"
+                          value={
+                            effectiveCap == null ? "none" : String(effectiveCap)
+                          }
+                          onValueChange={(v) => {
+                            if (!v) return;
+                            setCapHours(v === "none" ? null : Number(v));
+                          }}
+                        >
+                          {offeredCaps.map((opt) => (
+                            <Tooltip key={opt.value}>
+                              <TooltipTrigger asChild>
+                                <ToggleGroupItem
+                                  value={opt.value}
+                                  aria-label={opt.label}
+                                >
+                                  {opt.label}
+                                </ToggleGroupItem>
+                              </TooltipTrigger>
+                              <TooltipContent className="max-w-80">
+                                {opt.hours == null
+                                  ? "Deep-read every place the pre-scan flags, however long that takes"
+                                  : `Stop the deep read after about ${opt.label}. The places it did not reach are reported unread — never as clean.`}
+                              </TooltipContent>
+                            </Tooltip>
+                          ))}
+                        </ToggleGroup>
+                      </>
+                    )}
+                  </div>
+                )}
                 {running ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -723,6 +852,10 @@ export function SafetyScanView() {
                             void startTriageScan({
                               ...common,
                               mode: effectiveMode,
+                              // Hours, not places to read: the core's cost
+                              // model does the conversion, so the number shown
+                              // and the number enforced cannot drift apart.
+                              budgetHours: effectiveCap,
                             });
                           }
                         }}

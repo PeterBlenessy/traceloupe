@@ -480,16 +480,25 @@ validation. Checklist mirrors #459.
       honest way to close the rest is a real run in the app against an
       IMPORTED FIXTURE backup (never the user's), which the UI now makes
       possible.**
-- [ ] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
+- [x] **UI** — the mode picker (named postures, no numbers, #460) and both scopes
       (#456 per-conversation exists; add whole-backup census + the coverage
-      report). **Partially done (#479): the four-way mode control (Full read +
+      report). **#479: the four-way mode control (Full read +
       the three triage postures, each tooltipped in product language, helper
       models gated with why-tooltips), triage invocation, live census/deep-scan/
-      confirm phases, and the run-card coverage line. Still open: the
-      whole-backup budget surface. Coverage is now durable (#481): the scan
-      row stores censused/candidates/deep-scanned/unconfirmed (schema v16), and
-      ONE component renders the line for both the live run card and the stored
-      report, so the promise cannot drift between them.**
+      confirm phases, and the run-card coverage line. Coverage is durable
+      (#481): the scan row stores censused/candidates/deep-scanned/unconfirmed
+      (schema v16), and ONE component renders the line for both the live run
+      card and the stored report, so the promise cannot drift between them.
+      The budget surface shipped last: the engine has always taken a deep-scan
+      budget and NOTHING EVER SET ONE — the frontend sent null on every run, so
+      a whole-backup Thorough scan was an unbounded ~20-hour job with no
+      warning. The scan card now estimates the run before it starts
+      (`estimate_triage_scan`, all three postures from one message count) and
+      offers a wall-clock cap, which the core's cost model converts to a
+      worklist budget so the number shown and the number enforced are the same
+      arithmetic. The cap is offered, never imposed — defaulting it on would
+      silently truncate scans that used to run to completion — and only caps
+      that would actually cut THIS run short are shown.**
 - [x] **Coverage reporting** — surface "N of M candidates deep-scanned; the rest
       are not read" (rule-of-three), so a scoped scan never implies "clean" for
       what it did not read. **Done (#479/#481): the line appears live in the run

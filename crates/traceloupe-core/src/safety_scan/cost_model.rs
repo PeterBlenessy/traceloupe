@@ -61,6 +61,58 @@ impl ScanMode {
     }
 }
 
+/// How many focused classifications fit in a wall-clock budget.
+///
+/// This is how a time cap the user chooses becomes the `budget` the engine
+/// takes, which is a count of worklist items. Rounds DOWN and floors at one:
+/// asking for a scan and being given a budget of zero would report "0 of N
+/// deep-scanned" and look like a failure rather than a very small scan.
+pub fn items_in_hours(hours: f64) -> usize {
+    if !hours.is_finite() || hours <= 0.0 {
+        return 1;
+    }
+    ((hours * 3600.0 / FOCUSED_SECONDS_PER_CALL).floor() as usize).max(1)
+}
+
+/// What a triage scan is expected to cost before it is started.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TriageEstimate {
+    /// Messages the census will read (all of them — the census is not budgeted).
+    pub messages: usize,
+    /// Messages the census is expected to hand the focused classifier.
+    pub candidates: usize,
+    /// Expected wall-clock hours of focused classification.
+    pub hours: f64,
+}
+
+impl ScanMode {
+    /// The measured share of an ordinary phone this posture keeps.
+    pub fn measured_selectivity_pct(self) -> f64 {
+        MEASURED_SELECTIVITY
+            .iter()
+            .find(|m| m.mode == self)
+            .map(|m| m.selectivity_pct)
+            // Unreachable: a test asserts every mode has a recorded row.
+            .unwrap_or(100.0)
+    }
+
+    /// Estimate the cost of scanning `messages` in-scope messages.
+    ///
+    /// Built from selectivity measured on ONE public device, so it is an order
+    /// of magnitude, not a promise — a phone whose conversations skew toward
+    /// what the census keys on will produce more candidates than this. The UI
+    /// must present it as approximate for that reason.
+    pub fn estimate(self, messages: usize) -> TriageEstimate {
+        let selectivity = self.measured_selectivity_pct();
+        let candidates = (messages as f64 * selectivity / 100.0).round() as usize;
+        TriageEstimate {
+            messages,
+            candidates,
+            hours: candidates as f64 * FOCUSED_SECONDS_PER_CALL / 3600.0,
+        }
+    }
+}
+
 /// One row of the measured record: what the census actually kept at a mode's
 /// shipped threshold.
 pub struct MeasuredSelectivity {
@@ -166,6 +218,76 @@ mod tests {
         };
         assert!(cost(ScanMode::Thorough) > cost(ScanMode::Balanced));
         assert!(cost(ScanMode::Balanced) > cost(ScanMode::Precise));
+    }
+
+    /// The estimate the UI shows and the cost the guard bounds must be the
+    /// same arithmetic — a UI that reassures the user with a smaller number
+    /// than the ceiling is checking is worse than no estimate at all.
+    #[test]
+    fn the_estimate_agrees_with_the_cost_model() {
+        for m in &MEASURED_SELECTIVITY {
+            let est = m.mode.estimate(100_000);
+            let from_model = hours_per_100k(m.selectivity_pct);
+            assert!(
+                (est.hours - from_model).abs() < 0.01,
+                "{} estimates {:.2} h per 100k but the cost model says {:.2}",
+                m.mode.as_str(),
+                est.hours,
+                from_model
+            );
+            assert!(est.hours <= m.mode.cost_ceiling_hours_per_100k());
+        }
+    }
+
+    /// A time cap has to round DOWN to stay inside the promise, and never to
+    /// zero — a budget of nothing reads as a broken scan, not a small one.
+    #[test]
+    fn a_time_cap_becomes_a_workable_item_budget() {
+        // One hour of 6.5 s calls is 553 items (3600/6.5 = 553.8).
+        assert_eq!(items_in_hours(1.0), 553);
+        assert!(items_in_hours(1.0) as f64 * FOCUSED_SECONDS_PER_CALL / 3600.0 <= 1.0);
+        // Degenerate inputs still yield a runnable scan rather than a no-op.
+        assert_eq!(items_in_hours(0.0), 1);
+        assert_eq!(items_in_hours(-5.0), 1);
+        assert_eq!(items_in_hours(f64::NAN), 1);
+        assert_eq!(items_in_hours(0.001), 1);
+    }
+
+    /// Round-trip: capping at the estimate's own duration must not cut the
+    /// scan short, or the default "no cap needed" path would silently truncate.
+    #[test]
+    fn capping_at_the_estimate_covers_the_whole_worklist() {
+        for messages in [1_000usize, 25_000, 100_000] {
+            for m in &MEASURED_SELECTIVITY {
+                let est = m.mode.estimate(messages);
+                if est.candidates == 0 {
+                    continue;
+                }
+                assert!(
+                    items_in_hours(est.hours) >= est.candidates,
+                    "{} at {messages} messages: a cap of {:.2} h yields {} items but the \
+                     worklist is {}",
+                    m.mode.as_str(),
+                    est.hours,
+                    items_in_hours(est.hours),
+                    est.candidates
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_tighter_posture_estimates_less_work() {
+        let msgs = 50_000;
+        assert!(
+            ScanMode::Thorough.estimate(msgs).candidates
+                > ScanMode::Balanced.estimate(msgs).candidates
+        );
+        assert!(
+            ScanMode::Balanced.estimate(msgs).candidates
+                > ScanMode::Precise.estimate(msgs).candidates
+        );
+        assert_eq!(ScanMode::Thorough.estimate(0).candidates, 0);
     }
 
     #[test]
