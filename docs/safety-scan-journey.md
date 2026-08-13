@@ -551,6 +551,20 @@ validation. Checklist mirrors #459.
       Coverage of modes beats register — and an untested causal claim in a
       results doc is a liability, not a finding (§10.14). Examples help; the
       embedding space is still the ceiling.
+- [x] **Is the SCORING the problem?** (#486, the open half). The census takes a
+      max over nine centroids and compares it to one number, so every category
+      is read at whatever cut suits the loosest one. Tested the cheapest
+      shippable alternative — a per-category threshold set at the same quantile
+      of each category's bed distribution, keep if ANY category clears its own
+      bar — at genuinely matched cost. **A wash**: six operating points, deltas
+      −0.016 to +0.032 straddling zero, ~4 messages of 126. So the scoring
+      scheme is NOT what costs recall, which is further support for the
+      embedding space being the ceiling. What per-category cuts do is
+      REDISTRIBUTE: at matched cost scam-fraud goes 0.42 → 0.83 while grooming
+      goes 0.71 → 0.47. That is a values question (uniform coverage vs most
+      total detections), not an efficiency one, and it needs the generated
+      corpus before anyone should decide it. See §10.15 for the harness bug this
+      turned up.
 - [ ] **Wider / better corpus for the three unlabelled categories**
       (coercive-control, grooming, relationship-harassment). The only route is to
       **generate** labelled conversations; the same corpus is the training set for
@@ -1077,3 +1091,47 @@ will act on it, as this one did, and it cost two full measurement cycles. And
 **state the sample size next to the improvement**: scam-fraud has about twelve
 ground-truth messages, so 0.25 → 0.33 is one message. Right direction,
 uncallable magnitude.
+
+### 10.15 Two harnesses, one column, and the bug that needed both (2026-08-13)
+
+The per-category threshold experiment (#486) first reported that per-category
+cuts beat one global cut by +0.087 recall at the ~50 h operating point. That
+would have been the most interesting result of the whole project. It was a
+harness bug.
+
+`build_prototypes` applies the embedder's task prefix and the byte cap itself.
+The new harness passed it the eval helper `embed_one`, which applies them too,
+so every centroid was built from **double-prefixed** text. The effect was not a
+crash or an empty result — the kind this project has learned to expect — but a
+uniform ~0.025 lift on every score, which shifted the entire curve by one grid
+step while leaving it perfectly smooth and plausible.
+
+Nothing inside the harness could see it. Its own cross-check compared two
+centroid constructions, and both were wrong in the same way, so it reported
+agreement to 0.000000. What exposed it was that a SECOND harness computed the
+same column from the same image and disagreed: 11.5% selectivity at 0.64 where
+the new one said 25.2%. Narrowing it took three steps, each removing a
+candidate — hash the bed texts (identical, 576 messages, same sha), cross-check <!-- not-a-backup-count: public DFIR research image -->
+the scoring pointwise across all 576 (identical to 0.000000), then compare the
+score DISTRIBUTIONS (0.5602 mean against 0.5827). Once the inputs and the
+scoring function were both proven identical and the outputs still differed, the
+embeddings were the only thing left.
+
+Three things worth keeping.
+
+**A shared helper that silently normalises its input is a trap.** Every other
+caller — including production — passes a raw embed, so this was one new caller
+away from a wrong measurement. The signature now says so in its own doc
+comment, and all call sites were audited.
+
+**Keep at least one column computed by two independent harnesses.** The
+redundancy looks wasteful right up to the moment it converts a plausible wrong
+number into a visible contradiction. Nothing else in this project would have
+caught it, because there was no ground truth saying the number was wrong — only
+another measurement saying it was different.
+
+**"A model producing nothing is a harness bug" generalises.** The rule this
+project learned in §10.6 was about empty output, which is easy to notice. This
+was the harder version: a harness producing *something entirely reasonable*.
+The tell was not the value but the disagreement, which is only available if
+something else is measuring the same thing.

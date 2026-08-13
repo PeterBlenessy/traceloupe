@@ -955,3 +955,89 @@ nothing here fails when recall drops, and the per-category spread remains wide
 (`scam-fraud` 0.33 against `hate-identity` 0.82 at the same cut). A single
 max-over-prototypes score with one global threshold is what produces that
 spread — the remaining open question on #486.
+
+### 2026-08-13 — per-category thresholds do not buy recall (#486)
+
+The census scores a message against nine centroids, keeps the MAX, and compares
+it to one number. So every category is read at whatever cut suits the loosest
+centroid — the shape of a spread that has survived every corpus revision
+(`hate-identity` 0.82 against `scam-fraud` 0.33 at the Thorough cut). #486's
+remaining question was whether that is a corpus problem or a **scoring** one.
+
+`per_category_cuts_vs_one_global_cut` answers it. Each category gets its own
+threshold, set at the same quantile of that category's score distribution over
+the bed — so every category is allowed to keep an equal share of ordinary
+chatter — and a message is a candidate if ANY category clears its own bar. That
+is the cheapest honest version of "normalise per category": it needs no
+per-category ground truth, only the bed, so it could actually ship.
+
+Compared at genuinely matched cost (the global curve on a 0.0025 grid, so
+"same cost" means the same selectivity rather than the nearest coarse point):
+
+| per-category q | recall | selectivity | global at the same cost | Δ |
+|---|---|---|---|---|
+| 0.800 | 0.921 | 49.3% | 0.5675 → 0.929 | −0.008 |
+| 0.900 | 0.865 | 31.6% | 0.6025 → 0.833 | +0.032 |
+| 0.950 | 0.770 | 20.7% | 0.6175 → 0.738 | +0.032 |
+| 0.975 | 0.683 | 13.9% | 0.6300 → 0.698 | −0.016 |
+| 0.990 | 0.556 | 7.3% | 0.6500 → 0.571 | −0.016 |
+| 0.995 | 0.476 | 4.0% | 0.6675 → 0.476 | +0.000 |
+
+**A wash.** Six operating points, deltas from −0.016 to +0.032, straddling zero
+with no consistent direction; on 126 positives ±0.03 is about four messages.
+Per-category thresholds do not buy recall, and **the scoring scheme is
+therefore not what is costing it** — which is more support for the standing
+conclusion that the embedding space's ability to separate harm from ordinary
+conversation is the ceiling.
+
+What they *do* is redistribute. At matched cost (13.9% vs 13.5%):
+
+| category | per-category | global | its own cut |
+|---|---|---|---|
+| scam-fraud | **0.83** | 0.42 | 0.606 |
+| drugs-illegal | **0.67** | 0.58 | 0.617 |
+| harassment-bullying | 0.65 | 0.65 | 0.637 |
+| self-harm | 0.80 | 0.80 | 0.640 |
+| sexual-content | 0.69 | 0.75 | 0.651 |
+| threat-violence | 0.69 | **0.85** | 0.637 |
+| hate-identity | 0.82 | **0.91** | 0.599 |
+| coercive-control | 0.59 | **0.71** | 0.648 |
+| grooming-exploitation | 0.47 | **0.71** | 0.654 |
+
+The spread narrows at the top (0.91 → 0.83) and the worst category more than
+doubles (0.42 → 0.83), paid for by the categories that were already well
+served. That makes it a **values question, not an efficiency one**: uniform
+coverage across harm types, or the most total detections for the same money?
+Nothing in the measurement decides that.
+
+**Not shipping it on this evidence.** Each category has ~12 ground-truth
+messages, so every per-category move above is three to five messages, and the
+total is a wash. The honest position is that this needs the generated corpus
+(the open §8 item) before it can be decided — and if it is ever taken, it
+should be taken as a deliberate equal-coverage policy, not sold as an
+improvement.
+
+#### The harness bug that nearly became a finding
+
+The first run of this experiment reported per-category cuts beating the global
+one by +0.087 at the ~50 h point. It was wrong. `build_prototypes` applies the
+task prefix and the byte cap **itself**, and the new harness passed it the
+eval's `embed_one`, which applies them too — so every centroid was built from
+double-prefixed text. The centroids scored about 0.025 high on everything,
+which shifted the whole curve by one grid step: this harness's "global" column
+read 25.2% selectivity at 0.64 where `census_recall_vs_cost` read 11.5%.
+
+Every number was internally consistent and entirely plausible. What exposed it
+was **two harnesses computing the same column and disagreeing** — the bed
+hashed identically (576 messages, same sha) and the scoring cross-checked to <!-- not-a-backup-count: public DFIR research image -->
+0.000000, which left the embeddings as the only suspect, and the mean bed score
+differed (0.5827 against 0.5602). A cross-check inside one harness could not
+have caught it, because the mistake was made identically in both of that
+harness's constructions.
+
+Two rules. **A shared helper that silently normalises its input is a trap**;
+`build_prototypes` now documents in its own signature that the closure must be
+a raw embed, and all other call sites (including production) were audited and
+are correct. And **keep two independent harnesses computing at least one column
+in common** — that redundancy is what turns a plausible wrong number into a
+visible contradiction.
