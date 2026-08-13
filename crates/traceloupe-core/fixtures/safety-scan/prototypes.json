@@ -145,6 +145,78 @@
       ]
     },
     {
+      "category": "coercive-control",
+      "id": "cc-tracking-device",
+      "messages": [
+        "theres an airtag in your bag, i put it there",
+        "i can see youre still at the car park so dont lie to me"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-blackmail",
+      "messages": [
+        "id hate for your family to find out what you did",
+        "keep pushing me and everyone sees the screenshots"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-intimate-leverage",
+      "messages": [
+        "i still have the videos you sent me",
+        "think about that before you talk to a solicitor"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-children-contact",
+      "messages": [
+        "you can go, but the kids stay with me",
+        "no court is giving them to someone like you"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-employment",
+      "messages": [
+        "hand your notice in, i dont want you at that place",
+        "we managed before you had a wage"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-lock-out",
+      "messages": [
+        "your things are on the drive, the locks are done",
+        "you can come back when youve learned"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-home-surveillance",
+      "messages": [
+        "theres a camera in the hallway now, it records sound too",
+        "so i'll know exactly who comes in when im not here"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-recording",
+      "messages": [
+        "i recorded the whole argument on my phone",
+        "ill play it to your mother if you carry on"
+      ]
+    },
+    {
+      "category": "coercive-control",
+      "id": "cc-confinement",
+      "messages": [
+        "youre not going anywhere tonight",
+        "sit down, we're not finished"
+      ]
+    },
+    {
       "category": "grooming-exploitation",
       "id": "gr-secrecy",
       "messages": [

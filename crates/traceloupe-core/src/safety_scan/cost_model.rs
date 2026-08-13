@@ -128,19 +128,26 @@ pub struct MeasuredSelectivity {
 /// The last measured selectivity of each shipped posture.
 ///
 /// Provenance: `census_recall_vs_cost` against the public iOS 17 DFIR research
-/// image (576 in-scope messages), EmbeddingGemma-300M Q8_0, the 85-example
-/// prototype corpus, 2026-08-13 (#492). Re-run that harness and update these
+/// image (576 in-scope messages), EmbeddingGemma-300M Q8_0, the 94-example
+/// prototype corpus, 2026-08-13 (#499). Re-run that harness and update these
 /// whenever the corpus, the embedder, or a threshold changes.
+///
+/// Balanced moved 2.6% → 3.6% when coercive-control gained nine mode
+/// prototypes. That is a 40% cost rise (4.7 → 6.6 h per 100k) for +0.007
+/// overall recall — a poor trade in isolation, accepted because the same
+/// change makes Thorough and Precise strictly better and Balanced stays well
+/// inside its 11.0 h ceiling. Balanced's CUT is the thing that should move
+/// next: on this corpus 2.6% now sits nearer 0.68 than 0.67.
 pub const MEASURED_SELECTIVITY: [MeasuredSelectivity; 3] = [
     MeasuredSelectivity {
         mode: ScanMode::Thorough,
         threshold: 0.64,
-        selectivity_pct: 11.5,
+        selectivity_pct: 11.3,
     },
     MeasuredSelectivity {
         mode: ScanMode::Balanced,
         threshold: 0.67,
-        selectivity_pct: 2.6,
+        selectivity_pct: 3.6,
     },
     MeasuredSelectivity {
         mode: ScanMode::Precise,
