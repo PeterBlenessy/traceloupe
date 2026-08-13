@@ -1723,6 +1723,198 @@
           "minSeverity": 3
         }
       ]
+    },
+    {
+      "id": "rh-gt-waiting-at-work",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "i was by the side entrance at five, you went out the front"
+        },
+        {
+          "sender": "me",
+          "text": "please stop coming to my work"
+        },
+        {
+          "sender": "them",
+          "text": "its a public pavement, i can stand where i like"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 3
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-passing-by",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "nice curtains open tonight"
+        },
+        {
+          "sender": "me",
+          "text": "were you at my street again"
+        },
+        {
+          "sender": "them",
+          "text": "i take that road home, not everything is about you"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 3
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-turning-up",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "im outside, buzz me up"
+        },
+        {
+          "sender": "me",
+          "text": "i didnt invite you and i asked you not to come here"
+        },
+        {
+          "sender": "them",
+          "text": "ill wait then, ive got nowhere to be"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 3
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-unwanted-gifts",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "left something for you with your neighbour"
+        },
+        {
+          "sender": "me",
+          "text": "i told you last week to stop sending things"
+        },
+        {
+          "sender": "them",
+          "text": "its only flowers, youre making it into something"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 2
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-social-watching",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "who was in the photo from saturday"
+        },
+        {
+          "sender": "me",
+          "text": "stop going through my profile"
+        },
+        {
+          "sender": "them",
+          "text": "its public, if you didnt want me looking youd make it private"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 2
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-third-party",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "spoke to your sister since you wont reply"
+        },
+        {
+          "sender": "me",
+          "text": "leave my family out of it"
+        },
+        {
+          "sender": "them",
+          "text": "then answer me and i wont need to"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 3
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-obsession",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "youre the last thing i think about every night"
+        },
+        {
+          "sender": "me",
+          "text": "we broke up in march, i have asked you to stop"
+        },
+        {
+          "sender": "them",
+          "text": "that doesnt change how i feel, it never will"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 2
+        }
+      ]
+    },
+    {
+      "id": "rh-gt-multi-channel",
+      "kind": "positive",
+      "messages": [
+        {
+          "sender": "them",
+          "text": "emailed your work address since this one goes nowhere"
+        },
+        {
+          "sender": "me",
+          "text": "that is my job, do not do that"
+        },
+        {
+          "sender": "them",
+          "text": "then pick up, and i wont have to find another way"
+        }
+      ],
+      "expect": [
+        {
+          "category": "harassment-bullying",
+          "minSeverity": 3
+        }
+      ]
     }
   ]
 }

@@ -615,6 +615,22 @@ validation. Checklist mirrors #459.
       improve — its CUT wants re-deriving to ~0.68, which is the next threshold
       pass. **A prototype corpus cannot be evaluated ahead of the ground truth
       it is scored against.**
+- [x] **Relationship-harassment ground truth, and what it proved** (2026-08-13).
+      Eight cases for the stalking half the corpus never had (waiting at a
+      location, passing the street, turning up, unwanted gifts, profile
+      watching, third-party contact, obsession, other channels): harassment
+      ground truth 20 → 44 messages. It LOWERED measured recall
+      (0.65/0.55/0.50 → 0.64/0.52/0.36) because the old number was flattering —
+      every case in it looked like an insult. Prototypes for the same modes then
+      cost **25% more at Thorough for exactly zero recall** and were reverted.
+      The reason is the finding: those messages ("im downstairs, let me in",
+      "saw you changed your picture at 2am") are ORDINARY, and harassment only
+      in context — a prior refusal, the repetition, the relationship. Pulling
+      the centroid toward them pulls it toward everyday logistics. **This is the
+      demonstration of §1's claim**: a per-message census cannot see a pattern,
+      so for this category examples are the wrong lever and the cross-message
+      machinery (ranking, trajectory, the focused window, the fine-tune) is the
+      right one.
 - [ ] **Fine-tune** (endgame). The failures are precisely-labelled training signal
       (a parent's curfew is not coercive control; a survivor's account is not a
       threat). A fine-tune on in-domain conversation would collapse the three-model

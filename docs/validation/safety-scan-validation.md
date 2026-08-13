@@ -1118,3 +1118,58 @@ knowing and is not what anyone predicted.
 Three postures, three different answers from one corpus change, is a reminder
 that "did the corpus help?" is not a well-formed question without an operating
 point attached.
+
+### 2026-08-13 — relationship-harassment resists the census by construction
+
+Same method as #501: write the ground truth first, then test whether prototypes
+for those modes earn their keep. The answer this time is **no, and the reason
+bounds what the census architecture can do.**
+
+Harassment's ground truth was 20 messages across 5 cases, and every one was
+content-moderation shaped — insults, a pile-on, appearance, workplace. The
+"relationship half" the taxonomy names (BOCSAR Harassment: stalking at a
+location, stalking via car, trespassing, unwanted gifts, social media,
+obsession, third-party contact, contact through other channels) was essentially
+absent. Eight cases were written for it, taking harassment ground truth to
+**44 messages** and the positive set to **178**.
+
+**That alone lowered measured harassment recall** — 0.65 / 0.55 / 0.50 →
+0.64 / 0.52 / 0.36. Not a regression: a truer number. The eval set now contains
+the hard half it had been omitting, and the old figure was flattering because
+every case in it looked like an insult.
+
+Then eight prototypes for the same modes:
+
+| | harassment @0.64 / 0.675 / 0.70 | overall @0.64 | Thorough selectivity |
+|---|---|---|---|
+| 10 prototypes | 0.64 / 0.52 / 0.36 | 0.618 | 11.3% — 20.4 h |
+| 18 prototypes | 0.64 / 0.52 / **0.41** | 0.618 | **14.1% — 25.4 h** |
+
+**25% more expensive at Thorough for exactly zero recall.** Reverted.
+
+## Why, and why it matters more than the numbers
+
+Look at what the added prototypes had to say: *"im downstairs, let me in"*,
+*"saw you changed your picture at 2am"*, *"asked your friend where youve been"*.
+**Every one of those is an ordinary message.** They are harassment only because
+of what surrounds them — that the recipient asked this person to stop, that it
+is the ninth time this week, that they are an ex. Pulling the centroid toward
+them pulls it toward everyday logistics, which is exactly what the selectivity
+jump is: the census started keeping ordinary conversation.
+
+This is the clearest evidence yet for something the project has asserted since
+§1 but never demonstrated: **coercive-control and relationship-harassment are
+conversational patterns, and a per-message census cannot see a pattern.** The
+discriminative signal is not in the message; it is in the prior refusal, the
+repetition, and the relationship. Coercive-control partly survives this because
+some of its modes carry marked language ("hand your notice in", "the locks are
+done"); relationship-harassment largely does not.
+
+**So more examples are the wrong lever for this category.** The levers that
+address it are the ones that can see across messages — the evidence ranking and
+trajectory features that already exist, the conversational window the focused
+stage reads, and ultimately the fine-tune. Adding prototypes buys cost.
+
+The ground truth is kept, because it is honest and because it makes this
+measurable at all. Selectivity is unchanged (a property of the bed), so the
+shipped cuts and `MEASURED_SELECTIVITY` stand.
