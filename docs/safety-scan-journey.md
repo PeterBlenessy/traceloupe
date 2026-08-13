@@ -604,7 +604,17 @@ validation. Checklist mirrors #459.
       modes. Reverted. #492 showed covering missing modes is what moves recall;
       this shows the precondition — the mode must exist on BOTH sides. So the
       corpus effort writes ground truth first, mode-by-mode, and only then
-      decides which prototypes earn their keep.
+      decides which prototypes earn their keep. **Done, and it inverted the
+      result** (#499): nine ground-truth cases were written for those modes
+      (coercive-control 17 → 45 messages, the positive set 126 → 154), and the
+      SAME nine prototypes then bought coercive-control 0.56/0.38/0.11 →
+      0.62/0.40/0.16, with Thorough strictly better (0.591 → 0.617 at 11.5% →
+      11.3%) and Precise strictly better (0.253 → 0.273 at identical cost).
+      Balanced is the blemish: +0.007 recall for a 40% cost rise (4.7 → 6.6 h
+      per 100k), accepted because it stays inside its ceiling and the other two
+      improve — its CUT wants re-deriving to ~0.68, which is the next threshold
+      pass. **A prototype corpus cannot be evaluated ahead of the ground truth
+      it is scored against.**
 - [ ] **Fine-tune** (endgame). The failures are precisely-labelled training signal
       (a parent's curfew is not coercive control; a survivor's account is not a
       threat). A fine-tune on in-domain conversation would collapse the three-model

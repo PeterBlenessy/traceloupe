@@ -1041,3 +1041,47 @@ a raw embed, and all other call sites (including production) were audited and
 are correct. And **keep two independent harnesses computing at least one column
 in common** — that redundancy is what turns a plausible wrong number into a
 visible contradiction.
+
+### 2026-08-13 — ground truth first, then the prototypes earn their keep (#499)
+
+The negative result that produced this: nine coercive-control mode prototypes
+(tracking device, blackmail, intimate material as leverage, isolation from
+children, employment, lock-out, home surveillance, unauthorized recording,
+confinement) moved coercive-control recall by **exactly zero** and made Balanced
+38% more expensive. The modes did not exist in the ground truth, so nothing
+written against them could register as recall.
+
+So the ground truth was written first: **nine positive cases, one per mode,
+27 messages** — conversations rather than lines, because coercive control is a
+pattern. Coercive-control ground truth went **17 → 45 messages**; the whole
+positive set **126 → 154**. Adding ground truth does not touch selectivity (it
+is a property of the bed), which the guard confirmed.
+
+Then the same nine prototypes were re-tested against it. Both columns are on
+the identical 154-message ground truth:
+
+| cut | 14 prototypes | 23 prototypes |
+|---|---|---|
+| 0.64 Thorough | 0.591 @ 11.5% — 20.7 h | **0.617 @ 11.3% — 20.4 h** |
+| 0.67 Balanced | 0.448 @ 2.6% — 4.7 h | 0.455 @ **3.6%** — 6.6 h |
+| 0.70 Precise | 0.253 @ 0.9% — 1.6 h | **0.273 @ 0.9% — 1.6 h** |
+
+and on coercive-control itself: **0.56 / 0.38 / 0.11 → 0.62 / 0.40 / 0.16**.
+
+**The same nine prototypes that were worthless are now worth shipping.** Nothing
+about them changed — only whether the eval set exercised what they describe.
+Thorough is strictly better (more recall, slightly cheaper) and so is Precise
+(more recall, identical cost).
+
+**Balanced is the honest blemish.** It pays a 40% cost rise (4.7 → 6.6 h per
+100k) for +0.007 overall recall. Accepted, not hidden: it stays well inside its
+11.0 h ceiling and the same change strictly improves the other two postures. The
+right fix is not to revert but to **re-derive Balanced's cut** — on this corpus
+its old 2.6% keep-rate now sits nearer 0.68 than 0.67. Left as the next
+threshold pass rather than guessed at here.
+
+The rule this earns, and it inverts the intuition: **a prototype corpus cannot
+be evaluated ahead of the ground truth it is scored against.** Widening
+prototypes against a narrow eval set is measurable only as cost, and looks like
+evidence that the examples do not help. #492 found that covering missing modes
+moves recall; the precondition is that the mode exists on *both* sides.
