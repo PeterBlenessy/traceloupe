@@ -1,4 +1,4 @@
-# What public data already exists for the three "unlabelled" categories
+# What public data already exists for the categories called "unlabelled"
 
 **Status: desk research, 2026-08-13. Nothing here has been downloaded, licensed,
 or measured.** It exists so the corpus effort (journey §8) starts from what is
