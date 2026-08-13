@@ -631,7 +631,25 @@ validation. Checklist mirrors #459.
       so for this category examples are the wrong lever and the cross-message
       machinery (ranking, trajectory, the focused window, the fine-tune) is the
       right one.
-- [ ] **Fine-tune** (endgame). The failures are precisely-labelled training signal
+- [x] **Which limit is which** (2026-08-13). #503 bounded the CENSUS for the
+      pattern categories; `focused_stage_on_pattern_categories` then measured
+      the focused stage's ceiling — whole conversation in the window, no gate,
+      no budget — and the two categories came apart.
+      **Coercive-control 13/14**: given context the classifier is nearly
+      perfect, and the census passes only 0.62 of it. Nothing is wrong with the
+      model or the taxonomy here; the gate in front of a capable judge is too
+      tight, which is a tuning problem with a known cost curve.
+      **Relationship-harassment 3/8** on the new stalking cases even with
+      perfect context. The model does not read "im outside, buzz me up" /
+      "i asked you not to come here" as harassment at all. Not a corpus gap,
+      not a threshold, and prompt guidance was ruled out for this exact class in
+      #452 — it is our taxonomy meeting a model never trained on it.
+      (threat-violence 4/5 is the control: harm in the words, harness sound.)
+- [ ] **Fine-tune** — **the ONLY remaining lever for relationship-harassment**,
+      not merely the endgame. Everything cheaper has now been measured and ruled
+      out for that category: more prototypes buy cost (#503), more ground truth
+      makes the number honest but not better, richer context does not recover it
+      (above), and prompt exclusions were ruled out in #452. The failures are precisely-labelled training signal
       (a parent's curfew is not coercive control; a survivor's account is not a
       threat). A fine-tune on in-domain conversation would collapse the three-model
       pipeline back toward one model and is the only lever left that targets the

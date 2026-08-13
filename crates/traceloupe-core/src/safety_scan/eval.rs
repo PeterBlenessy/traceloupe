@@ -2062,6 +2062,114 @@ mod tests {
         );
     }
 
+    /// Can the FOCUSED stage see what the census structurally cannot? (#503)
+    ///
+    /// #503 established that relationship-harassment and coercive-control are
+    /// conversational patterns whose individual messages are ordinary — "im
+    /// downstairs, let me in" is harassment only because of a prior refusal —
+    /// and that a per-message census therefore cannot separate them from
+    /// everyday logistics without keeping the logistics too.
+    ///
+    /// That bounds the CENSUS. It says nothing about the pipeline, because the
+    /// focused stage reads a conversational window and could in principle
+    /// recover exactly what the census misses. If it does, triage's answer for
+    /// these categories is "rank generously, judge in context". If it does not,
+    /// the limit is the taxonomy meeting a per-message model at all, and only
+    /// the fine-tune is left.
+    ///
+    /// So: hand the focused classifier each pattern-category fixture as a whole
+    /// conversation, with every message in the window, and ask whether it finds
+    /// the category the fixture is labelled with. This is the stage's CEILING —
+    /// perfect context, no census gate, no budget — so a miss here is a real
+    /// limit rather than a tuning problem.
+    ///
+    ///   TRACELOUPE_EVAL_MODEL=…/gemma-4-E4B-it-Q4_K_M.gguf \
+    ///   cargo test -p traceloupe-core focused_stage_on_pattern_categories -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires the classifier GGUF (set TRACELOUPE_EVAL_MODEL)"]
+    fn focused_stage_on_pattern_categories() {
+        use crate::analysis::Category;
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::triage::{CensusInput, FocusWindow};
+        use crate::safety_scan::triage_scan;
+        use std::time::Duration;
+
+        let Ok(model) = std::env::var("TRACELOUPE_EVAL_MODEL") else {
+            eprintln!("set TRACELOUPE_EVAL_MODEL");
+            return;
+        };
+        let server = spawn_live_server(&model, false, 8192);
+        let c = LlmClient::new(server.base_url(), "eval", Duration::from_secs(300));
+
+        // The two categories #503 named, plus threat-violence as a CONTROL:
+        // its harm is in the words, so if the harness is sound it should score
+        // well here and the pattern categories should not.
+        let targets = [
+            Category::CoerciveControl,
+            Category::HarassmentBullying,
+            Category::ThreatViolence,
+        ];
+        let fixtures = load_fixtures();
+        println!("\n=== focused stage, whole conversation, no census gate ===");
+        println!("category                 hit   n   missed cases");
+        for cat in targets {
+            let cases: Vec<_> = fixtures
+                .cases
+                .iter()
+                .filter(|c| c.kind == "positive" && c.expected_categories().contains(&cat))
+                .collect();
+            if cases.is_empty() {
+                continue;
+            }
+            let mut hit = 0usize;
+            let mut missed: Vec<&str> = Vec::new();
+            for case in &cases {
+                let items: Vec<CensusInput> = case
+                    .messages
+                    .iter()
+                    .enumerate()
+                    .map(|(i, m)| CensusInput {
+                        source_id: i as i64,
+                        thread_identifier: case.id.clone(),
+                        sender: m.sender.clone(),
+                        occurred_at: Some(i as i64 * 60),
+                        text: m.text.clone(),
+                        fingerprint: format!("{}-{i}", case.id),
+                        service: Some("iMessage".into()),
+                    })
+                    .collect();
+                // Judge the LAST message of the exchange: the pattern is
+                // complete by then, which is the most favourable reading.
+                let focus = items.len() - 1;
+                let w = FocusWindow { items, focus };
+                match triage_scan::classify_focused(&c, &w) {
+                    Ok(out) => {
+                        if out.verdicts.iter().any(|v| v.category == cat) {
+                            hit += 1;
+                        } else {
+                            missed.push(&case.id);
+                        }
+                    }
+                    Err(e) => {
+                        missed.push(&case.id);
+                        eprintln!("  classify failed on {}: {e}", case.id);
+                    }
+                }
+            }
+            println!(
+                "  {:<22} {hit:>3}  {:>3}   {}",
+                cat.as_str(),
+                cases.len(),
+                if missed.is_empty() {
+                    "-".to_string()
+                } else {
+                    missed.join(", ")
+                }
+            );
+        }
+        drop(server);
+    }
+
     /// #409's premise, measured: focused mode re-sends the system prompt per
     /// message — but the pinned llama-server (b10075) defaults `cache_prompt`
     /// to true, so sequential focused calls on one slot should reuse the
