@@ -76,9 +76,17 @@ cleanliness:
    change the tokenizer).
 2. The patch above, kept as a local diff against a pinned llama.cpp checkout.
 
-Whichever is chosen should be a script in `tools/`, not a remembered
-incantation — this took several attempts to find and will not be re-derived
-easily.
+**This is now `tools/finetune/run.sh`**, which implements option 2 (the patch,
+applied automatically to a pinned llama.cpp checkout) because that is the path
+actually verified — writing option 1 into a script on the strength of it looking
+cleaner would be the same mistake this project keeps catching. The script was
+then re-run from a clean state (fresh venv, fresh clone, patch applied by the
+script) and its `--smoke` mode passed, so what is written down is what ran.
+
+`--smoke` trains the canary, converts, quantises, and then asserts the shipped
+sidecar returns the taught answer AND still answers an unrelated question. Both
+halves matter: a pipeline that silently drops the adapter passes every earlier
+step, and a model that answers only the canary has been lobotomised.
 
 ## What this does NOT tell us
 
