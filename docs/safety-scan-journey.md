@@ -583,6 +583,28 @@ validation. Checklist mirrors #459.
       is what moves recall, and inventing the mode list unaided is how the scam
       corpus came to be missing two. The same corpus is the training set for a
       possible fine-tune.
+- [x] **Decisions taken while charting the corpus effort** (2026-08-13).
+      **(a) Licensed data only, and the licence is checked by an agent, not
+      escalated.** PAN12's Zenodo record has NO licence field — `access_right:
+      open` is a visibility setting, not a grant of rights — and eSPD's MIT
+      covers its code while its data derives from PAN12. So PAN12 and its
+      derivatives are **not vendored**; grooming is generated like the other
+      two, with an optional parallel track to ask the creators for terms. It
+      was never going to be more than a cross-check anyway: its positives come
+      from Perverted Justice and its negatives from IRC/Omegle, so a classifier
+      can score the source instead of the behaviour.
+      **(b) Ground truth is the binding constraint, not prototypes.** The
+      BOCSAR 48-behaviour taxonomy exposed nine coercive-control modes our
+      prototypes never covered (tracking device, blackmail, intimate material as
+      leverage, isolation from children, employment, lock-out, home
+      surveillance, unauthorized recording, confinement). Adding all nine moved
+      coercive-control recall by **exactly zero** (0.59/0.29/0.12 before and
+      after) and made Balanced 38% more expensive — because coercive-control has
+      **17 ground-truth messages over 5 cases** and none of them exercise those
+      modes. Reverted. #492 showed covering missing modes is what moves recall;
+      this shows the precondition — the mode must exist on BOTH sides. So the
+      corpus effort writes ground truth first, mode-by-mode, and only then
+      decides which prototypes earn their keep.
 - [ ] **Fine-tune** (endgame). The failures are precisely-labelled training signal
       (a parent's curfew is not coercive control; a survivor's account is not a
       threat). A fine-tune on in-domain conversation would collapse the three-model

@@ -137,3 +137,84 @@ Questions 1 and 5 are for the user, not for an agent to decide.
 - [A Large Labeled Corpus for Online Harassment Research](https://www.semanticscholar.org/paper/A-Large-Labeled-Corpus-for-Online-Harassment-Golbeck-Ashktorab/3b2a962f977a081637fd683c1dc9582e12b344dd)
 - [Harassment corpus + lexicon](https://github.com/Mrezvan94/Harassment-Corpus)
 - [SynBullying (arXiv)](https://arxiv.org/html/2511.11599)
+
+---
+
+# The coercive-control mode taxonomy, and what testing it proved
+
+Added 2026-08-13, after acting on this note's own recommendation.
+
+## The taxonomy, extracted
+
+The 48 behaviours are from Kim & Karystianis, *Text mining police narratives of
+domestic violence events to identify coercive control behaviours* (NSW BOCSAR
+CJB260 / *Crime Science* 13:2, 2024), over 406,196 reports. Six categories:
+
+| category | subcategories |
+|---|---|
+| **Controlling behaviour** | blackmail; controlling behaviour (other); control over employment; control over finances; home isolation; internet search; isolation from children; isolation from family; isolation from friends; non-consensual sharing of intimate material; premise lock out; privacy violation; stated surveillance; use of tracking device; unauthorized information dissemination; deprivation of basic necessities |
+| **Harassment** | call; email; letter; location; message; obsession; social media; stalking via car; stalking at location; stalking (unspecified); trespassing; unwanted gift; unspecified |
+| **Intimidation and threats** | intimidation to harm; threat to kill; threat to sexual assault; intimidation (unspecified); intimidation with an object; threat to property damage; threat to harm/kill animals; threat to harm third person; veiled threats; threat to harm animals; threat to harm others; threats taking children away |
+| **Self-harm and suicide** | acts of self-harm; self-harm threat; suicide threat |
+| **Property damage and theft** | arson; property damage; withholding personal effects |
+| **Verbal abuse** | verbal abuse |
+
+**It is a complement, not a superset.** Derived from *police narratives*, it
+records what an officer writes down — observable acts. Our corpus has
+gaslighting, the silent treatment, appearance control and "I'm not controlling
+you, I'm protecting you", none of which appear here, because they do not survive
+into a police report. Use it as a checklist of modes we may be missing, never as
+a definition of the category.
+
+## The gap it exposed
+
+Our 14 coercive-control prototypes covered finances, isolation from
+family/friends, privacy violation and location demands. Nine listed modes were
+absent, several of them squarely in scope for a phone: **use of a tracking
+device**, **blackmail**, **non-consensual intimate material as leverage**,
+**isolation from children**, **control over employment**, **premise lock out**,
+**stated home surveillance**, **unauthorized recording**, **confinement**.
+
+## Adding them changed nothing — and that is the finding
+
+Nine prototypes were written to those modes and measured through the production
+path:
+
+| | coercive-control @0.64 / 0.67 / 0.70 | overall @0.64 | Balanced selectivity |
+|---|---|---|---|
+| 14 prototypes | 0.59 / 0.29 / 0.12 | 0.603 | 2.6% |
+| 23 prototypes | **0.59 / 0.29 / 0.12** | 0.611 | **3.6%** |
+
+Coercive-control recall did not move at all, and Balanced got **38% more
+expensive** for it. **Reverted.**
+
+The reason is structural, and it is the useful part. Coercive-control has **17
+ground-truth messages across 5 fixture cases**, covering monitoring/location,
+passwords, finances, isolation and appearance. Every mode added was one the
+ground truth does not contain — so no prototype for it can register as recall,
+by construction. The prototypes still widened the centroid, so the cost was
+real while the benefit was unmeasurable.
+
+**The binding constraint is ground truth, not prototypes.** #492 established
+that covering missing modes is what moves recall; this establishes the
+precondition — the mode has to exist on *both* sides. Widening the prototype
+corpus against a narrow eval set buys nothing and can be measured only as cost.
+
+That reorders the corpus effort: **write the ground truth first**, mode-by-mode
+against this taxonomy, and only then decide which prototypes earn their keep.
+Filed as a separate issue with the nine drafted mode texts ready to use.
+
+## Licence decision on the grooming corpora
+
+Applying the standing rule — *use public test data whose licence permits it*:
+
+| source | licence | verdict |
+|---|---|---|
+| PAN12 (Zenodo 3713280) | **no licence field**; `access_right: open` only | not usable as-is |
+| PAN @ CLEF 2012 task page | no terms stated | — |
+| eSPD datasets (GitLab) | repo **MIT** | MIT covers the code; data derives from PAN12 and inherits its unresolved terms |
+
+"Open access" is a visibility setting, not a grant of rights. **Decision: do not
+vendor or commit PAN12 or its derivatives.** Grooming is therefore treated like
+the other two categories — generate — with an optional parallel track to ask the
+creators for explicit terms. Tracked in its own issue; not a blocker.
