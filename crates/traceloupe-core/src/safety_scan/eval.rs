@@ -1939,6 +1939,7 @@ mod tests {
         // honest as those constants.
         println!("\nselectivity guard (measured now vs the checked-in record):");
         let mut drifted: Vec<String> = Vec::new();
+        let mut over_ceiling: Vec<String> = Vec::new();
         for m in &MEASURED_SELECTIVITY {
             let kept_bed = bed_vecs
                 .iter()
@@ -1953,15 +1954,16 @@ mod tests {
                 m.threshold,
                 m.selectivity_pct,
             );
-            assert!(
-                hours <= ceiling,
-                "{} keeps {sel:.1}% of this device — {hours:.1} h per 100k against a ceiling \
-                 of {ceiling:.1} h. Triage's whole premise is that the census is selective \
-                 enough to make depth affordable; at this rate the posture costs more than \
-                 the {FULL_READ_HOURS_PER_100K} h full read it replaces. Fix the census, do \
-                 not raise the ceiling.",
-                m.mode.as_str(),
-            );
+            if hours > ceiling {
+                over_ceiling.push(format!(
+                    "{} keeps {sel:.1}% of this device — {hours:.1} h per 100k against a \
+                     ceiling of {ceiling:.1} h. Triage's whole premise is that the census is \
+                     selective enough to make depth affordable; at this rate the posture costs \
+                     more than the {FULL_READ_HOURS_PER_100K} h full read it replaces. Fix the \
+                     census, do not raise the ceiling.",
+                    m.mode.as_str(),
+                ));
+            }
             // 0.1 pp sits deliberately between the two scales that matter: the
             // recorded constants are rounded to one decimal, so they can differ
             // from a true measurement by up to 0.05 pp for no reason at all,
@@ -1978,13 +1980,6 @@ mod tests {
                 ));
             }
         }
-        assert!(
-            drifted.is_empty(),
-            "cost_model::MEASURED_SELECTIVITY no longer matches this device:\n  {}\n\
-             Update those constants — the CI-side cost guard is checking a stale number, \
-             which is exactly how a selectivity regression stays invisible.",
-            drifted.join("\n  ")
-        );
         println!("\nper-category recall at the shipped cuts:");
         println!("category                  0.64   0.67   0.70");
         for cat in Category::ALL {
@@ -2008,6 +2003,24 @@ mod tests {
             );
         }
         assert!(!bed_vecs.is_empty() && !planted.is_empty());
+
+        // BOTH assertions land here, after every diagnostic has printed.
+        // They used to fire mid-way, which aborted the run before the
+        // per-category table — so the guard withheld exactly the numbers you
+        // need to decide whether the drift it just reported is an improvement
+        // worth recording or a regression worth reverting.
+        assert!(
+            over_ceiling.is_empty(),
+            "a posture now costs more than its name promises:\n  {}",
+            over_ceiling.join("\n  ")
+        );
+        assert!(
+            drifted.is_empty(),
+            "cost_model::MEASURED_SELECTIVITY no longer matches this device:\n  {}\n\
+             Update those constants — the CI-side cost guard is checking a stale number, \
+             which is exactly how a selectivity regression stays invisible.",
+            drifted.join("\n  ")
+        );
     }
 
     /// #409's premise, measured: focused mode re-sends the system prompt per
