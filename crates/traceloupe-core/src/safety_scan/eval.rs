@@ -320,6 +320,19 @@ mod tests {
     /// `-- --ignored` loads several multi-GB models concurrently — an OOM risk
     /// on the 24 GB reference machine, and timings measured under GPU
     /// contention are not comparable to the recorded numbers.
+    /// A cheap identity for a corpus of texts, so two harnesses can prove they
+    /// are looking at the same messages instead of assuming it.
+    fn bed_fingerprint(bed: &[String]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        for t in bed {
+            h.update(t.as_bytes());
+            h.update([1u8]);
+        }
+        format!("{:x}", h.finalize())[..12].to_string()
+    }
+
+    #[allow(dead_code)]
     fn spawn_live_server(
         model: &str,
         embedding: bool,
@@ -1478,6 +1491,292 @@ mod tests {
     ///   TRIAGE_REAL_BACKUP=… TRIAGE_REAL_PASSWORD=… \
     ///   TRACELOUPE_EMBED_MODEL=… \
     ///   cargo test -p traceloupe-core census_recall_vs_cost -- --ignored --nocapture
+    /// Does giving each category its OWN threshold beat one global cut? (#486)
+    ///
+    /// The census scores a message against nine centroids and keeps the MAX,
+    /// then compares it to one number. That number is therefore read at
+    /// whatever cut suits the loosest centroid, which is the shape of the
+    /// per-category spread that has survived every corpus revision: at the
+    /// Thorough cut `hate-identity` recalls 0.82 and `scam-fraud` 0.33. The
+    /// open question on #486 is whether that is a corpus problem or a scoring
+    /// problem.
+    ///
+    /// The per-category scheme here is QUANTILE calibration: each category's
+    /// threshold is set so it keeps the same share of ordinary chatter as
+    /// every other, and a message is a candidate if ANY category clears its
+    /// own bar. That is the cheapest honest version of "normalise per
+    /// category" — it needs no per-category ground truth, only the bed, so it
+    /// could actually ship.
+    ///
+    /// Both schemes are scored on the same messages with the same embeddings,
+    /// and compared at MATCHED COST, because a scheme that keeps more of the
+    /// phone will always recall more.
+    ///
+    ///   TRIAGE_REAL_BACKUP=… TRIAGE_REAL_PASSWORD=… TRACELOUPE_EMBED_MODEL=… \
+    ///   cargo test -p traceloupe-core per_category_cuts -- --ignored --nocapture
+    #[test]
+    #[ignore = "requires a public DFIR image + the embedding GGUF"]
+    fn per_category_cuts_vs_one_global_cut() {
+        use crate::analysis::Category;
+        use crate::cache::CacheDb;
+        use crate::safety_scan::chunker::{self, ScanSources, TimeRange};
+        use crate::safety_scan::client::LlmClient;
+        use crate::safety_scan::cost_model::hours_per_100k;
+        use crate::safety_scan::triage::{
+            build_prototypes, cap_for_embedding, cosine, EMBED_PREFIX,
+        };
+        use crate::safety_scan::triage_scan::prototype_examples;
+        use crate::sidecar::CancelToken;
+        use std::time::Duration;
+
+        let (Ok(backup), Ok(embed_model)) = (
+            std::env::var("TRIAGE_REAL_BACKUP"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+        ) else {
+            eprintln!("set TRIAGE_REAL_BACKUP and TRACELOUPE_EMBED_MODEL");
+            return;
+        };
+        let password = std::env::var("TRIAGE_REAL_PASSWORD").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the public image");
+        let cache = CacheDb::open(&cache_path).unwrap();
+        let bed: Vec<String> =
+            chunker::census_threads(&cache, TimeRange::default(), &ScanSources::default())
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .map(|m| m.text)
+                .collect();
+        assert!(
+            bed.len() > 100,
+            "the image supplies a real conversational bed"
+        );
+        println!(
+            "bed identity: n={} sha={}",
+            bed.len(),
+            bed_fingerprint(&bed)
+        );
+
+        let server = spawn_live_server(&embed_model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        let embed_one = |t: &str| c.embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(t)));
+
+        // One centroid per category, LABELLED — the shipped path throws the
+        // labels away by taking a max, which is precisely what is under test.
+        let cats: Vec<Category> = Category::ALL.to_vec();
+        let centroids: Vec<Vec<f32>> = cats
+            .iter()
+            .map(|cat| {
+                let ex = prototype_examples(&[*cat]);
+                // RAW `c.embed`, not `embed_one`: build_prototypes applies the
+                // task prefix and the byte cap itself. Passing embed_one here
+                // prefixed every example TWICE, which shifted every centroid
+                // and made this experiment's curve look one grid step looser
+                // than the shipped one on an identical bed.
+                let built = build_prototypes(&ex, |t| c.embed(t)).expect("build centroid");
+                assert_eq!(built.len(), 1, "one category must yield one centroid");
+                built.into_iter().next().unwrap()
+            })
+            .collect();
+
+        let scores = |v: &[f32]| -> Vec<f32> { centroids.iter().map(|p| cosine(v, p)).collect() };
+
+        // CROSS-CHECK against the shipped scoring path before trusting a
+        // single number below. This experiment rebuilds the centroids one
+        // category at a time so it can keep the labels the production path
+        // throws away — if that rebuild is not bit-for-bit the same scoring,
+        // every comparison here is against a curve the product does not have.
+        //
+        // Note what this does and does not catch. It compares two constructions
+        // INSIDE this test, so a mistake made identically in both (as
+        // double-prefixing originally was) passes it. What caught that was this
+        // harness's global curve disagreeing with `census_recall_vs_cost` on an
+        // identical bed — which is the real reason to keep two harnesses that
+        // compute the same column.
+        {
+            use crate::safety_scan::triage::census_score;
+            let shipped = build_prototypes(&prototype_examples(&Category::ALL), |t| c.embed(t))
+                .expect("shipped prototypes");
+            assert_eq!(
+                shipped.len(),
+                centroids.len(),
+                "the shipped path built {} centroids, this experiment {}",
+                shipped.len(),
+                centroids.len()
+            );
+            // Across the WHOLE bed, not a few probes: a handful of strings can
+            // agree while the curves built from 576 differ, which is exactly
+            // the disagreement this check exists to settle.
+            let mut worst = 0.0f32;
+            let mut worst_at = String::new();
+            for t in &bed {
+                let Ok(v) = embed_one(t) else { continue };
+                let mine = centroids
+                    .iter()
+                    .map(|p| cosine(&v, p))
+                    .fold(0.0f32, f32::max);
+                let theirs = census_score(&v, &shipped);
+                if (mine - theirs).abs() > worst {
+                    worst = (mine - theirs).abs();
+                    worst_at = t.chars().take(60).collect();
+                }
+            }
+            println!("  scoring cross-check: worst |experiment - production| = {worst:.6}");
+            assert!(
+                worst < 1e-5,
+                "scoring diverged by {worst:.6} (worst at {worst_at:?}) — every comparison \
+                 below would be against a curve the product does not have"
+            );
+        }
+        let bed_scores: Vec<Vec<f32>> = bed
+            .iter()
+            .filter_map(|t| embed_one(t).ok())
+            .map(|v| scores(&v))
+            .collect();
+
+        // Embed each positive ONCE and carry its categories alongside the
+        // score row. Embedding per (case × category) double-counts every
+        // multi-category case in the denominator every number below is read
+        // off — the same defect a review found in `census_recall_vs_cost`.
+        let fixtures = load_fixtures();
+        let mut planted_scores: Vec<(Vec<Category>, Vec<f32>)> = Vec::new();
+        for case in fixtures.cases.iter().filter(|c| c.kind == "positive") {
+            let cs: Vec<Category> = case.expected_categories().into_iter().collect();
+            for m in &case.messages {
+                if let Ok(v) = embed_one(&m.text) {
+                    planted_scores.push((cs.clone(), scores(&v)));
+                }
+            }
+        }
+        assert!(!planted_scores.is_empty() && !bed_scores.is_empty());
+        let max_of = |s: &[f32]| s.iter().copied().fold(0.0f32, f32::max);
+
+        // Per-category cut at quantile q of that category's BED scores: each
+        // category is allowed to keep the same fraction of ordinary chatter.
+        let cut_at = |cat_ix: usize, q: f64| -> f32 {
+            let mut col: Vec<f32> = bed_scores.iter().map(|s| s[cat_ix]).collect();
+            col.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let idx = ((col.len() - 1) as f64 * q).round() as usize;
+            col[idx]
+        };
+
+        println!("\n=== per-category cuts vs one global cut ===");
+        println!(
+            "bed {} messages · {} planted positives · {} categories",
+            bed_scores.len(),
+            planted_scores.len(),
+            cats.len()
+        );
+
+        // The global curve on a FINE grid, so "matched cost" means the same
+        // cost and not the nearest point of a coarse one. Comparing a scheme
+        // that keeps 13.9% of the phone against one that keeps 11.5% and
+        // calling the difference a win is how a costlier setting gets sold as
+        // a better one.
+        let curve = |t: f32| -> (f64, f64) {
+            let recall = planted_scores
+                .iter()
+                .filter(|(_, s)| max_of(s) >= t)
+                .count() as f64
+                / planted_scores.len() as f64;
+            let sel = 100.0 * bed_scores.iter().filter(|s| max_of(s) >= t).count() as f64
+                / bed_scores.len() as f64;
+            (recall, sel)
+        };
+        let fine: Vec<(f32, f64, f64)> = (0..=160)
+            .map(|i| 0.40 + i as f32 * 0.0025)
+            .map(|t| {
+                let (r, sel) = curve(t);
+                (t, r, sel)
+            })
+            .collect();
+        // The global threshold that keeps the same share of the phone.
+        let global_at = |target_sel: f64| -> (f32, f64, f64) {
+            *fine
+                .iter()
+                .min_by(|a, b| {
+                    (a.2 - target_sel)
+                        .abs()
+                        .partial_cmp(&(b.2 - target_sel).abs())
+                        .unwrap()
+                })
+                .unwrap()
+        };
+
+        println!("\nglobal cut (shipped):");
+        println!("  cut    recall  selectivity   h/100k");
+        for t in [0.55f32, 0.58, 0.61, 0.64, 0.67, 0.70] {
+            let (recall, sel) = curve(t);
+            println!(
+                "  {t:.2}   {recall:.3}   {sel:>5.1}%      {:>5.1}",
+                hours_per_100k(sel)
+            );
+        }
+
+        println!("\nper-category cuts (quantile-calibrated on the bed):");
+        println!("  q        recall  selectivity   h/100k   global at the SAME cost");
+        for q in [0.80f64, 0.90, 0.95, 0.975, 0.99, 0.995] {
+            let cuts: Vec<f32> = (0..cats.len()).map(|i| cut_at(i, q)).collect();
+            let keeps = |s: &[f32]| s.iter().zip(&cuts).any(|(v, t)| v >= t);
+            let recall = planted_scores.iter().filter(|(_, s)| keeps(s)).count() as f64
+                / planted_scores.len() as f64;
+            let sel = 100.0 * bed_scores.iter().filter(|s| keeps(s)).count() as f64
+                / bed_scores.len() as f64;
+            let (gt, gr, gs) = global_at(sel);
+            println!(
+                "  {q:.3}    {recall:.3}   {sel:>5.1}%      {:>5.1}    {gt:.4} → {gr:.3} at {gs:.1}%   ({:+.3})",
+                hours_per_100k(sel),
+                recall - gr,
+            );
+        }
+
+        // Per-category recall at one representative operating point of each
+        // scheme, so the SPREAD — the thing #486 is actually about — is visible.
+        let q = 0.975f64;
+        let cuts: Vec<f32> = (0..cats.len()).map(|i| cut_at(i, q)).collect();
+        let keeps = |s: &[f32]| s.iter().zip(&cuts).any(|(v, t)| v >= t);
+        let sel_at_q =
+            100.0 * bed_scores.iter().filter(|s| keeps(s)).count() as f64 / bed_scores.len() as f64;
+        let (gt, _, gs) = global_at(sel_at_q);
+        println!(
+            "\nper-category recall (its own positives) at MATCHED cost \
+             — per-category q={q:.3} ({sel_at_q:.1}%) vs global {gt:.4} ({gs:.1}%):"
+        );
+        println!("  category                 per-cat   global   its cut");
+        for (i, cat) in cats.iter().enumerate() {
+            let of_cat: Vec<&Vec<f32>> = planted_scores
+                .iter()
+                .filter(|(cs, _)| cs.contains(cat))
+                .map(|(_, s)| s)
+                .collect();
+            if of_cat.is_empty() {
+                continue;
+            }
+            let per = of_cat.iter().filter(|s| keeps(s)).count() as f64 / of_cat.len() as f64;
+            let glob =
+                of_cat.iter().filter(|s| max_of(s) >= gt).count() as f64 / of_cat.len() as f64;
+            println!(
+                "  {:<22}   {per:.2}     {glob:.2}    {:.3}",
+                cat.as_str(),
+                cuts[i]
+            );
+        }
+        drop(server);
+    }
+
     #[test]
     #[ignore = "requires a public DFIR image + the embedding GGUF"]
     fn census_recall_vs_cost() {
@@ -1524,6 +1823,11 @@ mod tests {
         assert!(
             bed.len() > 100,
             "the image supplies a real conversational bed"
+        );
+        println!(
+            "bed identity: n={} sha={}",
+            bed.len(),
+            bed_fingerprint(&bed)
         );
 
         let mut server = spawn_live_server(&embed_model, true, 2048);
@@ -1592,6 +1896,19 @@ mod tests {
             bed_vecs.len(),
             planted.len()
         );
+        {
+            let mut m: Vec<f32> = bed_vecs
+                .iter()
+                .map(|v| census_score(v, &prototypes))
+                .collect();
+            m.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            println!(
+                "  bed max-score: mean {:.4} median {:.4} p90 {:.4}",
+                m.iter().sum::<f32>() / m.len() as f32,
+                m[m.len() / 2],
+                m[(m.len() as f64 * 0.9) as usize]
+            );
+        }
         println!("threshold   recall   selectivity   100k cost");
         for th in [0.46f32, 0.49, 0.52, 0.55, 0.58, 0.61, 0.64, 0.67, 0.70] {
             let kept = planted

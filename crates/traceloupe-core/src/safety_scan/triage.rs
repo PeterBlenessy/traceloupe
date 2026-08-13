@@ -285,6 +285,13 @@ pub struct ScoredMessage {
 /// A category with no usable examples is simply absent from the result rather
 /// than contributing a zero vector that would score everything as mildly
 /// suspicious.
+/// **`embed` must be a RAW embedding call.** This function applies
+/// [`EMBED_PREFIX`] and [`cap_for_embedding`] itself, so a closure that also
+/// applies them prefixes every example twice. That produces centroids which
+/// score ~0.02-0.03 higher on everything — a curve that looks entirely
+/// plausible and is shifted a whole grid step from the one the product uses.
+/// It cost a measurement session to find; every caller here passes
+/// `|t| client.embed(t)` and nothing else.
 pub fn build_prototypes<E>(
     examples: &[(String, String)],
     mut embed: E,
