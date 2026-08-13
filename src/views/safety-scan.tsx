@@ -190,7 +190,7 @@ const MODE_OPTIONS = [
     value: "precise" as const,
     label: "Precise",
     description:
-      "By far the fastest and the cleanest — it finds slightly less than a full read, trading a little recall for far fewer false alarms",
+      "By far the fastest and the cleanest, but it finds noticeably less than a full read — it trades real coverage for far fewer false alarms",
   },
 ];
 
