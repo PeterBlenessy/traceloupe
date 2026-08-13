@@ -7,9 +7,17 @@
 //! models against a real analysis store. The command layer wires the real
 //! sandboxed sidecars into the same function.
 //!
-//! End-to-end on realistic data this pipeline reached recall 0.94 at precision
-//! 0.95 versus the shipped batch scan's 0.30 / 0.89
-//! (docs/validation/safety-scan-validation.md).
+//! **What this pipeline actually delivers.** A lab run reached recall 0.94 at
+//! precision 0.95 against the batch scan's 0.30 / 0.89 — that was 5-message
+//! Jigsaw chunks scored against non-held-out prototypes, and this module's doc
+//! used to call it "realistic data", which it is not. On a public device's own
+//! conversation, with a disjoint prototype corpus and ground truth covering the
+//! hard half of each category, the shipped postures reach census recall 0.618
+//! (Thorough, 20.4 h per 100k), 0.421 (Balanced, 5.0 h) and ~0.27 (Precise,
+//! 1.6 h) against a full read's 0.30 at ~11 h. Triage is a speed and precision
+//! play with a modest recall edge at its thorough end — see journey §8.5 and
+//! `docs/validation/safety-scan-validation.md` for the campaign that
+//! established this, and quote a row rather than a single figure.
 
 use crate::analysis::{AnalysisDb, Category, CensusRow, NewFinding, SourceKind};
 use crate::safety_scan::chunker::{Chunk, ChunkItem};
