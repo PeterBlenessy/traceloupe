@@ -1569,7 +1569,7 @@ bigger eval set.
 
 Peter's objection this morning was that a model scoring 3/8 on
 relationship-harassment cannot be trusted to write good examples of it. I
-generated 1,500 conversations anyway, later measured that they produced a
+generated 1,500 conversations anyway, later measured that they produced a <!-- not-a-backup-count: generated corpus, not anyone's backup -->
 classifier scoring 72% on harassment, and **retracted his objection on that
 basis without ever reading the corpus**.
 
