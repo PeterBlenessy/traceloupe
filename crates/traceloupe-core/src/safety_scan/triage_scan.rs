@@ -770,6 +770,48 @@ mod tests {
     /// ground truth those centroids are measured against — and any overlap
     /// makes the measurement train-on-test, which has already cost this
     /// project three retracted results (#491).
+    /// No message text may appear twice anywhere in the training corpus.
+    ///
+    /// This exists because a script that was meant to fix one problem created a
+    /// worse one: 58 positives were given "love-bombing" closers drawn from a
+    /// pool of 12 strings, so `love` became a 100%-precision predictor of the
+    /// positive class, and the same script then overwrote 13 unrelated messages
+    /// with those strings — deleting a child's stated age from the only
+    /// drugs-to-a-minor example and replacing a victim's refusal with the
+    /// abuser's apology. Four commits, none of them caught it.
+    ///
+    /// Duplicate text is the signature of exactly that failure: anything
+    /// generated mechanically at scale repeats itself, and a classifier will
+    /// find the repetition long before it finds the behaviour.
+    #[test]
+    fn no_message_appears_twice_in_the_training_corpus() {
+        use std::collections::HashMap;
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for line in crate::safety_scan::eval::training_corpus_lines() {
+            let key = line.trim().to_lowercase();
+            // Bare acknowledgements genuinely recur in real dialogue.
+            if key.split_whitespace().count() < 3 {
+                continue;
+            }
+            *seen.entry(key).or_default() += 1;
+        }
+        let mut repeats: Vec<(String, usize)> =
+            seen.into_iter().filter(|(_, n)| *n > 1).collect();
+        repeats.sort_by(|a, b| b.1.cmp(&a.1));
+        assert!(
+            repeats.is_empty(),
+            "{} message texts appear more than once — a model learns the repetition, \
+             not the behaviour:\n{}",
+            repeats.len(),
+            repeats
+                .iter()
+                .take(8)
+                .map(|(t, n)| format!("  {n}x {t:?}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
     /// The TRAINING corpus must not contain eval text either.
     ///
     /// This was missing, and it mattered: love-bombing closers added to 58

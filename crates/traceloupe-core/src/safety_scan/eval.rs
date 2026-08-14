@@ -95,6 +95,10 @@ const TRAIN_JSONL: &[(&str, &str)] = &[
         "negatives-hard",
         include_str!("../../fixtures/safety-scan/train/negatives-hard.jsonl"),
     ),
+    (
+        "negatives-long",
+        include_str!("../../fixtures/safety-scan/train/negatives-long.jsonl"),
+    ),
 ];
 
 /// The training-corpus file names the guard checks, so a file added to the
