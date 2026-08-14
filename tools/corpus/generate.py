@@ -165,6 +165,7 @@ def main() -> int:
     negatives = TAXONOMY["negatives"]["situations"]
 
     kept = dropped_parse = dropped_contam = 0
+    mode_counts: dict[tuple[str, str], int] = {}
     t0 = time.time()
     with open(args.out, "w") as fh:
         while kept < total:
@@ -175,7 +176,15 @@ def main() -> int:
             else:
                 kind = "positive"
                 category = random.choices([c for c, _ in cats], weights=weights)[0]
-                mode = random.choice(TAXONOMY["categories"][category]["modes"])
+                # Least-covered mode first, not a uniform draw. Measured on the
+                # first 972-conversation run: random sampling left some modes
+                # with one or two examples while others had a dozen, and a mode
+                # the corpus barely covers is one the classifier will not learn
+                # — which is the whole failure #492 diagnosed.
+                ms = TAXONOMY["categories"][category]["modes"]
+                fewest = min(mode_counts.get((category, m), 0) for m in ms)
+                mode = random.choice([m for m in ms if mode_counts.get((category, m), 0) == fewest])
+                mode_counts[(category, mode)] = fewest + 1
 
             try:
                 raw = ask(args.server, build_prompt(kind, category, mode))
