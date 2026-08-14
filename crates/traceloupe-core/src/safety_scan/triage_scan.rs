@@ -770,6 +770,26 @@ mod tests {
     /// ground truth those centroids are measured against — and any overlap
     /// makes the measurement train-on-test, which has already cost this
     /// project three retracted results (#491).
+    /// The TRAINING corpus must not contain eval text either.
+    ///
+    /// This was missing, and it mattered: love-bombing closers added to 58
+    /// training conversations collided with eval cases in 14 places, and
+    /// `scripts/preflight.sh` passed anyway because nothing checked the
+    /// training corpus at all. A model trained on text it is later scored
+    /// against reports a number that means nothing, which is the failure this
+    /// project has now hit in three different disguises.
+    #[test]
+    fn the_training_corpus_does_not_overlap_the_eval_set() {
+        let lines = crate::safety_scan::eval::training_corpus_lines();
+        assert!(lines.len() > 100, "training corpus looks empty: {} lines", lines.len());
+        if let Some((eval, train)) = crate::safety_scan::eval::overlaps_sealed_fixtures(&lines) {
+            panic!(
+                "training corpus overlaps the eval set:\n  eval:     {eval:?}\n  training: {train:?}\n\
+                 A model trained on the text it is scored against reports a number that means nothing."
+            );
+        }
+    }
+
     #[test]
     fn the_prototype_corpus_does_not_overlap_the_eval_fixtures() {
         // The check itself lives in `eval::overlaps_sealed_fixtures`, because

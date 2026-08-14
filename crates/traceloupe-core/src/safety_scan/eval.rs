@@ -60,6 +60,37 @@ const EVAL_JSONL: &[(&str, &str)] = &[
     ),
 ];
 
+/// The hand-written TRAINING corpus. Separate from the eval set on purpose, and
+/// guarded against overlapping it — see the test below.
+const TRAIN_JSONL: &[(&str, &str)] = &[
+    ("harassment", include_str!("../../fixtures/safety-scan/train/harassment.jsonl")),
+    ("coercive-control", include_str!("../../fixtures/safety-scan/train/coercive-control.jsonl")),
+    ("threat-violence", include_str!("../../fixtures/safety-scan/train/threat-violence.jsonl")),
+    ("self-harm", include_str!("../../fixtures/safety-scan/train/self-harm.jsonl")),
+    ("sexual-grooming", include_str!("../../fixtures/safety-scan/train/sexual-grooming.jsonl")),
+    ("hate-scam-drugs", include_str!("../../fixtures/safety-scan/train/hate-scam-drugs.jsonl")),
+    ("varied-structure", include_str!("../../fixtures/safety-scan/train/varied-structure.jsonl")),
+];
+
+/// Every message in the training corpus, for the contamination guard.
+pub fn training_corpus_lines() -> Vec<String> {
+    let mut out = Vec::new();
+    for (group, body) in TRAIN_JSONL {
+        for line in body.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value = serde_json::from_str(line)
+                .unwrap_or_else(|e| panic!("train/{group}.jsonl: {e}"));
+            if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
+                for m in msgs {
+                    if let Some(t) = m.get("text").and_then(|t| t.as_str()) {
+                        out.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Every eval case: the original `cases.json` plus the hand-written expansion.
 ///
 /// This is what a measurement should score against. `load_fixtures()` remains
