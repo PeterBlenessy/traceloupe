@@ -78,16 +78,30 @@ class Conversations(Dataset):
 
 
 def load_generated(path: Path) -> list[tuple[str, list[float]]]:
+    """A file, or a directory of .jsonl files.
+
+    Directories are the normal case: the corpus is split by category, and
+    naming one file at a time is how a file silently stops being trained on —
+    the same failure the Rust guards exist to catch on the fixture side.
+    """
+    files = sorted(path.glob("*.jsonl")) if path.is_dir() else [path]
+    if not files:
+        raise SystemExit(f"no .jsonl files under {path}")
     rows = []
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        d = json.loads(line)
-        y = [0.0] * len(CATEGORIES)
-        for c in d.get("categories") or []:
-            if c in IDX:
-                y[IDX[c]] = 1.0
-        rows.append((render(d["messages"]), y))
+    for f in files:
+        n = 0
+        for line in f.read_text().splitlines():
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            y = [0.0] * len(CATEGORIES)
+            for c in d.get("categories") or []:
+                if c in IDX:
+                    y[IDX[c]] = 1.0
+            rows.append((render(d["messages"]), y))
+            n += 1
+        if path.is_dir():
+            print(f"  {f.name}: {n}")
     return rows
 
 
@@ -117,7 +131,7 @@ def load_sealed() -> list[tuple[str, list[float], str]]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", required=True)
+    ap.add_argument("--data", required=True, help="a .jsonl file, or a directory of them")
     ap.add_argument("--model", default="answerdotai/ModernBERT-base")
     ap.add_argument("--epochs", type=int, default=4)
     ap.add_argument("--batch", type=int, default=8)
