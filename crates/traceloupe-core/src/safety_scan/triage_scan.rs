@@ -781,7 +781,11 @@ mod tests {
     #[test]
     fn the_training_corpus_does_not_overlap_the_eval_set() {
         let lines = crate::safety_scan::eval::training_corpus_lines();
-        assert!(lines.len() > 100, "training corpus looks empty: {} lines", lines.len());
+        assert!(
+            lines.len() > 100,
+            "training corpus looks empty: {} lines",
+            lines.len()
+        );
         if let Some((eval, train)) = crate::safety_scan::eval::overlaps_sealed_fixtures(&lines) {
             panic!(
                 "training corpus overlaps the eval set:\n  eval:     {eval:?}\n  training: {train:?}\n\
