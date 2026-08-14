@@ -59,7 +59,7 @@
       "id": "cc-money",
       "messages": [
         "i'll handle the money from now on",
-        "send me a photo of the receipt",
+        "photograph the receipt and send it over",
         "you dont need your own account"
       ]
     },
@@ -76,7 +76,7 @@
       "category": "coercive-control",
       "id": "cc-threat-leaving",
       "messages": [
-        "if you walk out that door dont come back",
+        "walk out now and thats it, were finished",
         "you know what happens if you leave",
         "nobody else would put up with you"
       ]
@@ -180,7 +180,7 @@
       "category": "coercive-control",
       "id": "cc-employment",
       "messages": [
-        "hand your notice in, i dont want you at that place",
+        "pack that job in, i dont want you working there",
         "we managed before you had a wage"
       ]
     },
@@ -220,7 +220,7 @@
       "category": "grooming-exploitation",
       "id": "gr-secrecy",
       "messages": [
-        "dont tell your mum we talk",
+        "your parents dont need to know about us",
         "this is just between us",
         "she wouldnt understand our friendship"
       ]
@@ -237,7 +237,7 @@
       "category": "grooming-exploitation",
       "id": "gr-gifts",
       "messages": [
-        "i sent you something, dont mention it at home",
+        "theres a present coming, keep it quiet indoors",
         "did you like it",
         "i can get you more"
       ]
@@ -318,7 +318,7 @@
       "id": "gr-money-lure",
       "messages": [
         "i can send you money for it",
-        "nobody needs to know where it came from"
+        "no one has to find out who gave you it"
       ]
     },
     {
@@ -334,7 +334,7 @@
       "category": "harassment-bullying",
       "id": "hb-degrade",
       "messages": [
-        "youre worthless and everyone knows it",
+        "youre pathetic and always have been",
         "you were a mistake",
         "look at yourself"
       ]
@@ -407,7 +407,7 @@
       "category": "harassment-bullying",
       "id": "hb-threat-reputation",
       "messages": [
-        "ill make sure everyone knows what you are",
+        "ill tell every last person exactly what youre like",
         "your family will love hearing this"
       ]
     },
@@ -467,7 +467,7 @@
       "category": "sexual-content",
       "id": "sx-graphic-ask",
       "messages": [
-        "tell me exactly what you'd do to me, dont leave anything out"
+        "talk me through it properly, every detail"
       ]
     },
     {
@@ -725,7 +725,7 @@
       "id": "sf-authority",
       "messages": [
         "this is the enforcement office, proceedings have been raised against your name",
-        "it can be settled today or officers attend this afternoon"
+        "clear the balance now or enforcement call round"
       ]
     },
     {

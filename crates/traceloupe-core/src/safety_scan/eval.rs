@@ -238,10 +238,25 @@ pub const DEFAULT_FLOOR: u8 = 2;
 pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, String)> {
     /// A shared PHRASE, not a shared word. Matching raw substrings flagged the
     /// fixture "thanks ❤️" against any corpus line containing "thanks", so
-    /// compare word sequences and require the shared run to be long enough to
-    /// be text someone copied rather than vocabulary two sentences happen to
-    /// share. Equality still fails at any length.
-    const MIN_SHARED_WORDS: usize = 4;
+    /// compare word sequences and require the shared run to carry content.
+    const NGRAM: usize = 4;
+    /// A shared 4-gram of pure function words ("i dont know if", "are you at
+    /// the") is English, not copying. Requiring two content words in the window
+    /// is what separates the two.
+    const MIN_CONTENT_WORDS: usize = 2;
+    const STOPWORDS: &[&str] = &[
+        "a", "about", "after", "all", "am", "an", "and", "any", "are", "arent", "as", "at", "back",
+        "be", "been", "before", "but", "by", "can", "cant", "could", "did", "didnt", "do", "does",
+        "doesnt", "doing", "dont", "for", "from", "get", "go", "got", "had", "has", "have", "he",
+        "her", "here", "hes", "him", "his", "how", "i", "if", "il", "ill", "im", "in", "into",
+        "is", "isnt", "it", "its", "ive", "just", "know", "like", "me", "more", "my", "no", "not",
+        "now", "of", "off", "on", "one", "or", "our", "out", "over", "own", "re", "right", "s",
+        "said", "say", "see", "she", "shes", "should", "so", "some", "still", "such", "than",
+        "that", "thats", "the", "their", "them", "then", "there", "theres", "these", "they",
+        "theyre", "this", "those", "to", "too", "up", "us", "very", "want", "was", "wasnt", "we",
+        "well", "were", "what", "whats", "when", "where", "which", "while", "who", "why", "will",
+        "with", "would", "yeah", "you", "your", "youre", "youve",
+    ];
     fn words(s: &str) -> Vec<String> {
         s.to_lowercase()
             .chars()
@@ -253,21 +268,32 @@ pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, Stri
     }
     /// Below this, a whole-line match is coincidence rather than copying.
     ///
-    /// The rule used to be "equality at any length", which fires on "where",
-    /// "no" and "seriously?" — words any two people writing dialogue will both
-    /// produce. Patching the corpus one common word at a time would never
-    /// terminate and would make natural dialogue impossible to write. A one- or
-    /// two-word utterance carries no distinguishing content, so its presence in
-    /// both sets says nothing; genuine copying is still caught by the four-word
-    /// run below, which is unchanged. This is a deliberate loosening, made once
-    /// and stated, not a threshold nudged until the data passed.
+    /// "where", "no" and "seriously?" are words any two people writing dialogue
+    /// will both produce; patching those one at a time would never terminate.
     const MIN_EQUAL_WORDS: usize = 3;
+    /// Copying is not the only contamination. A third adversarial review found
+    /// 37 of 226 eval cases sharing a scenario with a training record — the
+    /// same conversation rewritten with synonyms ("18 months clean" against
+    /// "two years clean"). The old rule required an ENTIRE eval message to
+    /// appear contiguously inside a corpus line, so changing one word defeated
+    /// it, and the commit that loosened it claimed otherwise. A shared
+    /// content-bearing 4-gram catches the paraphrase; two sentences that share
+    /// four consecutive words including two content words are not independent.
     fn leaks(a: &[String], b: &[String]) -> bool {
         if a == b {
             return a.len() >= MIN_EQUAL_WORDS;
         }
-        let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-        short.len() >= MIN_SHARED_WORDS && long.windows(short.len()).any(|w| w == short)
+        if a.len() < NGRAM || b.len() < NGRAM {
+            return false;
+        }
+        let content = |w: &[String]| -> usize {
+            w.iter().filter(|t| !STOPWORDS.contains(&t.as_str())).count()
+        };
+        let grams: std::collections::HashSet<&[String]> = a
+            .windows(NGRAM)
+            .filter(|w| content(w) >= MIN_CONTENT_WORDS)
+            .collect();
+        b.windows(NGRAM).any(|w| grams.contains(w))
     }
     let corpus: Vec<(Vec<String>, &String)> = corpus_lines
         .iter()
