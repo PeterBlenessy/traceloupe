@@ -677,7 +677,20 @@ validation. Checklist mirrors #459.
       normalisation — while mlx-lm requires transformers 5 and the converter
       pins transformers 4. This was done BEFORE generating a corpus precisely
       because a corpus cannot fix a tooling wall.
-- [ ] **Fine-tune** — **the ONLY remaining lever for relationship-harassment**,
+- [ ] **Corpus + classifier bake-off** (`docs/plans/safety-classifier-plan.md`).
+      The fine-tune was assumed to mean "LoRA the 4B we ship". That assumption
+      was not checked, and it should have been: the published comparisons put
+      small ENCODER classifiers (150-400M, built for sorting text rather than
+      generating it) at or above much larger generative models on supervised
+      classification once labelled data exists, at millisecond inference against
+      our 6.5 s/call. Since 6.5 s/call is the constraint the entire triage
+      architecture exists to work around, an encoder that wins does not improve a
+      number — it removes the reason for the census, the ranking, the budgets and
+      the postures. So: build the corpus, train a small specialist, and compare
+      both against the sealed set, with the 4B LoRA (pipeline already proven,
+      #511) as the fallback rather than the plan.
+- [ ] **Fine-tune the 4B** — the fallback if the bake-off favours it. Everything
+      cheaper is already ruled out for relationship-harassment,
       not merely the endgame. Everything cheaper has now been measured and ruled
       out for that category: more prototypes buy cost (#503), more ground truth
       makes the number honest but not better, richer context does not recover it
