@@ -20,6 +20,62 @@ use crate::analysis::Category;
 
 const CASES_JSON: &str = include_str!("../../fixtures/safety-scan/cases.json");
 
+/// The hand-written expansion of the eval set, one JSONL file per group.
+///
+/// `cases.json` had 14 coercive-control conversations and 13 harassment ones,
+/// which is far too few to compare two classifiers: exact binomial intervals on
+/// 13/14 and 12/14 overlap almost completely, and detecting the differences
+/// this project cares about needs on the order of 100 per category. Every
+/// comparison made before this expansion was reading differences smaller than
+/// the measurement error.
+///
+/// These are hand-written rather than generated, deliberately. The local model
+/// available for generation scores 3/8 on relationship-harassment with perfect
+/// context, so asking it to invent good examples of that behaviour — and then
+/// grading the result — was circular.
+const EVAL_JSONL: &[(&str, &str)] = &[
+    (
+        "coercive-control",
+        include_str!("../../fixtures/safety-scan/eval/coercive-control.jsonl"),
+    ),
+    (
+        "relationship-harassment",
+        include_str!("../../fixtures/safety-scan/eval/relationship-harassment.jsonl"),
+    ),
+    (
+        "threat-violence",
+        include_str!("../../fixtures/safety-scan/eval/threat-violence.jsonl"),
+    ),
+    (
+        "self-harm",
+        include_str!("../../fixtures/safety-scan/eval/self-harm.jsonl"),
+    ),
+    (
+        "other-categories",
+        include_str!("../../fixtures/safety-scan/eval/other-categories.jsonl"),
+    ),
+    (
+        "negatives",
+        include_str!("../../fixtures/safety-scan/eval/negatives.jsonl"),
+    ),
+];
+
+/// Every eval case: the original `cases.json` plus the hand-written expansion.
+///
+/// This is what a measurement should score against. `load_fixtures()` remains
+/// the narrower sealed set for the guards that were written against it.
+pub fn load_all_eval_cases() -> Vec<Case> {
+    let mut out = load_fixtures().cases;
+    for (group, body) in EVAL_JSONL {
+        for line in body.lines().filter(|l| !l.trim().is_empty()) {
+            let case: Case =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("eval/{group}.jsonl: {e}"));
+            out.push(case);
+        }
+    }
+    out
+}
+
 #[derive(Debug, Deserialize)]
 pub struct Fixtures {
     pub cases: Vec<Case>,
@@ -138,7 +194,7 @@ pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, Stri
         .map(|l| (words(l), l))
         .filter(|(w, _)| !w.is_empty())
         .collect();
-    for case in &load_fixtures().cases {
+    for case in &load_all_eval_cases() {
         for m in &case.messages {
             let f = words(&m.text);
             if f.is_empty() {
@@ -2237,7 +2293,11 @@ mod tests {
             Category::HarassmentBullying,
             Category::ThreatViolence,
         ];
-        let fixtures = load_fixtures();
+        // Scored against the FULL eval set (cases.json + the hand-written
+        // expansion), because the original 14 coercive-control conversations
+        // could not resolve the differences this test exists to report.
+        let cases_all = load_all_eval_cases();
+        let fixtures = Fixtures { cases: cases_all };
         println!("\n=== focused stage, whole conversation, no census gate ===");
         println!("category                 hit   n   missed cases");
         for cat in targets {

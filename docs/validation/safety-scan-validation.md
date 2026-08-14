@@ -1345,7 +1345,7 @@ on the scores we have:
 | incumbent, harassment | 7 / 13 | 25% – 81% |
 
 The incumbent's and challenger's intervals overlap almost completely. Detecting
-a 15-point difference at conventional power needs **~100 conversations per
+a 15-point difference at conventional power needs **~100 conversations per <!-- not-a-backup-count: eval-set sizing, not anyone's backup -->
 model per category**; we have 14 and 13. The set is roughly seven times too
 small for the comparison being asked of it.
 
