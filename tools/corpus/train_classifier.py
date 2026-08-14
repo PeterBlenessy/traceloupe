@@ -161,6 +161,18 @@ def main() -> int:
     print("positives per category:", dict(zip(CATEGORIES, counts.astype(int))))
     lossf = torch.nn.BCEWithLogitsLoss(pos_weight=pos_w)
 
+    # Keep the BEST epoch, not the last one.
+    #
+    # Measured 2026-08-14 on 1,322 conversations: validation loss bottoms at
+    # epoch 2 (0.75) and then climbs — 1.24 at epoch 3, 1.40 at epoch 4 — while
+    # training loss falls to 0.08. Every result reported before this was taken
+    # from a model trained 4-5 epochs, i.e. well past the point where it stopped
+    # generalising and started memorising. That probably also inflated the
+    # run-to-run variance, since behaviour past the optimum is unstable.
+    import copy
+    best_val = float("inf")
+    best_state = None
+    best_epoch = 0
     for ep in range(args.epochs):
         model.train()
         total = 0.0
@@ -181,7 +193,16 @@ def main() -> int:
                 b = {k: v.to(device) for k, v in b.items()}
                 o = model(input_ids=b["input_ids"], attention_mask=b["attention_mask"])
                 vl += lossf(o.logits, b["labels"]).item()
-        print(f"epoch {ep+1}: train {total/max(len(dl),1):.4f}  val {vl/max(len(val_dl),1):.4f}")
+        vloss = vl / max(len(val_dl), 1)
+        print(f"epoch {ep+1}: train {total/max(len(dl),1):.4f}  val {vloss:.4f}")
+        if vloss < best_val:
+            best_val, best_epoch = vloss, ep + 1
+            best_state = copy.deepcopy(model.state_dict())
+
+    if best_state is not None and best_epoch != args.epochs:
+        model.load_state_dict(best_state)
+        print(f"\nrestored epoch {best_epoch} (val {best_val:.4f}) — later epochs overfit")
+    model.eval()
 
     # --- score against the sealed set, in the incumbent's terms ---------------
     sealed = load_sealed()
