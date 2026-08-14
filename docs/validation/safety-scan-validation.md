@@ -1419,3 +1419,73 @@ tracking devices, threats about children.
 
 That is exactly what makes coercive control hard to see in life, and it means
 the residual 12% is the *harder* 12% rather than a random tail.
+
+### 2026-08-14 — the harassment gap is a teaching problem, not a capacity problem
+
+With an eval set that can measure things, the bake-off finally answers — and
+the answer overturns three conclusions reached earlier the same day on the
+broken 14-case set.
+
+A 149M encoder (ModernBERT-base) trained on conversation windows, scored
+against the 226-case eval set, against the shipped 4B classifier measured under
+its most favourable conditions (whole conversation, no census gate, no budget):
+
+| trained on | harassment | coercive-control | threats |
+|---|---|---|---|
+| 108 hand-written | **73 / 78 (94%)** | 9 / 89 | 0 / 20 |
+| 1,500 machine-written | 56 / 78 (72%) | 69 / 89 (78%) | 6 / 20 |
+| **the shipped 4B** | **17 / 78 (22%)** | 78 / 89 (88%) | 16 / 20 |
+
+The lopsided rows are expected and not a defect: the hand-written set is 60
+harassment conversations, 28 coercive-control and no threats at all, so it
+learns what it was shown. The machine-written set is spread across nine
+categories, so it is mediocre everywhere and good nowhere.
+
+**Two independently produced corpora both beat the shipped model on harassment
+by three to four times.** That is the finding. The category the product fails
+at is not beyond a small model — nobody ever taught the current one what an ex
+who will not stop turning up looks like.
+
+#### This defuses the style objection, mostly
+
+The obvious complaint about the 94% is that the training and eval conversations
+were written by the same author in the same session from the same mode list:
+the word-overlap check guarantees no shared text but cannot see shared style.
+
+Two things argue against it. The eval set contains five harassment cases written
+months earlier in a different session and register, absent from all training
+data — **the model missed none of them**. And the 1,500 machine-written
+conversations came from a different model, different prompts and a different
+register entirely, and still reach 72%. If the hand-written result were mostly
+style-matching, the machine corpus should not have come close.
+
+The trainer now splits every result by who wrote the test case, so no future run
+can report a headline without showing how it did on text its author did not
+write.
+
+#### Three retractions
+
+1. **"The challenger loses."** It does not. That was measured on 14
+   coercive-control conversations whose confidence interval spanned 66–100%.
+2. **"The machine-generated corpus is near-worthless."** It produces 72% on the
+   category the product fails at. The objection — that a model scoring 3/8 on
+   relationship-harassment cannot write good examples of it — was reasonable and
+   is wrong. Generation and recognition are different skills.
+3. **"A fine-tune of the 4B is the route."** Possibly not. A 149M model learns
+   this from a few hundred examples, and its inference is milliseconds against
+   6.5 s.
+
+All three errors came from the same source: an eval set too small and too easy
+to see the difference. None were visible until it was fixed.
+
+#### What this does not yet establish
+
+Every conversation in every corpus here was written by a language model, mine
+included. Real phone messages are messier — more elliptical, more in-jokes, more
+context outside the thread. The 94% and 72% are against machine-written test
+text and should be read as "this behaviour is learnable at this scale", not as a
+production accuracy estimate.
+
+Nor is the encoder a shipping decision yet: it needs the other seven categories
+(threats at 0-6/20 is not deployable), a runtime in the Rust app, and a
+per-category threshold pass. What it has earned is a place in the plan.
