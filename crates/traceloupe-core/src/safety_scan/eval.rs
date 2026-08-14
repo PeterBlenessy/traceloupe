@@ -287,7 +287,9 @@ pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, Stri
             return false;
         }
         let content = |w: &[String]| -> usize {
-            w.iter().filter(|t| !STOPWORDS.contains(&t.as_str())).count()
+            w.iter()
+                .filter(|t| !STOPWORDS.contains(&t.as_str()))
+                .count()
         };
         let grams: std::collections::HashSet<&[String]> = a
             .windows(NGRAM)
