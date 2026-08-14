@@ -1,0 +1,231 @@
+{
+  "_note": [
+    "Modes to cover, per category. The point of this file is that the mode list",
+    "comes from OUTSIDE one person's imagination: #492 measured that covering",
+    "missing modes is what improves detection, and that the scam corpus was",
+    "missing authority-threat and verify-at-a-link precisely because the list",
+    "was invented unaided.",
+    "",
+    "coercive-control and harassment-bullying carry the most modes on purpose —",
+    "they are the two categories the system handles worst, and the two with no",
+    "public conversational corpus anywhere. Their modes are taken from the NSW",
+    "BOCSAR / Crime Science text-mining study of 406,196 police narratives",
+    "(Kim & Karystianis 2024), which is a frequency-ordered account of what",
+    "these behaviours actually look like rather than what we imagine.",
+    "",
+    "It is a COMPLEMENT, not a definition: police narratives record observable",
+    "acts, so gaslighting and the silent treatment do not appear in the study",
+    "and are added here from our own fixtures."
+  ],
+  "categories": {
+    "coercive-control": {
+      "weight": 0.22,
+      "modes": [
+        "tells them to quit their job or not to work",
+        "controls all the money; they must account for spending",
+        "gives an allowance and demands receipts",
+        "stops them seeing friends",
+        "stops them seeing their family",
+        "stops them seeing their children, or threatens to take the children",
+        "demands their phone passcode or goes through their phone",
+        "demands location sharing and challenges any gap",
+        "demands to know who they were with, hour by hour",
+        "puts a tracker in their bag or car",
+        "installs cameras at home and says so",
+        "records them without consent and threatens to play it to others",
+        "threatens to expose a secret to family or employer",
+        "keeps intimate images and uses them as leverage",
+        "locks them out of the house or changes the locks",
+        "stops them leaving a room or the house",
+        "controls what they wear",
+        "reframes control as care or protection",
+        "denies things that happened; says they are imagining it",
+        "silent treatment as punishment",
+        "threatens that leaving would ruin them"
+      ]
+    },
+    "harassment-bullying": {
+      "weight": 0.22,
+      "modes": [
+        "waits outside their work or home",
+        "drives past repeatedly and mentions what they saw",
+        "turns up uninvited and will not leave",
+        "sends gifts after being asked to stop",
+        "watches and comments on their social media",
+        "contacts their friends or family to reach them",
+        "declares fixation after being rejected",
+        "messages from a new number after being blocked",
+        "reaches them through work email or another channel",
+        "sheer volume of unanswered messages",
+        "sustained insults about appearance",
+        "a group piling on one person",
+        "humiliation, threatening to share something embarrassing",
+        "spreading rumours or threatening their reputation",
+        "mocking grief or a hard time",
+        "exclusion, making sure they know they are shut out"
+      ]
+    },
+    "threat-violence": {
+      "weight": 0.09,
+      "modes": [
+        "explicit threat to hurt or kill",
+        "veiled threat that something will happen to them",
+        "threat to damage their property",
+        "threat to harm a pet",
+        "threat to harm someone they love",
+        "intimidation with an object or weapon",
+        "showing up angry and saying what they will do"
+      ]
+    },
+    "sexual-content": {
+      "weight": 0.09,
+      "modes": [
+        "unwanted explicit messages after being asked to stop",
+        "pressure for images",
+        "sharing or threatening to share intimate images",
+        "explicit content sent to someone who did not ask",
+        "persistent sexual comments a colleague did not invite"
+      ]
+    },
+    "grooming-exploitation": {
+      "weight": 0.09,
+      "modes": [
+        "adult building secrecy with a minor",
+        "flattery and special-relationship framing",
+        "moving the conversation to a private app",
+        "asking about parents' whereabouts",
+        "requesting images or a meeting",
+        "gifts or money in exchange for secrecy",
+        "testing boundaries with escalating questions"
+      ]
+    },
+    "self-harm": {
+      "weight": 0.08,
+      "modes": [
+        "stating an intention to self-harm",
+        "goodbye messages",
+        "hopelessness and burden framing",
+        "asking someone to keep it secret",
+        "disclosure of a past attempt",
+        "someone else threatening self-harm to control a partner"
+      ]
+    },
+    "hate-identity": {
+      "weight": 0.07,
+      "modes": [
+        "slurs directed at a person",
+        "dehumanising a group",
+        "telling someone they do not belong here",
+        "coded or euphemistic hostility about a group",
+        "religious or disability-based abuse"
+      ]
+    },
+    "scam-fraud": {
+      "weight": 0.07,
+      "modes": [
+        "bank impersonation asking for a code",
+        "authority threat about a debt or warrant",
+        "verify-at-a-link urgency",
+        "gift cards or vouchers as the only payment",
+        "romance, stranded abroad, needs money",
+        "crypto or investment with a closing window",
+        "family impersonation from a new number",
+        "delivery fee outstanding",
+        "invoice or bank-details change",
+        "prize with a release fee",
+        "refund that needs remote access to your machine"
+      ]
+    },
+    "drugs-illegal": {
+      "weight": 0.07,
+      "modes": [
+        "arranging a sale in coded language",
+        "supplying to someone clearly underage",
+        "pressuring a reluctant person to take something",
+        "selling prescription medication",
+        "arranging a handover location"
+      ]
+    }
+  },
+  "negatives": {
+    "_note": [
+      "The hard part, and where every false alarm this project has measured",
+      "lives. Each of these deliberately shares surface features with a harmful",
+      "mode above — the words look similar, the intent is not. A corpus of only",
+      "positives teaches a model to flag ordinary care."
+    ],
+    "situations": [
+      "a parent setting a curfew for a teenager who pushes back",
+      "a worried friend checking in repeatedly after bad news",
+      "a couple who both willingly share locations, one asking where the other is",
+      "partners agreeing a budget together, one asking about a big purchase",
+      "close friends insulting each other affectionately",
+      "someone quoting abuse they received, to a friend, for support",
+      "song lyrics or a film quote containing violent words",
+      "a clinical or supportive discussion of self-harm between professionals",
+      "a survivor describing what an ex did to them",
+      "a legitimate bank fraud alert with no request for codes",
+      "a real delivery notification",
+      "colleagues arguing heatedly about work",
+      "a break-up conversation that is sad but not controlling",
+      "someone declining a date politely and being accepted",
+      "a parent asking a child's whereabouts for safety at night",
+      "sports or gaming trash talk between friends",
+      "a doctor discussing prescription medication with a patient",
+      "someone organising a surprise party, being secretive innocently",
+      "a landlord legitimately changing locks after a tenancy ended",
+      "a journalist quoting a threat in a news report"
+    ]
+  },
+  "variation": {
+    "_note": [
+      "Persona and context seeding measurably raises diversity; repeating one",
+      "prompt collapses a corpus into a single voice. These are combined at",
+      "random per example so no two generations share a full configuration."
+    ],
+    "relationship": [
+      "married twelve years, two children",
+      "living together two years, no children",
+      "dating six months",
+      "separated three months, still in contact",
+      "divorced, sharing custody",
+      "ex-partner they have blocked once already",
+      "a couple in their early twenties",
+      "a couple in their sixties",
+      "same-sex couple, together five years",
+      "long-distance, met online",
+      "engaged, planning a wedding",
+      "flatmates who briefly dated"
+    ],
+    "intensity": [
+      "very subtle, would look normal to an outsider",
+      "unmistakable but calm in tone",
+      "escalating across the exchange",
+      "angry and explicit",
+      "affectionate on the surface, controlling underneath"
+    ],
+    "response": [
+      "the other person pushes back firmly",
+      "the other person placates and apologises",
+      "the other person does not reply at all",
+      "the other person tries to change the subject",
+      "the other person agrees, wearily",
+      "the other person asks them to stop"
+    ],
+    "register": [
+      "lowercase, no punctuation, txt-speak",
+      "normal punctuation, full sentences",
+      "some emoji",
+      "a few typos and autocorrect errors",
+      "very short messages, several in a row",
+      "one long message and a short reply"
+    ],
+    "locale": [
+      "British English",
+      "Irish English",
+      "Australian English",
+      "American English",
+      "Scottish English"
+    ]
+  }
+}
