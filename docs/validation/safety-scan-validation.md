@@ -1324,3 +1324,49 @@ mode-balanced sampling added in #514, and the classifier will be retrained once
 on the full ~3,000. **If the gap does not close substantially, the encoder is
 finished and the 4B LoRA (pipeline proven, #511) is the route.** The in-domain
 63% is the number to watch — if that does not move, more data is not the answer.
+
+#### The bake-off cannot be settled by this eval set — and neither could the last one
+
+Three training runs differing ONLY in corpus size scored 12, 6 and 8 of 14 on
+coercive-control. More data cannot make a model worse at a task, so that spread
+is run-to-run randomness, not signal — and every single-run comparison in this
+campaign, including "the challenger loses" reported an hour earlier, was reading
+differences smaller than the noise.
+
+Worse, the noise is not the only problem. **The sealed set is too small to
+resolve the question even with perfect measurement.** Exact binomial intervals
+on the scores we have:
+
+| | score | true value plausibly |
+|---|---|---|
+| incumbent, coercive-control | 13 / 14 | 66% – 100% |
+| challenger, best run | 12 / 14 | 57% – 98% |
+| challenger, worst run | 6 / 14 | 18% – 71% |
+| incumbent, harassment | 7 / 13 | 25% – 81% |
+
+The incumbent's and challenger's intervals overlap almost completely. Detecting
+a 15-point difference at conventional power needs **~100 conversations per
+model per category**; we have 14 and 13. The set is roughly seven times too
+small for the comparison being asked of it.
+
+**This reframes the whole plan. The bottleneck is EVALUATION, not training
+data.** Generating more training conversations cannot fix an instrument that
+cannot see the difference. Two consequences:
+
+1. **Expanding the sealed eval set is now the highest-value work**, because it
+   gates every future comparison — the classifier bake-off, the fine-tune, and
+   any threshold change. Until it exists, only very large differences are
+   detectable.
+2. **The development signal moves to the held-out slice of the generated
+   corpus** (~99 positives against 14), which is ten times steadier. The sealed
+   set remains the arbiter of whether a model transfers to real writing at all,
+   but it can no longer be asked to rank two models a few cases apart.
+
+A caution for reading the rest of this document: the incumbent's per-category
+figures (13/14, 7/13, 4/5) are DETERMINISTIC — temperature zero, so repeated
+runs agree — and are not affected by the run-to-run variance above. But their
+sampling intervals are just as wide, so they should be read as "roughly
+two-thirds to nearly all" rather than as precise scores. The relative ordering
+this campaign established (coercive-control recovered by context,
+relationship-harassment not) rests on gaps far larger than these intervals —
+13/14 against 3/8 — and survives. The fine-grained comparisons do not.
