@@ -795,9 +795,8 @@ mod tests {
             }
             *seen.entry(key).or_default() += 1;
         }
-        let mut repeats: Vec<(String, usize)> =
-            seen.into_iter().filter(|(_, n)| *n > 1).collect();
-        repeats.sort_by(|a, b| b.1.cmp(&a.1));
+        let mut repeats: Vec<(String, usize)> = seen.into_iter().filter(|(_, n)| *n > 1).collect();
+        repeats.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
         assert!(
             repeats.is_empty(),
             "{} message texts appear more than once — a model learns the repetition, \

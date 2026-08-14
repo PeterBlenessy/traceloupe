@@ -1390,7 +1390,7 @@ but because nothing had shown it what harassment looks like. That made the
 training corpus the deliverable, and the corpus is where the next three failures
 happened.
 
-**Machine generation could not produce it.** 1,500 conversations were generated;
+**Machine generation could not produce it.** 1,500 conversations were generated; <!-- not-a-backup-count: synthetic corpus, no real backup involved -->
 reading them showed 80 of 84 grooming examples with no minor signal at all and
 66 of 85 threat examples with no threat vocabulary. A model that cannot reliably
 classify these texts also cannot reliably write them, which should have been
