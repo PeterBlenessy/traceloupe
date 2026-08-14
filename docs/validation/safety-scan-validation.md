@@ -1370,3 +1370,52 @@ two-thirds to nearly all" rather than as precise scores. The relative ordering
 this campaign established (coercive-control recovered by context,
 relationship-harassment not) rests on gaps far larger than these intervals —
 13/14 against 3/8 — and survives. The fine-grained comparisons do not.
+
+### 2026-08-14 — the first trustworthy baseline, and it is worse than we thought
+
+The eval set now carries 226 hand-written conversations on top of `cases.json`,
+so `focused_stage_on_pattern_categories` was re-run against 89 coercive-control
+conversations instead of 14 and 78 harassment ones instead of 13. This is the
+first measurement in this campaign with a sample large enough to trust.
+
+| category | old set | expanded set |
+|---|---|---|
+| coercive-control | 13 / 14 (93%) | **78 / 89 (88%)** |
+| harassment-bullying | 7 / 13 (54%) | **17 / 78 (22%)** |
+| threat-violence *(control)* | 4 / 5 (80%) | **16 / 20 (80%)** |
+
+Coercive-control and the control category held, which is a useful check on the
+old numbers: they were imprecise, not wrong.
+
+**Harassment did not hold. It fell from 54% to 22%, and that is the real
+number.** The old thirteen cases were almost all content-moderation shaped —
+insults, a pile-on, appearance abuse — which the model catches. The 65 added
+cases are the relationship/stalking half: waiting outside work, driving past,
+turning up, contacting family and employers, a new number after every block.
+Those it misses almost completely.
+
+**So the product misses roughly four in five stalking-type harassment
+conversations, and did not know it**, because the eval set was both too small
+to be precise and too easy to be representative. That is the more serious of
+the two failures: an unrepresentative set does not merely blur a number, it
+reports the wrong one confidently.
+
+This confirms #504's structural finding on a proper sample. That result — 3/8
+with perfect context — is now 17/78, the same conclusion with an order of
+magnitude more evidence: **relationship-harassment is not recoverable by giving
+the current model more context.** Everything cheaper than a fine-tune has been
+measured and ruled out for this category, and the case is now quantitative
+rather than suggestive.
+
+#### What the coercive-control misses have in common
+
+11 of 89, and they are not random. The model misses control that reads as
+ordinary domestic negotiation — being told to hand in notice (cc-gt-employment),
+cancelled driving lessons (cc-e-058 family), a code on the boiler (cc-e-057),
+vetting clothing purchases (cc-e-017), "I never said that" denial (cc-e-019),
+real-time bank-app monitoring (cc-e-067), deferring someone's college course
+(cc-e-063). It catches control that announces itself: lock-outs, confinement,
+tracking devices, threats about children.
+
+That is exactly what makes coercive control hard to see in life, and it means
+the residual 12% is the *harder* 12% rather than a random tail.
