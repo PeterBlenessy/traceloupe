@@ -1381,3 +1381,63 @@ project learned in §10.6 was about empty output, which is easy to notice. This
 was the harder version: a harness producing *something entirely reasonable*.
 The tell was not the value but the disagreement, which is only available if
 something else is measuring the same thing.
+
+## The corpus that had to be built by hand, and the script that broke it
+
+The classifier gap turned out to be a teaching problem, not a capacity limit —
+harassment was caught in 17 of 78 cases not because the model could not learn it
+but because nothing had shown it what harassment looks like. That made the
+training corpus the deliverable, and the corpus is where the next three failures
+happened.
+
+**Machine generation could not produce it.** 1,500 conversations were generated;
+reading them showed 80 of 84 grooming examples with no minor signal at all and
+66 of 85 threat examples with no threat vocabulary. A model that cannot reliably
+classify these texts also cannot reliably write them, which should have been
+predictable from the fact that its classification was the problem being solved.
+The corpus is hand-written for that reason.
+
+**Hand-written did not mean sound.** An independent review found that 58
+positives ended with one of twelve shared closing lines, that the word "love"
+appeared in 28 positives and no negatives, and that every conversation of five
+or more messages was a positive. Each is a rule a model will learn *instead of*
+the behaviour, and each was invisible from inside the writing — they were
+artefacts of how the author worked, not of any decision.
+
+**Then the fix did more damage than the defect.** A script written to clear
+those artefacts replaced arbitrary messages with love-bomb closers wherever it
+thought a leak existed. It corrupted thirteen records: a child's stated age
+deleted from the only drugs-to-a-minor example, a victim's refusal replaced with
+the abuser's apology, negatives given abuser text, roles inverted. This was the
+same class of bug the first review had already found, committed four more times
+without verification.
+
+Three rules came out of it.
+
+**Do not repair a corpus with a script that rewrites message text.** The whole
+value of hand-written data is that a human chose each line for its position in
+its conversation; a script cannot know that and will silently destroy it. The
+recovery was to revert to the last clean commit and redo the work by hand, not
+to patch the corrupted records — patching preserves whatever the script did that
+nobody noticed.
+
+**Shortcuts need automated guards, because reading cannot find them.** Three now
+run in CI: no message text may appear twice across the corpus (this is what
+caught the twelve closers), no training text may overlap the sealed eval set,
+and every `.jsonl` on disk must be in the list the guards check — a file added
+to the directory but not the list was previously unguarded, which is how the
+hard negatives went unchecked. A guard that does not cover its own directory is
+not a guard.
+
+**Label rules belong in writing before the data, not after.** Sextortion had
+been labelled four different ways across five records because the boundary
+between `sexual-content`, `coercive-control` and `threat-violence` had never
+been decided. `docs/validation/labelling-rules.md` now fixes the nine category
+boundaries, the multi-label cases, and one rule that is easy to miss: the
+speaker tag must not predict the category. The at-risk person in `self-harm` was
+tagged `them` in 20 of 21 records, which is a free shortcut for any model that
+reads the tags.
+
+No number from this corpus is worth reporting until an independent reviewer has
+read every record. Two reviews returned NOT DEPLOYABLE; the numbers measured in
+between were measured on data that could not support them.
