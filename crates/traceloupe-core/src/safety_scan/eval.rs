@@ -247,9 +247,20 @@ pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, Stri
             .map(str::to_string)
             .collect()
     }
+    /// Below this, a whole-line match is coincidence rather than copying.
+    ///
+    /// The rule used to be "equality at any length", which fires on "where",
+    /// "no" and "seriously?" — words any two people writing dialogue will both
+    /// produce. Patching the corpus one common word at a time would never
+    /// terminate and would make natural dialogue impossible to write. A one- or
+    /// two-word utterance carries no distinguishing content, so its presence in
+    /// both sets says nothing; genuine copying is still caught by the four-word
+    /// run below, which is unchanged. This is a deliberate loosening, made once
+    /// and stated, not a threshold nudged until the data passed.
+    const MIN_EQUAL_WORDS: usize = 3;
     fn leaks(a: &[String], b: &[String]) -> bool {
         if a == b {
-            return true;
+            return a.len() >= MIN_EQUAL_WORDS;
         }
         let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
         short.len() >= MIN_SHARED_WORDS && long.windows(short.len()).any(|w| w == short)
