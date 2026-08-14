@@ -91,7 +91,20 @@ const TRAIN_JSONL: &[(&str, &str)] = &[
         "varied-structure",
         include_str!("../../fixtures/safety-scan/train/varied-structure.jsonl"),
     ),
+    (
+        "negatives-hard",
+        include_str!("../../fixtures/safety-scan/train/negatives-hard.jsonl"),
+    ),
 ];
+
+/// The training-corpus file names the guard checks, so a file added to the
+/// directory but not to the list fails loudly instead of going unchecked.
+pub fn training_corpus_files() -> Vec<String> {
+    TRAIN_JSONL
+        .iter()
+        .map(|(name, _)| format!("{name}.jsonl"))
+        .collect()
+}
 
 /// Every message in the training corpus, for the contamination guard.
 pub fn training_corpus_lines() -> Vec<String> {

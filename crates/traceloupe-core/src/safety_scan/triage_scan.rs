@@ -786,6 +786,28 @@ mod tests {
             "training corpus looks empty: {} lines",
             lines.len()
         );
+
+        // A guard that only checks the files someone remembered to list is a
+        // guard that silently shrinks. negatives-hard.jsonl was added to the
+        // directory and not to the constant within minutes of the guard being
+        // written, so the guard now checks that too.
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/safety-scan/train");
+        let on_disk: std::collections::BTreeSet<String> = std::fs::read_dir(&dir)
+            .expect("training corpus directory")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".jsonl"))
+            .collect();
+        let listed: std::collections::BTreeSet<String> =
+            crate::safety_scan::eval::training_corpus_files()
+                .into_iter()
+                .collect();
+        assert_eq!(
+            on_disk, listed,
+            "training files on disk do not match the ones the guard checks — an unlisted \
+             file is an unguarded file"
+        );
         if let Some((eval, train)) = crate::safety_scan::eval::overlaps_sealed_fixtures(&lines) {
             panic!(
                 "training corpus overlaps the eval set:\n  eval:     {eval:?}\n  training: {train:?}\n\
