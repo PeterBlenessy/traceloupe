@@ -1538,7 +1538,7 @@ The practical build, given the measurements:
 The balancer was still worth building — deliberate proportions beat accidental
 ones, and it surfaced that every category is capped by the thinnest one
 (hate-identity, 65), which is more actionable than any total. But it did not
-help: balanced (873 conversations) scores harassment 53/78 and coercive-control
+help: balanced (873 conversations) scores harassment 53/78 and coercive-control <!-- not-a-backup-count: training corpus size -->
 68/89, against machine-written alone (1,500) at 56/78 and 69/89. Within noise,
 on less data.
 
