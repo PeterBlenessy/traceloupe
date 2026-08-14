@@ -115,13 +115,15 @@ def main() -> int:
     ap.add_argument("--lr", type=float, default=3e-5)
     ap.add_argument("--threshold", type=float, default=0.5)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--seed", type=int, default=0, help="seeds the classifier head init AND the split")
     args = ap.parse_args()
+    torch.manual_seed(args.seed)
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"device: {device}")
 
     rows = load_generated(Path(args.data))
-    random.seed(0)
+    random.seed(args.seed)
     random.shuffle(rows)
     cut = max(1, int(len(rows) * 0.9))
     train_rows, val_rows = rows[:cut], rows[cut:]
@@ -203,6 +205,27 @@ def main() -> int:
         # and the table above says nothing about the architecture.
         print(f"\nhighest score per case: min {min(probs_seen):.3f} "
               f"median {sorted(probs_seen)[len(probs_seen)//2]:.3f} max {max(probs_seen):.3f}")
+    # The sealed set has 14 coercive-control cases and 13 harassment ones, so a
+    # single run's score there moves by several cases on random initialisation
+    # alone — measured: 12, 6 and 8 of 14 across three runs that differed only
+    # in training size. The held-out slice of the generated corpus is ~10x
+    # larger and is the development signal; the sealed set is the arbiter, and
+    # needs several seeds before any difference in it means anything.
+    vhit = vtot = 0
+    with torch.no_grad():
+        for text, y in val_rows:
+            if max(y) == 0:
+                continue
+            enc = tok(text, truncation=True, max_length=512, padding="max_length", return_tensors="pt")
+            p2 = torch.sigmoid(model(**{k: v.to(device) for k, v in enc.items()}).logits)[0].cpu().numpy()
+            for i in range(len(CATEGORIES)):
+                if y[i] > 0:
+                    vtot += 1
+                    if p2[i] >= args.threshold:
+                        vhit += 1
+    print(f"\nheld-out generated data (the steadier signal): {vhit}/{vtot} "
+          f"= {100*vhit/max(vtot,1):.0f}%")
+
     print("\nincumbent (4B, focused stage, full context, no time limit):")
     print("  coercive-control        13 / 14")
     print("  harassment-bullying      7 / 13")

@@ -677,6 +677,19 @@ validation. Checklist mirrors #459.
       normalisation — while mlx-lm requires transformers 5 and the converter
       pins transformers 4. This was done BEFORE generating a corpus precisely
       because a corpus cannot fix a tooling wall.
+- [x] **A trustworthy baseline** (2026-08-14). The eval set was 14
+      coercive-control conversations and 13 harassment ones — too small to
+      resolve the differences being asked of it (exact binomial intervals on
+      13/14 and 12/14 overlap almost entirely) and, worse, unrepresentative.
+      226 hand-written conversations later, the incumbent measures
+      coercive-control **78/89 (88%)**, harassment **17/78 (22%)**, threats
+      **16/20** as a control. Coercive-control and the control held; harassment
+      fell from an apparent 54% because the old cases were nearly all insults,
+      which it catches, while the stalking half — waiting outside work, turning
+      up, contacting family, a new number after each block — it misses almost
+      completely. **The product misses about four in five stalking-type
+      harassment conversations and did not know it.** An unrepresentative eval
+      set does not blur a number, it reports the wrong one confidently.
 - [ ] **Corpus + classifier bake-off** (`docs/plans/safety-classifier-plan.md`).
       The fine-tune was assumed to mean "LoRA the 4B we ship". That assumption
       was not checked, and it should have been: the published comparisons put

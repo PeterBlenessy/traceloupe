@@ -1269,3 +1269,153 @@ more cheaply than the threshold already does.
 The sweep stays in the harness. It is the tool for asking this question, and the
 next person to have the same good idea should be able to re-run it in a minute
 rather than re-deriving it.
+
+### 2026-08-14 — the small-classifier challenge, first round: it loses
+
+`docs/plans/safety-classifier-plan.md` argued for testing a small encoder
+classifier before fine-tuning the 4B, on the grounds that published comparisons
+put encoders at or above much larger models on supervised classification, and
+that our 6.5 s/call is the constraint the whole triage architecture exists to
+work around. Round one is done and the challenger is behind.
+
+ModernBERT-base (149M), trained on 1,500 generated conversations (1,350 train /
+150 held out), 4 epochs, scored against the sealed fixtures it has never seen:
+
+| category | challenger | incumbent (4B, full context) |
+|---|---|---|
+| coercive-control | 8 / 14 | **13 / 14** |
+| harassment-bullying | 4 / 13 | **7 / 13** |
+| threat-violence *(control)* | 0 / 5 | **4 / 5** |
+| scam-fraud | 5 / 5 | — |
+| hate-identity | 4 / 5 | — |
+| sexual-content | 3 / 5 | — |
+| self-harm | 2 / 5 | — |
+| drugs-illegal | 2 / 5 | — |
+| grooming-exploitation | 0 / 5 | — |
+
+Not a collapse — scores span 0.06 to 0.999, so it is predicting, just wrongly.
+
+**The shape of the failure is the same axis this project keeps meeting.** It
+does well where the harm is in the WORDS (scam 5/5, hate 4/5) and badly where
+the harm is in the SITUATION (threats 0/5, grooming 0/5, coercive-control 8/14).
+That is the identical split that defeated the census embeddings (#503): surface
+text carries lexical harm and not relational harm.
+
+#### Ruling out the obvious confound
+
+The model trains on machine-written conversations and is tested on hand-written
+ones, so a reasonable objection is that it learned "generated text" rather than
+the behaviour. Tested against **held-out conversations of exactly the kind it
+trained on**, it catches **63%** (62 of 99) — coercive-control 14/26, threats
+6/12. So the shortfall is not mainly transfer: it is weak on home turf too, and
+loses further crossing to real writing.
+
+#### What this does and does not settle
+
+It does not yet settle the architecture, because **the corpus is half the size
+the plan specified** (1,500 against 2,000–3,000) and came from a single
+generator. ~150 positives per category is thin for a nine-way multi-label task,
+and the literature puts useful supervised classification nearer 500–1,000 per
+class. Declaring the approach dead on an under-powered run would be the mistake
+this project has spent a fortnight learning not to make.
+
+So: a second 1,500-conversation run is under way, this time with the
+mode-balanced sampling added in #514, and the classifier will be retrained once
+on the full ~3,000. **If the gap does not close substantially, the encoder is
+finished and the 4B LoRA (pipeline proven, #511) is the route.** The in-domain
+63% is the number to watch — if that does not move, more data is not the answer.
+
+#### The bake-off cannot be settled by this eval set — and neither could the last one
+
+Three training runs differing ONLY in corpus size scored 12, 6 and 8 of 14 on
+coercive-control. More data cannot make a model worse at a task, so that spread
+is run-to-run randomness, not signal — and every single-run comparison in this
+campaign, including "the challenger loses" reported an hour earlier, was reading
+differences smaller than the noise.
+
+Worse, the noise is not the only problem. **The sealed set is too small to
+resolve the question even with perfect measurement.** Exact binomial intervals
+on the scores we have:
+
+| | score | true value plausibly |
+|---|---|---|
+| incumbent, coercive-control | 13 / 14 | 66% – 100% |
+| challenger, best run | 12 / 14 | 57% – 98% |
+| challenger, worst run | 6 / 14 | 18% – 71% |
+| incumbent, harassment | 7 / 13 | 25% – 81% |
+
+The incumbent's and challenger's intervals overlap almost completely. Detecting
+a 15-point difference at conventional power needs **~100 conversations per <!-- not-a-backup-count: eval-set sizing, not anyone's backup -->
+model per category**; we have 14 and 13. The set is roughly seven times too
+small for the comparison being asked of it.
+
+**This reframes the whole plan. The bottleneck is EVALUATION, not training
+data.** Generating more training conversations cannot fix an instrument that
+cannot see the difference. Two consequences:
+
+1. **Expanding the sealed eval set is now the highest-value work**, because it
+   gates every future comparison — the classifier bake-off, the fine-tune, and
+   any threshold change. Until it exists, only very large differences are
+   detectable.
+2. **The development signal moves to the held-out slice of the generated
+   corpus** (~99 positives against 14), which is ten times steadier. The sealed
+   set remains the arbiter of whether a model transfers to real writing at all,
+   but it can no longer be asked to rank two models a few cases apart.
+
+A caution for reading the rest of this document: the incumbent's per-category
+figures (13/14, 7/13, 4/5) are DETERMINISTIC — temperature zero, so repeated
+runs agree — and are not affected by the run-to-run variance above. But their
+sampling intervals are just as wide, so they should be read as "roughly
+two-thirds to nearly all" rather than as precise scores. The relative ordering
+this campaign established (coercive-control recovered by context,
+relationship-harassment not) rests on gaps far larger than these intervals —
+13/14 against 3/8 — and survives. The fine-grained comparisons do not.
+
+### 2026-08-14 — the first trustworthy baseline, and it is worse than we thought
+
+The eval set now carries 226 hand-written conversations on top of `cases.json`,
+so `focused_stage_on_pattern_categories` was re-run against 89 coercive-control
+conversations instead of 14 and 78 harassment ones instead of 13. This is the
+first measurement in this campaign with a sample large enough to trust.
+
+| category | old set | expanded set |
+|---|---|---|
+| coercive-control | 13 / 14 (93%) | **78 / 89 (88%)** |
+| harassment-bullying | 7 / 13 (54%) | **17 / 78 (22%)** |
+| threat-violence *(control)* | 4 / 5 (80%) | **16 / 20 (80%)** |
+
+Coercive-control and the control category held, which is a useful check on the
+old numbers: they were imprecise, not wrong.
+
+**Harassment did not hold. It fell from 54% to 22%, and that is the real
+number.** The old thirteen cases were almost all content-moderation shaped —
+insults, a pile-on, appearance abuse — which the model catches. The 65 added
+cases are the relationship/stalking half: waiting outside work, driving past,
+turning up, contacting family and employers, a new number after every block.
+Those it misses almost completely.
+
+**So the product misses roughly four in five stalking-type harassment
+conversations, and did not know it**, because the eval set was both too small
+to be precise and too easy to be representative. That is the more serious of
+the two failures: an unrepresentative set does not merely blur a number, it
+reports the wrong one confidently.
+
+This confirms #504's structural finding on a proper sample. That result — 3/8
+with perfect context — is now 17/78, the same conclusion with an order of
+magnitude more evidence: **relationship-harassment is not recoverable by giving
+the current model more context.** Everything cheaper than a fine-tune has been
+measured and ruled out for this category, and the case is now quantitative
+rather than suggestive.
+
+#### What the coercive-control misses have in common
+
+11 of 89, and they are not random. The model misses control that reads as
+ordinary domestic negotiation — being told to hand in notice (cc-gt-employment),
+cancelled driving lessons (cc-e-058 family), a code on the boiler (cc-e-057),
+vetting clothing purchases (cc-e-017), "I never said that" denial (cc-e-019),
+real-time bank-app monitoring (cc-e-067), deferring someone's college course
+(cc-e-063). It catches control that announces itself: lock-outs, confinement,
+tracking devices, threats about children.
+
+That is exactly what makes coercive control hard to see in life, and it means
+the residual 12% is the *harder* 12% rather than a random tail.
