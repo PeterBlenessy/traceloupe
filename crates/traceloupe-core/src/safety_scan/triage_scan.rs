@@ -811,6 +811,97 @@ mod tests {
         );
     }
 
+    /// No surface feature may predict the label better than the base rate does.
+    ///
+    /// The third review found the corpus riddled with these: a conversation the
+    /// phone owner speaks first in was harmful 18 times out of 18; the
+    /// them/me/them/them rhythm 10 out of 10; five-message conversations 10 out
+    /// of 11. None of those is a fact about harm. They are facts about how the
+    /// author wrote, and a classifier will find them first because they are
+    /// cheaper to learn than the behaviour.
+    ///
+    /// Worse, they are self-inflicted: the them/me/them/them shape exists
+    /// BECAUSE a previous round bolted a fourth line onto ten positives to
+    /// break a different shortcut. Removing one formula installed a stronger
+    /// one, which is why this has to be measured rather than eyeballed.
+    ///
+    /// The test is deliberately not "the feature is rare". A feature may fire
+    /// as often as it likes so long as, once it has fired, it has told you
+    /// nothing you did not already know from the corpus's own harmful/ordinary
+    /// mix. Anything outside a band around that base rate is a free answer.
+    #[test]
+    fn no_surface_feature_predicts_the_label() {
+        use std::collections::BTreeMap;
+        let records = crate::safety_scan::eval::training_corpus_records();
+        let total = records.len() as f64;
+        let base = records.iter().filter(|r| r.positive).count() as f64 / total;
+
+        /// Below this many records a rate is noise, not a shortcut.
+        const MIN_SUPPORT: usize = 10;
+        /// How far from the base rate a feature may sit before it is teaching
+        /// the model something the text did not.
+        const BAND: f64 = 0.15;
+
+        let mut features: BTreeMap<String, Vec<bool>> = BTreeMap::new();
+        let mut add = |name: String, positive: bool| {
+            features.entry(name).or_default().push(positive);
+        };
+        for r in &records {
+            let n = r.senders.len();
+            add(format!("shape={}", r.shape()), r.positive);
+            add(format!("turns={n}"), r.positive);
+            add(
+                format!("first={}", r.senders.first().map_or("?", |s| s.as_str())),
+                r.positive,
+            );
+            add(
+                format!("last={}", r.senders.last().map_or("?", |s| s.as_str())),
+                r.positive,
+            );
+            if n >= 2 {
+                add(
+                    format!("last_two_same={}", r.senders[n - 1] == r.senders[n - 2]),
+                    r.positive,
+                );
+            }
+            let chars: usize = r.texts.iter().map(|t| t.chars().count()).sum();
+            add(format!("len_bucket={}", chars / 100), r.positive);
+            let body = r.texts.join(" ").to_lowercase();
+            for token in ["love", "sorry", "thanks", "please", "x"] {
+                if body
+                    .split_whitespace()
+                    .any(|w| w.trim_matches(|c: char| !c.is_alphanumeric()) == token)
+                {
+                    add(format!("word={token}"), r.positive);
+                }
+            }
+        }
+
+        let mut offenders: Vec<String> = Vec::new();
+        for (name, hits) in &features {
+            if hits.len() < MIN_SUPPORT {
+                continue;
+            }
+            let rate = hits.iter().filter(|p| **p).count() as f64 / hits.len() as f64;
+            if (rate - base).abs() > BAND {
+                offenders.push(format!(
+                    "  {name:24} fires {:3}, harmful {:.0}% (corpus is {:.0}%)",
+                    hits.len(),
+                    rate * 100.0,
+                    base * 100.0
+                ));
+            }
+        }
+        offenders.sort();
+        assert!(
+            offenders.is_empty(),
+            "{} surface features predict the label better than the corpus mix does — \
+             a model learns these instead of the behaviour:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
+
     /// The TRAINING corpus must not contain eval text either.
     ///
     /// This was missing, and it mattered: love-bombing closers added to 58

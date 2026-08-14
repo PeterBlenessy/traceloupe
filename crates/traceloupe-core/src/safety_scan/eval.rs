@@ -99,6 +99,10 @@ const TRAIN_JSONL: &[(&str, &str)] = &[
         "negatives-long",
         include_str!("../../fixtures/safety-scan/train/negatives-long.jsonl"),
     ),
+    (
+        "structure-balance",
+        include_str!("../../fixtures/safety-scan/train/structure-balance.jsonl"),
+    ),
 ];
 
 /// The training-corpus file names the guard checks, so a file added to the
@@ -108,6 +112,59 @@ pub fn training_corpus_files() -> Vec<String> {
         .iter()
         .map(|(name, _)| format!("{name}.jsonl"))
         .collect()
+}
+
+/// One training conversation, reduced to what the structural guard needs.
+pub struct TrainRecord {
+    pub file: String,
+    pub line: usize,
+    pub positive: bool,
+    pub senders: Vec<String>,
+    pub texts: Vec<String>,
+}
+
+impl TrainRecord {
+    /// "TmT" for them/me/them. The shape a conversation makes is visible to the
+    /// model because the trainer renders sender tags as literal tokens, so a
+    /// shape that correlates with the label is a shortcut.
+    pub fn shape(&self) -> String {
+        self.senders
+            .iter()
+            .map(|s| if s == "them" { 'T' } else { 'm' })
+            .collect()
+    }
+}
+
+/// The training corpus as records, for the structural guard.
+pub fn training_corpus_records() -> Vec<TrainRecord> {
+    let mut out = Vec::new();
+    for (group, body) in TRAIN_JSONL {
+        for (i, line) in body.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let v: serde_json::Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("train/{group}.jsonl: {e}"));
+            let msgs = v
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or_default();
+            out.push(TrainRecord {
+                file: format!("{group}.jsonl"),
+                line: i + 1,
+                positive: v.get("kind").and_then(|k| k.as_str()) == Some("positive"),
+                senders: msgs
+                    .iter()
+                    .filter_map(|m| m.get("sender").and_then(|s| s.as_str()))
+                    .map(str::to_string)
+                    .collect(),
+                texts: msgs
+                    .iter()
+                    .filter_map(|m| m.get("text").and_then(|t| t.as_str()))
+                    .map(str::to_string)
+                    .collect(),
+            });
+        }
+    }
+    out
 }
 
 /// Every message in the training corpus, for the contamination guard.
