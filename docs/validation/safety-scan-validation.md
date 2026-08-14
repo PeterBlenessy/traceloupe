@@ -1269,3 +1269,58 @@ more cheaply than the threshold already does.
 The sweep stays in the harness. It is the tool for asking this question, and the
 next person to have the same good idea should be able to re-run it in a minute
 rather than re-deriving it.
+
+### 2026-08-14 — the small-classifier challenge, first round: it loses
+
+`docs/plans/safety-classifier-plan.md` argued for testing a small encoder
+classifier before fine-tuning the 4B, on the grounds that published comparisons
+put encoders at or above much larger models on supervised classification, and
+that our 6.5 s/call is the constraint the whole triage architecture exists to
+work around. Round one is done and the challenger is behind.
+
+ModernBERT-base (149M), trained on 1,500 generated conversations (1,350 train /
+150 held out), 4 epochs, scored against the sealed fixtures it has never seen:
+
+| category | challenger | incumbent (4B, full context) |
+|---|---|---|
+| coercive-control | 8 / 14 | **13 / 14** |
+| harassment-bullying | 4 / 13 | **7 / 13** |
+| threat-violence *(control)* | 0 / 5 | **4 / 5** |
+| scam-fraud | 5 / 5 | — |
+| hate-identity | 4 / 5 | — |
+| sexual-content | 3 / 5 | — |
+| self-harm | 2 / 5 | — |
+| drugs-illegal | 2 / 5 | — |
+| grooming-exploitation | 0 / 5 | — |
+
+Not a collapse — scores span 0.06 to 0.999, so it is predicting, just wrongly.
+
+**The shape of the failure is the same axis this project keeps meeting.** It
+does well where the harm is in the WORDS (scam 5/5, hate 4/5) and badly where
+the harm is in the SITUATION (threats 0/5, grooming 0/5, coercive-control 8/14).
+That is the identical split that defeated the census embeddings (#503): surface
+text carries lexical harm and not relational harm.
+
+#### Ruling out the obvious confound
+
+The model trains on machine-written conversations and is tested on hand-written
+ones, so a reasonable objection is that it learned "generated text" rather than
+the behaviour. Tested against **held-out conversations of exactly the kind it
+trained on**, it catches **63%** (62 of 99) — coercive-control 14/26, threats
+6/12. So the shortfall is not mainly transfer: it is weak on home turf too, and
+loses further crossing to real writing.
+
+#### What this does and does not settle
+
+It does not yet settle the architecture, because **the corpus is half the size
+the plan specified** (1,500 against 2,000–3,000) and came from a single
+generator. ~150 positives per category is thin for a nine-way multi-label task,
+and the literature puts useful supervised classification nearer 500–1,000 per
+class. Declaring the approach dead on an under-powered run would be the mistake
+this project has spent a fortnight learning not to make.
+
+So: a second 1,500-conversation run is under way, this time with the
+mode-balanced sampling added in #514, and the classifier will be retrained once
+on the full ~3,000. **If the gap does not close substantially, the encoder is
+finished and the 4B LoRA (pipeline proven, #511) is the route.** The in-domain
+63% is the number to watch — if that does not move, more data is not the answer.
