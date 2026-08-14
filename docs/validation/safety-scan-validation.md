@@ -1419,3 +1419,148 @@ tracking devices, threats about children.
 
 That is exactly what makes coercive control hard to see in life, and it means
 the residual 12% is the *harder* 12% rather than a random tail.
+
+### 2026-08-14 — the harassment gap is a teaching problem, not a capacity problem
+
+With an eval set that can measure things, the bake-off finally answers — and
+the answer overturns three conclusions reached earlier the same day on the
+broken 14-case set.
+
+A 149M encoder (ModernBERT-base) trained on conversation windows, scored
+against the 226-case eval set, against the shipped 4B classifier measured under
+its most favourable conditions (whole conversation, no census gate, no budget):
+
+| trained on | harassment | coercive-control | threats |
+|---|---|---|---|
+| 108 hand-written | **73 / 78 (94%)** | 9 / 89 | 0 / 20 |
+| 1,500 machine-written | 56 / 78 (72%) | 69 / 89 (78%) | 6 / 20 |
+| **the shipped 4B** | **17 / 78 (22%)** | 78 / 89 (88%) | 16 / 20 |
+
+The lopsided rows are expected and not a defect: the hand-written set is 60
+harassment conversations, 28 coercive-control and no threats at all, so it
+learns what it was shown. The machine-written set is spread across nine
+categories, so it is mediocre everywhere and good nowhere.
+
+**Two independently produced corpora both beat the shipped model on harassment
+by three to four times.** That is the finding. The category the product fails
+at is not beyond a small model — nobody ever taught the current one what an ex
+who will not stop turning up looks like.
+
+#### This defuses the style objection, mostly
+
+The obvious complaint about the 94% is that the training and eval conversations
+were written by the same author in the same session from the same mode list:
+the word-overlap check guarantees no shared text but cannot see shared style.
+
+Two things argue against it. The eval set contains five harassment cases written
+months earlier in a different session and register, absent from all training
+data — **the model missed none of them**. And the 1,500 machine-written
+conversations came from a different model, different prompts and a different
+register entirely, and still reach 72%. If the hand-written result were mostly
+style-matching, the machine corpus should not have come close.
+
+The trainer now splits every result by who wrote the test case, so no future run
+can report a headline without showing how it did on text its author did not
+write.
+
+#### Three retractions
+
+1. **"The challenger loses."** It does not. That was measured on 14
+   coercive-control conversations whose confidence interval spanned 66–100%.
+2. **"The machine-generated corpus is near-worthless."** It produces 72% on the
+   category the product fails at. The objection — that a model scoring 3/8 on
+   relationship-harassment cannot write good examples of it — was reasonable and
+   is wrong. Generation and recognition are different skills.
+3. **"A fine-tune of the 4B is the route."** Possibly not. A 149M model learns
+   this from a few hundred examples, and its inference is milliseconds against
+   6.5 s.
+
+All three errors came from the same source: an eval set too small and too easy
+to see the difference. None were visible until it was fixed.
+
+#### What this does not yet establish
+
+Every conversation in every corpus here was written by a language model, mine
+included. Real phone messages are messier — more elliptical, more in-jokes, more
+context outside the thread. The 94% and 72% are against machine-written test
+text and should be read as "this behaviour is learnable at this scale", not as a
+production accuracy estimate.
+
+Nor is the encoder a shipping decision yet: it needs the other seven categories
+(threats at 0-6/20 is not deployable), a runtime in the Rust app, and a
+per-category threshold pass. What it has earned is a place in the plan.
+
+#### Mixing corpora naively makes things worse
+
+The third arm of the comparison — concatenating the hand-written and
+machine-written sets — was expected to be the best of both and is not:
+
+| trained on | harassment | coercive-control | threats |
+|---|---|---|---|
+| 108 hand-written | 73 / 78 (94%) | 9 / 89 | 0 / 20 |
+| 1,500 machine-written | 56 / 78 (72%) | **69 / 89 (78%)** | 6 / 20 |
+| both, concatenated | 71 / 78 (91%) | **39 / 89 (44%)** | 3 / 20 |
+
+**Coercive-control halved — but the explanation below is WRONG, and is left
+here with its correction because the reasoning error matters more than the
+number.**
+
+*Original claim:* the hand-written set is 60 harassment conversations and no
+threats, so adding it tips the mixture and the model reallocates.
+
+*Why that is wrong:* the proportions barely moved. Harassment is 15% of the
+machine-written corpus and 17% of the concatenation; coercive-control 14% and
+15%. A two-point shift cannot take a category from 78% to 44%.
+
+*What is actually going on:* single-run variance, measured earlier the same day
+in this exact setup at six cases out of fourteen between runs differing only in
+seed. Three single runs were compared and a mechanism was invented for the gap
+between them. That is the third instance of the same error in one day — when a
+number surprises me I reach for an explanation instead of for a repeat.
+
+So the corpus cannot be assembled by concatenation, which is what anyone would
+do by default. It has to be **balanced deliberately per category**, and
+hand-written material — which is far more efficient per example, 60
+conversations reaching 94% where 1,500 mixed ones reach 72% — has to be added
+in proportion rather than dumped in.
+
+The practical build, given the measurements:
+
+- **machine-written for breadth.** Nearly free, and it is what carries
+  coercive-control (78%) and gives the only non-zero threat score. Its weakness
+  is that it is mediocre everywhere.
+- **hand-written for the weak categories and for hard negatives**, where the
+  distinction between a worried friend and an ex who will not stop is finer than
+  a weaker model can draw.
+- **balanced per category before training**, not concatenated. This measurement
+  is the reason to bother.
+
+The balancer was still worth building — deliberate proportions beat accidental
+ones, and it surfaced that every category is capped by the thinnest one
+(hate-identity, 65), which is more actionable than any total. But it did not
+help: balanced (873 conversations) scores harassment 53/78 and coercive-control <!-- not-a-backup-count: training corpus size -->
+68/89, against machine-written alone (1,500) at 56/78 and 69/89. Within noise,
+on less data.
+
+#### The style objection is now largely dead
+
+The balanced run reports the origin split for the first time:
+
+| test cases written | caught |
+|---|---|
+| months earlier, different session, in no training set | 30 / 62 (48%) |
+| this session, same author as the training material | 105 / 201 (52%) |
+
+Four points apart on samples of 62 and 201. **A model that had learned "how this
+author writes a stalking conversation" would do far better on the second row
+than the first.** It does not. Combined with the machine-written corpus reaching
+72% on harassment from a different model, different prompts and a different
+register, the contamination worry that hung over the 94% is answered.
+
+#### What still needs several seeds before anyone believes it
+
+Everything above except the origin split. The hand vs machine vs balanced
+comparison rests on one run per arm, and this setup is known to swing by several
+cases on seed alone. The origin split is the exception because its samples are
+62 and 201 rather than 14, which is the whole argument for having built the
+bigger eval set.

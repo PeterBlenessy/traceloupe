@@ -93,9 +93,18 @@ def load_generated(path: Path) -> list[tuple[str, list[float]]]:
 
 def load_sealed() -> list[tuple[str, list[float], str]]:
     """The eval set. Positives only — the question is what it catches."""
-    data = json.loads((ROOT / "crates/traceloupe-core/fixtures/safety-scan/cases.json").read_text())
+    import glob
+    cases = json.loads(
+        (ROOT / "crates/traceloupe-core/fixtures/safety-scan/cases.json").read_text()
+    )["cases"]
+    # Plus the 226 hand-written cases (#515). Scoring against the old 14
+    # coercive-control conversations could not resolve anything.
+    for f in sorted(glob.glob(str(ROOT / "crates/traceloupe-core/fixtures/safety-scan/eval/*.jsonl"))):
+        for line in open(f):
+            if line.strip():
+                cases.append(json.loads(line))
     out = []
-    for case in data["cases"]:
+    for case in cases:
         if case["kind"] != "positive":
             continue
         y = [0.0] * len(CATEGORIES)
@@ -226,10 +235,37 @@ def main() -> int:
     print(f"\nheld-out generated data (the steadier signal): {vhit}/{vtot} "
           f"= {100*vhit/max(vtot,1):.0f}%")
 
+    # WHERE the caught cases came from, not just how many.
+    #
+    # The training conversations and most of the eval conversations were
+    # written by the same author in the same session from the same mode list.
+    # The word-overlap check guarantees no shared TEXT, but it cannot see
+    # shared STYLE — and a model that has learned "this is how this author
+    # writes a stalking conversation" scores well without having learned what
+    # stalking is. The eval set happens to contain cases written months
+    # earlier, in a different session and register, which are not in any
+    # training data: those are the honest generalisation test, so report them
+    # separately rather than letting them average away.
+    origins = {"older (different session)": [], "this session": []}
+    with torch.no_grad():
+        for text, y, cid in sealed:
+            key = "this session" if cid.startswith(("cc-e-", "rh-e-", "tv-e-", "sh-e-",
+                                                    "sx-e-", "gr-e-", "hi-e-", "sc-e-",
+                                                    "dr-e-", "neg-e-")) else "older (different session)"
+            enc = tok(text, truncation=True, max_length=512, padding="max_length", return_tensors="pt")
+            p3 = torch.sigmoid(model(**{k: v.to(device) for k, v in enc.items()}).logits)[0].cpu().numpy()
+            for i in range(len(CATEGORIES)):
+                if y[i] > 0:
+                    origins[key].append(1 if p3[i] >= args.threshold else 0)
+    print("\ncaught, split by who wrote the test case:")
+    for k, v in origins.items():
+        if v:
+            print(f"  {k:<28} {sum(v)}/{len(v)} = {100*sum(v)/len(v):.0f}%")
+
     print("\nincumbent (4B, focused stage, full context, no time limit):")
-    print("  coercive-control        13 / 14")
-    print("  harassment-bullying      7 / 13")
-    print("  threat-violence          4 / 5   (control)")
+    print("  coercive-control        78 / 89")
+    print("  harassment-bullying     17 / 78")
+    print("  threat-violence         16 / 20   (control)")
 
     if args.out:
         model.save_pretrained(args.out)
