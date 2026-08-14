@@ -1489,3 +1489,39 @@ production accuracy estimate.
 Nor is the encoder a shipping decision yet: it needs the other seven categories
 (threats at 0-6/20 is not deployable), a runtime in the Rust app, and a
 per-category threshold pass. What it has earned is a place in the plan.
+
+#### Mixing corpora naively makes things worse
+
+The third arm of the comparison — concatenating the hand-written and
+machine-written sets — was expected to be the best of both and is not:
+
+| trained on | harassment | coercive-control | threats |
+|---|---|---|---|
+| 108 hand-written | 73 / 78 (94%) | 9 / 89 | 0 / 20 |
+| 1,500 machine-written | 56 / 78 (72%) | **69 / 89 (78%)** | 6 / 20 |
+| both, concatenated | 71 / 78 (91%) | **39 / 89 (44%)** | 3 / 20 |
+
+**Coercive-control halved.** The hand-written set is 60 harassment
+conversations, 28 coercive-control and no threats; adding it to an
+already-spread corpus tips the mixture toward harassment, and the model
+reallocates accordingly. The held-out signal moves the same way (78% → 68%).
+
+So the corpus cannot be assembled by concatenation, which is what anyone would
+do by default. It has to be **balanced deliberately per category**, and
+hand-written material — which is far more efficient per example, 60
+conversations reaching 94% where 1,500 mixed ones reach 72% — has to be added
+in proportion rather than dumped in.
+
+The practical build, given the measurements:
+
+- **machine-written for breadth.** Nearly free, and it is what carries
+  coercive-control (78%) and gives the only non-zero threat score. Its weakness
+  is that it is mediocre everywhere.
+- **hand-written for the weak categories and for hard negatives**, where the
+  distinction between a worried friend and an ex who will not stop is finer than
+  a weaker model can draw.
+- **balanced per category before training**, not concatenated. This measurement
+  is the reason to bother.
+
+That balancing pass is the next piece of work, and it is cheap: the material
+exists, only the mixture is wrong.
