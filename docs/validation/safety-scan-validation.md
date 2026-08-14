@@ -1501,10 +1501,22 @@ machine-written sets — was expected to be the best of both and is not:
 | 1,500 machine-written | 56 / 78 (72%) | **69 / 89 (78%)** | 6 / 20 |
 | both, concatenated | 71 / 78 (91%) | **39 / 89 (44%)** | 3 / 20 |
 
-**Coercive-control halved.** The hand-written set is 60 harassment
-conversations, 28 coercive-control and no threats; adding it to an
-already-spread corpus tips the mixture toward harassment, and the model
-reallocates accordingly. The held-out signal moves the same way (78% → 68%).
+**Coercive-control halved — but the explanation below is WRONG, and is left
+here with its correction because the reasoning error matters more than the
+number.**
+
+*Original claim:* the hand-written set is 60 harassment conversations and no
+threats, so adding it tips the mixture and the model reallocates.
+
+*Why that is wrong:* the proportions barely moved. Harassment is 15% of the
+machine-written corpus and 17% of the concatenation; coercive-control 14% and
+15%. A two-point shift cannot take a category from 78% to 44%.
+
+*What is actually going on:* single-run variance, measured earlier the same day
+in this exact setup at six cases out of fourteen between runs differing only in
+seed. Three single runs were compared and a mechanism was invented for the gap
+between them. That is the third instance of the same error in one day — when a
+number surprises me I reach for an explanation instead of for a repeat.
 
 So the corpus cannot be assembled by concatenation, which is what anyone would
 do by default. It has to be **balanced deliberately per category**, and
@@ -1523,5 +1535,32 @@ The practical build, given the measurements:
 - **balanced per category before training**, not concatenated. This measurement
   is the reason to bother.
 
-That balancing pass is the next piece of work, and it is cheap: the material
-exists, only the mixture is wrong.
+The balancer was still worth building — deliberate proportions beat accidental
+ones, and it surfaced that every category is capped by the thinnest one
+(hate-identity, 65), which is more actionable than any total. But it did not
+help: balanced (873 conversations) scores harassment 53/78 and coercive-control
+68/89, against machine-written alone (1,500) at 56/78 and 69/89. Within noise,
+on less data.
+
+#### The style objection is now largely dead
+
+The balanced run reports the origin split for the first time:
+
+| test cases written | caught |
+|---|---|
+| months earlier, different session, in no training set | 30 / 62 (48%) |
+| this session, same author as the training material | 105 / 201 (52%) |
+
+Four points apart on samples of 62 and 201. **A model that had learned "how this
+author writes a stalking conversation" would do far better on the second row
+than the first.** It does not. Combined with the machine-written corpus reaching
+72% on harassment from a different model, different prompts and a different
+register, the contamination worry that hung over the 94% is answered.
+
+#### What still needs several seeds before anyone believes it
+
+Everything above except the origin split. The hand vs machine vs balanced
+comparison rests on one run per arm, and this setup is known to swing by several
+cases on seed alone. The origin split is the exception because its samples are
+62 and 201 rather than 14, which is the whole argument for having built the
+bigger eval set.
