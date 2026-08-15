@@ -41,6 +41,19 @@ otherwise labelled three different ways.
 
 ## Role balance
 
-`me` and `them` must not correlate with a category. In particular the at-risk
-person in `self-harm` and the victim in `coercive-control` appear as both
-speakers, so the model cannot learn "the harmful one is always `them`".
+`me` and `them` must not correlate with a category, and this is a **measured**
+requirement, not an aspiration: `no_surface_feature_predicts_the_label` fails
+the build when any speaker- or shape-based feature lands more than 15 points
+from the corpus's own harmful/ordinary mix.
+
+**At least 30% of the positives in every category must put the harmful party in
+the `me` seat** — the owner of the phone doing the harassing, threatening,
+controlling, grooming, scamming or supplying. Real backups belong to abusers as
+often as to victims, and a corpus where `them` is always the aggressor teaches
+the sender tag instead of the behaviour.
+
+This section previously claimed the balance was already achieved for
+`coercive-control` and `self-harm`. That was false when it was written: the
+controller was `them` in all 35 coercive-control records, and only `self-harm`
+was ever balanced. A rule stated as a fact about the data is worth nothing
+unless something counts it, which is why the guard now does.
