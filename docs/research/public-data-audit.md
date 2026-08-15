@@ -82,3 +82,19 @@ thresholding recovers a signal that is absent.
 3. The checklist has proven itself as an instrument: it separates "detects
    rudeness" from "detects harm", which is exactly the distinction the product
    lives on. It stays as the acceptance gate for every candidate model.
+
+## PAN12 access request (draft for Peter to submit on Zenodo)
+
+Record: https://zenodo.org/records/3713280 — files are restricted; the form
+asks for a short statement of intended use. Draft:
+
+> I am the developer of TraceLoupe, an open-source iPhone-backup forensics
+> tool (github.com/PeterBlenessy/traceloupe). I am building an on-device
+> safety feature that flags potentially harmful conversations — including
+> grooming — in a user's own message history, for personal-safety and
+> parental-safeguarding review. The corpus would be used to train and evaluate
+> a small local classifier. The data never leaves the training machine, is not
+> redistributed, and no excerpt of it is committed to the repository; only
+> model weights and aggregate metrics are derived from it.
+
+Submitting needs a Zenodo login, so this is Peter's single required action.
