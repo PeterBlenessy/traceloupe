@@ -60,6 +60,148 @@ const EVAL_JSONL: &[(&str, &str)] = &[
     ),
 ];
 
+/// The hand-written TRAINING corpus. Separate from the eval set on purpose, and
+/// guarded against overlapping it — see the test below.
+const TRAIN_JSONL: &[(&str, &str)] = &[
+    (
+        "harassment",
+        include_str!("../../fixtures/safety-scan/train/harassment.jsonl"),
+    ),
+    (
+        "coercive-control",
+        include_str!("../../fixtures/safety-scan/train/coercive-control.jsonl"),
+    ),
+    (
+        "threat-violence",
+        include_str!("../../fixtures/safety-scan/train/threat-violence.jsonl"),
+    ),
+    (
+        "self-harm",
+        include_str!("../../fixtures/safety-scan/train/self-harm.jsonl"),
+    ),
+    (
+        "sexual-grooming",
+        include_str!("../../fixtures/safety-scan/train/sexual-grooming.jsonl"),
+    ),
+    (
+        "hate-scam-drugs",
+        include_str!("../../fixtures/safety-scan/train/hate-scam-drugs.jsonl"),
+    ),
+    (
+        "varied-structure",
+        include_str!("../../fixtures/safety-scan/train/varied-structure.jsonl"),
+    ),
+    (
+        "negatives-hard",
+        include_str!("../../fixtures/safety-scan/train/negatives-hard.jsonl"),
+    ),
+    (
+        "negatives-long",
+        include_str!("../../fixtures/safety-scan/train/negatives-long.jsonl"),
+    ),
+    (
+        "structure-balance",
+        include_str!("../../fixtures/safety-scan/train/structure-balance.jsonl"),
+    ),
+    (
+        "me-as-perpetrator",
+        include_str!("../../fixtures/safety-scan/train/me-as-perpetrator.jsonl"),
+    ),
+    (
+        "negatives-me-first",
+        include_str!("../../fixtures/safety-scan/train/negatives-me-first.jsonl"),
+    ),
+    (
+        "surface-realism",
+        include_str!("../../fixtures/safety-scan/train/surface-realism.jsonl"),
+    ),
+    (
+        "category-range",
+        include_str!("../../fixtures/safety-scan/train/category-range.jsonl"),
+    ),
+];
+
+/// The training-corpus file names the guard checks, so a file added to the
+/// directory but not to the list fails loudly instead of going unchecked.
+pub fn training_corpus_files() -> Vec<String> {
+    TRAIN_JSONL
+        .iter()
+        .map(|(name, _)| format!("{name}.jsonl"))
+        .collect()
+}
+
+/// One training conversation, reduced to what the structural guard needs.
+pub struct TrainRecord {
+    pub file: String,
+    pub line: usize,
+    pub positive: bool,
+    pub senders: Vec<String>,
+    pub texts: Vec<String>,
+}
+
+impl TrainRecord {
+    /// "TmT" for them/me/them. The shape a conversation makes is visible to the
+    /// model because the trainer renders sender tags as literal tokens, so a
+    /// shape that correlates with the label is a shortcut.
+    pub fn shape(&self) -> String {
+        self.senders
+            .iter()
+            .map(|s| if s == "them" { 'T' } else { 'm' })
+            .collect()
+    }
+}
+
+/// The training corpus as records, for the structural guard.
+pub fn training_corpus_records() -> Vec<TrainRecord> {
+    let mut out = Vec::new();
+    for (group, body) in TRAIN_JSONL {
+        for (i, line) in body.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+            let v: serde_json::Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("train/{group}.jsonl: {e}"));
+            let msgs = v
+                .get("messages")
+                .and_then(|m| m.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or_default();
+            out.push(TrainRecord {
+                file: format!("{group}.jsonl"),
+                line: i + 1,
+                positive: v.get("kind").and_then(|k| k.as_str()) == Some("positive"),
+                senders: msgs
+                    .iter()
+                    .filter_map(|m| m.get("sender").and_then(|s| s.as_str()))
+                    .map(str::to_string)
+                    .collect(),
+                texts: msgs
+                    .iter()
+                    .filter_map(|m| m.get("text").and_then(|t| t.as_str()))
+                    .map(str::to_string)
+                    .collect(),
+            });
+        }
+    }
+    out
+}
+
+/// Every message in the training corpus, for the contamination guard.
+pub fn training_corpus_lines() -> Vec<String> {
+    let mut out = Vec::new();
+    for (group, body) in TRAIN_JSONL {
+        for line in body.lines().filter(|l| !l.trim().is_empty()) {
+            let v: serde_json::Value =
+                serde_json::from_str(line).unwrap_or_else(|e| panic!("train/{group}.jsonl: {e}"));
+            if let Some(msgs) = v.get("messages").and_then(|m| m.as_array()) {
+                for m in msgs {
+                    if let Some(t) = m.get("text").and_then(|t| t.as_str()) {
+                        out.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Every eval case: the original `cases.json` plus the hand-written expansion.
 ///
 /// This is what a measurement should score against. `load_fixtures()` remains
@@ -169,10 +311,31 @@ pub const DEFAULT_FLOOR: u8 = 2;
 pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, String)> {
     /// A shared PHRASE, not a shared word. Matching raw substrings flagged the
     /// fixture "thanks ❤️" against any corpus line containing "thanks", so
-    /// compare word sequences and require the shared run to be long enough to
-    /// be text someone copied rather than vocabulary two sentences happen to
-    /// share. Equality still fails at any length.
-    const MIN_SHARED_WORDS: usize = 4;
+    /// compare word sequences and require the shared run to carry content.
+    const NGRAM: usize = 4;
+    /// A shared 4-gram of pure function words ("i dont know if", "are you at
+    /// the") is English, not copying. Requiring two content words in the window
+    /// is what separates the two.
+    const MIN_CONTENT_WORDS: usize = 2;
+    /// Contraction fragments are tokenizer artefacts, not content. "you've"
+    /// splits to ["you", "ve"], and counting "ve" as a content word made
+    /// ("ve", "had", "a", "lot") look like a shared phrase between two
+    /// unrelated sentences. They belong here for the same reason "the" does.
+    const STOPWORDS: &[&str] = &[
+        "ve", "ll", "t", "m", "d", "don", "doesn", "didn", "isn", "aren", "wasn", "weren",
+        "wouldn", "couldn", "shouldn", "haven", "hasn", "won", "hadn", "mustn", "a", "about",
+        "after", "all", "am", "an", "and", "any", "are", "arent", "as", "at", "back", "be", "been",
+        "before", "but", "by", "can", "cant", "could", "did", "didnt", "do", "does", "doesnt",
+        "doing", "dont", "for", "from", "get", "go", "got", "had", "has", "have", "he", "her",
+        "here", "hes", "him", "his", "how", "i", "if", "il", "ill", "im", "in", "into", "is",
+        "isnt", "it", "its", "ive", "just", "know", "like", "me", "more", "my", "no", "not", "now",
+        "of", "off", "on", "one", "or", "our", "out", "over", "own", "re", "right", "s", "said",
+        "say", "see", "she", "shes", "should", "so", "some", "still", "such", "than", "that",
+        "thats", "the", "their", "them", "then", "there", "theres", "these", "they", "theyre",
+        "this", "those", "to", "too", "up", "us", "very", "want", "was", "wasnt", "we", "well",
+        "were", "what", "whats", "when", "where", "which", "while", "who", "why", "will", "with",
+        "would", "yeah", "you", "your", "youre", "youve",
+    ];
     fn words(s: &str) -> Vec<String> {
         s.to_lowercase()
             .chars()
@@ -182,12 +345,36 @@ pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, Stri
             .map(str::to_string)
             .collect()
     }
+    /// Below this, a whole-line match is coincidence rather than copying.
+    ///
+    /// "where", "no" and "seriously?" are words any two people writing dialogue
+    /// will both produce; patching those one at a time would never terminate.
+    const MIN_EQUAL_WORDS: usize = 3;
+    /// Copying is not the only contamination. A third adversarial review found
+    /// 37 of 226 eval cases sharing a scenario with a training record — the
+    /// same conversation rewritten with synonyms ("18 months clean" against
+    /// "two years clean"). The old rule required an ENTIRE eval message to
+    /// appear contiguously inside a corpus line, so changing one word defeated
+    /// it, and the commit that loosened it claimed otherwise. A shared
+    /// content-bearing 4-gram catches the paraphrase; two sentences that share
+    /// four consecutive words including two content words are not independent.
     fn leaks(a: &[String], b: &[String]) -> bool {
         if a == b {
-            return true;
+            return a.len() >= MIN_EQUAL_WORDS;
         }
-        let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-        short.len() >= MIN_SHARED_WORDS && long.windows(short.len()).any(|w| w == short)
+        if a.len() < NGRAM || b.len() < NGRAM {
+            return false;
+        }
+        let content = |w: &[String]| -> usize {
+            w.iter()
+                .filter(|t| !STOPWORDS.contains(&t.as_str()))
+                .count()
+        };
+        let grams: std::collections::HashSet<&[String]> = a
+            .windows(NGRAM)
+            .filter(|w| content(w) >= MIN_CONTENT_WORDS)
+            .collect();
+        b.windows(NGRAM).any(|w| grams.contains(w))
     }
     let corpus: Vec<(Vec<String>, &String)> = corpus_lines
         .iter()

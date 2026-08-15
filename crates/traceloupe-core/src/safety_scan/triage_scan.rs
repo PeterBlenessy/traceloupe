@@ -770,6 +770,184 @@ mod tests {
     /// ground truth those centroids are measured against — and any overlap
     /// makes the measurement train-on-test, which has already cost this
     /// project three retracted results (#491).
+    /// No message text may appear twice anywhere in the training corpus.
+    ///
+    /// This exists because a script that was meant to fix one problem created a
+    /// worse one: 58 positives were given "love-bombing" closers drawn from a
+    /// pool of 12 strings, so `love` became a 100%-precision predictor of the
+    /// positive class, and the same script then overwrote 13 unrelated messages
+    /// with those strings — deleting a child's stated age from the only
+    /// drugs-to-a-minor example and replacing a victim's refusal with the
+    /// abuser's apology. Four commits, none of them caught it.
+    ///
+    /// Duplicate text is the signature of exactly that failure: anything
+    /// generated mechanically at scale repeats itself, and a classifier will
+    /// find the repetition long before it finds the behaviour.
+    #[test]
+    fn no_message_appears_twice_in_the_training_corpus() {
+        use std::collections::HashMap;
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        for line in crate::safety_scan::eval::training_corpus_lines() {
+            let key = line.trim().to_lowercase();
+            // Bare acknowledgements genuinely recur in real dialogue.
+            if key.split_whitespace().count() < 3 {
+                continue;
+            }
+            *seen.entry(key).or_default() += 1;
+        }
+        let mut repeats: Vec<(String, usize)> = seen.into_iter().filter(|(_, n)| *n > 1).collect();
+        repeats.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        assert!(
+            repeats.is_empty(),
+            "{} message texts appear more than once — a model learns the repetition, \
+             not the behaviour:\n{}",
+            repeats.len(),
+            repeats
+                .iter()
+                .take(8)
+                .map(|(t, n)| format!("  {n}x {t:?}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
+    /// No surface feature may predict the label better than the base rate does.
+    ///
+    /// The third review found the corpus riddled with these: a conversation the
+    /// phone owner speaks first in was harmful 18 times out of 18; the
+    /// them/me/them/them rhythm 10 out of 10; five-message conversations 10 out
+    /// of 11. None of those is a fact about harm. They are facts about how the
+    /// author wrote, and a classifier will find them first because they are
+    /// cheaper to learn than the behaviour.
+    ///
+    /// Worse, they are self-inflicted: the them/me/them/them shape exists
+    /// BECAUSE a previous round bolted a fourth line onto ten positives to
+    /// break a different shortcut. Removing one formula installed a stronger
+    /// one, which is why this has to be measured rather than eyeballed.
+    ///
+    /// The test is deliberately not "the feature is rare". A feature may fire
+    /// as often as it likes so long as, once it has fired, it has told you
+    /// nothing you did not already know from the corpus's own harmful/ordinary
+    /// mix. Anything outside a band around that base rate is a free answer.
+    #[test]
+    fn no_surface_feature_predicts_the_label() {
+        use std::collections::BTreeMap;
+        let records = crate::safety_scan::eval::training_corpus_records();
+        let total = records.len() as f64;
+        let base = records.iter().filter(|r| r.positive).count() as f64 / total;
+
+        /// Below this many records a rate is noise, not a shortcut.
+        const MIN_SUPPORT: usize = 10;
+        /// How far from the base rate a feature may sit before it is teaching
+        /// the model something the text did not.
+        const BAND: f64 = 0.15;
+
+        let mut features: BTreeMap<String, Vec<bool>> = BTreeMap::new();
+        let mut add = |name: String, positive: bool| {
+            features.entry(name).or_default().push(positive);
+        };
+        for r in &records {
+            let n = r.senders.len();
+            add(format!("shape={}", r.shape()), r.positive);
+            add(format!("turns={n}"), r.positive);
+            add(
+                format!("first={}", r.senders.first().map_or("?", |s| s.as_str())),
+                r.positive,
+            );
+            add(
+                format!("last={}", r.senders.last().map_or("?", |s| s.as_str())),
+                r.positive,
+            );
+            if n >= 2 {
+                add(
+                    format!("last_two_same={}", r.senders[n - 1] == r.senders[n - 2]),
+                    r.positive,
+                );
+            }
+            let chars: usize = r.texts.iter().map(|t| t.chars().count()).sum();
+            add(format!("len_bucket={}", chars / 100), r.positive);
+            let body = r.texts.join(" ").to_lowercase();
+            for token in ["love", "sorry", "thanks", "please", "x"] {
+                if body
+                    .split_whitespace()
+                    .any(|w| w.trim_matches(|c: char| !c.is_alphanumeric()) == token)
+                {
+                    add(format!("word={token}"), r.positive);
+                }
+            }
+        }
+
+        let mut offenders: Vec<String> = Vec::new();
+        for (name, hits) in &features {
+            if hits.len() < MIN_SUPPORT {
+                continue;
+            }
+            let rate = hits.iter().filter(|p| **p).count() as f64 / hits.len() as f64;
+            if (rate - base).abs() > BAND {
+                offenders.push(format!(
+                    "  {name:24} fires {:3}, harmful {:.0}% (corpus is {:.0}%)",
+                    hits.len(),
+                    rate * 100.0,
+                    base * 100.0
+                ));
+            }
+        }
+        offenders.sort();
+        assert!(
+            offenders.is_empty(),
+            "{} surface features predict the label better than the corpus mix does — \
+             a model learns these instead of the behaviour:\n{}",
+            offenders.len(),
+            offenders.join("\n")
+        );
+    }
+
+    /// The TRAINING corpus must not contain eval text either.
+    ///
+    /// This was missing, and it mattered: love-bombing closers added to 58
+    /// training conversations collided with eval cases in 14 places, and
+    /// `scripts/preflight.sh` passed anyway because nothing checked the
+    /// training corpus at all. A model trained on text it is later scored
+    /// against reports a number that means nothing, which is the failure this
+    /// project has now hit in three different disguises.
+    #[test]
+    fn the_training_corpus_does_not_overlap_the_eval_set() {
+        let lines = crate::safety_scan::eval::training_corpus_lines();
+        assert!(
+            lines.len() > 100,
+            "training corpus looks empty: {} lines",
+            lines.len()
+        );
+
+        // A guard that only checks the files someone remembered to list is a
+        // guard that silently shrinks. negatives-hard.jsonl was added to the
+        // directory and not to the constant within minutes of the guard being
+        // written, so the guard now checks that too.
+        let dir =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/safety-scan/train");
+        let on_disk: std::collections::BTreeSet<String> = std::fs::read_dir(&dir)
+            .expect("training corpus directory")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".jsonl"))
+            .collect();
+        let listed: std::collections::BTreeSet<String> =
+            crate::safety_scan::eval::training_corpus_files()
+                .into_iter()
+                .collect();
+        assert_eq!(
+            on_disk, listed,
+            "training files on disk do not match the ones the guard checks — an unlisted \
+             file is an unguarded file"
+        );
+        if let Some((eval, train)) = crate::safety_scan::eval::overlaps_sealed_fixtures(&lines) {
+            panic!(
+                "training corpus overlaps the eval set:\n  eval:     {eval:?}\n  training: {train:?}\n\
+                 A model trained on the text it is scored against reports a number that means nothing."
+            );
+        }
+    }
+
     #[test]
     fn the_prototype_corpus_does_not_overlap_the_eval_fixtures() {
         // The check itself lives in `eval::overlaps_sealed_fixtures`, because

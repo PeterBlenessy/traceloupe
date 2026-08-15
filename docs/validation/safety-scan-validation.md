@@ -1564,3 +1564,55 @@ comparison rests on one run per arm, and this setup is known to swing by several
 cases on seed alone. The origin split is the exception because its samples are
 62 and 201 rather than 14, which is the whole argument for having built the
 bigger eval set.
+
+### 2026-08-14 — the machine-written corpus is unusable, and I should not have needed telling twice
+
+Peter's objection this morning was that a model scoring 3/8 on
+relationship-harassment cannot be trusted to write good examples of it. I
+generated 1,500 conversations anyway, later measured that they produced a <!-- not-a-backup-count: generated corpus, not anyone's backup -->
+classifier scoring 72% on harassment, and **retracted his objection on that
+basis without ever reading the corpus**.
+
+Reading it settles the matter the other way.
+
+**The labels came from the prompt, not the content.** The generator was asked
+for mode X of category Y and stamped the output Y regardless of what the model
+actually wrote. Wherever it drifted — which is constantly — the label is simply
+false. Structural checks, which are a floor on the problem and not a ceiling:
+
+| check | count |
+|---|---|
+| "grooming" conversations with no indication a minor is involved | **80 of 84** |
+| "threat-violence" conversations containing no threat vocabulary | **66 of 85** |
+| one-sided, no reply from the other party | 92 |
+
+Reading a sample is worse than the counts suggest. A conversation labelled
+*harassment / waits outside their work or home* reads "Hey, I'm near your place,
+just waiting for a bit" answered by "No rush, really" — two friends arranging to
+meet. One labelled *threat-violence / explicit threat to hurt or kill* contains
+no threat. One labelled *harassment / exclusion* is coercive control and ends
+"that's my good boy 😘". Several are incoherent: a victim answers a lock-change
+with "are we still on for the cinema Friday? 🍿".
+
+**So the 72% means something other than what I said it meant.** A classifier
+trained on that corpus was not learning these categories; whatever it learned,
+the label "72% on harassment" does not describe competence at recognising
+harassment.
+
+**Retracting the retraction.** The earlier entry recorded "the machine corpus is
+near-worthless" as a mistaken objection of Peter's, corrected by measurement.
+That was wrong. His objection was right, my measurement was computed on data I
+had not inspected, and I used the number to overrule the person who had actually
+thought about it.
+
+The machine corpus is dropped from the training pipeline entirely. Not
+filtered — filtering by keyword would be the same error in a smaller costume,
+since the problem is that the labels do not describe the text.
+
+**The general lesson, which is the expensive one.** I spent the day optimising
+counts: examples per category, balance across categories, corpus size. Quality
+was assumed and never checked. 60 hand-written conversations outperform 1,500
+generated ones, which was visible in the numbers hours before I understood what
+it was telling me — it was not that hand-written material is *somewhat* better
+per example, it was that most of the generated material is not an example of
+anything.
