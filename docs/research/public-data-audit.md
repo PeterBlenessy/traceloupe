@@ -98,3 +98,31 @@ asks for a short statement of intended use. Draft:
 > model weights and aggregate metrics are derived from it.
 
 Submitting needs a Zenodo login, so this is Peter's single required action.
+
+## First real-data training run: ModernBERT-base on CGA (2026-08-15)
+
+512-token windows, best-epoch checkpointing, published splits.
+
+| measurement | result |
+|---|---|
+| CGA held-out test | **0.783** — attacks caught 309/420, clean kept clean 349/420 |
+| our behavioural checklist | harmful caught **4/201**, ordinary kept clean 21/25 |
+
+**What the first number means:** the training process works. 78% on real,
+held-out, multi-author conversations is in the range published work reaches on
+this data, so the pipeline (rendering, truncation, checkpointing) is sound and
+the numbers can be trusted in a way nothing measured on our own fixtures ever
+could be.
+
+**What the second number means:** a model trained on Wikipedia editors
+attacking each other transfers almost nothing to quiet intimate harm — same
+result as toxic-bert, for the same reason. Public-forum abuse is loud; the harm
+our product exists for is quiet. This was predicted in the baseline section and
+is now measured twice.
+
+**Consequences:** (1) PAN12 (real grooming chats — quiet harm, the only public
+example of it) moves from important to critical; Peter's Zenodo request is the
+gate. (2) Civil Comments multi-head training proceeds for the loud categories
+(threat, insult, identity, sexual), where transfer has a fair chance. (3) The
+quiet categories (coercive control) stay in the pattern tier, which needs no
+training data — a decision this result retroactively strengthens.
