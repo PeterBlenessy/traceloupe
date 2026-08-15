@@ -143,3 +143,34 @@ Why this is the most valuable set of the audit: it is the only public corpus of
 near zero on — and it is real two-person informal chat, the closest domain
 match to SMS we have. Queued for training as soon as the Civil Comments run
 frees the GPU.
+
+## Civil Comments multi-head run (2026-08-15, evening)
+
+Five sigmoid heads, 40k balanced samples, 192-token windows, best-epoch. On its
+own held-out data (8k comments):
+
+| head | caught | false alarms |
+|---|---|---|
+| toxicity | 3455/3903 (89%) | 517/4097 (13%) |
+| insult | 2338/2896 (81%) | 419/5104 (8%) |
+| threat | 58/104 (56%) | 40/7896 (0.5%) |
+| identity attack | 129/335 (39%) | 48/7665 (0.6%) |
+| sexual explicit | 59/125 (47%) | 26/7875 (0.3%) |
+
+Reading: the two big heads are healthy for a first pass. The three rare heads
+are starved — threat is 0.25% of the raw data, and a 20k-positive subsample
+carries only a few hundred of each. Second iteration: oversample the rare
+dimensions specifically and tune per-head thresholds; the false-alarm headroom
+(under 1%) says the thresholds are far too conservative.
+
+Checklist transfer: 12 of 201 harmful caught across all categories, 5/25
+ordinary wrongly flagged. Third measurement of the same law (toxic-bert, CGA
+model, now this): **models trained on loud public abuse do not see quiet
+intimate harm.** The checklist has now falsified the easy version of the plan
+three times, which is exactly what an instrument is for.
+
+Standing conclusion for the scanner architecture: the public-data heads are a
+*signal*, not the scanner. They will catch the genuinely loud subset of backup
+content (slurs, explicit threats, overt sexual pressure) cheaply and with
+published-range reliability; the quiet categories ride on PAN12 (running now)
+and the pattern tier.
