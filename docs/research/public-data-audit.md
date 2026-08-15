@@ -49,3 +49,36 @@ records serve as the behavioural checklist, never as training data.
 
 - PAN12 Zenodo request form (drafted use-statement will be provided).
 - Nothing else so far.
+
+## Zero-training baseline (2026-08-15)
+
+`unitary/toxic-bert` — a free classifier already trained on the Jigsaw data —
+scored against the 226-case behavioural checklist, conversation score = max
+over its messages:
+
+| threshold | harmful caught | ordinary wrongly flagged |
+|---|---|---|
+| 0.5 | 11 / 201 | 3 / 25 |
+| 0.1 | 48 / 201 | 6 / 25 |
+| 0.02 | 98 / 201 | 11 / 25 |
+
+The harmful cases it misses have a **median top score of 0.015** — this is not
+a threshold problem; the model sees nothing in them at all.
+
+**What this actually measures.** Toxic-bert detects *overt* toxicity — slurs,
+profanity, direct insults — because that is what news-site comment moderation
+labels. Our checklist is dominated by *quiet* harm: "lovely woman. lives on her
+own now doesnt she", "the app says youre still in town". No amount of
+thresholding recovers a signal that is absent.
+
+**Consequences for the plan:**
+1. The zero-training shortcut is closed. Off-the-shelf models are a floor
+   (11/201), not an option.
+2. **Civil Comments alone will not be enough either** — a model trained on it
+   inherits the same overt-toxicity blind spot. The conversation-level CGA data
+   (which labels *derailment*, not swearing) and PAN12 (which labels grooming,
+   the quietest category of all) carry the burden for veiled harm. This raises
+   PAN12 access from nice-to-have to important.
+3. The checklist has proven itself as an instrument: it separates "detects
+   rudeness" from "detects harm", which is exactly the distinction the product
+   lives on. It stays as the acceptance gate for every candidate model.
