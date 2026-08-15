@@ -103,6 +103,14 @@ const TRAIN_JSONL: &[(&str, &str)] = &[
         "structure-balance",
         include_str!("../../fixtures/safety-scan/train/structure-balance.jsonl"),
     ),
+    (
+        "me-as-perpetrator",
+        include_str!("../../fixtures/safety-scan/train/me-as-perpetrator.jsonl"),
+    ),
+    (
+        "negatives-me-first",
+        include_str!("../../fixtures/safety-scan/train/negatives-me-first.jsonl"),
+    ),
 ];
 
 /// The training-corpus file names the guard checks, so a file added to the
