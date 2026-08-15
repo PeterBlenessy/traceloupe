@@ -217,3 +217,23 @@ Trust level by category, all measured on real held-out data:
 
 Next: per-head threshold tuning + rare-head oversampling; ONNX export and the
 Rust integration path; grooming checklist rewrite.
+
+## Export chain proven (2026-08-16, 00:15)
+
+PyTorch → ONNX → int8, each step verified:
+
+| artefact | size | CPU latency | accuracy on real test |
+|---|---|---|---|
+| PyTorch fp32 | — | — | recall 0.968, F0.5 0.958 |
+| ONNX fp32 | 571MB | 32 ms/conversation | bit-identical (max logit diff 8e-6) |
+| **ONNX int8** | **143MB** | **14 ms/conversation** | recall 0.964, est. F0.5 0.958 |
+
+Quantisation costs 0.4 points of recall and nothing else. The deployable
+grooming detector is 143MB and scores a conversation in 14 ms on CPU — the
+incumbent generative stage takes ~6.5 s, so this is ~460× faster at
+published-benchmark accuracy. Integration path: the `ort` crate in the Rust
+backend (scans must outlive the UI), tokenizer via `tokenizers` crate.
+
+One tooling note: the tokenizer config saved by this transformers version
+names a class (`TokenizersBackend`) it cannot itself re-import; load the
+tokenizer from the hub id instead of the local dir.
