@@ -111,6 +111,10 @@ const TRAIN_JSONL: &[(&str, &str)] = &[
         "negatives-me-first",
         include_str!("../../fixtures/safety-scan/train/negatives-me-first.jsonl"),
     ),
+    (
+        "surface-realism",
+        include_str!("../../fixtures/safety-scan/train/surface-realism.jsonl"),
+    ),
 ];
 
 /// The training-corpus file names the guard checks, so a file added to the
@@ -309,18 +313,24 @@ pub fn overlaps_sealed_fixtures(corpus_lines: &[String]) -> Option<(String, Stri
     /// the") is English, not copying. Requiring two content words in the window
     /// is what separates the two.
     const MIN_CONTENT_WORDS: usize = 2;
+    /// Contraction fragments are tokenizer artefacts, not content. "you've"
+    /// splits to ["you", "ve"], and counting "ve" as a content word made
+    /// ("ve", "had", "a", "lot") look like a shared phrase between two
+    /// unrelated sentences. They belong here for the same reason "the" does.
     const STOPWORDS: &[&str] = &[
-        "a", "about", "after", "all", "am", "an", "and", "any", "are", "arent", "as", "at", "back",
-        "be", "been", "before", "but", "by", "can", "cant", "could", "did", "didnt", "do", "does",
-        "doesnt", "doing", "dont", "for", "from", "get", "go", "got", "had", "has", "have", "he",
-        "her", "here", "hes", "him", "his", "how", "i", "if", "il", "ill", "im", "in", "into",
-        "is", "isnt", "it", "its", "ive", "just", "know", "like", "me", "more", "my", "no", "not",
-        "now", "of", "off", "on", "one", "or", "our", "out", "over", "own", "re", "right", "s",
-        "said", "say", "see", "she", "shes", "should", "so", "some", "still", "such", "than",
-        "that", "thats", "the", "their", "them", "then", "there", "theres", "these", "they",
-        "theyre", "this", "those", "to", "too", "up", "us", "very", "want", "was", "wasnt", "we",
-        "well", "were", "what", "whats", "when", "where", "which", "while", "who", "why", "will",
-        "with", "would", "yeah", "you", "your", "youre", "youve",
+        "ve", "ll", "t", "m", "d", "don", "doesn", "didn", "isn", "aren", "wasn", "weren",
+        "wouldn", "couldn", "shouldn", "haven", "hasn", "won", "hadn", "mustn", "a", "about",
+        "after", "all", "am", "an", "and", "any", "are", "arent", "as", "at", "back", "be", "been",
+        "before", "but", "by", "can", "cant", "could", "did", "didnt", "do", "does", "doesnt",
+        "doing", "dont", "for", "from", "get", "go", "got", "had", "has", "have", "he", "her",
+        "here", "hes", "him", "his", "how", "i", "if", "il", "ill", "im", "in", "into", "is",
+        "isnt", "it", "its", "ive", "just", "know", "like", "me", "more", "my", "no", "not", "now",
+        "of", "off", "on", "one", "or", "our", "out", "over", "own", "re", "right", "s", "said",
+        "say", "see", "she", "shes", "should", "so", "some", "still", "such", "than", "that",
+        "thats", "the", "their", "them", "then", "there", "theres", "these", "they", "theyre",
+        "this", "those", "to", "too", "up", "us", "very", "want", "was", "wasnt", "we", "well",
+        "were", "what", "whats", "when", "where", "which", "while", "who", "why", "will", "with",
+        "would", "yeah", "you", "your", "youre", "youve",
     ];
     fn words(s: &str) -> Vec<String> {
         s.to_lowercase()
