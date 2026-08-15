@@ -115,6 +115,10 @@ const TRAIN_JSONL: &[(&str, &str)] = &[
         "surface-realism",
         include_str!("../../fixtures/safety-scan/train/surface-realism.jsonl"),
     ),
+    (
+        "category-range",
+        include_str!("../../fixtures/safety-scan/train/category-range.jsonl"),
+    ),
 ];
 
 /// The training-corpus file names the guard checks, so a file added to the
