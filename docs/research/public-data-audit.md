@@ -126,3 +126,20 @@ gate. (2) Civil Comments multi-head training proceeds for the loud categories
 (threat, insult, identity, sexual), where transfer has a fair chance. (3) The
 quiet categories (coercive control) stay in the pattern tier, which needs no
 training data — a decision this result retroactively strengthens.
+
+## PAN12 acquired (2026-08-15)
+
+Peter submitted the Zenodo request and downloaded the corpus; it lives at
+`~/.traceloupe-dev/datasets/pan12/` (training + test). **No excerpt of this
+data is ever committed to the repo** — only weights and aggregate metrics.
+
+Training corpus: 66,927 conversations / ~904k messages / 142 convicted
+predators appearing in 2,016 conversations (**3% positive** — the first
+deployment-shaped class balance in the project; the hand-written eval set is
+89% positive and cannot measure false-alarm rates realistically).
+
+Why this is the most valuable set of the audit: it is the only public corpus of
+*quiet* harm — the register both toxic-bert and the CGA-trained model scored
+near zero on — and it is real two-person informal chat, the closest domain
+match to SMS we have. Queued for training as soon as the Civil Comments run
+frees the GPU.
