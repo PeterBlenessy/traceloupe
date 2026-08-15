@@ -133,8 +133,8 @@ Peter submitted the Zenodo request and downloaded the corpus; it lives at
 `~/.traceloupe-dev/datasets/pan12/` (training + test). **No excerpt of this
 data is ever committed to the repo** — only weights and aggregate metrics.
 
-Training corpus: 66,927 conversations / ~904k messages / 142 convicted
-predators appearing in 2,016 conversations (**3% positive** — the first
+Training corpus: 66,927 conversations <!-- not-a-backup-count: public PAN12 research corpus --> / ~904k messages / 142 convicted
+predators appearing in 2,016 conversations <!-- not-a-backup-count: public PAN12 research corpus --> (**3% positive** — the first
 deployment-shaped class balance in the project; the hand-written eval set is
 89% positive and cannot measure false-alarm rates realistically).
 
