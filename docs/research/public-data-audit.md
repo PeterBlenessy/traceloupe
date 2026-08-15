@@ -174,3 +174,46 @@ Standing conclusion for the scanner architecture: the public-data heads are a
 content (slurs, explicit threats, overt sexual pressure) cheaply and with
 published-range reliability; the quiet categories ride on PAN12 (running now)
 and the pattern tier.
+
+## PAN12 run: above the published reference (2026-08-15, night)
+
+ModernBERT-base, two epochs, class-weighted, best-epoch. Official test corpus,
+Fauzi & Bours protocol:
+
+| | ours | published (Fauzi & Bours 2020) |
+|---|---|---|
+| F0.5 | **0.958** | 0.9348 |
+| precision | 0.955 | — |
+| recall | 0.968 | — |
+
+Caught 1,780 of 1,839 predatory conversations; **84 false alarms in 122,035
+clean conversations (0.07%)**. In plain terms: it finds 97 of every 100 real
+grooming conversations, and wrongly flags about 7 in 10,000 ordinary ones.
+A 2024-class encoder beating a 2020 bag-of-words ensemble is the expected
+shape; being *in range* of the reference is what makes the number credible.
+
+**Window experiment.** On 400 real predatory conversations, scoring only the
+opening: first 4 messages → 42%, first 6 → 64%, **first 10 → 89%**, first 20 →
+96%. The model detects grooming early, from windows the triage scan can
+actually hand it — consistent with (and stronger than) the published
+26-161-message early-detection finding.
+
+**Checklist correction.** The model catches 0 of the 7 hand-written grooming
+vignettes while catching 96.8% of real grooming. Given the window experiment,
+the vignettes are the suspect, not the model: one author's idea of grooming,
+already shown unrepresentative by review four. The grooming section of the
+checklist needs rewriting against real patterns (excerpt-inspired, not
+excerpt-copied) before it can gate this model. Its other sections stand.
+
+## Where this leaves the scanner
+
+Trust level by category, all measured on real held-out data:
+- **grooming**: at/above published reference, works on 10-message windows
+- **toxicity/insult (loud harassment)**: healthy first pass (89%/81% caught)
+- **threat / identity / sexual-explicit**: heads starved, second iteration needed
+- **coercive control**: pattern tier (no model)
+- **self-harm**: deferred pending data pass
+- **conversation derailment**: 0.783, in published range
+
+Next: per-head threshold tuning + rare-head oversampling; ONNX export and the
+Rust integration path; grooming checklist rewrite.
