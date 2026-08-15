@@ -1441,3 +1441,59 @@ reads the tags.
 No number from this corpus is worth reporting until an independent reviewer has
 read every record. Two reviews returned NOT DEPLOYABLE; the numbers measured in
 between were measured on data that could not support them.
+
+## The corpus taught my writing voice, and four reviews were needed to prove it
+
+The fourth review did what the first three did not: it trained a model on the
+corpus and measured it, rather than reading it. Three results ended the
+hand-written approach.
+
+**Deleting every content word barely hurt.** Replacing each noun, verb and
+adjective with `X`, keeping only function words, punctuation and speaker tags,
+scored 0.858 against 0.903 for the full text. Ninety-five per cent of the
+performance survived removing the subject matter entirely. Whatever the
+classifier had learned, it was not about harm — it was the rhythm of two
+writing voices, one menacing and one mundane, both mine.
+
+**The ordinary conversations were a coin flip.** On the sealed set's ordinary
+cases the trained model scored 0.52. Held out file by file, the hard negatives
+scored 0.318 — two in three ordinary conversations flagged as harmful. Every
+harmful file generalised; only the ordinary ones collapsed, because "ordinary"
+had been memorised from a few dozen specific records rather than learned. A
+real backup is almost entirely conversations resembling none of them.
+
+**The last line carried the answer.** The aggressor speaks last in 96% of the
+harmful records. Deleting the final message dropped accuracy from 0.903 to
+0.823. The triage scan hands the model arbitrary windows of a thread, which do
+not end tidily on the abuser's closing move.
+
+Three more things this cost, worth writing down.
+
+**A guard whose features you chose yourself is a conflict of interest.** The
+structural guard passed while six features it did not test were further from
+the base rate than the ten it was built to catch — a de-escalating closing line
+(−42 points), a self-exculpating reframe (+32), the presence of a question mark
+(−29). It passed because it did not look. The fix is not more features; it is
+that the author of a corpus cannot be the sole author of its guards.
+
+**An n-gram guard cannot catch a paraphrase, and mine claimed it could.** After
+being rewritten to require a shared content-bearing 4-gram, it still missed 35
+eval cases with a training twin — same scenario, synonyms swapped, sometimes
+with the speaker roles exchanged so even the equality branch missed it. The
+docstring asserting otherwise was written by me in the same commit that failed
+to test it.
+
+**The evaluation set has the same defect as the training set.** Both were
+written by one author in one sitting-style. Training on one and scoring against
+the other measures whether the model has learned that author's voice. Even a
+good number would say nothing about a real phone. This is the finding that
+matters most, because it invalidates the measuring instrument and not just the
+thing measured.
+
+The conclusion is that single-author synthetic data cannot support this
+feature. Not "needs more rounds" — four rounds each removed a shortcut and
+installed a new one, which is what a structural limit looks like from the
+inside. What the hand-written records remain good for is behavioural unit
+tests: specific things the product must catch, asserted individually. What they
+cannot be is the corpus a model learns harm from, or the yardstick it is
+measured against.
