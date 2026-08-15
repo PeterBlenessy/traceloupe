@@ -1497,3 +1497,68 @@ inside. What the hand-written records remain good for is behavioural unit
 tests: specific things the product must catch, asserted individually. What they
 cannot be is the corpus a model learns harm from, or the yardstick it is
 measured against.
+
+## The pivot to real data, and the first number worth trusting
+
+Peter's reaction to the corpus finding settled the direction in one sentence:
+*"focus on public data, get to a level where we trust the scanner, then decide
+how to improve it without removing what works."* He also pointed out, fairly,
+that he had asked for known public datasets from the start — the synthetic
+route was chosen to fill a gap one category left, and then quietly grew into
+the whole corpus and the whole yardstick. The lesson for next time is about
+scope creep in a workaround, not about who was right: a stopgap that starts
+answering the main question needs to be re-justified as if proposed fresh.
+
+The pivot reshaped the product's promise more than its code:
+
+- **Established categories, established data.** Harassment, threats, hate and
+  sexual content train on Civil Comments (2M real comments, public domain) and
+  Conversations Gone Awry (4,188 real conversations labelled where they turn
+  into personal attacks). Grooming trains on PAN12 — real predator chats from
+  convictions, the academic standard, which Peter unblocked the same day by
+  submitting the Zenodo access request.
+- **Patterns, not classifiers, for coercive control.** The relationship
+  requirement was dropped at Peter's suggestion. Control lives in the pattern —
+  volume, one-sidedness, contact resuming after silence — and the census stage
+  already computes exactly those statistics. No training data needed, and more
+  honest than a model pretending to read control into one message.
+- **Cut what has no data.** Drugs and scam leave the learned scanner: scam
+  becomes rules for the common shapes, drugs waits. Fewer promises, kept.
+- **The 522 hand-written conversations became the acceptance checklist** — the
+  role they were always good for.
+
+Model choice stayed with the small encoder — the reader, not the writer — and
+Peter's criterion is on record: he doesn't care which model, *"as long as it
+has been considered and the chosen one performed well."* Consideration and
+measurement are the deliverable, not a name.
+
+Three results from the first day of real-data work, in the order they earned
+trust:
+
+**The zero-training floor.** An off-the-shelf toxicity model catches 11 of the
+201 checklist cases, and the ones it misses score 0.015 — it sees nothing in
+them. Public-moderation models detect loud abuse; our product exists for quiet
+abuse. Measured, not assumed, and it closed the "just use a pretrained model"
+shortcut with a number.
+
+**The pipeline proof.** ModernBERT trained on the real conversation data
+scored 0.783 on conversations it had never seen — in the range published work
+reaches on the same data. That sentence could never be written about anything
+measured on our own fixtures. The same model still transfers almost nothing to
+the quiet checklist (4 of 201), which is the transfer gap made visible: the
+loud categories can ride public data; the quiet ones live or die on PAN12.
+
+**The deployment-shaped test set.** PAN12's training corpus is 66,927 real
+conversations of which 3% involve a predator — the first data in this project
+whose class balance resembles a phone. The hand-written eval set is 89%
+harmful; it can say "did you catch it" but barely "did you cry wolf". A
+published protocol (Fauzi & Bours 2020, F0.5 ≈ 0.93 on this corpus) is the
+external reference the overnight run gets compared against.
+
+Operational lessons from the day, so they cost nothing next time: a training
+run launched through the harness dies with its ten-minute timeout — detach it
+and poll; a run with no step-level logging cannot be distinguished from a hung
+one, which turned a 90-minute wait into a diagnosis; and on a shared laptop,
+throughput belongs to whoever is using the machine — length-sorted batches cut
+step time 18× when memory pressure eased, and a queue that grinds slowly while
+Peter works and sprints when the machine idles beats any fixed schedule.
