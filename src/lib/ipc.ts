@@ -1542,6 +1542,8 @@ export interface TraceLoupeClient {
   safetyScanHealthCheck(modelId?: string | null): Promise<SafetyHealthReport>;
   /** Download a catalog model (progress on `safetyscan://model-progress`). */
   downloadSafetyScanModel(modelId: string): Promise<void>;
+  /** Silently install the grooming-signal artefacts if absent (#521). */
+  ensureGroomingArtefacts(): Promise<boolean>;
   cancelSafetyScanModelDownload(): Promise<void>;
   /** The in-flight download, if any — lets the UI rehydrate after a refresh. */
   getSafetyScanDownloadStatus(): Promise<SafetyModelDownloadStatus | null>;
@@ -2292,6 +2294,7 @@ const tauriClient: TraceLoupeClient = {
     }),
   downloadSafetyScanModel: (modelId) =>
     invoke("download_safety_scan_model", { modelId }),
+  ensureGroomingArtefacts: () => invoke<boolean>("ensure_grooming_artefacts"),
   getSafetyScanDownloadStatus: () =>
     invoke<SafetyModelDownloadStatus | null>("get_safety_scan_download_status"),
   cancelSafetyScanModelDownload: () =>
@@ -7064,6 +7067,7 @@ const mockClient: TraceLoupeClient = {
   downloadSafetyScanModel: async () => {
     mockSafetyModelInstalled = true;
   },
+  ensureGroomingArtefacts: async () => true,
   cancelSafetyScanModelDownload: async () => {},
   runSafetyScan: async () => {
     if (!mockActive) throw new Error("no backup is open");

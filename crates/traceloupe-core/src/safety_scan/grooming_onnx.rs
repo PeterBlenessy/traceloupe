@@ -88,7 +88,11 @@ pub fn render_window(messages: &[ChunkItem]) -> String {
         if !out.is_empty() {
             out.push('\n');
         }
-        out.push_str(&format!("{letter}: {}", m.text));
+        // One LINE per message, as in training. Real iMessage bodies contain
+        // newlines; unescaped, one message renders as several apparent turns,
+        // and a body containing "\nB: ..." would inject a fabricated turn.
+        let flat: String = m.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        out.push_str(&format!("{letter}: {flat}"));
     }
     out
 }
@@ -98,7 +102,19 @@ impl GroomingClassifier {
         let session = Session::builder()
             .and_then(|mut b| b.commit_from_file(model))
             .map_err(|e| format!("onnx session: {e}"))?;
-        let tokenizer = Tokenizer::from_file(tokenizer).map_err(|e| format!("tokenizer: {e}"))?;
+        let mut tokenizer =
+            Tokenizer::from_file(tokenizer).map_err(|e| format!("tokenizer: {e}"))?;
+        // Truncation must live in the tokenizer, not as a post-hoc slice: HF
+        // truncates BEFORE adding [CLS]/[SEP], so trained inputs always end
+        // with [SEP]. Slicing afterwards decapitates [SEP] on any window over
+        // MAX_TOKENS — a shape the model never saw (review of #522, finding 5).
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: MAX_TOKENS,
+                direction: tokenizers::TruncationDirection::Right,
+                ..Default::default()
+            }))
+            .map_err(|e| format!("truncation: {e}"))?;
         Ok(Self { session, tokenizer })
     }
 
@@ -106,11 +122,10 @@ impl GroomingClassifier {
     /// threshold at argmax, and the published comparison used argmax, so a
     /// boolean keeps this honest — no invented confidence scale.
     pub fn window_is_predatory(&mut self, rendered: &str) -> Result<bool, String> {
-        let mut enc = self
+        let enc = self
             .tokenizer
             .encode(rendered, true)
             .map_err(|e| format!("encode: {e}"))?;
-        enc.truncate(MAX_TOKENS, 0, tokenizers::TruncationDirection::Right);
         let ids: Vec<i64> = enc.get_ids().iter().map(|&i| i as i64).collect();
         let mask: Vec<i64> = enc.get_attention_mask().iter().map(|&i| i as i64).collect();
         let n = ids.len();
@@ -126,24 +141,39 @@ impl GroomingClassifier {
         let logits = outputs[0]
             .try_extract_array::<f32>()
             .map_err(|e| format!("logits: {e}"))?;
+        // A net must never sink the boat: an unexpected output shape is an
+        // Err (audited, thread skipped), not a panic that unwinds the scan.
+        if logits.ndim() != 2 || logits.shape()[1] < 2 {
+            return Err(format!("unexpected logits shape {:?}", logits.shape()));
+        }
         let row = logits.index_axis(ndarray::Axis(0), 0);
         Ok(row[1] > row[0])
     }
 
     /// First window and last window, max — per the measured detection curve.
-    pub fn conversation_is_predatory(&mut self, messages: &[ChunkItem]) -> Result<bool, String> {
+    /// Returns the index (within `messages`) of the LAST message of the window
+    /// that fired: the finding anchors on scored evidence, so a hit in the
+    /// tail of a years-long thread must not deep-link to its beginning
+    /// (review of #522, finding 2).
+    pub fn conversation_predatory_at(
+        &mut self,
+        messages: &[ChunkItem],
+    ) -> Result<Option<usize>, String> {
         if messages.is_empty() {
-            return Ok(false);
+            return Ok(None);
         }
-        let head = &messages[..messages.len().min(WINDOW_MESSAGES)];
-        if self.window_is_predatory(&render_window(head))? {
-            return Ok(true);
+        let head_end = messages.len().min(WINDOW_MESSAGES);
+        if self.window_is_predatory(&render_window(&messages[..head_end]))? {
+            return Ok(Some(head_end - 1));
         }
-        if messages.len() > WINDOW_MESSAGES {
-            let tail = &messages[messages.len() - WINDOW_MESSAGES..];
-            return self.window_is_predatory(&render_window(tail));
+        if messages.len() > WINDOW_MESSAGES
+            && self.window_is_predatory(&render_window(
+                &messages[messages.len() - WINDOW_MESSAGES..],
+            ))?
+        {
+            return Ok(Some(messages.len() - 1));
         }
-        Ok(false)
+        Ok(None)
     }
 }
 
@@ -177,6 +207,40 @@ mod tests {
         let a = vec![msg("them", "hey"), msg("me", "hi")];
         let b = vec![msg("+44 7911 123456", "hey"), msg("owner", "hi")];
         assert_eq!(render_window(&a), render_window(&b));
+    }
+
+    /// Review of #522, finding 2: a hit in the TAIL window must anchor there.
+    /// Uses the real model via the env artefacts plus the out-of-repo smoke
+    /// window planted at the END of a long ordinary thread.
+    #[test]
+    fn a_tail_window_hit_anchors_on_the_tail() {
+        let (Ok(model), Ok(tok), Ok(smoke)) = (
+            std::env::var("TRACELOUPE_GROOMING_ONNX"),
+            std::env::var("TRACELOUPE_GROOMING_TOKENIZER"),
+            std::env::var("TRACELOUPE_GROOMING_SMOKE"),
+        ) else {
+            eprintln!("skipped: needs the artefact env vars");
+            return;
+        };
+        let mut c = GroomingClassifier::load(Path::new(&model), Path::new(&tok)).unwrap();
+        let mut msgs: Vec<ChunkItem> = (0..30)
+            .map(|i| {
+                msg(
+                    if i % 2 == 0 { "them" } else { "me" },
+                    "see you at the quiz",
+                )
+            })
+            .collect();
+        for line in std::fs::read_to_string(&smoke).unwrap().trim().lines() {
+            let (who, body) = line.split_once(": ").unwrap_or(("A", line));
+            msgs.push(msg(if who == "A" { "them" } else { "me" }, body));
+        }
+        let hit = c.conversation_predatory_at(&msgs).unwrap();
+        assert_eq!(
+            hit,
+            Some(msgs.len() - 1),
+            "the anchor must be in the tail window, not message 9 of the head"
+        );
     }
 
     /// Parity with the Python reference. Ignored without the artefacts; run

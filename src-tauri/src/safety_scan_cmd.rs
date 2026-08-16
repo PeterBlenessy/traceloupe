@@ -372,41 +372,6 @@ pub async fn download_safety_scan_model(
             };
             MODEL_PROGRESS.send(ev);
         });
-        // The grooming signal's artefacts (#521) ride along with ANY successful
-        // model install — same verified downloader, same snapshot, no new UI.
-        // Their failure never fails the install: the scan runs without the
-        // signal and says so in its audit, which beats blocking a 5 GB
-        // download the user asked for over a 145 MB extra they didn't.
-        if main.is_ok() {
-            use traceloupe_core::safety_scan::grooming_onnx::{GROOMING_MODEL, GROOMING_TOKENIZER};
-            for onnx in [&GROOMING_MODEL, &GROOMING_TOKENIZER] {
-                if onnx.installed_at(&dir).is_some() {
-                    continue;
-                }
-                let status_o = status_w.clone();
-                let model_id_o = model_id_c.clone();
-                if let Err(e) = models::download_onnx(onnx, &dir, &cancel, |p| {
-                    if let InstallProgress::Downloading { received, total } = p {
-                        *status_o.lock().unwrap_or_else(|e| e.into_inner()) =
-                            Some(DownloadSnapshot {
-                                model_id: model_id_o.clone(),
-                                received,
-                                total,
-                                phase: "downloading".into(),
-                            });
-                        MODEL_PROGRESS.send(ModelProgressEvent::Downloading { received, total });
-                    }
-                }) {
-                    // Cancellation must stay a cancellation, not a warning.
-                    if cancel.is_cancelled() {
-                        return main;
-                    }
-                    eprintln!(
-                        "grooming artefact download failed (scan will run without the signal): {e}"
-                    );
-                }
-            }
-        }
         main
     })
     .await;
@@ -428,6 +393,51 @@ pub async fn download_safety_scan_model(
                 message: msg.clone(),
             });
             Err(msg)
+        }
+    }
+}
+
+/// Ensure the grooming-signal artefacts (#521) are installed, silently.
+///
+/// Invoked by the frontend on mount: existing users already have their scan
+/// models, so a ride-along-with-installs path would never run for them. Shares
+/// the download gate so it cannot race a user-driven model download; skips
+/// networking entirely when both artefacts are present. Failure is a log line
+/// — the scan runs without the signal and its audit says so.
+#[tauri::command]
+pub async fn ensure_grooming_artefacts(
+    app: AppHandle,
+    gate: State<'_, SafetyDownloadGate>,
+) -> Result<bool, String> {
+    use traceloupe_core::safety_scan::grooming_onnx::{GROOMING_MODEL, GROOMING_TOKENIZER};
+    let dir = models_dir(&app)?;
+    if GROOMING_MODEL.installed_at(&dir).is_some()
+        && GROOMING_TOKENIZER.installed_at(&dir).is_some()
+    {
+        return Ok(true);
+    }
+    let Ok(_guard) = gate.0.try_lock() else {
+        // A model download is running; its completion path re-invokes us.
+        return Ok(false);
+    };
+    let done = tauri::async_runtime::spawn_blocking(move || {
+        let cancel = CancelToken::new();
+        for spec in [&GROOMING_MODEL, &GROOMING_TOKENIZER] {
+            if spec.installed_at(&dir).is_some() {
+                continue;
+            }
+            models::download_onnx(spec, &dir, &cancel, |_| {})
+                .map_err(|e| format!("{}: {e}", spec.filename))?;
+        }
+        Ok::<bool, String>(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    match done {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            crate::logging::warn(&app, format!("grooming artefacts unavailable: {e}"));
+            Ok(false)
         }
     }
 }
@@ -1767,6 +1777,17 @@ pub async fn run_triage_scan(
                     ScanEvent::Confirming { done, total },
                     done == 0 || done == total,
                 ),
+                // The full-pass grooming signal reports as deep-scan progress:
+                // it IS a scan of every thread, and the existing event keeps
+                // the UI contract unchanged (#521 scoped UI out).
+                TriageProgress::Grooming { done, total } => (
+                    ScanEvent::DeepScanning {
+                        done,
+                        total,
+                        findings: 0,
+                    },
+                    done == 0 || done == total,
+                ),
             };
             // Always emit phase boundaries; throttle the mid-phase stream.
             if boundary || last_emit.elapsed() >= Duration::from_millis(150) {
@@ -1797,32 +1818,60 @@ pub async fn run_triage_scan(
                     None
                 }
             },
-            _ => None,
+            (m, t) => {
+                if m.is_some() != t.is_some() {
+                    crate::logging::warn(
+                        &app2,
+                        "grooming signal half-installed (model or tokenizer missing) — \
+                         scan runs without it; re-run the artefact download"
+                            .to_string(),
+                    );
+                }
+                None
+            }
         };
         let grooming = |thread: &[traceloupe_core::safety_scan::triage::CensusInput]|
             -> traceloupe_core::Result<Option<usize>> {
+            use traceloupe_core::safety_scan::grooming_onnx::WINDOW_MESSAGES;
             let Some(clf) = grooming_clf.as_mut() else {
                 return Ok(None);
             };
-            let items: Vec<traceloupe_core::safety_scan::chunker::ChunkItem> = thread
-                .iter()
-                .map(|m| traceloupe_core::safety_scan::chunker::ChunkItem {
+            // Only the scored windows are materialised — a 40k-message thread
+            // must not be cloned to read 20 messages of it (review of #522,
+            // finding 7). Indices into `slim` map back to `thread` because the
+            // head keeps its indices and the tail is offset by `base`.
+            let head_end = thread.len().min(WINDOW_MESSAGES);
+            let base = thread.len().saturating_sub(WINDOW_MESSAGES);
+            let to_item = |m: &traceloupe_core::safety_scan::triage::CensusInput| {
+                traceloupe_core::safety_scan::chunker::ChunkItem {
                     source_id: m.source_id,
                     sender: m.sender.clone(),
                     occurred_at: m.occurred_at,
                     text: m.text.clone(),
                     fingerprint: m.fingerprint.clone(),
-                })
-                .collect();
-            clf.conversation_is_predatory(&items)
+                }
+            };
+            let slim: Vec<traceloupe_core::safety_scan::chunker::ChunkItem> =
+                if thread.len() <= WINDOW_MESSAGES * 2 {
+                    thread.iter().map(to_item).collect()
+                } else {
+                    thread[..head_end]
+                        .iter()
+                        .chain(thread[base..].iter())
+                        .map(to_item)
+                        .collect()
+                };
+            clf.conversation_predatory_at(&slim)
                 .map(|hit| {
-                    hit.then(|| {
-                        // Anchor on the last message of the first window — the
-                        // scored evidence, not merely the newest message.
-                        thread
-                            .len()
-                            .min(traceloupe_core::safety_scan::grooming_onnx::WINDOW_MESSAGES)
-                            - 1
+                    hit.map(|i| {
+                        if thread.len() <= WINDOW_MESSAGES * 2 || i < head_end {
+                            i
+                        } else {
+                            // Tail-window anchor, mapped back to the real
+                            // thread index (finding 2: the finding must point
+                            // at the evidence the model scored).
+                            base + (i - head_end)
+                        }
                     })
                 })
                 .map_err(traceloupe_core::Error::Inference)
@@ -1875,13 +1924,15 @@ pub async fn run_triage_scan(
         crate::logging::info(
             &app2,
             format!(
-                "Triage scan: {} — censused {}, candidates {}, deep-scanned {}, findings {}, unscanned {}",
+                "Triage scan: {} — censused {}, candidates {}, deep-scanned {}, findings {}, unscanned {}, grooming flagged {} (failed {})",
                 if outcome.cancelled { "cancelled" } else { "done" },
                 outcome.censused,
                 outcome.candidates,
                 outcome.deep_scanned,
                 outcome.findings,
-                outcome.unscanned()
+                outcome.unscanned(),
+                outcome.grooming_flagged,
+                outcome.grooming_failed
             ),
         );
         emit_scan(

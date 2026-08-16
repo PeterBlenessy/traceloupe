@@ -1607,6 +1607,7 @@ mod tests {
                         println!("  census {done}/{total}");
                     }
                 }
+                TriageProgress::Grooming { .. } => {}
                 TriageProgress::DeepScan { done, total, .. } => {
                     if done % 10 == 0 && done > 0 {
                         println!("  deep-scan {done}/{total}");
@@ -2934,6 +2935,7 @@ mod tests {
                         }
                     }
                     TriageProgress::DeepScan { .. } => {}
+                    TriageProgress::Grooming { .. } => {}
                 },
             )
             .expect("run_triage precise");
@@ -3339,8 +3341,7 @@ mod grooming_e2e {
                     fingerprint: m.fingerprint.clone(),
                 })
                 .collect();
-            clf.conversation_is_predatory(&items)
-                .map(|hit| hit.then(|| t.len().min(10) - 1))
+            clf.conversation_predatory_at(&items)
                 .map_err(crate::Error::Inference)
         };
         let out = triage_scan::run_triage(

@@ -51,6 +51,8 @@ pub enum TriageProgress {
     },
     /// Confirmation of provisional findings (only when the mode confirms).
     Confirm { done: usize, total: usize },
+    /// The full-pass grooming signal: `done` of `total` threads scored.
+    Grooming { done: usize, total: usize },
 }
 
 /// What a triage scan did, for the honest coverage report.
@@ -402,7 +404,7 @@ where
     // Verdicts are provisional here; confirmation (when the mode has it) is the
     // next phase, over the collected results, so the two model tiers never need
     // to be resident together.
-    let mut provisional: Vec<(FocusWindow, FocusVerdict)> = Vec::new();
+    let mut provisional: Vec<(FocusWindow, FocusVerdict, bool)> = Vec::new();
     progress(TriageProgress::DeepScan {
         done: 0,
         total: worklist.len(),
@@ -445,7 +447,7 @@ where
             out.rejected += o.rejected;
             out.contentless += o.contentless;
             for v in o.verdicts {
-                provisional.push((window.clone(), v));
+                provisional.push((window.clone(), v, false));
             }
         }
         progress(TriageProgress::DeepScan {
@@ -454,6 +456,17 @@ where
             findings: provisional.len(),
         });
     }
+    // Every attempted item failing is not "a clean backup" — it is the §10.6
+    // signature of a harness bug (wrong grammar, dead server), and it must
+    // fail the scan loudly rather than complete with zero findings.
+    if !out.cancelled && out.deep_scanned > 0 && out.deep_scan_failed == out.deep_scanned {
+        return Err(crate::Error::Inference(
+            "every focused classification failed — suspect the harness (server/grammar), \
+             not a clean backup"
+                .into(),
+        ));
+    }
+
     // --- phase 3.5: the full-pass grooming signal (#521) ---
     // Runs over EVERY thread regardless of posture: at ~14 ms/conversation the
     // classifier is census-grade, so it does not draw from the deep-scan
@@ -461,6 +474,10 @@ where
     // extra net, and a net must never sink the boat. Verdicts join
     // `provisional`, so the mode's confirmation promise applies to them too.
     if !out.cancelled {
+        progress(TriageProgress::Grooming {
+            done: 0,
+            total: threads.len(),
+        });
         for (ti, thread) in threads.iter().enumerate() {
             if cancel.is_cancelled() {
                 out.cancelled = true;
@@ -482,6 +499,7 @@ where
                                         messages matches known predatory conversations."
                                 .into(),
                         },
+                        true,
                     ));
                 }
                 Ok(_) => {}
@@ -495,6 +513,10 @@ where
                     );
                 }
             }
+            progress(TriageProgress::Grooming {
+                done: ti + 1,
+                total: threads.len(),
+            });
         }
     }
     // A verdict for a message the deep scan already judged would double-report
@@ -502,18 +524,7 @@ where
     {
         let mut seen = std::collections::HashSet::new();
         provisional
-            .retain(|(w, v)| seen.insert((w.items[w.focus].fingerprint.clone(), v.category)));
-    }
-
-    // Every attempted item failing is not "a clean backup" — it is the §10.6
-    // signature of a harness bug (wrong grammar, dead server), and it must
-    // fail the scan loudly rather than complete with zero findings.
-    if !out.cancelled && out.deep_scanned > 0 && out.deep_scan_failed == out.deep_scanned {
-        return Err(crate::Error::Inference(
-            "every focused classification failed — suspect the harness (server/grammar), \
-             not a clean backup"
-                .into(),
-        ));
+            .retain(|(w, v, _)| seen.insert((w.items[w.focus].fingerprint.clone(), v.category)));
     }
 
     // --- phase 4: confirm the provisional findings (mode-dependent) ---
@@ -525,8 +536,16 @@ where
             total: to_confirm,
         });
     }
-    'confirm: for (done, (window, v)) in provisional.into_iter().enumerate() {
-        if mode.confirm() {
+    'confirm: for (done, (window, v, conversation_level)) in provisional.into_iter().enumerate() {
+        // The confirm tier judges ONE message ("assess only the last
+        // message"), and the grooming signal exists precisely because no
+        // single grooming message is incriminating — handing it message #10
+        // in isolation vetoes every true hit (review of #522, finding 1). A
+        // conversation-level verdict from the benchmarked classifier
+        // (precision 0.955 on PAN12's official test) IS its own second
+        // opinion; the message-level confirmer answers a different question
+        // and does not apply.
+        if mode.confirm() && !conversation_level {
             if out.cancelled || cancel.is_cancelled() {
                 // Unconfirmed-on-cancel findings are dropped, not written: the
                 // mode promised a second opinion. The scan is marked cancelled,
@@ -670,8 +689,7 @@ mod tests {
             panic!("census kept nothing, so the deep scan must not run")
         };
         let confirmed = std::cell::Cell::new(0usize);
-        let confirm = |_: &FocusWindow, v: &FocusVerdict| -> Result<bool> {
-            assert_eq!(v.category, Category::GroomingExploitation);
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
             confirmed.set(confirmed.get() + 1);
             Ok(true)
         };
@@ -695,12 +713,64 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.grooming_flagged, 1);
-        assert_eq!(confirmed.get(), 1, "the grooming verdict was vetted");
+        assert_eq!(
+            confirmed.get(),
+            0,
+            "conversation-level verdicts are exempt from the message-level \
+             confirmer (#522 finding 1) — it must never see them"
+        );
         assert_eq!(out.findings, 1);
         let rows = db.list_findings(Some(scan)).unwrap();
         assert_eq!(rows[0].category, Category::GroomingExploitation);
         assert_eq!(rows[0].severity, 3);
         assert_eq!(rows[0].source_id, Some(1), "anchored on the flagged index");
+    }
+
+    /// Review of #522, finding 1 — the regression that shipped in the first
+    /// version of this PR: in Balanced/Precise the message-level confirmer was
+    /// asked to vet conversation-level verdicts, and since no single grooming
+    /// message is incriminating, it vetoed every true hit in the DEFAULT scan
+    /// mode. Conversation-level verdicts are exempt; message-level verdicts
+    /// still go through.
+    #[test]
+    fn the_message_level_confirmer_never_vets_conversation_verdicts() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![thread(&[
+            (1, "them", "hows the revision going"),
+            (2, "me", "fine"),
+        ])];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]);
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { panic!("census kept nothing") };
+        // A confirmer that vetoes EVERYTHING it is shown. If the grooming
+        // verdict reaches it, the finding dies and this test fails.
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(false) };
+        let grooming = |t: &[CensusInput]| Ok((t[0].source_id == 1).then_some(0));
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Balanced, // the DEFAULT mode, which confirms
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            grooming,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            out.findings, 1,
+            "the conversation-level verdict must not be vetoed by the \
+             single-message confirmer"
+        );
+        assert_eq!(out.unconfirmed, 0);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::GroomingExploitation);
     }
 
     /// A grooming-pass failure is a skipped thread and an audit line, never a

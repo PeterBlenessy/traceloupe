@@ -5287,6 +5287,7 @@ pub fn run() {
             safety_scan_cmd::get_safety_scan_model_status,
             safety_scan_cmd::safety_scan_health_check,
             safety_scan_cmd::download_safety_scan_model,
+            safety_scan_cmd::ensure_grooming_artefacts,
             safety_scan_cmd::get_safety_scan_download_status,
             safety_scan_cmd::cancel_safety_scan_model_download,
             safety_scan_cmd::run_safety_scan,
