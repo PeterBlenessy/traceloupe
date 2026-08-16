@@ -268,3 +268,30 @@ integration, not assumed.
 
 Artefact: `modernbert_civil2.pt` (scratchpad); export follows the proven
 grooming chain when integration lands.
+
+## Quantisation verdict for the civil heads (2026-08-16, night)
+
+Dynamic int8 quantisation shifts the score SCALE badly (a clear identity
+attack dropped 0.399 → 0.014 pointwise) — but it preserves the RANKING, and
+thresholds calibrated on the quantised model's own scores recover everything.
+Three variants, each calibrated on its own full-validation scores, reported on
+the full test split:
+
+| head @2% budget | fp32 (571MB) | int8 (143MB) | int8 per-channel |
+|---|---|---|---|
+| threat | 87% | 86% | 86% |
+| sexual explicit | 94% | 93% | 93% |
+| identity attack | 77% | 76% | 77% |
+| insult | 66% | 63% | 64% |
+| toxicity | 57% | 53% | 53% |
+
+**Ship plain int8 with self-calibrated thresholds** (in
+`civil2_int8_thresholds.json`, scratchpad; they move into the Rust spec at
+integration): threat 0.725, identity 0.780, sexual 0.805 at the 2% operating
+point. The rule this run establishes for every future quantised artefact:
+**never carry thresholds across a quantisation boundary — recalibrate on the
+artefact you ship.** The grooming model dodged this only because argmax needs
+ranking, not scale.
+
+State of #525 after today: model trained, calibrated, quantised, verdict
+recorded. Next: the Rust integration behind the earn-your-place measurement.
