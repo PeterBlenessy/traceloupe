@@ -6,6 +6,9 @@ license.workspace = true
 description = "UI-agnostic core for the local iOS backup browser: discovery, cache, import pipeline"
 
 [dependencies]
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls"] }
+ndarray = "0.17"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }

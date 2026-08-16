@@ -12,6 +12,7 @@ pub mod content_key;
 pub mod cost_model;
 pub mod engine;
 pub mod eval;
+pub mod grooming_onnx;
 pub mod guard;
 pub mod models;
 pub mod prompt;
