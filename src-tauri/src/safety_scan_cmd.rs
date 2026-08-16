@@ -1743,6 +1743,54 @@ pub async fn run_triage_scan(
         // rounds DOWN and floors at one, so a tiny cap yields a very small scan
         // rather than a zero-budget run that reads as broken.
         let budget = budget_hours.map(cost_model::items_in_hours);
+        // The full-pass grooming signal (#521): loaded only if both artefacts
+        // are installed; otherwise the stage is a no-op and the scan is
+        // exactly what it was before this feature existed. Load failure is a
+        // log line, not a scan failure — the extra net must not sink the boat.
+        use traceloupe_core::safety_scan::grooming_onnx::{
+            GroomingClassifier, GROOMING_MODEL, GROOMING_TOKENIZER,
+        };
+        let mut grooming_clf = match (
+            GROOMING_MODEL.installed_at(&dir),
+            GROOMING_TOKENIZER.installed_at(&dir),
+        ) {
+            (Some(m), Some(t)) => match GroomingClassifier::load(&m, &t) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    crate::logging::warn(&app2, format!("grooming signal unavailable: {e}"));
+                    None
+                }
+            },
+            _ => None,
+        };
+        let grooming = |thread: &[traceloupe_core::safety_scan::triage::CensusInput]|
+            -> traceloupe_core::Result<Option<usize>> {
+            let Some(clf) = grooming_clf.as_mut() else {
+                return Ok(None);
+            };
+            let items: Vec<traceloupe_core::safety_scan::chunker::ChunkItem> = thread
+                .iter()
+                .map(|m| traceloupe_core::safety_scan::chunker::ChunkItem {
+                    source_id: m.source_id,
+                    sender: m.sender.clone(),
+                    occurred_at: m.occurred_at,
+                    text: m.text.clone(),
+                    fingerprint: m.fingerprint.clone(),
+                })
+                .collect();
+            clf.conversation_is_predatory(&items)
+                .map(|hit| {
+                    hit.then(|| {
+                        // Anchor on the last message of the first window — the
+                        // scored evidence, not merely the newest message.
+                        thread
+                            .len()
+                            .min(traceloupe_core::safety_scan::grooming_onnx::WINDOW_MESSAGES)
+                            - 1
+                    })
+                })
+                .map_err(traceloupe_core::Error::Inference)
+        };
         let outcome = triage_scan::run_triage(
             &mut analysis,
             scan_row_id,
@@ -1755,6 +1803,7 @@ pub async fn run_triage_scan(
             embed,
             classify,
             confirm,
+            grooming,
             &cancel,
             progress,
         )

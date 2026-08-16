@@ -1281,6 +1281,7 @@ mod tests {
             embed,
             classify,
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1382,6 +1383,7 @@ mod tests {
                 },
                 classify2,
                 confirm2,
+                |_| Ok(None),
                 &CancelToken::new(),
                 |_| {},
             )
@@ -1594,6 +1596,7 @@ mod tests {
             embed,
             classify,
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
+            |_| Ok(None),
             &CancelToken::new(),
             |p: TriageProgress| match p {
                 TriageProgress::Census { done, total } => {
@@ -2805,6 +2808,7 @@ mod tests {
             embed,
             classify,
             |_: &FocusWindow, _| Ok(true),
+            |_| Ok(None),
             &CancelToken::new(),
             |p: TriageProgress| {
                 if let TriageProgress::DeepScan { done, total, .. } = p {
@@ -2918,6 +2922,7 @@ mod tests {
                 },
                 classify2,
                 confirm2,
+                |_| Ok(None),
                 &CancelToken::new(),
                 |p: TriageProgress| match p {
                     TriageProgress::Census { total, .. } => {

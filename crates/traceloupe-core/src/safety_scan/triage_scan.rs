@@ -58,6 +58,10 @@ pub enum TriageProgress {
 pub struct TriageOutcome {
     /// Messages scored by the census.
     pub censused: usize,
+    /// Threads the full-pass grooming signal flagged (pre-confirmation).
+    pub grooming_flagged: usize,
+    /// Threads where the grooming signal errored (audited, skipped).
+    pub grooming_failed: usize,
     /// Messages at or above the mode's threshold — the deep-scan demand.
     pub candidates: usize,
     /// Messages actually deep-scanned (candidates, minus what a budget cut).
@@ -264,7 +268,7 @@ pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Focu
 /// written — the mode promised a confirmed result, and a resume re-classifies
 /// the worklist.
 #[allow(clippy::too_many_arguments)]
-pub fn run_triage<E, C, F, P>(
+pub fn run_triage<E, C, F, G, P>(
     analysis: &mut AnalysisDb,
     scan_id: i64,
     threads: &[Vec<CensusInput>],
@@ -280,6 +284,11 @@ pub fn run_triage<E, C, F, P>(
     mut embed: E,
     mut classify: C,
     mut confirm: F,
+    // The full-pass grooming signal (#521): called once per thread with the
+    // thread's messages; returns the index to anchor a provisional grooming
+    // finding on, or None. Callers without the ONNX model installed pass
+    // `|_| Ok(None)` — the stage then costs nothing and the scan is unchanged.
+    mut grooming: G,
     cancel: &CancelToken,
     mut progress: P,
 ) -> Result<TriageOutcome>
@@ -287,6 +296,7 @@ where
     E: FnMut(&str) -> Result<Vec<f32>>,
     C: FnMut(&FocusWindow) -> Result<FocusOutcome>,
     F: FnMut(&FocusWindow, &FocusVerdict) -> Result<bool>,
+    G: FnMut(&[CensusInput]) -> Result<Option<usize>>,
     P: FnMut(TriageProgress),
 {
     let mut out = TriageOutcome::default();
@@ -444,6 +454,57 @@ where
             findings: provisional.len(),
         });
     }
+    // --- phase 3.5: the full-pass grooming signal (#521) ---
+    // Runs over EVERY thread regardless of posture: at ~14 ms/conversation the
+    // classifier is census-grade, so it does not draw from the deep-scan
+    // budget. Failures are audited and skipped per-thread — this stage is an
+    // extra net, and a net must never sink the boat. Verdicts join
+    // `provisional`, so the mode's confirmation promise applies to them too.
+    if !out.cancelled {
+        for (ti, thread) in threads.iter().enumerate() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            match grooming(thread) {
+                Ok(Some(mi)) if mi < thread.len() => {
+                    out.grooming_flagged += 1;
+                    let window = triage::context_window(thread, mi, ScanMode::default_radius());
+                    provisional.push((
+                        window,
+                        FocusVerdict {
+                            category: Category::GroomingExploitation,
+                            // Any sexual context involving a minor is severity
+                            // 3 by the taxonomy's own rubric.
+                            severity: 3,
+                            rationale: "Conversation-level grooming signal (PAN12-trained \
+                                        classifier): the pattern across this thread's \
+                                        messages matches known predatory conversations."
+                                .into(),
+                        },
+                    ));
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    out.grooming_failed += 1;
+                    let _ = analysis.audit(
+                        scan_id,
+                        now,
+                        "triage_grooming_failed",
+                        &format!("thread {ti}: {e}"),
+                    );
+                }
+            }
+        }
+    }
+    // A verdict for a message the deep scan already judged would double-report
+    // it; keep the deep-scan verdict, whose rationale names the content.
+    {
+        let mut seen = std::collections::HashSet::new();
+        provisional
+            .retain(|(w, v)| seen.insert((w.items[w.focus].fingerprint.clone(), v.category)));
+    }
+
     // Every attempted item failing is not "a clean backup" — it is the §10.6
     // signature of a harness bug (wrong grammar, dead server), and it must
     // fail the scan loudly rather than complete with zero findings.
@@ -549,7 +610,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -557,7 +618,9 @@ where
             out.deep_scan_failed,
             out.unconfirmed,
             out.confirm_failed,
-            out.unscorable
+            out.unscorable,
+            out.grooming_flagged,
+            out.grooming_failed
         ),
     );
     Ok(out)
@@ -588,6 +651,91 @@ mod tests {
     }
     fn threat_proto() -> Vec<Vec<f32>> {
         vec![vec![1.0, 0.0]]
+    }
+
+    /// The grooming pass (#521): a thread the census scores as boring still
+    /// produces a finding when the conversation-level signal fires, it carries
+    /// the right category and severity, and it goes through the confirm tier
+    /// like every other provisional verdict.
+    #[test]
+    fn a_grooming_hit_becomes_a_finding_without_census_help() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            thread(&[(1, "them", "hows the revision going"), (2, "me", "boring")]),
+            thread(&[(3, "them", "quiz thursday?"), (4, "me", "in")]),
+        ];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // orthogonal: census keeps nothing
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> {
+            panic!("census kept nothing, so the deep scan must not run")
+        };
+        let confirmed = std::cell::Cell::new(0usize);
+        let confirm = |_: &FocusWindow, v: &FocusVerdict| -> Result<bool> {
+            assert_eq!(v.category, Category::GroomingExploitation);
+            confirmed.set(confirmed.get() + 1);
+            Ok(true)
+        };
+        // Flag the first thread only.
+        let grooming = |t: &[CensusInput]| Ok((t[0].source_id == 1).then_some(0));
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Precise, // the mode that confirms
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            grooming,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.grooming_flagged, 1);
+        assert_eq!(confirmed.get(), 1, "the grooming verdict was vetted");
+        assert_eq!(out.findings, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::GroomingExploitation);
+        assert_eq!(rows[0].severity, 3);
+        assert_eq!(rows[0].source_id, Some(1), "anchored on the flagged index");
+    }
+
+    /// A grooming-pass failure is a skipped thread and an audit line, never a
+    /// dead scan — and a scan with no model (the closure always says None) is
+    /// byte-for-byte the scan we shipped before the feature existed.
+    #[test]
+    fn a_grooming_error_skips_the_thread_and_the_scan_survives() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![thread(&[(1, "them", "hello")])];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]);
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        let grooming =
+            |_: &[CensusInput]| Err(crate::Error::Inference("onnx runtime exploded".into()));
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            grooming,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.grooming_failed, 1);
+        assert_eq!(out.findings, 0);
+        assert!(!out.cancelled);
     }
 
     fn thread(msgs: &[(i64, &str, &str)]) -> Vec<CensusInput> {
@@ -639,6 +787,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -691,6 +840,7 @@ mod tests {
             embed,
             classify,
             veto,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -712,6 +862,7 @@ mod tests {
             embed,
             classify,
             veto,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -752,6 +903,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1079,6 +1231,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1127,6 +1280,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &cancel,
             progress,
         )
@@ -1178,6 +1332,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &cancel,
             |_| {},
         )
@@ -1225,6 +1380,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &cancel,
             |_| {},
         )
@@ -1264,6 +1420,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1344,6 +1501,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1397,6 +1555,7 @@ mod tests {
             counting_embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1449,6 +1608,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &cancel,
             |_| {},
         )
@@ -1491,6 +1651,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1523,6 +1684,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1569,6 +1731,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1609,6 +1772,7 @@ mod tests {
             embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1643,6 +1807,7 @@ mod tests {
             counting_embed,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1667,6 +1832,7 @@ mod tests {
             counting_embed2,
             classify,
             confirm,
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
