@@ -237,3 +237,34 @@ backend (scans must outlive the UI), tokenizer via `tokenizers` crate.
 One tooling note: the tokenizer config saved by this transformers version
 names a class (`TokenizersBackend`) it cannot itself re-import; load the
 tokenizer from the hub id instead of the local dir.
+
+## Civil heads, second iteration + honest calibration (2026-08-16)
+
+Fixes to iteration 1: every rare-dimension example kept (not subsampled away),
+per-head pos_weight from the actual mix, and thresholds swept on the FULL
+validation split with a fine grid — the first sweep overfit a 4k sample and
+its thresholds missed the false-alarm target 4-6× on test.
+
+Catch rate at each false-alarm budget (calibrated on full val, reported on
+full test — transfer is now honest, 1.0% targets land 0.87-0.96%):
+
+| head | 0.5% budget | 1% budget | 2% budget |
+|---|---|---|---|
+| threat | 56% | 76% | **87%** |
+| sexual explicit | 48% | 80% | **94%** |
+| identity attack | 41% | 62% | **77%** |
+| insult | 40% | 52% | 65% |
+| toxicity | 31% | 46% | 56% |
+
+**Deployment recommendation.** In the scanner these heads score individual
+messages as a census-grade signal feeding the deep-scan worklist — their false
+alarms cost deep-scan budget, not user-facing findings, and the deep scan
+already confirms. At the 2% operating point the rare heads (threat 87%, sexual
+94%, identity 77%) add real recall for exactly the categories the embedding
+census is weakest on, at a candidate rate the budget model absorbs. The
+toxicity/insult heads overlap the embedding census's strength and earn their
+place only if measured to add candidates the census misses — to be tested at
+integration, not assumed.
+
+Artefact: `modernbert_civil2.pt` (scratchpad); export follows the proven
+grooming chain when integration lands.
