@@ -1281,6 +1281,7 @@ mod tests {
             embed,
             classify,
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
+            |_| Ok(None),
             &CancelToken::new(),
             |_| {},
         )
@@ -1382,6 +1383,7 @@ mod tests {
                 },
                 classify2,
                 confirm2,
+                |_| Ok(None),
                 &CancelToken::new(),
                 |_| {},
             )
@@ -1594,6 +1596,7 @@ mod tests {
             embed,
             classify,
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
+            |_| Ok(None),
             &CancelToken::new(),
             |p: TriageProgress| match p {
                 TriageProgress::Census { done, total } => {
@@ -1604,6 +1607,7 @@ mod tests {
                         println!("  census {done}/{total}");
                     }
                 }
+                TriageProgress::Grooming { .. } => {}
                 TriageProgress::DeepScan { done, total, .. } => {
                     if done % 10 == 0 && done > 0 {
                         println!("  deep-scan {done}/{total}");
@@ -2805,6 +2809,7 @@ mod tests {
             embed,
             classify,
             |_: &FocusWindow, _| Ok(true),
+            |_| Ok(None),
             &CancelToken::new(),
             |p: TriageProgress| {
                 if let TriageProgress::DeepScan { done, total, .. } = p {
@@ -2918,6 +2923,7 @@ mod tests {
                 },
                 classify2,
                 confirm2,
+                |_| Ok(None),
                 &CancelToken::new(),
                 |p: TriageProgress| match p {
                     TriageProgress::Census { total, .. } => {
@@ -2929,6 +2935,7 @@ mod tests {
                         }
                     }
                     TriageProgress::DeepScan { .. } => {}
+                    TriageProgress::Grooming { .. } => {}
                 },
             )
             .expect("run_triage precise");
@@ -3243,5 +3250,121 @@ mod tests {
             failures * 4 <= chunks_to_run,
             "{failures} of {chunks_to_run} chunks failed — too many for the timing to mean anything"
         );
+    }
+}
+
+#[cfg(test)]
+mod grooming_e2e {
+    use super::super::triage::{CensusInput, FocusWindow, ScanMode};
+    use super::super::triage_scan::{self, FocusOutcome, FocusVerdict};
+    use crate::analysis::{AnalysisDb, Category};
+    use crate::sidecar::CancelToken;
+    use crate::Result;
+
+    /// #521 acceptance: a scan over threads containing one REAL predatory
+    /// conversation (via TRACELOUPE_GROOMING_SMOKE, kept outside the repo) and
+    /// ordinary chatter produces exactly one grooming finding, using the real
+    /// ONNX classifier end to end. Ignored without the artefacts.
+    #[test]
+    fn a_planted_predatory_thread_is_the_only_grooming_finding() {
+        let (Ok(model), Ok(tok), Ok(smoke)) = (
+            std::env::var("TRACELOUPE_GROOMING_ONNX"),
+            std::env::var("TRACELOUPE_GROOMING_TOKENIZER"),
+            std::env::var("TRACELOUPE_GROOMING_SMOKE"),
+        ) else {
+            eprintln!("skipped: needs TRACELOUPE_GROOMING_ONNX/_TOKENIZER/_SMOKE");
+            return;
+        };
+        use super::super::grooming_onnx::GroomingClassifier;
+        let mut clf =
+            GroomingClassifier::load(std::path::Path::new(&model), std::path::Path::new(&tok))
+                .unwrap();
+        // The smoke file is one rendered window ("A: ...\nB: ...") — unpack it
+        // into thread messages so the scan renders it itself.
+        let text = std::fs::read_to_string(&smoke).unwrap();
+        let mut planted: Vec<CensusInput> = Vec::new();
+        for (i, line) in text.trim().lines().enumerate() {
+            let (who, body) = line.split_once(": ").unwrap_or(("A", line));
+            planted.push(CensusInput {
+                source_id: 100 + i as i64,
+                thread_identifier: "planted".into(),
+                sender: if who == "A" {
+                    "them".into()
+                } else {
+                    "me".into()
+                },
+                occurred_at: Some(1000 + i as i64),
+                text: body.into(),
+                fingerprint: format!("plant{i}"),
+                service: None,
+            });
+        }
+        let ordinary = |id: i64, lines: &[(&str, &str)]| -> Vec<CensusInput> {
+            lines
+                .iter()
+                .enumerate()
+                .map(|(i, (who, t))| CensusInput {
+                    source_id: id + i as i64,
+                    thread_identifier: format!("t{id}"),
+                    sender: (*who).into(),
+                    occurred_at: Some(2000 + id + i as i64),
+                    text: (*t).into(),
+                    fingerprint: format!("fp{id}-{i}"),
+                    service: None,
+                })
+                .collect()
+        };
+        let threads = vec![
+            planted,
+            ordinary(200, &[("them", "you about later"), ("me", "after 7 yeah")]),
+            ordinary(
+                300,
+                &[
+                    ("them", "results came back all clear"),
+                    ("me", "oh thank god"),
+                ],
+            ),
+        ];
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing: the signal must carry it
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        let grooming = |t: &[CensusInput]| {
+            let items: Vec<crate::safety_scan::chunker::ChunkItem> = t
+                .iter()
+                .map(|m| crate::safety_scan::chunker::ChunkItem {
+                    source_id: m.source_id,
+                    sender: m.sender.clone(),
+                    occurred_at: m.occurred_at,
+                    text: m.text.clone(),
+                    fingerprint: m.fingerprint.clone(),
+                })
+                .collect();
+            clf.conversation_predatory_at(&items)
+                .map_err(crate::Error::Inference)
+        };
+        let out = triage_scan::run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            grooming,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.grooming_flagged, 1, "only the planted thread fires");
+        assert_eq!(out.findings, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::GroomingExploitation);
+        assert_eq!(rows[0].thread_identifier.as_deref(), Some("planted"));
     }
 }

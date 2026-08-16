@@ -145,6 +145,10 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
       qc.invalidateQueries({ queryKey: ["safetyScan"] });
       await subscribeScan();
     })();
+    // The grooming-signal artefacts (#521) install silently for EXISTING
+    // users — their scan models predate the signal, so no download path would
+    // otherwise ever fetch them. Backend-gated, idempotent, log-only.
+    void client.ensureGroomingArtefacts().catch(() => {});
     void (async () => {
       const status = await client.getSafetyScanDownloadStatus();
       if (cancelled || !status) return;
@@ -278,6 +282,7 @@ export function SafetyScanProvider({ children }: { children: React.ReactNode }) 
     await subscribeModel();
     try {
       await client.downloadSafetyScanModel(modelId);
+      void client.ensureGroomingArtefacts().catch(() => {});
       // The mock client resolves without emitting events; refresh regardless.
       setDownload(null);
       setDownloadingModelId(null);
