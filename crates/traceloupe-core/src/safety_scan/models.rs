@@ -204,14 +204,50 @@ pub fn download_model(
         .timeout_connect(std::time::Duration::from_secs(30))
         .timeout_read(std::time::Duration::from_secs(60))
         .build();
-    download_model_with(&agent, &spec.url(), spec, models_dir, cancel, on_progress)
+    download_model_with(
+        &agent,
+        &spec.url(),
+        spec.filename,
+        spec.size_bytes,
+        spec.sha256,
+        models_dir,
+        cancel,
+        on_progress,
+    )
+}
+
+/// Same verified pipeline for the ONNX artefacts (#521) — one downloader, so
+/// the checksum/size/cancel semantics cannot drift between model kinds.
+pub fn download_onnx(
+    spec: &super::grooming_onnx::OnnxSpec,
+    models_dir: &Path,
+    cancel: &CancelToken,
+    on_progress: impl FnMut(InstallProgress),
+) -> Result<PathBuf> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(30))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .build();
+    download_model_with(
+        &agent,
+        spec.url,
+        spec.filename,
+        spec.size_bytes,
+        spec.sha256,
+        models_dir,
+        cancel,
+        on_progress,
+    )
 }
 
 /// Testable core: URL and agent injectable so tests use a local server.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn download_model_with(
     agent: &ureq::Agent,
     url: &str,
-    spec: &ModelSpec,
+    filename: &str,
+    size_bytes: u64,
+    sha256: &str,
     models_dir: &Path,
     cancel: &CancelToken,
     mut on_progress: impl FnMut(InstallProgress),
@@ -221,12 +257,8 @@ pub(crate) fn download_model_with(
     // must never write the same partial file (a torn interleaving could hash
     // correctly per stream yet be corrupt on disk). The command layer also
     // gates downloads, but this is cheap defense in depth.
-    let tmp = models_dir.join(format!(
-        "{}.{}.downloading",
-        spec.filename,
-        std::process::id()
-    ));
-    let final_path = models_dir.join(spec.filename);
+    let tmp = models_dir.join(format!("{}.{}.downloading", filename, std::process::id()));
+    let final_path = models_dir.join(filename);
 
     let resp = agent
         .get(url)
@@ -235,11 +267,11 @@ pub(crate) fn download_model_with(
     let total = resp
         .header("Content-Length")
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(spec.size_bytes);
+        .unwrap_or(size_bytes);
 
     // Same MITM/disk-fill cap as install.rs: verification happens at EOF, so
     // bound what a hostile host can stream first.
-    let max_bytes = spec.size_bytes.saturating_mul(2).max(64 * 1024 * 1024);
+    let max_bytes = size_bytes.saturating_mul(2).max(64 * 1024 * 1024);
 
     let mut reader = resp.into_reader();
     let mut file = std::fs::File::create(&tmp).map_err(|e| Error::EngineDownload(e.to_string()))?;
@@ -277,11 +309,10 @@ pub(crate) fn download_model_with(
 
     on_progress(InstallProgress::Verifying);
     let digest = hex::encode(hasher.finalize());
-    if !digest.eq_ignore_ascii_case(spec.sha256) {
+    if !digest.eq_ignore_ascii_case(sha256) {
         let _ = std::fs::remove_file(&tmp);
         return Err(Error::EngineDownload(format!(
-            "checksum mismatch for {}: expected {}, got {digest}",
-            spec.filename, spec.sha256
+            "checksum mismatch for {filename}: expected {sha256}, got {digest}"
         )));
     }
     std::fs::rename(&tmp, &final_path).map_err(|e| Error::EngineDownload(e.to_string()))?;
@@ -393,9 +424,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let agent = ureq::AgentBuilder::new().build();
         let mut phases = Vec::new();
-        let path = download_model_with(&agent, &url, &spec, dir.path(), &CancelToken::new(), |p| {
-            phases.push(std::mem::discriminant(&p));
-        })
+        let path = download_model_with(
+            &agent,
+            &url,
+            spec.filename,
+            spec.size_bytes,
+            spec.sha256,
+            dir.path(),
+            &CancelToken::new(),
+            |p| {
+                phases.push(std::mem::discriminant(&p));
+            },
+        )
         .unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), payload);
         assert!(spec.installed_at(dir.path()).is_some());
@@ -415,8 +455,17 @@ mod tests {
         let spec = tiny_spec(&payload, false);
         let dir = tempfile::tempdir().unwrap();
         let agent = ureq::AgentBuilder::new().build();
-        let err = download_model_with(&agent, &url, &spec, dir.path(), &CancelToken::new(), |_| {})
-            .unwrap_err();
+        let err = download_model_with(
+            &agent,
+            &url,
+            spec.filename,
+            spec.size_bytes,
+            spec.sha256,
+            dir.path(),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"), "{err}");
         assert!(spec.installed_at(dir.path()).is_none());
         assert!(
@@ -438,8 +487,17 @@ mod tests {
         let agent = ureq::AgentBuilder::new().build();
         let cancel = CancelToken::new();
         cancel.cancel();
-        let err =
-            download_model_with(&agent, &url, &spec, dir.path(), &cancel, |_| {}).unwrap_err();
+        let err = download_model_with(
+            &agent,
+            &url,
+            spec.filename,
+            spec.size_bytes,
+            spec.sha256,
+            dir.path(),
+            &cancel,
+            |_| {},
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::Cancelled));
         assert!(
             std::fs::read_dir(dir.path())
