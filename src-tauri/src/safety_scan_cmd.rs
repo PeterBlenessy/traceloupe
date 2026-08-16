@@ -345,7 +345,7 @@ pub async fn download_safety_scan_model(
     let model_id_c = model_id.clone();
     let join = tauri::async_runtime::spawn_blocking(move || {
         let mut last_emit = std::time::Instant::now();
-        models::download_model(spec, &dir, &cancel, |p| {
+        let main = models::download_model(spec, &dir, &cancel, |p| {
             let ev = match p {
                 InstallProgress::Downloading { received, total } => {
                     // Status is cheap to update every tick (drives rehydration);
@@ -371,7 +371,43 @@ pub async fn download_safety_scan_model(
                 InstallProgress::Done => ModelProgressEvent::Done,
             };
             MODEL_PROGRESS.send(ev);
-        })
+        });
+        // The grooming signal's artefacts (#521) ride along with ANY successful
+        // model install — same verified downloader, same snapshot, no new UI.
+        // Their failure never fails the install: the scan runs without the
+        // signal and says so in its audit, which beats blocking a 5 GB
+        // download the user asked for over a 145 MB extra they didn't.
+        if main.is_ok() {
+            use traceloupe_core::safety_scan::grooming_onnx::{GROOMING_MODEL, GROOMING_TOKENIZER};
+            for onnx in [&GROOMING_MODEL, &GROOMING_TOKENIZER] {
+                if onnx.installed_at(&dir).is_some() {
+                    continue;
+                }
+                let status_o = status_w.clone();
+                let model_id_o = model_id_c.clone();
+                if let Err(e) = models::download_onnx(onnx, &dir, &cancel, |p| {
+                    if let InstallProgress::Downloading { received, total } = p {
+                        *status_o.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(DownloadSnapshot {
+                                model_id: model_id_o.clone(),
+                                received,
+                                total,
+                                phase: "downloading".into(),
+                            });
+                        MODEL_PROGRESS.send(ModelProgressEvent::Downloading { received, total });
+                    }
+                }) {
+                    // Cancellation must stay a cancellation, not a warning.
+                    if cancel.is_cancelled() {
+                        return main;
+                    }
+                    eprintln!(
+                        "grooming artefact download failed (scan will run without the signal): {e}"
+                    );
+                }
+            }
+        }
+        main
     })
     .await;
 
