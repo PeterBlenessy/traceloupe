@@ -1562,3 +1562,45 @@ one, which turned a 90-minute wait into a diagnosis; and on a shared laptop,
 throughput belongs to whoever is using the machine — length-sorted batches cut
 step time 18× when memory pressure eased, and a queue that grinds slowly while
 Peter works and sprints when the machine idles beats any fixed schedule.
+
+## From benchmark to product, and the veto nobody would have seen
+
+Twenty-four hours after the PAN12 result, the detector is in the product
+(PR #522): an `ort`-loaded int8 model scoring every conversation as phase 3.5
+of the triage scan, artefacts self-installing from release assets, the scan
+byte-identical when they are absent. The window design follows the measured
+curve — first ten and last ten messages — because 89% of real predatory
+conversations are detectable from their opening ten alone.
+
+The integration's one deep lesson came from the adversarial review, and it is
+the same lesson as the corpus rounds wearing different clothes: **the
+configurations you test are the configurations you used.** The confirm tier
+vets each provisional finding by asking a model to judge ONE message. Grooming
+is the category that exists because no single message is incriminating — so in
+Balanced and Precise, the default and strictest modes, the confirmer said
+"safe" to message after message and silently vetoed every grooming hit the
+classifier produced. My unit test stubbed the confirmer; my end-to-end test ran
+Thorough, the one mode without confirmation. Both passed. The reviewer read the
+mode matrix instead of running it, and found the only two cells I had proven
+were the only two cells that dodge the gate.
+
+The fix is a category of exemption, not a patch: conversation-level verdicts
+now skip the message-level confirmer, on the argument that a classifier
+benchmarked at 0.955 precision on its official test IS the second opinion the
+mode promises — the confirmer answers a different question. The regression
+test pins it with a confirmer that vetoes everything it is shown.
+
+Also carried out of the review: tail-window hits anchor on the messages the
+model actually scored (a hit in the last ten messages of a years-long thread
+previously deep-linked to its beginning); truncation moved into the tokenizer
+so long windows keep the end-of-text marker they had in training; and the
+artefact install moved from riding along with model downloads — a path that
+never fires for existing users and wedged a reloaded UI — to a silent,
+idempotent, gate-sharing ensure call on app mount.
+
+Scoreboard after the first shipped deliverable: grooming detected at
+published-benchmark quality on every scan; loud harassment/toxicity next (the
+second Civil iteration with per-head thresholds is training as this is
+written); coercive control heading to the pattern tier; self-harm awaiting its
+data pass. The scanner Peter asked to be able to trust now has one category he
+verifiably can.
