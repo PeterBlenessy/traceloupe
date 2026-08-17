@@ -3259,6 +3259,80 @@ mod tests {
 }
 
 #[cfg(test)]
+mod pattern_tier_acceptance {
+    //! #529 acceptance: through the PRODUCTION import (encrypted fixture
+    //! backup → native parse → census threads), the stalking-shaped thread
+    //! flags and the heavy-but-reciprocal one does not.
+    //!
+    //!   TRACELOUPE_FIXTURE_BACKUP=<dir> TRACELOUPE_FIXTURE_PASSWORD=test123     //!   cargo test -p traceloupe-core pattern_tier_on_a_fixture_backup -- --ignored --nocapture
+
+    use crate::safety_scan::pattern_tier;
+    use crate::sidecar::CancelToken;
+
+    #[test]
+    #[ignore = "requires a generated fixture backup (tools/make_fixture_backup.py)"]
+    fn pattern_tier_on_a_fixture_backup() {
+        let (Ok(backup), Ok(password)) = (
+            std::env::var("TRACELOUPE_FIXTURE_BACKUP"),
+            std::env::var("TRACELOUPE_FIXTURE_PASSWORD"),
+        ) else {
+            eprintln!("set TRACELOUPE_FIXTURE_BACKUP and TRACELOUPE_FIXTURE_PASSWORD");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the fixture");
+        let cache = crate::cache::CacheDb::open(&cache_path).unwrap();
+        let threads = crate::safety_scan::chunker::census_threads(
+            &cache,
+            crate::safety_scan::chunker::TimeRange::default(),
+            &crate::safety_scan::chunker::ScanSources::default(),
+        )
+        .unwrap();
+        let mut flagged: Vec<String> = Vec::new();
+        for thread in &threads {
+            let metas: Vec<pattern_tier::MsgMeta> = thread
+                .iter()
+                .filter_map(|m| {
+                    m.occurred_at.map(|at| pattern_tier::MsgMeta {
+                        at,
+                        from_me: m.sender == "me",
+                    })
+                })
+                .collect();
+            let p = pattern_tier::contact_pattern(&metas);
+            if pattern_tier::classify(&p).flagged {
+                flagged.push(
+                    thread
+                        .first()
+                        .map(|m| m.thread_identifier.clone())
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        assert_eq!(
+            flagged,
+        // Thread identifiers are chat ROWIDs (the durable key; handles live
+        // on messages) — the stalking chat is ROWID 90 in the fixture.
+            vec!["90".to_string()],
+            "exactly the stalking-shaped thread flags — not the reciprocal one,              not the ordinary fixture threads"
+        );
+    }
+}
+
+#[cfg(test)]
 mod census_boost {
     //! The earn-your-place measurement (#525): on the public research image's
     //! real conversational bed, with the sealed eval set's loud-category

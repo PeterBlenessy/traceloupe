@@ -180,10 +180,18 @@ def seed_sms_db(path: Path) -> None:
         CREATE TABLE chat (
             ROWID INTEGER PRIMARY KEY,
             chat_identifier TEXT,
-            account_login TEXT
+            account_login TEXT,
+            display_name TEXT,
+            service_name TEXT
         );
+        -- The native Phase-2 parser (parsers/messages.rs) needs handle /
+        -- chat_handle_join and the columns below; without them the native
+        -- import declines and fixture backups import ZERO messages (#529).
+        CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
+        CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
         CREATE TABLE message (
             ROWID INTEGER PRIMARY KEY,
+            guid TEXT,
             text TEXT,
             service TEXT,
             account TEXT,
@@ -193,6 +201,14 @@ def seed_sms_db(path: Path) -> None:
             is_sent INTEGER,
             is_delivered INTEGER,
             is_read INTEGER,
+            handle_id INTEGER,
+            cache_has_attachments INTEGER DEFAULT 0,
+            date_delivered INTEGER,
+            date_edited INTEGER,
+            associated_message_type INTEGER DEFAULT 0,
+            associated_message_guid TEXT,
+            associated_message_emoji TEXT,
+            thread_originator_guid TEXT,
             attributedBody BLOB
         );
         CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
@@ -204,8 +220,14 @@ def seed_sms_db(path: Path) -> None:
         """
     )
     con.execute(
-        "INSERT INTO chat (ROWID, chat_identifier, account_login) VALUES (1, '+15551234567', 'e:me@example.com')"
+        "INSERT INTO chat (ROWID, chat_identifier, account_login, service_name) VALUES (1, '+15551234567', 'e:me@example.com', 'iMessage')"
     )
+    con.execute("INSERT INTO handle (ROWID, id) VALUES (1, '+15551234567')")
+    con.execute("INSERT INTO handle (ROWID, id) VALUES (90, '+15550009090')")
+    con.execute("INSERT INTO handle (ROWID, id) VALUES (91, '+15550009191')")
+    con.execute("INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (1, 1)")
+    con.execute("INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (90, 90)")
+    con.execute("INSERT INTO chat_handle_join (chat_id, handle_id) VALUES (91, 91)")
     convo = [
         # (text, is_from_me, minutes_offset)
         ("Hey, are you around this weekend?", 0, 0),
@@ -219,15 +241,61 @@ def seed_sms_db(path: Path) -> None:
         ts = cocoa_ns(base.replace(minute=off))
         con.execute(
             """INSERT INTO message
-               (ROWID, text, service, account, date, date_read,
-                is_from_me, is_sent, is_delivered, is_read)
-               VALUES (?, ?, 'iMessage', 'me@example.com', ?, ?, ?, ?, 1, 1)""",
-            (rowid, text, ts, ts, from_me, from_me),
+               (ROWID, guid, text, service, account, date, date_read,
+                is_from_me, is_sent, is_delivered, is_read, handle_id)
+               VALUES (?, ?, ?, 'iMessage', 'me@example.com', ?, ?, ?, ?, 1, 1, ?)""",
+            (rowid, f"guid-{rowid}", text, ts, ts, from_me, from_me,
+             None if from_me else 1),
         )
         con.execute(
             "INSERT INTO chat_message_join (chat_id, message_id) VALUES (1, ?)",
             (rowid,),
         )
+
+    # The pattern-tier shapes (#529): a stalking-shaped thread (daily
+    # unanswered bursts across a week, chat 90) and a heavy-but-reciprocal
+    # thread (chat 91) the tier must NOT flag. Metadata-only signal — the
+    # texts are deliberately bland so no content tier fires on them.
+    con.execute(
+        "INSERT INTO chat (ROWID, chat_identifier, account_login) VALUES (90, '+15550009090', 'e:me@example.com')"
+    )
+    con.execute(
+        "INSERT INTO chat (ROWID, chat_identifier, account_login) VALUES (91, '+15550009191', 'e:me@example.com')"
+    )
+    stalk_base = datetime(2024, 6, 1, 12, 0, tzinfo=timezone.utc)
+    rowid = 9000
+    for day in range(7):
+        for i in range(7):
+            ts = cocoa_ns(stalk_base + timedelta(days=day, minutes=i))
+            con.execute(
+                """INSERT INTO message
+                   (ROWID, guid, text, service, account, date, date_read,
+                    is_from_me, is_sent, is_delivered, is_read, handle_id)
+                   VALUES (?, ?, ?, 'SMS', 'me@example.com', ?, ?, 0, 0, 1, 1, 90)""",
+                (rowid, f"guid-{rowid}", f"checking in again {day}-{i}", ts, ts),
+            )
+            con.execute(
+                "INSERT INTO chat_message_join (chat_id, message_id) VALUES (90, ?)",
+                (rowid,),
+            )
+            rowid += 1
+    busy_base = datetime(2024, 6, 1, 9, 0, tzinfo=timezone.utc)
+    for i in range(120):
+        ts = cocoa_ns(busy_base + timedelta(minutes=10 * i))
+        from_me = 1 if i % 3 == 0 else 0
+        con.execute(
+            """INSERT INTO message
+               (ROWID, guid, text, service, account, date, date_read,
+                is_from_me, is_sent, is_delivered, is_read, handle_id)
+               VALUES (?, ?, ?, 'SMS', 'me@example.com', ?, ?, ?, ?, 1, 1, ?)""",
+            (rowid, f"guid-{rowid}", f"planning message {i}", ts, ts, from_me, from_me,
+             None if from_me else 91),
+        )
+        con.execute(
+            "INSERT INTO chat_message_join (chat_id, message_id) VALUES (91, ?)",
+            (rowid,),
+        )
+        rowid += 1
 
     # Messages carrying image attachments, to exercise the media path and give
     # the gallery several photos. Caption text (rather than NULL) so iLEAPP's
