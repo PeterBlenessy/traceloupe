@@ -66,6 +66,8 @@ pub struct TriageOutcome {
     pub grooming_failed: usize,
     /// Messages the loud-category heads added to the worklist (#525).
     pub heads_flagged: usize,
+    /// Threads the coercive-control pattern tier flagged (#529).
+    pub patterns_flagged: usize,
     /// Threads where the head pass errored (audited, skipped).
     pub heads_failed: usize,
     /// Messages at or above the mode's threshold — the deep-scan demand.
@@ -598,6 +600,55 @@ where
             });
         }
     }
+    // --- phase 3.6: the coercive-control pattern tier (#529) ---
+    // Pure sender+timestamp arithmetic — no model, no text, negligible cost,
+    // so it runs on every scan unconditionally. Its verdicts are
+    // conversation-level for the same reason grooming's are: a message-level
+    // confirmer cannot judge a pattern it cannot see.
+    if !out.cancelled {
+        use crate::safety_scan::pattern_tier;
+        for thread in threads.iter() {
+            let metas: Vec<pattern_tier::MsgMeta> = thread
+                .iter()
+                .filter_map(|m| {
+                    m.occurred_at.map(|at| pattern_tier::MsgMeta {
+                        at,
+                        from_me: m.sender == "me",
+                    })
+                })
+                .collect();
+            let p = pattern_tier::contact_pattern(&metas);
+            let v = pattern_tier::classify(&p);
+            if !v.flagged {
+                continue;
+            }
+            // Anchor on the contact's LAST message — the most recent evidence
+            // of the pattern, where a reviewer would start reading.
+            let Some(mi) = thread
+                .iter()
+                .rposition(|m| m.sender != "me" && m.occurred_at.is_some())
+            else {
+                continue;
+            };
+            out.patterns_flagged += 1;
+            let window = triage::context_window(thread, mi, ScanMode::default_radius());
+            provisional.push((
+                window,
+                FocusVerdict {
+                    category: Category::CoerciveControl,
+                    // Behavioural evidence without content: severity 2. The
+                    // text tiers raise it if the words warrant.
+                    severity: 2,
+                    rationale: format!(
+                        "Contact-pattern signal (no message content used): {}.",
+                        pattern_tier::rationale(&p, &v)
+                    ),
+                },
+                true,
+            ));
+        }
+    }
+
     // A verdict for a message the deep scan already judged would double-report
     // it; keep the deep-scan verdict, whose rationale names the content.
     {
@@ -708,7 +759,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -720,7 +771,8 @@ where
             out.grooming_flagged,
             out.grooming_failed,
             out.heads_flagged,
-            out.heads_failed
+            out.heads_failed,
+            out.patterns_flagged
         ),
     );
     Ok(out)
@@ -806,6 +858,86 @@ mod tests {
         assert_eq!(rows[0].category, Category::GroomingExploitation);
         assert_eq!(rows[0].severity, 3);
         assert_eq!(rows[0].source_id, Some(1), "anchored on the flagged index");
+    }
+
+    /// #529 acceptance at the engine level: a stalking-shaped thread yields a
+    /// coercive-control pattern finding with an accurate plain-language
+    /// rationale; a heavy-but-reciprocal thread yields none; and the verdict
+    /// is conversation-level (never shown to the message confirmer).
+    #[test]
+    fn a_stalking_shaped_thread_becomes_a_pattern_finding() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        // Stalking shape: 7 daily unanswered bursts of 7. Ordinary shape:
+        // heavy but the owner replies constantly.
+        let mut stalk = Vec::new();
+        for day in 0..7i64 {
+            for i in 0..7i64 {
+                stalk.push(CensusInput {
+                    source_id: 1000 + day * 10 + i,
+                    thread_identifier: "stalker".into(),
+                    sender: "them".into(),
+                    occurred_at: Some(day * 86_400 + 12 * 3600 + i * 60),
+                    text: "call me".into(),
+                    fingerprint: format!("s{day}-{i}"),
+                    service: None,
+                });
+            }
+        }
+        let mut friendly = Vec::new();
+        for i in 0..120i64 {
+            friendly.push(CensusInput {
+                source_id: 5000 + i,
+                thread_identifier: "friend".into(),
+                sender: if i % 3 == 0 {
+                    "me".into()
+                } else {
+                    "them".into()
+                },
+                occurred_at: Some(i * 600),
+                text: "planning stuff".into(),
+                fingerprint: format!("f{i}"),
+                service: None,
+            });
+        }
+        let threads = vec![stalk, friendly];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            panic!("pattern verdicts are conversation-level; the confirmer must not see them")
+        };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Balanced, // the confirming mode — proves the exemption
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.patterns_flagged, 1, "only the stalking shape flags");
+        assert_eq!(out.findings, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::CoerciveControl);
+        assert_eq!(rows[0].severity, 2);
+        assert!(
+            rows[0].rationale.contains("49 messages"),
+            "rationale carries the numbers: {}",
+            rows[0].rationale
+        );
+        assert!(
+            rows[0].rationale.contains("no message content used"),
+            "the rationale must say what this finding is and is not"
+        );
     }
 
     /// #525: a message every census pass rejects still reaches the deep scan
