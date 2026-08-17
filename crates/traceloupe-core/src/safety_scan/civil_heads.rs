@@ -116,7 +116,7 @@ impl CivilHeads {
             let mut best: Option<HeadHit> = None;
             for &(head, th, cat) in ACTIVE {
                 let p = 1.0 / (1.0 + (-logits[[r, head]]).exp());
-                if p >= th && best.map_or(true, |b| p - th > b.score) {
+                if p >= th && best.is_none_or(|b| p - th > b.score) {
                     best = Some(HeadHit {
                         category: cat,
                         score: p,
@@ -156,7 +156,7 @@ mod tests {
             "the meeting moved to 3pm, see you there",
         ];
         let hits = c
-            .score_batch(&texts.iter().map(|s| *s).collect::<Vec<_>>())
+            .score_batch(&texts.iter().copied().collect::<Vec<_>>())
             .unwrap();
         assert_eq!(hits[0].map(|h| h.category), Some(Category::ThreatViolence));
         assert_eq!(hits[1].map(|h| h.category), Some(Category::HateIdentity));
