@@ -352,3 +352,64 @@ cases (indicative); ✗ no trustworthy number.
 
 Rule the targets inherit: nothing counts as reached until measured on data
 neither the author nor the model has seen.
+
+## The audit is complete: every category resolved (2026-08-17, evening)
+
+Peter's instruction was test data for ALL categories. The sweep below finishes
+the three unfinished rows; licences verified on the hosting pages, not assumed.
+Full candidate tables from the review agent are archived in this section's
+commit; the verdicts:
+
+### Harassment / cyberbullying
+**Licence-clean and usable now** (single-message register): Wikipedia Detox
+(CC0, 100k+ each of attack/aggression/toxicity), Jigsaw Toxic Comment (CC0
+labels), Davidson 24.8k tweets (MIT, downloaded), andrewmvd 47k cyberbullying
+tweets (CC BY), ConvAbuse (CC BY, the one conversation-shaped permissive set —
+abuse aimed at chat agents). **Rejected with reasons**: OLID/Waseem/
+Bretschneider (no licence or dead hosts). **The decisive negative**:
+conversation-level, intimate-register English harassment data that a shipped
+product may use **does not exist publicly** — the closest sets are role-play
+French/Italian (NC or unlicensed), dead university sites, or TOU-gated
+(ALONE, individual agreement by email). This is now a shown-search fact, not
+an assumption.
+
+### Smishing / SMS scam
+**In hand**: UCI SMS Spam Collection (CC BY 4.0, 5,574 real SMS, downloaded)
+and Mendeley Mishra-Soni (CC BY 4.0, 638 real smishing + spam/ham). Everything
+else English is largely UCI recycled; the one fresh source (Smishtank, 1,090
+community-reported smishing) has a dead download link — emailing the UTSA
+authors is a cheap parallel bet (Peter's call whether to send). Modern scam
+shapes (parcel/toll/bank, 2024+) will need synthetic augmentation on top; a
+CC-BY LLM-generated balanced set exists as a starting point.
+
+### Self-harm / suicidality
+**The unlock**: the C-SSRS-labelled Reddit set (Zenodo, **CC BY 4.0, expert
+clinician annotations**, kappa 0.76, downloaded — 3.6MB, 500 users) is the
+calibration/eval anchor this category lacked. SWMH (54k posts) is usable for
+research-phase signal via an instant click-through (CC BY-NC). The gold
+standards are closed to this project in practice: UMD requires institutional
+IRB approval; CLPsych's agreement forbids product training pipelines; Crisis
+Text Line (the perfect SMS register) is a closed partnership. The big Kaggle
+scrapes carry uploader-asserted licences on text the uploaders don't own —
+usable as weak-label bulk only with that provenance accepted.
+
+### The cross-category fact the audit establishes
+The public supply is single-message, public-register text. **In every category,
+the intimate conversation-level register this product actually scans has no
+usable public dataset.** The strategy this dictates — public data for surface
+signal, hand-built conversation eval sets under CI guards with adversarial
+review, fine-tuning for register transfer — is now the documented conclusion
+of an exhaustive search, not a preference.
+
+### Corrected scorecard "Have" column (real-data numbers lead)
+| Category | Real-data result (the trustworthy number) | Phone-register transfer check |
+|---|---|---|
+| grooming | 97% @ 0.07% FA, PAN12 official (1,839 positives) | shipped; checklist rewrite pending |
+| threat | 87% @ 2% FA (Civil test, ~700 threats) | census 15/20 |
+| hate-identity | 77% @ 2% FA (687 attacks) | census 10/11 |
+| sexual-content | 94% @ 2% FA (240 examples) | census 10/12 |
+| toxicity / insult | 57% / 66% @ 2% FA (thousands) | held back (adds nothing) |
+| self-harm | — (C-SSRS anchor now in hand; number to come) | 15 cases only |
+| harassment (quiet) | no public set exists (shown above) | 17/78 — the open front |
+| coercive control | by design: pattern tier, no ML | to be measured on fixtures |
+| scam | UCI+Mendeley in hand; rule tier to measure | — |
