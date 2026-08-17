@@ -295,3 +295,60 @@ ranking, not scale.
 
 State of #525 after today: model trained, calibrated, quantised, verdict
 recorded. Next: the Rust integration behind the earn-your-place measurement.
+
+## The earn-your-place measurement: the heads stay OFF (2026-08-17)
+
+Protocol per #525: the public iOS 17 research image's 576 real messages as the
+bed, the sealed eval set's loud-category positives planted as ground truth,
+census at the Balanced cut vs census ∪ heads, with a matched-cost census cut as
+the alternative spend.
+
+| category | census alone | census + heads | census at matched cost | heads alone |
+|---|---|---|---|---|
+| threat-violence | 15/20 | 15/20 | 15/20 | 6/20 |
+| hate-identity | 10/11 | 10/11 | 10/11 | 3/11 |
+| sexual-content | 10/12 | 10/12 | 10/12 | 1/12 |
+
+(Numbers from the corrected instrument after review: loud failure on embed
+drops, matched-cost cut off-by-one fixed, real [PAD] id in batching.) The
+heads added 5 bed candidates (2.6% → 3.5% of messages kept) and **zero
+additional catches**. The heads-alone column resolves the ambiguity the first
+table left open: the heads DO fire on this register — but only on cases the
+census already catches. Every head catch is a census catch's subset. What the census misses in these categories, the heads
+miss too — the missed cases are quiet in register even when the category is
+loud, which is Civil Comments' known blind spot, now measured a fourth time
+from a new angle.
+
+**Decision, per the issue's own gate:** the civil-heads model is not fetched
+and the pass stays inactive. Users are not charged 143 MB for zero recall. The
+code path ships tested behind a build-level hold-back (CENSUS_BOOST_ACTIVE)
+plus the absent-model no-op (union, budget cap, failure audit all pinned by
+unit tests); activation is a deliberate three-part change — flip the const,
+add the spec to the fetch loop, pin the new artefact — together with a fresh
+measurement table. One caveat the table itself cannot show: the ground truth
+is hand-written SMS-register text and the prototypes are hand-authored, so the
+census arm plays at home while the web-comment-trained heads play away. The
+result still says "don't charge users 143 MB today"; it does not say a
+message-level signal can never help. The negative result is the
+system working: this table is exactly what the measurement gate exists to
+produce, and it cost one afternoon instead of a shipped regression.
+
+## The scorecard (2026-08-17, requested by Peter)
+
+Trust markers: ✓ real held-out data with a published reference; ~ hand-written
+cases (indicative); ✗ no trustworthy number.
+
+| Category | Have | Reach for | Path |
+|---|---|---|---|
+| grooming | ✓ 97/100 @ 7-in-10k FA (PAN12 official, beats published); shipped | hold ≥95; SMS-register proof | checklist rewrite from real patterns |
+| threat-violence | ~ 15/20 census | ≥18/20 on real data | ground truth first; census tuning or SMS-register model |
+| hate-identity | ~ 10/11 census | hold; widen eval | ground truth first |
+| sexual-content | ~ 10/12 census | ≥11/12 | inspect misses; quiet ones → harassment track |
+| harassment (quiet) | ~ 17/78 (#516, unchanged) | ≥60/78 then ≥70/78 | THE open front: intimate-register conversation data → fine-tune the reader → checklist gate |
+| coercive-control | ✗ (13/14 on 14 thin cases, slow scanner) | measured catch on stalking-shaped fixtures | build the pattern tier (census statistics); fixtures then thresholds; no ML |
+| self-harm | ✗ | any trusted number, then ≥80% | licence pass (agreements → Peter), train + benchmark like grooming |
+| scam-fraud | ✗ | ≥90% of a public smishing test set | audit smishing sets, rule tier, measure |
+| drugs | ✗ | out of scope v1 | revisit when data exists |
+
+Rule the targets inherit: nothing counts as reached until measured on data
+neither the author nor the model has seen.

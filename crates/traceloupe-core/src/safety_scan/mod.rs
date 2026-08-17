@@ -7,6 +7,7 @@
 //! ever gives the model tools, queries, or memory across calls.
 
 pub mod chunker;
+pub mod civil_heads;
 pub mod client;
 pub mod content_key;
 pub mod cost_model;

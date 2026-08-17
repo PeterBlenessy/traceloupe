@@ -411,6 +411,13 @@ pub async fn ensure_grooming_artefacts(
 ) -> Result<bool, String> {
     use traceloupe_core::safety_scan::grooming_onnx::{GROOMING_MODEL, GROOMING_TOKENIZER};
     let dir = models_dir(&app)?;
+    // The civil-heads model is deliberately NOT fetched: the earn-your-place
+    // measurement (docs/research/public-data-audit.md, 2026-08-17) showed the
+    // heads add candidates but zero recall over the census on the loud
+    // categories, so users are not charged 143 MB for nothing. Activation is
+    // a deliberate three-part change: flip CENSUS_BOOST_ACTIVE, add the spec
+    // to the fetch loop below, and pin the new artefact's sha/size — plus a
+    // fresh measurement table, per the const's own doc.
     if GROOMING_MODEL.installed_at(&dir).is_some()
         && GROOMING_TOKENIZER.installed_at(&dir).is_some()
     {
@@ -1830,6 +1837,42 @@ pub async fn run_triage_scan(
                 None
             }
         };
+        // The loud-category heads (#525): same absent-is-a-no-op contract.
+        use traceloupe_core::safety_scan::civil_heads::{
+            CivilHeads, CENSUS_BOOST_ACTIVE, CIVIL_HEADS_MODEL,
+        };
+        let mut heads_clf = match (
+            // The build-level hold-back gates FIRST: an artefact on disk is not
+            // a decision (see CENSUS_BOOST_ACTIVE).
+            CIVIL_HEADS_MODEL
+                .installed_at(&dir)
+                .filter(|_| CENSUS_BOOST_ACTIVE),
+            GROOMING_TOKENIZER.installed_at(&dir),
+        ) {
+            (Some(m), Some(t)) => match CivilHeads::load(&m, &t) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    crate::logging::warn(&app2, format!("census boost unavailable: {e}"));
+                    None
+                }
+            },
+            _ => None,
+        };
+        let heads = |rejected: &[&traceloupe_core::safety_scan::triage::CensusInput]|
+            -> traceloupe_core::Result<Vec<(usize, traceloupe_core::analysis::Category)>> {
+            let Some(clf) = heads_clf.as_mut() else {
+                return Ok(Vec::new());
+            };
+            let texts: Vec<&str> = rejected.iter().map(|m| m.text.as_str()).collect();
+            let hits = clf
+                .score_batch(&texts)
+                .map_err(traceloupe_core::Error::Inference)?;
+            Ok(hits
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, h)| h.map(|h| (i, h.category)))
+                .collect())
+        };
         let grooming = |thread: &[traceloupe_core::safety_scan::triage::CensusInput]|
             -> traceloupe_core::Result<Option<usize>> {
             use traceloupe_core::safety_scan::grooming_onnx::WINDOW_MESSAGES;
@@ -1889,6 +1932,7 @@ pub async fn run_triage_scan(
             classify,
             confirm,
             grooming,
+            heads,
             &cancel,
             progress,
         )

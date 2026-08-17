@@ -64,6 +64,10 @@ pub struct TriageOutcome {
     pub grooming_flagged: usize,
     /// Threads where the grooming signal errored (audited, skipped).
     pub grooming_failed: usize,
+    /// Messages the loud-category heads added to the worklist (#525).
+    pub heads_flagged: usize,
+    /// Threads where the head pass errored (audited, skipped).
+    pub heads_failed: usize,
     /// Messages at or above the mode's threshold — the deep-scan demand.
     pub candidates: usize,
     /// Messages actually deep-scanned (candidates, minus what a budget cut).
@@ -270,7 +274,7 @@ pub fn classify_focused(client: &LlmClient, window: &FocusWindow) -> Result<Focu
 /// written — the mode promised a confirmed result, and a resume re-classifies
 /// the worklist.
 #[allow(clippy::too_many_arguments)]
-pub fn run_triage<E, C, F, G, P>(
+pub fn run_triage<E, C, F, G, H, P>(
     analysis: &mut AnalysisDb,
     scan_id: i64,
     threads: &[Vec<CensusInput>],
@@ -291,6 +295,12 @@ pub fn run_triage<E, C, F, G, P>(
     // finding on, or None. Callers without the ONNX model installed pass
     // `|_| Ok(None)` — the stage then costs nothing and the scan is unchanged.
     mut grooming: G,
+    // The loud-category census boost (#525): called once per thread with the
+    // messages the census did NOT keep; returns (index-within-slice, category)
+    // for messages a calibrated head flags. Hits join the worklist BEFORE the
+    // budget, so the deep scan judges them like any census candidate. Callers
+    // without the model pass `|_| Ok(Vec::new())`.
+    mut heads: H,
     cancel: &CancelToken,
     mut progress: P,
 ) -> Result<TriageOutcome>
@@ -299,6 +309,7 @@ where
     C: FnMut(&FocusWindow) -> Result<FocusOutcome>,
     F: FnMut(&FocusWindow, &FocusVerdict) -> Result<bool>,
     G: FnMut(&[CensusInput]) -> Result<Option<usize>>,
+    H: FnMut(&[&CensusInput]) -> Result<Vec<(usize, crate::analysis::Category)>>,
     P: FnMut(TriageProgress),
 {
     let mut out = TriageOutcome::default();
@@ -395,6 +406,74 @@ where
         })
         .collect();
     out.candidates = worklist.len();
+    // --- phase 2.5: the loud-category head pass (#525) ---
+    // Scores only what the census rejected — its whole value is recall the
+    // embedding cut lost, in the register (loud single messages) where the
+    // heads are calibrated. Union happens BEFORE the budget so head candidates
+    // compete for deep-scan slots on equal terms; per-thread failures are
+    // audited and skipped, the boost never sinks the scan.
+    let mut worklist = worklist;
+    {
+        let already: std::collections::HashSet<i64> =
+            worklist.iter().map(|w| w.source_id).collect();
+        let mut appended = 0usize;
+        for (ti, thread) in threads.iter().enumerate() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            // References only: on the default path (no model) this must cost a
+            // pointer Vec, never a copy of the corpus text.
+            let rejected: Vec<&CensusInput> = thread
+                .iter()
+                .filter(|m| !already.contains(&m.source_id))
+                .collect();
+            if rejected.is_empty() {
+                continue;
+            }
+            match heads(&rejected) {
+                Ok(hits) => {
+                    let mut pushed = std::collections::HashSet::new();
+                    for (mi, _category) in hits {
+                        let Some(m) = rejected.get(mi) else { continue };
+                        // A closure returning the same index twice must not
+                        // burn two budget slots on one message (review of
+                        // #527, finding 4).
+                        if !pushed.insert(m.source_id) {
+                            continue;
+                        }
+                        out.heads_flagged += 1;
+                        appended += 1;
+                        worklist.push(crate::analysis::WorkItem {
+                            source_id: m.source_id,
+                            thread_identifier: m.thread_identifier.clone(),
+                            sender: m.sender.clone(),
+                            // The Vec is never re-sorted: head items rank last
+                            // because they are APPENDED after the SQL-ranked
+                            // census list, so a tight budget spends on the
+                            // census's best first. `score` is read nowhere
+                            // downstream; 0.0 is documentation, not mechanism.
+                            score: 0.0,
+                            cell_hot: 0,
+                            fingerprint: m.fingerprint.clone(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    out.heads_failed += 1;
+                    let _ = analysis.audit(
+                        scan_id,
+                        now,
+                        "triage_heads_failed",
+                        &format!("thread {ti}: {e}"),
+                    );
+                }
+            }
+        }
+        if appended > 0 {
+            out.candidates = worklist.len();
+        }
+    }
     let worklist: Vec<_> = match budget {
         Some(b) => worklist.into_iter().take(b).collect(),
         None => worklist,
@@ -629,7 +708,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -639,7 +718,9 @@ where
             out.confirm_failed,
             out.unscorable,
             out.grooming_flagged,
-            out.grooming_failed
+            out.grooming_failed,
+            out.heads_flagged,
+            out.heads_failed
         ),
     );
     Ok(out)
@@ -708,6 +789,7 @@ mod tests {
             classify,
             confirm,
             grooming,
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -724,6 +806,91 @@ mod tests {
         assert_eq!(rows[0].category, Category::GroomingExploitation);
         assert_eq!(rows[0].severity, 3);
         assert_eq!(rows[0].source_id, Some(1), "anchored on the flagged index");
+    }
+
+    /// #525: a message every census pass rejects still reaches the deep scan
+    /// when a calibrated head flags it — and the budget caps the union, with
+    /// census candidates ranked first.
+    #[test]
+    fn a_head_flagged_message_joins_the_worklist_and_budget_still_caps() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        let threads = vec![
+            // Census keeps message 1; message 2 in the SAME thread is
+            // rejected — the head pass must see 2 but never 1.
+            thread(&[
+                (1, "them", "i will hurt you badly"),
+                (2, "them", "loud threat the embedding missed"),
+            ]),
+            thread(&[(3, "them", "ordinary chatter")]),
+        ];
+        // Census: only message 1 scores above the cut.
+        let embed = |t: &str| {
+            Ok(if t.contains("hurt") {
+                vec![1.0, 0.0]
+            } else {
+                vec![0.0, 1.0]
+            })
+        };
+        let seen = std::cell::RefCell::new(Vec::new());
+        let classify = |w: &FocusWindow| -> Result<FocusOutcome> {
+            seen.borrow_mut().push(w.items[w.focus].source_id);
+            Ok(FocusOutcome {
+                verdicts: vec![],
+                rejected: 0,
+                contentless: 0,
+            })
+        };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
+        // Heads flag BOTH rejected messages — message 2 TWICE, which must
+        // not burn two budget slots — and the budget of 2 must then drop the
+        // remaining one, proving the cap binds the union rather than just the
+        // census half. The closure also asserts it never sees the
+        // census-kept message (the rejected-only filter).
+        let heads = |rejected: &[&CensusInput]| {
+            assert!(
+                rejected.iter().all(|m| m.source_id != 1),
+                "the census-kept message must not reach the head pass"
+            );
+            let mut hits: Vec<(usize, Category)> = rejected
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.source_id == 2 || m.source_id == 3)
+                .map(|(i, _)| (i, Category::ThreatViolence))
+                .collect();
+            if let Some(first) = hits.first().copied() {
+                hits.push(first); // duplicate index: must be ignored
+            }
+            Ok(hits)
+        };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Thorough,
+            0.9,
+            Some(2), // budget: census candidate + ONE head candidate
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            heads,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.heads_flagged, 2);
+        assert_eq!(out.candidates, 3, "census one + heads two");
+        assert_eq!(out.deep_scanned, 2);
+        let ids = seen.borrow().clone();
+        assert_eq!(
+            ids,
+            vec![1, 2],
+            "census candidate first, then the first head hit; the second head \
+             hit fell to the budget"
+        );
     }
 
     /// Review of #522, finding 1 — the regression that shipped in the first
@@ -759,6 +926,7 @@ mod tests {
             classify,
             confirm,
             grooming,
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -799,6 +967,7 @@ mod tests {
             classify,
             confirm,
             grooming,
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -858,6 +1027,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -911,6 +1081,7 @@ mod tests {
             classify,
             veto,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -933,6 +1104,7 @@ mod tests {
             classify,
             veto,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -974,6 +1146,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1302,6 +1475,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1351,6 +1525,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &cancel,
             progress,
         )
@@ -1403,6 +1578,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &cancel,
             |_| {},
         )
@@ -1451,6 +1627,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &cancel,
             |_| {},
         )
@@ -1491,6 +1668,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1572,6 +1750,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1626,6 +1805,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1679,6 +1859,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &cancel,
             |_| {},
         )
@@ -1722,6 +1903,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1755,6 +1937,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1802,6 +1985,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1843,6 +2027,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1878,6 +2063,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1903,6 +2089,7 @@ mod tests {
             classify,
             confirm,
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
