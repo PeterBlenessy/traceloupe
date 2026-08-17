@@ -332,3 +332,23 @@ result still says "don't charge users 143 MB today"; it does not say a
 message-level signal can never help. The negative result is the
 system working: this table is exactly what the measurement gate exists to
 produce, and it cost one afternoon instead of a shipped regression.
+
+## The scorecard (2026-08-17, requested by Peter)
+
+Trust markers: ✓ real held-out data with a published reference; ~ hand-written
+cases (indicative); ✗ no trustworthy number.
+
+| Category | Have | Reach for | Path |
+|---|---|---|---|
+| grooming | ✓ 97/100 @ 7-in-10k FA (PAN12 official, beats published); shipped | hold ≥95; SMS-register proof | checklist rewrite from real patterns |
+| threat-violence | ~ 15/20 census | ≥18/20 on real data | ground truth first; census tuning or SMS-register model |
+| hate-identity | ~ 10/11 census | hold; widen eval | ground truth first |
+| sexual-content | ~ 10/12 census | ≥11/12 | inspect misses; quiet ones → harassment track |
+| harassment (quiet) | ~ 17/78 (#516, unchanged) | ≥60/78 then ≥70/78 | THE open front: intimate-register conversation data → fine-tune the reader → checklist gate |
+| coercive-control | ✗ (13/14 on 14 thin cases, slow scanner) | measured catch on stalking-shaped fixtures | build the pattern tier (census statistics); fixtures then thresholds; no ML |
+| self-harm | ✗ | any trusted number, then ≥80% | licence pass (agreements → Peter), train + benchmark like grooming |
+| scam-fraud | ✗ | ≥90% of a public smishing test set | audit smishing sets, rule tier, measure |
+| drugs | ✗ | out of scope v1 | revisit when data exists |
+
+Rule the targets inherit: nothing counts as reached until measured on data
+neither the author nor the model has seen.
