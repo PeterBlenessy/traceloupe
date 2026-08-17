@@ -636,7 +636,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn spawn_live_server(
+    pub(crate) fn spawn_live_server(
         model: &str,
         embedding: bool,
         ctx_size: u32,
@@ -3255,6 +3255,180 @@ mod tests {
             failures * 4 <= chunks_to_run,
             "{failures} of {chunks_to_run} chunks failed — too many for the timing to mean anything"
         );
+    }
+}
+
+#[cfg(test)]
+mod census_boost {
+    //! The earn-your-place measurement (#525): on the public research image's
+    //! real conversational bed, with the sealed eval set's loud-category
+    //! positives planted as ground truth, does census ∪ heads beat census
+    //! alone at matched cost? Run with:
+    //!
+    //!   TRIAGE_REAL_BACKUP=.../iOS_17/Backup/extracted     //!   TRACELOUPE_EMBED_MODEL=.../embeddinggemma-300M-Q8_0.gguf     //!   TRACELOUPE_CIVIL_ONNX=.../model_int8.onnx     //!   TRACELOUPE_GROOMING_TOKENIZER=.../tokenizer.json     //!   cargo test -p traceloupe-core census_boost_earns_its_place -- --ignored --nocapture
+
+    use crate::analysis::Category;
+    use crate::safety_scan::civil_heads::CivilHeads;
+    use crate::safety_scan::client::LlmClient;
+    use crate::safety_scan::triage::{self, cap_for_embedding, census_score, EMBED_PREFIX};
+    use crate::safety_scan::triage_scan;
+    use crate::sidecar::CancelToken;
+    use std::time::Duration;
+
+    const LOUD: &[Category] = &[
+        Category::ThreatViolence,
+        Category::HateIdentity,
+        Category::SexualContent,
+    ];
+
+    #[test]
+    #[ignore = "requires a public DFIR image + the embedding GGUF + the civil ONNX"]
+    fn census_boost_earns_its_place() {
+        let (Ok(backup), Ok(embed_model), Ok(onnx), Ok(tok)) = (
+            std::env::var("TRIAGE_REAL_BACKUP"),
+            std::env::var("TRACELOUPE_EMBED_MODEL"),
+            std::env::var("TRACELOUPE_CIVIL_ONNX"),
+            std::env::var("TRACELOUPE_GROOMING_TOKENIZER"),
+        ) else {
+            eprintln!("set TRIAGE_REAL_BACKUP, TRACELOUPE_EMBED_MODEL, TRACELOUPE_CIVIL_ONNX, TRACELOUPE_GROOMING_TOKENIZER");
+            return;
+        };
+        // --- the real bed, through the production import ---
+        let password = std::env::var("TRIAGE_REAL_PASSWORD").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the public image");
+        let cache = crate::cache::CacheDb::open(&cache_path).unwrap();
+        let bed: Vec<String> = crate::safety_scan::chunker::census_threads(
+            &cache,
+            crate::safety_scan::chunker::TimeRange::default(),
+            &crate::safety_scan::chunker::ScanSources::default(),
+        )
+        .unwrap()
+        .into_iter()
+        .flatten()
+        .map(|m| m.text)
+        .collect();
+        assert!(bed.len() > 100, "the image supplies a real bed");
+
+        // --- ground truth: sealed-set positives for the loud categories ---
+        let mut planted: Vec<(Category, Vec<String>)> = Vec::new();
+        for case in super::load_all_eval_cases() {
+            if case.kind != "positive" {
+                continue;
+            }
+            let cats: Vec<Category> = case
+                .expect
+                .iter()
+                .filter_map(|e| Category::parse(&e.category))
+                .filter(|c| LOUD.contains(c))
+                .collect();
+            if let Some(&c) = cats.first() {
+                planted.push((c, case.messages.iter().map(|m| m.text.clone()).collect()));
+            }
+        }
+        for c in LOUD {
+            let n = planted.iter().filter(|(pc, _)| pc == c).count();
+            assert!(n >= 5, "{c:?} needs ground truth, has {n}");
+        }
+
+        // --- census scores, production path ---
+        let mut server = super::tests::spawn_live_server(&embed_model, true, 2048);
+        let c = LlmClient::new(server.base_url(), "embed", Duration::from_secs(300));
+        let prototypes =
+            triage::build_prototypes(&triage_scan::prototype_examples(&Category::ALL), |t| {
+                c.embed(t)
+            })
+            .expect("prototypes");
+        let score = |t: &str| -> Option<f32> {
+            c.embed(&format!("{EMBED_PREFIX}{}", cap_for_embedding(t)))
+                .ok()
+                .map(|v| census_score(&v, &prototypes))
+        };
+        let bed_scores: Vec<f32> = bed.iter().filter_map(|t| score(t)).collect();
+        // planted: a case is census-caught if ANY of its messages clears the cut
+        let mut planted_scores: Vec<(Category, Vec<f32>, Vec<String>)> = Vec::new();
+        for (cat, msgs) in &planted {
+            let ss: Vec<f32> = msgs.iter().filter_map(|t| score(t)).collect();
+            planted_scores.push((*cat, ss, msgs.clone()));
+        }
+        server.shutdown();
+
+        // --- head scores on everything (the pass only sees census-rejects at
+        // runtime; scoring all and masking below keeps one inference pass) ---
+        let mut heads =
+            CivilHeads::load(std::path::Path::new(&onnx), std::path::Path::new(&tok)).unwrap();
+        let head_hit = |texts: &[String], heads: &mut CivilHeads| -> Vec<bool> {
+            let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            heads
+                .score_batch(&refs)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.is_some())
+                .collect()
+        };
+        let bed_head: Vec<bool> = head_hit(&bed, &mut heads);
+        let planted_head: Vec<Vec<bool>> = planted_scores
+            .iter()
+            .map(|(_, _, msgs)| head_hit(msgs, &mut heads))
+            .collect();
+
+        // --- the comparison, at the Balanced cut ---
+        let cut = crate::safety_scan::triage::ScanMode::Balanced.census_threshold();
+        let kept_bed = bed_scores.iter().filter(|s| **s >= cut).count();
+        let boost_bed = bed_scores
+            .iter()
+            .zip(&bed_head)
+            .filter(|(s, h)| **s < cut && **h)
+            .count();
+        let sel_census = kept_bed as f64 / bed_scores.len() as f64;
+        let sel_union = (kept_bed + boost_bed) as f64 / bed_scores.len() as f64;
+        println!(
+            "bed: {} messages | census keeps {} ({:.1}%) | heads add {} ({:.1}% total)",
+            bed_scores.len(),
+            kept_bed,
+            sel_census * 100.0,
+            boost_bed,
+            sel_union * 100.0
+        );
+        // matched-cost census: the cut that keeps as many bed messages as the union
+        let mut sorted = bed_scores.clone();
+        sorted.sort_by(|a, b| b.partial_cmp(a).unwrap());
+        let matched_cut = sorted
+            .get(kept_bed + boost_bed)
+            .copied()
+            .unwrap_or(f32::MIN);
+        println!("(matched-cost census cut: {matched_cut:.3} vs Balanced {cut:.3})");
+        for cat in LOUD {
+            let mut n = 0;
+            let (mut census_r, mut union_r, mut matched_r) = (0, 0, 0);
+            for ((pc, ss, _), hh) in planted_scores.iter().zip(&planted_head) {
+                if pc != cat {
+                    continue;
+                }
+                n += 1;
+                let census = ss.iter().any(|s| *s >= cut);
+                let head = ss.iter().zip(hh).any(|(s, h)| *s < cut && *h);
+                census_r += census as usize;
+                union_r += (census || head) as usize;
+                matched_r += ss.iter().any(|s| *s >= matched_cut) as usize;
+            }
+            println!(
+                "{cat:?}: census {census_r}/{n} | census+heads {union_r}/{n} | census-at-matched-cost {matched_r}/{n}"
+            );
+        }
     }
 }
 

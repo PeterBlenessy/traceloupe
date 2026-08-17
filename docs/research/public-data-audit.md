@@ -295,3 +295,30 @@ ranking, not scale.
 
 State of #525 after today: model trained, calibrated, quantised, verdict
 recorded. Next: the Rust integration behind the earn-your-place measurement.
+
+## The earn-your-place measurement: the heads stay OFF (2026-08-17)
+
+Protocol per #525: the public iOS 17 research image's 576 real messages as the
+bed, the sealed eval set's loud-category positives planted as ground truth,
+census at the Balanced cut vs census ∪ heads, with a matched-cost census cut as
+the alternative spend.
+
+| category | census alone | census + heads | census at matched cost |
+|---|---|---|---|
+| threat-violence | 15/20 | 15/20 | 15/20 |
+| hate-identity | 10/11 | 10/11 | 10/11 |
+| sexual-content | 10/12 | 10/12 | 10/12 |
+
+The heads added 8 bed candidates (2.6% → 4.0% of messages kept) and **zero
+additional catches**. What the census misses in these categories, the heads
+miss too — the missed cases are quiet in register even when the category is
+loud, which is Civil Comments' known blind spot, now measured a fourth time
+from a new angle.
+
+**Decision, per the issue's own gate:** the civil-heads model is not fetched
+and the pass stays inactive. Users are not charged 143 MB for zero recall. The
+code path ships tested behind the absent-model no-op (union, budget cap,
+failure audit all pinned by unit tests), so a future better model activates by
+publishing an artefact, not by changing code. The negative result is the
+system working: this table is exactly what the measurement gate exists to
+produce, and it cost one afternoon instead of a shipped regression.

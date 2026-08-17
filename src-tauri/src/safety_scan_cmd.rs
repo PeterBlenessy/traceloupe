@@ -409,12 +409,16 @@ pub async fn ensure_grooming_artefacts(
     app: AppHandle,
     gate: State<'_, SafetyDownloadGate>,
 ) -> Result<bool, String> {
-    use traceloupe_core::safety_scan::civil_heads::CIVIL_HEADS_MODEL;
     use traceloupe_core::safety_scan::grooming_onnx::{GROOMING_MODEL, GROOMING_TOKENIZER};
     let dir = models_dir(&app)?;
+    // The civil-heads model is deliberately NOT fetched: the earn-your-place
+    // measurement (docs/research/public-data-audit.md, 2026-08-17) showed the
+    // heads add candidates but zero recall over the census on the loud
+    // categories, so users are not charged 143 MB for nothing. The scan code
+    // path stays, tested, behind the absent-model no-op — a better model
+    // activates it by shipping the artefact, not by changing code.
     if GROOMING_MODEL.installed_at(&dir).is_some()
         && GROOMING_TOKENIZER.installed_at(&dir).is_some()
-        && CIVIL_HEADS_MODEL.installed_at(&dir).is_some()
     {
         return Ok(true);
     }
@@ -424,7 +428,7 @@ pub async fn ensure_grooming_artefacts(
     };
     let done = tauri::async_runtime::spawn_blocking(move || {
         let cancel = CancelToken::new();
-        for spec in [&GROOMING_MODEL, &GROOMING_TOKENIZER, &CIVIL_HEADS_MODEL] {
+        for spec in [&GROOMING_MODEL, &GROOMING_TOKENIZER] {
             if spec.installed_at(&dir).is_some() {
                 continue;
             }
