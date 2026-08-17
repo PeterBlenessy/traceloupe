@@ -413,3 +413,32 @@ of an exhaustive search, not a preference.
 | harassment (quiet) | no public set exists (shown above) | 17/78 — the open front |
 | coercive control | by design: pattern tier, no ML | to be measured on fixtures |
 | scam | UCI+Mendeley in hand; rule tier to measure | — |
+
+## First self-harm numbers, on the C-SSRS expert-graded anchor (2026-08-17, night)
+
+Task: at-risk (Ideation/Behavior/Attempt) vs not (Supportive/Indicator) — the
+clinical line C-SSRS draws. 500 users, 5-fold cross-validation, every number
+pooled across held-out folds.
+
+| model | caught | false alarms |
+|---|---|---|
+| TF-IDF + logistic regression (baseline) | 72% | 28% |
+| ModernBERT, 512-token windows | 77% | 46% |
+
+**Read the false-alarm column carefully before judging it**: the "negatives"
+here are people posting in mental-health communities who experts did NOT rate
+at-risk — the hardest possible near-misses, nothing like a phone's ordinary
+traffic. A 46% false-alarm rate against expert-rejected near-misses does not
+translate to 46% against grocery lists. It DOES say the transformer trades
+precision for recall versus the classical baseline, and that neither is
+deployment-grade yet: no threshold tuning has been done (argmax only), and the
+register is Reddit posts, not messages.
+
+Also recorded: the first transformer attempt silently collapsed to
+never-flagging and burned 90 minutes before its one cumulative line revealed
+it. Per-epoch loss printing and a seconds-fast classical baseline (which
+sanity-checked the labels at 72%) are now part of the recipe — a training run
+without a visible loss curve and a reference number is undiagnosable.
+
+Next for this category: threshold sweep on the fold scores, then the register
+question (Reddit → messages) via the same transfer discipline as grooming.
