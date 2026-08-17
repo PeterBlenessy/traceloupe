@@ -3259,6 +3259,103 @@ mod tests {
 }
 
 #[cfg(test)]
+mod pattern_tier_acceptance {
+    //! #529 acceptance: through the production import (encrypted fixture
+    //! backup -> native parse -> census threads) and the production engine
+    //! (run_triage phase 3.6), the stalking-shaped thread yields exactly one
+    //! coercive-control pattern finding.
+    //!
+    //! Run with:
+    //!   TRACELOUPE_FIXTURE_BACKUP=<dir> \
+    //!   TRACELOUPE_FIXTURE_PASSWORD=<password used at generation> \
+    //!   cargo test -p traceloupe-core pattern_tier_on_a_fixture_backup -- --ignored --nocapture
+
+    use super::super::triage::{CensusInput, FocusWindow, ScanMode};
+    use super::super::triage_scan::{self, FocusOutcome, FocusVerdict};
+    use crate::analysis::{AnalysisDb, Category};
+    use crate::sidecar::CancelToken;
+    use crate::Result;
+
+    #[test]
+    #[ignore = "requires a generated fixture backup (tools/make_fixture_backup.py)"]
+    fn pattern_tier_on_a_fixture_backup() {
+        let (Ok(backup), Ok(password)) = (
+            std::env::var("TRACELOUPE_FIXTURE_BACKUP"),
+            std::env::var("TRACELOUPE_FIXTURE_PASSWORD"),
+        ) else {
+            eprintln!("set TRACELOUPE_FIXTURE_BACKUP and TRACELOUPE_FIXTURE_PASSWORD");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cache_path = dir.path().join("cache.db");
+        crate::import::import_backup(
+            None,
+            std::path::Path::new(&backup),
+            &password,
+            &cache_path,
+            &dir.path().join("work"),
+            &["messages".to_string()],
+            false,
+            false,
+            &CancelToken::new(),
+            |_| {},
+        )
+        .expect("import the fixture");
+        let cache = crate::cache::CacheDb::open(&cache_path).unwrap();
+        let raw = crate::safety_scan::chunker::census_threads(
+            &cache,
+            crate::safety_scan::chunker::TimeRange::default(),
+            &crate::safety_scan::chunker::ScanSources::default(),
+        )
+        .unwrap();
+        assert!(
+            !raw.is_empty(),
+            "the fixture imports through the native path"
+        );
+        let threads: Vec<Vec<CensusInput>> = raw;
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        // Census blind, classifier unreachable: only phase 3.6 can produce
+        // findings, and it must — through the real engine, dedup, and
+        // persistence, not a re-implementation of the tier loop.
+        let embed = |_: &str| Ok(vec![0.0, 1.0]);
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            panic!("conversation-level verdicts never meet the confirmer")
+        };
+        let out = triage_scan::run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Balanced,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.patterns_flagged, 1, "exactly the stalking-shaped chat");
+        assert_eq!(out.findings, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::CoerciveControl);
+        // Thread identifiers are chat ROWIDs; the stalking chat is 90.
+        assert_eq!(rows[0].thread_identifier.as_deref(), Some("90"));
+        assert!(
+            rows[0].rationale.contains("49 messages"),
+            "{}",
+            rows[0].rationale
+        );
+    }
+}
+
+#[cfg(test)]
 mod census_boost {
     //! The earn-your-place measurement (#525): on the public research image's
     //! real conversational bed, with the sealed eval set's loud-category

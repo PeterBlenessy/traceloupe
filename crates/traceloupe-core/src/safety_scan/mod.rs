@@ -16,6 +16,7 @@ pub mod eval;
 pub mod grooming_onnx;
 pub mod guard;
 pub mod models;
+pub mod pattern_tier;
 pub mod prompt;
 pub mod reaper;
 pub mod relink;
