@@ -3260,14 +3260,21 @@ mod tests {
 
 #[cfg(test)]
 mod pattern_tier_acceptance {
-    //! #529 acceptance: through the PRODUCTION import (encrypted fixture
-    //! backup → native parse → census threads), the stalking-shaped thread
-    //! flags and the heavy-but-reciprocal one does not.
+    //! #529 acceptance: through the production import (encrypted fixture
+    //! backup -> native parse -> census threads) and the production engine
+    //! (run_triage phase 3.6), the stalking-shaped thread yields exactly one
+    //! coercive-control pattern finding.
     //!
-    //!   TRACELOUPE_FIXTURE_BACKUP=<dir> TRACELOUPE_FIXTURE_PASSWORD=test123     //!   cargo test -p traceloupe-core pattern_tier_on_a_fixture_backup -- --ignored --nocapture
+    //! Run with:
+    //!   TRACELOUPE_FIXTURE_BACKUP=<dir> \
+    //!   TRACELOUPE_FIXTURE_PASSWORD=<password used at generation> \
+    //!   cargo test -p traceloupe-core pattern_tier_on_a_fixture_backup -- --ignored --nocapture
 
-    use crate::safety_scan::pattern_tier;
+    use super::super::triage::{CensusInput, FocusWindow, ScanMode};
+    use super::super::triage_scan::{self, FocusOutcome, FocusVerdict};
+    use crate::analysis::{AnalysisDb, Category};
     use crate::sidecar::CancelToken;
+    use crate::Result;
 
     #[test]
     #[ignore = "requires a generated fixture backup (tools/make_fixture_backup.py)"]
@@ -3295,39 +3302,55 @@ mod pattern_tier_acceptance {
         )
         .expect("import the fixture");
         let cache = crate::cache::CacheDb::open(&cache_path).unwrap();
-        let threads = crate::safety_scan::chunker::census_threads(
+        let raw = crate::safety_scan::chunker::census_threads(
             &cache,
             crate::safety_scan::chunker::TimeRange::default(),
             &crate::safety_scan::chunker::ScanSources::default(),
         )
         .unwrap();
-        let mut flagged: Vec<String> = Vec::new();
-        for thread in &threads {
-            let metas: Vec<pattern_tier::MsgMeta> = thread
-                .iter()
-                .filter_map(|m| {
-                    m.occurred_at.map(|at| pattern_tier::MsgMeta {
-                        at,
-                        from_me: m.sender == "me",
-                    })
-                })
-                .collect();
-            let p = pattern_tier::contact_pattern(&metas);
-            if pattern_tier::classify(&p).flagged {
-                flagged.push(
-                    thread
-                        .first()
-                        .map(|m| m.thread_identifier.clone())
-                        .unwrap_or_default(),
-                );
-            }
-        }
-        assert_eq!(
-            flagged,
-        // Thread identifiers are chat ROWIDs (the durable key; handles live
-        // on messages) — the stalking chat is ROWID 90 in the fixture.
-            vec!["90".to_string()],
-            "exactly the stalking-shaped thread flags — not the reciprocal one,              not the ordinary fixture threads"
+        assert!(
+            !raw.is_empty(),
+            "the fixture imports through the native path"
+        );
+        let threads: Vec<Vec<CensusInput>> = raw;
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        // Census blind, classifier unreachable: only phase 3.6 can produce
+        // findings, and it must — through the real engine, dedup, and
+        // persistence, not a re-implementation of the tier loop.
+        let embed = |_: &str| Ok(vec![0.0, 1.0]);
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            panic!("conversation-level verdicts never meet the confirmer")
+        };
+        let out = triage_scan::run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Balanced,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.patterns_flagged, 1, "exactly the stalking-shaped chat");
+        assert_eq!(out.findings, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::CoerciveControl);
+        // Thread identifiers are chat ROWIDs; the stalking chat is 90.
+        assert_eq!(rows[0].thread_identifier.as_deref(), Some("90"));
+        assert!(
+            rows[0].rationale.contains("49 messages"),
+            "{}",
+            rows[0].rationale
         );
     }
 }

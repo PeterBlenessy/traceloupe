@@ -1968,7 +1968,7 @@ pub async fn run_triage_scan(
         crate::logging::info(
             &app2,
             format!(
-                "Triage scan: {} — censused {}, candidates {}, deep-scanned {}, findings {}, unscanned {}, grooming flagged {} (failed {})",
+                "Triage scan: {} — censused {}, candidates {}, deep-scanned {}, findings {}, unscanned {}, grooming flagged {} (failed {}), patterns flagged {}",
                 if outcome.cancelled { "cancelled" } else { "done" },
                 outcome.censused,
                 outcome.candidates,
@@ -1976,7 +1976,8 @@ pub async fn run_triage_scan(
                 outcome.findings,
                 outcome.unscanned(),
                 outcome.grooming_flagged,
-                outcome.grooming_failed
+                outcome.grooming_failed,
+                outcome.patterns_flagged
             ),
         );
         emit_scan(

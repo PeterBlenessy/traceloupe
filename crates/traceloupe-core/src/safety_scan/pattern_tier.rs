@@ -7,6 +7,10 @@
 //! columns already contain. The audit (PR #528) established that no public
 //! dataset exists for this register; by design this tier needs none.
 //!
+//! Known blind spot, by upstream design: the census reads messages with
+//! non-empty text, so an attachment-only barrage (100 photos overnight, no
+//! caption) contributes nothing here. Recorded rather than hidden.
+//!
 //! Everything here is pure and unit-tested against hand-designed shapes: the
 //! stalking shapes the tier must flag, and the heavy-but-ordinary shapes
 //! (group planning bursts, chatty friends) it must not.
@@ -74,7 +78,7 @@ pub fn contact_pattern(msgs: &[MsgMeta]) -> ContactPattern {
             night += 1;
         }
         if let Some(prev) = last_inbound_at {
-            if !owner_replied_since && m.at - prev >= DAY / 2 {
+            if !owner_replied_since && m.at.saturating_sub(prev) >= DAY / 2 {
                 p.reinitiations_unanswered += 1;
             }
         }
@@ -82,10 +86,34 @@ pub fn contact_pattern(msgs: &[MsgMeta]) -> ContactPattern {
         owner_replied_since = false;
     }
     if p.inbound > 0 {
-        p.span_days = ((last_in - first_in) as f64 / DAY as f64).max(1.0 / 24.0);
+        p.span_days = (last_in.saturating_sub(first_in) as f64 / DAY as f64).max(1.0 / 24.0);
         p.night_share = night as f64 / p.inbound as f64;
     }
     p
+}
+
+/// Automated senders — shortcodes ("262966"), alphanumeric sender IDs
+/// ("AMZN", "DHL") — produce exactly the high-volume, never-answered,
+/// re-initiating shape this tier hunts, and they are on every phone (2FA,
+/// bank alerts, deliveries). A person's number is E.164: leading '+' and 10+
+/// digits; an email is an iMessage handle. Anything else is treated as a
+/// service, not a contact.
+pub fn sender_is_service(handle: &str) -> bool {
+    let h = handle.trim();
+    if h == "me" || h.is_empty() {
+        return false;
+    }
+    if h.contains('@') {
+        return false; // email handle: a person
+    }
+    let digits = h.chars().filter(|c| c.is_ascii_digit()).count();
+    if h.starts_with('+') && digits >= 10 {
+        return false; // E.164: a person
+    }
+    if h.chars().any(|c| c.is_ascii_alphabetic()) {
+        return true; // alphanumeric sender ID
+    }
+    digits < 7 // bare short numeric code
 }
 
 /// The verdict, with which criteria fired — the rationale is built from these
@@ -105,6 +133,12 @@ pub fn classify(p: &ContactPattern) -> PatternVerdict {
     if p.inbound < 20 {
         return v; // below any meaningful pattern
     }
+    // A sub-day thread has no PATTERN, whatever its volume — twenty unanswered
+    // messages in twenty minutes is a friend venting while you're in a
+    // meeting. Persistence means days.
+    if p.span_days < 2.0 {
+        return v;
+    }
     let reply_ratio = p.outbound as f64 / p.inbound as f64;
     let per_day = p.inbound as f64 / p.span_days.max(1.0);
 
@@ -115,9 +149,10 @@ pub fn classify(p: &ContactPattern) -> PatternVerdict {
     if p.reinitiations_unanswered >= 4 {
         persistence.push("keeps-reinitiating-unanswered");
     }
-    if p.night_share >= 0.4 {
-        persistence.push("night-concentrated");
-    }
+    // night_share is COMPUTED but not a criterion: the 00-06 window is UTC,
+    // which is a Tokyo working morning — "night-time" would be a false claim
+    // in a forensic finding for most of the world. Re-enable only with the
+    // owner's timezone (cache.health_timezones) resolving the window.
     let mut nonreciprocal = Vec::new();
     if reply_ratio <= 0.1 {
         nonreciprocal.push("rarely-answered");
@@ -134,22 +169,18 @@ pub fn classify(p: &ContactPattern) -> PatternVerdict {
 
 /// The plain-language rationale, from the numbers only.
 pub fn rationale(p: &ContactPattern, v: &PatternVerdict) -> String {
+    let days = p.span_days.max(1.0).round() as i64;
     let mut parts = vec![format!(
-        "{} messages over {:.0} days with {} replies",
+        "{} messages over {} day{} with {} replies",
         p.inbound,
-        p.span_days.max(1.0),
+        days,
+        if days == 1 { "" } else { "s" },
         p.outbound
     )];
     if v.criteria.contains(&"keeps-reinitiating-unanswered") {
         parts.push(format!(
             "resumed contact {} times after long unanswered gaps",
             p.reinitiations_unanswered
-        ));
-    }
-    if v.criteria.contains(&"night-concentrated") {
-        parts.push(format!(
-            "{:.0}% sent in night-time hours",
-            p.night_share * 100.0
         ));
     }
     if v.criteria.contains(&"long-one-sided-runs") {
@@ -208,8 +239,12 @@ mod tests {
         msgs.push((5 * 86_400 + 2 * 3600 + 100, true)); // one reply in two weeks
         let p = contact_pattern(&shape(&msgs));
         let v = classify(&p);
-        assert!(v.flagged, "{p:?}");
-        assert!(v.criteria.contains(&"night-concentrated"), "{v:?}");
+        assert!(
+            v.flagged,
+            "nightly check-ins still flag on re-initiation + non-reciprocity \
+             (the night criterion itself is disabled until owner-timezone \
+             resolution exists): {p:?}"
+        );
     }
 
     /// A group-planning burst: heavy, but the owner replies constantly.
@@ -242,6 +277,69 @@ mod tests {
         let p = contact_pattern(&shape(&msgs));
         let v = classify(&p);
         assert!(v.flagged, "{p:?}");
+    }
+
+    /// Review of #531, finding 2: automated senders match the stalking shape
+    /// on every phone and must be recognised as services.
+    #[test]
+    fn service_senders_are_recognised() {
+        for s in ["262966", "AMZN", "DHL-Info", "72404", "12345"] {
+            assert!(sender_is_service(s), "{s} is a service");
+        }
+        for s in ["+15550009090", "+447700900123", "mum@example.com", "me"] {
+            assert!(!sender_is_service(s), "{s} is a person");
+        }
+    }
+
+    /// Review of #531, finding 5: a sub-day barrage has volume but no
+    /// PATTERN — twenty unanswered messages in twenty minutes is a friend
+    /// venting while the owner is in a meeting.
+    #[test]
+    fn a_sub_day_barrage_never_flags() {
+        let msgs: Vec<(i64, bool)> = (0..25).map(|i| (i * 60, false)).collect();
+        let p = contact_pattern(&shape(&msgs));
+        assert!(!classify(&p).flagged, "{p:?}");
+    }
+
+    /// Review of #531, finding 4: every threshold pinned one step OUTSIDE its
+    /// bar — before this, six simultaneous loosenings left the whole suite
+    /// green.
+    #[test]
+    fn each_threshold_holds_one_step_outside_its_bar() {
+        // 19 inbound (bar: 20) — daily unanswered, otherwise maximal shape.
+        let msgs: Vec<(i64, bool)> = (0..19).map(|d| (d * 86_400, false)).collect();
+        assert!(
+            !classify(&contact_pattern(&shape(&msgs))).flagged,
+            "inbound bar"
+        );
+        // 3 re-initiations (bar: 4) with no other persistence signal:
+        // 20 inbound in 4 daily clusters over 3+ days, low per-day volume.
+        let mut msgs = Vec::new();
+        for day in 0..4i64 {
+            for i in 0..5i64 {
+                msgs.push((day * 86_400 + i * 60, false));
+            }
+        }
+        let p = contact_pattern(&shape(&msgs));
+        assert_eq!(p.reinitiations_unanswered, 3);
+        assert!(p.inbound as f64 / p.span_days.max(1.0) < 15.0, "{p:?}");
+        assert!(!classify(&p).flagged, "reinit bar: {p:?}");
+        // reply ratio 3/20 = 0.15 (bar: 0.10) and runs under 15: reciprocity
+        // defeats the flag even with re-initiations present.
+        let mut msgs = Vec::new();
+        for day in 0..10i64 {
+            for i in 0..2i64 {
+                msgs.push((day * 86_400 + i * 60, false));
+            }
+        }
+        msgs.push((86_400 * 2 + 300, true));
+        msgs.push((86_400 * 5 + 300, true));
+        msgs.push((86_400 * 8 + 300, true));
+        let p = contact_pattern(&shape(&msgs));
+        let ratio = p.outbound as f64 / p.inbound as f64;
+        assert!(ratio > 0.10 && ratio < 0.2, "{ratio}");
+        assert!(p.longest_one_sided_run < 15, "{p:?}");
+        assert!(!classify(&p).flagged, "reply-ratio bar: {p:?}");
     }
 
     /// Below the volume floor nothing flags, whatever the shape.

@@ -605,47 +605,86 @@ where
     // so it runs on every scan unconditionally. Its verdicts are
     // conversation-level for the same reason grooming's are: a message-level
     // confirmer cannot judge a pattern it cannot see.
+    //
+    // Review-hardened (#531): computed PER SENDER, never per thread — a busy
+    // group chat is many people, and scoring it as one "contact" flagged
+    // ordinary families and named whichever member spoke last. Service
+    // senders (shortcodes, alphanumeric IDs — 2FA, banks, deliveries) are
+    // skipped: they match the shape on every phone. One finding per thread
+    // and only when the deep scan produced no coercive-control finding there
+    // already — the content-named verdict outranks the behavioural one.
     if !out.cancelled {
         use crate::safety_scan::pattern_tier;
-        for thread in threads.iter() {
-            let metas: Vec<pattern_tier::MsgMeta> = thread
-                .iter()
-                .filter_map(|m| {
-                    m.occurred_at.map(|at| pattern_tier::MsgMeta {
-                        at,
-                        from_me: m.sender == "me",
-                    })
-                })
-                .collect();
-            let p = pattern_tier::contact_pattern(&metas);
-            let v = pattern_tier::classify(&p);
-            if !v.flagged {
+        let text_flagged: std::collections::HashSet<String> = provisional
+            .iter()
+            .filter(|(_, v, _)| v.category == Category::CoerciveControl)
+            .map(|(w, _, _)| w.items[w.focus].thread_identifier.clone())
+            .collect();
+        'patterns: for thread in threads.iter() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            let tid = match thread.first() {
+                Some(m) => m.thread_identifier.clone(),
+                None => continue,
+            };
+            if text_flagged.contains(&tid) {
                 continue;
             }
-            // Anchor on the contact's LAST message — the most recent evidence
-            // of the pattern, where a reviewer would start reading.
-            let Some(mi) = thread
+            let mut senders: Vec<&str> = thread
                 .iter()
-                .rposition(|m| m.sender != "me" && m.occurred_at.is_some())
-            else {
-                continue;
-            };
-            out.patterns_flagged += 1;
-            let window = triage::context_window(thread, mi, ScanMode::default_radius());
-            provisional.push((
-                window,
-                FocusVerdict {
-                    category: Category::CoerciveControl,
-                    // Behavioural evidence without content: severity 2. The
-                    // text tiers raise it if the words warrant.
-                    severity: 2,
-                    rationale: format!(
-                        "Contact-pattern signal (no message content used): {}.",
-                        pattern_tier::rationale(&p, &v)
-                    ),
-                },
-                true,
-            ));
+                .filter(|m| m.sender != "me")
+                .map(|m| m.sender.as_str())
+                .collect();
+            senders.sort_unstable();
+            senders.dedup();
+            for sender in senders {
+                if pattern_tier::sender_is_service(sender) {
+                    continue;
+                }
+                // This sender's messages plus the owner's replies: the pair
+                // that defines reciprocity for THIS contact.
+                let metas: Vec<pattern_tier::MsgMeta> = thread
+                    .iter()
+                    .filter(|m| m.sender == sender || m.sender == "me")
+                    .filter_map(|m| {
+                        m.occurred_at.map(|at| pattern_tier::MsgMeta {
+                            at,
+                            from_me: m.sender == "me",
+                        })
+                    })
+                    .collect();
+                let p = pattern_tier::contact_pattern(&metas);
+                let v = pattern_tier::classify(&p);
+                if !v.flagged {
+                    continue;
+                }
+                let Some(mi) = thread
+                    .iter()
+                    .rposition(|m| m.sender == sender && m.occurred_at.is_some())
+                else {
+                    continue;
+                };
+                out.patterns_flagged += 1;
+                let window = triage::context_window(thread, mi, ScanMode::default_radius());
+                provisional.push((
+                    window,
+                    FocusVerdict {
+                        category: Category::CoerciveControl,
+                        // Behavioural evidence without content: severity 2.
+                        // The text tiers raise it if the words warrant.
+                        severity: 2,
+                        rationale: format!(
+                            "Flagged from message timing and volume alone — not from \
+                             the words in the conversation: {}.",
+                            pattern_tier::rationale(&p, &v)
+                        ),
+                    },
+                    true,
+                ));
+                continue 'patterns; // one finding per thread
+            }
         }
     }
 
@@ -725,18 +764,36 @@ where
             }
         }
         let judged = &window.items[window.focus];
+        // Conversation-level findings are about the THREAD, and their anchor
+        // message moves on every re-import (it is "the most recent"). Keying
+        // fingerprint/content on the anchor made dismissals evaporate at the
+        // next import (#531 review, finding 7) — so they key on the thread.
+        let (fingerprint, content_key) = if conversation_level {
+            (
+                format!("thread:{}:{:?}", judged.thread_identifier, v.category),
+                crate::safety_scan::content_key::content_key(&format!(
+                    "thread-pattern:{}",
+                    judged.thread_identifier
+                )),
+            )
+        } else {
+            (
+                judged.fingerprint.clone(),
+                crate::safety_scan::content_key::content_key(&judged.text),
+            )
+        };
         findings.push(NewFinding {
             source_kind: SourceKind::Message,
             source_id: Some(judged.source_id),
             thread_identifier: Some(judged.thread_identifier.clone()),
             occurred_at: judged.occurred_at,
-            fingerprint: judged.fingerprint.clone(),
+            fingerprint,
             category: v.category,
             severity: v.severity,
             rationale: v.rationale,
             service: judged.service.clone(),
             sender: Some(judged.sender.clone()),
-            content_key: crate::safety_scan::content_key::content_key(&judged.text),
+            content_key,
         });
     }
     // Every confirmation failing is the same §10.6 signature as every classify
@@ -876,7 +933,8 @@ mod tests {
                 stalk.push(CensusInput {
                     source_id: 1000 + day * 10 + i,
                     thread_identifier: "stalker".into(),
-                    sender: "them".into(),
+                    // A real person's handle — service senders are skipped.
+                    sender: "+15550001111".into(),
                     occurred_at: Some(day * 86_400 + 12 * 3600 + i * 60),
                     text: "call me".into(),
                     fingerprint: format!("s{day}-{i}"),
@@ -935,7 +993,7 @@ mod tests {
             rows[0].rationale
         );
         assert!(
-            rows[0].rationale.contains("no message content used"),
+            rows[0].rationale.contains("timing and volume alone"),
             "the rationale must say what this finding is and is not"
         );
     }
