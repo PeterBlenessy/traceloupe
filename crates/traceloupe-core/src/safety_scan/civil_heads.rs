@@ -155,9 +155,7 @@ mod tests {
             "can you grab milk on the way home",
             "the meeting moved to 3pm, see you there",
         ];
-        let hits = c
-            .score_batch(&texts.iter().copied().collect::<Vec<_>>())
-            .unwrap();
+        let hits = c.score_batch(texts.as_slice()).unwrap();
         assert_eq!(hits[0].map(|h| h.category), Some(Category::ThreatViolence));
         assert_eq!(hits[1].map(|h| h.category), Some(Category::HateIdentity));
         assert_eq!(hits[2].map(|h| h.category), Some(Category::SexualContent));
