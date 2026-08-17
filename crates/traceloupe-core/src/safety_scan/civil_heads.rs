@@ -50,6 +50,10 @@ const ACTIVE: &[(usize, f32, Category)] = &[
 ];
 
 const MAX_TOKENS: usize = 192;
+/// Internal inference chunk: bounds peak memory regardless of caller batch
+/// size. A 30k-message thread must never become one 30k×192 tensor (review of
+/// #527, finding 2).
+const CHUNK: usize = 64;
 
 pub struct CivilHeads {
     session: Session,
@@ -77,6 +81,16 @@ impl CivilHeads {
                 ..Default::default()
             }))
             .map_err(|e| format!("truncation: {e}"))?;
+        // Tokenizer-managed padding with the model's REAL [PAD] id — hand-
+        // padding with id 0 filled slots with a live vocabulary token that
+        // only the mask suppressed (review of #527, finding 6).
+        let pad_id = tokenizer.token_to_id("[PAD]").unwrap_or(0);
+        tokenizer.with_padding(Some(tokenizers::PaddingParams {
+            strategy: tokenizers::PaddingStrategy::BatchLongest,
+            pad_id,
+            pad_token: "[PAD]".into(),
+            ..Default::default()
+        }));
         Ok(Self { session, tokenizer })
     }
 
@@ -86,6 +100,14 @@ impl CivilHeads {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
+        let mut all = Vec::with_capacity(texts.len());
+        for chunk in texts.chunks(CHUNK) {
+            all.extend(self.score_chunk(chunk)?);
+        }
+        Ok(all)
+    }
+
+    fn score_chunk(&mut self, texts: &[&str]) -> Result<Vec<Option<HeadHit>>, String> {
         let encs = self
             .tokenizer
             .encode_batch(texts.to_vec(), true)
@@ -122,17 +144,25 @@ impl CivilHeads {
         }
         let mut out = Vec::with_capacity(n);
         for r in 0..n {
-            let mut best: Option<HeadHit> = None;
+            // Highest margin over its own threshold wins. Margin-vs-margin:
+            // comparing a margin against a probability was dead code (review
+            // of #527, finding 1 — the condition could never be true, so
+            // ACTIVE order silently decided every tie).
+            let mut best: Option<(f32, HeadHit)> = None;
             for &(head, th, cat) in ACTIVE {
                 let p = 1.0 / (1.0 + (-logits[[r, head]]).exp());
-                if p >= th && best.is_none_or(|b| p - th > b.score) {
-                    best = Some(HeadHit {
-                        category: cat,
-                        score: p,
-                    });
+                let margin = p - th;
+                if margin >= 0.0 && best.is_none_or(|(m, _)| margin > m) {
+                    best = Some((
+                        margin,
+                        HeadHit {
+                            category: cat,
+                            score: p,
+                        },
+                    ));
                 }
             }
-            out.push(best);
+            out.push(best.map(|(_, h)| h));
         }
         Ok(out)
     }
@@ -141,6 +171,39 @@ impl CivilHeads {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Padding must be inert: a text scored alone and the same text scored in
+    /// a batch beside a much longer one must agree, or every threshold shifts
+    /// with batch composition — a silent recall change (review of #527,
+    /// finding 6). Ignored without the artefacts.
+    #[test]
+    fn a_score_does_not_depend_on_its_batchmates() {
+        let (Ok(model), Ok(tok)) = (
+            std::env::var("TRACELOUPE_CIVIL_ONNX"),
+            std::env::var("TRACELOUPE_GROOMING_TOKENIZER"),
+        ) else {
+            eprintln!("skipped: set TRACELOUPE_CIVIL_ONNX / TRACELOUPE_GROOMING_TOKENIZER");
+            return;
+        };
+        let mut c = CivilHeads::load(Path::new(&model), Path::new(&tok)).unwrap();
+        let short = "i will come to your house and break both your legs";
+        let filler = "the committee reviewed the quarterly maintenance schedule and noted that \
+                      the north stairwell repainting, the gutter replacement along the east \
+                      elevation, the car park resurfacing, the intercom upgrade and the \
+                      replacement of the fire doors on levels two through five would proceed \
+                      in the order agreed at the previous meeting subject to contractor \
+                      availability and the outcome of the insurance assessment";
+        let alone = c.score_batch(&[short]).unwrap()[0];
+        let padded = c.score_batch(&[short, filler]).unwrap()[0];
+        let (a, p) = (alone.expect("flags alone"), padded.expect("flags padded"));
+        assert_eq!(a.category, p.category);
+        assert!(
+            (a.score - p.score).abs() < 1e-3,
+            "padding changed the score: alone {} vs batched {}",
+            a.score,
+            p.score
+        );
+    }
 
     /// Parity with the calibrated Python reference: loud samples of each
     /// active category flag with the right category; ordinary text does not.

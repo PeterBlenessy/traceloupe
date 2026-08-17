@@ -433,18 +433,26 @@ where
             }
             match heads(&rejected) {
                 Ok(hits) => {
+                    let mut pushed = std::collections::HashSet::new();
                     for (mi, _category) in hits {
                         let Some(m) = rejected.get(mi) else { continue };
+                        // A closure returning the same index twice must not
+                        // burn two budget slots on one message (review of
+                        // #527, finding 4).
+                        if !pushed.insert(m.source_id) {
+                            continue;
+                        }
                         out.heads_flagged += 1;
                         appended += 1;
                         worklist.push(crate::analysis::WorkItem {
                             source_id: m.source_id,
                             thread_identifier: m.thread_identifier.clone(),
                             sender: m.sender.clone(),
-                            // Below every census score by construction (the
-                            // census cut is positive), so head candidates rank
-                            // after census candidates and a tight budget
-                            // spends on the census's best first.
+                            // The Vec is never re-sorted: head items rank last
+                            // because they are APPENDED after the SQL-ranked
+                            // census list, so a tight budget spends on the
+                            // census's best first. `score` is read nowhere
+                            // downstream; 0.0 is documentation, not mechanism.
                             score: 0.0,
                             cell_hot: 0,
                             fingerprint: m.fingerprint.clone(),
@@ -808,8 +816,12 @@ mod tests {
         let mut db = AnalysisDb::open_in_memory().unwrap();
         let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
         let threads = vec![
-            thread(&[(1, "them", "i will hurt you badly")]), // census keeps this
-            thread(&[(2, "them", "loud threat the embedding missed")]), // heads only
+            // Census keeps message 1; message 2 in the SAME thread is
+            // rejected — the head pass must see 2 but never 1.
+            thread(&[
+                (1, "them", "i will hurt you badly"),
+                (2, "them", "loud threat the embedding missed"),
+            ]),
             thread(&[(3, "them", "ordinary chatter")]),
         ];
         // Census: only message 1 scores above the cut.
@@ -830,16 +842,26 @@ mod tests {
             })
         };
         let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> { Ok(true) };
-        // Heads flag BOTH rejected messages; the budget of 2 must then drop
-        // one of them, proving the cap binds the union rather than just the
-        // census half.
+        // Heads flag BOTH rejected messages — message 2 TWICE, which must
+        // not burn two budget slots — and the budget of 2 must then drop the
+        // remaining one, proving the cap binds the union rather than just the
+        // census half. The closure also asserts it never sees the
+        // census-kept message (the rejected-only filter).
         let heads = |rejected: &[&CensusInput]| {
-            Ok(rejected
+            assert!(
+                rejected.iter().all(|m| m.source_id != 1),
+                "the census-kept message must not reach the head pass"
+            );
+            let mut hits: Vec<(usize, Category)> = rejected
                 .iter()
                 .enumerate()
                 .filter(|(_, m)| m.source_id == 2 || m.source_id == 3)
                 .map(|(i, _)| (i, Category::ThreatViolence))
-                .collect())
+                .collect();
+            if let Some(first) = hits.first().copied() {
+                hits.push(first); // duplicate index: must be ignored
+            }
+            Ok(hits)
         };
         let out = run_triage(
             &mut db,

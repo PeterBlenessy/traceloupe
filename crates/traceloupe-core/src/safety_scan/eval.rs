@@ -3358,6 +3358,13 @@ mod census_boost {
                 .map(|v| census_score(&v, &prototypes))
         };
         let bed_scores: Vec<f32> = bed.iter().filter_map(|t| score(t)).collect();
+        // §10.6: a silently shortened score column misaligns the two arms and
+        // still prints a plausible table (review of #527, finding 3).
+        assert_eq!(
+            bed_scores.len(),
+            bed.len(),
+            "an embed failure dropped bed messages — rerun, do not trust the table"
+        );
         // planted: a case is census-caught if ANY of its messages clears the cut
         let mut planted_scores: Vec<(Category, Vec<f32>, Vec<String>)> = Vec::new();
         for (cat, msgs) in &planted {
@@ -3406,14 +3413,18 @@ mod census_boost {
         // matched-cost census: the cut that keeps as many bed messages as the union
         let mut sorted = bed_scores.clone();
         sorted.sort_by(|a, b| b.partial_cmp(a).unwrap());
-        let matched_cut = sorted
-            .get(kept_bed + boost_bed)
-            .copied()
-            .unwrap_or(f32::MIN);
+        // Keeping exactly K messages means the cut is sorted[K-1] (>= test);
+        // sorted[K] kept K+1 and quietly gave this arm one extra slot.
+        let k = kept_bed + boost_bed;
+        let matched_cut = if k == 0 {
+            f32::MAX
+        } else {
+            sorted.get(k - 1).copied().unwrap_or(f32::MIN)
+        };
         println!("(matched-cost census cut: {matched_cut:.3} vs Balanced {cut:.3})");
         for cat in LOUD {
             let mut n = 0;
-            let (mut census_r, mut union_r, mut matched_r) = (0, 0, 0);
+            let (mut census_r, mut union_r, mut matched_r, mut head_any) = (0, 0, 0, 0);
             for ((pc, ss, _), hh) in planted_scores.iter().zip(&planted_head) {
                 if pc != cat {
                     continue;
@@ -3424,9 +3435,13 @@ mod census_boost {
                 census_r += census as usize;
                 union_r += (census || head) as usize;
                 matched_r += ss.iter().any(|s| *s >= matched_cut) as usize;
+                // Head-only recall separates "adds nothing beyond the census"
+                // from "never fires on this register at all" — different
+                // conclusions (review of #527, finding 3).
+                head_any += hh.iter().any(|h| *h) as usize;
             }
             println!(
-                "{cat:?}: census {census_r}/{n} | census+heads {union_r}/{n} | census-at-matched-cost {matched_r}/{n}"
+                "{cat:?}: census {census_r}/{n} | census+heads {union_r}/{n} | census-at-matched-cost {matched_r}/{n} | heads-alone {head_any}/{n}"
             );
         }
     }

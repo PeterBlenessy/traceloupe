@@ -303,22 +303,32 @@ bed, the sealed eval set's loud-category positives planted as ground truth,
 census at the Balanced cut vs census ∪ heads, with a matched-cost census cut as
 the alternative spend.
 
-| category | census alone | census + heads | census at matched cost |
-|---|---|---|---|
-| threat-violence | 15/20 | 15/20 | 15/20 |
-| hate-identity | 10/11 | 10/11 | 10/11 |
-| sexual-content | 10/12 | 10/12 | 10/12 |
+| category | census alone | census + heads | census at matched cost | heads alone |
+|---|---|---|---|---|
+| threat-violence | 15/20 | 15/20 | 15/20 | 6/20 |
+| hate-identity | 10/11 | 10/11 | 10/11 | 3/11 |
+| sexual-content | 10/12 | 10/12 | 10/12 | 1/12 |
 
-The heads added 8 bed candidates (2.6% → 4.0% of messages kept) and **zero
-additional catches**. What the census misses in these categories, the heads
+(Numbers from the corrected instrument after review: loud failure on embed
+drops, matched-cost cut off-by-one fixed, real [PAD] id in batching.) The
+heads added 5 bed candidates (2.6% → 3.5% of messages kept) and **zero
+additional catches**. The heads-alone column resolves the ambiguity the first
+table left open: the heads DO fire on this register — but only on cases the
+census already catches. Every head catch is a census catch's subset. What the census misses in these categories, the heads
 miss too — the missed cases are quiet in register even when the category is
 loud, which is Civil Comments' known blind spot, now measured a fourth time
 from a new angle.
 
 **Decision, per the issue's own gate:** the civil-heads model is not fetched
 and the pass stays inactive. Users are not charged 143 MB for zero recall. The
-code path ships tested behind the absent-model no-op (union, budget cap,
-failure audit all pinned by unit tests), so a future better model activates by
-publishing an artefact, not by changing code. The negative result is the
+code path ships tested behind a build-level hold-back (CENSUS_BOOST_ACTIVE)
+plus the absent-model no-op (union, budget cap, failure audit all pinned by
+unit tests); activation is a deliberate three-part change — flip the const,
+add the spec to the fetch loop, pin the new artefact — together with a fresh
+measurement table. One caveat the table itself cannot show: the ground truth
+is hand-written SMS-register text and the prototypes are hand-authored, so the
+census arm plays at home while the web-comment-trained heads play away. The
+result still says "don't charge users 143 MB today"; it does not say a
+message-level signal can never help. The negative result is the
 system working: this table is exactly what the measurement gate exists to
 produce, and it cost one afternoon instead of a shipped regression.

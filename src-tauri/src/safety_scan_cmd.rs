@@ -414,9 +414,10 @@ pub async fn ensure_grooming_artefacts(
     // The civil-heads model is deliberately NOT fetched: the earn-your-place
     // measurement (docs/research/public-data-audit.md, 2026-08-17) showed the
     // heads add candidates but zero recall over the census on the loud
-    // categories, so users are not charged 143 MB for nothing. The scan code
-    // path stays, tested, behind the absent-model no-op — a better model
-    // activates it by shipping the artefact, not by changing code.
+    // categories, so users are not charged 143 MB for nothing. Activation is
+    // a deliberate three-part change: flip CENSUS_BOOST_ACTIVE, add the spec
+    // to the fetch loop below, and pin the new artefact's sha/size — plus a
+    // fresh measurement table, per the const's own doc.
     if GROOMING_MODEL.installed_at(&dir).is_some()
         && GROOMING_TOKENIZER.installed_at(&dir).is_some()
     {
