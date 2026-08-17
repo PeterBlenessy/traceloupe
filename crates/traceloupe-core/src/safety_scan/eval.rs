@@ -1282,6 +1282,7 @@ mod tests {
             classify,
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
@@ -1384,6 +1385,7 @@ mod tests {
                 classify2,
                 confirm2,
                 |_| Ok(None),
+                |_| Ok(Vec::new()),
                 &CancelToken::new(),
                 |_| {},
             )
@@ -1597,6 +1599,7 @@ mod tests {
             classify,
             |_: &FocusWindow, _: &FocusVerdict| Ok(true),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |p: TriageProgress| match p {
                 TriageProgress::Census { done, total } => {
@@ -2810,6 +2813,7 @@ mod tests {
             classify,
             |_: &FocusWindow, _| Ok(true),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |p: TriageProgress| {
                 if let TriageProgress::DeepScan { done, total, .. } = p {
@@ -2924,6 +2928,7 @@ mod tests {
                 classify2,
                 confirm2,
                 |_| Ok(None),
+                |_| Ok(Vec::new()),
                 &CancelToken::new(),
                 |p: TriageProgress| match p {
                     TriageProgress::Census { total, .. } => {
@@ -3357,6 +3362,7 @@ mod grooming_e2e {
             classify,
             confirm,
             grooming,
+            |_| Ok(Vec::new()),
             &CancelToken::new(),
             |_| {},
         )
