@@ -1837,9 +1837,15 @@ pub async fn run_triage_scan(
             }
         };
         // The loud-category heads (#525): same absent-is-a-no-op contract.
-        use traceloupe_core::safety_scan::civil_heads::{CivilHeads, CIVIL_HEADS_MODEL};
+        use traceloupe_core::safety_scan::civil_heads::{
+            CivilHeads, CENSUS_BOOST_ACTIVE, CIVIL_HEADS_MODEL,
+        };
         let mut heads_clf = match (
-            CIVIL_HEADS_MODEL.installed_at(&dir),
+            // The build-level hold-back gates FIRST: an artefact on disk is not
+            // a decision (see CENSUS_BOOST_ACTIVE).
+            CIVIL_HEADS_MODEL
+                .installed_at(&dir)
+                .filter(|_| CENSUS_BOOST_ACTIVE),
             GROOMING_TOKENIZER.installed_at(&dir),
         ) {
             (Some(m), Some(t)) => match CivilHeads::load(&m, &t) {
@@ -1851,7 +1857,7 @@ pub async fn run_triage_scan(
             },
             _ => None,
         };
-        let heads = |rejected: &[traceloupe_core::safety_scan::triage::CensusInput]|
+        let heads = |rejected: &[&traceloupe_core::safety_scan::triage::CensusInput]|
             -> traceloupe_core::Result<Vec<(usize, traceloupe_core::analysis::Category)>> {
             let Some(clf) = heads_clf.as_mut() else {
                 return Ok(Vec::new());

@@ -309,7 +309,7 @@ where
     C: FnMut(&FocusWindow) -> Result<FocusOutcome>,
     F: FnMut(&FocusWindow, &FocusVerdict) -> Result<bool>,
     G: FnMut(&[CensusInput]) -> Result<Option<usize>>,
-    H: FnMut(&[CensusInput]) -> Result<Vec<(usize, crate::analysis::Category)>>,
+    H: FnMut(&[&CensusInput]) -> Result<Vec<(usize, crate::analysis::Category)>>,
     P: FnMut(TriageProgress),
 {
     let mut out = TriageOutcome::default();
@@ -422,10 +422,11 @@ where
                 out.cancelled = true;
                 break;
             }
-            let rejected: Vec<CensusInput> = thread
+            // References only: on the default path (no model) this must cost a
+            // pointer Vec, never a copy of the corpus text.
+            let rejected: Vec<&CensusInput> = thread
                 .iter()
                 .filter(|m| !already.contains(&m.source_id))
-                .cloned()
                 .collect();
             if rejected.is_empty() {
                 continue;
@@ -832,7 +833,7 @@ mod tests {
         // Heads flag BOTH rejected messages; the budget of 2 must then drop
         // one of them, proving the cap binds the union rather than just the
         // census half.
-        let heads = |rejected: &[CensusInput]| {
+        let heads = |rejected: &[&CensusInput]| {
             Ok(rejected
                 .iter()
                 .enumerate()

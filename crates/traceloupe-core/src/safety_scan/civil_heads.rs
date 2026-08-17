@@ -22,6 +22,15 @@ use tokenizers::Tokenizer;
 use super::grooming_onnx::OnnxSpec;
 use crate::analysis::Category;
 
+/// The hold-back switch. The earn-your-place measurement (2026-08-17,
+/// docs/research/public-data-audit.md) found the heads add candidates but zero
+/// recall over the census, so the pass is OFF at build level. An artefact
+/// already on disk (fetched during the brief window the ensure command pulled
+/// it) must NOT silently activate a stage the measurement said no to —
+/// presence of a file is not a decision. Flip this only together with a new
+/// artefact AND a new measurement table.
+pub const CENSUS_BOOST_ACTIVE: bool = false;
+
 pub const CIVIL_HEADS_MODEL: OnnxSpec = OnnxSpec {
     filename: "civil-heads-modernbert-int8.onnx",
     url: "https://github.com/PeterBlenessy/traceloupe/releases/download/models-v2/civil-heads-modernbert-int8.onnx",
