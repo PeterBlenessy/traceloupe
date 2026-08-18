@@ -443,7 +443,7 @@ their only coverage, which is exactly why the fixture set exists.
 The proven oracle is `tools/validate-triage-pipeline.py`; setup and the run
 command are in `triage-validation-setup.md`. Pass criteria: end-to-end recall
 within ~0.05 of 0.94 at precision ≥ 0.90, at census threshold 0.52
-(`docs/safety-scan-journey.md` §6.1/§8).
+(`the journey doc (traceloupe-training, private)` §6.1/§8).
 
 ### 2026-08-12 — the lab result reproduces (journey §8, step 1)
 

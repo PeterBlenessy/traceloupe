@@ -2996,7 +2996,7 @@ mod tests {
     /// (`tools/validate-triage-pipeline.py`) sends these verbatim so it can
     /// never drift into reimplementing GBNF — a mistake that produced false
     /// "recall 0.00" results three times during the rebuild (see
-    /// docs/safety-scan-journey.md §10.6).
+    /// the journey doc (traceloupe-training, private) §10.6).
     #[test]
     #[ignore = "writes the grammar file the validation harness needs"]
     fn dump_grammars() {
