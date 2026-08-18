@@ -442,3 +442,25 @@ without a visible loss curve and a reference number is undiagnosable.
 
 Next for this category: threshold sweep on the fold scores, then the register
 question (Reddit → messages) via the same transfer discipline as grooming.
+
+## CMV conversation-level harassment reader: measured, not shippable (2026-08-18)
+
+ModernBERT on CGA-CMV (6,842 real conversations, balanced, published splits),
+best-epoch: **0.618 on the held-out test** — attacks caught 78%, but clean
+conversations kept clean only 46%. Published specialised architectures reach
+~0.66 on this corpus; a generic full-conversation read lands at the low end of
+range, and the clean-kept rate disqualifies it as a scanner signal either way.
+Same verdict class as the civil heads: measured, and held back.
+
+What this narrows: the quiet-harassment front's realistic paths are now (1)
+the ALONE access bet — the only real intimate-register conversations anywhere,
+(2) multi-voice synthetic under guards + adversarial review, and (3) the
+phone-register eval expansion so progress is measurable. Public forum data has
+now been tried at conversation level twice (CGA-wiki 0.783 but zero quiet
+transfer; CGA-CMV 0.618 with unusable false-alarm rate); the register gap, not
+model capacity, is the binding constraint — consistent with every measurement
+since the pivot.
+
+Tooling note: the preserved training scripts referenced a session worktree for
+the checklist step; paths now point at the repo root. The CMV weights were
+lost to that crash (retrainable in ~1.5h; the decision number survived).
