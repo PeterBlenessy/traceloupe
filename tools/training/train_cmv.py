@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 SP='/private/tmp/claude-501/-Users-peter-Development-iphone-backup-analyzer/815f70cc-17bc-4c6d-b41c-a49f939ad8b8/scratchpad'
-ROOT=SP+'/datasets/conversations-gone-awry-corpus'
+ROOT=SP+'/datasets/conversations-gone-awry-cmv-corpus'
 REPO='/Users/peter/Development/iphone-backup-analyzer'
 torch.manual_seed(0); random.seed(0)
 
@@ -27,7 +27,7 @@ def render(cid):
     return "\n".join(out)
 splits={'train':[], 'val':[], 'test':[]}
 for cid,meta in convos.items():
-    splits[meta['split']].append((render(cid), 1 if meta['conversation_has_personal_attack'] else 0))
+    splits[meta['meta']['split']].append((render(cid), 1 if meta['meta']['has_removed_comment'] else 0))
 print({k:len(v) for k,v in splits.items()}, flush=True)
 
 tok=AutoTokenizer.from_pretrained("answerdotai/ModernBERT-base")
@@ -86,5 +86,5 @@ for f in sorted(glob.glob(REPO+'/crates/traceloupe-core/fixtures/safety-scan/eva
         cases.append((txt, 1 if d['kind']=='positive' else 0))
 a,tp,fn,fp,tn=acc(cases)
 print(f"CHECKLIST: acc {a:.3f}  (harmful caught {tp}/{tp+fn}, ordinary kept clean {tn}/{tn+fp})", flush=True)
-torch.save(best[1], SP+'/modernbert_cga.pt')
+torch.save(best[1], SP+'/modernbert_cmv.pt')
 print("saved", flush=True)
