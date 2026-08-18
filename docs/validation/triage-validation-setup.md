@@ -2,7 +2,7 @@
 
 The one command that confirms the triage architecture reproduces its lab result
 (recall 0.94 / precision 0.95 vs the shipped batch scan's 0.30 / 0.89, recorded
-in `docs/safety-scan-journey.md` §6.1). The harness is
+in `the journey doc (traceloupe-training, private)` §6.1). The harness is
 `tools/validate-triage-pipeline.py` — the **proven oracle** that produced those
 numbers, committed so a fresh session runs it instead of reinventing it. (Three
 false "recall 0.00" results during the rebuild came from harnesses that
@@ -75,7 +75,7 @@ force a clean run. Roughly 20–40 min per threshold (Gemma is the slow stage).
   permanent), focused recall, Guard trim.
 
 Record the run in `docs/validation/safety-scan-validation.md` (date, machine,
-llama.cpp build) and tick the box in `docs/safety-scan-journey.md` §8.
+llama.cpp build) and tick the box in `the journey doc (traceloupe-training, private)` §8.
 
 ## Hardware note
 
