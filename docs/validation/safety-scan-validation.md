@@ -1272,7 +1272,7 @@ rather than re-deriving it.
 
 ### 2026-08-14 — the small-classifier challenge, first round: it loses
 
-`docs/plans/safety-classifier-plan.md` argued for testing a small encoder
+`the classifier plan (traceloupe-training/research, private)` argued for testing a small encoder
 classifier before fine-tuning the 4B, on the grounds that published comparisons
 put encoders at or above much larger models on supervised classification, and
 that our 6.5 s/call is the constraint the whole triage architecture exists to
