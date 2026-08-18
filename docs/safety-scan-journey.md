@@ -566,7 +566,7 @@ validation. Checklist mirrors #459.
       corpus before anyone should decide it. See §10.15 for the harness bug this
       turned up.
 - [ ] **Wider / better corpus for the unlabelled categories** —
-      **two, not three** (`docs/research/safety-scan-corpus-prior-art.md`). This
+      **two, not three** (`the prior-art doc (traceloupe-training/research, private)`). This
       item used to read "coercive-control, grooming, relationship-harassment,
       and the only route is to generate", which contradicted §1 (which names
       two) and the plan's T10 (which has always said to evaluate **PAN12** for
@@ -666,7 +666,7 @@ validation. Checklist mirrors #459.
       it cannot be undone — a model that has seen the eval set cannot unsee it.
       Mutation-proven against the real #492 overlap.
 - [x] **Fine-tune feasibility, proven end to end** (2026-08-13,
-      `docs/research/finetune-feasibility.md`). Every link works on the M3:
+      `the feasibility doc (traceloupe-training/research, private)`). Every link works on the M3:
       MLX LoRA → fuse → GGUF → Q4_K_M → the SHIPPED llama-server, with the
       taught behaviour surviving conversion and quantisation and general
       capability intact. **Training peak memory 4.97 GB**, so 24 GB is not the
@@ -690,7 +690,7 @@ validation. Checklist mirrors #459.
       completely. **The product misses about four in five stalking-type
       harassment conversations and did not know it.** An unrepresentative eval
       set does not blur a number, it reports the wrong one confidently.
-- [ ] **Corpus + classifier bake-off** (`docs/plans/safety-classifier-plan.md`).
+- [ ] **Corpus + classifier bake-off** (`the classifier plan (traceloupe-training/research, private)`).
       The fine-tune was assumed to mean "LoRA the 4B we ship". That assumption
       was not checked, and it should have been: the published comparisons put
       small ENCODER classifiers (150-400M, built for sorting text rather than
@@ -1604,3 +1604,14 @@ second Civil iteration with per-head thresholds is training as this is
 written); coercive control heading to the pattern tier; self-harm awaiting its
 data pass. The scanner Peter asked to be able to trust now has one category he
 verifiably can.
+
+## The training work moves home
+
+Model training — the scripts, dataset audit, calibration artefacts, research
+docs and every future batch of the #536 protocol — now lives in a private
+companion repo (`traceloupe-training`), Peter's call: the app stays open
+source and consumes only the published model artefacts (public `models-vN`
+release assets, pinned by checksum in `OnnxSpec`), while the know-how that
+produces them is the private part. This document remains the public
+engineering narrative; measurement detail continues in the private repo from
+here.
