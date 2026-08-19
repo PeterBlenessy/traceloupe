@@ -35,10 +35,16 @@ pub struct ContactPattern {
     pub span_days: f64,
     /// Longest run of consecutive inbound messages with no reply between.
     pub longest_one_sided_run: usize,
-    /// Times the contact re-initiated: sent again after >= 12h of silence
-    /// during which the owner never replied. 12h, not 24: a daily-noon burst
-    /// rhythm has 23h54m gaps and "a day" would miss it by six minutes — the
-    /// signal is overnight-scale persistence, not a calendar day.
+    /// Times the contact re-initiated with a BURST: after >= 12h of unanswered
+    /// silence, sent 3+ messages within an hour. 12h, not 24, because a
+    /// daily-noon rhythm has 23h54m gaps.
+    ///
+    /// The burst requirement is what separates control from information
+    /// (#541). "Contacts you daily and you never reply" describes a stalker
+    /// AND a nursery, a delivery driver, a recruiter and a landlord — all of
+    /// which this tier flagged before the checklist was written. A person
+    /// pressing for a response sends several messages at once; a broadcast
+    /// sends one.
     pub reinitiations_unanswered: usize,
     /// Share of inbound sent between 00:00 and 06:00 UTC. UTC is a proxy —
     /// backups do not carry the sender's timezone; fixtures construct times
@@ -47,6 +53,12 @@ pub struct ContactPattern {
 }
 
 const DAY: i64 = 86_400;
+/// Messages within BURST_WINDOW that make a re-initiation a burst rather than
+/// a notification. Fifteen minutes, not an hour: a nursery's four daily
+/// updates span half an hour and were counted as a burst at the wider window
+/// (#541). Someone pressing for a response types in minutes.
+const BURST_MESSAGES: usize = 3;
+const BURST_WINDOW: i64 = 900;
 const NIGHT_START_H: i64 = 0;
 const NIGHT_END_H: i64 = 6;
 
@@ -61,6 +73,8 @@ pub fn contact_pattern(msgs: &[MsgMeta]) -> ContactPattern {
     // the pair that defines an unanswered re-initiation.
     let mut last_inbound_at: Option<i64> = None;
     let mut owner_replied_since = true;
+    let mut pending_reinit: Option<i64> = None;
+    let mut burst_len = 0usize;
     for m in &sorted {
         if m.from_me {
             p.outbound += 1;
@@ -79,7 +93,17 @@ pub fn contact_pattern(msgs: &[MsgMeta]) -> ContactPattern {
         }
         if let Some(prev) = last_inbound_at {
             if !owner_replied_since && m.at.saturating_sub(prev) >= DAY / 2 {
-                p.reinitiations_unanswered += 1;
+                // Provisional: confirmed below only if this opens a burst.
+                pending_reinit = Some(m.at);
+                burst_len = 1;
+            } else if pending_reinit.is_some() && m.at.saturating_sub(prev) <= BURST_WINDOW {
+                burst_len += 1;
+                if burst_len == BURST_MESSAGES {
+                    p.reinitiations_unanswered += 1;
+                    pending_reinit = None;
+                }
+            } else if pending_reinit.is_some() {
+                pending_reinit = None;
             }
         }
         last_inbound_at = Some(m.at);
@@ -157,7 +181,11 @@ pub fn classify(p: &ContactPattern) -> PatternVerdict {
     if reply_ratio <= 0.1 {
         nonreciprocal.push("rarely-answered");
     }
-    if p.longest_one_sided_run >= 15 {
+    // A long unanswered run is only evidence of non-reciprocity inside a
+    // relationship that is ALREADY thin. A friend live-texting an event sends
+    // twenty in a row and you answer them all day long — 27% reply rate, and
+    // the tier flagged it before this qualifier (#541).
+    if p.longest_one_sided_run >= 15 && reply_ratio <= 0.25 {
         nonreciprocal.push("long-one-sided-runs");
     }
     if !persistence.is_empty() && !nonreciprocal.is_empty() {
@@ -259,24 +287,104 @@ mod tests {
         assert!(!v.flagged, "reciprocal traffic must never flag: {p:?}");
     }
 
-    /// A newsletter/notification shape: fully one-sided but never re-initiating
-    /// in the unanswered sense day after day at low volume... it IS
-    /// re-initiating. What saves it must be volume + the persistence bar:
-    /// one message a day is not a burst, not night-time, and re-initiations
-    /// alone without any other persistence signal still flag — so this test
-    /// pins the deliberate trade: a daily unanswered drumbeat over weeks IS
-    /// flagged. Marketing spam that matches a stalking shape is the price of
-    /// catching the stalking shape; the deep scan's text tier tells them
-    /// apart downstream.
+    /// A daily unanswered drumbeat is a NOTIFICATION, not control — and this
+    /// assertion used to say the opposite. The original comment called
+    /// flagging it "the price of catching the stalking shape"; the #541
+    /// checklist showed the price was nurseries, delivery drivers, recruiters
+    /// and landlords, so the burst requirement now separates them and this
+    /// test inverted.
     #[test]
-    fn a_daily_unanswered_drumbeat_flags_by_design() {
+    fn a_daily_unanswered_drumbeat_is_a_notification_not_control() {
         let mut msgs = Vec::new();
         for day in 0..30 {
             msgs.push((day * 86_400 + 12 * 3600, false));
         }
         let p = contact_pattern(&shape(&msgs));
-        let v = classify(&p);
-        assert!(v.flagged, "{p:?}");
+        assert_eq!(
+            p.reinitiations_unanswered, 0,
+            "single messages are not bursts"
+        );
+        assert!(!classify(&p).flagged, "{p:?}");
+    }
+
+    /// #541: the shapes a real phone carries that are NOT control — measured
+    /// against the shipped classifier, not a mirror of it. Each is built from
+    /// its real timing, because the tier reads nothing else.
+    #[test]
+    fn legitimate_high_volume_threads_are_not_flagged() {
+        // (note, inbound/day, days, replies, night-share, burst size)
+        let cases: &[(&str, i64, i64, i64, bool, i64)] = &[
+            (
+                "nursery daily updates, parent rarely replies",
+                2,
+                30,
+                3,
+                false,
+                2,
+            ),
+            ("delivery driver updates over months", 1, 60, 2, false, 1),
+            (
+                "chatty friend who monologues, you reply later",
+                7,
+                30,
+                400,
+                false,
+                7,
+            ),
+            ("elderly parent sending clippings daily", 2, 45, 8, false, 2),
+            (
+                "night-shift partner texting through their shift",
+                4,
+                30,
+                60,
+                true,
+                4,
+            ),
+            (
+                "sports club broadcast from the coach's phone",
+                1,
+                40,
+                1,
+                false,
+                1,
+            ),
+            ("recruiter chasing weekly, unanswered", 1, 21, 0, false, 1),
+            (
+                "landlord about works, mostly unanswered",
+                1,
+                25,
+                3,
+                false,
+                1,
+            ),
+        ];
+        let mut flagged = Vec::new();
+        for &(note, per_day, days, replies, night, burst) in cases {
+            let mut msgs = Vec::new();
+            let hour = if night { 2 } else { 13 };
+            for d in 0..days {
+                for i in 0..per_day.max(1) {
+                    for b in 0..burst.max(1) {
+                        msgs.push((d * 86_400 + hour * 3600 + i * 1800 + b * 60, false));
+                    }
+                }
+            }
+            for r in 0..replies {
+                msgs.push((
+                    r * (days * 86_400 / replies.max(1)) + hour * 3600 + 900,
+                    true,
+                ));
+            }
+            let p = contact_pattern(&shape(&msgs));
+            let v = classify(&p);
+            if v.flagged {
+                flagged.push((note, format!("{:?}", v.criteria), p.inbound, p.outbound));
+            }
+        }
+        assert!(
+            flagged.is_empty(),
+            "the pattern tier flagged legitimate high-volume threads: {flagged:#?}"
+        );
     }
 
     /// Review of #531, finding 2: automated senders match the stalking shape
