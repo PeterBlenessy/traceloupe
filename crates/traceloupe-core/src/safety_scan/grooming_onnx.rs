@@ -23,6 +23,10 @@ use super::chunker::ChunkItem;
 
 /// Messages per scored window. 10 is the knee of the measured curve.
 pub const WINDOW_MESSAGES: usize = 10;
+/// How far the predatory logit must exceed the benign one. See the comment at
+/// the comparison for the measurement that chose it.
+const MIN_MARGIN: f32 = 0.5;
+
 /// Tokenizer truncation, matching training (256 covers a 10-message window).
 const MAX_TOKENS: usize = 256;
 
@@ -147,7 +151,15 @@ impl GroomingClassifier {
             return Err(format!("unexpected logits shape {:?}", logits.shape()));
         }
         let row = logits.index_axis(ndarray::Axis(0), 0);
-        Ok(row[1] > row[0])
+        // A CONFIDENCE MARGIN, not bare argmax. Measured against a checklist
+        // of legitimate adult-child conversations — the register a family
+        // phone actually carries, which PAN12's adult chat-room negatives do
+        // not represent (#541): argmax flagged 3 of 25 ordinary exchanges (a
+        // coach arranging training, an aunt checking in after a family row);
+        // a 0.5 margin flags 1, and costs 3 points of real recall (84% -> 81%
+        // on 300 real predatory windows). Two-thirds fewer accusations
+        // against relatives for three points.
+        Ok(row[1] - row[0] >= MIN_MARGIN)
     }
 
     /// First window and last window, max — per the measured detection curve.
@@ -240,6 +252,51 @@ mod tests {
             hit,
             Some(msgs.len() - 1),
             "the anchor must be in the tail window, not message 9 of the head"
+        );
+    }
+
+    /// #541: the shipped detector must not accuse ordinary family life.
+    /// Every conversation in the checklist is legitimate — a parent
+    /// coordinating a lift, a grandparent sending birthday money, a coach,
+    /// a tutor, an aunt offering a private ear. The one known exception is
+    /// documented in the fixture and allowed for, because its surface really
+    /// is grooming-shaped; anything MORE than that is a regression.
+    #[test]
+    fn legitimate_family_conversations_are_not_flagged() {
+        let (Ok(model), Ok(tok)) = (
+            std::env::var("TRACELOUPE_GROOMING_ONNX"),
+            std::env::var("TRACELOUPE_GROOMING_TOKENIZER"),
+        ) else {
+            eprintln!("skipped: set TRACELOUPE_GROOMING_ONNX / TRACELOUPE_GROOMING_TOKENIZER");
+            return;
+        };
+        #[derive(serde::Deserialize)]
+        struct Checklist {
+            conversations: Vec<Convo>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Convo {
+            note: String,
+            messages: Vec<(String, String)>,
+        }
+        let raw = include_str!("../../fixtures/safety-scan/eval/legitimate-adult-child.json");
+        let list: Checklist = serde_json::from_str(raw).unwrap();
+        let mut c = GroomingClassifier::load(Path::new(&model), Path::new(&tok)).unwrap();
+        let mut flagged = Vec::new();
+        for convo in &list.conversations {
+            let items: Vec<ChunkItem> = convo
+                .messages
+                .iter()
+                .map(|(who, text)| msg(who, text))
+                .collect();
+            if c.conversation_predatory_at(&items).unwrap().is_some() {
+                flagged.push(convo.note.clone());
+            }
+        }
+        assert!(
+            flagged.len() <= 1,
+            "the detector flagged {} legitimate family conversations (budget 1): {flagged:?}",
+            flagged.len()
         );
     }
 

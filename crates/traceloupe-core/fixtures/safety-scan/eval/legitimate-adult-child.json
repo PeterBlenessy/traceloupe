@@ -1,0 +1,30 @@
+{
+  "_comment": "Hand-written LEGITIMATE conversations between adults and children/teens — the register the grooming detector meets on a family phone and was never trained against (PAN12 negatives are adult chat-room logs). EVAL ONLY, never training. Each is an ordinary exchange that shares surface features with grooming: an adult, a minor, arrangements to meet, affection, privacy, gifts, or moving to another app.",
+  "conversations": [
+    {"note": "parent coordinating a lift", "messages": [["them","are you done at 4 or 4:30 today"],["me","4:30, we ran over last week"],["them","ill be in the usual spot by the gate"]]},
+    {"note": "grandparent sending money for a birthday", "messages": [["them","ive put £20 in your account for your birthday"],["me","thank you granddad!!"],["them","dont tell your brother, hes getting his in march"]]},
+    {"note": "coach arranging training", "messages": [["them","training moved to 6pm thursday"],["me","ok ill be there"],["them","bring your boots, pitch is soft"]]},
+    {"note": "teacher about homework, school platform", "messages": [["them","your essay hasnt come through on teams"],["me","i sent it sunday"],["them","try again, or email it to me directly"]]},
+    {"note": "aunt checking in privately after a family row", "messages": [["them","you ok? your mum said it kicked off last night"],["me","not really"],["them","you can always ring me. this stays between us if you want"]]},
+    {"note": "parent asking about a friend's house", "messages": [["them","whose house are you at"],["me","leos"],["them","home by 10 please. text me when you set off"]]},
+    {"note": "tutor rescheduling", "messages": [["them","can we move tuesday to wednesday same time"],["me","yeah thats fine"],["them","great, ill send the zoom link the night before"]]},
+    {"note": "scout leader about a trip", "messages": [["them","dont forget the consent form for saturday"],["me","mums signing it tonight"],["them","perfect, hand it in at the hall"]]},
+    {"note": "parent, affectionate", "messages": [["them","proud of you today. you were brilliant"],["me","thanks dad"],["them","love you. see you at tea"]]},
+    {"note": "older cousin, gaming, moving app", "messages": [["them","this chat is rubbish, get on discord"],["me","whats your tag"],["them","ill send it, we can do the raid tonight"]]},
+    {"note": "godparent sending a gift", "messages": [["them","ordered you that game you wanted"],["me","omg thank you!!"],["them","early christmas. act surprised in december"]]},
+    {"note": "parent about pickup after a party", "messages": [["them","what time do you want picking up"],["me","half 11?"],["them","ill be outside. dont keep me waiting in the cold"]]},
+    {"note": "family friend offering a lift home", "messages": [["them","im driving past yours after, want a lift"],["me","yes please"],["them","ill check with your mum first"]]},
+    {"note": "youth worker checking on wellbeing", "messages": [["them","you seemed quiet at group. everything alright"],["me","just tired"],["them","if that changes you know where i am"]]},
+    {"note": "uncle, private joke", "messages": [["them","dont tell your mum i let you have the second doughnut"],["me","haha ok"],["them","our secret. see you sunday"]]},
+    {"note": "music teacher about a recital", "messages": [["them","can you come 20 minutes early on friday to warm up"],["me","sure"],["them","great, ill meet you in the practice room"]]},
+    {"note": "parent about phone use at night", "messages": [["them","phone downstairs at ten on school nights"],["me","everyone else keeps theirs"],["them","then everyone else has different parents. ten"]]},
+    {"note": "older sibling, affectionate, late night", "messages": [["them","you still up"],["me","cant sleep"],["them","want me to come sit with you for a bit"]]},
+    {"note": "neighbour arranging dog walking job", "messages": [["them","still ok to walk bailey after school"],["me","yeah, 4ish"],["them","ill leave the lead out. £5 as usual"]]},
+    {"note": "parent, holiday photos", "messages": [["them","send me that photo you took at the beach"],["me","which one"],["them","the one with your sister, i want to print it"]]},
+    {"note": "school nurse follow-up", "messages": [["them","did you get the letter about your check up"],["me","mum has it"],["them","good, ring the office if you need to change the time"]]},
+    {"note": "family friend, compliment", "messages": [["them","you looked so grown up at the wedding"],["me","haha thanks"],["them","your mum was so proud, she showed everyone the photos"]]},
+    {"note": "parent, allowance", "messages": [["them","ive sent your pocket money"],["me","thanks"],["them","thats for the month, dont spend it in a week"]]},
+    {"note": "driving instructor", "messages": [["them","lesson at 9 saturday, ill pick you up from home"],["me","ok"],["them","bring your provisional licence"]]},
+    {"note": "parent checking a new online friend", "messages": [["them","whos this person youve been playing with"],["me","just someone from the server"],["them","how old are they? im not banning it, i just want to know"]]}
+  ]
+}
