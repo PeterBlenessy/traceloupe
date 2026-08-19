@@ -68,6 +68,8 @@ pub struct TriageOutcome {
     pub heads_flagged: usize,
     /// Threads the coercive-control pattern tier flagged (#529).
     pub patterns_flagged: usize,
+    /// Threads the scam tier flagged (#539).
+    pub scam_flagged: usize,
     /// Threads where the head pass errored (audited, skipped).
     pub heads_failed: usize,
     /// Messages at or above the mode's threshold — the deep-scan demand.
@@ -476,6 +478,10 @@ where
             out.candidates = worklist.len();
         }
     }
+    // Census candidates before the budget bites — the scam tier must judge
+    // "did the census keep this?", not "did the budget reach it?".
+    let pre_budget_ids: std::collections::HashSet<i64> =
+        worklist.iter().map(|w| w.source_id).collect();
     let worklist: Vec<_> = match budget {
         Some(b) => worklist.into_iter().take(b).collect(),
         None => worklist,
@@ -600,6 +606,79 @@ where
             });
         }
     }
+    // --- phase 3.55: the scam tier (#539) ---
+    // A 537 KB embedded classifier: no model download, no ML runtime, and
+    // microseconds per message, so like the pattern tier it runs on every
+    // scan unconditionally. It reads every message the census REJECTED — the
+    // census scores against harm prototypes, and scam text is structurally
+    // unlike them, so this is precisely the recall the embedding cut loses.
+    // Measured: 46% of real held-out smishing caught, and 0 of 25 legitimate
+    // transactional messages flagged (see scam.rs for why that second column
+    // decided the design).
+    if !out.cancelled {
+        use crate::safety_scan::scam;
+        // Census candidates BEFORE the budget: a budgeted scan must not hand
+        // its highest-harm messages to a lexical tier instead of the deep scan
+        // (#540 review, finding 5).
+        let kept = &pre_budget_ids;
+        // Threads the deep scan already called scam — the content-named
+        // verdict outranks the structural one.
+        let text_flagged: std::collections::HashSet<String> = provisional
+            .iter()
+            .filter(|(_, v, _)| v.category == Category::ScamFraud)
+            .map(|(w, _, _)| w.items[w.focus].thread_identifier.clone())
+            .collect();
+        for thread in threads.iter() {
+            if cancel.is_cancelled() {
+                out.cancelled = true;
+                break;
+            }
+            if thread
+                .first()
+                .is_some_and(|m| text_flagged.contains(&m.thread_identifier))
+            {
+                continue;
+            }
+            // Highest-scoring message in the thread, not the first: a marginal
+            // early hit must not outrank a blatant later one (#540 finding 5).
+            let mut best: Option<(usize, u32)> = None;
+            for (mi, m) in thread.iter().enumerate() {
+                // The owner's own outgoing messages are not scams sent TO
+                // them; a scam finding names something they received.
+                if m.sender == "me" || kept.contains(&m.source_id) {
+                    continue;
+                }
+                let sc = scam::score(&m.text);
+                if sc < 4 || best.is_some_and(|(_, b)| b >= sc) {
+                    continue;
+                }
+                best = Some((mi, sc));
+            }
+            if let Some((mi, _)) = best {
+                let m = &thread[mi];
+                out.scam_flagged += 1;
+                let window = triage::context_window(thread, mi, ScanMode::default_radius());
+                let signals = scam::explain(&m.text);
+                let why = if signals.is_empty() {
+                    "matches the wording of known scam messages".to_string()
+                } else {
+                    signals.join("; ")
+                };
+                provisional.push((
+                    window,
+                    FocusVerdict {
+                        category: Category::ScamFraud,
+                        // Money or credentials at stake, but no evidence the
+                        // recipient acted: severity 2.
+                        severity: 2,
+                        rationale: format!("Matches known scam patterns — {why}."),
+                    },
+                    true,
+                ));
+            }
+        }
+    }
+
     // --- phase 3.6: the coercive-control pattern tier (#529) ---
     // Pure sender+timestamp arithmetic — no model, no text, negligible cost,
     // so it runs on every scan unconditionally. Its verdicts are
@@ -816,7 +895,7 @@ where
         now,
         "triage_deep_scan",
         &format!(
-            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={}",
+            "scanned={} findings={} rejected={} contentless={} failed={} unconfirmed={} confirm_failed={} unscorable={} grooming_flagged={} grooming_failed={} heads_flagged={} heads_failed={} patterns_flagged={} scam_flagged={}",
             out.deep_scanned,
             out.findings,
             out.rejected,
@@ -829,7 +908,8 @@ where
             out.grooming_failed,
             out.heads_flagged,
             out.heads_failed,
-            out.patterns_flagged
+            out.patterns_flagged,
+            out.scam_flagged
         ),
     );
     Ok(out)
@@ -915,6 +995,69 @@ mod tests {
         assert_eq!(rows[0].category, Category::GroomingExploitation);
         assert_eq!(rows[0].severity, 3);
         assert_eq!(rows[0].source_id, Some(1), "anchored on the flagged index");
+    }
+
+    /// #539 acceptance at the engine level: a real smishing message the
+    /// census rejected still becomes a scam finding, ordinary traffic does
+    /// not, the owner's own outgoing text is never flagged as a scam sent to
+    /// them, and one campaign yields one finding rather than forty.
+    #[test]
+    fn a_smishing_message_becomes_one_scam_finding() {
+        let mut db = AnalysisDb::open_in_memory().unwrap();
+        let scan = db.begin_scan("m", (None, None), "all", 1).unwrap();
+        // Real-shaped smishing (the model is trained on real SMS; invented
+        // text is off-distribution, this project's oldest lesson).
+        let smish = "URGENT: your parcel is held at customs. Pay the 1.45 GBP \
+                     fee now at http://rm-delivery-fee.co/uk or it returns to sender";
+        let threads = vec![
+            vec![
+                msg_at(1, "+447700900111", smish, 1000),
+                msg_at(2, "+447700900111", smish, 2000), // same campaign, again
+            ],
+            vec![
+                msg_at(3, "them", "can you grab milk on the way home", 3000),
+                msg_at(4, "me", "sure, 2 pints?", 3100),
+            ],
+            // The owner forwarding scam text is not a scam sent TO them.
+            vec![msg_at(5, "me", smish, 4000)],
+        ];
+        let embed = |_: &str| Ok(vec![0.0, 1.0]); // census keeps nothing
+        let classify = |_: &FocusWindow| -> Result<FocusOutcome> { unreachable!() };
+        let confirm = |_: &FocusWindow, _: &FocusVerdict| -> Result<bool> {
+            panic!("conversation-level verdicts never meet the confirmer")
+        };
+        let out = run_triage(
+            &mut db,
+            scan,
+            &threads,
+            &[vec![1.0, 0.0]],
+            ScanMode::Balanced,
+            0.9,
+            None,
+            1,
+            embed,
+            classify,
+            confirm,
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            &CancelToken::new(),
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(out.scam_flagged, 1, "one campaign, one finding");
+        assert_eq!(out.findings, 1);
+        let rows = db.list_findings(Some(scan)).unwrap();
+        assert_eq!(rows[0].category, Category::ScamFraud);
+        assert_eq!(
+            rows[0].source_id,
+            Some(1),
+            "the first message of the campaign"
+        );
+        assert!(
+            rows[0].rationale.contains("link") || rows[0].rationale.contains("delivery"),
+            "the rationale names a real signal: {}",
+            rows[0].rationale
+        );
     }
 
     /// #529 acceptance at the engine level: a stalking-shaped thread yields a
@@ -1165,6 +1308,18 @@ mod tests {
         assert_eq!(out.grooming_failed, 1);
         assert_eq!(out.findings, 0);
         assert!(!out.cancelled);
+    }
+
+    fn msg_at(id: i64, sender: &str, text: &str, at: i64) -> CensusInput {
+        CensusInput {
+            source_id: id,
+            thread_identifier: format!("t{}", id / 10),
+            sender: sender.into(),
+            occurred_at: Some(at),
+            text: text.into(),
+            fingerprint: format!("fp{id}"),
+            service: None,
+        }
     }
 
     fn thread(msgs: &[(i64, &str, &str)]) -> Vec<CensusInput> {
