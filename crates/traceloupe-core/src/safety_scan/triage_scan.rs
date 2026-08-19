@@ -68,7 +68,7 @@ pub struct TriageOutcome {
     pub heads_flagged: usize,
     /// Threads the coercive-control pattern tier flagged (#529).
     pub patterns_flagged: usize,
-    /// Messages the scam tier flagged (#539).
+    /// Threads the scam tier flagged (#539).
     pub scam_flagged: usize,
     /// Threads where the head pass errored (audited, skipped).
     pub heads_failed: usize,
@@ -478,6 +478,10 @@ where
             out.candidates = worklist.len();
         }
     }
+    // Census candidates before the budget bites — the scam tier must judge
+    // "did the census keep this?", not "did the budget reach it?".
+    let pre_budget_ids: std::collections::HashSet<i64> =
+        worklist.iter().map(|w| w.source_id).collect();
     let worklist: Vec<_> = match budget {
         Some(b) => worklist.into_iter().take(b).collect(),
         None => worklist,
@@ -606,27 +610,52 @@ where
     // A 537 KB embedded classifier: no model download, no ML runtime, and
     // microseconds per message, so like the pattern tier it runs on every
     // scan unconditionally. It reads every message the census REJECTED — the
-    // census scores against harm prototypes, and scam text is lexically
+    // census scores against harm prototypes, and scam text is structurally
     // unlike them, so this is precisely the recall the embedding cut loses.
-    // Measured 92% caught at 2.2% false alarms on real held-out SMS.
+    // Measured: 46% of real held-out smishing caught, and 0 of 25 legitimate
+    // transactional messages flagged (see scam.rs for why that second column
+    // decided the design).
     if !out.cancelled {
         use crate::safety_scan::scam;
-        let kept: std::collections::HashSet<i64> = worklist.iter().map(|w| w.source_id).collect();
-        let model = scam::model();
-        'scam: for thread in threads.iter() {
+        // Census candidates BEFORE the budget: a budgeted scan must not hand
+        // its highest-harm messages to a lexical tier instead of the deep scan
+        // (#540 review, finding 5).
+        let kept = &pre_budget_ids;
+        // Threads the deep scan already called scam — the content-named
+        // verdict outranks the structural one.
+        let text_flagged: std::collections::HashSet<String> = provisional
+            .iter()
+            .filter(|(_, v, _)| v.category == Category::ScamFraud)
+            .map(|(w, _, _)| w.items[w.focus].thread_identifier.clone())
+            .collect();
+        for thread in threads.iter() {
             if cancel.is_cancelled() {
                 out.cancelled = true;
                 break;
             }
+            if thread
+                .first()
+                .is_some_and(|m| text_flagged.contains(&m.thread_identifier))
+            {
+                continue;
+            }
+            // Highest-scoring message in the thread, not the first: a marginal
+            // early hit must not outrank a blatant later one (#540 finding 5).
+            let mut best: Option<(usize, u32)> = None;
             for (mi, m) in thread.iter().enumerate() {
                 // The owner's own outgoing messages are not scams sent TO
                 // them; a scam finding names something they received.
                 if m.sender == "me" || kept.contains(&m.source_id) {
                     continue;
                 }
-                if !model.is_scam(&m.text) {
+                let sc = scam::score(&m.text);
+                if sc < 4 || best.is_some_and(|(_, b)| b >= sc) {
                     continue;
                 }
+                best = Some((mi, sc));
+            }
+            if let Some((mi, _)) = best {
+                let m = &thread[mi];
                 out.scam_flagged += 1;
                 let window = triage::context_window(thread, mi, ScanMode::default_radius());
                 let signals = scam::explain(&m.text);
@@ -646,10 +675,6 @@ where
                     },
                     true,
                 ));
-                // One finding per thread: a scam campaign sends many
-                // near-identical texts and the user needs the thread, not
-                // forty rows.
-                continue 'scam;
             }
         }
     }

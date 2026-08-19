@@ -1,147 +1,179 @@
-//! The scam/smishing tier (#539): a compact classical classifier, embedded.
+//! The scam/smishing tier (#539): structural rules, no model, no artefact.
 //!
-//! Measured before built. Hand-written structural rules caught 46% of real
-//! held-out smishing; this model catches **92% at 2.2% false alarms** on the
-//! same split (UCI + Mendeley, both CC BY 4.0, deduplicated by text first —
-//! Mendeley includes UCI, and without dedup 55% of test scam appears verbatim
-//! in train, which inflated an early run to a meaningless 98%).
+//! This design was chosen, then abandoned for a classifier, then chosen again
+//! — and the reversal is the interesting part. Against the public SMS corpora
+//! a TF-IDF classifier caught 92% where these rules caught 46%, so the
+//! classifier shipped. A review then measured both against the register those
+//! corpora lack: legitimate transactional SMS (banks, couriers, appointment
+//! reminders, 2FA). UCI's "ham" is 0.17% URLs and almost entirely personal
+//! chat, so the classifier had learned *business register ⇒ scam*:
 //!
-//! Scam is lexically distinctive — the reason bag-of-words spam filters have
-//! worked since the 1990s — and it is the opposite of coercive control, where
-//! the words are ordinary and only the pattern betrays it. Hence: words here,
-//! arithmetic there.
+//! | at equal legitimate-traffic cost | real smishing caught | legitimate flagged |
+//! |---|---|---|
+//! | TF-IDF classifier @0.92 | 41% | 0/25 |
+//! | TF-IDF classifier @0.47 (its tuned point) | 92% | **21/25** |
+//! | **these rules** | **46%** | **0/25** |
 //!
-//! No ML runtime, no download: the whole detector is 536 KB of weights, a
-//! hashmap lookup and a dot product. Per message it costs microseconds.
+//! At its tuned threshold the classifier flagged 21 of 25 ordinary bank and
+//! delivery messages; forced down to where it spares them, it catches less
+//! than the rules. Structure generalises across registers where vocabulary
+//! does not — so the rules ship, and a 540 KB weights blob, its parity test,
+//! its attribution burden and its tokenisation-drift risk all disappear with
+//! the classifier.
+//!
+//! Cost: nothing to download, nothing to parse, nanoseconds per message.
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
-use serde::Deserialize;
-
-const MODEL_JSON: &str = include_str!("../../fixtures/safety-scan/scam-model.json");
-
-#[derive(Deserialize)]
-struct RawModel {
-    threshold: f64,
-    intercept: f64,
-    /// term -> (logistic coefficient, idf)
-    features: HashMap<String, (f64, f64)>,
+/// One structural signal, its weight, and the plain-language claim it licenses.
+/// The claim is a statement inside a forensic report, so it must be true
+/// whenever the signal fires — matching is on whole words for that reason.
+struct Signal {
+    weight: u32,
+    label: &'static str,
+    words: &'static [&'static str],
 }
 
-pub struct ScamModel {
-    threshold: f64,
-    intercept: f64,
-    features: HashMap<String, (f64, f64)>,
-}
+/// Weights reflect measured lift over ordinary SMS: premium-rate numbers 295x,
+/// links 71x, money claims 43x, urgency 34x, the rest single-digit.
+const SIGNALS: &[Signal] = &[
+    Signal {
+        weight: 2,
+        label: "claims you have won something",
+        words: &["won", "winner", "prize", "award", "guaranteed"],
+    },
+    Signal {
+        weight: 2,
+        label: "presses for immediate action",
+        words: &["urgent", "immediately", "expires", "expired"],
+    },
+    Signal {
+        weight: 1,
+        label: "offers something free",
+        words: &["free"],
+    },
+    Signal {
+        weight: 1,
+        label: "asks you to verify account details",
+        words: &["verify"],
+    },
+    Signal {
+        weight: 1,
+        label: "asks for credentials",
+        words: &["password", "passcode"],
+    },
+    Signal {
+        weight: 1,
+        label: "references a delivery",
+        words: &["parcel", "shipment", "customs", "courier"],
+    },
+    Signal {
+        weight: 1,
+        label: "asks you to claim something",
+        words: &["claim", "claiming", "collect"],
+    },
+    // Added after measuring each against BOTH populations: fires on this
+    // share of real smishing / of ordinary SMS / of the legitimate
+    // transactional checklist. "call now"-style wording was rejected despite
+    // 41% scam coverage — it also fires on 5.7% of ordinary SMS and on a real
+    // bank message ("Call the number on your card").
+    Signal {
+        weight: 1,
+        // 20% scam, 0.2% ham, 0/25 legitimate
+        label: "offers money or credit",
+        words: &["cash", "cashback", "bonus"],
+    },
+    Signal {
+        weight: 1,
+        // 24% scam, 1.7% ham, 0/25 legitimate
+        label: "asks you to reply with a code",
+        words: &["txt"],
+    },
+    Signal {
+        weight: 2,
+        // 12% scam, 0.1% ham, 0/25 legitimate — prize-draw framing is close
+        // to definitional for this category
+        label: "claims you were selected or have won a draw",
+        words: &["draw", "selected", "chosen", "congratulations"],
+    },
+    Signal {
+        weight: 1,
+        // 5% scam, 0.0% ham, 0/25 legitimate
+        label: "uses premium-subscription wording",
+        words: &["unsubscribe", "subscription", "poly", "tone"],
+    },
+];
 
-static MODEL: OnceLock<ScamModel> = OnceLock::new();
+/// Combined score must reach this for a message to be reported. Chosen on the
+/// public corpora and verified against the legitimate-transactional checklist
+/// (0 of 25 flagged) — a single signal is never enough, because ordinary
+/// service messages legitimately contain links, deadlines and the word "free".
+const FLAG_AT: u32 = 4;
 
-pub fn model() -> &'static ScamModel {
-    MODEL.get_or_init(|| {
-        let raw: RawModel = serde_json::from_str(MODEL_JSON).expect("scam-model.json is valid");
-        ScamModel {
-            threshold: raw.threshold,
-            intercept: raw.intercept,
-            features: raw.features,
-        }
-    })
-}
-
-/// Tokenisation must match the trainer's (scikit-learn's default analyzer):
-/// lowercase, then word tokens of 2+ alphanumeric/underscore characters,
-/// plus adjacent bigrams. A drift here is a silent accuracy change, so the
-/// parity test pins it against the Python scores.
-fn tokens(text: &str) -> Vec<String> {
-    let lower = text.to_lowercase();
-    let words: Vec<String> = lower
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+/// Apostrophes stay INSIDE words: splitting on them turns "won't" into "won"
+/// and resurrects the fabricated-claim bug from a different direction. With
+/// the classifier gone there is no tokenisation to stay parity with, so this
+/// can simply be correct.
+fn words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '\'' || c == '\u{2019}'))
         .filter(|w| w.chars().count() >= 2)
         .map(str::to_string)
-        .collect();
-    let mut out = words.clone();
-    for pair in words.windows(2) {
-        out.push(format!("{} {}", pair[0], pair[1]));
-    }
-    out
+        .collect()
 }
 
-impl ScamModel {
-    /// The scam probability for one message.
-    pub fn score(&self, text: &str) -> f64 {
-        let toks = tokens(text);
-        if toks.is_empty() {
-            return 0.0;
-        }
-        // Raw term counts -> tf-idf with L2 normalisation, as the trainer does.
-        let mut counts: HashMap<&str, f64> = HashMap::new();
-        for t in &toks {
-            if self.features.contains_key(t) {
-                *counts.entry(t.as_str()).or_default() += 1.0;
-            }
-        }
-        let mut norm = 0.0;
-        for (t, c) in &counts {
-            let (_, idf) = self.features[*t];
-            norm += (c * idf).powi(2);
-        }
-        // A message with no known feature carries no evidence either way.
-        if norm == 0.0 {
-            return 0.0;
-        }
-        let norm = norm.sqrt();
-        let mut z = self.intercept;
-        for (t, c) in &counts {
-            let (coef, idf) = self.features[*t];
-            z += coef * (c * idf) / norm;
-        }
-        1.0 / (1.0 + (-z).exp())
-    }
-
-    pub fn is_scam(&self, text: &str) -> bool {
-        self.score(text) >= self.threshold
-    }
-
-    pub fn threshold(&self) -> f64 {
-        self.threshold
-    }
+/// UK premium-rate ranges ONLY: 09xx, 087x, 084x. 0800/0808 are freephone;
+/// calling them premium-rate was a false statement that fired on 227 of 379
+/// matches (#540 review). The digit run must stand alone, so order numbers
+/// and account numbers no longer trip it.
+fn premium_rate_number(text: &str) -> bool {
+    text.split(|c: char| !c.is_ascii_digit())
+        .filter(|run| (10..=11).contains(&run.len()))
+        .any(|r| r.starts_with("09") || r.starts_with("087") || r.starts_with("084"))
 }
 
-/// Structural signals, kept from the rule work — NOT the detector (they caught
-/// 46% where the model catches 92%), but the readable reason a finding exists.
-/// Measured lift over ordinary SMS in parentheses.
+fn has_link(lower: &str) -> bool {
+    lower.contains("http") || lower.contains("www.") || lower.contains("bit.ly")
+}
+
+/// The signals a message actually exhibits — the readable reason a finding
+/// exists, and the input to the score.
 pub fn explain(text: &str) -> Vec<&'static str> {
-    let t = text.to_lowercase();
+    let lower = text.to_lowercase();
+    let ws = words(text);
     let mut out = Vec::new();
-    if t.contains("http") || t.contains("www.") || t.contains("bit.ly") {
+    if has_link(&lower) {
         out.push("contains a link");
     }
-    if regex_lite_premium(&t) {
+    if premium_rate_number(&lower) {
         out.push("asks you to call a premium-rate number");
     }
-    for (needle, label) in [
-        ("won", "claims you have won something"),
-        ("prize", "claims you have won something"),
-        ("refund", "offers a refund"),
-        ("urgent", "presses for immediate action"),
-        ("expires", "presses for immediate action"),
-        ("verify", "asks you to verify account details"),
-        ("password", "asks for credentials"),
-        ("parcel", "references a delivery"),
-    ] {
-        if t.contains(needle) && !out.contains(&label) {
-            out.push(label);
+    for s in SIGNALS {
+        if s.words.iter().any(|w| ws.iter().any(|t| t == w)) && !out.contains(&s.label) {
+            out.push(s.label);
         }
     }
     out
 }
 
-/// `09`/`08` premium prefixes followed by 8 digits — no regex crate needed.
-fn regex_lite_premium(lower: &str) -> bool {
-    let b = lower.as_bytes();
-    b.windows(10).any(|w| {
-        (w.starts_with(b"09") || w.starts_with(b"08")) && w.iter().all(|c| c.is_ascii_digit())
-    })
+pub fn score(text: &str) -> u32 {
+    let lower = text.to_lowercase();
+    let ws = words(text);
+    let mut total = 0;
+    if has_link(&lower) {
+        total += 3;
+    }
+    if premium_rate_number(&lower) {
+        total += 3;
+    }
+    for s in SIGNALS {
+        if s.words.iter().any(|w| ws.iter().any(|t| t == w)) {
+            total += s.weight;
+        }
+    }
+    total
+}
+
+pub fn is_scam(text: &str) -> bool {
+    score(text) >= FLAG_AT
 }
 
 #[cfg(test)]
@@ -149,70 +181,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_model_loads_and_carries_its_measurement() {
-        let m = model();
-        assert!(m.threshold > 0.0 && m.threshold < 1.0);
-        assert!(
-            m.features.len() > 5_000,
-            "the exported vocabulary looks truncated: {}",
-            m.features.len()
-        );
-    }
-
-    #[test]
     fn ordinary_messages_do_not_flag() {
-        let m = model();
         for t in [
             "can you grab milk on the way home",
             "the meeting moved to 3pm, see you there",
-            "running about 20 minutes late, sorry",
             "happy birthday!! hope you have a lovely day x",
+            "running about 20 minutes late, sorry",
         ] {
-            assert!(!m.is_scam(t), "false alarm on {t:?} (score {})", m.score(t));
+            assert!(!is_scam(t), "false alarm on {t:?} (score {})", score(t));
         }
     }
 
-    /// Rust must reproduce the Python model's DECISIONS on real held-out
-    /// messages, or the tokenisation has drifted and the measured 92%/2.2% no
-    /// longer describes what ships. Fixture lives outside the repo (real SMS
-    /// text is not committed); point TRACELOUPE_SCAM_PARITY at it.
+    /// The register the classifier could not survive: real service messages
+    /// legitimately carry links, deadlines, money and the word "free".
     #[test]
-    fn rust_scoring_matches_the_python_model() {
-        let Ok(path) = std::env::var("TRACELOUPE_SCAM_PARITY") else {
-            eprintln!("skipped: set TRACELOUPE_SCAM_PARITY");
-            return;
-        };
-        #[derive(serde::Deserialize)]
-        struct Case {
-            text: String,
-            python_score: f64,
+    fn legitimate_transactional_messages_do_not_flag() {
+        for t in [
+            "HSBC: You have authorised a payment of GBP 45.00 to AMAZON UK on 18/08. Not you? Call the number on your card.",
+            "Your Uber code is 4821. Enter it to sign in.",
+            "Your Royal Mail parcel is out for delivery today between 09:00 and 13:00.",
+            "DPD: Your parcel is running late and will arrive tomorrow. Track at dpd.co.uk/track",
+            "TV Licence: your licence is due for renewal on 01/09. Renew at tvlicensing.co.uk",
+            "Your appointment with Dr Patel is confirmed for 22 Aug at 11:00. Reply CANCEL to change.",
+            "Santander: We've spotted unusual activity on your card ending 4417. Reply YES if this was you.",
+            "Your prescription is ready for collection at Boots High Street.",
+        ] {
+            assert!(
+                !is_scam(t),
+                "legitimate message flagged (score {}): {t:?}",
+                score(t)
+            );
         }
-        let cases: Vec<Case> =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        let m = model();
-        let (mut agree, mut worst) = (0usize, 0.0f64);
-        for c in &cases {
-            let ours = m.score(&c.text);
-            worst = worst.max((ours - c.python_score).abs());
-            if (ours >= m.threshold()) == (c.python_score >= m.threshold()) {
-                agree += 1;
-            }
-        }
-        assert_eq!(
-            agree,
-            cases.len(),
-            "decision parity broken on {} of {} held-out messages (worst score gap {worst:.4})",
-            cases.len() - agree,
-            cases.len()
-        );
     }
 
     #[test]
-    fn explanations_only_name_what_is_present() {
-        let e = explain("Your parcel is held, verify at http://x.co");
-        assert!(e.contains(&"contains a link"));
-        assert!(e.contains(&"references a delivery"));
-        assert!(!e.contains(&"claims you have won something"));
+    fn real_shaped_smishing_flags() {
+        for t in [
+            "URGENT: your parcel is held at customs. Pay the 1.45 GBP fee now at http://rm-delivery-fee.co/uk or it returns to sender",
+            "You have WON a guaranteed GBP 1000 cash prize! Call 09061234567 now to claim",
+            "FREE entry to win a prize draw! Text WIN to claim your award now",
+        ] {
+            assert!(is_scam(t), "missed smishing (score {}): {t:?}", score(t));
+        }
+    }
+
+    /// Claims must be true whenever they appear: substring matching once put
+    /// "claims you have won something" on "wondering" and "won't", and called
+    /// freephone numbers premium-rate (#540 review, finding 2).
+    #[test]
+    fn explanations_never_fabricate() {
+        for t in [
+            "just wondering when you're free tomorrow",
+            "that was a wonderful evening, thank you",
+            "he won't be back till 9",
+        ] {
+            assert!(
+                !explain(t).contains(&"claims you have won something"),
+                "fabricated a win claim for {t:?}: {:?}",
+                explain(t)
+            );
+        }
+        for t in [
+            "Call MobilesDirect free on 08000938767 to update now",
+            "my order number is 0812345678901",
+        ] {
+            assert!(
+                !explain(t).contains(&"asks you to call a premium-rate number"),
+                "called a non-premium number premium in {t:?}"
+            );
+        }
+        assert!(explain("Call 09061234567 to claim")
+            .contains(&"asks you to call a premium-rate number"));
         assert!(explain("see you at 8").is_empty());
     }
 }
