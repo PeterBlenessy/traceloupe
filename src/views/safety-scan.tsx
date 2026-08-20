@@ -890,6 +890,7 @@ export function SafetyScanView() {
                       deepScanned: lastTriageDone.deepScanned,
                       unscanned: lastTriageDone.unscanned,
                       unconfirmed: lastTriageDone.unconfirmed,
+                      tierFindings: lastTriageDone.tierFindings,
                     }}
                     findings={lastTriageDone.findings}
                     cancelled={lastTriageDone.status === "cancelled"}
@@ -1203,6 +1204,18 @@ function TriageCoverageLine({
             <> — {plural(findings, "finding")}</>
           )}
           .
+          {/* Three tiers read EVERY conversation rather than the ranked
+              worklist, so without this sentence the line can report more
+              findings than places read — which reads as a bug rather than as
+              extra cover. */}
+          {coverage.tierFindings > 0 && (
+            <>
+              {" "}
+              {plural(coverage.tierFindings, "finding")}{" "}
+              {coverage.tierFindings === 1 ? "came" : "came"} from checks that
+              read every conversation, not only the flagged places.
+            </>
+          )}
           {coverage.unscanned > 0 && (
             <>
               {" "}

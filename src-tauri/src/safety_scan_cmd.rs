@@ -577,6 +577,8 @@ pub enum ScanEvent {
         /// Candidates the budget left unread — reported, never called clean.
         unscanned: usize,
         unconfirmed: usize,
+        /// Findings from tiers that read every conversation, not the worklist.
+        tier_findings: usize,
         /// Model calls that failed even after a retry: skipped worklist items
         /// plus dropped confirmations.
         failed: usize,
@@ -1949,6 +1951,12 @@ pub async fn run_triage_scan(
                     candidates: outcome.candidates,
                     deep_scanned: outcome.deep_scanned,
                     unconfirmed: outcome.unconfirmed,
+                    // The three full-pass tiers produce findings outside the
+                    // ranked worklist; the coverage line must account for them
+                    // or it reports more findings than places read.
+                    tier_findings: outcome.grooming_flagged
+                        + outcome.scam_flagged
+                        + outcome.patterns_flagged,
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -1995,6 +2003,9 @@ pub async fn run_triage_scan(
                 deep_scanned: outcome.deep_scanned,
                 unscanned: outcome.unscanned(),
                 unconfirmed: outcome.unconfirmed,
+                tier_findings: outcome.grooming_flagged
+                    + outcome.scam_flagged
+                    + outcome.patterns_flagged,
                 failed: outcome.deep_scan_failed + outcome.confirm_failed,
             },
         );
@@ -2680,6 +2691,10 @@ pub struct TriageCoverageDto {
     /// cannot compute it differently.
     pub unscanned: u64,
     pub unconfirmed: u64,
+    /// Findings from tiers that read EVERY conversation rather than the ranked
+    /// worklist. Without this the coverage line can report more findings than
+    /// places read in depth, which reads as a bug rather than as extra cover.
+    pub tier_findings: u64,
 }
 
 impl From<traceloupe_core::analysis::TriageCoverage> for TriageCoverageDto {
@@ -2690,6 +2705,7 @@ impl From<traceloupe_core::analysis::TriageCoverage> for TriageCoverageDto {
             deep_scanned: c.deep_scanned as u64,
             unscanned: c.unscanned() as u64,
             unconfirmed: c.unconfirmed as u64,
+            tier_findings: c.tier_findings as u64,
         }
     }
 }
@@ -3152,12 +3168,15 @@ mod tests {
             deep_scanned: 4,
             unscanned: 0,
             unconfirmed: 0,
+            tier_findings: 5,
             failed: 0,
         };
         let json = serde_json::to_string(&e).unwrap();
         assert!(json.contains(r#""phase":"triageDone""#), "{json}");
         assert!(json.contains(r#""scanId":7"#), "{json}");
         assert!(json.contains(r#""deepScanned":4"#), "{json}");
+        // The field the coverage line needs to stay arithmetically honest.
+        assert!(json.contains(r#""tierFindings":5"#), "{json}");
         assert!(!json.contains("scan_id"), "snake_case leaked: {json}");
 
         let done = ScanEvent::Done {
