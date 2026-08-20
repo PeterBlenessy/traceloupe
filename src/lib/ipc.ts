@@ -1004,6 +1004,8 @@ export type SafetyScanEvent =
       /** Candidates the budget left unread — reported, never called clean. */
       unscanned: number;
       unconfirmed: number;
+      /** Findings from tiers that read every conversation, not the worklist. */
+      tierFindings: number;
       /** Model calls that failed after a retry: skipped items + dropped confirmations. */
       failed: number;
     }
@@ -1087,6 +1089,10 @@ export interface TriageCoverage {
   deepScanned: number;
   unscanned: number;
   unconfirmed: number;
+  /** Findings from tiers that read EVERY conversation rather than the ranked
+   *  worklist (grooming, scam, contact patterns). Without this the coverage
+   *  line can report more findings than places read, which reads as a bug. */
+  tierFindings: number;
 }
 
 /** One posture's expected cost for the chosen scope. */
@@ -7394,6 +7400,7 @@ const mockClient: TraceLoupeClient = {
               deepScanned: 180,
               unscanned: 30,
               unconfirmed: 12,
+              tierFindings: 0,
             },
           },
           report:

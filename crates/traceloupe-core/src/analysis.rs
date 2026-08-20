@@ -25,7 +25,7 @@ pub struct AnalysisDb {
     conn: Connection,
 }
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 /// A scan's SCOPE as a SQL predicate over `content_findings f`: `?1` is the
 /// sources slug ('all' or a comma-joined service list), `?2`/`?3` the optional
@@ -727,9 +727,20 @@ pub struct TriageCoverage {
     pub candidates: usize,
     pub deep_scanned: usize,
     pub unconfirmed: usize,
+    /// Findings from tiers that read EVERY conversation rather than the ranked
+    /// worklist (grooming, scam, contact patterns). Without this the coverage
+    /// line reports more findings than places read, which reads as a bug.
+    pub tier_findings: usize,
 }
 
 impl TriageCoverage {
+    /// Findings the deep scan could account for. When a scan reports more
+    /// findings than this, the extra came from the full-pass tiers — and the
+    /// coverage line must say so, or it reads as a bug (schema v18).
+    pub fn accountable_findings(&self) -> usize {
+        self.deep_scanned
+    }
+
     /// Candidates a budget or a stop left unread.
     pub fn unscanned(&self) -> usize {
         self.candidates.saturating_sub(self.deep_scanned)
@@ -1150,6 +1161,16 @@ impl AnalysisDb {
                  );
                  DELETE FROM census;",
             )?;
+            // v18: findings no longer come only from the deep scan. Three
+            // tiers (grooming, scam, contact-pattern) read EVERY conversation
+            // and produce findings outside the ranked worklist, so a coverage
+            // line saying "2 of 2 places read in depth — 5 findings" no longer
+            // adds up for a reader. Record what each tier saw.
+            for col in ["tier_findings"] {
+                if !scan_cols.iter().any(|c| c == col) {
+                    conn.execute(&format!("ALTER TABLE scans ADD COLUMN {col} INTEGER"), [])?;
+                }
+            }
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         Ok(Self { conn })
@@ -1319,14 +1340,15 @@ impl AnalysisDb {
     pub fn record_triage_coverage(&self, scan_id: i64, c: TriageCoverage) -> Result<()> {
         self.conn.execute(
             "UPDATE scans SET censused = ?2, candidates = ?3, deep_scanned = ?4,
-                              unconfirmed = ?5
+                              unconfirmed = ?5, tier_findings = ?6
              WHERE id = ?1",
             params![
                 scan_id,
                 c.censused as i64,
                 c.candidates as i64,
                 c.deep_scanned as i64,
-                c.unconfirmed as i64
+                c.unconfirmed as i64,
+                c.tier_findings as i64
             ],
         )?;
         Ok(())
@@ -2527,7 +2549,7 @@ impl AnalysisDb {
             .query_row(
                 "SELECT id, model, range_start, range_end, sources, status, started_at,
                         finished_at, chunks_total, chunks_done, error,
-                        censused, candidates, deep_scanned, unconfirmed
+                        censused, candidates, deep_scanned, unconfirmed, tier_findings
                  FROM scans ORDER BY id DESC LIMIT 1",
                 [],
                 |r| {
@@ -2557,6 +2579,9 @@ impl AnalysisDb {
                                 candidates: r.get::<_, Option<i64>>(12)?.unwrap_or(0) as usize,
                                 deep_scanned: r.get::<_, Option<i64>>(13)?.unwrap_or(0) as usize,
                                 unconfirmed: r.get::<_, Option<i64>>(14)?.unwrap_or(0) as usize,
+                                // Pre-v18 rows have no tier findings; 0 is the
+                                // truth for them, not a degraded read.
+                                tier_findings: r.get::<_, Option<i64>>(15)?.unwrap_or(0) as usize,
                             }),
                         },
                     })
@@ -2572,7 +2597,7 @@ impl AnalysisDb {
             .query_row(
                 "SELECT id, model, range_start, range_end, sources, status, started_at,
                         finished_at, chunks_total, chunks_done, error,
-                        censused, candidates, deep_scanned, unconfirmed
+                        censused, candidates, deep_scanned, unconfirmed, tier_findings
                  FROM scans WHERE id = ?1",
                 params![id],
                 |r| {
@@ -2602,6 +2627,9 @@ impl AnalysisDb {
                                 candidates: r.get::<_, Option<i64>>(12)?.unwrap_or(0) as usize,
                                 deep_scanned: r.get::<_, Option<i64>>(13)?.unwrap_or(0) as usize,
                                 unconfirmed: r.get::<_, Option<i64>>(14)?.unwrap_or(0) as usize,
+                                // Pre-v18 rows have no tier findings; 0 is the
+                                // truth for them, not a degraded read.
+                                tier_findings: r.get::<_, Option<i64>>(15)?.unwrap_or(0) as usize,
                             }),
                         },
                     })
@@ -2972,6 +3000,7 @@ mod tests {
                 candidates: 120,
                 deep_scanned: 40,
                 unconfirmed: 3,
+                tier_findings: 0,
             },
         )
         .unwrap();
@@ -3054,6 +3083,7 @@ mod tests {
                 candidates: 210,
                 deep_scanned: 180,
                 unconfirmed: 12,
+                tier_findings: 0,
             },
         )
         .unwrap();
@@ -3075,6 +3105,7 @@ mod tests {
                 candidates: 1,
                 deep_scanned: 1,
                 unconfirmed: 0,
+                tier_findings: 0,
             },
         )
         .unwrap();
@@ -3126,6 +3157,7 @@ mod tests {
                 candidates: 4,
                 deep_scanned: 1,
                 unconfirmed: 0,
+                tier_findings: 0,
             },
         )
         .unwrap();
