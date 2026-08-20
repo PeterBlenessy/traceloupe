@@ -538,7 +538,6 @@ where
             });
         }
     }
-    let mut worklist = worklist;
     if routed_any {
         // Promotion, capped as a share of the phone: only threads inside the
         // top slice by rank, and only those the census kept nothing from. The
@@ -1585,7 +1584,11 @@ mod tests {
         // And a router that ranks them the other way round proves the test
         // above is measuring the ordering rather than a fixed sequence.
         let with = run(|t: &[CensusInput]| {
-            Ok(Some(if t[0].source_id == 2 { (0.9, 0) } else { (0.1, 0) }))
+            Ok(Some(if t[0].source_id == 2 {
+                (0.9, 0)
+            } else {
+                (0.1, 0)
+            }))
         });
         assert_eq!(with, vec![2, 1], "the router's order, when one is present");
     }
